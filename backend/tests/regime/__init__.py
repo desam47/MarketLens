@@ -1,0 +1,1 @@
+"""Tests for market regime analysis package."""

@@ -1,0 +1,139 @@
+"""
+Alert repository for data access operations.
+"""
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import and_, desc
+
+from backend.database import SessionLocal
+from backend.models import Alert, AlertTrigger
+
+
+class AlertRepository:
+    """Repository for alert CRUD operations."""
+
+    def __init__(self, db=None):
+        self._owns_session = db is None
+        self.db = db or SessionLocal()
+
+    def close(self) -> None:
+        if self._owns_session:
+            self.db.close()
+
+    # --- Read -----------------------------------------------------------
+
+    def get_all(self) -> list[Alert]:
+        """All alerts, newest first."""
+        return (
+            self.db.query(Alert)
+            .order_by(desc(Alert.created_at))
+            .all()
+        )
+
+    def get_all_enabled(self) -> list[Alert]:
+        """All enabled alerts."""
+        return (
+            self.db.query(Alert)
+            .filter(Alert.is_enabled == True)
+            .order_by(desc(Alert.created_at))
+            .all()
+        )
+
+    def get_by_id(self, alert_id: int) -> Alert | None:
+        return self.db.query(Alert).filter(Alert.id == alert_id).first()
+
+    def get_for_symbol(self, symbol: str) -> list[Alert]:
+        """All alerts (enabled or not) for a given symbol."""
+        return (
+            self.db.query(Alert)
+            .filter(Alert.symbol == symbol.upper())
+            .order_by(desc(Alert.created_at))
+            .all()
+        )
+
+    def get_enabled_for_symbol(self, symbol: str) -> list[Alert]:
+        """All enabled alerts for a given symbol."""
+        return (
+            self.db.query(Alert)
+            .filter(
+                and_(
+                    Alert.symbol == symbol.upper(),
+                    Alert.is_enabled == True,
+                )
+            )
+            .all()
+        )
+
+    # --- Write ---------------------------------------------------------
+
+    def create(
+        self,
+        name: str,
+        symbol: str,
+        condition_type: str,
+        parameter: str,
+    ) -> Alert:
+        alert = Alert(
+            name=name,
+            symbol=symbol.upper(),
+            condition_type=condition_type,
+            parameter=parameter,
+        )
+        self.db.add(alert)
+        self.db.commit()
+        self.db.refresh(alert)
+        return alert
+
+    def update(
+        self,
+        alert_id: int,
+        name: str | None = None,
+        condition_type: str | None = None,
+        parameter: str | None = None,
+        is_enabled: bool | None = None,
+    ) -> Alert | None:
+        alert = self.get_by_id(alert_id)
+        if alert is None:
+            return None
+        if name is not None:
+            alert.name = name
+        if condition_type is not None:
+            alert.condition_type = condition_type
+        if parameter is not None:
+            alert.parameter = parameter
+        if is_enabled is not None:
+            alert.is_enabled = is_enabled
+        alert.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(alert)
+        return alert
+
+    def delete(self, alert_id: int) -> bool:
+        alert = self.get_by_id(alert_id)
+        if alert is None:
+            return False
+        self.db.delete(alert)
+        self.db.commit()
+        return True
+
+    # --- Triggers ------------------------------------------------------
+
+    def get_triggers(self, alert_id: int, limit: int = 100) -> list[AlertTrigger]:
+        return (
+            self.db.query(AlertTrigger)
+            .filter(AlertTrigger.alert_id == alert_id)
+            .order_by(desc(AlertTrigger.triggered_at))
+            .limit(limit)
+            .all()
+        )
+
+    def get_recent_triggers(self, since: datetime | None = None) -> list[AlertTrigger]:
+        """Triggers fired within the last 24 hours (or since ``since``)."""
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(hours=24)
+        return (
+            self.db.query(AlertTrigger)
+            .filter(AlertTrigger.triggered_at >= since)
+            .order_by(desc(AlertTrigger.triggered_at))
+            .all()
+        )

@@ -1,0 +1,1 @@
+"""Alerts API router package."""

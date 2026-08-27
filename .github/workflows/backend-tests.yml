@@ -1,0 +1,78 @@
+name: Backend tests
+
+# Runs the Python regression tests on every push and pull request.
+# The suite covers indicators, scanner, watchlist (API + repository),
+# yfinance provider, and engine seeding. Configured at the repo root
+# via pytest.ini so `pytest` (no arguments) discovers everything.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        # Install from requirements.txt rather than hand-picking
+        # packages — the file is now the source of truth and matches
+        # the versions verified locally.
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create test database with seeded data
+        # Some tests (engine seeding, multitimeframe) need a sqlite DB
+        # that already has QuoteModel rows for AAPL, otherwise the
+        # seeder has nothing to replay and the "non-unknown regime"
+        # assertion fails. Synthesize a small fixture rather than
+        # commit the real marketlens.db (which would bloat the repo
+        # and leak symbols' real tick history).
+        run: |
+          python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from datetime import datetime, timedelta
+          from backend.database import Base, engine, SessionLocal
+          from backend.models.market_data_sql import QuoteModel
+
+          # Create schema
+          Base.metadata.create_all(engine)
+
+          # Seed ~60 quotes for AAPL with a steady uptrend so the regime
+          # engine can classify it as something other than UNKNOWN.
+          db = SessionLocal()
+          base = datetime.utcnow() - timedelta(hours=2)
+          for i in range(60):
+              price = 100.0 + i * 0.5  # gentle uptrend
+              db.add(QuoteModel(
+                  symbol='AAPL',
+                  price=price,
+                  volume=1000,
+                  timestamp=base + timedelta(minutes=i),
+                  provider='fixture',
+                  data_status='LIVE',
+              ))
+          db.commit()
+          print('Seeded 60 AAPL quotes')
+          "
+
+      - name: Run full test suite
+        # pytest.ini at the repo root sets testpaths and pythonpath so
+        # `pytest` from the project root discovers and runs the entire
+        # backend/tests/ tree in one shot.
+        run: |
+          pytest
