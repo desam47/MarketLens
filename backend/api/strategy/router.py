@@ -6,13 +6,6 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from backend.engines.timeframe import Timeframe
-from backend.strategy.strategy_selector import StrategySelector
-
-logger = logging.getLogger(__name__)
-
-router = APIRouter(prefix="/api/strategy", tags=["strategy"])
-
 # Reuse the seeded, live-updated engines from the other routers so the strategy
 # selector operates on the same state the rest of the API sees. This prevents the
 # strategy endpoint from returning stale/wrong signals due to its own un-seeded
@@ -22,6 +15,13 @@ router = APIRouter(prefix="/api/strategy", tags=["strategy"])
 from backend.api.multitimeframe.router import get_engine as get_mtf_engine
 from backend.api.regime.router import get_engine as get_regime_engine
 from backend.api.trend.router import get_engine as get_trend_engine
+from backend.engines.timeframe import Timeframe
+from backend.strategy.strategy_selector import StrategySelector
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/strategy", tags=["strategy"])
+
 
 # Only the selector itself needs per-symbol state (selection history).
 _selectors: dict[str, StrategySelector] = {}
@@ -78,7 +78,7 @@ async def get_current_strategy(symbol: str):
         }
     except Exception as e:
         logger.error(f"Error getting strategy for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get("/{symbol}/history")
 async def get_strategy_history(symbol: str, limit: int | None = 100):
@@ -102,7 +102,7 @@ async def get_strategy_history(symbol: str, limit: int | None = 100):
         }
     except Exception as e:
         logger.error(f"Error getting strategy history for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/{symbol}/select")
 async def select_strategy_manual(symbol: str,
@@ -183,4 +183,4 @@ async def select_strategy_manual(symbol: str,
         }
     except Exception as e:
         logger.error(f"Error selecting strategy manually for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

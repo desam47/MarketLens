@@ -15,17 +15,17 @@ from backend.scanner.scanner import Scanner, ScanResult
 
 
 class TestScanner(unittest.TestCase):
-    
+
     def setUp(self):
         self.scanner = Scanner()
-    
+
     def test_scanner_initialization(self):
         """Test that scanner initializes correctly"""
         self.assertIsInstance(self.scanner.scan_results, dict)
         self.assertIsInstance(self.scanner.rankings, list)
         self.assertIsInstance(self.scanner.score_weights, dict)
         self.assertEqual(self.scanner.last_scan_time, None)
-    
+
     def test_scan_result_creation(self):
         """Test creating a scan result"""
         timestamp = datetime.now()
@@ -43,23 +43,23 @@ class TestScanner(unittest.TestCase):
         # No scores yet → total_score is 0.0 (avoids ZeroDivisionError
         # when the scores dict is empty under any weighting scheme).
         self.assertEqual(result.calculate_total_score(), 0.0)
-    
+
     def test_scan_result_methods(self):
         """Test scan result methods"""
         result = ScanResult("AAPL", datetime.now())
-        
+
         # Test add_indicator
         result.add_indicator("rsi", 65.5)
         self.assertEqual(result.indicator_values["rsi"], 65.5)
-        
+
         # Test add_trend_signal
         result.add_trend_signal("ONE_HOUR", {"direction": "uptrend", "confidence": 0.8})
         self.assertEqual(result.trend_signals["ONE_HOUR"]["direction"], "uptrend")
-        
+
         # Test add_score
         result.add_score("momentum", 75.0)
         self.assertEqual(result.scores["momentum"], 75.0)
-        
+
         # Test add_signal
         result.add_signal("RSI_OVERSOLD")
         self.assertEqual(result.signals, ["RSI_OVERSOLD"])
@@ -78,7 +78,7 @@ class TestScanner(unittest.TestCase):
         # With default equal weighting
         expected = (80.0 + 60.0) / 2
         self.assertEqual(result.calculate_total_score(), expected)
-    
+
     @patch('backend.scanner.scanner.market_data_manager')
     def test_scan_symbol_success(self, mock_market_data_manager):
         """Test successful symbol scanning"""
@@ -92,36 +92,36 @@ class TestScanner(unittest.TestCase):
             volume=1000000
         )
         mock_market_data_manager.get_quote.return_value = mock_quote
-        
+
         # Scan symbol
         result = self.scanner.scan_symbol("AAPL")
-        
+
         # Assertions
         self.assertEqual(result.symbol, "AAPL")
         self.assertEqual(result.quote, mock_quote)
         self.assertIsInstance(result.indicator_values, dict)
         self.assertIsInstance(result.scores, dict)
         self.assertIsInstance(result.signals, list)
-        
+
         # Verify market data manager was called
         mock_market_data_manager.get_quote.assert_called_once_with("AAPL")
-    
+
     @patch('backend.scanner.scanner.market_data_manager')
     def test_scan_symbol_failure(self, mock_market_data_manager):
         """Test symbol scanning when market data fails"""
         # Setup mock to raise exception
         mock_market_data_manager.get_quote.side_effect = Exception("API error")
-        
+
         # Scan symbol - should not raise exception
         result = self.scanner.scan_symbol("ERROR")
-        
+
         # Should still return a result
         self.assertEqual(result.symbol, "ERROR")
         self.assertIsNone(result.quote)
         # Should have empty indicators and scores due to failure
         self.assertEqual(len(result.indicator_values), 0)
         self.assertEqual(len(result.scores), 0)
-    
+
     def test_calculate_indicators(self):
         """Test indicator calculation when no bar history is available."""
         result = ScanResult("AAPL", datetime.now())
@@ -221,7 +221,6 @@ class TestScanner(unittest.TestCase):
 
     def test_calculate_indicators_db_failure_falls_back(self):
         """DB-cache failure should fall back to a direct provider call."""
-        from backend.models.market_data import Bar
 
         result = ScanResult("AAPL", datetime.now())
         result.quote = Quote(
@@ -247,7 +246,7 @@ class TestScanner(unittest.TestCase):
         self.assertIsNone(result.indicator_values["rsi"])
         self.assertIsNone(result.indicator_values["macd"])
         self.assertIsNone(result.indicator_values["adx"])
-    
+
     def test_calculate_scores(self):
         """Test score calculation"""
         result = ScanResult("AAPL", datetime.now())
@@ -258,10 +257,10 @@ class TestScanner(unittest.TestCase):
             "volume": 500000,
             "rsi": 40
         }
-        
+
         # Calculate scores
         self.scanner._calculate_scores(result)
-        
+
         # Should have calculated scores
         self.assertIn("trend_strength", result.scores)
         self.assertIn("momentum", result.scores)
@@ -270,12 +269,12 @@ class TestScanner(unittest.TestCase):
         self.assertIn("rsi", result.scores)
         self.assertIn("macd", result.scores)
         self.assertIn("adx", result.scores)
-        
+
         # Check scores are in valid range
-        for score_name, score_value in result.scores.items():
+        for _score_name, score_value in result.scores.items():
             self.assertGreaterEqual(score_value, 0)
             self.assertLessEqual(score_value, 100)
-    
+
     def test_generate_signals(self):
         """Test signal generation"""
         result = ScanResult("AAPL", datetime.now())
@@ -291,17 +290,17 @@ class TestScanner(unittest.TestCase):
             "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
             "ONE_DAY": {"direction": "uptrend", "confidence": 0.9}
         }
-        
+
         # Generate signals
         self.scanner._generate_signals(result)
-        
+
         # Should have generated signals
         self.assertGreater(len(result.signals), 0)
         self.assertIn("RSI_OVERSOLD", result.signals)
         self.assertIn("MACD_BULLISH", result.signals)
         self.assertIn("MULTI_TIMEFRAME_BULLISH", result.signals)
         self.assertIn("HIGH_VOLUME", result.signals)
-    
+
     @patch('backend.scanner.scanner.market_data_manager')
     def test_scan_symbols(self, mock_market_data_manager):
         """Test scanning multiple symbols"""
@@ -316,20 +315,20 @@ class TestScanner(unittest.TestCase):
                 volume=1000000
             )
         mock_market_data_manager.get_quote.side_effect = get_quote_side_effect
-        
+
         # Scan symbols
         symbols = ["AAPL", "GOOGL", "MSFT"]
         results = self.scanner.scan_symbols(symbols)
-        
+
         # Assertions
         self.assertEqual(len(results), 3)
         for i, symbol in enumerate(symbols):
             self.assertEqual(results[i].symbol, symbol)
             self.assertIsNotNone(results[i].quote)
-        
+
         # Should have called get_quote for each symbol
         self.assertEqual(mock_market_data_manager.get_quote.call_count, 3)
-    
+
     def test_rank_symbols(self):
         """Test ranking symbols"""
         # Add some scan results with scores
@@ -337,34 +336,34 @@ class TestScanner(unittest.TestCase):
         result1.add_score("trend_strength", 80)
         result1.add_score("momentum", 70)
         self.scanner.scan_results["AAPL"] = result1
-        
+
         result2 = ScanResult("GOOGL", datetime.now())
         result2.add_score("trend_strength", 90)
         result2.add_score("momentum", 60)
         self.scanner.scan_results["GOOGL"] = result2
-        
+
         result3 = ScanResult("MSFT", datetime.now())
         result3.add_score("trend_strength", 70)
         result3.add_score("momentum", 80)
         self.scanner.scan_results["MSFT"] = result3
-        
+
         # Rank symbols
         ranked = self.scanner.rank_symbols(["AAPL", "GOOGL", "MSFT"])
-        
+
         # Should be ranked by total score (with default equal weighting)
         # AAPL: (80+70)/2 = 75
         # GOOGL: (90+60)/2 = 75
         # MSFT: (70+80)/2 = 75
         # All equal, so order might vary but should have 3 items
         self.assertEqual(len(ranked), 3)
-        
+
         # Check that ranks were assigned
-        for symbol, score in ranked:
+        for symbol, _score in ranked:
             result = self.scanner.scan_results[symbol]
             self.assertIsNotNone(result.rank)
             self.assertGreaterEqual(result.rank, 1)
             self.assertLessEqual(result.rank, 3)
-    
+
     def test_get_top_symbols(self):
         """Test getting top symbols"""
         # Add some scan results
@@ -372,40 +371,40 @@ class TestScanner(unittest.TestCase):
         result1.add_score("trend_strength", 80)
         result1.add_score("momentum", 70)
         self.scanner.scan_results["AAPL"] = result1
-        
+
         result2 = ScanResult("GOOGL", datetime.now())
         result2.add_score("trend_strength", 90)
         result2.add_score("momentum", 80)
         self.scanner.scan_results["GOOGL"] = result2
-        
+
         # Get top symbols
         top = self.scanner.get_top_symbols(1)
         self.assertEqual(len(top), 1)
         # GOOGL should be ranked higher (85 vs 75 average)
         self.assertEqual(top[0][0], "GOOGL")
-    
+
     def test_get_scan_result(self):
         """Test getting scan result for a symbol"""
         result = ScanResult("AAPL", datetime.now())
         self.scanner.scan_results["AAPL"] = result
-        
+
         # Get existing result
         retrieved = self.scanner.get_scan_result("AAPL")
         self.assertEqual(retrieved, result)
-        
+
         # Get non-existing result
         none_result = self.scanner.get_scan_result("NONEXISTENT")
         self.assertIsNone(none_result)
-    
+
     def test_get_signals_for_symbol(self):
         """Test getting signals for a symbol"""
         result = ScanResult("AAPL", datetime.now())
         result.add_signal("TEST_SIGNAL")
         self.scanner.scan_results["AAPL"] = result
-        
+
         signals = self.scanner.get_signals_for_symbol("AAPL")
         self.assertEqual(signals, ["TEST_SIGNAL"])
-        
+
         # Test non-existent symbol
         no_signals = self.scanner.get_signals_for_symbol("NONEXISTENT")
         self.assertEqual(no_signals, [])

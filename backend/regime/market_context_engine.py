@@ -1,0 +1,198 @@
+"""
+Market Context Engine — aggregates SPY/QQQ/IWM/VIX into a single regime.
+
+Phase 8 spec §1: analyze SPY, QQQ, IWM, VIX. Emit one of
+RISK_ON / RISK_OFF / NEUTRAL / TRANSITION. Also report market trend,
+volatility state, momentum, and trend strength.
+
+Hard rule: the per-symbol MarketRegimeEngine is used as the building
+block for each sub-index, but the per-symbol API now returns the
+new 4-name enum. The aggregation rule (consensus threshold) is
+configurable via MarketContextSettings.
+"""
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from ..config.settings import settings
+from .market_regime_engine import MarketRegime, MarketRegimeEngine
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MarketContextSignal:
+    """Phase 8: market-wide regime + supporting metrics."""
+    regime: str                        # MarketRegime.value
+    confidence: float                  # 0.0..1.0
+    trend_strength: float              # 0.0..1.0
+    momentum: float                    # -1.0..+1.0  (negative = bearish, positive = bullish)
+    volatility_state: str              # "low" | "normal" | "high" | "unknown"
+    sub_regimes: dict[str, str] = field(default_factory=dict)
+    # SPY/QQQ/IWM/VIX sub-regime values
+    contributing_factors: dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "regime": self.regime,
+            "confidence": round(self.confidence, 3),
+            "trend_strength": round(self.trend_strength, 3),
+            "momentum": round(self.momentum, 3),
+            "volatility_state": self.volatility_state,
+            "sub_regimes": self.sub_regimes,
+            "contributing_factors": self.contributing_factors,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+        }
+
+
+class MarketContextEngine:
+    """
+    Phase 8 spec: SPY/QQQ/IWM/VIX → market-wide regime.
+
+    Aggregation rule:
+      * 3+ sub-regimes RISK_ON   → RISK_ON
+      * 3+ sub-regimes RISK_OFF  → RISK_OFF
+      * 3+ sub-regimes NEUTRAL   → NEUTRAL
+      * Mixed / conflicting / high VIX → TRANSITION
+    """
+
+    def __init__(self):
+        self._cfg = settings.market_context
+        self.sub_engines: dict[str, MarketRegimeEngine] = {
+            sym: MarketRegimeEngine(sym)
+            for sym in self._cfg.indices
+        }
+        self._price_history: dict[str, list[tuple[datetime, float]]] = {
+            sym: [] for sym in self._cfg.indices
+        }
+        self._signals: list[MarketContextSignal] = []
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def update(self,
+               price: float,
+               volume: float,
+               timestamp: datetime,
+               symbol: str,
+               high: float | None = None,
+               low: float | None = None,
+               open_price: float | None = None,
+               provider: str = "internal") -> None:
+        """
+        Feed a new tick for one of the configured index symbols.
+
+        Routes the tick to the right sub-engine and tracks price history
+        for momentum / volatility calculations.
+        """
+        symbol = symbol.upper()
+        if symbol not in self.sub_engines:
+            logger.warning(f"MarketContextEngine: unknown index {symbol}, ignoring")
+            return
+
+        self.sub_engines[symbol].update(
+            price=price,
+            volume=volume,
+            timestamp=timestamp,
+            high=high,
+            low=low,
+            open_price=open_price,
+            provider=provider,
+        )
+        self._price_history[symbol].append((timestamp, price))
+        self._prune_history(symbol)
+
+    def get_current_context(self) -> MarketContextSignal | None:
+        """Compute and return the current aggregated market context signal."""
+        sub_regimes = self._collect_sub_regimes()
+        if not sub_regimes:
+            return None
+
+        regime, confidence, factors = self._aggregate(sub_regimes)
+        ts = max(
+            (e.get_current_regime().timestamp for e in self.sub_engines.values()
+             if e.get_current_regime()),
+            default=datetime.now(),
+        )
+
+        signal = MarketContextSignal(
+            regime=regime,
+            confidence=confidence,
+            trend_strength=factors.get("trend_strength", 0.0),
+            momentum=factors.get("momentum", 0.0),
+            volatility_state=factors.get("volatility_state", "unknown"),
+            sub_regimes={k: v.value for k, v in sub_regimes.items()},
+            contributing_factors=factors,
+            timestamp=ts,
+        )
+        self._signals.append(signal)
+        return signal
+
+    def get_history(self, limit: int | None = None) -> list[MarketContextSignal]:
+        if limit is None:
+            return self._signals.copy()
+        return self._signals[-limit:] if len(self._signals) > limit else self._signals.copy()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _collect_sub_regimes(self) -> dict[str, MarketRegime]:
+        """Read each sub-engine's most recent regime. Skip if cold-start."""
+        out: dict[str, MarketRegime] = {}
+        for sym, engine in self.sub_engines.items():
+            sig = engine.get_current_regime()
+            if sig is not None:
+                out[sym] = sig.regime
+        return out
+
+    def _aggregate(
+        self,
+        sub_regimes: dict[str, MarketRegime],
+    ) -> tuple[str, float, dict[str, Any]]:
+        """
+        Aggregate sub-regimes into a single market-wide regime.
+
+        Per spec:
+          3+ of 4 RISK_ON   → RISK_ON
+          3+ of 4 RISK_OFF  → RISK_OFF
+          3+ of 4 NEUTRAL   → NEUTRAL
+          mixed              → TRANSITION
+        """
+        factors: dict[str, Any] = {}
+
+        if not sub_regimes:
+            factors["reason"] = "no_sub_regimes"
+            return MarketRegime.UNKNOWN.value, 0.0, factors
+
+        # Count sub-regimes (skip UNKNOWN)
+        counts = {MarketRegime.RISK_ON: 0, MarketRegime.RISK_OFF: 0, MarketRegime.NEUTRAL: 0, MarketRegime.TRANSITION: 0}
+        for sym, reg in sub_regimes.items():
+            if reg in counts:
+                counts[reg] += 1
+            factors[f"sub_{sym}"] = reg.value
+
+        threshold = self._cfg.consensus_threshold
+
+        # Apply consensus
+        if counts[MarketRegime.RISK_ON] >= threshold:
+            factors["primary_reason"] = "consensus_risk_on"
+            return MarketRegime.RISK_ON.value, min(0.9, 0.5 + counts[MarketRegime.RISK_ON] * 0.1), factors
+        if counts[MarketRegime.RISK_OFF] >= threshold:
+            factors["primary_reason"] = "consensus_risk_off"
+            return MarketRegime.RISK_OFF.value, min(0.9, 0.5 + counts[MarketRegime.RISK_OFF] * 0.1), factors
+        if counts[MarketRegime.NEUTRAL] >= threshold:
+            factors["primary_reason"] = "consensus_neutral"
+            return MarketRegime.NEUTRAL.value, min(0.9, 0.5 + counts[MarketRegime.NEUTRAL] * 0.1), factors
+
+        # Mixed → TRANSITION
+        factors["primary_reason"] = "mixed_sub_regimes"
+        return MarketRegime.TRANSITION.value, 0.6, factors
+
+    def _prune_history(self, symbol: str, max_len: int = 100) -> None:
+        hist = self._price_history[symbol]
+        if len(hist) > max_len:
+            self._price_history[symbol] = hist[-max_len:]

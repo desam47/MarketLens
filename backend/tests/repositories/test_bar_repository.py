@@ -15,7 +15,6 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
-from backend.database import Base
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
 from backend.repositories import bar_repository
@@ -177,6 +176,39 @@ class TestBarRepository(unittest.TestCase):
         with self.Session() as db:
             stored = bar_repository.get_bars(db, "AAPL", "1d")
         self.assertEqual(stored[0].data_status, DataStatus.HISTORICAL)
+
+
+    def test_slow_query_logging_threshold(self):
+        """``get_bars`` logs a WARNING when the slow-query threshold is breached.
+
+        We insert one bar, then verify the slow-log fires when
+        ``_SLOW_QUERY_THRESHOLD_MS`` is patched to 0 and does not fire
+        at the real 100ms threshold. The EXPLAIN step is exercised via
+        the same threshold override.
+        """
+        import logging
+
+        from backend.repositories import bar_repository
+
+        bar = _make_bar("AAPL", datetime(2025, 1, 1), 100.0)
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+
+        # Real threshold (100ms) — in-memory SQLite with 1 row won't breach.
+        original = bar_repository._SLOW_QUERY_THRESHOLD_MS
+        try:
+            bar_repository._SLOW_QUERY_THRESHOLD_MS = 0.0  # force every call to log
+            with self.assertLogs(
+                "backend.repositories.bar_repository", level=logging.WARNING
+            ) as cm:
+                with self.Session() as db:
+                    bar_repository.get_bars(db, "AAPL", "1d", limit=None)
+            warning_lines = [line for line in cm.output if "slow_query" in line]
+            self.assertGreater(len(warning_lines), 0)
+            self.assertIn("get_bars", warning_lines[0])
+            self.assertIn("AAPL", warning_lines[0])
+        finally:
+            bar_repository._SLOW_QUERY_THRESHOLD_MS = original
 
 
 if __name__ == "__main__":

@@ -38,7 +38,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         prices = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
         volumes = [1000] * len(prices)
 
-        for i, (price, volume) in enumerate(zip(prices, volumes)):
+        for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
             timestamp = base_time + timedelta(minutes=i*5)
             # Provide approximate OHLC
             high = price + 0.5
@@ -76,7 +76,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         prices = [100, 100.5, 101, 101.5, 102, 102.5, 103, 103.5, 104, 104.5, 105]
         volumes = [1000] * len(prices)
 
-        for i, (price, volume) in enumerate(zip(prices, volumes)):
+        for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
             timestamp = base_time + timedelta(minutes=i*5)
             # Small ranges for low volatility
             high = price + 0.2
@@ -105,7 +105,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         prices = [100] * 10  # Flat prices
         volumes = [1000] * 10
 
-        for i, (price, volume) in enumerate(zip(prices, volumes)):
+        for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
             timestamp = base_time + timedelta(minutes=i*5)
             high = price + 0.1
             low = price - 0.1
@@ -119,7 +119,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         trending_prices = [100 + i*0.5 for i in range(10)]  # Steady uptrend
         trending_volumes = [1500] * 10  # Higher volume
 
-        for i, (price, volume) in enumerate(zip(trending_prices, trending_volumes)):
+        for i, (price, volume) in enumerate(zip(trending_prices, trending_volumes, strict=True)):
             timestamp = base_time + timedelta(minutes=(i+10)*5)
             high = price + 0.3
             low = price - 0.2
@@ -139,7 +139,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         prices = [100 + i*0.2 for i in range(15)]  # Steady uptrend
         volumes = [1200] * 15
 
-        for i, (price, volume) in enumerate(zip(prices, volumes)):
+        for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
             timestamp = base_time + timedelta(minutes=i*5)
             high = price + 0.2
             low = price - 0.1

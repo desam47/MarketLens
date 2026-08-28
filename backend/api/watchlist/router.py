@@ -2,12 +2,16 @@
 Watchlist API endpoints
 """
 from datetime import datetime
+from io import StringIO
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
+from backend.config.settings import settings as _settings
 from backend.repositories.watchlist_repository import WatchlistRepository
+from backend.symbols.validator import validate_symbol
 
 from ..dependencies import get_db
 
@@ -45,6 +49,25 @@ class WatchlistSymbolResponse(WatchlistSymbolBase):
     watchlist_id: int
     added_at: datetime
     position: int
+
+
+class ImportRequest(BaseModel):
+    """Body for POST /api/watchlists/{id}/import."""
+
+    symbols: list[str]
+
+
+class ImportResponse(BaseModel):
+    """Result of an import: symbols split into imported / skipped / errors.
+
+    - ``imported``: tickers successfully added to the watchlist.
+    - ``skipped``: tickers that were already present (no change made).
+    - ``errors``: tickers that failed validation, with the reason.
+    """
+
+    imported: list[str]
+    skipped: list[str]
+    errors: list[str]
 
 # Watchlist endpoints
 @router.get("/", response_model=list[WatchlistResponse])
@@ -172,3 +195,118 @@ def reorder_watchlist_symbols(watchlist_id: int, symbol_order: list[str], db: Se
     # Return the updated symbols
     symbols = repo.get_watchlist_symbols(watchlist_id)
     return symbols
+
+
+# ----------------------------------------------------------------------
+# Phase 3 closure endpoints — search, import, export.
+# ----------------------------------------------------------------------
+
+
+@router.get("/{watchlist_id}/symbols/search", response_model=list[WatchlistSymbolResponse])
+def search_watchlist_symbols(
+    watchlist_id: int,
+    q: str = Query(..., min_length=1, description="Substring to match against ticker symbols"),
+    db: Session = Depends(get_db),
+):
+    """Search symbols in a watchlist by substring (case-insensitive).
+
+    Includes disabled symbols so the user can find and re-enable them.
+    """
+    repo = WatchlistRepository(db)
+    if repo.get_watchlist(watchlist_id) is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    needle = q.upper()
+    matches = [
+        s for s in repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+        if needle in s.symbol.upper()
+    ]
+    return matches
+
+
+@router.post("/{watchlist_id}/import", response_model=ImportResponse)
+def import_watchlist_symbols(
+    watchlist_id: int, body: ImportRequest, db: Session = Depends(get_db)
+):
+    """Bulk import symbols into a watchlist.
+
+    Each input symbol is uppercased and trimmed. Symbols that are already
+    enabled in the watchlist go to ``skipped``. Symbols that fail
+    validation (provider returns no quote, or max-symbols cap is hit) go
+    to ``errors``. Successfully imported symbols are returned in
+    ``imported``.
+
+    The max-symbols cap is ``WatchlistSettings.max_symbols_per_watchlist``
+    (default 50), checked against the current enabled count.
+    """
+    repo = WatchlistRepository(db)
+    if repo.get_watchlist(watchlist_id) is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    max_symbols = _settings.watchlist.max_symbols_per_watchlist
+    current_count = repo.get_watchlist_symbol_count(watchlist_id, enabled_only=True)
+    slots_left = max(0, max_symbols - current_count)
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for raw in body.symbols:
+        symbol = raw.upper().strip()
+        if not symbol:
+            continue
+        # Skip if already present (treat disabled rows as not present so
+        # an import can "re-add" a previously disabled symbol — the repo's
+        # add method re-enables existing rows for us).
+        existing = repo.get_watchlist_symbol(watchlist_id, symbol)
+        if existing and existing.is_enabled:
+            skipped.append(symbol)
+            continue
+        # Enforce max-symbols.
+        if slots_left <= 0:
+            errors.append(f"{symbol}: watchlist full (max {max_symbols})")
+            continue
+        # Validate the ticker via the market data provider.
+        result = validate_symbol(symbol)
+        if not result.valid:
+            errors.append(f"{symbol}: {result.error or 'invalid'}")
+            continue
+        repo.add_symbol_to_watchlist(watchlist_id, symbol)
+        imported.append(symbol)
+        slots_left -= 1
+
+    return ImportResponse(imported=imported, skipped=skipped, errors=errors)
+
+
+@router.get("/{watchlist_id}/export")
+def export_watchlist(
+    watchlist_id: int,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    db: Session = Depends(get_db),
+):
+    """Export all symbols in a watchlist as JSON or CSV.
+
+    JSON returns the full ``WatchlistSymbolResponse`` list. CSV returns
+    ``symbol,is_enabled,position`` rows with a
+    ``Content-Disposition: attachment`` header so browsers download it.
+    """
+    repo = WatchlistRepository(db)
+    if repo.get_watchlist(watchlist_id) is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    symbols = repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+
+    if format == "csv":
+        buf = StringIO()
+        buf.write("symbol,is_enabled,position\n")
+        for s in symbols:
+            buf.write(f"{s.symbol},{int(s.is_enabled)},{s.position}\n")
+        return PlainTextResponse(
+            buf.getvalue(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=watchlist_{watchlist_id}.csv"
+            },
+        )
+
+    # JSON path: reuse the response model to keep the shape consistent.
+    return [WatchlistSymbolResponse.model_validate(s) for s in symbols]

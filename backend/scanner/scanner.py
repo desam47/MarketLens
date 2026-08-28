@@ -1,19 +1,22 @@
 """
 Market scanner and ranking system
 """
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
 from ..market_data.services.manager import market_data_manager
 from ..models.market_data import Quote
+from ..observability import record_scan
 from ..trend.trend_engine import TrendEngine
 
 logger = logging.getLogger(__name__)
 
 class ScanResult:
     """Result of scanning a single symbol"""
-    
+
     def __init__(self, symbol: str, timestamp: datetime):
         self.symbol = symbol
         self.timestamp = timestamp
@@ -23,51 +26,51 @@ class ScanResult:
         self.scores: dict[str, float] = {}
         self.rank: int | None = None
         self.signals: list[str] = []
-    
+
     def add_indicator(self, name: str, value: Any):
         """Add an indicator value"""
         self.indicator_values[name] = value
-    
+
     def add_trend_signal(self, timeframe: str, signal: Any):
         """Add a trend signal"""
         self.trend_signals[timeframe] = signal
-    
+
     def add_score(self, name: str, score: float):
         """Add a score (0-100)"""
         self.scores[name] = max(0, min(100, score))  # Clamp to 0-100
-    
+
     def add_signal(self, signal: str):
         """Add a trading signal"""
         self.signals.append(signal)
-    
+
     def calculate_total_score(self, weights: dict[str, float] | None = None) -> float:
         """Calculate weighted total score"""
         if not self.scores:
             return 0.0
-        
+
         if weights is None:
             # Equal weighting if no weights provided
             weights = {name: 1.0 for name in self.scores.keys()}
-        
+
         total_weight = sum(weights.get(name, 0) for name in self.scores.keys())
         if total_weight == 0:
             return 0.0
-        
+
         weighted_sum = sum(
-            self.scores.get(name, 0) * weights.get(name, 0) 
+            self.scores.get(name, 0) * weights.get(name, 0)
             for name in self.scores.keys()
         )
-        
+
         return weighted_sum / total_weight
 
 class Scanner:
     """Market scanner that evaluates and ranks symbols"""
-    
+
     def __init__(self):
         self.scan_results: dict[str, ScanResult] = {}
         self.rankings: list[tuple[str, float]] = []  # (symbol, score)
         self.last_scan_time: datetime | None = None
-        
+
         # Scoring weights for different factors
         self.score_weights = {
             "trend_strength": 0.25,
@@ -78,31 +81,31 @@ class Scanner:
             "macd": 0.10,
             "adx": 0.05
         }
-    
+
     def scan_symbol(self, symbol: str) -> ScanResult:
         """Scan a single symbol and return results"""
         result = ScanResult(symbol, datetime.now())
-        
+
         try:
             # Get current quote
             quote = market_data_manager.get_quote(symbol)
             result.quote = quote
-            
+
             # Get trend engine for this symbol
             trend_engine = TrendEngine(symbol)
-            
+
             # Update trend engine with recent data (we'd need historical data in practice)
             # For now, we'll use the quote to update
             if quote:
                 trend_engine.update(
-                    quote.price, 
-                    quote.volume or 0, 
+                    quote.price,
+                    quote.volume or 0,
                     quote.timestamp,
                     quote.provider
                 )
-                
+
                 # Get trend signals for multiple timeframes
-                timeframes = ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE", 
+                timeframes = ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE",
                              "ONE_HOUR", "FOUR_HOUR", "ONE_DAY"]
                 for tf_str in timeframes:
                     # Get the Timeframe enum
@@ -115,23 +118,23 @@ class Scanner:
                             "strength": trend_signal.strength.value,
                             "confidence": trend_signal.confidence
                         })
-            
+
             # Calculate technical indicators
             self._calculate_indicators(result, symbol)
-            
+
             # Calculate scores
             self._calculate_scores(result)
-            
+
             # Generate trading signals
             self._generate_signals(result)
-            
+
         except Exception as e:
             logger.error(f"Error scanning symbol {symbol}: {e}")
             # Still return a result, but it may be incomplete
-        
+
         self.scan_results[symbol] = result
         return result
-    
+
     def _calculate_indicators(self, result: ScanResult, symbol: str):
         """Calculate technical indicators for the symbol.
 
@@ -253,7 +256,7 @@ class Scanner:
             result.add_indicator("rsi", None)
             result.add_indicator("macd", None)
             result.add_indicator("adx", None)
-    
+
     def _calculate_scores(self, result: ScanResult):
         """Calculate various scores for the symbol.
 
@@ -311,7 +314,7 @@ class Scanner:
 
         except Exception as e:
             logger.error(f"Error calculating scores for {result.symbol}: {e}")
-    
+
     def _generate_signals(self, result: ScanResult):
         """Generate trading signals based on indicator values"""
         try:
@@ -332,55 +335,78 @@ class Scanner:
                     signals.append("MACD_BULLISH")
                 else:
                     signals.append("MACD_BEARISH")
-            
+
             # Trend signals from multiple timeframes
             bullish_count = 0
             bearish_count = 0
-            for tf_str, signal_data in result.trend_signals.items():
+            for _tf_str, signal_data in result.trend_signals.items():
                 direction = signal_data.get("direction")
                 confidence = signal_data.get("confidence", 0)
                 if direction == "uptrend" and confidence > 0.6:
                     bullish_count += 1
                 elif direction == "downtrend" and confidence > 0.6:
                     bearish_count += 1
-            
+
             if bullish_count >= 3:
                 signals.append("MULTI_TIMEFRAME_BULLISH")
             elif bearish_count >= 3:
                 signals.append("MULTI_TIMEFRAME_BEARISH")
-            
+
             # Volume spike signal
             volume = result.indicator_values.get("volume", 0)
             # This would need volume history to be meaningful
             # For now, just a placeholder
             if volume > 1000000:  # Arbitrary threshold
                 signals.append("HIGH_VOLUME")
-            
+
             result.signals = signals
-            
+
         except Exception as e:
             logger.error(f"Error generating signals for {result.symbol}: {e}")
-    
+
     def scan_symbols(self, symbols: list[str]) -> list[ScanResult]:
         """Scan multiple symbols and return results"""
         results = []
         for symbol in symbols:
             result = self.scan_symbol(symbol)
             results.append(result)
-        
+
         self.last_scan_time = datetime.now()
         return results
-    
+
+    async def scan_symbols_async(self, symbols: list[str]) -> list[ScanResult]:
+        """Scan multiple symbols concurrently via asyncio.to_thread + asyncio.gather.
+
+        Each :meth:`scan_symbol` is a blocking call (HTTP, DB read) so it is run on
+        a worker thread. With ``max_workers`` capped by the default executor
+        (5*cpu_count on Python 3.12+), this turns N serial HTTP round-trips into
+        roughly ``ceil(N / workers)`` round-trips of wall time. Useful for batch
+        scan endpoints that are already ``async def``.
+
+        The synchronous :meth:`scan_symbols` is preserved for any caller that
+        is not in an event loop.
+        """
+        if not symbols:
+            return []
+        start = time.monotonic()
+        # asyncio.gather accepts any awaitables; to_thread gives us one per symbol.
+        tasks = [asyncio.to_thread(self.scan_symbol, symbol) for symbol in symbols]
+        results = await asyncio.gather(*tasks)
+        duration_ms = (time.monotonic() - start) * 1000
+        record_scan(duration_ms)
+        self.last_scan_time = datetime.now()
+        return list(results)
+
     def rank_symbols(self, symbols: list[str] | None = None) -> list[tuple[str, float]]:
         """Rank symbols by their total score"""
         if symbols is None:
             symbols = list(self.scan_results.keys())
-        
+
         # Scan any symbols we haven't scanned yet
         for symbol in symbols:
             if symbol not in self.scan_results:
                 self.scan_symbol(symbol)
-        
+
         # Calculate total scores and rank
         ranked = []
         for symbol in symbols:
@@ -388,35 +414,35 @@ class Scanner:
             if result:
                 total_score = result.calculate_total_score(self.score_weights)
                 ranked.append((symbol, total_score))
-        
+
         # Sort by score descending
         ranked.sort(key=lambda x: x[1], reverse=True)
-        
+
         # Assign ranks
-        for i, (symbol, score) in enumerate(ranked):
+        for i, (symbol, _score) in enumerate(ranked):
             if symbol in self.scan_results:
                 self.scan_results[symbol].rank = i + 1
-        
+
         self.rankings = ranked
         return ranked
-    
+
     def get_top_symbols(self, count: int = 10) -> list[tuple[str, float, int]]:
         """Get top N symbols by rank"""
         if not self.rankings:
             self.rank_symbols()
-        
+
         top_symbols = []
         for symbol, score in self.rankings[:count]:
             result = self.scan_results.get(symbol)
             rank = result.rank if result else None
             top_symbols.append((symbol, score, rank))
-        
+
         return top_symbols
-    
+
     def get_scan_result(self, symbol: str) -> ScanResult | None:
         """Get scan result for a symbol"""
         return self.scan_results.get(symbol)
-    
+
     def get_signals_for_symbol(self, symbol: str) -> list[str]:
         """Get trading signals for a symbol"""
         result = self.scan_results.get(symbol)

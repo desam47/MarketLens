@@ -15,11 +15,12 @@ regime/trend/confluence engines were in-memory only and lost their state.
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
 from backend.api.regime.router import get_engine as get_regime_engine_from_router
+from backend.database import SessionLocal
 from backend.market_data.services.engine_seeder import (
     EngineRegistry,
     seed_engine_from_quotes,
@@ -27,7 +28,41 @@ from backend.market_data.services.engine_seeder import (
 from backend.regime.market_regime_engine import MarketRegimeEngine
 
 
-class TestSeedEngineFromQuotes(unittest.TestCase):
+class _SeededDBMixin:
+    """Insert synthetic QuoteModel rows for AAPL before each test."""
+
+    def setUp(self):
+        super().setUp()
+        self._seed_aapl_quotes()
+
+    @staticmethod
+    def _seed_aapl_quotes():
+        # Import models normally so Base is the shared singleton.
+        from backend.database import Base, engine
+        from backend.models.market_data_sql import QuoteModel
+        # Ensure tables exist.
+        Base.metadata.create_all(bind=engine)
+        # Remove any existing AAPL rows to keep tests deterministic.
+        with SessionLocal() as db:
+            db.query(QuoteModel).filter(QuoteModel.symbol == "AAPL").delete()
+            # 60 synthetic quotes with a clear uptrend — enough for regime classification.
+            base_time = datetime.now(UTC) - timedelta(hours=10)
+            for i in range(60):
+                row = QuoteModel(
+                    symbol="AAPL",
+                    price=150.0 + i * 0.10,  # clear uptrend
+                    bid=150.0 + i * 0.10 - 0.01,
+                    ask=150.0 + i * 0.10 + 0.01,
+                    volume=1_000_000,
+                    timestamp=base_time + timedelta(minutes=i * 10),
+                    provider="test",
+                    data_status="ok",
+                )
+                db.add(row)
+            db.commit()
+
+
+class TestSeedEngineFromQuotes(_SeededDBMixin, unittest.TestCase):
     """Tests for the seed_engine_from_quotes helper."""
 
     def test_seed_produces_non_unknown_regime(self):
@@ -111,7 +146,7 @@ class TestEngineRegistry(unittest.TestCase):
         self.registry.register("quote", "AAPL", callback_b)
         self.registry.register("quote", "NVDA", lambda **kw: received.append(("n", 1)))  # different symbol
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         notified = self.registry.dispatch_quote(
             symbol="AAPL", price=123.45, volume=1000,
             timestamp=ts, high=124.0, low=122.0, open_price=123.0,
@@ -129,7 +164,7 @@ class TestEngineRegistry(unittest.TestCase):
         self.registry.register("bar:1h", "AAPL", lambda **kw: received.append("1h"))
         self.registry.register("bar:1d", "AAPL", lambda **kw: received.append("1d"))
 
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         n_1h = self.registry.dispatch_bar("AAPL", "1h", price=100, volume=1, timestamp=ts)
         n_1d = self.registry.dispatch_bar("AAPL", "1d", price=100, volume=1, timestamp=ts)
 
@@ -170,7 +205,7 @@ class TestEngineRegistry(unittest.TestCase):
             captured.update(kw)
 
         self.registry.register("quote", "AAPL", capture)
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         self.registry.dispatch_quote(
             symbol="AAPL", price=100, volume=50, timestamp=ts,
             high=101, low=99, open_price=99.5,
@@ -182,7 +217,7 @@ class TestEngineRegistry(unittest.TestCase):
         self.assertEqual(captured["open_price"], 99.5)
 
 
-class TestRouterSeedingIntegration(unittest.TestCase):
+class TestRouterSeedingIntegration(_SeededDBMixin, unittest.TestCase):
     """End-to-end test: the router's get_regime_engine must seed from the DB.
 
     This is the highest-value regression test — it exercises the exact code path
@@ -195,6 +230,12 @@ class TestRouterSeedingIntegration(unittest.TestCase):
         The router's get_regime_engine() should create a fresh engine, seed it from
         the DB, register it for live-tick updates, and return a non-unknown regime.
         """
+        # Reset the router's module-level engine cache so a prior test (e.g.
+        # test_seed_produces_non_unknown_regime, which seeds an engine into
+        # the registry) doesn't return a stale engine here.
+        from backend.api.regime.router import _engines
+        _engines.pop("AAPL", None)
+
         signal = get_regime_engine_from_router("AAPL").get_current_regime()
 
         self.assertIsNotNone(

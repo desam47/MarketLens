@@ -8,11 +8,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.config.settings import settings as _settings
 from backend.database import get_db
 from backend.models.market_data import Bar, MarketStatus, Quote
 
 from ..market_data.services.ingestion_service import ingestion_service
-from ..market_data.services.manager import MarketDataManager
+from ..market_data.services.manager import _rate_limiter, market_data_manager
 
 router = APIRouter(
     prefix="/api/market-data",
@@ -49,8 +50,23 @@ async def start_ingestion(background_tasks: BackgroundTasks):
 @router.post("/ingestion/stop")
 async def stop_ingestion():
     """Stop the market data ingestion service"""
-    await ingestion_service.stop()
+    ingestion_service.stop()
     return {"message": "Market data ingestion service stopped"}
+
+@router.post("/ingestion/toggle")
+async def toggle_ingestion(background_tasks: BackgroundTasks):
+    """Flip the ingestion service: stop if running, start if not.
+
+    Returns the new state so the caller can update its UI without a
+    follow-up ``GET /ingestion/status`` call.
+    """
+    if ingestion_service.is_running:
+        ingestion_service.stop()
+        return {"is_running": False, "message": "Ingestion service stopped"}
+    # BackgroundTasks.add_task handles sync callables correctly — see
+    # ingestion_service.start() implementation (daemon thread pattern).
+    background_tasks.add_task(ingestion_service.start)
+    return {"is_running": True, "message": "Ingestion service started"}
 
 @router.get("/ingestion/status", response_model=IngestionStatusResponse)
 async def get_ingestion_status():
@@ -129,9 +145,30 @@ async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
 @router.get("/status/{symbol}", response_model=MarketStatus)
 async def get_market_status(symbol: str, db: Session = Depends(get_db)):
     """Get market status for a symbol"""
-    manager = MarketDataManager()
     try:
-        status = manager.get_market_status(symbol.upper())
+        status = market_data_manager.get_market_status(symbol.upper())
         return status
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get market status: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Failed to get market status: {e!s}") from e
+
+
+@router.get("/providers", response_model=None)
+async def get_providers():
+    """List all registered providers with their current health and rate-limiter stats.
+
+    Returns each provider's ``ProviderStatus`` (healthy / last error / request
+    count) plus, in a side-channel ``_rate_limit`` field, the number of calls
+    that were throttled by the per-provider rate limiter. The side-channel
+    field is prefixed with ``_`` so it doesn't collide with provider names.
+
+    ``response_model=None`` because the response is a heterogeneous dict
+    (provider statuses + rate-limit metadata); declaring ``ProviderStatus``
+    as the response model would reject the metadata field.
+    """
+    statuses = market_data_manager.get_provider_statuses()
+    result: dict = {name: status.model_dump() for name, status in statuses.items()}
+    result["_rate_limit"] = {
+        "throttled_calls": _rate_limiter.stats(),
+        "limit_per_minute": _settings.market_data.rate_limit_per_minute,
+    }
+    return result

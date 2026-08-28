@@ -14,12 +14,12 @@ from backend.repositories.watchlist_repository import WatchlistRepository
 
 
 class TestWatchlistRepository(unittest.TestCase):
-    
+
     def setUp(self):
         # Create a mock database session
         self.mock_db = MagicMock()
         self.repo = WatchlistRepository(self.mock_db)
-    
+
     def test_get_watchlists(self):
         """Test getting all watchlists"""
         # Setup mock
@@ -28,17 +28,17 @@ class TestWatchlistRepository(unittest.TestCase):
         mock_query.filter.return_value = mock_query
         mock_query.order_by.return_value.all.return_value = mock_watchlists
         self.mock_db.query.return_value = mock_query
-        
+
         # Test
         result = self.repo.get_watchlists()
-        
+
         # Assertions
         self.assertEqual(len(result), 2)
         self.mock_db.query.assert_called_once_with(Watchlist)
         mock_query.filter.assert_called_once()
         mock_query.order_by.assert_called_once()
         mock_query.order_by.return_value.all.assert_called_once()
-    
+
     def test_get_watchlist(self):
         """Test getting a specific watchlist"""
         # Setup mock
@@ -47,16 +47,16 @@ class TestWatchlistRepository(unittest.TestCase):
         mock_query.filter.return_value = mock_query
         mock_query.first.return_value = mock_watchlist
         self.mock_db.query.return_value = mock_query
-        
+
         # Test
         result = self.repo.get_watchlist(1)
-        
+
         # Assertions
         self.assertEqual(result, mock_watchlist)
         self.mock_db.query.assert_called_once_with(Watchlist)
         mock_query.filter.assert_called_once()
         mock_query.filter.return_value.first.assert_called_once()
-    
+
     def test_create_watchlist(self):
         """Test creating a new watchlist"""
         # Setup mock
@@ -67,18 +67,18 @@ class TestWatchlistRepository(unittest.TestCase):
         self.mock_db.add = MagicMock()
         self.mock_db.commit = MagicMock()
         self.mock_db.refresh = MagicMock()
-        
+
         # Patch Watchlist constructor
         with patch('backend.repositories.watchlist_repository.Watchlist', return_value=mock_watchlist):
             # Test
             result = self.repo.create_watchlist("Test Watchlist", "A test watchlist")
-            
+
             # Assertions
             self.assertEqual(result, mock_watchlist)
             self.mock_db.add.assert_called_once_with(mock_watchlist)
             self.mock_db.commit.assert_called_once()
             self.mock_db.refresh.assert_called_once_with(mock_watchlist)
-    
+
     def test_add_symbol_to_watchlist_new(self):
         """Test adding a new symbol to a watchlist"""
         # Setup mocks

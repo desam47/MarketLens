@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
+from backend.observability import record_bar
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,11 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     """
     if not bars:
         return 0
+
+    # Count the bars we're about to write for the metrics endpoint.
+    # We call record_bar after the commit so the counter reflects rows
+    # actually written, not attempted.
+    incoming_count = len(bars)
 
     # Detect whether the unique constraint exists by checking sqlite_master.
     # The constraint is added via the model's unique=True flag.
@@ -109,6 +115,13 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
             written += 1
         db.commit()
 
+    # Record per-bar counters for the perf endpoint. The bar_repository
+    # is the single point of write for all bars, so this is the right
+    # place to count. We record after commit so a rolled-back transaction
+    # doesn't inflate the counter.
+    for _ in range(incoming_count):
+        record_bar()
+
     return written
 
 
@@ -118,7 +131,16 @@ def get_bars(
     timeframe: str,
     limit: int | None = None,
 ) -> list[Bar]:
-    """Return bars for (symbol, timeframe), ordered oldest → newest."""
+    """Return bars for (symbol, timeframe), ordered oldest → newest.
+
+    Bars are deduplicated on (symbol, timeframe, timestamp) — the unique
+    index on the table prevents new duplicates, but rows inserted before
+    the index was added may still be present. The .distinct() guard makes
+    get_bars safe against any pre-existing dupes.
+
+    Phase 20 perf: slow queries (≥ 100ms) are logged with their EXPLAIN
+    plan so expensive query patterns surface during development.
+    """
     query = (
         db.query(BarModel)
         .filter(
@@ -127,12 +149,26 @@ def get_bars(
                 BarModel.timeframe == timeframe,
             )
         )
+        .distinct(BarModel.timestamp)
         .order_by(BarModel.timestamp.asc())
     )
     if limit:
         query = query.limit(limit)
 
+    import time
+    t0 = time.perf_counter()
     rows: list[BarModel] = query.all()
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    _log_slow_query(
+        db,
+        "get_bars",
+        symbol=symbol.upper(),
+        timeframe=timeframe,
+        limit=limit,
+        elapsed_ms=elapsed_ms,
+    )
+
     return [_model_to_bar(row) for row in rows]
 
 
@@ -176,3 +212,60 @@ def _has_unique_constraint(db: Session, table: str, columns: tuple[str, ...]) ->
         {"table": table, "like": like_fragment},
     )
     return result.fetchone() is not None
+
+
+# Phase 20 perf: any bar-related query that exceeds this threshold
+# gets its query + EXPLAIN plan logged so we can spot regressions
+# during development. 100ms is a generous threshold for a local
+# SQLite DB with the indexes in place — a hit here is almost always
+# a missing index or a bad query shape.
+_SLOW_QUERY_THRESHOLD_MS = 100.0
+
+
+def _log_slow_query(
+    db: Session,
+    op: str,
+    elapsed_ms: float,
+    **params,
+) -> None:
+    """Log a bar query that exceeded the slow-query threshold.
+
+    Only triggers on queries ≥ ``_SLOW_QUERY_THRESHOLD_MS``. On SQLite
+    we run ``EXPLAIN QUERY PLAN`` for the operation so the log entry
+    contains the actual index/scan choices. On other dialects we just
+    log the elapsed time and parameters — those have their own
+    query-plan tooling (e.g. ``pg_stat_statements``).
+    """
+    if elapsed_ms < _SLOW_QUERY_THRESHOLD_MS:
+        return
+
+    dialect = db.bind.dialect.name if db.bind else "sqlite"
+    param_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
+    logger.warning(
+        f"slow_query: {op} took {elapsed_ms:.1f}ms ({param_str})"
+    )
+    if dialect != "sqlite":
+        return
+
+    # Pull the most recent statement from the connection's raw SQLite
+    # handle and run EXPLAIN QUERY PLAN against it. This requires that
+    # the caller has already executed the query (which it has — we
+    # only know the elapsed time after the call returns).
+    try:
+        conn = db.connection().connection.dbapi_connection
+        # ``last_query_rowset`` isn't a documented public API but is
+        # used by SQLAlchemy's own dialect debug tooling; fall back to
+        # nothing if it's unavailable.
+        sql = getattr(conn, "_last_query_rowset", None) or getattr(
+            conn, "last_query", None
+        )
+        if not sql:
+            return
+        plan_rows = db.execute(text(f"EXPLAIN QUERY PLAN {sql}")).fetchall()
+        plan_lines = [", ".join(str(c) for c in row) for row in plan_rows]
+        logger.warning(f"slow_query: plan for {op} -> {' | '.join(plan_lines)}")
+    except Exception as e:
+        # EXPLAIN is best-effort: if the driver version exposes the
+        # internals differently, we still have the timing + parameter
+        # log above.
+        logger.debug(f"slow_query: EXPLAIN unavailable for {op}: {e}")

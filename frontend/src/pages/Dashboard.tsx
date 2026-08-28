@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import api, { RegimeData, TrendData, ConfluenceData, StrategyData } from '../services/api';
+import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData } from '../services/api';
 import { RegimeCard } from '../components/RegimeCard';
 import { TrendCard } from '../components/TrendCard';
 import { ConfluenceCard } from '../components/ConfluenceCard';
 import { StrategyCard } from '../components/StrategyCard';
+import { MarketContextCard } from '../components/MarketContextCard';
+import { TopMoversCard } from '../components/TopMoversCard';
+import { TransitionsMiniCard } from '../components/TransitionsMiniCard';
 import { SymbolInput } from '../components/SymbolInput';
+import { NLSearchBar } from '../components/NLSearchBar';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
@@ -23,11 +27,15 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const [confluenceError, setConfluenceError] = useState<string | null>(null);
   const [strategy, setStrategy] = useState<StrategyData | null>(null);
   const [strategyError, setStrategyError] = useState<string | null>(null);
+  const [marketContext, setMarketContext] = useState<MarketContextData | null>(null);
+  const [marketContextError, setMarketContextError] = useState<string | null>(null);
+  const [sectorData, setSectorData] = useState<SectorData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<string>('day_trading');
 
   const fetchData = async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -39,6 +47,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     setTrendsError(null);
     setConfluenceError(null);
     setStrategyError(null);
+    setMarketContextError(null);
 
     // Each call is independent — one failing shouldn't blank the whole page.
     // We capture (data, error) per call so each card can show its own
@@ -53,11 +62,13 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     };
 
     try {
-      const [regimeResult, trendsResult, confluenceResult, strategyResult] = await Promise.all([
+      const [regimeResult, trendsResult, confluenceResult, strategyResult, mktCtxResult, sectorResult] = await Promise.all([
         safeCall(() => api.getRegime(symbol)),
         safeCall(() => api.getTrends(symbol, ['15m', '1h', '4h', '1d'])),
-        safeCall(() => api.getConfluence(symbol)),
+        safeCall(() => api.getConfluence(symbol, selectedPreset)),
         safeCall(() => api.getStrategy(symbol)),
+        safeCall(() => api.getMarketContext()),
+        safeCall(() => api.getSector(symbol)),
       ]);
 
       setRegime(regimeResult.data);
@@ -68,6 +79,9 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       setConfluenceError(confluenceResult.error);
       setStrategy(strategyResult.data);
       setStrategyError(strategyResult.error);
+      setMarketContext(mktCtxResult.data);
+      setMarketContextError(mktCtxResult.error);
+      setSectorData(sectorResult.data);
       setLastUpdated(new Date());
     } catch (err: any) {
       setError(err.message || 'Failed to fetch data');
@@ -80,14 +94,14 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol]);
+  }, [symbol, selectedPreset]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => fetchData(true), 30000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, symbol]);
+  }, [autoRefresh, symbol, selectedPreset]);
 
   return (
     <div className="dashboard">
@@ -132,8 +146,14 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
         <LoadingSpinner message="Loading market data..." />
       ) : (
         <div className="dashboard-grid">
-          <RegimeCard regime={regime} error={regimeError} />
-          <ConfluenceCard confluence={confluence} error={confluenceError} />
+          <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />
+          <MarketContextCard context={marketContext} error={marketContextError} />
+          <ConfluenceCard
+            confluence={confluence}
+            error={confluenceError}
+            selectedPreset={selectedPreset}
+            onPresetChange={setSelectedPreset}
+          />
           <StrategyCard strategy={strategy} error={strategyError} />
           <div className="trends-section">
             <h2>Multi-Timeframe Trend</h2>
@@ -149,6 +169,9 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
               )}
             </div>
           </div>
+          <TopMoversCard onSelectSymbol={onSymbolChange} />
+          <NLSearchBar onSelectSymbol={onSymbolChange} />
+          <TransitionsMiniCard symbol={symbol} onSelectSymbol={onSymbolChange} />
         </div>
       )}
     </div>

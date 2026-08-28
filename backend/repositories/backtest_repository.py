@@ -5,8 +5,8 @@ Mirrors ``AlertRepository`` style: a self-managed SQLAlchemy session
 plus a method-per-query interface. Returns ORM objects (not DTOs);
 serialization is the router's job.
 """
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from sqlalchemy import desc
 
@@ -47,6 +47,7 @@ class BacktestRepository:
         start_date: datetime,
         end_date: datetime,
         signals_requested: str,
+        strategy_version: str | None = None,
         status: str = "pending",
     ) -> BacktestRun:
         run = BacktestRun(
@@ -55,6 +56,7 @@ class BacktestRepository:
             start_date=start_date,
             end_date=end_date,
             signals_requested=signals_requested,
+            strategy_version=strategy_version,
             status=status,
         )
         self.db.add(run)
@@ -75,6 +77,19 @@ class BacktestRepository:
         avg_return_20d: float | None = None,
         error: str | None = None,
         completed_at: datetime | None = None,
+        # --- Phase 14 extended metrics ---
+        median_return_1d: float | None = None,
+        median_return_5d: float | None = None,
+        median_return_20d: float | None = None,
+        max_drawdown: float | None = None,
+        sharpe_ratio: float | None = None,
+        profit_factor: float | None = None,
+        mfe_avg: float | None = None,
+        mae_avg: float | None = None,
+        signal_frequency: float | None = None,
+        equity_curve_json: str | None = None,
+        out_of_sample: bool | None = None,
+        overfitting_warning: str | None = None,
     ) -> BacktestRun | None:
         run = self.get_run(run_id)
         if run is None:
@@ -96,6 +111,31 @@ class BacktestRepository:
             run.error = error
         if completed_at is not None:
             run.completed_at = completed_at
+        # --- Phase 14 ---
+        if median_return_1d is not None:
+            run.median_return_1d = median_return_1d
+        if median_return_5d is not None:
+            run.median_return_5d = median_return_5d
+        if median_return_20d is not None:
+            run.median_return_20d = median_return_20d
+        if max_drawdown is not None:
+            run.max_drawdown = max_drawdown
+        if sharpe_ratio is not None:
+            run.sharpe_ratio = sharpe_ratio
+        if profit_factor is not None:
+            run.profit_factor = profit_factor
+        if mfe_avg is not None:
+            run.mfe_avg = mfe_avg
+        if mae_avg is not None:
+            run.mae_avg = mae_avg
+        if signal_frequency is not None:
+            run.signal_frequency = signal_frequency
+        if equity_curve_json is not None:
+            run.equity_curve_json = equity_curve_json
+        if out_of_sample is not None:
+            run.out_of_sample = out_of_sample
+        if overfitting_warning is not None:
+            run.overfitting_warning = overfitting_warning
         self.db.commit()
         self.db.refresh(run)
         return run

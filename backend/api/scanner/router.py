@@ -15,11 +15,18 @@ subsequent quick reads.
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.repositories.watchlist_repository import WatchlistRepository
+from backend.scanner.filters import (
+    AndFilter,
+    DailyBullish,
+    OrFilter,
+    default_registry,
+)
+from backend.scanner.ranking import RankingEngine, default_ranking_engine
 from backend.scanner.scanner import ScanResult, market_scanner
 
 from ..dependencies import get_db
@@ -51,6 +58,44 @@ class _ScanResultResponse(BaseModel):
     rank: int | None = None
     signals: list[str]
     trend_signals: dict[str, Any]
+
+
+class _RankedResponse(BaseModel):
+    timestamp: str
+    count: int
+    results: list[_ScanResultResponse]
+
+
+class _RankedEntryResponse(BaseModel):
+    symbol: str
+    score: float
+    rank: int
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class _NamedRankingResponse(BaseModel):
+    name: str
+    label: str
+    description: str
+    total_eligible: int
+    entries: list[_RankedEntryResponse]
+
+
+class _FilterRequest(BaseModel):
+    """A single filter expression.
+
+    Example::
+
+        {"type": "daily_bullish", "params": {"min_confidence": 0.6}}
+    """
+    type: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class _FilterBody(BaseModel):
+    """Request body for /filter and /rankings endpoints."""
+    filters: list[_FilterRequest] = Field(default_factory=list)
+    match: str = Field(default="AND", description="AND or OR")
 
 
 # --- Helpers -----------------------------------------------------------
@@ -92,7 +137,200 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
     )
 
 
-# --- Endpoints ---------------------------------------------------------
+def _build_filter(filters: list[_FilterRequest], match: str):
+    """Build a Filter expression from a request body.
+
+    Empty filter list returns a "match all" filter (DailyBullish with a
+    negative confidence threshold always matches any trend direction).
+
+    Unknown filter types are surfaced as ``HTTPException(400)`` so the
+    client sees a 4xx rather than an opaque 500.
+    """
+    if not filters:
+        return AndFilter([DailyBullish(min_confidence=-1.0)])
+    try:
+        built = [default_registry.build(f.model_dump()) for f in filters]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if match.upper() == "OR":
+        return OrFilter(built)
+    return AndFilter(built)
+
+
+def _serialize_named_ranking(rr) -> _NamedRankingResponse:
+    return _NamedRankingResponse(
+        name=rr.name,
+        label=rr.label,
+        description=rr.description,
+        total_eligible=rr.total_eligible,
+        entries=[
+            _RankedEntryResponse(
+                symbol=e.symbol,
+                score=e.score,
+                rank=e.rank,
+                metrics=e.metrics,
+            )
+            for e in rr.entries
+        ],
+    )
+
+
+def _empty_rankings(engine: RankingEngine) -> list[_NamedRankingResponse]:
+    return [
+        _NamedRankingResponse(
+            name=meta["name"],
+            label=meta["label"],
+            description=meta["description"],
+            total_eligible=0,
+            entries=[],
+        )
+        for meta in engine.CATEGORIES
+    ]
+
+
+# --- Phase 10: composable filters + named rankings ----------------------
+# IMPORTANT: these literal-path routes MUST be registered before any
+# ``/{symbol}`` path-parameter route, otherwise FastAPI will route
+# ``/filter-types`` to the symbol-scanner endpoint and try to scan
+# a stock called "filter-types".
+
+@router.get("/filter-types", response_model=list[str])
+async def list_filter_types():
+    """List the filter ``type`` strings accepted by ``POST /api/scanner/filter``."""
+    return default_registry.list_types()
+
+
+@router.post("/filter", response_model=list[_ScanResultResponse])
+async def filter_scan_results(
+    filter_body: _FilterBody = Body(...),
+    symbols: list[str] | None = Query(default=None),
+):
+    """Run the named filter against the scanner's current cache.
+
+    If ``symbols`` is provided, only those symbols are scanned first (so
+    the response reflects the latest data). Otherwise we operate on the
+    existing cache.
+    """
+    f = _build_filter(filter_body.filters, filter_body.match)
+
+    if symbols:
+        await market_scanner.scan_symbols_async([s.upper() for s in symbols])
+
+    cache = list(market_scanner.scan_results.values())
+    if not cache:
+        return []
+
+    matched = [r for r in cache if f.matches(r)]
+    return [_result_to_dict(r) for r in matched]
+
+
+@router.post("/rankings", response_model=list[_NamedRankingResponse])
+async def get_named_rankings(
+    filter_body: _FilterBody = Body(...),
+    top_n: int = Query(default=10),
+    symbols: list[str] | None = Query(default=None),
+    engine: RankingEngine = Depends(lambda: default_ranking_engine),
+):
+    """Compute named rankings (Strongest Bullish, etc.) over the cache.
+
+    An optional filter narrows the candidate set before ranking.
+    """
+    f = _build_filter(filter_body.filters, filter_body.match)
+
+    if symbols:
+        await market_scanner.scan_symbols_async([s.upper() for s in symbols])
+
+    cache = list(market_scanner.scan_results.values())
+    if not cache:
+        return _empty_rankings(engine)
+
+    ranked = engine.rank(cache, top_n=top_n, filter=f)
+    return [_serialize_named_ranking(rr) for rr in ranked.values()]
+
+
+@router.get("/rankings/categories", response_model=list[dict[str, str]])
+async def list_ranking_categories():
+    """List the named ranking categories available."""
+    return default_ranking_engine.CATEGORIES
+
+
+@router.get("/top-movers", response_model=list[_ScanResultResponse])
+async def get_top_movers(
+    direction: str = Query("bullish", pattern="^(bullish|bearish)$"),
+    limit: int = Query(10, ge=1, le=50),
+    watchlist_id: int | None = Query(None, description="Watchlist to scan (defaults to first active)"),
+    db: Session = Depends(get_db),
+):
+    """Return the top N strongest-bullish or strongest-bearish symbols.
+
+    Used by the dashboard's "Top Bullish" and "Top Bearish" cards. When
+    ``watchlist_id`` is omitted, scans the first active watchlist.
+    """
+    repo = WatchlistRepository(db)
+    if watchlist_id is None:
+        watchlists = repo.get_watchlists(active_only=True)
+        if not watchlists:
+            return []
+        watchlist_id = watchlists[0].id
+
+    watchlist = repo.get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+    if not watchlist_symbols:
+        return []
+
+    symbols = [ws.symbol for ws in watchlist_symbols]
+    await market_scanner.scan_symbols_async(symbols)
+
+    cache = list(market_scanner.scan_results.values())
+    ranking_key = "strongest_bullish" if direction == "bullish" else "strongest_bearish"
+    named = default_ranking_engine.rank(cache, top_n=limit)
+    target = named.get(ranking_key)
+    if not target:
+        return []
+
+    by_symbol = {r.symbol.upper(): r for r in cache}
+    out: list[_ScanResultResponse] = []
+    for entry in target.entries:
+        result = by_symbol.get(entry.symbol.upper())
+        if result is not None:
+            out.append(_result_to_dict(result))
+    return out
+
+
+@router.get("/watchlist/{watchlist_id}/rankings", response_model=list[_NamedRankingResponse])
+async def get_watchlist_rankings(
+    watchlist_id: int,
+    top_n: int = 10,
+    db: Session = Depends(get_db),
+    engine: RankingEngine = Depends(lambda: default_ranking_engine),
+):
+    """Scan a watchlist and return named rankings for the enabled symbols.
+
+    Convenience wrapper that combines ``/watchlist/{id}`` with the
+    ranking engine — useful for the dashboard's "Strongest Bullish
+    Today" cards.
+    """
+    repo = WatchlistRepository(db)
+    watchlist = repo.get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+    if not watchlist_symbols:
+        return _empty_rankings(engine)
+
+    symbols = [ws.symbol for ws in watchlist_symbols]
+    await market_scanner.scan_symbols_async(symbols)
+
+    cache = list(market_scanner.scan_results.values())
+    ranked = engine.rank(cache, top_n=top_n)
+    return [_serialize_named_ranking(rr) for rr in ranked.values()]
+
+
+# --- Symbol-level endpoints -------------------------------------------
 
 @router.get("/{symbol}", response_model=_ScanResultResponse)
 async def scan_symbol(symbol: str):
@@ -112,7 +350,7 @@ async def scan_symbol(symbol: str):
         return _result_to_dict(result)
     except Exception as e:
         logger.error(f"Error scanning symbol {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{symbol}/cached", response_model=_ScanResultResponse | None)
@@ -141,24 +379,18 @@ async def get_signals_for_symbol(symbol: str):
             result = market_scanner.scan_symbol(symbol.upper())
         except Exception as e:
             logger.error(f"Error scanning symbol {symbol}: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
     return result.signals or []
 
 
-class _RankedResponse(BaseModel):
-    timestamp: str
-    count: int
-    results: list[_ScanResultResponse]
-
+# --- Watchlist endpoints ----------------------------------------------
 
 @router.get("/watchlist/{watchlist_id}", response_model=_RankedResponse)
 async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     """Scan every enabled symbol in ``watchlist_id`` and return them ranked.
 
-    Symbols are scanned sequentially (each makes its own YFinance calls).
-    For large watchlists this will be slow — consider running a background
-    scan and reading results via the ``/cached`` endpoint if that's a
-    concern.
+    Symbols are scanned concurrently via ``asyncio.to_thread`` so wall-clock
+    latency is roughly ``ceil(N / workers)`` rather than N serial HTTP round-trips.
     """
     repo = WatchlistRepository(db)
     watchlist = repo.get_watchlist(watchlist_id)
@@ -172,8 +404,8 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
         )
 
     symbols = [ws.symbol for ws in watchlist_symbols]
-    # ``scan_symbols`` populates self.scan_results and self.last_scan_time.
-    market_scanner.scan_symbols(symbols)
+    # ``scan_symbols_async`` populates self.scan_results and self.last_scan_time.
+    await market_scanner.scan_symbols_async(symbols)
     ranked = market_scanner.rank_symbols(symbols)
 
     # rank_symbols stores the result in scan_results with rank assigned.
@@ -214,7 +446,7 @@ async def scan_watchlist_top(
         return []
 
     symbols = [ws.symbol for ws in watchlist_symbols]
-    market_scanner.scan_symbols(symbols)
+    await market_scanner.scan_symbols_async(symbols)
     ranked = market_scanner.rank_symbols(symbols)
 
     by_symbol = {r.symbol.upper(): r for r in market_scanner.scan_results.values()}

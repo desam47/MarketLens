@@ -5,7 +5,7 @@ import os
 import sys
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
@@ -20,10 +20,10 @@ from backend.models.market_data import (
 
 
 class TestYFinanceProvider(unittest.TestCase):
-    
+
     def setUp(self):
         self.provider = YFinanceProvider()
-    
+
     @patch.object(YFinanceProvider, '_fetch_chart')
     def test_get_quote_success(self, mock_fetch_chart):
         """Test successful quote retrieval"""
@@ -52,7 +52,7 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertEqual(quote.provider, "yahoo_finance")
         self.assertEqual(quote.data_status, DataStatus.DELAYED)
         self.assertIsInstance(quote.timestamp, datetime)
-    
+
     @patch.object(YFinanceProvider, '_fetch_chart')
     def test_get_quote_failure(self, mock_fetch_chart):
         """Test quote retrieval failure handling"""
@@ -196,7 +196,7 @@ class TestYFinanceProvider(unittest.TestCase):
 
         # Test
         bar = self.provider.get_latest_bar("AAPL", "1d")
-        
+
         # Assertions
         self.assertIsInstance(bar, Bar)
         self.assertEqual(bar.symbol, "AAPL")
@@ -205,7 +205,7 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertEqual(bar.data_status, DataStatus.DELAYED)
         self.assertIsInstance(bar.timestamp, datetime)
         self.assertGreater(bar.close, 0)
-    
+
     def test_get_capabilities(self):
         """Test provider capabilities"""
         capabilities = self.provider.get_capabilities()
@@ -219,7 +219,7 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertTrue(capabilities.supports_market_status)
         self.assertEqual(capabilities.min_timeframe, "1m")
         self.assertEqual(capabilities.max_timeframe, "3mo")
-    
+
     def test_is_available(self):
         """Test provider availability check"""
         with patch.object(self.provider, 'get_quote') as mock_get_quote:
@@ -232,7 +232,7 @@ class TestYFinanceProvider(unittest.TestCase):
                 data_status=DataStatus.DELAYED
             )
             self.assertTrue(self.provider.is_available())
-            
+
             # Test when provider fails
             mock_get_quote.side_effect = Exception("API error")
             self.assertFalse(self.provider.is_available())

@@ -12,14 +12,14 @@ from backend.market_data.services.manager import market_data_manager
 
 
 class TestMarketDataIntegration(unittest.TestCase):
-    
+
     def test_manager_initialization(self):
         """Test that the global market data manager is properly initialized"""
         self.assertIsNotNone(market_data_manager)
         self.assertTrue(hasattr(market_data_manager, 'providers'))
         self.assertTrue(hasattr(market_data_manager, 'get_quote'))
         self.assertTrue(hasattr(market_data_manager, 'get_latest_bar'))
-    
+
     def test_provider_exists(self):
         """Test that Yahoo Finance provider is registered"""
         self.assertIn("yahoo_finance", market_data_manager.providers)

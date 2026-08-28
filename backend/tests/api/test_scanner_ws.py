@@ -11,7 +11,7 @@ import sys
 import unittest
 from contextlib import contextmanager
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
@@ -21,8 +21,6 @@ from backend.api.main import app
 from backend.api.scanner import ws_router
 from backend.api.scanner.ws_router import (
     ScannerBroadcastManager,
-    broadcast_manager,
-    install,
     reset_dispatcher,
 )
 from backend.models.market_data import DataStatus, Quote
@@ -317,6 +315,58 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["type"], "scan_error")
         self.assertEqual(sent["symbol"], "AAPL")
         self.assertIn("upstream down", sent["error"])
+
+    async def test_dispatcher_cooldown_suppresses_repeat_scans(self):
+        """A second call within the cooldown window must skip the scan.
+
+        Without the cooldown gate, ``_scan_and_broadcast_all`` would
+        re-scan + re-serialize + broadcast on every quote event —
+        which can fire many times per second under load. With a 30s
+        cooldown, the second call within the window short-circuits
+        before touching the scanner or any subscriber.
+        """
+        manager = ScannerBroadcastManager()
+        ws = AsyncMock()
+        await manager.subscribe(ws, "AAPL")
+
+        with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
+            mock_scanner.scan_symbol.return_value = _make_scan_result("AAPL")
+            loop = asyncio.get_running_loop()
+            dispatcher = ws_router.ScannerDispatcher(manager, loop)
+            # Make the cooldown effectively infinite so the second
+            # call is guaranteed to be inside the window.
+            dispatcher._cooldown_seconds = 999.0
+
+            # First call: scan runs, broadcast happens.
+            await dispatcher._scan_and_broadcast_all()
+            self.assertEqual(mock_scanner.scan_symbol.call_count, 1)
+            self.assertEqual(ws.send_json.await_count, 1)
+
+            # Second call (still inside the cooldown): scan is skipped
+            # and the subscriber receives no new push.
+            await dispatcher._scan_and_broadcast_all()
+            self.assertEqual(mock_scanner.scan_symbol.call_count, 1)  # unchanged
+            self.assertEqual(ws.send_json.await_count, 1)  # unchanged
+
+    async def test_dispatcher_cooldown_expires_for_next_call(self):
+        """Once the cooldown elapses, scanning resumes normally."""
+        manager = ScannerBroadcastManager()
+        ws = AsyncMock()
+        await manager.subscribe(ws, "AAPL")
+
+        with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
+            mock_scanner.scan_symbol.return_value = _make_scan_result("AAPL")
+            loop = asyncio.get_running_loop()
+            dispatcher = ws_router.ScannerDispatcher(manager, loop)
+            # Zero cooldown means every call is allowed through.
+            dispatcher._cooldown_seconds = 0.0
+
+            await dispatcher._scan_and_broadcast_all()
+            await dispatcher._scan_and_broadcast_all()
+            await dispatcher._scan_and_broadcast_all()
+
+            self.assertEqual(mock_scanner.scan_symbol.call_count, 3)
+            self.assertEqual(ws.send_json.await_count, 3)
 
 
 if __name__ == '__main__':

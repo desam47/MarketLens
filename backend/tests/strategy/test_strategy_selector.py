@@ -35,12 +35,12 @@ class TestStrategySelector(unittest.TestCase):
         self.assertIsInstance(self.selector.selection_history, list)
         self.assertIsInstance(self.selector.strategy_params, dict)
 
-    def test_select_strategy_trending_regime(self):
-        """Test strategy selection for trending regime"""
-        # Create trending regime signal
+    def test_select_strategy_risk_on_regime(self):
+        """Test strategy selection for risk-on (trending up) regime"""
+        # Create risk-on regime signal
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.TRENDING_UP,
+            regime=MarketRegime.RISK_ON,
             confidence=0.8,
             strength=0.7,
             supporting_factors={},
@@ -76,12 +76,12 @@ class TestStrategySelector(unittest.TestCase):
         self.assertIn('fast_ma', signal.parameters)
         self.assertIn('slow_ma', signal.parameters)
 
-    def test_select_strategy_ranging_regime(self):
-        """Test strategy selection for ranging regime"""
-        # Create ranging regime signal
+    def test_select_strategy_neutral_regime(self):
+        """Test strategy selection for neutral (ranging) regime"""
+        # Create neutral regime signal
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.RANGING,
+            regime=MarketRegime.NEUTRAL,
             confidence=0.7,
             strength=0.3,
             supporting_factors={},
@@ -116,12 +116,12 @@ class TestStrategySelector(unittest.TestCase):
         self.assertIn(signal.strategy_type, [StrategyType.MEAN_REVERSION, StrategyType.TREND_FOLLOWING])
         self.assertGreater(signal.confidence, 0.3)
 
-    def test_select_strategy_volatile_regime(self):
-        """Test strategy selection for volatile regime"""
-        # Create volatile regime signal
+    def test_select_strategy_transition_regime(self):
+        """Test strategy selection for transition (volatile) regime"""
+        # Create transition regime signal
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.VOLATILE,
+            regime=MarketRegime.TRANSITION,
             confidence=0.8,
             strength=0.8,
             supporting_factors={},
@@ -136,11 +136,11 @@ class TestStrategySelector(unittest.TestCase):
         self.assertGreater(signal.confidence, 0.5)
 
     def test_select_strategy_quiet_regime(self):
-        """Test strategy selection for quiet regime"""
-        # Create quiet regime signal
+        """Test strategy selection for quiet (neutral low-vol) regime"""
+        # Create quiet regime signal (Phase 8: QUIET -> NEUTRAL)
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.QUIET,
+            regime=MarketRegime.NEUTRAL,
             confidence=0.9,
             strength=0.2,
             supporting_factors={},
@@ -155,11 +155,11 @@ class TestStrategySelector(unittest.TestCase):
         self.assertGreater(signal.confidence, 0.5)
 
     def test_select_strategy_breakout_regime(self):
-        """Test strategy selection for breakout regime"""
-        # Create breakout regime signal
+        """Test strategy selection for breakout (RISK_ON) regime"""
+        # Create breakout regime signal (Phase 8: BREAKOUT_UP -> RISK_ON)
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.BREAKOUT_UP,
+            regime=MarketRegime.RISK_ON,
             confidence=0.85,
             strength=0.9,
             supporting_factors={},
@@ -169,8 +169,8 @@ class TestStrategySelector(unittest.TestCase):
         # Select strategy
         signal = self.selector.select_strategy(regime_signal)
 
-        # Should favor breakout strategies
-        self.assertEqual(signal.strategy_type, StrategyType.BREAKOUT)
+        # Should favor trend following for risk-on (Phase 8: BREAKOUT_UP → RISK_ON)
+        self.assertEqual(signal.strategy_type, StrategyType.TREND_FOLLOWING)
         self.assertGreater(signal.confidence, 0.5)
 
     def test_fallback_on_error(self):
@@ -197,7 +197,7 @@ class TestStrategySelector(unittest.TestCase):
         """Test that selection history is maintained"""
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.TRENDING_UP,
+            regime=MarketRegime.RISK_ON,
             confidence=0.8,
             strength=0.7,
             supporting_factors={},
@@ -205,7 +205,7 @@ class TestStrategySelector(unittest.TestCase):
         )
 
         # Make multiple selections
-        for i in range(3):
+        for _i in range(3):
             self.selector.select_strategy(regime_signal)
 
         history = self.selector.get_selection_history()
@@ -219,7 +219,7 @@ class TestStrategySelector(unittest.TestCase):
         """Test getting current strategy"""
         regime_signal = RegimeSignal(
             symbol=self.symbol,
-            regime=MarketRegime.TRENDING_UP,
+            regime=MarketRegime.RISK_ON,
             confidence=0.8,
             strength=0.7,
             supporting_factors={},

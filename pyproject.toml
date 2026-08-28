@@ -1,0 +1,57 @@
+[project]
+name = "marketlens"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+# ---------------------------------------------------------------------------
+# Ruff — Python linter + formatter runner
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Exclude directories that are not part of the Python package.
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+    "frontend",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+]
+
+[tool.ruff.lint]
+# E/W = pycodestyle errors + warnings
+# F   = pyflakes (imports, names)
+# I   = isort (import ordering)
+# B   = flake8-bugbear (common bugs)
+# UP  = pyupgrade (modernise syntax)
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length — formatter's job, not linter's
+    "B008",  # fastapi Depends() in function defaults is intentional
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**" = ["B011"]  # reusing a name in a test is fine
+"scripts/**"       = ["E402"]  # path setup before imports in entry points
+
+# ---------------------------------------------------------------------------
+# MyPy — Optional Python type checker
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+exclude = [
+    "frontend/",
+    "build/",
+    "dist/",
+    ".venv/",
+]
+
+# Phase 1 requires the tool to RUN, not to produce zero warnings.
+# The codebase will have many mypy findings; strictness is a future phase.
+check_untyped_defs = true
+warn_unused_ignores = false
+warn_redundant_casts = false
+no_implicit_optional = false

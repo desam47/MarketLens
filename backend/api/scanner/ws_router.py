@@ -131,7 +131,7 @@ class ScannerBroadcastManager:
             async with self._lock:
                 for ws_id in dead:
                     self._sockets.pop(ws_id, None)
-                    for key, ids in self._subs.items():
+                    for _, ids in self._subs.items():
                         if ws_id in ids:
                             ids.discard(ws_id)
                 # Purge empty buckets.
@@ -166,6 +166,18 @@ class ScannerDispatcher:
         self._manager = manager
         self._loop = loop
         self._registered = False
+        # Per-symbol cooldown: the dispatcher is called once per
+        # engine_registry quote event, but quotes flow every ~30s. To
+        # avoid re-scanning the *same* symbol more than once per
+        # cooldown window (e.g. when multiple ingestion ticks land in
+        # quick succession), we track the last successful scan
+        # timestamp per symbol and skip re-runs that come in too soon.
+        # Symbol → monotonic seconds of last successful scan.
+        self._last_scan_at: dict[str, float] = {}
+        # Cooldown in seconds. 30s matches the ingestion quote interval,
+        # so a normal flow produces at most one scan per symbol per
+        # cycle. Backtests / real-time bursts are still throttled.
+        self._cooldown_seconds: float = 30.0
 
     def register(self) -> None:
         """Attach to ``engine_registry`` (idempotent)."""
@@ -199,9 +211,26 @@ class ScannerDispatcher:
             logger.debug(f"ScannerDispatcher could not schedule: {e}")
 
     async def _scan_and_broadcast_all(self) -> None:
-        """Re-scan every symbol that currently has a subscriber."""
+        """Re-scan every subscribed symbol, respecting the per-symbol cooldown.
+
+        Phase 20 perf fix: the dispatcher is triggered on every
+        ``engine_registry`` quote event, but a single quote can fire
+        many times per second under load (especially when the regime
+        engine or scanner has multiple subscribers). Without throttling
+        we re-scan + re-serialize + broadcast for every tick. The
+        cooldown table (``_last_scan_at``) means each symbol is scanned
+        at most once per ``_cooldown_seconds`` window.
+        """
+        import time as _time
         symbols = self._manager.get_subscribed_symbols()
+        now = _time.monotonic()
         for symbol in symbols:
+            # Cooldown gate: skip the scan (and the broadcast) if we
+            # already produced a result for this symbol very recently.
+            last = self._last_scan_at.get(symbol, 0.0)
+            if now - last < self._cooldown_seconds:
+                continue
+
             # Re-check after the scan starts — a subscription may have
             # been removed in the meantime, in which case we skip the
             # broadcast but still run the scan (the cached result is
@@ -217,6 +246,11 @@ class ScannerDispatcher:
                         {"type": "scan_error", "symbol": symbol, "error": str(e)},
                     )
                 continue
+
+            # Record successful scan time *before* the broadcast so
+            # that a slow send doesn't get bypassed by a re-entry
+            # that races with the same scan.
+            self._last_scan_at[symbol] = _time.monotonic()
 
             if not self._manager.has_subscribers(symbol):
                 continue

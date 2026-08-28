@@ -2,16 +2,25 @@
 Multi-timeframe analysis engine for detecting trend confluence and alignment.
 """
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
+from ..config.settings import settings
 from ..engines.timeframe import Timeframe
-from ..trend.trend_engine import TrendDirection, TrendEngine, TrendSignal, TrendStrength
+from ..trend.trend_engine import (
+    TrendClassification,
+    TrendDirection,
+    TrendEngine,
+    TrendSignal,
+    TrendStrength,
+    strength_to_float,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ConfluenceDirection(str, Enum):
+class ConfluenceDirection(StrEnum):
     """Overall market direction based on multiple timeframes"""
     STRONG_UPTREND = "strong_uptrend"
     UPTREND = "uptrend"
@@ -22,8 +31,73 @@ class ConfluenceDirection(str, Enum):
     STRONG_DOWNTREND = "strong_downtrend"
 
 
+# Phase 7 spec: two named preset configurations.
+# Day trading: 5m → 1d (no 1m, no 1w).
+# Swing:      15m → 1w (no 1m, no 5m, no 30m).
+# These are intentionally frozensets (not dicts) — order doesn't matter,
+# only membership does.
+PRESET_SCALPER: frozenset[Timeframe] = frozenset({
+    Timeframe.ONE_MINUTE,
+    Timeframe.TWO_MINUTE,
+    Timeframe.THREE_MINUTE,
+    Timeframe.FIVE_MINUTE,
+    Timeframe.FIFTEEN_MINUTE,
+})
+
+PRESET_DAY_TRADING: frozenset[Timeframe] = frozenset({
+    Timeframe.FIVE_MINUTE,
+    Timeframe.FIFTEEN_MINUTE,
+    Timeframe.THIRTY_MINUTE,
+    Timeframe.ONE_HOUR,
+    Timeframe.FOUR_HOUR,
+})
+
+PRESET_SWING: frozenset[Timeframe] = frozenset({
+    Timeframe.FIFTEEN_MINUTE,
+    Timeframe.ONE_HOUR,
+    Timeframe.FOUR_HOUR,
+    Timeframe.ONE_DAY,
+    Timeframe.ONE_WEEK,
+})
+
+# All 8 timeframes the spec demands. The full set is what callers can
+# opt into via the "all" preset name.
+ALL_TIMEFRAMES: frozenset[Timeframe] = frozenset({
+    Timeframe.ONE_MINUTE,
+    Timeframe.FIVE_MINUTE,
+    Timeframe.FIFTEEN_MINUTE,
+    Timeframe.THIRTY_MINUTE,
+    Timeframe.ONE_HOUR,
+    Timeframe.FOUR_HOUR,
+    Timeframe.ONE_DAY,
+    Timeframe.ONE_WEEK,
+})
+
+# Order matters: the dashboard renders presets in this order.
+_PRESET_MAP: dict[str, frozenset[Timeframe]] = {
+    "scalper": PRESET_SCALPER,
+    "day_trading": PRESET_DAY_TRADING,
+    "swing": PRESET_SWING,
+    "all": ALL_TIMEFRAMES,
+}
+
+PRESET_NAMES: tuple[str, ...] = ("scalper", "day_trading", "swing", "all")
+
+
 class ConfluenceSignal:
-    """Represents a multi-timeframe confluence signal"""
+    """Represents a multi-timeframe confluence signal.
+
+    Carries the spec's alignment metrics in additive form so existing
+    API consumers keep working. The new fields are:
+
+    - ``bullish_alignment``  : fraction of TFs in UPTREND (0..1)
+    - ``bearish_alignment``  : fraction of TFs in DOWNTREND (0..1)
+    - ``conflicting``        : count of TFs disagreeing with the majority
+    - ``short_term_direction``, ``intermediate_direction``,
+      ``higher_direction`` : the directional bucket at each end of the
+      preset's time horizon and the median
+    - ``preset``            : which preset produced this signal
+    """
 
     def __init__(self,
                  symbol: str,
@@ -31,42 +105,154 @@ class ConfluenceSignal:
                  strength: float,  # 0.0 to 1.0
                  alignment_score: float,  # How aligned timeframes are (0.0 to 1.0)
                  timeframe_signals: dict[Timeframe, TrendSignal],
-                 timestamp: datetime):
+                 timestamp: datetime,
+                 bullish_alignment: float = 0.0,
+                 bearish_alignment: float = 0.0,
+                 conflicting: int = 0,
+                 short_term_direction: TrendDirection = TrendDirection.UNKNOWN,
+                 intermediate_direction: TrendDirection = TrendDirection.UNKNOWN,
+                 higher_direction: TrendDirection = TrendDirection.UNKNOWN,
+                 preset: str = "day_trading"):
         self.symbol = symbol
         self.direction = direction
         self.strength = strength
         self.alignment_score = alignment_score
         self.timeframe_signals = timeframe_signals
         self.timestamp = timestamp
+        # Phase 7 additions:
+        self.bullish_alignment = bullish_alignment
+        self.bearish_alignment = bearish_alignment
+        self.conflicting = conflicting
+        self.short_term_direction = short_term_direction
+        self.intermediate_direction = intermediate_direction
+        self.higher_direction = higher_direction
+        self.preset = preset
 
     def __repr__(self):
         return (f"ConfluenceSignal({self.symbol} {self.direction.value} "
-                f"str:{self.strength:.2f} align:{self.alignment_score:.2f})")
+                f"str:{self.strength:.2f} align:{self.alignment_score:.2f} "
+                f"preset:{self.preset})")
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 spec models: TimeframeTrendSnapshot + MultiTimeframeSnapshot
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TimeframeTrendSnapshot:
+    """Snapshot of one timeframe's trend state.
+
+    Mirrors the Phase 6 ``TrendSnapshot`` shape, trimmed to the fields
+    that are meaningful for a single timeframe (no per-TF momentum vs
+    structure — those are on the underlying ``TrendSnapshot`` and stay
+    there).
+    """
+    symbol: str
+    timeframe: Timeframe
+    timestamp: datetime
+    direction: TrendClassification     # Phase 6 8-class bucket
+    score: float                        # -100..+100
+    strength: float                     # 0.0..1.0 (numeric, from strength_to_float)
+    confidence: float                   # 0.0..1.0
+    data_quality: str
+    strategy_version: str
+
+
+@dataclass
+class MultiTimeframeSnapshot:
+    """Multi-timeframe confluence snapshot for a symbol.
+
+    Carries every field the Phase 7 spec explicitly demands:
+    alignment, bullish alignment, bearish alignment, conflicting
+    timeframes, short/intermediate/higher-timeframe direction. Plus
+    the per-TF map for downstream callers that want to render the
+    matrix.
+    """
+    symbol: str
+    timestamp: datetime
+    preset: str                         # "day_trading" | "swing" | "all"
+    direction: ConfluenceDirection      # 7-class overall bucket
+    strength: float                     # 0.0..1.0
+    alignment_score: float              # 0.0..1.0
+    bullish_alignment: float            # 0.0..1.0
+    bearish_alignment: float            # 0.0..1.0
+    conflicting: int                    # TFs disagreeing with majority
+    short_term_direction: TrendClassification    # shortest active TF
+    intermediate_direction: TrendClassification  # median active TF
+    higher_direction: TrendClassification        # longest active TF
+    timeframe_snapshots: dict[Timeframe, TimeframeTrendSnapshot] = field(
+        default_factory=dict,
+    )
+    strategy_version: str = ""
+
+
+def _timeframe_seconds(tf: Timeframe) -> int:
+    """Rough ordering key for short/intermediate/higher bucketing.
+
+    Not a real "duration" — we don't care about exact seconds — just a
+    monotonic sort key so the shortest TF lands at index 0 and the
+    longest at the end. We only use this to pick the
+    short/intermediate/higher representatives, so an approximation is
+    fine.
+    """
+    return {
+        Timeframe.ONE_MINUTE: 60,
+        Timeframe.FIVE_MINUTE: 300,
+        Timeframe.FIFTEEN_MINUTE: 900,
+        Timeframe.THIRTY_MINUTE: 1800,
+        Timeframe.ONE_HOUR: 3600,
+        Timeframe.TWO_HOUR: 7200,
+        Timeframe.FOUR_HOUR: 14400,
+        Timeframe.ONE_DAY: 86400,
+        Timeframe.ONE_WEEK: 604800,
+    }.get(tf, 0)
 
 
 class MultiTimeframeEngine:
-    """Engine for analyzing trends across multiple timeframes"""
+    """Engine for analyzing trends across multiple timeframes.
 
-    def __init__(self, symbol: str):
+    Per Phase 7 spec, builds one trend engine per *preset* timeframe.
+    The full 8-TF list (``ALL_TIMEFRAMES``) is also available via the
+    ``preset="all"`` arg. Timeframe weights for the overall confluence
+    score come from ``settings.multitimeframe.weights`` (Principle 11)
+    rather than a hard-coded dict.
+    """
+
+    def __init__(self, symbol: str, preset: str | None = None):
         self.symbol = symbol
+        self.preset_name = preset or settings.multitimeframe.default_preset
+        # Resolve the preset. Unknown names fall back to day_trading
+        # for safety (the spec says "do not assume all timeframes are
+        # equally important" — silently using a superset would
+        # violate that intent).
+        self.active_timeframes: frozenset[Timeframe] = (
+            _PRESET_MAP.get(self.preset_name, PRESET_DAY_TRADING)
+        )
+        # The legacy class advertised a single ordered `analysis_timeframes`
+        # list for the API/tests to inspect. Keep the same shape, filtered
+        # by the preset, ordered short → long.
+        self.analysis_timeframes: list[Timeframe] = sorted(
+            self.active_timeframes, key=_timeframe_seconds,
+        )
+
         self.trend_engines: dict[Timeframe, TrendEngine] = {}
 
-        # Confluence history
-        self.confluence_history: list[ConfluenceSignal] = []
+        # Per-TF weight lookup. Replaces the hard-coded dict that used
+        # to live inside _calculate_overall_direction.
+        self.timeframe_weights: dict[str, float] = dict(
+            settings.multitimeframe.weights,
+        )
 
-        # Define which timeframes to analyze (prioritizing key ones)
-        self.analysis_timeframes = [
-            Timeframe.FIVE_MINUTE,
-            Timeframe.FIFTEEN_MINUTE,
-            Timeframe.ONE_HOUR,
-            Timeframe.FOUR_HOUR,
-            Timeframe.ONE_DAY
-        ]
+        # Confluence history (existing — unchanged shape)
+        self.confluence_history: list[ConfluenceSignal] = []
+        # Phase 7: parallel snapshot history (new dataclass)
+        self.snapshot_history: list[MultiTimeframeSnapshot] = []
 
         self._initialize_trend_engines()
 
     def _initialize_trend_engines(self):
-        """Initialize trend engines for each timeframe we want to analyze"""
+        """Initialize trend engines for each active timeframe."""
         for timeframe in self.analysis_timeframes:
             self.trend_engines[timeframe] = TrendEngine(self.symbol)
 
@@ -74,16 +260,20 @@ class MultiTimeframeEngine:
                provider: str = "") -> None:
         """Update all timeframe engines with new market data"""
         # Update each trend engine
-        for timeframe, engine in self.trend_engines.items():
+        for _timeframe, engine in self.trend_engines.items():
             engine.update(price, volume, timestamp, provider)
 
-        # Generate confluence signal
+        # Generate confluence signal + snapshot
         self._generate_confluence_signal(timestamp)
 
+    # ------------------------------------------------------------------
+    # Confluence signal + snapshot
+    # ------------------------------------------------------------------
+
     def _generate_confluence_signal(self, timestamp: datetime) -> None:
-        """Generate a multi-timeframe confluence signal"""
-        # Get current trends from all timeframes
-        timeframe_signals = {}
+        """Generate a multi-timeframe confluence signal and snapshot."""
+        # Get current trends from all active timeframes
+        timeframe_signals: dict[Timeframe, TrendSignal] = {}
         for timeframe, engine in self.trend_engines.items():
             trend = engine.get_current_trend(timeframe)
             if trend:
@@ -92,35 +282,60 @@ class MultiTimeframeEngine:
         if not timeframe_signals:
             return
 
-        # Calculate alignment score (how many timeframes agree)
+        # Existing alignment score (dominant-direction fraction)
         alignment_score = self._calculate_alignment(timeframe_signals)
 
-        # Determine overall direction and strength
+        # New (Phase 7) alignment metrics
+        bullish_align, bearish_align, conflicting_count = (
+            self._calculate_directional_alignment(timeframe_signals)
+        )
+
+        # Short / intermediate / higher-timeframe direction picks
+        short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
+            timeframe_signals,
+        )
+
+        # Existing overall direction + strength (unchanged logic)
         direction, strength = self._calculate_overall_direction(timeframe_signals)
 
-        # Create confluence signal
+        # Build the ConfluenceSignal with the new fields layered on.
         signal = ConfluenceSignal(
             symbol=self.symbol,
             direction=direction,
             strength=strength,
             alignment_score=alignment_score,
             timeframe_signals=timeframe_signals,
-            timestamp=timestamp
+            timestamp=timestamp,
+            bullish_alignment=bullish_align,
+            bearish_alignment=bearish_align,
+            conflicting=conflicting_count,
+            short_term_direction=short_dir,
+            intermediate_direction=inter_dir,
+            higher_direction=higher_dir,
+            preset=self.preset_name,
         )
 
-        # Store in history
+        # Store in history (capped at 1000)
         self.confluence_history.append(signal)
-
-        # Keep only last 1000 signals to prevent memory issues
         if len(self.confluence_history) > 1000:
             self.confluence_history = self.confluence_history[-1000:]
 
-    def _calculate_alignment(self, signals: dict[Timeframe, TrendSignal]) -> float:
-        """Calculate how aligned the timeframes are (0.0 = no alignment, 1.0 = perfect alignment)"""
-        if len(signals) < 2:
-            return 1.0  # Single timeframe is perfectly aligned with itself
+        # Build the snapshot (Phase 7 dataclass) and append to history.
+        snapshot = self.build_snapshot(timestamp)
+        if snapshot is not None:
+            self.snapshot_history.append(snapshot)
+            if len(self.snapshot_history) > 1000:
+                self.snapshot_history = self.snapshot_history[-1000:]
 
-        # Count uptrend, downtrend, and sideways signals
+    # ------------------------------------------------------------------
+    # Alignment calculations
+    # ------------------------------------------------------------------
+
+    def _calculate_alignment(self, signals: dict[Timeframe, TrendSignal]) -> float:
+        """How aligned the timeframes are (0.0 = no alignment, 1.0 = perfect)."""
+        if len(signals) < 2:
+            return 1.0
+
         uptrend_count = 0
         downtrend_count = 0
         sideways_count = 0
@@ -135,34 +350,92 @@ class MultiTimeframeEngine:
 
         total = len(signals)
         max_count = max(uptrend_count, downtrend_count, sideways_count)
-
-        # Alignment is the percentage of timeframes in the dominant direction
         return max_count / total if total > 0 else 0.0
 
-    def _calculate_overall_direction(self,
-                                   signals: dict[Timeframe, TrendSignal]) -> tuple[ConfluenceDirection, float]:
-        """Calculate overall direction and strength from timeframe signals"""
+    def _calculate_directional_alignment(
+        self, signals: dict[Timeframe, TrendSignal],
+    ) -> tuple[float, float, int]:
+        """Return (bullish_align, bearish_align, conflicting_count).
+
+        - ``bullish_align`` : fraction of TFs in UPTREND (0..1)
+        - ``bearish_align`` : fraction of TFs in DOWNTREND (0..1)
+        - ``conflicting``   : number of TFs not in the majority direction
+
+        SIDEWAYS counts as neither bullish nor bearish; if SIDEWAYS is
+        the majority, then *both* bullish and bearish counts are 0 and
+        ``conflicting`` equals the total (everything disagrees with the
+        majority).
+        """
+        if not signals:
+            return 0.0, 0.0, 0
+        uptrend_count = sum(
+            1 for s in signals.values() if s.direction == TrendDirection.UPTREND
+        )
+        downtrend_count = sum(
+            1 for s in signals.values() if s.direction == TrendDirection.DOWNTREND
+        )
+        sideways_count = sum(
+            1 for s in signals.values()
+            if s.direction not in (TrendDirection.UPTREND, TrendDirection.DOWNTREND)
+        )
+        total = len(signals)
+        majority = max(uptrend_count, downtrend_count, sideways_count)
+        return (
+            uptrend_count / total,
+            downtrend_count / total,
+            total - majority,
+        )
+
+    def _calculate_horizon_directions(
+        self, signals: dict[Timeframe, TrendSignal],
+    ) -> tuple[TrendDirection, TrendDirection, TrendDirection]:
+        """Pick the directional bucket for short/intermediate/higher TFs.
+
+        - short : shortest active TF that has a signal
+        - higher: longest active TF that has a signal
+        - intermediate: median (by ``_timeframe_seconds``) active TF
+
+        Returns ``(UNKNOWN, UNKNOWN, UNKNOWN)`` if there are no signals.
+        For a single-TF preset, all three return the same direction.
+        """
+        if not signals:
+            return (TrendDirection.UNKNOWN,
+                    TrendDirection.UNKNOWN,
+                    TrendDirection.UNKNOWN)
+        ordered = sorted(signals.keys(), key=_timeframe_seconds)
+        short = ordered[0]
+        higher = ordered[-1]
+        mid_idx = len(ordered) // 2
+        intermediate = ordered[mid_idx]
+        return (
+            signals[short].direction,
+            signals[intermediate].direction,
+            signals[higher].direction,
+        )
+
+    # ------------------------------------------------------------------
+    # Existing overall-direction calculation (preserved verbatim logic
+    # but now reading weights from settings instead of a hard-coded
+    # dict — the only change is the source of the weight value).
+    # ------------------------------------------------------------------
+
+    def _calculate_overall_direction(
+        self, signals: dict[Timeframe, TrendSignal],
+    ) -> tuple[ConfluenceDirection, float]:
+        """Calculate overall direction and strength from timeframe signals."""
         if not signals:
             return ConfluenceDirection.NEUTRAL, 0.0
 
-        # Weight timeframes by their importance (longer timeframes get more weight)
-        timeframe_weights = {
-            Timeframe.FIVE_MINUTE: 0.1,
-            Timeframe.FIFTEEN_MINUTE: 0.15,
-            Timeframe.ONE_HOUR: 0.2,
-            Timeframe.FOUR_HOUR: 0.25,
-            Timeframe.ONE_DAY: 0.3
-        }
-
-        # Calculate weighted scores
+        # Weights come from settings — Principle 11 compliance.
+        # Falls back to a small default for unknown timeframes so a
+        # caller adding a new TF to a preset doesn't silently get 0.0.
         weighted_score = 0.0
         total_weight = 0.0
-        strength_values = []
+        strength_values: list[int] = []
 
         for timeframe, signal in signals.items():
-            weight = timeframe_weights.get(timeframe, 0.1)
+            weight = self.timeframe_weights.get(timeframe.value, 0.05)
 
-            # Convert direction to numeric score
             if signal.direction == TrendDirection.UPTREND:
                 score = 1
             elif signal.direction == TrendDirection.DOWNTREND:
@@ -173,29 +446,23 @@ class MultiTimeframeEngine:
             weighted_score += score * weight * signal.confidence
             total_weight += weight
 
-            # Convert strength to numeric value for averaging
             strength_map = {
                 TrendStrength.WEAK: 1,
                 TrendStrength.MODERATE: 2,
                 TrendStrength.STRONG: 3,
-                TrendStrength.VERY_STRONG: 4
+                TrendStrength.VERY_STRONG: 4,
             }
             strength_values.append(strength_map.get(signal.strength, 2))
 
-        if total_weight > 0:
-            avg_score = weighted_score / total_weight
-        else:
-            avg_score = 0.0
+        avg_score = weighted_score / total_weight if total_weight > 0 else 0.0
+        avg_strength_raw = (
+            sum(strength_values) / len(strength_values) if strength_values else 2
+        )
+        avg_strength = (avg_strength_raw - 1) / 3  # 1..4 → 0..1
 
-        # Calculate average strength (normalized to 0-1)
-        avg_strength_raw = sum(strength_values) / len(strength_values) if strength_values else 2
-        avg_strength = (avg_strength_raw - 1) / 3  # Convert 1-4 range to 0-1
-
-        # Determine confluence direction based on score and alignment
         alignment = self._calculate_alignment(signals)
 
-        # Strong signals require both good alignment and decent score
-        if alignment > 0.6:  # At least 60% alignment
+        if alignment > 0.6:
             if avg_score > 0.3:
                 direction = ConfluenceDirection.STRONG_UPTREND
             elif avg_score > 0.1:
@@ -207,7 +474,6 @@ class MultiTimeframeEngine:
             else:
                 direction = ConfluenceDirection.STRONG_DOWNTREND
         else:
-            # Poor alignment - reduce to weaker signals
             if avg_score > 0.2:
                 direction = ConfluenceDirection.WEAK_UPTREND
             elif avg_score < -0.2:
@@ -215,11 +481,77 @@ class MultiTimeframeEngine:
             else:
                 direction = ConfluenceDirection.NEUTRAL
 
-        # Strength is combination of alignment and average strength
         final_strength = (alignment * 0.5) + (avg_strength * 0.5)
-        final_strength = max(0.0, min(1.0, final_strength))  # Clamp to 0-1
-
+        final_strength = max(0.0, min(1.0, final_strength))
         return direction, final_strength
+
+    # ------------------------------------------------------------------
+    # Snapshot builder (Phase 7 dataclass)
+    # ------------------------------------------------------------------
+
+    def build_snapshot(
+        self, timestamp: datetime | None = None,
+    ) -> MultiTimeframeSnapshot | None:
+        """Build a MultiTimeframeSnapshot from the current per-TF state.
+
+        Returns ``None`` if no per-TF trend signal has been produced yet
+        (matches the Phase 6 ``TrendEngine.build_snapshot`` contract).
+        The snapshot's per-TF map uses the 8-class ``TrendClassification``
+        (Phase 6) rather than the 4-class ``TrendDirection`` — the spec
+        calls for the more granular bucket.
+        """
+        ts = timestamp or datetime.now()
+        timeframe_signals = self.get_all_timeframe_trends()
+        if not timeframe_signals:
+            return None
+
+        # Per-TF snapshots
+        tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] = {}
+        for tf, sig in timeframe_signals.items():
+            tf_snapshots[tf] = TimeframeTrendSnapshot(
+                symbol=self.symbol,
+                timeframe=tf,
+                timestamp=sig.timestamp,
+                direction=sig.classification,
+                score=sig.score,
+                strength=strength_to_float(sig.strength),
+                confidence=sig.confidence,
+                data_quality=sig.data_quality,
+                strategy_version=settings.trend.strategy_version,
+            )
+
+        # Aggregate metrics (re-derive from the per-TF signals so this
+        # method is independent of the confluence signal having been
+        # generated in this same tick).
+        bullish_align, bearish_align, conflicting = (
+            self._calculate_directional_alignment(timeframe_signals)
+        )
+        alignment_score = self._calculate_alignment(timeframe_signals)
+        short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
+            timeframe_signals,
+        )
+        direction, strength = self._calculate_overall_direction(timeframe_signals)
+
+        return MultiTimeframeSnapshot(
+            symbol=self.symbol,
+            timestamp=ts,
+            preset=self.preset_name,
+            direction=direction,
+            strength=strength,
+            alignment_score=alignment_score,
+            bullish_alignment=bullish_align,
+            bearish_alignment=bearish_align,
+            conflicting=conflicting,
+            short_term_direction=short_dir,
+            intermediate_direction=inter_dir,
+            higher_direction=higher_dir,
+            timeframe_snapshots=tf_snapshots,
+            strategy_version=settings.trend.strategy_version,
+        )
+
+    # ------------------------------------------------------------------
+    # Accessors
+    # ------------------------------------------------------------------
 
     def get_current_confluence(self) -> ConfluenceSignal | None:
         """Get the current confluence signal"""
@@ -231,7 +563,25 @@ class MultiTimeframeEngine:
         """Get confluence signal history"""
         if limit is None:
             return self.confluence_history.copy()
-        return self.confluence_history[-limit:] if len(self.confluence_history) > limit else self.confluence_history.copy()
+        return (self.confluence_history[-limit:]
+                if len(self.confluence_history) > limit
+                else self.confluence_history.copy())
+
+    def get_current_snapshot(self) -> MultiTimeframeSnapshot | None:
+        """Get the current MultiTimeframeSnapshot, or None if no data yet."""
+        if self.snapshot_history:
+            return self.snapshot_history[-1]
+        return None
+
+    def get_snapshot_history(
+        self, limit: int | None = None,
+    ) -> list[MultiTimeframeSnapshot]:
+        """Get MultiTimeframeSnapshot history."""
+        if limit is None:
+            return self.snapshot_history.copy()
+        return (self.snapshot_history[-limit:]
+                if len(self.snapshot_history) > limit
+                else self.snapshot_history.copy())
 
     def get_timeframe_trend(self, timeframe: Timeframe) -> TrendSignal | None:
         """Get current trend for a specific timeframe"""
@@ -241,8 +591,8 @@ class MultiTimeframeEngine:
         return None
 
     def get_all_timeframe_trends(self) -> dict[Timeframe, TrendSignal]:
-        """Get current trends for all analyzed timeframes"""
-        trends = {}
+        """Get current trends for all active timeframes"""
+        trends: dict[Timeframe, TrendSignal] = {}
         for timeframe, engine in self.trend_engines.items():
             trend = engine.get_current_trend(timeframe)
             if trend:

@@ -13,6 +13,7 @@ ALPN protocols. curl_cffi uses libcurl under the hood and correctly impersonates
 real browser (Chrome 120), bypassing the anti-bot protection.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from curl_cffi import requests as curl_requests
@@ -251,19 +252,39 @@ class YFinanceProvider(BaseMarketDataProvider):
             raise
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        quotes: dict[str, Quote] = {}
-        for symbol in symbols:
+        if not symbols:
+            return {}
+        results: dict[str, Quote] = {}
+        failed: list[str] = []
+
+        def _fetch_one(symbol: str) -> tuple[str, Quote | None, Exception | None]:
             try:
-                quotes[symbol] = self.get_quote(symbol)
-            except Exception:
-                quotes[symbol] = Quote(
-                    symbol=symbol.upper(),
-                    price=0.0,
-                    timestamp=datetime.utcnow(),
-                    provider=self.name,
-                    data_status=DataStatus.ERROR,
-                )
-        return quotes
+                return (symbol, self.get_quote(symbol), None)
+            except Exception as e:
+                return (symbol, None, e)
+
+        # Cap workers at 20 — YFinance rate-limits aggressively and a
+        # larger pool gets us blocked. 20 in-flight HTTP calls is the
+        # sweet spot for a residential connection.
+        with ThreadPoolExecutor(max_workers=min(len(symbols), 20)) as pool:
+            for symbol, quote, err in pool.map(_fetch_one, symbols):
+                if err is not None or quote is None:
+                    failed.append(symbol)
+                    results[symbol] = Quote(
+                        symbol=symbol.upper(),
+                        price=0.0,
+                        timestamp=datetime.utcnow(),
+                        provider=self.name,
+                        data_status=DataStatus.ERROR,
+                    )
+                else:
+                    results[symbol] = quote
+
+        if failed:
+            logger.warning(
+                f"get_batch_quotes: {len(failed)}/{len(symbols)} symbols failed: {failed}"
+            )
+        return results
 
     def get_market_status(self, symbol: str) -> MarketStatus:
         try:

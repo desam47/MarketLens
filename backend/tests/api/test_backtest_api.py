@@ -20,12 +20,18 @@ def _mock_run(**kwargs):
         start_date=datetime(2025, 1, 1),
         end_date=datetime(2025, 12, 31),
         signals_requested="RSI_OVERSOLD,MACD_BULLISH",
+        strategy_version="v1.0",
         status="completed",
         total_bars=250, total_signals=12,
         win_rate_1d=0.55, avg_return_1d=1.2, avg_return_5d=3.4, avg_return_20d=8.1,
         error=None,
         created_at=datetime(2025, 12, 31, 12, 0, 0),
         completed_at=datetime(2025, 12, 31, 12, 0, 5),
+        # Phase 14 extended fields
+        median_return_1d=1.0, median_return_5d=3.0, median_return_20d=7.5,
+        max_drawdown=-8.5, sharpe_ratio=1.2, profit_factor=1.5,
+        mfe_avg=4.2, mae_avg=-2.1, signal_frequency=0.048,
+        equity_curve_json=None, out_of_sample=False, overfitting_warning=None,
     )
     defaults.update(kwargs)
     m = MagicMock()
@@ -44,6 +50,7 @@ def _mock_trade(**kwargs):
         return_5d=2.5641,
         exit_date_20d=datetime(2025, 6, 27), exit_price_20d=205.0,
         return_20d=5.1282,
+        mfe=6.5, mae=-2.3,
     )
     defaults.update(kwargs)
     m = MagicMock()

@@ -1,0 +1,273 @@
+/**
+ * AIAnalysisPanel — Phase 16 AI symbol analysis card.
+ *
+ * Renders the structured output of /api/ai/analyze as a card on the
+ * Symbol page. When AI is disabled, the panel shows a neutral info state
+ * explaining how to enable it. The card surfaces:
+ *   - Trend direction + confidence badge
+ *   - AI summary
+ *   - Supporting factors vs. risk factors
+ *   - Timeframe conflicts
+ *   - Key levels
+ *   - Provider/model attribution
+ */
+import React, { useEffect, useState, useCallback } from 'react';
+import api, { AIAnalysisResult, AIConfig } from '../services/api';
+
+interface AIAnalysisPanelProps {
+  symbol: string;
+  timeframe?: string;
+}
+
+function trendColor(trend: string): string {
+  if (trend === 'bullish') return '#10b981';
+  if (trend === 'bearish') return '#ef4444';
+  return '#9ca3af';
+}
+
+function trendIcon(trend: string): string {
+  if (trend === 'bullish') return '🐂';
+  if (trend === 'bearish') return '🐻';
+  if (trend === 'uncertain') return '❓';
+  return '➡️';
+}
+
+function confidenceLabel(c: number): string {
+  return `${Math.round(c * 100)}%`;
+}
+
+function providerLabel(provider: string): string {
+  // Translate internal provider ids to user-visible names.
+  const map: Record<string, string> = {
+    ollama: 'Ollama',
+    openai: 'OpenAI',
+    anthropic: 'Anthropic',
+    disabled: 'AI disabled',
+    none: 'AI unavailable',
+    unknown: 'AI',
+  };
+  return map[provider] || provider;
+}
+
+export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelProps) {
+  const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
+  const [config, setConfig] = useState<AIConfig | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasRun, setHasRun] = useState(false);
+  const [toggling, setToggling] = useState(false);
+
+  // Fetch AI config on mount so the user knows whether the feature is available.
+  useEffect(() => {
+    let cancelled = false;
+    api.getAIConfig()
+      .then(cfg => { if (!cancelled) setConfig(cfg); })
+      .catch(() => { /* config endpoint may be down; non-fatal */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const runAnalysis = useCallback(async () => {
+    if (!symbol) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.analyzeSymbol(symbol, timeframe);
+      setAnalysis(result);
+      setHasRun(true);
+    } catch (e: any) {
+      setError(e.message || 'Analysis failed');
+      setHasRun(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [symbol, timeframe]);
+
+  // Auto-run on mount when AI is enabled and the symbol changes.
+  useEffect(() => {
+    if (config?.enabled) {
+      runAnalysis();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe, config?.enabled]);
+
+  const aiDisabled = config ? !config.enabled : undefined;
+
+  const toggleAI = useCallback(async () => {
+    if (!config) return;
+    setToggling(true);
+    setError(null);
+    try {
+      const updated = await api.setAIEnabled(!config.enabled);
+      setConfig(updated);
+      // Clear stale analysis when AI is turned off.
+      if (!updated.enabled) {
+        setAnalysis(null);
+        setHasRun(false);
+      }
+    } catch (e: any) {
+      setError(e.message || 'Failed to update AI setting');
+    } finally {
+      setToggling(false);
+    }
+  }, [config]);
+
+  return (
+    <div className="card ai-analysis-card">
+      <div className="ai-header-row">
+        <h2>
+          <span className="ai-icon">🤖</span> AI Analysis
+          {analysis && (
+            <span className="ai-provider-tag" title={`model: ${analysis.model}`}>
+              {providerLabel(analysis.provider)}
+            </span>
+          )}
+        </h2>
+        {config && (
+          <label className="ai-toggle" title="Enable or disable AI at runtime">
+            <input
+              type="checkbox"
+              checked={config.enabled}
+              onChange={toggleAI}
+              disabled={toggling}
+            />
+            <span className={`ai-toggle-pill ${config.enabled ? 'on' : 'off'}`}>
+              {toggling ? '…' : config.enabled ? 'On' : 'Off'}
+            </span>
+          </label>
+        )}
+        <button
+          className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
+          onClick={runAnalysis}
+          disabled={loading || aiDisabled}
+          title={aiDisabled ? 'AI is disabled' : 'Re-run AI analysis'}
+        >
+          {loading ? '⟳ Analyzing…' : hasRun ? '↻ Re-run' : '✨ Analyze'}
+        </button>
+      </div>
+
+      {aiDisabled && (
+        <div className="ai-disabled-info">
+          <p>⚠️ AI is disabled.</p>
+          <p className="info-text">
+            Flip the toggle above to turn it on, or set
+            {' '}<code>AI_ENABLED=true</code> in your environment.
+            Configure with <code>AI_PROVIDER</code> (e.g. <code>ollama</code>,
+            {' '}<code>openai</code>) and <code>AI_MODEL</code>.
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div className="ai-error">
+          <p>⚠️ {error}</p>
+        </div>
+      )}
+
+      {!aiDisabled && !error && analysis && (
+        <div className="ai-body">
+          <div className="ai-trend-row">
+            <div
+              className="ai-trend-badge"
+              style={{
+                backgroundColor: trendColor(analysis.trend),
+                color: '#fff',
+              }}
+              title={`confidence: ${confidenceLabel(analysis.confidence)}`}
+            >
+              {trendIcon(analysis.trend)} {analysis.trend.toUpperCase()}
+            </div>
+            <div className="ai-confidence">
+              <div className="ai-conf-label">Confidence</div>
+              <div className="progress-bar ai-conf-bar">
+                <div
+                  className="progress-fill"
+                  style={{
+                    width: `${Math.round(analysis.confidence * 100)}%`,
+                    backgroundColor: trendColor(analysis.trend),
+                  }}
+                />
+              </div>
+              <div className="ai-conf-value">
+                {confidenceLabel(analysis.confidence)}
+              </div>
+            </div>
+            {analysis.is_uncertain && (
+              <span className="ai-uncertain-tag" title="AI was unable to produce a confident analysis">
+                uncertain
+              </span>
+            )}
+          </div>
+
+          <div className="ai-summary">
+            <p>{analysis.summary}</p>
+          </div>
+
+          {analysis.supporting_factors.length > 0 && (
+            <div className="ai-section ai-bullish">
+              <h3>🟢 Supporting Factors</h3>
+              <ul>
+                {analysis.supporting_factors.map((f, i) => (
+                  <li key={i}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {analysis.risk_factors.length > 0 && (
+            <div className="ai-section ai-bearish">
+              <h3>🔴 Risk Factors</h3>
+              <ul>
+                {analysis.risk_factors.map((f, i) => (
+                  <li key={i}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {analysis.timeframe_conflicts.length > 0 && (
+            <div className="ai-section ai-conflict">
+              <h3>⚖️ Timeframe Conflicts</h3>
+              <ul>
+                {analysis.timeframe_conflicts.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {analysis.key_levels.length > 0 && (
+            <div className="ai-section ai-levels">
+              <h3>🎯 Key Levels</h3>
+              <ul>
+                {analysis.key_levels.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="ai-footer">
+            <span className="info-text">
+              Model: <code>{analysis.model}</code>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {!aiDisabled && !error && !analysis && !loading && (
+        <div className="ai-empty">
+          <p>Click "Analyze" to run an AI-powered analysis of {symbol}.</p>
+        </div>
+      )}
+
+      {!aiDisabled && !error && loading && !analysis && (
+        <div className="ai-loading">
+          <p>🤖 Analyzing {symbol}…</p>
+          <p className="info-text">Gathering indicators and asking the AI model</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default AIAnalysisPanel;

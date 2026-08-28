@@ -3,7 +3,7 @@ Market regime detection engine for identifying market conditions.
 """
 import logging
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from ..engines.timeframe import Timeframe
@@ -20,15 +20,27 @@ from ..trend.trend_engine import TrendDirection, TrendEngine, TrendSignal
 logger = logging.getLogger(__name__)
 
 
-class MarketRegime(str, Enum):
-    """Market regime classifications"""
-    TRENDING_UP = "trending_up"
-    TRENDING_DOWN = "trending_down"
-    RANGING = "ranging"
-    VOLATILE = "volatile"
-    QUIET = "quiet"
-    BREAKOUT_UP = "breakout_up"
-    BREAKOUT_DOWN = "breakout_down"
+class MarketRegime(StrEnum):
+    """Phase 8: spec-compliant market regime classifications.
+
+    Per the Phase 8 spec, a regime is one of:
+        RISK_ON     - market participants are risk-on (uptrend)
+        RISK_OFF    - market participants are risk-off (downtrend)
+        NEUTRAL     - market is range-bound / no clear direction
+        TRANSITION  - market is in flux / high volatility
+        UNKNOWN     - not enough data to classify
+
+    The 4 spec names are the externally-visible values. The
+    ``MarketContextEngine`` aggregates 4 sub-regimes (SPY/QQQ/IWM/VIX)
+    into a single market-wide regime. Internally, the per-symbol
+    ``MarketRegimeEngine`` still runs the same classification logic;
+    its old internal buckets (TRENDING_UP, RANGING, etc.) collapse
+    to the 4 spec names before being returned.
+    """
+    RISK_ON = "risk_on"
+    RISK_OFF = "risk_off"
+    NEUTRAL = "neutral"
+    TRANSITION = "transition"
     UNKNOWN = "unknown"
 
 
@@ -235,28 +247,25 @@ class MarketRegimeEngine:
 
         # Regime classification logic
 
-        # 1. Check for extreme volatility (VOLATILE regime)
+        # 1. Check for extreme volatility → TRANSITION
         if volatility_pct > self.volatility_threshold_high:
             factors['primary_reason'] = 'high_volatility'
-            return MarketRegime.VOLATILE, min(0.9, volatility_pct * 10), 0.8, factors
+            return MarketRegime.TRANSITION, min(0.9, volatility_pct * 10), 0.8, factors
 
-        # 2. Check for low volatility (potential QUIET or squeeze leading to breakout)
+        # 2. Check for low volatility → NEUTRAL (or breakout direction)
         if volatility_pct < self.volatility_threshold_low:
             factors['primary_reason'] = 'low_volatility'
             if bb_width and bb_width < self.bb_width_threshold:
-                # Bollinger Band squeeze - potential breakout coming
+                # Bollinger Band squeeze — potential breakout coming
                 factors['squeeze_detected'] = True
-                # Determine breakout direction based on trend
                 if overall_trend.direction == TrendDirection.UPTREND:
-                    return MarketRegime.BREAKOUT_UP, 0.7, 0.6, factors
+                    return MarketRegime.RISK_ON, 0.7, 0.6, factors
                 elif overall_trend.direction == TrendDirection.DOWNTREND:
-                    return MarketRegime.BREAKOUT_DOWN, 0.7, 0.6, factors
+                    return MarketRegime.RISK_OFF, 0.7, 0.6, factors
                 else:
-                    # Neutral trend with squeeze = impending breakout but direction unclear
-                    return MarketRegime.QUIET, 0.6, 0.4, factors
+                    return MarketRegime.NEUTRAL, 0.6, 0.4, factors
             else:
-                # Low volatility without squeeze = quiet market
-                return MarketRegime.QUIET, 0.8, 0.3, factors
+                return MarketRegime.NEUTRAL, 0.8, 0.3, factors
 
         # 3. Check for trending markets (using ADX and alignment)
         is_trending = adx_value and adx_value > self.adx_trending_threshold
@@ -265,40 +274,35 @@ class MarketRegimeEngine:
         if is_trending and good_alignment:
             factors['primary_reason'] = 'strong_trend_good_alignment'
             if overall_trend.direction == TrendDirection.UPTREND:
-                confidence = min(0.9, 0.5 + (adx_value - 25) / 50 * 0.4)  # Scale ADX 25-75 to 0.5-0.9
+                confidence = min(0.9, 0.5 + (adx_value - 25) / 50 * 0.4)
                 strength = min(0.9, 0.4 + confluence_signal.alignment_score * 0.5)
-                return MarketRegime.TRENDING_UP, confidence, strength, factors
+                return MarketRegime.RISK_ON, confidence, strength, factors
             elif overall_trend.direction == TrendDirection.DOWNTREND:
                 confidence = min(0.9, 0.5 + (adx_value - 25) / 50 * 0.4)
                 strength = min(0.9, 0.4 + confluence_signal.alignment_score * 0.5)
-                return MarketRegime.TRENDING_DOWN, confidence, strength, factors
+                return MarketRegime.RISK_OFF, confidence, strength, factors
 
-        # 4. Check for weak/trending but poor alignment (could be ranging or choppy)
+        # 4. Check for weak/trending but poor alignment → NEUTRAL
         if is_trending and not good_alignment:
             factors['primary_reason'] = 'trending_poor_alignment'
-            # This often indicates a ranging market within a larger trend, or a weakening trend
             if overall_trend.confidence < 0.5:
-                return MarketRegime.RANGING, 0.6, 0.4, factors
+                return MarketRegime.NEUTRAL, 0.6, 0.4, factors
             else:
-                # Still trending but mixed timeframes
-                return MarketRegime.RANGING, 0.5, 0.3, factors
+                return MarketRegime.NEUTRAL, 0.5, 0.3, factors
 
-        # 5. Check for ranging markets (low ADX, mixed signals)
+        # 5. Check for ranging markets (low ADX, mixed signals) → NEUTRAL
         if not is_trending or (adx_value and adx_value < self.adx_trending_threshold):
             factors['primary_reason'] = 'low_adx_ranging'
-            # Additional confirmation: price oscillating around EMA/middle BB
             if bb_width and bb_width > self.bb_width_threshold * 1.5:
-                # Wide bands = ranging market
-                return MarketRegime.RANGING, 0.7, 0.5, factors
+                return MarketRegime.NEUTRAL, 0.7, 0.5, factors
             elif ema_fast_val and ema_slow_val:
-                # Price crossing EMAs frequently = ranging
-                return MarketRegime.RANGING, 0.6, 0.4, factors
+                return MarketRegime.NEUTRAL, 0.6, 0.4, factors
             else:
-                return MarketRegime.RANGING, 0.5, 0.3, factors
+                return MarketRegime.NEUTRAL, 0.5, 0.3, factors
 
         # 6. Default fallback
         factors['primary_reason'] = 'default_fallback'
-        return MarketRegime.RANGING, 0.4, 0.2, factors
+        return MarketRegime.NEUTRAL, 0.4, 0.2, factors
 
     def get_current_regime(self) -> RegimeSignal | None:
         """Get the current market regime signal"""

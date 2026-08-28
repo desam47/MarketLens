@@ -1,16 +1,15 @@
 """
 Unit tests for AlertsEngine.
 """
+import os
+import sys
 import time
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import sys
-import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../"))
 
-from backend.alerts.engine import AlertsEngine, DEDUP_WINDOW_SECONDS
+from backend.alerts.engine import DEDUP_WINDOW_SECONDS, AlertsEngine
 
 
 def _make_alert(
@@ -58,7 +57,7 @@ class TestAlertsEngineConditions(unittest.TestCase):
         ))
         result = _make_result(signals=["RSI_OVERSOLD", "MACD_BULLISH"])
 
-        with patch.object(self.engine, "_persist_trigger") as mock_persist:
+        with patch.object(self.engine, "_persist_trigger"):
             fired = self.engine._try_fire(
                 _make_alert(condition_type="signal_equals", parameter="RSI_OVERSOLD"),
                 price=150.0,
@@ -157,6 +156,30 @@ class TestAlertsEngineStartup(unittest.TestCase):
                 "quote", "AAPL", engine._on_quote
             )
 
+    def test_reload_registers_bar_callbacks(self):
+        engine = AlertsEngine()
+        from collections import defaultdict
+        engine._bar_alert_ids = defaultdict(list)
+
+        with patch("backend.alerts.engine.SessionLocal") as mock_session_cls, \
+             patch("backend.alerts.engine.engine_registry") as mock_registry:
+            mock_db = MagicMock()
+            mock_session_cls.return_value = mock_db
+            mock_db.query.return_value.filter.return_value.all.return_value = [
+                _make_alert(id=1, condition_type="breakout", parameter="20"),
+                _make_alert(id=2, condition_type="volume_expansion", parameter="2.0"),
+            ]
+            engine._started = True
+            engine._reload()
+            # Both AAPL alerts are bar-based — one register call is enough
+            # because the symbol is the same. Confirm at least one bar
+            # registration was made.
+            bar_calls = [c for c in mock_registry.register.call_args_list
+                         if c[0][0] == "bar"]
+            self.assertEqual(len(bar_calls), 1)
+            self.assertEqual(bar_calls[0][0][1], "AAPL")
+            self.assertEqual(bar_calls[0][0][2], engine._on_bar)
+
     def test_startup_idempotent(self):
         engine = AlertsEngine()
 
@@ -203,6 +226,95 @@ class TestAlertsEngineRegisterUnregister(unittest.TestCase):
             mock_registry.unregister.assert_called_once_with(
                 "quote", "AAPL", self.engine._on_quote
             )
+
+    def test_register_for_alert_bar_condition_registers_callback(self):
+        alert = _make_alert(id=1, condition_type="breakout", parameter="20")
+        with patch("backend.alerts.engine.engine_registry") as mock_registry:
+            self.engine.register_for_alert(alert)
+            mock_registry.register.assert_called_once_with(
+                "bar", "AAPL", self.engine._on_bar
+            )
+
+    def test_unregister_for_alert_bar_condition_removes_callback(self):
+        alert = _make_alert(id=1, condition_type="breakout", parameter="20")
+        from collections import defaultdict
+        self.engine._bar_alert_ids = defaultdict(list)
+        self.engine._bar_alert_ids["AAPL"].append(1)
+        self.engine._alerts_cache[1] = alert
+        with patch("backend.alerts.engine.engine_registry") as mock_registry:
+            self.engine.unregister_for_alert(alert)
+            mock_registry.unregister.assert_called_once_with(
+                "bar", "AAPL", self.engine._on_bar
+            )
+
+
+class TestAlertsEngineBarConditions(unittest.TestCase):
+    """Test _on_bar dispatches to the right condition group."""
+
+    def setUp(self):
+        self.engine = AlertsEngine()
+        self.engine._started = True
+        self.engine._alerts_cache = {}
+        from collections import defaultdict
+        self.engine._bar_alert_ids = defaultdict(list)
+
+    def _add_bar_alert(self, alert):
+        self.engine._alerts_cache[alert.id] = alert
+        self.engine._bar_alert_ids[alert.symbol.upper()].append(alert.id)
+
+    def test_on_bar_breakout_calls_try_fire(self):
+        alert = _make_alert(id=1, condition_type="breakout", parameter="20")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=True) as mock_fire, \
+             patch("backend.alerts.engine.build_breakout_payload",
+                   return_value={"current_price": 155.0, "highest_high": 150.0, "symbol": "AAPL"}):
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            self.assertTrue(mock_fire.called)
+            self.assertEqual(mock_fire.call_args[0][0], alert)
+            self.assertEqual(mock_fire.call_args[1]["extra_value"],
+                             {"current_price": 155.0, "highest_high": 150.0, "symbol": "AAPL"})
+
+    def test_on_bar_trend_conditions_use_trend_payload(self):
+        alert = _make_alert(id=1, condition_type="trend_crosses_above_70", parameter="")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=True) as mock_fire, \
+             patch("backend.alerts.engine.build_trend_payload",
+                   return_value={"current": 75.0, "previous": 65.0,
+                                 "current_direction": "bullish", "previous_direction": "neutral"}):
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            self.assertTrue(mock_fire.called)
+
+    def test_on_bar_alignment_conditions_use_alignment_payload(self):
+        alert = _make_alert(id=1, condition_type="full_timeframe_alignment", parameter="")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=True) as mock_fire, \
+             patch("backend.alerts.engine.build_alignment_payload",
+                   return_value={"directions": ["bullish", "bullish", "bullish"], "symbol": "AAPL"}):
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            self.assertTrue(mock_fire.called)
+
+    def test_on_bar_unknown_condition_no_fire(self):
+        alert = _make_alert(id=1, condition_type="unknown_bar_condition", parameter="")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=False) as mock_fire:
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            mock_fire.assert_not_called()
+
+    def test_on_bar_no_alerts_for_symbol_no_op(self):
+        with patch.object(self.engine, "_try_fire") as mock_fire:
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            mock_fire.assert_not_called()
+
+    def test_on_bar_divergence_uses_divergence_payload(self):
+        alert = _make_alert(id=1, condition_type="divergence", parameter="negative")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=True) as mock_fire, \
+             patch("backend.alerts.conditions.build_divergence_payload",
+                   return_value={"price_change_pct": 2.5, "rsi_like": 45.0}):
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+            self.assertTrue(mock_fire.called)
+            self.assertEqual(mock_fire.call_args[1]["extra_value"],
+                             {"price_change_pct": 2.5, "rsi_like": 45.0})
 
 
 class TestEvaluateScanResult(unittest.TestCase):

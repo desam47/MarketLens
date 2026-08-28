@@ -4,7 +4,7 @@ market regime, trend analysis, and multi-timeframe confluence.
 """
 import logging
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from ..multitimeframe.multi_timeframe_engine import (
@@ -16,7 +16,7 @@ from ..trend.trend_engine import TrendDirection, TrendSignal, TrendStrength
 logger = logging.getLogger(__name__)
 
 
-class StrategyType(str, Enum):
+class StrategyType(StrEnum):
     """Types of trading strategies"""
     TREND_FOLLOWING = "trend_following"
     MEAN_REVERSION = "mean_reversion"
@@ -183,16 +183,21 @@ class StrategySelector:
             )
 
     def _get_base_strategy_from_regime(self, regime: MarketRegime) -> StrategyType:
-        """Map market regime to base strategy type"""
+        """Map market regime to base strategy type.
+
+        Phase 8 spec maps the 4 spec regimes to strategy types:
+            RISK_ON     → TREND_FOLLOWING  (follow the uptrend)
+            RISK_OFF    → TREND_FOLLOWING  (downtrends are also trends)
+            NEUTRAL     → MEAN_REVERSION   (range-bound)
+            TRANSITION  → BREAKOUT         (volatility = breakout risk)
+            UNKNOWN     → MEAN_REVERSION   (conservative fallback)
+        """
         regime_map = {
-            MarketRegime.TRENDING_UP: StrategyType.TREND_FOLLOWING,
-            MarketRegime.TRENDING_DOWN: StrategyType.TREND_FOLLOWING,
-            MarketRegime.RANGING: StrategyType.MEAN_REVERSION,
-            MarketRegime.VOLATILE: StrategyType.BREAKOUT,
-            MarketRegime.QUIET: StrategyType.MEAN_REVERSION,
-            MarketRegime.BREAKOUT_UP: StrategyType.BREAKOUT,
-            MarketRegime.BREAKOUT_DOWN: StrategyType.BREAKOUT,
-            MarketRegime.UNKNOWN: StrategyType.MEAN_REVERSION  # Conservative fallback
+            MarketRegime.RISK_ON: StrategyType.TREND_FOLLOWING,
+            MarketRegime.RISK_OFF: StrategyType.TREND_FOLLOWING,
+            MarketRegime.NEUTRAL: StrategyType.MEAN_REVERSION,
+            MarketRegime.TRANSITION: StrategyType.BREAKOUT,
+            MarketRegime.UNKNOWN: StrategyType.MEAN_REVERSION,
         }
         return regime_map.get(regime, StrategyType.MEAN_REVERSION)
 
@@ -244,9 +249,9 @@ class StrategySelector:
         params = self.strategy_params.get(strategy_type, {}).get("base", {}).copy()
 
         # Adjust based on regime volatility
-        if regime_signal.regime in [MarketRegime.VOLATILE, MarketRegime.BREAKOUT_UP, MarketRegime.BREAKOUT_DOWN]:
+        if regime_signal.regime == MarketRegime.TRANSITION:
             vol_adjustment = "high_vol"
-        elif regime_signal.regime in [MarketRegime.QUIET, MarketRegime.RANGING]:
+        elif regime_signal.regime == MarketRegime.NEUTRAL:
             vol_adjustment = "low_vol"
         else:
             vol_adjustment = None
@@ -283,16 +288,13 @@ class StrategySelector:
                                  trend_signal: TrendSignal | None,
                                  confluence_signal: ConfluenceSignal | None) -> str:
         """Select the optimal timeframe to trade based on analysis"""
-        # Default timeframes by regime
+        # Default timeframes by regime (Phase 8: 4 spec names)
         regime_timeframes = {
-            MarketRegime.TRENDING_UP: "4h",
-            MarketRegime.TRENDING_DOWN: "4h",
-            MarketRegime.RANGING: "1h",
-            MarketRegime.VOLATILE: "15m",
-            MarketRegime.QUIET: "1h",
-            MarketRegime.BREAKOUT_UP: "15m",
-            MarketRegime.BREAKOUT_DOWN: "15m",
-            MarketRegime.UNKNOWN: "1h"
+            MarketRegime.RISK_ON: "4h",
+            MarketRegime.RISK_OFF: "4h",
+            MarketRegime.NEUTRAL: "1h",
+            MarketRegime.TRANSITION: "15m",
+            MarketRegime.UNKNOWN: "1h",
         }
 
         base_timeframe = regime_timeframes.get(regime_signal.regime, "1h")

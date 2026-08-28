@@ -15,18 +15,18 @@ from ..models.market_data import (
 
 class MarketDataProvider(ABC):
     """Abstract base class for market data providers"""
-    
+
     def __init__(self, name: str):
         self.name = name
-    
+
     @abstractmethod
     def get_quote(self, symbol: str) -> Quote:
         """Get latest quote for a symbol"""
-    
+
     @abstractmethod
     def get_bar(self, symbol: str, timeframe: str, timestamp: datetime) -> Bar:
         """Get historical bar for a symbol at specific timeframe and timestamp"""
-    
+
     @abstractmethod
     def get_latest_bar(self, symbol: str, timeframe: str) -> Bar:
         """Get most recent bar for a symbol and timeframe"""
@@ -49,31 +49,31 @@ class MarketDataProvider(ABC):
     @abstractmethod
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         """Get quotes for multiple symbols"""
-    
+
     @abstractmethod
     def get_market_status(self, symbol: str) -> MarketStatus:
         """Get market status for a symbol"""
-    
+
     @abstractmethod
     def get_provider_status(self) -> ProviderStatus:
         """Get provider health/status"""
-    
+
     @abstractmethod
     def get_capabilities(self) -> ProviderCapabilities:
         """Get provider capabilities"""
-    
+
     @abstractmethod
     def is_available(self) -> bool:
         """Check if provider is available/healthy"""
 
 class BaseMarketDataProvider(MarketDataProvider):
     """Base implementation with common functionality"""
-    
+
     def __init__(self, name: str):
         super().__init__(name)
         self._last_error: str | None = None
         self._is_healthy = True
-    
+
     def _handle_error(self, error: Exception, context: str = ""):
         """Handle and record provider errors"""
         self._last_error = f"{context}: {error!s}" if context else str(error)
@@ -83,12 +83,12 @@ class BaseMarketDataProvider(MarketDataProvider):
         print(f"ERROR in {self.name}.{context}: {error}")
         print(traceback.format_exc())
         raise error
-    
+
     def _reset_error_state(self):
         """Reset error state after successful operation"""
         self._last_error = None
         self._is_healthy = True
-    
+
     def get_provider_status(self) -> ProviderStatus:
         """Get provider health/status"""
         from datetime import datetime

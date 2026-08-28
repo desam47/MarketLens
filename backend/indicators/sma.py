@@ -1,8 +1,9 @@
-from typing import Any
-
 """
 Simple Moving Average (SMA) indicator
 """
+
+from typing import Any
+
 from .base_indicator import BaseIndicator
 
 

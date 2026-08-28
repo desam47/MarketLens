@@ -4,24 +4,23 @@ Unit tests for ``backend.backtesting.replay`` helpers.
 All functions are pure and do not touch the database, so testing
 requires only the indicator implementations and the Pydantic Bar model.
 """
+import math
 import os
 import sys
 import unittest
-import math
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-from backend.models.market_data import Bar, DataStatus
 from backend.backtesting.replay import (
+    HIGH_VOLUME_MULTIPLIER,
+    VOLUME_LOOKBACK,
     _bars_to_dicts,
     build_indicator_values,
     build_scan_result,
     relative_volume,
-    INDICATOR_WARMUP,
-    VOLUME_LOOKBACK,
-    HIGH_VOLUME_MULTIPLIER,
 )
+from backend.models.market_data import Bar, DataStatus
 
 
 def _bar(close, high=None, low=None, volume=1_000_000, days_ago=0):

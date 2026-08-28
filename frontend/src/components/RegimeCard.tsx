@@ -1,23 +1,22 @@
 import React from 'react';
-import { RegimeData } from '../services/api';
+import { RegimeData, SectorData } from '../services/api';
 
 interface RegimeCardProps {
   regime: RegimeData | null;
+  sectorData?: SectorData | null;
   error?: string | null;
 }
 
+// Phase 8: spec-compliant regime color map.
 const regimeColors: Record<string, string> = {
-  trending_up: '#10b981',
-  trending_down: '#ef4444',
-  ranging: '#f59e0b',
-  volatile: '#dc2626',
-  quiet: '#6b7280',
-  breakout_up: '#22c55e',
-  breakout_down: '#f97316',
-  unknown: '#9ca3af',
+  risk_on: '#10b981',    // green — bullish
+  risk_off: '#ef4444',   // red — bearish
+  neutral: '#f59e0b',    // amber — range-bound
+  transition: '#a855f7',  // purple — volatile / changing
+  unknown: '#9ca3af',    // gray — insufficient data
 };
 
-export function RegimeCard({ regime, error }: RegimeCardProps) {
+export function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
   if (error) {
     return (
       <div className="card regime-card card-error">
@@ -76,6 +75,27 @@ export function RegimeCard({ regime, error }: RegimeCardProps) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Phase 8: sector + relative-strength footer */}
+      {sectorData && (
+        <div className="regime-footer">
+          <div className="footer-row">
+            <span className="footer-label">Sector:</span>
+            <span className="footer-value">
+              {sectorData.sector}
+              {sectorData.sector_etf && ` (${sectorData.sector_etf})`}
+            </span>
+          </div>
+          {sectorData.alignment_score > 0 && (
+            <div className="footer-row">
+              <span className="footer-label">Alignment:</span>
+              <span className="footer-value" title="Stock vs sector vs market">
+                {sectorData.alignment_score.toFixed(2)}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {regime.timestamp && (

@@ -4,8 +4,8 @@ Tests for the Alerts API endpoints.
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch, PropertyMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -112,7 +112,7 @@ class TestAlertsAPI(unittest.TestCase):
     # --- GET /api/alerts/active -----------------------------------------
 
     def test_active_triggers(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
             MockRepo.return_value.get_recent_triggers.return_value = [
                 _mock_trigger(id=1, symbol="AAPL", triggered_at=now),

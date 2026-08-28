@@ -56,6 +56,14 @@ def init_database():
         backtest = importlib.util.module_from_spec(backtest_spec)
         backtest_spec.loader.exec_module(backtest)
 
+        # Load the signal model directly (Phase 13: HistoricalSignal)
+        signal_spec = importlib.util.spec_from_file_location(
+            "signal",
+            os.path.join(_REPO_ROOT, 'backend', 'models', 'signal.py')
+        )
+        signal = importlib.util.module_from_spec(signal_spec)
+        signal_spec.loader.exec_module(signal)
+
         # Get the model classes
         QuoteModel = market_data_sql.QuoteModel
         BarModel = market_data_sql.BarModel
@@ -67,6 +75,7 @@ def init_database():
         AlertTrigger = alert.AlertTrigger
         BacktestRun = backtest.BacktestRun
         BacktestTrade = backtest.BacktestTrade
+        HistoricalSignal = signal.HistoricalSignal
 
         # Create all tables
         Base.metadata.create_all(bind=engine)

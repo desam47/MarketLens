@@ -20,15 +20,20 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-
-from sqlalchemy import and_
+from datetime import UTC, datetime, timedelta
 
 from backend.database import SessionLocal
 from backend.market_data.services.engine_seeder import engine_registry
 from backend.models import Alert, AlertTrigger
 
-from .conditions import evaluate
+from .conditions import (
+    build_alignment_payload,
+    build_breakdown_payload,
+    build_breakout_payload,
+    build_trend_payload,
+    build_volume_payload,
+    evaluate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,38 +83,67 @@ class AlertsEngine:
         """
         db = SessionLocal()
         try:
-            alerts = db.query(Alert).filter(Alert.is_enabled == True).all()
+            alerts = db.query(Alert).filter(Alert.is_enabled).all()
         finally:
             db.close()
 
         # Rebuild the alerts cache.
         self._alerts_cache = {a.id: a for a in alerts}
 
-        # Rebuild the price symbol → alert_ids map, re-registering
-        # callbacks for any symbols that are new.
-        current_symbols = set(self._price_alert_ids.keys())
-        new_symbols: set[str] = set()
+        # Price-based conditions: fire on every quote tick.
+        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
+        # Bar-based conditions: fire on every bar (trend, alignment, volume, etc.).
+        BAR_CONDITIONS = (
+            "trend_crosses_above_70", "trend_crosses_below_70",
+            "trend_direction_changes", "trend_strengthens", "trend_weakens",
+            "full_timeframe_alignment", "timeframe_conflict",
+            "volume_expansion", "breakout", "breakdown", "divergence",
+            "market_regime_change",
+        )
+
+        current_price_symbols = set(self._price_alert_ids.keys())
+        current_bar_symbols = set(self._bar_alert_ids.keys()) if hasattr(self, "_bar_alert_ids") else set()
+        new_price_symbols: set[str] = set()
+        new_bar_symbols: set[str] = set()
+        # Track which symbols we've already registered in this reload pass to
+        # avoid duplicate registrations when multiple alerts share the same symbol.
+        _price_registered: set[str] = set()
+        _bar_registered: set[str] = set()
+
         for alert in alerts:
-            if alert.condition_type in ("price_above", "price_below", "pct_change_above"):
-                sym = alert.symbol.upper()
-                new_symbols.add(sym)
+            sym = alert.symbol.upper()
+            if alert.condition_type in PRICE_CONDITIONS:
+                new_price_symbols.add(sym)
                 if sym not in self._price_alert_ids or alert.id not in self._price_alert_ids[sym]:
                     self._price_alert_ids.setdefault(sym, []).append(alert.id)
-                    if sym not in current_symbols:
+                    if sym not in current_price_symbols and sym not in _price_registered:
                         engine_registry.register("quote", sym, self._on_quote)
+                        _price_registered.add(sym)
+            elif alert.condition_type in BAR_CONDITIONS:
+                new_bar_symbols.add(sym)
+                if not hasattr(self, "_bar_alert_ids"):
+                    self._bar_alert_ids = defaultdict(list)
+                if sym not in self._bar_alert_ids or alert.id not in self._bar_alert_ids[sym]:
+                    self._bar_alert_ids.setdefault(sym, []).append(alert.id)
+                    if sym not in current_bar_symbols and sym not in _bar_registered:
+                        engine_registry.register("bar", sym, self._on_bar)
+                        _bar_registered.add(sym)
 
-        # Unregister callbacks for symbols that no longer have any price alerts.
-        for sym in current_symbols - new_symbols:
-            for alert_id in self._price_alert_ids.get(sym, []):
-                # The callback is shared per symbol, so we only need to
-                # unregister once. Track which we've unregistered.
-                pass
+        # Unregister price callbacks for symbols with no price alerts.
+        for sym in current_price_symbols - new_price_symbols:
             if sym in self._price_alert_ids:
                 engine_registry.unregister("quote", sym, self._on_quote)
                 del self._price_alert_ids[sym]
 
+        # Unregister bar callbacks for symbols with no bar alerts.
+        if hasattr(self, "_bar_alert_ids"):
+            for sym in current_bar_symbols - new_bar_symbols:
+                if sym in self._bar_alert_ids:
+                    engine_registry.unregister("bar", sym, self._on_bar)
+                    del self._bar_alert_ids[sym]
+
         logger.info(f"AlertsEngine loaded {len(alerts)} enabled alerts "
-                    f"({len(new_symbols)} symbols with price alerts)")
+                    f"({len(new_price_symbols)} price symbols, {len(new_bar_symbols)} bar symbols)")
 
     def evaluate_scan_result(self, result) -> None:
         """Check every enabled signal_equals alert for this symbol.
@@ -134,42 +168,71 @@ class AlertsEngine:
             self._try_fire(alert, price, extra_value=result.signals)
 
     def register_for_alert(self, alert: Alert) -> None:
-        """Register a price-alert callback when a new alert is created.
+        """Register a callback when a new alert is created.
 
         Called from the alerts router's POST handler so the engine starts
         evaluating the new alert immediately, without waiting for the
         next startup reload.
         """
-        if alert.condition_type not in ("price_above", "price_below", "pct_change_above"):
+        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
+        BAR_CONDITIONS = (
+            "trend_crosses_above_70", "trend_crosses_below_70",
+            "trend_direction_changes", "trend_strengthens", "trend_weakens",
+            "full_timeframe_alignment", "timeframe_conflict",
+            "volume_expansion", "breakout", "breakdown", "divergence",
+            "market_regime_change",
+        )
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
             self._alerts_cache[alert.id] = alert
-            already_registered = sym in self._price_alert_ids
-            self._price_alert_ids.setdefault(sym, []).append(alert.id)
-        if not already_registered:
-            engine_registry.register("quote", sym, self._on_quote)
+            if alert.condition_type in PRICE_CONDITIONS:
+                already_registered = sym in self._price_alert_ids
+                self._price_alert_ids.setdefault(sym, []).append(alert.id)
+                if not already_registered:
+                    engine_registry.register("quote", sym, self._on_quote)
+            elif alert.condition_type in BAR_CONDITIONS:
+                if not hasattr(self, "_bar_alert_ids"):
+                    self._bar_alert_ids = defaultdict(list)
+                already_registered = sym in self._bar_alert_ids
+                self._bar_alert_ids.setdefault(sym, []).append(alert.id)
+                if not already_registered:
+                    engine_registry.register("bar", sym, self._on_bar)
 
     def unregister_for_alert(self, alert: Alert) -> None:
-        """Remove a price-alert callback when an alert is deleted or disabled.
+        """Remove a callback when an alert is deleted or disabled.
 
         Called from the alerts router's DELETE / PUT (is_enabled=False) handlers.
         """
-        if alert.condition_type not in ("price_above", "price_below", "pct_change_above"):
+        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
+        BAR_CONDITIONS = (
+            "trend_crosses_above_70", "trend_crosses_below_70",
+            "trend_direction_changes", "trend_strengthens", "trend_weakens",
+            "full_timeframe_alignment", "timeframe_conflict",
+            "volume_expansion", "breakout", "breakdown", "divergence",
+            "market_regime_change",
+        )
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
             self._alerts_cache.pop(alert.id, None)
-            # ``.remove`` throws ValueError if the alert id isn't in the
-            # list — that can happen if the engine was restarted between
-            # the alert's last registration and this unregister call.
-            # Treat that as a no-op so a delete always succeeds.
-            ids = self._price_alert_ids.get(sym)
-            if ids and alert.id in ids:
-                ids.remove(alert.id)
-            if not self._price_alert_ids.get(sym):
-                self._price_alert_ids.pop(sym, None)
-                engine_registry.unregister("quote", sym, self._on_quote)
+            if alert.condition_type in PRICE_CONDITIONS:
+                ids = self._price_alert_ids.get(sym)
+                if ids and alert.id in ids:
+                    ids.remove(alert.id)
+                if not self._price_alert_ids.get(sym):
+                    self._price_alert_ids.pop(sym, None)
+                    engine_registry.unregister("quote", sym, self._on_quote)
+            elif alert.condition_type in BAR_CONDITIONS:
+                if hasattr(self, "_bar_alert_ids"):
+                    ids = self._bar_alert_ids.get(sym)
+                    if ids and alert.id in ids:
+                        ids.remove(alert.id)
+                    if not self._bar_alert_ids.get(sym):
+                        self._bar_alert_ids.pop(sym, None)
+                        engine_registry.unregister("bar", sym, self._on_bar)
 
     # --- Price callback (called from engine_registry, any thread) -------
 
@@ -200,6 +263,56 @@ class AlertsEngine:
             elif alert.condition_type == "pct_change_above":
                 if pct_change is not None:
                     self._try_fire(alert, pct_change, extra_value=pct_change)
+
+    # --- Bar callback (called from engine_registry, any thread) -----------
+
+    def _on_bar(self, symbol: str, timeframe: str, price: float, volume: float = 0,
+                timestamp=None, **_: object) -> None:
+        """Called by engine_registry on every completed bar for registered symbols.
+
+        Checks trend, alignment, volume, breakout/breakdown, and divergence
+        alert conditions.
+        """
+        if not self._started:
+            return
+        sym = symbol.upper()
+        tf = timeframe or "1d"
+
+        with self._lock:
+            alert_ids = list(getattr(self, "_bar_alert_ids", {}).get(sym, []))
+            alerts = {aid: a for aid, a in self._alerts_cache.items() if aid in alert_ids}
+
+        if not alerts:
+            return
+
+        # Pre-compute payloads for each condition group.
+        trend_payload = build_trend_payload(sym, tf)
+        alignment_payload = build_alignment_payload(sym)
+        volume_payload = build_volume_payload(sym, tf)
+        breakout_payload = build_breakout_payload(sym, tf)
+        breakdown_payload = build_breakdown_payload(sym, tf)
+
+        for alert in alerts.values():
+            ct = alert.condition_type
+            if ct in ("trend_crosses_above_70", "trend_crosses_below_70",
+                      "trend_direction_changes", "trend_strengthens", "trend_weakens"):
+                self._try_fire(alert, price, extra_value=trend_payload)
+            elif ct in ("full_timeframe_alignment", "timeframe_conflict"):
+                self._try_fire(alert, price, extra_value=alignment_payload)
+            elif ct == "volume_expansion":
+                self._try_fire(alert, price, extra_value=volume_payload)
+            elif ct == "breakout":
+                self._try_fire(alert, price, extra_value=breakout_payload)
+            elif ct == "breakdown":
+                self._try_fire(alert, price, extra_value=breakdown_payload)
+            elif ct == "divergence":
+                from .conditions import build_divergence_payload
+                div_payload = build_divergence_payload(sym, tf)
+                self._try_fire(alert, price, extra_value=div_payload)
+            elif ct == "market_regime_change":
+                from .conditions import build_regime_change_payload
+                regime_payload = build_regime_change_payload(sym)
+                self._try_fire(alert, price, extra_value=regime_payload)
 
     # --- Core trigger logic --------------------------------------------
 
@@ -245,6 +358,52 @@ class AlertsEngine:
             elif alert.condition_type == "pct_change_above":
                 observed = str(extra_value)
                 message = f"{alert.symbol}: +{extra_value:.2f}% change (threshold: {alert.parameter}%)"
+            elif alert.condition_type in ("trend_crosses_above_70", "trend_crosses_below_70",
+                                           "trend_direction_changes", "trend_strengthens", "trend_weakens"):
+                if isinstance(extra_value, dict):
+                    curr = extra_value.get("current", 0.0)
+                    prev = extra_value.get("previous", 0.0)
+                    curr_dir = extra_value.get("current_direction", "neutral")
+                    prev_dir = extra_value.get("previous_direction", "neutral")
+                    observed = f"score={curr:.1f} ({curr_dir}) prev={prev:.1f} ({prev_dir})"
+                else:
+                    observed = str(extra_value)
+                message = f"{alert.symbol}: {alert.condition_type} (param={alert.parameter})"
+            elif alert.condition_type in ("full_timeframe_alignment", "timeframe_conflict"):
+                if isinstance(extra_value, dict):
+                    dirs = extra_value.get("directions", [])
+                    observed = "timeframes=" + ",".join(dirs)
+                else:
+                    observed = str(extra_value)
+                message = f"{alert.symbol}: {alert.condition_type} ({len(dirs) if isinstance(dirs, list) else 0} timeframes)"
+            elif alert.condition_type == "volume_expansion":
+                if isinstance(extra_value, dict):
+                    observed = (f"current={extra_value.get('current_volume', 0)}, "
+                                f"avg={extra_value.get('avg_volume', 0):.0f}")
+                else:
+                    observed = str(extra_value)
+                message = f"{alert.symbol}: volume expansion (param={alert.parameter})"
+            elif alert.condition_type in ("breakout", "breakdown"):
+                if isinstance(extra_value, dict):
+                    cp = extra_value.get("current_price", 0)
+                    ref_key = "highest_high" if alert.condition_type == "breakout" else "lowest_low"
+                    observed = f"price={cp}, ref={extra_value.get(ref_key, 0)}"
+                else:
+                    observed = str(extra_value)
+                message = f"{alert.symbol}: {alert.condition_type} (param={alert.parameter})"
+            elif alert.condition_type == "divergence":
+                if isinstance(extra_value, dict):
+                    observed = f"price_chg={extra_value.get('price_change_pct', 0):.2f}%, rsi={extra_value.get('rsi_like', 0):.1f}"
+                else:
+                    observed = str(extra_value)
+                message = f"{alert.symbol}: {alert.parameter} divergence"
+            elif alert.condition_type == "market_regime_change":
+                if isinstance(extra_value, dict):
+                    observed = (f"{extra_value.get('previous_regime', '?')} → "
+                                f"{extra_value.get('current_regime', '?')}")
+                else:
+                    observed = str(extra_value)
+                message = f"Market regime changed: {observed}"
             else:
                 observed = str(extra_value) if extra_value is not None else None
                 message = None
@@ -270,7 +429,7 @@ class AlertsEngine:
         db = SessionLocal()
         try:
             from backend.models import QuoteModel
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             cutoff = now - timedelta(hours=26)  # allow for market closed hours
 
             latest = (

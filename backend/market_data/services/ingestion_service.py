@@ -3,7 +3,9 @@ Market Data Ingestion Service
 Automatically fetches and stores market data from providers
 """
 import asyncio
+import atexit
 import logging
+import threading
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_
@@ -20,11 +22,14 @@ from backend.models import (
     Quote,
     QuoteModel,
 )
+from backend.observability import record_bar, set_ingestion_running
+from backend.services.signal_recorder import signal_recorder
 
 from .engine_seeder import engine_registry
 from .manager import MarketDataManager
 
 logger = logging.getLogger(__name__)
+
 
 class MarketDataIngestionService:
     """Service for automatically ingesting and storing market data"""
@@ -38,9 +43,11 @@ class MarketDataIngestionService:
             timeframes: List of timeframes to track (default: common timeframes)
         """
         self.symbols = symbols or ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX"]
-        self.timeframes = timeframes or ["1m", "5m", "15m", "1h", "1d"]
+        self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
         self.manager = MarketDataManager()
         self.is_running = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self.last_quote_update: dict[str, datetime] = {}
         self.last_bar_update: dict[str, dict[str, datetime]] = {}
         self.last_status_update: dict[str, datetime] = {}
@@ -51,34 +58,81 @@ class MarketDataIngestionService:
             self.last_status_update[symbol] = datetime.min
             self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
 
-    async def start(self):
-        """Start the ingestion service"""
+    def start(self):
+        """Start the ingestion service in a background thread.
+
+        This is a *sync* method so it works correctly with FastAPI's
+        BackgroundTasks (which only handles sync callables). The background
+        thread owns its own asyncio event loop, so the async ingestion loops
+        run in isolation without blocking the request thread.
+        """
         if self.is_running:
             logger.warning("Ingestion service is already running")
             return
 
         self.is_running = True
-        logger.info("Starting market data ingestion service")
+        set_ingestion_running(True)
+        logger.info("Starting market data ingestion service in background thread")
 
-        # Start ingestion tasks
+        def _run_loop():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._loop.run_until_complete(self._run_loops())
+            finally:
+                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                self._loop.close()
+                self._loop = None
+                self.is_running = False
+                set_ingestion_running(False)
+                logger.info("Ingestion service loop exited")
+
+        self._thread = threading.Thread(target=_run_loop, daemon=True, name="ingestion")
+        self._thread.start()
+
+    async def _run_loops(self):
+        """Run all four ingestion loops until stop() is called."""
         tasks = [
             asyncio.create_task(self._quote_ingestion_loop()),
             asyncio.create_task(self._bar_ingestion_loop()),
             asyncio.create_task(self._status_ingestion_loop()),
-            asyncio.create_task(self._provider_health_loop())
+            asyncio.create_task(self._provider_health_loop()),
+            asyncio.create_task(self._signal_recording_loop()),
         ]
-
         try:
             await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            logger.info("Ingestion loops cancelled")
         except Exception as e:
             logger.error(f"Error in ingestion service: {e}")
-            self.is_running = False
             raise
 
-    async def stop(self):
-        """Stop the ingestion service"""
+    def stop(self):
+        """Stop the ingestion service.
+
+        Signals the background loop to cancel and waits for the thread to exit.
+        """
+        if not self.is_running:
+            return
         self.is_running = False
+        set_ingestion_running(False)
         logger.info("Stopping market data ingestion service")
+        # If the background thread is still running, ask the event loop to
+        # cancel its tasks. We use ``call_soon_threadsafe`` because the
+        # loop is owned by a different thread.
+        if self._loop is not None and not self._loop.is_closed():
+
+            def _cancel_all():
+                for task in asyncio.all_tasks(self._loop):
+                    task.cancel()
+
+            try:
+                self._loop.call_soon_threadsafe(_cancel_all)
+            except RuntimeError:
+                # Loop already shut down — nothing to cancel.
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
     async def _quote_ingestion_loop(self):
         """Continuously ingest quote data"""
@@ -101,6 +155,36 @@ class MarketDataIngestionService:
             except Exception as e:
                 logger.error(f"Error in bar ingestion loop: {e}")
                 await asyncio.sleep(10)
+
+    async def _signal_recording_loop(self):
+        """Record HistoricalSignal rows + backfill forward outcomes.
+
+        Two responsibilities, running on independent intervals:
+          - Record one signal per (symbol, timeframe) per bar (90s)
+          - Backfill forward outcomes for old signals (300s)
+        """
+        while self.is_running:
+            try:
+                recorded = await asyncio.to_thread(
+                    signal_recorder.record_from_recent_bars,
+                    self.symbols,
+                    self.timeframes,
+                )
+                if recorded:
+                    logger.debug(f"Recorded {recorded} historical signals")
+            except Exception as e:
+                logger.error(f"Error in signal recording loop: {e}")
+
+            try:
+                backfilled = await asyncio.to_thread(
+                    signal_recorder.backfill_outcomes
+                )
+                if backfilled:
+                    logger.debug(f"Backfilled {backfilled} signal outcomes")
+            except Exception as e:
+                logger.error(f"Error in signal backfill loop: {e}")
+
+            await asyncio.sleep(90)
 
     async def _status_ingestion_loop(self):
         """Continuously ingest market status data"""
@@ -235,6 +319,9 @@ class MarketDataIngestionService:
                         logger.warning(f"Failed to ingest {timeframe} bar for {symbol}: {e}")
 
             db.commit()
+            # Record ingestion metrics after a successful commit.
+            for _ in fresh_bars:
+                record_bar()
         except Exception as e:
             logger.error(f"Error committing bars to database: {e}")
             db.rollback()
@@ -405,3 +492,6 @@ class MarketDataIngestionService:
 
 # Global instance for easy access
 ingestion_service = MarketDataIngestionService()
+
+# Safety net: ensure the background thread stops on process exit.
+atexit.register(ingestion_service.stop)

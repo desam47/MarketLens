@@ -2,17 +2,21 @@
 Market data models for MarketLens
 """
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class DataStatus(str, Enum):
+class DataStatus(StrEnum):
     LIVE = "LIVE"
     DELAYED = "DELAYED"
     HISTORICAL = "HISTORICAL"
     STALE = "STALE"
     ERROR = "ERROR"
+    # Phase 4 additions — emitted by TimeframeEngine for data-quality issues.
+    GAP = "GAP"                  # expected bar missing (gap between consecutive candles)
+    INCOMPLETE = "INCOMPLETE"    # bar arrived with fewer ticks than expected
+    DUPLICATE = "DUPLICATE"      # tick with same (timeframe, timestamp) seen twice
 
 class Quote(BaseModel):
     symbol: str

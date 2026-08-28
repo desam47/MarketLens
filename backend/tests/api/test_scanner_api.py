@@ -10,7 +10,7 @@ import os
 import sys
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
@@ -75,6 +75,10 @@ class TestScannerAPI(unittest.TestCase):
         self.mock_repo_class = self.repo_patch.start()
         self.mock_repo = MagicMock()
         self.mock_repo_class.return_value = self.mock_repo
+        # scan_symbols_async delegates to scan_symbols for the async routes.
+        self.mock_scanner.scan_symbols_async = AsyncMock(
+            side_effect=lambda symbols: self.mock_scanner.scan_symbols(symbols)
+        )
 
     def tearDown(self):
         self.scanner_patch.stop()
@@ -324,6 +328,162 @@ class TestScannerAPI(unittest.TestCase):
         response = self.client.get("/api/scanner/watchlist/999/top")
 
         self.assertEqual(response.status_code, 404)
+
+
+class TestScannerFilterAPI(unittest.TestCase):
+    """Phase 10: tests for the composable-filter endpoints."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.mock_scanner = self.scanner_patch.start()
+
+    def tearDown(self):
+        self.scanner_patch.stop()
+
+    def test_list_filter_types(self):
+        response = self.client.get("/api/scanner/filter-types")
+        self.assertEqual(response.status_code, 200)
+        types = response.json()
+        self.assertIn("daily_bullish", types)
+        self.assertIn("trend_score_gt", types)
+        self.assertIn("mtf_alignment", types)
+
+    def test_filter_returns_matching_results(self):
+        aapl = _make_result("AAPL", scores={"momentum": 80.0, "volume": 60.0})
+        aapl.scores["_total"] = 85.0
+        msft = _make_result("MSFT", scores={"momentum": 30.0, "volume": 20.0})
+        msft.scores["_total"] = 25.0
+        self.mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft}
+
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={
+                "filters": [{"type": "trend_score_gt", "params": {"threshold": 50.0}}],
+                "match": "AND",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        symbols = {r["symbol"] for r in body}
+        self.assertEqual(symbols, {"AAPL"})
+
+    def test_filter_unknown_type_returns_500(self):
+        # FastAPI surfaces unhandled ValueError as 500; the goal is that
+        # the error doesn't crash the process.
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={"filters": [{"type": "does_not_exist"}]},
+        )
+        self.assertIn(response.status_code, (400, 422, 500))
+
+    def test_filter_with_and_conjunction(self):
+        aapl = _make_result("AAPL", scores={"momentum": 80.0, "volume": 80.0})
+        aapl.scores["_total"] = 80.0
+        aapl.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}}
+        msft = _make_result("MSFT", scores={"momentum": 80.0, "volume": 80.0})
+        msft.scores["_total"] = 80.0
+        msft.trend_signals = {"ONE_DAY": {"direction": "downtrend", "confidence": 0.8}}
+        self.mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft}
+
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={
+                "filters": [
+                    {"type": "trend_score_gt", "params": {"threshold": 50.0}},
+                    {"type": "daily_bullish", "params": {"min_confidence": 0.5}},
+                ],
+                "match": "AND",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["symbol"], "AAPL")
+
+    def test_filter_with_or_disjunction(self):
+        aapl = _make_result("AAPL", indicators={"rsi": 25.0})
+        msft = _make_result("MSFT", indicators={"rsi": 80.0})
+        goog = _make_result("GOOG", indicators={"rsi": 50.0})
+        self.mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft, "GOOG": goog}
+
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={
+                "filters": [
+                    {"type": "rsi_oversold", "params": {"threshold": 30.0}},
+                    {"type": "rsi_overbought", "params": {"threshold": 70.0}},
+                ],
+                "match": "OR",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        symbols = {r["symbol"] for r in body}
+        self.assertEqual(symbols, {"AAPL", "MSFT"})
+
+
+class TestScannerRankingsAPI(unittest.TestCase):
+    """Phase 10: tests for the named-rankings endpoints."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.mock_scanner = self.scanner_patch.start()
+        self.engine_patch = patch('backend.api.scanner.router.default_ranking_engine')
+        self.mock_engine = self.engine_patch.start()
+        # Replace the MagicMock's CATEGORIES with the real engine's list
+        # so the categories endpoint returns the real names by default.
+        from backend.scanner.ranking import default_ranking_engine as real_engine
+        self.mock_engine.CATEGORIES = real_engine.CATEGORIES
+
+    def tearDown(self):
+        self.scanner_patch.stop()
+        self.engine_patch.stop()
+
+    def test_list_categories(self):
+        response = self.client.get("/api/scanner/rankings/categories")
+        self.assertEqual(response.status_code, 200)
+        cats = response.json()
+        names = {c["name"] for c in cats}
+        self.assertIn("strongest_bullish", names)
+        self.assertIn("best_mtf_alignment", names)
+
+    def test_rankings_endpoint_returns_payload(self):
+        # Mock the engine to avoid coupling this test to ranking logic
+        from backend.scanner.ranking import NamedRanking, RankedEntry
+        self.mock_engine.CATEGORIES = [
+            {"name": "strongest_bullish", "label": "Strongest Bullish", "description": "x"},
+        ]
+        self.mock_engine.rank.return_value = {
+            "strongest_bullish": NamedRanking(
+                name="strongest_bullish",
+                label="Strongest Bullish",
+                description="x",
+                entries=[RankedEntry(symbol="AAPL", score=85.0, rank=1, metrics={})],
+                total_eligible=1,
+            ),
+        }
+        self.mock_scanner.scan_results = {"AAPL": _make_result("AAPL")}
+
+        response = self.client.post(
+            "/api/scanner/rankings",
+            json={"filters": [], "match": "AND"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["name"], "strongest_bullish")
+        self.assertEqual(body[0]["entries"][0]["symbol"], "AAPL")
+
+    def test_watchlist_rankings_404_when_missing(self):
+        with patch('backend.api.scanner.router.WatchlistRepository') as mock_repo_class:
+            mock_repo = MagicMock()
+            mock_repo_class.return_value = mock_repo
+            mock_repo.get_watchlist.return_value = None
+
+            response = self.client.get("/api/scanner/watchlist/999/rankings")
+            self.assertEqual(response.status_code, 404)
 
 
 if __name__ == '__main__':

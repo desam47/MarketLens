@@ -2,9 +2,16 @@ import React, { useState, useEffect } from 'react';
 import api, { Watchlist } from '../services/api';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { WatchlistTable } from '../components/WatchlistTable';
 
 interface WatchlistPageProps {
   onSelectSymbol: (symbol: string) => void;
+}
+
+interface ImportResult {
+  imported: string[];
+  skipped: string[];
+  errors: string[];
 }
 
 export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
@@ -12,11 +19,15 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [symbols, setSymbols] = useState<import('../services/api').WatchlistSymbol[]>([]);
-  const [symbolsLoading, setSymbolsLoading] = useState(false);
+  const [showRename, setShowRename] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importing, setImporting] = useState(false);
   const [symbolCounts, setSymbolCounts] = useState<Record<number, number>>({});
 
   const fetchWatchlists = async () => {
@@ -48,29 +59,6 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     }
   };
 
-  const fetchSymbols = async (watchlistId: number) => {
-    setSymbolsLoading(true);
-    try {
-      const data = await api.getWatchlistSymbols(watchlistId);
-      setSymbols(data);
-      setSymbolCounts(prev => ({ ...prev, [watchlistId]: data.length }));
-    } catch (err: any) {
-      setError(err.message || 'Failed to load symbols');
-      setSymbols([]);
-    } finally {
-      setSymbolsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (selectedId != null) {
-      fetchSymbols(selectedId);
-    } else {
-      setSymbols([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
-
   useEffect(() => {
     fetchWatchlists();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,6 +80,20 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     }
   };
 
+  const handleRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWatchlist || !renameValue.trim()) return;
+    try {
+      const updated = await api.updateWatchlist(selectedWatchlist.id, { name: renameValue.trim() });
+      setWatchlists(watchlists.map(w => w.id === updated.id ? updated : w));
+      setShowRename(false);
+      setRenameValue('');
+      setInfo(`Renamed to "${updated.name}"`);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const handleAddSymbol = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSymbol.trim() || !selectedWatchlist) return;
@@ -100,17 +102,6 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
       await api.addSymbolToWatchlist(selectedWatchlist.id, symbol);
       await fetchWatchlists();
       setNewSymbol('');
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  const handleRemoveSymbol = async (symbol: string) => {
-    if (!selectedWatchlist) return;
-    if (!window.confirm(`Remove ${symbol} from watchlist?`)) return;
-    try {
-      await api.removeSymbolFromWatchlist(selectedWatchlist.id, symbol);
-      await fetchWatchlists();
     } catch (err: any) {
       setError(err.message);
     }
@@ -128,21 +119,58 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     }
   };
 
-  const handleMoveSymbol = async (symbol: string, direction: 'up' | 'down') => {
+  const handleExport = async (format: 'json' | 'csv') => {
     if (!selectedWatchlist) return;
-    const symbolList = symbols.map(s => s.symbol);
-    const idx = symbolList.indexOf(symbol);
-    if (idx === -1) return;
-
-    const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (newIdx < 0 || newIdx >= symbolList.length) return;
-
-    [symbolList[idx], symbolList[newIdx]] = [symbolList[newIdx], symbolList[idx]];
     try {
-      await api.reorderSymbols(selectedWatchlist.id, symbolList);
-      await fetchSymbols(selectedWatchlist.id);
+      const text = await api.exportWatchlist(selectedWatchlist.id, format);
+      const blob = new Blob([text], {
+        type: format === 'csv' ? 'text/csv' : 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `watchlist_${selectedWatchlist.id}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err: any) {
       setError(err.message);
+    }
+  };
+
+  const handleImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWatchlist) return;
+    // Parse: split by commas and newlines, uppercase, trim, dedupe, drop empties.
+    const parsed = Array.from(
+      new Set(
+        importText
+          .split(/[\n,]+/)
+          .map(s => s.toUpperCase().trim())
+          .filter(s => s.length > 0),
+      ),
+    );
+    if (parsed.length === 0) {
+      setError('No symbols to import');
+      return;
+    }
+    setImporting(true);
+    try {
+      const result: ImportResult = await api.importWatchlist(selectedWatchlist.id, parsed);
+      setInfo(
+        `Imported ${result.imported.length}, skipped ${result.skipped.length}, errors ${result.errors.length}`,
+      );
+      if (result.errors.length > 0) {
+        setError(`Failed: ${result.errors.slice(0, 3).join('; ')}${result.errors.length > 3 ? '…' : ''}`);
+      }
+      setShowImport(false);
+      setImportText('');
+      await fetchWatchlists();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -158,6 +186,11 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
       </div>
 
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {info && (
+        <div className="info-banner" onClick={() => setInfo(null)} role="status">
+          {info}
+        </div>
+      )}
 
       {showCreate && (
         <div className="modal-overlay" onClick={() => setShowCreate(false)}>
@@ -174,6 +207,50 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
               <div className="modal-actions">
                 <button type="button" onClick={() => setShowCreate(false)}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Create</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showRename && selectedWatchlist && (
+        <div className="modal-overlay" onClick={() => setShowRename(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Rename Watchlist</h2>
+            <form onSubmit={handleRename}>
+              <input
+                type="text"
+                placeholder="New name"
+                value={renameValue}
+                onChange={e => setRenameValue(e.target.value)}
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button type="button" onClick={() => setShowRename(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showImport && selectedWatchlist && (
+        <div className="modal-overlay" onClick={() => setShowImport(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Import Symbols</h2>
+            <form onSubmit={handleImport}>
+              <textarea
+                placeholder="AAPL, NVDA, MSFT (or one per line)"
+                value={importText}
+                onChange={e => setImportText(e.target.value)}
+                rows={8}
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button type="button" onClick={() => setShowImport(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={importing}>
+                  {importing ? 'Importing…' : 'Import'}
+                </button>
               </div>
             </form>
           </div>
@@ -205,12 +282,43 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
             <>
               <div className="watchlist-title-bar">
                 <h2>{selectedWatchlist.name}</h2>
-                <button
-                  className="btn btn-danger"
-                  onClick={() => handleDeleteWatchlist(selectedWatchlist.id)}
-                >
-                  Delete
-                </button>
+                <div className="watchlist-actions">
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setRenameValue(selectedWatchlist.name);
+                      setShowRename(true);
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => setShowImport(true)}
+                  >
+                    Import
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => handleExport('json')}
+                    title="Download as JSON"
+                  >
+                    Export JSON
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => handleExport('csv')}
+                    title="Download as CSV"
+                  >
+                    Export CSV
+                  </button>
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => handleDeleteWatchlist(selectedWatchlist.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
 
               <form onSubmit={handleAddSymbol} className="add-symbol-form">
@@ -224,43 +332,10 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
                 <button type="submit" className="btn btn-primary">Add</button>
               </form>
 
-              <div className="symbol-list">
-                {symbolsLoading ? (
-                  <p className="empty-state">Loading symbols…</p>
-                ) : symbols.length === 0 ? (
-                  <p className="empty-state">No symbols yet. Add one above.</p>
-                ) : (
-                  symbols.map((s, i) => (
-                    <div key={s.symbol} className="symbol-row">
-                      <div className="symbol-row-actions">
-                        <button
-                          onClick={() => handleMoveSymbol(s.symbol, 'up')}
-                          disabled={i === 0}
-                        >↑</button>
-                        <button
-                          onClick={() => handleMoveSymbol(s.symbol, 'down')}
-                          disabled={i === symbols.length - 1}
-                        >↓</button>
-                      </div>
-                      <span
-                        className="symbol-ticker"
-                        onClick={() => onSelectSymbol(s.symbol)}
-                      >
-                        {s.symbol}
-                      </span>
-                      <span className="symbol-status">
-                        {s.is_enabled ? '🟢' : '⚪'}
-                      </span>
-                      <button
-                        className="btn-remove"
-                        onClick={() => handleRemoveSymbol(s.symbol)}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
+              <WatchlistTable
+                watchlistId={selectedId!}
+                onSelectSymbol={onSelectSymbol}
+              />
             </>
           ) : (
             <p className="empty-state">Select or create a watchlist to view symbols</p>

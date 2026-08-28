@@ -8,89 +8,117 @@ from .base_indicator import BaseIndicator
 
 class RSIIndicator(BaseIndicator):
     """Relative Strength Index indicator"""
-    
+
     def __init__(self, period: int = 14):
         super().__init__("RSI", {"period": period})
         self.period = period
         self.gains: list[float] = []
         self.losses: list[float] = []
-    
+
     def calculate(self, data: list[dict[str, Any]]) -> list[float]:
         """Calculate RSI for the given data"""
         if not data or len(data) < self.period + 1:
             return []
-        
+
         # Extract close prices
         closes = [float(d['close']) for d in data]
-        
+
         # Calculate price changes
         changes = []
         for i in range(1, len(closes)):
             changes.append(closes[i] - closes[i-1])
-        
+
         # Separate gains and losses
         gains = [max(change, 0) for change in changes]
         losses = [max(-change, 0) for change in changes]
-        
+
         # Calculate initial average gain and loss
         avg_gain = sum(gains[:self.period]) / self.period
         avg_loss = sum(losses[:self.period]) / self.period
-        
+
         # Calculate RSI
         rsi_values = [None] * self.period  # First 'period' values are undefined
-        
+
         if avg_loss == 0:
             rsi_values.append(100.0)  # Avoid division by zero
         else:
             rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
             rsi_values.append(rsi)
-        
+
         # Calculate remaining RSI values using Wilder's smoothing
         for i in range(self.period, len(gains)):
             avg_gain = (avg_gain * (self.period - 1) + gains[i]) / self.period
             avg_loss = (avg_loss * (self.period - 1) + losses[i]) / self.period
-            
+
             if avg_loss == 0:
                 rsi_values.append(100.0)
             else:
                 rs = avg_gain / avg_loss
                 rsi = 100 - (100 / (1 + rs))
                 rsi_values.append(rsi)
-        
+
         # Filter out None values for clean return
         self.values = [v for v in rsi_values if v is not None]
         return self.values.copy()
-    
+
     def update(self, new_data: dict[str, Any]) -> float | None:
-        """Update RSI with new data point"""
+        """Update RSI with new data point using O(1) Wilder's smoothing.
+
+        Phase 20 perf fix: the previous implementation called
+        ``calculate()`` on a sliding price window, which is O(period)
+        per bar. This version maintains ``avg_gain`` and ``avg_loss`` as
+        instance state and updates them in O(1) per bar.
+        """
         close_price = float(new_data['close'])
-        
-        # Initialize price history if needed
+
+        # ---- Warmup: collect enough data to seed the first RSI ----
         if not hasattr(self, '_price_history'):
             self._price_history = []
-        
-        self._price_history.append(close_price)
-        
-        # Keep only what we need for calculation
-        # We need at least period + 1 prices to calculate RSI
-        if len(self._price_history) < self.period + 1:
-            return None
-        
-        # Keep recent history for efficiency
-        if len(self._price_history) > self.period + 10:
-            self._price_history = self._price_history[-(self.period + 10):]
-        
-        # Calculate RSI with current history
-        try:
-            result = self.calculate([
-                {'close': price} for price in self._price_history
-            ])
-            if result:
-                latest_value = result[-1]
-                self.values.append(latest_value)
-                return latest_value
-        except Exception:
-            pass
-        
+            self._prev_close: float | None = None
+            self._avg_gain: float | None = None
+            self._avg_loss: float | None = None
+
+        if self._prev_close is not None:
+            change = close_price - self._prev_close
+            gain = max(change, 0.0)
+            loss = max(-change, 0.0)
+
+            if self._avg_gain is None:
+                # Still accumulating warmup changes to compute first SMA.
+                # We need self.period changes to seed the first average.
+                self._price_history.append(gain)
+                self._price_history.append(loss)
+                if len(self._price_history) >= self.period * 2:
+                    gains = self._price_history[0::2]
+                    losses = self._price_history[1::2]
+                    self._avg_gain = sum(gains[:self.period]) / self.period
+                    self._avg_loss = sum(losses[:self.period]) / self.period
+                    # Compute the first RSI value from those seed averages
+                    # so callers see a value the moment we have enough data.
+                    if self._avg_loss == 0:
+                        rsi_value = 100.0
+                    else:
+                        rs = self._avg_gain / self._avg_loss
+                        rsi_value = 100.0 - (100.0 / (1.0 + rs))
+                    self.values.append(rsi_value)
+                    # Trim warmup buffer — we no longer need the raw
+                    # gain/loss history since state is in _avg_gain/loss.
+                    self._price_history = []
+                    return rsi_value
+            else:
+                # ---- Incremental update using Wilder's smoothing (O(1)) ----
+                self._avg_gain = (self._avg_gain * (self.period - 1) + gain) / self.period
+                self._avg_loss = (self._avg_loss * (self.period - 1) + loss) / self.period
+
+                if self._avg_loss == 0:
+                    rsi_value = 100.0
+                else:
+                    rs = self._avg_gain / self._avg_loss
+                    rsi_value = 100.0 - (100.0 / (1.0 + rs))
+
+                self.values.append(rsi_value)
+                return rsi_value
+
+        self._prev_close = close_price
         return None

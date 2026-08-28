@@ -1,7 +1,7 @@
 """
 Alert repository for data access operations.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, desc
 
@@ -34,7 +34,7 @@ class AlertRepository:
         """All enabled alerts."""
         return (
             self.db.query(Alert)
-            .filter(Alert.is_enabled == True)
+            .filter(Alert.is_enabled)
             .order_by(desc(Alert.created_at))
             .all()
         )
@@ -58,7 +58,7 @@ class AlertRepository:
             .filter(
                 and_(
                     Alert.symbol == symbol.upper(),
-                    Alert.is_enabled == True,
+                    Alert.is_enabled,
                 )
             )
             .all()
@@ -130,7 +130,7 @@ class AlertRepository:
     def get_recent_triggers(self, since: datetime | None = None) -> list[AlertTrigger]:
         """Triggers fired within the last 24 hours (or since ``since``)."""
         if since is None:
-            since = datetime.now(timezone.utc) - timedelta(hours=24)
+            since = datetime.now(UTC) - timedelta(hours=24)
         return (
             self.db.query(AlertTrigger)
             .filter(AlertTrigger.triggered_at >= since)

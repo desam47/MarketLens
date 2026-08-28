@@ -2,7 +2,7 @@
 API endpoints for market regime analysis
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
@@ -11,6 +11,8 @@ from backend.market_data.services.engine_seeder import (
     seed_engine_from_quotes,
 )
 from backend.regime.market_regime_engine import MarketRegimeEngine
+from backend.regime.relative_strength_engine import RelativeStrengthEngine
+from backend.regime.sector_engine import SectorEngine
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,8 @@ router = APIRouter(prefix="/api/regime", tags=["regime"])
 
 # In a real implementation, these would be dependency injected or managed as services
 _engines: dict[str, MarketRegimeEngine] = {}
+_rs_engines: dict[str, RelativeStrengthEngine] = {}
+_sector_engines: dict[str, SectorEngine] = {}
 
 # Freshness thresholds for the data_age_seconds field on the regime response.
 # Used by the frontend to color the "last updated" indicator.
@@ -52,7 +56,7 @@ def _data_age_seconds(ts: datetime | None) -> float | None:
     """
     if ts is None:
         return None
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     if ts.tzinfo is not None:
         ts = ts.replace(tzinfo=None)
     delta = (now - ts).total_seconds()
@@ -112,7 +116,7 @@ async def get_current_regime(symbol: str):
         }
     except Exception as e:
         logger.error(f"Error getting regime for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get("/{symbol}/history")
 async def get_regime_history(symbol: str, limit: int | None = 100):
@@ -139,7 +143,7 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
         }
     except Exception as e:
         logger.error(f"Error getting regime history for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/{symbol}/update")
 async def update_regime(symbol: str, price: float, volume: float,
@@ -170,4 +174,54 @@ async def update_regime(symbol: str, price: float, volume: float,
         }
     except Exception as e:
         logger.error(f"Error updating regime for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ----------------------------------------------------------------------
+# Phase 8: relative-strength and sector endpoints
+# ----------------------------------------------------------------------
+
+def _get_rs_engine(symbol: str) -> RelativeStrengthEngine:
+    """Get or create a relative-strength engine for symbol."""
+    symbol = symbol.upper()
+    if symbol not in _rs_engines:
+        engine = RelativeStrengthEngine(symbol)
+        _rs_engines[symbol] = engine
+    return _rs_engines[symbol]
+
+
+def _get_sector_engine(symbol: str) -> SectorEngine:
+    """Get or create a sector engine for symbol."""
+    symbol = symbol.upper()
+    if symbol not in _sector_engines:
+        engine = SectorEngine(symbol)
+        _sector_engines[symbol] = engine
+    return _sector_engines[symbol]
+
+
+@router.get("/{symbol}/relative-strength")
+async def get_relative_strength(symbol: str):
+    """Phase 8: relative-strength signals vs SPY and QQQ benchmarks."""
+    try:
+        engine = _get_rs_engine(symbol.upper())
+        signals = engine.compute()
+        return {
+            "symbol": symbol.upper(),
+            "signals": [s.to_dict() for s in signals],
+            "count": len(signals),
+        }
+    except Exception as e:
+        logger.error(f"Error getting relative strength for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/{symbol}/sector")
+async def get_sector_signal(symbol: str):
+    """Phase 8: sector alignment signal for symbol."""
+    try:
+        engine = _get_sector_engine(symbol.upper())
+        signal = engine.get_current_signal()
+        return signal.to_dict()
+    except Exception as e:
+        logger.error(f"Error getting sector signal for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e

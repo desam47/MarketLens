@@ -21,8 +21,8 @@ router = APIRouter(prefix="/api/trend", tags=["trend"])
 _engines: dict[str, TrendEngine] = {}
 
 # Timeframes we ingest bars for. Used to register the trend engine with the
-# live-tick registry under each bar:{tf} key.
-_TREND_TIMEFRAMES = ("1m", "5m", "15m", "1h", "1d")
+# live-tick registry under each bar:{tf} key. Must match the ingestion service.
+_TREND_TIMEFRAMES = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "1d", "1wk")
 
 def get_engine(symbol: str) -> TrendEngine:
     """Get or create trend engine for symbol, seeding from DB on first access.
@@ -53,7 +53,7 @@ async def get_current_trend(symbol: str, timeframe: str):
         try:
             tf = Timeframe(timeframe)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}")
+            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
 
         engine = get_engine(symbol.upper())
         trend_signal = engine.get_current_trend(tf)
@@ -80,7 +80,7 @@ async def get_current_trend(symbol: str, timeframe: str):
         raise
     except Exception as e:
         logger.error(f"Error getting trend for {symbol} {timeframe}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get("/{symbol}/history/{timeframe}")
 async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100):
@@ -90,7 +90,7 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
         try:
             tf = Timeframe(timeframe)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}")
+            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
 
         engine = get_engine(symbol.upper())
         history = engine.get_trend_history(tf, limit=limit)
@@ -103,6 +103,7 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
                     "direction": signal.direction.value,
                     "strength": signal.strength.value,
                     "confidence": signal.confidence,
+                    "score": signal.score,
                     "timestamp": signal.timestamp.isoformat() if signal.timestamp else None
                 }
                 for signal in history
@@ -113,7 +114,7 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
         raise
     except Exception as e:
         logger.error(f"Error getting trend history for {symbol} {timeframe}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.post("/{symbol}/update/{timeframe}")
 async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
@@ -124,7 +125,7 @@ async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
         try:
             Timeframe(timeframe)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}")
+            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
 
         engine = get_engine(symbol.upper())
 
@@ -147,4 +148,4 @@ async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
         raise
     except Exception as e:
         logger.error(f"Error updating trend for {symbol} {timeframe}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

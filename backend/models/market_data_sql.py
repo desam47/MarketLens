@@ -47,9 +47,11 @@ class BarModel(Base):
     provider = Column(String(50), nullable=False)
     data_status = Column(String(20), nullable=False)
 
-    # Composite indexes for common queries
+    # Composite indexes for common queries.
+    # ix_bars_symbol_timeframe_timestamp is UNIQUE so concurrent upsert_bars
+    # calls cannot create duplicate bars for the same (symbol, timeframe, timestamp).
     __table_args__ = (
-        Index('ix_bars_symbol_timeframe_timestamp', 'symbol', 'timeframe', 'timestamp'),
+        Index('ix_bars_symbol_timeframe_timestamp', 'symbol', 'timeframe', 'timestamp', unique=True),
         Index('ix_bars_provider_symbol', 'provider', 'symbol'),
         Index('ix_bars_timeframe_timestamp', 'timeframe', 'timestamp'),
     )
