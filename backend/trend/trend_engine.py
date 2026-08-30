@@ -251,7 +251,7 @@ class TrendEngine:
                 self.indicators[timeframe] = stack
 
     def update(self, price: float, volume: float,
-               timestamp: datetime, provider: str = ""):
+               timestamp: datetime, provider: str = "", **_: object):
         """Update trend engine with new market data.
 
         Phase 0 Principle 15 — data quality validated before analysis.

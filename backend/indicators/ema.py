@@ -3,6 +3,8 @@ Exponential Moving Average (EMA) indicator
 """
 from typing import Any
 
+import numpy as np
+
 from .base_indicator import BaseIndicator
 
 
@@ -21,21 +23,44 @@ class EMAIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = [float(d['close']) for d in data]
+        closes = np.array([float(d['close']) for d in data])
+        period = self.period
+        multiplier = 2 / (period + 1)
+        alpha = multiplier
+        beta = 1 - multiplier
 
         # Calculate SMA for first EMA value
-        sma = sum(closes[:self.period]) / self.period
-        ema_values = [sma]
-        self.prev_ema = sma
+        sma = closes[:period].mean()
 
-        # Calculate EMA for remaining values
-        for i in range(self.period, len(closes)):
-            ema = (closes[i] * self.multiplier) + (self.prev_ema * (1 - self.multiplier))
-            ema_values.append(ema)
-            self.prev_ema = ema
+        # Create array for convolution: c[i] = alpha * closes[i] for i >= period, else 0
+        c = np.zeros_like(closes)
+        c[period:] = alpha * closes[period:]
 
-        self.values = ema_values
-        return ema_values.copy()
+        # Create beta sequence: [beta^0, beta^1, ..., beta^{n-1}]
+        beta_seq = beta ** np.arange(len(closes))
+
+        # Compute s = convolve(c, beta_seq, mode='full') and take first len(closes) elements
+        s = np.convolve(c, beta_seq, mode='full')[:len(closes)]
+
+        # Compute term = sma * beta^{i - (period-1)} for each i
+        exponents = np.arange(len(closes)) - (period - 1)
+        term = sma * (beta ** exponents)
+
+        # Full EMA array (including values before period-1, which we will discard)
+        ema_full = term + s
+
+        # Extract the valid EMA values (from index period-1 to end)
+        ema_result = ema_full[period-1:]
+        ema_list = ema_result.tolist()
+
+        # Update state for update() method
+        self.values = ema_list
+        if ema_list:
+            self.prev_ema = ema_list[-1]
+        else:
+            self.prev_ema = None
+
+        return ema_list.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update EMA with new data point.

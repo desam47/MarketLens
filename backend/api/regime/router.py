@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
-from backend.market_data.services.engine_seeder import (
+from ...market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_quotes,
 )

@@ -1,0 +1,103 @@
+# =============================================================================
+# Pre-commit hooks for MarketLens
+# =============================================================================
+# Install:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run manually against all files:
+#   pre-commit run --all-files
+#
+# Each hook only runs on the changed files in a typical commit, which
+# keeps the gate fast even on a large repo. The local hooks section
+# enforces rules that aren't covered by off-the-shelf tools.
+# =============================================================================
+
+repos:
+  # ----- Ruff: linter (fast, replaces flake8 + isort + pyupgrade) -----
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: ["--fix", "--exit-non-zero-on-fix"]
+        types_or: [python, pyi]
+        # Mirror the [tool.ruff] section in pyproject.toml.
+        files: '^(backend|scripts)/.*\.py$'
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff-format
+        name: ruff (format)
+        types_or: [python, pyi]
+        files: '^(backend|scripts)/.*\.py$'
+
+  # ----- mypy: optional static type check -----
+  # The project runs mypy but does not require zero findings yet. We run
+  # it as an advisory hook so it never blocks the commit; CI handles
+  # the strict gate.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: mypy (advisory)
+        # Don't fail the commit on type errors — the project's pyproject
+        # is currently very loose (`ignore_missing_imports=true`,
+        # `check_untyped_defs=true` with many findings).
+        args: ["--no-incremental", "--follow-imports=silent"]
+        files: '^backend/.*\.py$'
+        additional_dependencies:
+          - pydantic>=2.0
+          - pydantic-settings>=2.0
+          - types-requests
+        # Exclude tests, migrations, generated files.
+        exclude: |
+          (?x)^(
+              backend/tests/.*|
+              backend/alembic/.*
+          )$
+
+  # ----- Standard hygiene: trailing whitespace, EOF, line endings -----
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+        # Catches accidentally-committed PEM keys / API tokens.
+        name: detect private keys / API tokens
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # ----- Local: safety check for hardcoded secrets in committed code -----
+  - repo: local
+    hooks:
+      - id: no-hardcoded-secrets
+        name: scan for hardcoded secrets
+        # We scan staged Python and config files for common secret
+        # patterns. This is intentionally a coarse filter — false
+        # positives are easier to deal with than committed API keys.
+        entry: |
+          bash -c '
+            set -e
+            pattern="(api[_-]?key|secret|password|token|aws_access|aws_secret).*[:=].*[\"'\''][A-Za-z0-9/+_=-]{16,}[\"'\'']"
+            if grep -rEni "$pattern" "$@"; then
+              echo "ERROR: possible hardcoded secret found above"
+              exit 1
+            fi
+          ' --
+        language: system
+        types: [python, yaml, toml, json, env]
+        # Exclude test fixtures and example env files.
+        exclude: |
+          (?x)^(
+              \.env\.example|
+              .*test.*\.py|
+              backend/tests/.*
+          )$

@@ -1,4 +1,4 @@
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5001/api';
 
 // Phase 8: spec-compliant regime names (RISK_ON / RISK_OFF / NEUTRAL / TRANSITION / UNKNOWN)
 export type RegimeType = 'risk_on' | 'risk_off' | 'neutral' | 'transition' | 'unknown';
@@ -138,7 +138,21 @@ export interface SystemStatus {
   version: string;
   debug: boolean;
   market_data_provider: string;
+  market_data_fallback_providers: string[];
   ai_enabled: boolean;
+  timestamp: string;
+}
+
+/** Live system configuration read directly from .env — reflects changes
+ * without requiring a server restart. Falls back to cached settings for
+ * fields that can't be read from the env file. */
+export interface SystemConfig {
+  service: string;
+  version: string;
+  market_data_primary_provider: string;
+  market_data_fallback_providers: string[];
+  ai_enabled: boolean;
+  config_source: string;
   timestamp: string;
 }
 
@@ -313,6 +327,8 @@ export interface WatchlistScanResult {
   signals: string[];
   trend_signals: Record<string, any>;
   timestamp: string;
+  /** True when the watchlist row is enabled. Defaults to true. */
+  is_enabled?: boolean;
 }
 
 export interface WatchlistScanResponse {
@@ -424,6 +440,8 @@ export interface AIAnalysisResult {
   provider: string;
   model: string;
   is_uncertain: boolean;
+  template_id?: number | null;
+  template_name?: string | null;
 }
 
 export interface AIConfig {
@@ -452,6 +470,167 @@ export type ScannerEvent =
   | { type: 'unsubscribed'; symbol: string }
   | { type: 'pong' }
   | { type: 'error'; message: string };
+
+// --- Phase 2.3.3: realtime bar push ---
+
+export interface BarUpdateData {
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  timestamp: string | null;
+}
+
+export type RealtimeEvent =
+  | { type: 'bar_update'; symbol: string; timeframe: string; data: BarUpdateData }
+  | { type: 'subscribed'; symbol: string; timeframe: string }
+  | { type: 'unsubscribed'; symbol: string; timeframe: string }
+  | { type: 'pong' }
+  | { type: 'error'; message: string };
+
+/** "SYMBOL:TF" subscription key (uppercase symbol, lowercase tf). */
+const realtimeKey = (symbol: string, timeframe: string) =>
+  `${symbol.toUpperCase()}:${timeframe.toLowerCase()}`;
+
+export class RealtimeSubscriber {
+  private ws: WebSocket | null = null;
+  private wsUrl: string;
+  /** Active (symbol, tf) subscriptions keyed by "SYMBOL:TF". */
+  private subs: Set<string> = new Set();
+  private listeners: Set<(evt: RealtimeEvent) => void> = new Set();
+  private statusListeners: Set<(status: 'connecting' | 'open' | 'closed') => void> = new Set();
+  private reconnectAttempts = 0;
+  private pingTimer: number | null = null;
+  private reconnectTimer: number | null = null;
+  private explicitlyClosed = false;
+  private currentStatus: 'connecting' | 'open' | 'closed' = 'closed';
+
+  constructor(wsUrl: string) {
+    this.wsUrl = wsUrl;
+  }
+
+  connect(): void {
+    if (this.ws || this.explicitlyClosed) return;
+    this.setStatus('connecting');
+    try {
+      this.ws = new WebSocket(this.wsUrl);
+    } catch (e) {
+      this.scheduleReconnect();
+      return;
+    }
+
+    this.ws.onopen = () => {
+      this.reconnectAttempts = 0;
+      this.setStatus('open');
+      // Re-subscribe to anything we wanted before a possible reconnect.
+      for (const key of Array.from(this.subs)) {
+        const [symbol, timeframe] = key.split(':');
+        this.send({ action: 'subscribe', symbol, timeframe });
+      }
+      this.startPing();
+    };
+
+    this.ws.onmessage = (msg) => {
+      let parsed: RealtimeEvent | null = null;
+      try {
+        parsed = JSON.parse(msg.data) as RealtimeEvent;
+      } catch {
+        return;
+      }
+      for (const l of Array.from(this.listeners)) l(parsed);
+    };
+
+    this.ws.onerror = () => { /* onclose handles reconnect */ };
+    this.ws.onclose = () => {
+      this.stopPing();
+      this.ws = null;
+      this.setStatus('closed');
+      if (!this.explicitlyClosed) this.scheduleReconnect();
+    };
+  }
+
+  disconnect(): void {
+    this.explicitlyClosed = true;
+    this.stopPing();
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      try { this.ws.close(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    this.setStatus('closed');
+  }
+
+  /** Subscribe to a symbol+timeframe pair. */
+  subscribe(symbol: string, timeframe: string): void {
+    const key = realtimeKey(symbol, timeframe);
+    this.subs.add(key);
+    if (this.currentStatus === 'open') {
+      const [s, tf] = key.split(':');
+      this.send({ action: 'subscribe', symbol: s, timeframe: tf });
+    } else {
+      this.connect();
+    }
+  }
+
+  unsubscribe(symbol: string, timeframe: string): void {
+    const key = realtimeKey(symbol, timeframe);
+    if (this.subs.delete(key) && this.currentStatus === 'open') {
+      const [s, tf] = key.split(':');
+      this.send({ action: 'unsubscribe', symbol: s, timeframe: tf });
+    }
+  }
+
+  onEvent(listener: (evt: RealtimeEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  onStatus(listener: (status: 'connecting' | 'open' | 'closed') => void): () => void {
+    this.statusListeners.add(listener);
+    listener(this.currentStatus);
+    return () => this.statusListeners.delete(listener);
+  }
+
+  private send(payload: object): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(payload));
+    }
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.pingTimer = window.setInterval(() => {
+      this.send({ action: 'ping' });
+    }, 25000);
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer !== null) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.explicitlyClosed) return;
+    this.setStatus('closed');
+    const delay = Math.min(10000, 500 * Math.pow(2, this.reconnectAttempts));
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
+  private setStatus(status: 'connecting' | 'open' | 'closed'): void {
+    this.currentStatus = status;
+    for (const l of Array.from(this.statusListeners)) l(status);
+  }
+}
 
 /**
  * Lightweight WebSocket client for the scanner stream. One instance per
@@ -633,6 +812,81 @@ export interface NewsItem {
   relevance: number;
 }
 
+// ---- Phase 2.3.4: custom indicators ----
+
+export interface CustomIndicator {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  formula_type: string;
+  parameters: Record<string, any>;
+  color: string | null;
+  line_width: number | null;
+  line_style: string | null;
+  separate_pane: boolean;
+  pane_height: number | null;
+  is_overlay: boolean;
+  z_index: number;
+  is_active: boolean;
+  watchlist_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IndicatorValue {
+  timestamp: string;
+  value: number;
+}
+
+export interface IndicatorValuesResult {
+  indicator_id: number;
+  symbol: string;
+  timeframe: string;
+  count: number;
+  values: IndicatorValue[];
+}
+
+// ---- Phase 2.3.5: drawing tools ----
+
+export type DrawingType =
+  | 'trend_line'
+  | 'horizontal_line'
+  | 'fib_retracement'
+  | 'rectangle'
+  | 'arrow'
+  | 'text'
+  | 'channel'
+  | 'pitchfork'
+  | 'gann_fan';
+
+export interface DrawingTool {
+  id: number;
+  watchlist_id: number | null;
+  symbol: string;
+  timeframe: string;
+  drawing_type: DrawingType;
+  label: string | null;
+  color: string | null;
+  line_width: number | null;
+  line_style: string | null;
+  font_size: number | null;
+  opacity: number | null;
+  start_timestamp: string;
+  start_price: number;
+  end_timestamp: string | null;
+  end_price: number | null;
+  fib_levels: string | null;
+  top_price: number | null;
+  bottom_price: number | null;
+  is_visible: boolean;
+  is_locked: boolean;
+  extend_left: boolean;
+  extend_right: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface NewsResponse {
   symbol: string;
   items: NewsItem[];
@@ -742,6 +996,17 @@ class ApiService {
     return `${wsBase}/scanner-stream/ws`;
   }
 
+  /**
+   * Compute the WebSocket URL for the realtime bar push stream from the
+   * HTTP API base. ``http://host:5001/api`` becomes
+   * ``ws://host:5001/api/realtime/ws`` (and ``https`` becomes ``wss``).
+   */
+  getRealtimeWsUrl(): string {
+    const httpBase = this.baseUrl.replace(/\/+$/, '');
+    const wsBase = httpBase.replace(/^http/, 'ws');
+    return `${wsBase}/realtime/ws`;
+  }
+
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       ...options,
@@ -798,6 +1063,11 @@ class ApiService {
 
   async getSystemStatus(): Promise<SystemStatus> {
     return this.fetch<SystemStatus>('/system/status');
+  }
+
+  /** Live config read from .env — reflects runtime changes without restart. */
+  async getSystemConfig(): Promise<SystemConfig> {
+    return this.fetch<SystemConfig>('/system/config');
   }
 
   // Market Regime
@@ -1137,6 +1407,11 @@ class ApiService {
     return new ScannerSubscriber(this.getScannerWsUrl());
   }
 
+  // Phase 2.3.3: realtime bar push
+  createRealtimeSubscriber(): RealtimeSubscriber {
+    return new RealtimeSubscriber(this.getRealtimeWsUrl());
+  }
+
   // Phase 12: top movers (bullish/bearish)
   async getTopMovers(
     direction: 'bullish' | 'bearish',
@@ -1173,15 +1448,20 @@ class ApiService {
     });
   }
 
-  // Phase 16: AI symbol analysis
+  // Phase 16: AI symbol analysis (extended in Phase 2.4.5 for template_id)
   async analyzeSymbol(
     symbol: string,
     timeframe: string = '1d',
-    options?: { max_tokens?: number; temperature?: number },
+    options?: {
+      max_tokens?: number;
+      temperature?: number;
+      template_id?: number;
+    },
   ): Promise<AIAnalysisResult> {
     const params = new URLSearchParams({ symbol, timeframe });
     if (options?.max_tokens) params.set('max_tokens', String(options.max_tokens));
     if (options?.temperature != null) params.set('temperature', String(options.temperature));
+    if (options?.template_id != null) params.set('template_id', String(options.template_id));
     return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`);
   }
 
@@ -1217,6 +1497,212 @@ class ApiService {
     const params = expiration ? `?expiration=${encodeURIComponent(expiration)}` : '';
     return this.fetch<OptionsResponse>(`/aux-data/options/${symbol}${params}`);
   }
+
+  // ── Phase 2.3.4: custom indicators ──────────────────────────────────
+
+  async getCustomIndicators(watchlistId?: number): Promise<CustomIndicator[]> {
+    const params = watchlistId != null ? `?watchlist_id=${watchlistId}` : '';
+    return this.fetch<CustomIndicator[]>(`/custom-indicators${params}`);
+  }
+
+  async createCustomIndicator(data: Partial<CustomIndicator>): Promise<CustomIndicator> {
+    return this.fetch<CustomIndicator>('/custom-indicators', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCustomIndicator(id: number, data: Partial<CustomIndicator>): Promise<CustomIndicator> {
+    return this.fetch<CustomIndicator>(`/custom-indicators/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCustomIndicator(id: number): Promise<void> {
+    return this.fetch<void>(`/custom-indicators/${id}`, { method: 'DELETE' });
+  }
+
+  async computeCustomIndicator(
+    id: number,
+    symbol: string,
+    timeframe: string,
+    limit = 200,
+  ): Promise<IndicatorValuesResult> {
+    return this.fetch<IndicatorValuesResult>(
+      `/custom-indicators/compute/${id}?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+      { method: 'POST' },
+    );
+  }
+
+  // ── Phase 2.3.5: drawing tools ──────────────────────────────────────
+
+  async getDrawingTools(params?: {
+    symbol?: string;
+    timeframe?: string;
+    watchlistId?: number;
+    drawingType?: string;
+  }): Promise<DrawingTool[]> {
+    const q = new URLSearchParams();
+    if (params?.symbol) q.set('symbol', params.symbol);
+    if (params?.timeframe) q.set('timeframe', params.timeframe);
+    if (params?.watchlistId != null) q.set('watchlist_id', String(params.watchlistId));
+    if (params?.drawingType) q.set('drawing_type', params.drawingType);
+    const qs = q.toString();
+    return this.fetch<DrawingTool[]>(`/drawing-tools${qs ? `?${qs}` : ''}`);
+  }
+
+  async createDrawingTool(data: Partial<DrawingTool>): Promise<DrawingTool> {
+    return this.fetch<DrawingTool>('/drawing-tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDrawingTool(id: number, data: Partial<DrawingTool>): Promise<DrawingTool> {
+    return this.fetch<DrawingTool>(`/drawing-tools/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDrawingTool(id: number): Promise<void> {
+    return this.fetch<void>(`/drawing-tools/${id}`, { method: 'DELETE' });
+  }
+
+  // ── Phase 2.4.5: AI templates ─────────────────────────────────────
+
+  async getAITemplates(activeOnly = false): Promise<AITemplate[]> {
+    const qs = activeOnly ? '?active_only=true' : '';
+    return this.fetch<AITemplate[]>(`/ai/templates${qs}`);
+  }
+
+  async getAITemplate(id: number): Promise<AITemplate> {
+    return this.fetch<AITemplate>(`/ai/templates/${id}`);
+  }
+
+  async getAIDefaultTemplate(): Promise<AITemplate> {
+    return this.fetch<AITemplate>('/ai/templates/default');
+  }
+
+  async createAITemplate(data: {
+    name: string;
+    description?: string;
+    system_prompt: string;
+    user_instructions?: string;
+    variables?: string[];
+    is_active?: boolean;
+    is_default?: boolean;
+  }): Promise<AITemplate> {
+    return this.fetch<AITemplate>('/ai/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAITemplate(
+    id: number,
+    data: Partial<{
+      name: string;
+      description: string;
+      system_prompt: string;
+      user_instructions: string;
+      variables: string[];
+      is_active: boolean;
+      is_default: boolean;
+    }>,
+  ): Promise<AITemplate> {
+    return this.fetch<AITemplate>(`/ai/templates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteAITemplate(id: number): Promise<void> {
+    return this.del(`/ai/templates/${id}`);
+  }
+
+  async previewAITemplate(
+    id: number,
+    symbol: string,
+    timeframe: string,
+  ): Promise<AITemplatePreview> {
+    return this.fetch<AITemplatePreview>(
+      `/ai/templates/${id}/preview?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`,
+    );
+  }
+
+  // ── Phase 2.5: background AI jobs (RQ) ──────────────────────────────
+
+  async enqueueAIJob(payload: {
+    symbol: string;
+    timeframe?: string;
+    template_id?: number | null;
+  }): Promise<AIJobEnqueueResponse> {
+    return this.fetch<AIJobEnqueueResponse>('/ai/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getAIJob(jobId: string): Promise<AIJobStatusResponse> {
+    return this.fetch<AIJobStatusResponse>(`/ai/jobs/${encodeURIComponent(jobId)}`);
+  }
+}
+
+// ── Phase 2.4.5: AI template types ──────────────────────────────────────
+
+export interface AITemplate {
+  id: number;
+  name: string;
+  description: string | null;
+  system_prompt: string;
+  user_instructions: string | null;
+  variables: string[];
+  is_active: boolean;
+  is_default: boolean;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AITemplatePreview {
+  template_id: number;
+  system_prompt_rendered: string;
+  variables_used: Record<string, string>;
+  missing_variables: string[];
+}
+
+// ── Phase 2.5: background AI job types ────────────────────────────────────
+
+export interface AIJobEnqueueResponse {
+  job_id: string;
+  status: string;
+  symbol: string;
+  timeframe: string;
+  template_id?: number | null;
+  template_name?: string | null;
+}
+
+export interface AIJobStatusResponse {
+  job_id: string;
+  status: 'queued' | 'started' | 'finished' | 'failed';
+  symbol: string;
+  timeframe: string;
+  template_id?: number | null;
+  template_name?: string | null;
+  result: AIAnalysisResult | null;
+  error: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
 }
 
 export const api = new ApiService();

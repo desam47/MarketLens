@@ -257,7 +257,7 @@ class MultiTimeframeEngine:
             self.trend_engines[timeframe] = TrendEngine(self.symbol)
 
     def update(self, price: float, volume: float, timestamp: datetime,
-               provider: str = "") -> None:
+               provider: str = "", **_: object) -> None:
         """Update all timeframe engines with new market data"""
         # Update each trend engine
         for _timeframe, engine in self.trend_engines.items():

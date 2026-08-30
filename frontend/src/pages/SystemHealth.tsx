@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import api, { HealthData, SystemStatus } from '../services/api';
+import api, { HealthData, SystemStatus, SystemConfig } from '../services/api';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorBanner } from '../components/ErrorBanner';
 
 export function SystemHealth() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [ingestionStatus, setIngestionStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,13 +16,15 @@ export function SystemHealth() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, statusData, ingestionData] = await Promise.all([
+      const [healthData, statusData, configData, ingestionData] = await Promise.all([
         api.getHealth().catch(() => null),
         api.getSystemStatus().catch(() => null),
+        api.getSystemConfig().catch(() => null),
         api.getIngestionStatus().catch(() => null),
       ]);
       setHealth(healthData);
       setSystemStatus(statusData);
+      setSystemConfig(configData);
       setIngestionStatus(ingestionData);
     } catch (err: any) {
       setError(err.message);
@@ -89,10 +92,40 @@ export function SystemHealth() {
 
         <div className="health-card">
           <h2>System Configuration</h2>
-          {systemStatus ? (
+          {systemConfig ? (
             <div className="health-details">
-              <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
+              <p>
+                <strong>Market Data Provider:</strong>{' '}
+                <span className="provider-name">{systemConfig.market_data_primary_provider}</span>
+                <span className="config-source-badge" title="Read live from .env — no restart required">
+                  LIVE
+                </span>
+              </p>
+              {systemConfig.market_data_fallback_providers &&
+                systemConfig.market_data_fallback_providers.length > 0 && (
+                <p>
+                  <strong>Fallback Provider(s):</strong>{' '}
+                  <span className="provider-name">
+                    {systemConfig.market_data_fallback_providers.join(', ')}
+                  </span>
+                </p>
+              )}
+              {systemStatus && (
+                <>
+                  <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
+                  <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
+                  <p><strong>Version:</strong> {systemStatus.version}</p>
+                </>
+              )}
+            </div>
+          ) : systemStatus ? (
+            <div className="health-details">
               <p><strong>Market Data Provider:</strong> {systemStatus.market_data_provider}</p>
+              {systemStatus.market_data_fallback_providers &&
+                systemStatus.market_data_fallback_providers.length > 0 && (
+                <p><strong>Fallback Provider(s):</strong> {systemStatus.market_data_fallback_providers.join(', ')}</p>
+              )}
+              <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
               <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
               <p><strong>Version:</strong> {systemStatus.version}</p>
             </div>

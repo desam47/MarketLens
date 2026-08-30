@@ -2,16 +2,89 @@
 Application configuration settings
 """
 
-from pydantic import AliasChoices, Field
+import os
+from pathlib import Path
+
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Project root is two levels up from this file (backend/config/settings.py).
+# Used for env_file resolution so pydantic-settings reads .env regardless of CWD,
+# and as the base for any relative paths in settings (e.g. the SQLite DB).
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+# Path to the canonical .env file at the project root. All settings classes
+# point at this single file so there's one source of truth for local config.
+_ENV_FILE = str(_PROJECT_ROOT / ".env")
+
+
+class RedisSettings(BaseSettings):
+    """Redis configuration for caching and pub/sub."""
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="REDIS_", extra="ignore")
+    url: str = Field(default="redis://localhost:6379/0")
+    password: str | None = Field(default=None)
+    # Cache TTL settings (in seconds)
+    bar_data_ttl: int = Field(default=300)  # 5 minutes for bar data
+    quote_ttl: int = Field(default=60)      # 1 minute for quotes
+    # Cache size limits (maximum number of keys)
+    max_bar_keys: int = Field(default=1000)
+    max_quote_keys: int = Field(default=1000)
+    # Enable/disable Redis caching
+    enabled: bool = Field(default=False)
+
+
+class BackgroundProcessingSettings(BaseSettings):
+    """Phase 2.5 — Background AI analysis job queue (RQ)."""
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="BACKGROUND_", extra="ignore")
+    enabled: bool = Field(default=True)
+    # RQ queue name. Workers must be started with: rq worker --url redis://... <queue_name>
+    queue_name: str = Field(default="marketlens-workers")
+    # Result TTL in seconds — how long completed results stay in Redis before expiring.
+    result_ttl: int = Field(default=3600)
+    # Job TTL in seconds — jobs not started within this window are discarded.
+    job_timeout: int = Field(default=600)
+
+
+class FinnhubSettings(BaseSettings):
+    """Finnhub free-tier provider configuration (v2.2).
+
+    Free tier: 30 req/sec rate limit, IP-based (no API key required).
+    Providing an API key upgrades to 60 req/sec.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="FINNHUB_", extra="ignore")
+    enabled: bool = Field(default=False)
+    api_key: str = Field(default="")
+    rate_limit_per_minute: int = Field(default=1200)
+    request_timeout: float = Field(default=10.0)
+
+
+class WebullSettings(BaseSettings):
+    """Webull Open API v3 provider configuration (v2.2).
+
+    Provider is enabled only when WEBULL_ENABLED=true AND both
+    WEBULL_APP_KEY and WEBULL_APP_SECRET are set. The token is held
+    in-process memory only and refreshed automatically on expiry.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="WEBULL_", extra="ignore")
+    enabled: bool = Field(default=False)
+    app_key: str = Field(default="")
+    app_secret: str = Field(default="")
+    rate_limit_per_minute: int = Field(default=120)
+    request_timeout: float = Field(default=15.0)
 
 
 class MarketDataSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MARKET_DATA_", extra="ignore")
-    primary_provider: str = Field(default="yahoo_finance")
-    fallback_providers: list[str] = Field(default_factory=lambda: [])
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MARKET_DATA_", extra="ignore")
+    primary_provider: str = Field(default="finnhub")
+    fallback_providers: list[str] = Field(default_factory=lambda: ["yahoo_finance", "webull"])
+    # Global rate limit (used when no per-provider override is set).
     rate_limit_per_minute: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=300)
+    # Per-provider rate limit overrides keyed by provider name.
+    # Values are sourced from MARKET_DATA_<PROVIDER_NAME>_RATE_LIMIT_PER_MINUTE.
+    yahoo_finance_rate_limit_per_minute: int = Field(default=60)
+    finnhub_rate_limit_per_minute: int = Field(default=1200)
+    webull_rate_limit_per_minute: int = Field(default=120)
 
 
 class AISettings(BaseSettings):
@@ -29,7 +102,7 @@ class AISettings(BaseSettings):
     ``api_key`` is sourced from the environment (``AI_API_KEY``) and
     must never be sent to the frontend — see ``AIManager.safe_config()``.
     """
-    model_config = SettingsConfigDict(env_prefix="AI_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_", extra="ignore")
 
     enabled: bool = Field(default=False)
     # Primary provider: one of {ollama, lm_studio, openai_compatible,
@@ -64,21 +137,42 @@ class AISettings(BaseSettings):
 
 
 class WatchlistSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="WATCHLIST_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="WATCHLIST_", extra="ignore")
     max_symbols_per_watchlist: int = Field(default=50)
     max_watchlists: int = Field(default=10)
     auto_save_enabled: bool = Field(default=True)
 
 
 class DatabaseSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="DATABASE_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="DATABASE_", extra="ignore")
     url: str = Field(default="sqlite:///./marketlens.db")
     echo: bool = Field(default=False)
     pool_size: int = Field(default=5)
 
+    @field_validator("url")
+    @classmethod
+    def _resolve_relative_url(cls, v: str) -> str:
+        """Normalise SQLite URLs to absolute paths relative to the project root.
+
+        ``sqlite:///./foo.db`` and ``sqlite:///foo.db`` resolve relative to the
+        project root (``_PROJECT_ROOT``), not to whatever directory the server
+        happens to be started from.  This prevents data from being silently
+        written to a different file every time CWD changes.
+        Absolute URLs (``sqlite:///absolute/path.db``) and non-SQLite URLs are
+        returned unchanged.
+        """
+        if not v.startswith("sqlite:///"):
+            return v
+        # Strip the ``sqlite:///`` prefix to get the file path portion.
+        path_part = v[len("sqlite:///") :]
+        if os.path.isabs(path_part):
+            return v
+        # ``sqlite:///./foo.db`` → ``sqlite:///absolute/path/to/foo.db``
+        return f"sqlite:///{(_PROJECT_ROOT / path_part.lstrip('./')).resolve()}"
+
 
 class CORSSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="CORS_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="CORS_", extra="ignore")
     # Comma-separated list of allowed origins, e.g. "http://localhost:3000,https://app.example.com".
     # `*` is allowed in dev but logs a warning at startup because it permits any
     # browser to call authenticated endpoints if allow_credentials=True.
@@ -88,7 +182,7 @@ class CORSSettings(BaseSettings):
 
 
 class RateLimitSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="RATE_LIMIT_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="RATE_LIMIT_", extra="ignore")
     # Max requests per IP per window for write/mutation endpoints (ingestion
     # start/stop, watchlist edits). Read endpoints are not rate-limited —
     # they're already throttled by the underlying engines' state.
@@ -117,7 +211,7 @@ class TrendSignalWeights(BaseSettings):
     # exposes every component.
     adx: float = 0.15
     # Volume confirmation (relative to its own SMA)
-    volume: float = 0.1
+    relative_volume: float = 0.1
     # Momentum (ROC sign)
     momentum: float = 0.05
     # SuperTrend direction (close above/below the line)
@@ -197,7 +291,7 @@ class MultiTimeframeSettings(BaseSettings):
     module-level constants on the engine itself because they're
     configuration, not settings — they don't vary per environment.
     """
-    model_config = SettingsConfigDict(env_prefix="MTF_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MTF_", extra="ignore")
     # Which preset to use when the engine is constructed without one.
     # "day_trading" (5m/15m/1h/4h/1d) or "swing" (15m/1h/4h/1d/1w).
     default_preset: str = "day_trading"
@@ -223,7 +317,7 @@ class MarketContextSettings(BaseSettings):
     The market-wide regime is derived by aggregating the sub-regimes of
     these four indices. VIX is treated inversely (high VIX → risk-off).
     """
-    model_config = SettingsConfigDict(env_prefix="MARKET_CONTEXT_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MARKET_CONTEXT_", extra="ignore")
     # Indices to analyze for the market-wide regime aggregate.
     indices: tuple[str, ...] = ("SPY", "QQQ", "IWM", "^VIX")
     # Number of sub-regimes that must agree for a consensus regime.
@@ -243,7 +337,7 @@ class RelativeStrengthSettings(BaseSettings):
     symbol's return delta over the lookback window and maps it to a
     classification band.
     """
-    model_config = SettingsConfigDict(env_prefix="RELATIVE_STRENGTH_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="RELATIVE_STRENGTH_", extra="ignore")
     # Comma-separated benchmark symbols used for relative-strength
     # computation. Defaults to the SPY/QQQ pair from the Phase 8 spec;
     # override via ``RELATIVE_STRENGTH_BENCHMARKS=SPY,QQQ,IWM``.
@@ -300,14 +394,91 @@ class AuxDataSettings(BaseSettings):
     Defaults are ``enabled=False`` for all three; the trend engine,
     scanner, and AI pipeline do not require any of them.
     """
-    model_config = SettingsConfigDict(env_prefix="AUX_", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_", extra="ignore")
     news: NewsAuxSettings = Field(default_factory=NewsAuxSettings)
     fundamentals: FundamentalsAuxSettings = Field(default_factory=FundamentalsAuxSettings)
     options: OptionsAuxSettings = Field(default_factory=OptionsAuxSettings)
 
 
+class SecuritySettings(BaseSettings):
+    """Security header configuration.
+
+    HTTP security headers are added to every response. Defaults are
+    production-safe; HSTS is disabled by default because it must only
+    be set on deployments that are reachable exclusively over HTTPS.
+    Enable ``hsts_enabled=True`` only after HTTPS is confirmed end-to-end.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="SECURITY_", extra="ignore")
+
+    # Strict-Transport-Security: only enable when HTTPS is enforced
+    # across the entire deployment chain (load balancer → app).
+    # max-age in seconds: 31536000 = 1 year, 63072000 = 2 years.
+    hsts_enabled: bool = Field(default=False)
+    hsts_max_age_seconds: int = Field(default=31536000)  # 1 year
+    hsts_include_subdomains: bool = Field(default=True)
+    hsts_preload: bool = Field(default=False)
+
+    # Content-Security-Policy. The default below is intentionally strict
+    # for a JSON API: scripts and styles are blocked, only same-origin
+    # is allowed, forms and frames are denied. Override via
+    # ``SECURITY_CSP_VALUE=...`` if you need a looser policy.
+    csp_enabled: bool = Field(default=True)
+    csp_value: str = Field(
+        default="default-src 'none'; "
+        "script-src 'none'; "
+        "style-src 'none'; "
+        "img-src 'none'; "
+        "font-src 'none'; "
+        "connect-src 'none'; "
+        "frame-ancestors 'none'; "
+        "form-action 'none'; "
+        "base-uri 'none';"
+    )
+
+    # Clickjacking / framing protection.
+    x_frame_options: str = Field(default="DENY")
+
+    # MIME-type sniffing protection (IE legacy, but harmless elsewhere).
+    x_content_type_options: bool = Field(default=True)
+
+    # Referrer header on cross-origin requests.
+    referrer_policy: str = Field(default="strict-origin-when-cross-origin")
+
+    # Disable Google FLoC tracking.
+    permissions_policy: str = Field(
+        default="accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "magnetometer=(), microphone=(), payment=(), usb=()"
+    )
+
+
+class ObservabilitySettings(BaseSettings):
+    """Observability and monitoring configuration.
+
+    Configuration for distributed tracing, metrics collection, and
+    structured logging. All settings can be overridden via environment
+    variables with the OBSERVABILITY_ prefix.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="OBSERVABILITY_", extra="ignore")
+
+    # Tracing configuration
+    tracing_enabled: bool = Field(default=True)
+    # Jaeger agent host and port for trace export
+    jaeger_agent_host: str = Field(default="localhost")
+    jaeger_agent_port: int = Field(default=6831)
+
+    # Metrics configuration
+    metrics_enabled: bool = Field(default=True)
+    # Enable detailed SQLAlchemy query logging in metrics
+    sqlalchemy_query_logging: bool = Field(default=False)
+
+    # Logging configuration
+    structured_logging_enabled: bool = Field(default=True)
+    # Log level for structured logging when not in debug mode
+    structured_log_level: str = Field(default="INFO")
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
     app_version: str = "0.1.0"
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG", "debug"))
@@ -315,6 +486,8 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "port"))
 
     market_data: MarketDataSettings = Field(default_factory=MarketDataSettings)
+    finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
+    webull: WebullSettings = Field(default_factory=WebullSettings)
     ai: AISettings = Field(default_factory=AISettings)
     watchlist: WatchlistSettings = Field(default_factory=WatchlistSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -326,6 +499,10 @@ class Settings(BaseSettings):
     market_context: MarketContextSettings = Field(default_factory=MarketContextSettings)
     relative_strength: RelativeStrengthSettings = Field(default_factory=RelativeStrengthSettings)
     aux_data: AuxDataSettings = Field(default_factory=AuxDataSettings)
+    redis: RedisSettings = Field(default_factory=RedisSettings)
+    background: BackgroundProcessingSettings = Field(default_factory=BackgroundProcessingSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
 
 # Global settings instance

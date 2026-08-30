@@ -22,11 +22,11 @@ from sqlalchemy.orm import Session
 
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import extract_json_object
-from backend.api.dependencies import get_db
-from backend.nl_search.executor import execute_query
-from backend.nl_search.parser import parse_query
-from backend.nl_search.prompt import NL_EXPLAIN_PROMPT, build_explain_prompt
-from backend.nl_search.schema import NLFilters, NLSearchResponse, Ranking
+from ..dependencies import get_db
+from ...nl_search.executor import execute_query
+from ...nl_search.parser import parse_query
+from ...nl_search.prompt import NL_EXPLAIN_PROMPT, build_explain_prompt
+from ...nl_search.schema import NLFilters, NLSearchResponse, Ranking
 
 logger = logging.getLogger(__name__)
 

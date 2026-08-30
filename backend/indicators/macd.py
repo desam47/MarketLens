@@ -3,6 +3,8 @@ Moving Average Convergence Divergence (MACD) indicator
 """
 from typing import Any
 
+import numpy as np
+
 from .base_indicator import BaseIndicator
 from .ema import EMAIndicator
 
@@ -32,16 +34,14 @@ class MACDIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = [float(d['close']) for d in data]
+        closes = np.array([float(d['close']) for d in data])
 
-        # Calculate EMAs
+        # Calculate EMAs using the EMAIndicator instances
         ema_fast_values = self.ema_fast.calculate([{'close': c} for c in closes])
         ema_slow_values = self.ema_slow.calculate([{'close': c} for c in closes])
 
         # Calculate MACD line (fast EMA - slow EMA)
         macd_line = []
-        signal_line = []
-        histogram = []
 
         # We need to align the arrays - EMAs start after their respective periods
         start_index = self.slow - 1  # Slow EMA determines when we have enough data
@@ -55,27 +55,26 @@ class MACDIndicator(BaseIndicator):
                 macd = ema_fast_values[fast_idx] - ema_slow_values[slow_idx]
                 macd_line.append(macd)
 
-        # Calculate signal line (EMA of MACD line)
+        # Calculate signal line (EMA of MACD line) using the EMAIndicator instance
         if len(macd_line) >= self.signal:
-            signal_values = []
-            for i in range(len(macd_line)):
-                if i < self.signal - 1:
-                    signal_values.append(None)
-                else:
-                    # Calculate EMA of MACD line
-                    signal = sum(macd_line[i - self.signal + 1:i + 1]) / self.signal
-                    signal_values.append(signal)
+            signal_values = self.ema_signal.calculate([{'close': val} for val in macd_line])
 
-            # Filter out None values and calculate histogram
-            signal_line = [v for v in signal_values if v is not None]
             # Align MACD and signal lines for histogram calculation
-            min_len = min(len(macd_line), len(signal_line))
-            if min_len > 0:
-                aligned_macd = macd_line[-min_len:]
-                aligned_signal = signal_line[-min_len:]
-                histogram = [macd - sig for macd, sig in zip(aligned_macd, aligned_signal, strict=True)]
-                self.values = histogram.copy()  # Store histogram as main values
-                return self.values.copy()
+            # The signal line will be shorter by (signal-1) values due to EMA warmup period
+            if len(signal_values) > 0:
+                # Calculate how many MACD values we need to drop to align with signal line
+                macd_offset = len(macd_line) - len(signal_values)
+                aligned_macd = macd_line[macd_offset:] if macd_offset > 0 else macd_line
+                aligned_signal = signal_values
+
+                if len(aligned_macd) > 0 and len(aligned_signal) > 0:
+                    min_len = min(len(aligned_macd), len(aligned_signal))
+                    if min_len > 0:
+                        aligned_macd = aligned_macd[-min_len:]
+                        aligned_signal = aligned_signal[-min_len:]
+                        histogram = [macd - sig for macd, sig in zip(aligned_macd, aligned_signal)]
+                        self.values = histogram.copy()  # Store histogram as main values
+                        return self.values.copy()
 
         # If we don't have enough data for signal line yet, return empty
         self.values = []

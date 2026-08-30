@@ -216,7 +216,7 @@ class TestScannerAPI(unittest.TestCase):
 
     def test_watchlist_scan_returns_empty_for_no_symbols(self):
         self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
-        self.mock_repo.get_watchlist_symbols.return_value = []
+        self.mock_repo.get_all_watchlist_symbols.return_value = []
 
         response = self.client.get("/api/scanner/watchlist/1")
 
@@ -229,12 +229,14 @@ class TestScannerAPI(unittest.TestCase):
 
     def test_watchlist_scan_ranks_and_returns(self):
         watchlist = MagicMock(id=1)
-        aapl = MagicMock(symbol="AAPL")
-        googl = MagicMock(symbol="GOOGL")
-        msft = MagicMock(symbol="MSFT")
+        aapl = MagicMock(symbol="AAPL", is_enabled=True)
+        googl = MagicMock(symbol="GOOGL", is_enabled=True)
+        msft = MagicMock(symbol="MSFT", is_enabled=True)
 
         self.mock_repo.get_watchlist.return_value = watchlist
-        self.mock_repo.get_watchlist_symbols.return_value = [aapl, googl, msft]
+        # The new code path queries the unfiltered list so the UI can show
+        # disabled rows for re-enable/delete management.
+        self.mock_repo.get_all_watchlist_symbols.return_value = [aapl, googl, msft]
 
         # Each scan_symbol call returns a distinct result.
         aapl_result = _make_result("AAPL", rank=1, indicators={"rsi": 60.0})
@@ -269,22 +271,26 @@ class TestScannerAPI(unittest.TestCase):
         self.assertEqual(data["count"], 3)
         # Order matches the ranked list, not the scan order.
         self.assertEqual([r["symbol"] for r in data["results"]], ["AAPL", "GOOGL", "MSFT"])
+        # All enabled rows report is_enabled=True.
+        for r in data["results"]:
+            self.assertTrue(r["is_enabled"])
         # Timestamp is serialized (not empty).
         self.assertNotEqual(data["timestamp"], "")
-        # The watchlist symbols query was correct.
-        self.mock_repo.get_watchlist_symbols.assert_called_once_with(
-            1, enabled_only=True
+        # The watchlist symbols query used the all-inclusive variant.
+        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(
+            1, include_disabled=True
         )
 
     def test_watchlist_scan_passes_enabled_only(self):
-        """The router should always pass enabled_only=True to the repo."""
+        """The router should call the inclusive variant so disabled rows
+        are visible (with is_enabled=False) for management."""
         self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
-        self.mock_repo.get_watchlist_symbols.return_value = []
+        self.mock_repo.get_all_watchlist_symbols.return_value = []
 
         self.client.get("/api/scanner/watchlist/1")
 
-        self.mock_repo.get_watchlist_symbols.assert_called_once_with(
-            1, enabled_only=True
+        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(
+            1, include_disabled=True
         )
 
     # --- /api/scanner/watchlist/{id}/top ----------------------------------

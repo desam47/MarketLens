@@ -12,11 +12,11 @@ from fastapi import APIRouter, HTTPException
 # engine copies.
 # Importing here is safe: regime/trend/multitimeframe routers import from
 # market_data, never from each other — no import cycle.
-from backend.api.multitimeframe.router import get_engine as get_mtf_engine
-from backend.api.regime.router import get_engine as get_regime_engine
-from backend.api.trend.router import get_engine as get_trend_engine
-from backend.engines.timeframe import Timeframe
-from backend.strategy.strategy_selector import StrategySelector
+from ..multitimeframe.router import get_engine as get_mtf_engine
+from ..regime.router import get_engine as get_regime_engine
+from ..trend.router import get_engine as get_trend_engine
+from ...engines.timeframe import Timeframe
+from ...strategy.strategy_selector import StrategySelector
 
 logger = logging.getLogger(__name__)
 

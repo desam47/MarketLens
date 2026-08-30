@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { Bar, Transition } from '../services/api';
 
 // Lightweight-charts v4 — using the production build for tree-shaking.
@@ -14,7 +14,26 @@ interface CandlestickChartProps {
   transitions?: Transition[];
   height?: number;
   onError?: (err: Error) => void;
+  initialChartType?: ChartType;
+  showVolume?: boolean;
 }
+
+// --- Chart type config ---
+export type ChartType = 'candlestick' | 'bar' | 'line' | 'area' | 'heikin-ashi';
+
+interface ChartTypeDef {
+  key: ChartType;
+  label: string;
+  shortLabel: string;
+}
+
+const CHART_TYPES: ChartTypeDef[] = [
+  { key: 'candlestick', label: 'Candlestick', shortLabel: 'Candle' },
+  { key: 'bar', label: 'OHLC Bars', shortLabel: 'Bars' },
+  { key: 'line', label: 'Line', shortLabel: 'Line' },
+  { key: 'area', label: 'Area', shortLabel: 'Area' },
+  { key: 'heikin-ashi', label: 'Heikin-Ashi', shortLabel: 'HA' },
+];
 
 // --- Overlay config ---
 type OverlayKey = 'ema9' | 'ema21' | 'sma50' | 'sma200' | 'supertrend';
@@ -40,21 +59,101 @@ const DOWN_COLOR = '#ef4444';
 const GRID_COLOR = '#1f2937';
 const TEXT_COLOR = '#9ca3af';
 
-function toChartData(bars: Bar[]) {
+interface ChartPoint {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+function toChartData(bars: Bar[]): ChartPoint[] {
   const sorted = [...bars].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
-  return sorted.map(b => ({
-    time: Math.floor(new Date(b.timestamp).getTime() / 1000),
-    open: b.open,
-    high: b.high,
-    low: b.low,
-    close: b.close,
-  }));
+  // Deduplicate by timestamp — keep the last bar for each unique time.
+  // lightweight-charts requires strictly ascending, unique timestamps.
+  const deduped: ChartPoint[] = [];
+  let lastTime: number | null = null;
+  for (const b of sorted) {
+    const t = Math.floor(new Date(b.timestamp).getTime() / 1000);
+    if (t === lastTime) continue; // skip duplicate
+    lastTime = t;
+    deduped.push({
+      time: t,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    });
+  }
+  return deduped;
 }
 
 function toTime(b: Bar): number {
   return Math.floor(new Date(b.timestamp).getTime() / 1000);
+}
+
+// Final dedup guard: strips any remaining duplicate timestamps from an already-
+// sorted-by-time array. lightweight-charts asserts ascending, unique timestamps.
+function dedupByTime(data: ChartPoint[]): ChartPoint[] {
+  const out: ChartPoint[] = [];
+  let last = -1;
+  for (const p of data) {
+    if (p.time === last) continue;
+    last = p.time;
+    out.push(p);
+  }
+  return out;
+}
+
+// Dedupe overlay time/value points (same pattern, different type).
+function dedupByTimeOverlay(data: { time: number; value: number }[]): { time: number; value: number }[] {
+  const out: { time: number; value: number }[] = [];
+  let last = -1;
+  for (const p of data) {
+    if (p.time === last) continue;
+    last = p.time;
+    out.push(p);
+  }
+  return out;
+}
+
+// Heikin-Ashi transform. Each HA candle's open is the midpoint of the
+// prior HA candle (so HA series is recursive: we walk the original
+// series forward, building each HA bar from the prior HA bar's open/close
+// and the current raw bar's high/low/close).
+function toHeikinAshi(bars: Bar[]): ChartPoint[] {
+  const sorted = [...bars].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+  // Deduplicate: keep last bar per timestamp (same guard as toChartData).
+  const deduped: Bar[] = [];
+  let lastTs: number | null = null;
+  for (const b of sorted) {
+    const t = new Date(b.timestamp).getTime();
+    if (t === lastTs) continue;
+    lastTs = t;
+    deduped.push(b);
+  }
+  if (deduped.length === 0) return [];
+  const out: ChartPoint[] = [];
+  // First HA bar uses its raw open as open, midpoint as close.
+  let haOpen = (deduped[0].open + deduped[0].close) / 2;
+  for (const b of deduped) {
+    const haClose = (b.open + b.high + b.low + b.close) / 4;
+    const haHigh = Math.max(b.high, haOpen, haClose);
+    const haLow = Math.min(b.low, haOpen, haClose);
+    out.push({
+      time: toTime(b),
+      open: haOpen,
+      high: haHigh,
+      low: haLow,
+      close: haClose,
+    });
+    haOpen = (haOpen + haClose) / 2;
+  }
+  return out;
 }
 
 function computeEMA(bars: Bar[], period: number): { time: number; value: number }[] {
@@ -77,6 +176,8 @@ function computeSMA(bars: Bar[], period: number): { time: number; value: number 
   const result: { time: number; value: number }[] = [];
   for (let i = period - 1; i < sorted.length; i++) {
     const sum = sorted.slice(i - period + 1, i + 1).reduce((a, b) => a + b.close, 0);
+    const len = sorted.slice(i - period + 1, i + 1).length;
+    if (len < period) continue;
     result.push({ time: toTime(sorted[i]), value: sum / period });
   }
   return result;
@@ -165,21 +266,83 @@ function computeSuperTrend(
   return result;
 }
 
-function applyColoredData(
-  series: SeriesLike,
-  data: { time: number; value: number; color?: string }[],
-) {
-  // Emitting many small data points is the standard way to get multi-color
-  // line series in lightweight-charts. Each entry becomes a line segment.
-  series.setData(data);
+// Memoization helpers (top-level so referential identity is stable).
+const memo = {
+  bars: new WeakMap<Bar[], Bar[]>(),
+  data: new WeakMap<Bar[], ChartPoint[]>(),
+  ha: new WeakMap<Bar[], ChartPoint[]>(),
+  ema9: new WeakMap<Bar[], { time: number; value: number }[]>(),
+  ema21: new WeakMap<Bar[], { time: number; value: number }[]>(),
+  sma50: new WeakMap<Bar[], { time: number; value: number }[]>(),
+  sma200: new WeakMap<Bar[], { time: number; value: number }[]>(),
+  supertrend: new WeakMap<Bar[], { time: number; value: number; color?: string }[]>(),
+};
+
+function sortedBars(bars: Bar[]): Bar[] {
+  let cached = memo.bars.get(bars);
+  if (!cached) {
+    cached = [...bars].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    memo.bars.set(bars, cached);
+  }
+  return cached;
 }
 
-export function CandlestickChart({
+function getChartData(bars: Bar[]): ChartPoint[] {
+  let cached = memo.data.get(bars);
+  if (!cached) {
+    cached = toChartData(bars);
+    memo.data.set(bars, cached);
+  }
+  return cached;
+}
+
+function getHeikinAshi(bars: Bar[]): ChartPoint[] {
+  let cached = memo.ha.get(bars);
+  if (!cached) {
+    cached = toHeikinAshi(bars);
+    memo.ha.set(bars, cached);
+  }
+  return cached;
+}
+
+function getOverlayData(key: OverlayKey, bars: Bar[]) {
+  switch (key) {
+    case 'ema9': {
+      let c = memo.ema9.get(bars);
+      if (!c) { c = computeEMA(bars, 9); memo.ema9.set(bars, c); }
+      return c;
+    }
+    case 'ema21': {
+      let c = memo.ema21.get(bars);
+      if (!c) { c = computeEMA(bars, 21); memo.ema21.set(bars, c); }
+      return c;
+    }
+    case 'sma50': {
+      let c = memo.sma50.get(bars);
+      if (!c) { c = computeSMA(bars, 50); memo.sma50.set(bars, c); }
+      return c;
+    }
+    case 'sma200': {
+      let c = memo.sma200.get(bars);
+      if (!c) { c = computeSMA(bars, 200); memo.sma200.set(bars, c); }
+      return c;
+    }
+    case 'supertrend': {
+      let c = memo.supertrend.get(bars);
+      if (!c) { c = computeSuperTrend(bars, 7, 3); memo.supertrend.set(bars, c); }
+      return c;
+    }
+  }
+}
+
+function CandlestickChartImpl({
   bars,
   symbol,
   transitions = [],
   height = 400,
   onError,
+  initialChartType = 'candlestick',
+  showVolume = true,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -191,11 +354,22 @@ export function CandlestickChart({
   const [activeOverlays, setActiveOverlays] = useState<Set<OverlayKey>>(
     () => new Set<OverlayKey>(['ema9', 'ema21']),
   );
+  const [chartType, setChartType] = useState<ChartType>(initialChartType);
 
-  const sortedBars = useMemo(
-    () => [...bars].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
-    [bars],
-  );
+  // Stable callbacks — these are passed as props and would otherwise create
+  // new function identities on every render.
+  const handleChartTypeChange = useCallback((next: ChartType) => {
+    setChartType(next);
+  }, []);
+
+  const toggleOverlay = useCallback((key: OverlayKey) => {
+    setActiveOverlays(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // Build the chart once.
   useEffect(() => {
@@ -232,26 +406,18 @@ export function CandlestickChart({
           },
         });
 
-        const candleSeries = chart.addCandlestickSeries({
-          upColor: UP_COLOR,
-          downColor: DOWN_COLOR,
-          borderUpColor: UP_COLOR,
-          borderDownColor: DOWN_COLOR,
-          wickUpColor: UP_COLOR,
-          wickDownColor: DOWN_COLOR,
-        });
-
-        const volumeSeries = chart.addHistogramSeries({
-          priceFormat: { type: 'volume' },
-          priceScaleId: 'volume',
-        });
-        chart.priceScale('volume').applyOptions({
-          scaleMargins: { top: 0.8, bottom: 0 },
-        });
+        if (showVolume) {
+          const volumeSeries = chart.addHistogramSeries({
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'volume',
+          });
+          chart.priceScale('volume').applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+          });
+          volumeRef.current = volumeSeries;
+        }
 
         chartRef.current = chart;
-        seriesRef.current = candleSeries;
-        volumeRef.current = volumeSeries;
         setReady(true);
 
         resizeObserver = new ResizeObserver(entries => {
@@ -273,9 +439,7 @@ export function CandlestickChart({
     return () => {
       cancelled = true;
       if (resizeObserver) resizeObserver.disconnect();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       const chart = chartRef.current;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       const overlayMap = overlaySeriesRef.current;
       if (chart) {
         try {
@@ -284,32 +448,104 @@ export function CandlestickChart({
           // ignore — chart may have already been removed
         }
       }
-      // Nullify refs directly so subsequent renders don't try to use a removed chart.
       chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
       overlayMap.clear();
     };
-  }, [height, onError]);
+  }, [height, onError, showVolume]);
+
+  // (Re)create the main price series when chartType changes.
+  useEffect(() => {
+    if (!ready || !chartRef.current) return;
+    const chart = chartRef.current;
+
+    // Remove the existing price series if any.
+    if (seriesRef.current) {
+      try { chart.removeSeries(seriesRef.current); } catch { /* ignore */ }
+      seriesRef.current = null;
+    }
+
+    const lwc = (chart as any).constructor.prototype;
+    // The series type determines which lightweight-charts factory we use.
+    if (chartType === 'candlestick') {
+      seriesRef.current = chart.addCandlestickSeries({
+        upColor: UP_COLOR,
+        downColor: DOWN_COLOR,
+        borderUpColor: UP_COLOR,
+        borderDownColor: DOWN_COLOR,
+        wickUpColor: UP_COLOR,
+        wickDownColor: DOWN_COLOR,
+      });
+    } else if (chartType === 'bar') {
+      seriesRef.current = chart.addBarSeries({
+        upColor: UP_COLOR,
+        downColor: DOWN_COLOR,
+      });
+    } else if (chartType === 'line') {
+      seriesRef.current = chart.addLineSeries({
+        color: '#60a5fa',
+        lineWidth: 2,
+      });
+    } else if (chartType === 'area') {
+      seriesRef.current = chart.addAreaSeries({
+        lineColor: '#60a5fa',
+        topColor: 'rgba(96, 165, 250, 0.4)',
+        bottomColor: 'rgba(96, 165, 250, 0.05)',
+        lineWidth: 2,
+      });
+    } else if (chartType === 'heikin-ashi') {
+      seriesRef.current = chart.addCandlestickSeries({
+        upColor: UP_COLOR,
+        downColor: DOWN_COLOR,
+        borderUpColor: UP_COLOR,
+        borderDownColor: DOWN_COLOR,
+        wickUpColor: UP_COLOR,
+        wickDownColor: DOWN_COLOR,
+      });
+    }
+  }, [chartType, ready]);
 
   // Push bar data + manage overlay series when bars or activeOverlays change.
   useEffect(() => {
-    if (!ready || !chartRef.current || !seriesRef.current || !volumeRef.current) return;
+    if (!ready || !chartRef.current || !seriesRef.current) return;
 
-    const data = toChartData(bars);
+    const data = chartType === 'heikin-ashi' ? getHeikinAshi(bars) : getChartData(bars);
     if (data.length === 0) {
       seriesRef.current.setData([]);
-      volumeRef.current.setData([]);
+      if (volumeRef.current) volumeRef.current.setData([]);
       return;
     }
-    seriesRef.current.setData(data);
 
-    const volData = data.map(d => ({
-      time: d.time,
-      value: bars.find(b => Math.floor(new Date(b.timestamp).getTime() / 1000) === d.time)?.volume ?? 0,
-      color: d.close >= d.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)',
-    }));
-    volumeRef.current.setData(volData);
+    // Final safety net: lightweight-charts requires strictly ascending,
+    // unique timestamps. The toChartData/toHeikinAshi helpers already dedupe,
+    // but this guards against any path that bypasses them and any future
+    // data source that returns non-deduped bars.
+    const dedupedAsc = dedupByTime(data);
+
+    if (chartType === 'line' || chartType === 'area') {
+      // Line/area series expects { time, value } pairs.
+      seriesRef.current.setData(dedupedAsc.map(d => ({ time: d.time, value: d.close })));
+    } else {
+      // Candlestick / bar / heikin-ashi: OHLC.
+      seriesRef.current.setData(dedupedAsc);
+    }
+
+    if (volumeRef.current) {
+      // Volume data comes from the deduped series, indexed by timestamp.
+      const sorted = sortedBars(bars);
+      const volData = dedupedAsc.map(d => {
+        const matching = sorted.find(b => toTime(b) === d.time);
+        return {
+          time: d.time,
+          value: matching?.volume ?? 0,
+          color: (matching?.close ?? 0) >= (matching?.open ?? 0)
+            ? 'rgba(16, 185, 129, 0.4)'
+            : 'rgba(239, 68, 68, 0.4)',
+        };
+      });
+      volumeRef.current.setData(volData);
+    }
 
     // Markers
     if (transitions.length > 0) {
@@ -352,15 +588,8 @@ export function CandlestickChart({
           });
           overlayMap.set(def.key, series);
         }
-        let overlayData: { time: number; value: number; color?: string }[];
-        switch (def.key) {
-          case 'ema9': overlayData = computeEMA(sortedBars, 9); break;
-          case 'ema21': overlayData = computeEMA(sortedBars, 21).map(d => ({ ...d, color: def.color })); break;
-          case 'sma50': overlayData = computeSMA(sortedBars, 50).map(d => ({ ...d, color: def.color })); break;
-          case 'sma200': overlayData = computeSMA(sortedBars, 200).map(d => ({ ...d, color: def.color })); break;
-          case 'supertrend': overlayData = computeSuperTrend(sortedBars, 7, 3); break;
-        }
-        applyColoredData(series, overlayData);
+        const overlayData = dedupByTimeOverlay(getOverlayData(def.key, bars));
+        series.setData(overlayData);
       } else if (series) {
         try {
           chart.removeSeries(series);
@@ -372,16 +601,7 @@ export function CandlestickChart({
     }
 
     chart.timeScale().fitContent();
-  }, [bars, transitions, ready, activeOverlays, sortedBars]);
-
-  const toggleOverlay = (key: OverlayKey) => {
-    setActiveOverlays(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
+  }, [bars, transitions, ready, activeOverlays, chartType]);
 
   if (err) {
     return (
@@ -397,6 +617,22 @@ export function CandlestickChart({
       <div className="card-header-row">
         <h2>{symbol} Price Chart</h2>
         <span className="bar-count">{bars.length} bars</span>
+      </div>
+      <div className="chart-type-toolbar">
+        {CHART_TYPES.map(def => {
+          const active = chartType === def.key;
+          return (
+            <button
+              key={def.key}
+              type="button"
+              className={`chart-type-btn${active ? ' active' : ''}`}
+              onClick={() => handleChartTypeChange(def.key)}
+              title={def.label}
+            >
+              {def.shortLabel}
+            </button>
+          );
+        })}
       </div>
       <div className="chart-overlay-toolbar">
         {OVERLAYS.map(def => {
@@ -424,4 +660,22 @@ export function CandlestickChart({
   );
 }
 
+// React.memo: skip re-render when props are shallow-equal. The chart effect
+// already diffs bars/transitions/activeOverlays/chartType internally so
+// most prop changes (e.g. parent re-renders with new closures) will be
+// no-ops here. bars is the only prop that changes meaningfully for a
+// live data tick — and we want to re-render on that.
+const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
+  return (
+    prev.bars === next.bars &&
+    prev.transitions === next.transitions &&
+    prev.symbol === next.symbol &&
+    prev.height === next.height &&
+    prev.onError === next.onError &&
+    prev.initialChartType === next.initialChartType &&
+    prev.showVolume === next.showVolume
+  );
+});
+
+export { CandlestickChart };
 export default CandlestickChart;

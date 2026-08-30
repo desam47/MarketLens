@@ -14,7 +14,7 @@ real browser (Chrome 120), bypassing the anti-bot protection.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 
 from curl_cffi import requests as curl_requests
 
@@ -254,12 +254,70 @@ class YFinanceProvider(BaseMarketDataProvider):
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         if not symbols:
             return {}
-        results: dict[str, Quote] = {}
-        failed: list[str] = []
+        # Use the quote endpoint for batch
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={','.join(symbols)}"
+        try:
+            r = curl_requests.get(
+                url,
+                impersonate="chrome120",
+                timeout=15,
+            )
+            if r.status_code != 200:
+                raise RuntimeError(
+                    f"Yahoo Finance HTTP {r.status_code} for batch quote: {r.text[:200]}"
+                )
+            data = r.json()
+            quote_data = data.get("quoteResponse", {}).get("result", [])
+            # Build a map from symbol to quote data
+            quote_map = {item["symbol"]: item for item in quote_data}
+            results = {}
+            for symbol in symbols:
+                symbol_upper = symbol.upper()
+                if symbol_upper in quote_map:
+                    item = quote_map[symbol_upper]
+                    # Build Quote object
+                    quote = Quote(
+                        symbol=symbol_upper,
+                        price=float(item.get("regularMarketPrice", 0.0)),
+                        timestamp=datetime.fromtimestamp(item.get("regularMarketTime", 0), timezone.utc),
+                        provider=self.name,
+                        data_status=DataStatus.DELAYED,
+                        bid=item.get("bid"),
+                        ask=item.get("ask"),
+                        volume=item.get("regularMarketVolume"),
+                    )
+                    results[symbol] = quote
+                else:
+                    # Symbol not found in response
+                    results[symbol] = Quote(
+                        symbol=symbol_upper,
+                        price=0.0,
+                        timestamp=datetime.now(timezone.utc),
+                        provider=self.name,
+                        data_status=DataStatus.ERROR,
+                    )
+            self._reset_error_state()
+            return results
+        except Exception as e:
+            self._handle_error(e, f"Failed to get batch quotes for {symbols}")
+            raise
 
-        def _fetch_one(symbol: str) -> tuple[str, Quote | None, Exception | None]:
+    def get_batch_historical_bars(
+        self,
+        symbols: list[str],
+        timeframe: str = "1d",
+        range_: str = "3mo",
+    ) -> dict[str, list[Bar]]:
+        """Fetch historical bars for multiple symbols in parallel.
+        Returns a dict mapping symbol to list of bars (oldest -> newest).
+        """
+        if not symbols:
+            return {}
+        results: dict[str, list[Bar]] = {}
+
+        def _fetch_one(symbol: str) -> tuple[str, list[Bar] | None, Exception | None]:
             try:
-                return (symbol, self.get_quote(symbol), None)
+                return (symbol, self.get_historical_bars(symbol, timeframe=timeframe, range_=range_), None)
             except Exception as e:
                 return (symbol, None, e)
 
@@ -267,23 +325,12 @@ class YFinanceProvider(BaseMarketDataProvider):
         # larger pool gets us blocked. 20 in-flight HTTP calls is the
         # sweet spot for a residential connection.
         with ThreadPoolExecutor(max_workers=min(len(symbols), 20)) as pool:
-            for symbol, quote, err in pool.map(_fetch_one, symbols):
-                if err is not None or quote is None:
-                    failed.append(symbol)
-                    results[symbol] = Quote(
-                        symbol=symbol.upper(),
-                        price=0.0,
-                        timestamp=datetime.utcnow(),
-                        provider=self.name,
-                        data_status=DataStatus.ERROR,
-                    )
+            for symbol, bars, err in pool.map(_fetch_one, symbols):
+                if err is not None or bars is None:
+                    results[symbol] = []
                 else:
-                    results[symbol] = quote
+                    results[symbol] = bars
 
-        if failed:
-            logger.warning(
-                f"get_batch_quotes: {len(failed)}/{len(symbols)} symbols failed: {failed}"
-            )
         return results
 
     def get_market_status(self, symbol: str) -> MarketStatus:
@@ -313,7 +360,7 @@ class YFinanceProvider(BaseMarketDataProvider):
             supports_historical_bars=True,
             supports_latest_quote=True,
             supports_latest_bar=True,
-            supports_batch_quotes=False,
+            supports_batch_quotes=True,
             supports_market_status=True,
             min_timeframe="1m",
             max_timeframe="3mo",

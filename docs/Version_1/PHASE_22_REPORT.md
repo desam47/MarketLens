@@ -75,7 +75,7 @@
 **Problem:** The spec claim is the inverse of what the codebase enforces. There is no `TradeSignal` class anywhere in `backend/`. The codebase actively **prohibits** trade-signal types:
 - `backend/tests/trend/test_trend_engine.py:388` — `test_no_buy_signal`: "Phase 6 spec: bullish trend must NOT become a BUY signal."
 - `backend/tests/multitimeframe/test_multi_timeframe_engine.py:245` — `test_no_trade_signals`: checks that `BUY`/`SELL` enum members do not exist
-- `docs/PHASE_AUDIT.md:312` — "Do not create trade signals ... verified by `test_no_trade_signals`"
+- `phase_audit_v1.md:312` — "Do not create trade signals ... verified by `test_no_trade_signals`"
 
 **Affected files:** `backend/models/signal.py`, `backend/trend/trend_engine.py` (no `TradeSignal` defined or expected)
 

@@ -82,14 +82,17 @@ class Scanner:
             "adx": 0.05
         }
 
-    def scan_symbol(self, symbol: str) -> ScanResult:
+    def scan_symbol(self, symbol: str, historical_bars: list | None = None, quote: Quote | None = None) -> ScanResult:
         """Scan a single symbol and return results"""
         result = ScanResult(symbol, datetime.now())
 
         try:
-            # Get current quote
-            quote = market_data_manager.get_quote(symbol)
-            result.quote = quote
+            # Get current quote - use provided quote if available, otherwise fetch
+            if quote is not None:
+                result.quote = quote
+            else:
+                quote = market_data_manager.get_quote(symbol)
+                result.quote = quote
 
             # Get trend engine for this symbol
             trend_engine = TrendEngine(symbol)
@@ -120,7 +123,7 @@ class Scanner:
                         })
 
             # Calculate technical indicators
-            self._calculate_indicators(result, symbol)
+            self._calculate_indicators(result, symbol, historical_bars)
 
             # Calculate scores
             self._calculate_scores(result)
@@ -135,7 +138,7 @@ class Scanner:
         self.scan_results[symbol] = result
         return result
 
-    def _calculate_indicators(self, result: ScanResult, symbol: str):
+    def _calculate_indicators(self, result: ScanResult, symbol: str, historical_bars: list | None = None):
         """Calculate technical indicators for the symbol.
 
         When a real bar is available from the latest timeframe, we use
@@ -155,7 +158,13 @@ class Scanner:
                 # Try to enrich with the most recent bar's OHLC. RSI/MACD/ADX
                 # still need history; we mark them as None so downstream code
                 # can detect missing data rather than act on fake values.
-                latest_bar = market_data_manager.get_latest_bar(symbol, "1d")
+                # Use the last bar from historical data if available (from batch fetch),
+                # otherwise fall back to individual latest bar call.
+                latest_bar = None
+                if historical_bars and len(historical_bars) > 0:
+                    # Use the most recent bar from the historical data we already fetched
+                    latest_bar = historical_bars[-1]
+
                 if latest_bar:
                     result.add_indicator("close", latest_bar.close)
                     result.add_indicator("high", latest_bar.high)
@@ -168,54 +177,70 @@ class Scanner:
                     )
                     result.add_indicator("atr", true_range)
                 else:
-                    result.add_indicator("close", price)
-                    result.add_indicator("atr", 0.0)
+                    # Fall back to individual latest bar call if historical data not available
+                    latest_bar = market_data_manager.get_latest_bar(symbol, "1d")
+                    if latest_bar:
+                        result.add_indicator("close", latest_bar.close)
+                        result.add_indicator("high", latest_bar.high)
+                        result.add_indicator("low", latest_bar.low)
+                        # True range proxy for ATR; full ATR still needs history.
+                        true_range = max(
+                            latest_bar.high - latest_bar.low,
+                            abs(latest_bar.high - price),
+                            abs(latest_bar.low - price),
+                        )
+                        result.add_indicator("atr", true_range)
+                    else:
+                        result.add_indicator("close", price)
+                        result.add_indicator("atr", 0.0)
 
                 # Pull a 3-month daily history and feed it to the
-                # windowed indicators. The manager persists the result
-                # for the next call when a DB session is available.
-                self._populate_windowed_indicators(result, symbol)
+                # windowed indicators. Use pre-fetched bars if available,
+                # otherwise fetch via the market data manager.
+                self._populate_windowed_indicators(result, symbol, historical_bars)
 
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")
 
-    def _populate_windowed_indicators(self, result: ScanResult, symbol: str):
+    def _populate_windowed_indicators(self, result: ScanResult, symbol: str, historical_bars: list | None = None):
         """Compute RSI / MACD / ADX from a bar history window.
 
-        Fetches a 3-month daily history via the market data manager and
-        runs the corresponding indicators. On any failure (no history,
-        import error, insufficient bars), the indicator is recorded as
+        If historical_bars is provided, use it. Otherwise, fetch via the market data manager.
+        On any failure (no history, import error, insufficient bars), the indicator is recorded as
         ``None`` so the existing "missing data" branch in
         ``_calculate_scores`` continues to work unchanged.
         """
         bars: list = []
-        try:
-            from backend.database import SessionLocal
-            with SessionLocal() as db:
-                bars = market_data_manager.get_historical_bars(
-                    symbol,
-                    timeframe="1d",
-                    range_="3mo",
-                    use_cache=True,
-                    db=db,
-                )
-        except Exception as e:
-            logger.warning(
-                f"DB-backed history lookup failed for {symbol}: {e}"
-            )
-            # Fall back to a non-cached provider call.
+        if historical_bars is not None:
+            bars = historical_bars
+        else:
             try:
-                bars = market_data_manager.get_historical_bars(
-                    symbol,
-                    timeframe="1d",
-                    range_="3mo",
-                    use_cache=False,
-                )
-            except Exception as e2:
+                from backend.database import SessionLocal
+                with SessionLocal() as db:
+                    bars = market_data_manager.get_historical_bars(
+                        symbol,
+                        timeframe="1d",
+                        range_="3mo",
+                        use_cache=True,
+                        db=db,
+                    )
+            except Exception as e:
                 logger.warning(
-                    f"Provider history lookup failed for {symbol}: {e2}"
+                    f"DB-backed history lookup failed for {symbol}: {e}"
                 )
-                bars = []
+                # Fall back to a non-cached provider call.
+                try:
+                    bars = market_data_manager.get_historical_bars(
+                        symbol,
+                        timeframe="1d",
+                        range_="3mo",
+                        use_cache=False,
+                    )
+                except Exception as e2:
+                    logger.warning(
+                        f"Provider history lookup failed for {symbol}: {e2}"
+                    )
+                    bars = []
 
         if not bars:
             result.add_indicator("rsi", None)
@@ -366,9 +391,30 @@ class Scanner:
 
     def scan_symbols(self, symbols: list[str]) -> list[ScanResult]:
         """Scan multiple symbols and return results"""
+        # Fetch historical bars and quotes for all symbols in batch to eliminate N+1 query problem
+        from backend.database import SessionLocal
+        batch_bars = {}
+        batch_quotes = {}
+        try:
+            with SessionLocal() as db:
+                batch_bars = market_data_manager.get_batch_historical_bars(
+                    symbols,
+                    timeframe="1d",
+                    range_="3mo",
+                    use_cache=True,
+                    db=db,
+                )
+                batch_quotes = market_data_manager.get_batch_quotes(symbols)
+        except Exception as e:
+            logger.warning(f"Batch lookup failed: {e}")
+            # Fall back to individual calls if batch fails
+            batch_bars = {}
+            batch_quotes = {}
+
         results = []
         for symbol in symbols:
-            result = self.scan_symbol(symbol)
+            # Pass the pre-fetched bars and quote to avoid individual database/provider calls
+            result = self.scan_symbol(symbol, historical_bars=batch_bars.get(symbol), quote=batch_quotes.get(symbol))
             results.append(result)
 
         self.last_scan_time = datetime.now()
@@ -426,7 +472,7 @@ class Scanner:
         self.rankings = ranked
         return ranked
 
-    def get_top_symbols(self, count: int = 10) -> list[tuple[str, float, int]]:
+    def get_top_symbols(self, count: int = 10) -> list[tuple[str, float, int | None]]:
         """Get top N symbols by rank"""
         if not self.rankings:
             self.rank_symbols()

@@ -1,6 +1,6 @@
 # MarketLens Phase Audit
 
-**Last updated:** 2026-08-28 (Phase 22 closed at 100% — 30-point audit complete: 29 PASS, 1 INVERTED (claim 11: TrendSignal is the only signal type by deliberate design; TradeSignal is prohibited by `test_no_trade_signals`/`test_no_buy_signal`). Full report at `docs/PHASE_22_REPORT.md` with 7-dimension scorecard and technical debt list. **All 22 phases now substantially complete.**)
+**Last updated:** 2026-08-28 (Phase 22 closed at 100% — 30-point audit complete: 29 PASS, 1 INVERTED (claim 11: TrendSignal is the only signal type by deliberate design; TradeSignal is prohibited by `test_no_trade_signals`/`test_no_buy_signal`). Full report at `PHASE_22_REPORT.md` with 7-dimension scorecard and technical debt list. **All 22 phases now substantially complete.**)
 **Methodology:** Cross-reference each phase spec in `docs/prompts/PHASE N.md` against actual code in `backend/`, `frontend/`, and `docs/`. Status legend:
 
 - ✅ **DONE** — spec requirements substantially met
@@ -1010,7 +1010,7 @@ Report also exposes `is_stable` (score < 0.5) and `oos_sharpe_ratio` + `oos_win_
 
 | Item | Status | Evidence |
 |---|---|---|
-| 30-point scorecard produced | ✅ DONE | `docs/PHASE_22_REPORT.md` |
+| 30-point scorecard produced | ✅ DONE | `PHASE_22_REPORT.md` |
 | Architecture / data quality / quant engine / performance / test coverage / security / extensibility scores | ✅ DONE | All 7 dimensions scored in the report |
 | Remaining technical debt documented | ✅ DONE | 5 items, ranked by severity |
 | Per-claim verification (PASS / FAIL) | ✅ DONE | 29/30 PASS, 1 INVERTED (claim 11 — see report) |

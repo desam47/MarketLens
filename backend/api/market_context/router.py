@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from backend.market_data.services.engine_seeder import (
+from ...market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_quotes,
 )
@@ -65,11 +65,15 @@ def get_engine() -> MarketContextEngine:
                 logger.warning(f"Failed to seed sub-engine for {sym}: {e}")
         # Register each sub-engine with the live-tick path so it
         # automatically receives any incoming quotes for SPY/QQQ/IWM/VIX.
+        # The lambda uses **kwargs because ``dispatch_quote`` invokes callbacks
+        # as ``cb(price=..., volume=..., timestamp=..., high=..., low=...,
+        # open_price=...)`` — fixed kwargs, not positional.
         for sym in _engine._cfg.indices:
             engine_registry.register(
-                "quote", sym, lambda p, v, t, _s=sym: _engine.update(
-                    price=p, volume=v, timestamp=t, symbol=_s
-                )
+                "quote", sym, lambda price, volume, timestamp, _s=sym, **_:
+                    _engine.update(
+                        price=price, volume=volume, timestamp=timestamp, symbol=_s
+                    )
             )
     return _engine
 

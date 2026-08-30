@@ -1,5 +1,5 @@
 """
-System performance endpoint.
+System performance and metrics endpoints.
 
 Exposes the metrics Phase 20 spec requires:
   - average processing latency  (scanner avg scan time)
@@ -15,18 +15,19 @@ in FastAPI (avoids circular imports).
 """
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.observability import (
+from ...observability import (
     get_snapshot,
     record_http_request,
 )
-from backend.observability.metrics import (
+from ...observability.metrics import (
     start_memory_profiling,
     stop_memory_profiling,
 )
+from ...observability.prometheus import render_prometheus_text
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -45,6 +46,9 @@ class PerformanceResponse(BaseModel):
     python_heap_current_mb: float | None
     python_heap_peak_mb: float | None
     python_heap_top_allocations: list | None
+    cache: dict | None = None
+    rate_limit: dict | None = None
+    websocket: dict | None = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -56,6 +60,46 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         record_http_request()
         return await call_next(request)
+
+
+def _safe_cache_stats() -> dict | None:
+    """Pull Redis cache stats from MarketDataManager; return None on failure.
+
+    Cache stats come from the same Manager instance the ingestion
+    service uses, so the counters reflect real production traffic. If
+    anything goes wrong (manager not importable, Redis constructor
+    side-effects) we surface ``None`` instead of failing the endpoint.
+    """
+    try:
+        from ...market_data.services.manager import MarketDataManager
+
+        manager = MarketDataManager()
+        return manager.get_cache_stats()
+    except Exception:
+        return None
+
+
+def _safe_rate_limit_stats() -> dict | None:
+    """Pull rate-limiter stats from the global _write_limiter.
+
+    The limiter is created in ``api/main.py`` and lives there. We
+    import lazily to avoid the circular ``api.main`` -> ``api.system``
+    edge at import time.
+    """
+    try:
+        from ..main import _write_limiter
+        return _write_limiter.get_stats()
+    except Exception:
+        return None
+
+
+def _safe_websocket_stats() -> dict | None:
+    """Pull WebSocket connection + broadcast stats."""
+    try:
+        from ..scanner.ws_router import broadcast_manager
+        return broadcast_manager.get_stats()
+    except Exception:
+        return None
 
 
 @router.get("/performance", response_model=PerformanceResponse)
@@ -85,6 +129,9 @@ async def get_performance() -> PerformanceResponse:
         python_heap_current_mb=snap["python_heap_current_mb"],
         python_heap_peak_mb=snap["python_heap_peak_mb"],
         python_heap_top_allocations=snap["python_heap_top_allocations"],
+        cache=_safe_cache_stats(),
+        rate_limit=_safe_rate_limit_stats(),
+        websocket=_safe_websocket_stats(),
     )
 
 
@@ -100,3 +147,15 @@ async def toggle_memory_profiling(payload: MemoryProfileToggle) -> dict:
     else:
         stop_memory_profiling()
     return {"memory_profiling_enabled": payload.enabled}
+
+
+@router.get("/metrics", response_class=Response)
+async def prometheus_metrics() -> Response:
+    """Prometheus exposition endpoint (text format 0.0.4).
+
+    Scraped by Prometheus / VictoriaMetrics. The text is generated
+    on each call from the in-process counters — no background
+    exporter thread is used.
+    """
+    text = render_prometheus_text()
+    return Response(content=text, media_type="text/plain; version=0.0.4; charset=utf-8")

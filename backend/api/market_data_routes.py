@@ -12,8 +12,8 @@ from backend.config.settings import settings as _settings
 from backend.database import get_db
 from backend.models.market_data import Bar, MarketStatus, Quote
 
-from ..market_data.services.ingestion_service import ingestion_service
-from ..market_data.services.manager import _rate_limiter, market_data_manager
+from backend.market_data.services.ingestion_service import ingestion_service
+from backend.market_data.services.manager import _rate_limiter, _redis_cache, market_data_manager
 
 router = APIRouter(
     prefix="/api/market-data",
@@ -125,21 +125,62 @@ async def get_quote_history(symbol: str, limit: int = 100, db: Session = Depends
 
 @router.get("/bar/{symbol}/{timeframe}", response_model=Bar)
 async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_db)):
-    """Get the latest bar for a symbol and timeframe"""
+    """Get the latest bar for a symbol and timeframe.
+
+    Reads the Redis cache first (populated by the ingestion service) so
+    repeated requests don't hit the database. Falls back to the database
+    when Redis is empty or unavailable, then falls through to the
+    provider chain as a last resort.
+    """
+    from backend.market_data.services.manager import market_data_manager
+
+    # 1. Redis cache (fastest).
+    cached = _redis_cache.get_latest_bar(symbol.upper(), timeframe)
+    if cached is not None:
+        return cached
+
+    # 2. Database.
     bar = ingestion_service.get_latest_bar(symbol.upper(), timeframe)
-    if bar is None:
-        raise HTTPException(status_code=404, detail=f"No bar data found for {symbol} {timeframe}")
-    return bar
+    if bar is not None:
+        return bar
+
+    # 3. Provider chain (last resort — also populates the cache).
+    try:
+        return market_data_manager.get_latest_bar(symbol.upper(), timeframe)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No bar data found for {symbol} {timeframe}: {e}",
+        )
 
 @router.get("/bars/{symbol}", response_model=dict[str, Bar])
 async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
-    """Get latest bars for all timeframes for a symbol"""
+    """Get latest bars for all timeframes for a symbol.
+
+    Tries Redis cache first for each timeframe, then database, then provider
+    chain — same three-tier fallback as the single-bar endpoint.
+    """
     symbol = symbol.upper()
     bars = {}
     for timeframe in ingestion_service.timeframes:
+        # 1. Redis cache.
+        cached = _redis_cache.get_latest_bar(symbol, timeframe)
+        if cached is not None:
+            bars[timeframe] = cached
+            continue
+
+        # 2. Database.
         bar = ingestion_service.get_latest_bar(symbol, timeframe)
-        if bar:
+        if bar is not None:
             bars[timeframe] = bar
+            continue
+
+        # 3. Provider chain.
+        try:
+            bars[timeframe] = market_data_manager.get_latest_bar(symbol, timeframe)
+        except Exception:
+            # Don't fail the whole request if one timeframe is missing.
+            pass
     return bars
 
 @router.get("/status/{symbol}", response_model=MarketStatus)

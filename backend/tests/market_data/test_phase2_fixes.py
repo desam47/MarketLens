@@ -29,10 +29,11 @@ class TestProviderRegistry(unittest.TestCase):
         self.assertIn("yahoo_finance", _PROVIDER_CLASSES)
 
     def test_init_uses_default_settings(self):
-        """Default settings (yfinance as primary, no fallbacks) init yfinance only."""
+        """Default settings (yfinance primary, finnhub fallback) init both providers."""
         mgr = MarketDataManager()
         self.assertIn("yahoo_finance", mgr.providers)
-        self.assertEqual(mgr.provider_priority, ["yahoo_finance"])
+        self.assertIn("finnhub", mgr.providers)
+        self.assertEqual(mgr.provider_priority, ["yahoo_finance", "finnhub"])
 
     def test_init_with_fallback(self, *_):
         """A fallback in settings ends up registered with priority 1."""

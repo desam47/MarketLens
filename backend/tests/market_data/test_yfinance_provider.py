@@ -215,7 +215,7 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertTrue(capabilities.supports_historical_bars)
         self.assertTrue(capabilities.supports_latest_quote)
         self.assertTrue(capabilities.supports_latest_bar)
-        self.assertFalse(capabilities.supports_batch_quotes)  # Our implementation
+        self.assertTrue(capabilities.supports_batch_quotes)  # yfinance supports batch quotes
         self.assertTrue(capabilities.supports_market_status)
         self.assertEqual(capabilities.min_timeframe, "1m")
         self.assertEqual(capabilities.max_timeframe, "3mo")

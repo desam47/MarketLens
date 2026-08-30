@@ -98,8 +98,8 @@ class MarketRegimeEngine:
         self.bb_width_threshold = 0.05         # Bollinger Band width threshold for squeeze
 
     def update(self, price: float, volume: float, timestamp: datetime,
-               provider: str = "", high: float = None, low: float = None,
-               open_price: float = None) -> None:
+               provider: str = "", high: float | None = None, low: float | None = None,
+               open_price: float | None = None) -> None:
         """Update regime detection with new market data"""
         # Use provided OHLC or approximate from price
         high_price = high if high is not None else price

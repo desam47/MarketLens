@@ -131,7 +131,7 @@ def record_now(symbols: list[str] | None = None, timeframes: list[str] | None = 
     list. Useful for backfilling signals when new bars land.
     """
     if not symbols or not timeframes:
-        from backend.market_data.services.ingestion_service import ingestion_service
+        from ...market_data.services.ingestion_service import ingestion_service
         symbols = symbols or ingestion_service.symbols
         timeframes = timeframes or ingestion_service.timeframes
     recorded = signal_recorder.record_from_recent_bars(symbols, timeframes)
@@ -156,7 +156,7 @@ def get_latest_signals_for_symbol(
     # Use a union: fetch the most recent signal for each timeframe the
     # caller cares about. We don't have an explicit list, so we lean on
     # the ingestion service's configured timeframes.
-    from backend.market_data.services.ingestion_service import ingestion_service
+    from ...market_data.services.ingestion_service import ingestion_service
     repo = SignalRepository(db)
     out: dict[str, SignalResponse] = {}
     for tf in ingestion_service.timeframes:

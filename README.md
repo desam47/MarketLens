@@ -163,5 +163,5 @@ frontend/
 
 - **API_SUMMARY.md** — endpoint reference and design notes
 - **IMPLEMENTATION_SUMMARY.md** — what was built and fixes applied
-- **docs/** — phase audits and migration guides (e.g. `PHASE_AUDIT.md`, `MIGRATIONS.md`)
+- **docs/** — phase audits and migration guides (e.g. `docs/Version_1/phase_audit_v1.md`, `docs/Version_2/phase_audit_v2.md`, `MIGRATIONS.md`)
 - **scripts/** — `init_db.py` (database bootstrap), and other tooling

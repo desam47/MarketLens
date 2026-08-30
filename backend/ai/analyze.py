@@ -46,6 +46,7 @@ def analyze_symbol(
     *,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    system_prompt_override: str | None = None,
 ) -> AnalysisResponse | UncertaintyResponse:
     """Run a full AI analysis for ``symbol``.
 
@@ -62,6 +63,15 @@ def analyze_symbol(
     is a strict subtype of ``AnalysisResponse`` (same fields).
 
     Never raises for expected failures.
+
+    Args:
+        symbol: Ticker symbol to analyze.
+        timeframe: Primary analysis timeframe (default "1d").
+        max_tokens: Override max tokens for this call.
+        temperature: Override temperature for this call.
+        system_prompt_override: If provided, use this rendered system prompt
+            instead of the built-in ``SYSTEM_PROMPT``. Used when a saved
+            user template is selected for the request.
     """
     # --- Step 1: gather structured quant context ---
     ctx: AnalysisContext | None = None
@@ -76,9 +86,10 @@ def analyze_symbol(
         raise
 
     # --- Step 2: ask the AI ---
+    system_prompt = system_prompt_override if system_prompt_override else SYSTEM_PROMPT
     ai_resp = ai_manager.complete(
         prompt=build_user_prompt(ctx.to_dict()),
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         max_tokens=max_tokens,
         temperature=temperature,
     )

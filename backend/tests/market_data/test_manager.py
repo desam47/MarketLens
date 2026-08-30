@@ -22,16 +22,39 @@ from backend.models.market_data import (
 class TestMarketDataManager(unittest.TestCase):
 
     def setUp(self):
+        # Clear circuit breakers BEFORE manager init so a clean slate for each test.
+        # Breakers are module-level singletons — a breaker opened in one test would
+        # otherwise fail-fast in the next test.
+        from backend.market_data.services.manager import _circuit_breakers, _cb_lock
+        with _cb_lock:
+            _circuit_breakers.clear()
+        # Make Redis look like a miss-everything cache so tests don't read
+        # whatever the live ingestion service has populated.
+        self._redis_cache_patcher = patch(
+            "backend.market_data.services.manager._redis_cache"
+        )
+        self.mock_redis = self._redis_cache_patcher.start()
+        self.mock_redis.get_quote.return_value = None
+        self.mock_redis.get_latest_bar.return_value = None
+        self.mock_redis.get_bars.return_value = None
+        self.mock_redis.set_quote.return_value = True
+        self.mock_redis.set_latest_bar.return_value = True
+        self.mock_redis.set_bars.return_value = True
+        self.mock_redis.is_available.return_value = True
         self.manager = MarketDataManager()
         # Ensure the bar_repository module is loadable so patch() can find it
         # even though backend.repositories is a namespace package.
         import backend.repositories.bar_repository  # noqa: F401
 
+    def tearDown(self):
+        self._redis_cache_patcher.stop()
+
     def test_initialization(self):
-        """Test that manager initializes with Yahoo Finance provider"""
+        """Test that manager initializes with Yahoo Finance primary and Finnhub fallback."""
         self.assertIn("yahoo_finance", self.manager.providers)
-        self.assertEqual(len(self.manager.provider_priority), 1)
-        self.assertEqual(self.manager.provider_priority[0], "yahoo_finance")
+        self.assertIn("finnhub", self.manager.providers)
+        self.assertEqual(len(self.manager.provider_priority), 2)
+        self.assertEqual(self.manager.provider_priority, ["yahoo_finance", "finnhub"])
 
     def test_add_provider(self):
         """Test adding a new provider"""
@@ -136,8 +159,8 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertEqual(quote.symbol, "AAPL")
         self.assertEqual(quote.price, 149.5)  # From fallback provider
         self.assertEqual(quote.provider, "fallback_provider")
-        # Primary was retried 3 times before the manager fell through.
-        self.assertEqual(mock_primary.get_quote.call_count, 3)
+        # Primary was retried 2 times before the manager fell through.
+        self.assertEqual(mock_primary.get_quote.call_count, 2)
         mock_primary.get_quote.assert_called_with("AAPL")
         mock_fallback.get_quote.assert_called_once_with("AAPL")
 
@@ -233,14 +256,13 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertTrue(all(b.data_status == DataStatus.LIVE for b in result))
 
     def test_get_quote_retries_on_transient_failure(self):
-        """A transient failure should be retried (3 attempts) before falling through."""
+        """A transient failure should be retried (2 attempts) before falling through."""
         mock_primary = MagicMock()
         mock_primary.name = "yahoo_finance"
         mock_primary.is_available.return_value = True
-        # First two attempts fail, third succeeds.
+        # First attempt fails, second succeeds.
         mock_primary.get_quote.side_effect = [
             Exception("transient 1"),
-            Exception("transient 2"),
             Quote(
                 symbol="AAPL", price=150.0, timestamp=datetime.now(),
                 provider="yahoo_finance", data_status=DataStatus.DELAYED,
@@ -253,8 +275,8 @@ class TestMarketDataManager(unittest.TestCase):
         quote = self.manager.get_quote("AAPL")
 
         self.assertEqual(quote.price, 150.0)
-        # tenacity retried up to 3 times.
-        self.assertEqual(mock_primary.get_quote.call_count, 3)
+        # tenacity retried up to 2 times.
+        self.assertEqual(mock_primary.get_quote.call_count, 2)
 
     def test_get_historical_bars_cache_ttl_ceiling(self):
         """When the intraday cache is fresher than TTL, it is used as-is (no provider call)."""

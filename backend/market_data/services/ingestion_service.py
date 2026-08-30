@@ -5,6 +5,7 @@ Automatically fetches and stores market data from providers
 import asyncio
 import atexit
 import logging
+import random
 import threading
 from datetime import datetime, timedelta
 
@@ -42,7 +43,7 @@ class MarketDataIngestionService:
             symbols: List of symbols to track (default: popular stocks)
             timeframes: List of timeframes to track (default: common timeframes)
         """
-        self.symbols = symbols or ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX"]
+        self.symbols = symbols or ["SPY", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX"]
         self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
         self.manager = MarketDataManager()
         self.is_running = False
@@ -65,6 +66,10 @@ class MarketDataIngestionService:
         BackgroundTasks (which only handles sync callables). The background
         thread owns its own asyncio event loop, so the async ingestion loops
         run in isolation without blocking the request thread.
+
+        The correlation ID from the calling request's context is captured at
+        start time and restored in the daemon thread, so ingestion loop log
+        lines are traceable back to the initiating request.
         """
         if self.is_running:
             logger.warning("Ingestion service is already running")
@@ -74,10 +79,27 @@ class MarketDataIngestionService:
         set_ingestion_running(True)
         logger.info("Starting market data ingestion service in background thread")
 
+        # Capture the correlation ID from the current contextvar so it can be
+        # re-installed in the background thread. Daemon threads don't inherit
+        # contextvars from the parent thread, and asyncio.run() creates a fresh
+        # task that doesn't inherit them either.
+        captured_corr_id: str | None = None
+        try:
+            from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
+            captured_corr_id = get_correlation_id()
+        except Exception:
+            pass
+
         def _run_loop():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
             try:
+                # Re-install the captured correlation ID into the asyncio context.
+                if captured_corr_id:
+                    try:
+                        set_correlation_id(captured_corr_id)
+                    except Exception:
+                        pass
                 self._loop.run_until_complete(self._run_loops())
             finally:
                 self._loop.run_until_complete(self._loop.shutdown_asyncgens())
@@ -91,13 +113,21 @@ class MarketDataIngestionService:
         self._thread.start()
 
     async def _run_loops(self):
-        """Run all four ingestion loops until stop() is called."""
+        """Run all four ingestion loops until stop() is called.
+
+        Loops are staggered with small startup offsets so they don't all
+        fire their first call against the provider chain at the same
+        instant — that would burst-trigger 429s on the Finnhub free tier
+        (60 req/sec ceiling, with our heaviest cycle burning ~75 calls
+        in <2s if unthrottled). Offsets are kept under 15s so the first
+        real data still lands promptly.
+        """
         tasks = [
-            asyncio.create_task(self._quote_ingestion_loop()),
-            asyncio.create_task(self._bar_ingestion_loop()),
-            asyncio.create_task(self._status_ingestion_loop()),
-            asyncio.create_task(self._provider_health_loop()),
-            asyncio.create_task(self._signal_recording_loop()),
+            asyncio.create_task(self._quote_ingestion_loop(initial_delay=0.0)),
+            asyncio.create_task(self._bar_ingestion_loop(initial_delay=5.0)),
+            asyncio.create_task(self._status_ingestion_loop(initial_delay=10.0)),
+            asyncio.create_task(self._provider_health_loop(initial_delay=15.0)),
+            asyncio.create_task(self._signal_recording_loop(initial_delay=20.0)),
         ]
         try:
             await asyncio.gather(*tasks)
@@ -134,35 +164,64 @@ class MarketDataIngestionService:
         if self._thread is not None:
             self._thread.join(timeout=5.0)
 
-    async def _quote_ingestion_loop(self):
-        """Continuously ingest quote data"""
+    async def _jittered_sleep(self, base_seconds: float, jitter: float = 1.0) -> None:
+        """Sleep for ``base_seconds ± jitter`` to decorrelate loop timing.
+
+        When multiple loops share the same base interval (e.g. 60s) they
+        naturally synchronise over time. Adding random jitter breaks the
+        phase-lock so concurrent loops spread their request bursts across
+        the provider's rate-limit window rather than landing in the same
+        second every minute.
+        """
+        offset = random.uniform(-jitter, jitter)
+        await asyncio.sleep(max(0, base_seconds + offset))
+
+    async def _quote_ingestion_loop(self, initial_delay: float = 0.0):
+        """Continuously ingest quote data.
+
+        ``initial_delay`` is a startup offset (seconds) used to stagger
+        the first fire so concurrent loops don't burst against the
+        provider chain.
+        """
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
                 await self._ingest_quotes()
-                # Wait 30 seconds between quote updates (respect rate limits)
-                await asyncio.sleep(30)
+                # 30s + jitter — break fixed-cadence patterns so the
+                # provider sees a more human-like request pattern.
+                await self._jittered_sleep(30, jitter=3.0)
             except Exception as e:
                 logger.error(f"Error in quote ingestion loop: {e}")
                 await asyncio.sleep(5)  # Short delay before retry
 
-    async def _bar_ingestion_loop(self):
-        """Continuously ingest bar data"""
+    async def _bar_ingestion_loop(self, initial_delay: float = 0.0):
+        """Continuously ingest bar data.
+
+        The bar loop is the heaviest: 8 symbols × 7 timeframes = 56 calls
+        per cycle. With a per-call delay of 0.2s the cycle takes ~11s,
+        which keeps us well under Finnhub's 60 req/sec ceiling even when
+        the quote and health loops fire alongside it.
+        """
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
                 await self._ingest_bars()
-                # Wait 60 seconds between bar updates
-                await asyncio.sleep(60)
+                await self._jittered_sleep(60, jitter=5.0)
             except Exception as e:
                 logger.error(f"Error in bar ingestion loop: {e}")
                 await asyncio.sleep(10)
 
-    async def _signal_recording_loop(self):
+    async def _signal_recording_loop(self, initial_delay: float = 0.0):
         """Record HistoricalSignal rows + backfill forward outcomes.
 
         Two responsibilities, running on independent intervals:
           - Record one signal per (symbol, timeframe) per bar (90s)
           - Backfill forward outcomes for old signals (300s)
         """
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
                 recorded = await asyncio.to_thread(
@@ -184,26 +243,28 @@ class MarketDataIngestionService:
             except Exception as e:
                 logger.error(f"Error in signal backfill loop: {e}")
 
-            await asyncio.sleep(90)
+            await self._jittered_sleep(90, jitter=5.0)
 
-    async def _status_ingestion_loop(self):
+    async def _status_ingestion_loop(self, initial_delay: float = 0.0):
         """Continuously ingest market status data"""
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
                 await self._ingest_market_status()
-                # Wait 300 seconds (5 minutes) between status updates
-                await asyncio.sleep(300)
+                await self._jittered_sleep(300, jitter=15.0)
             except Exception as e:
                 logger.error(f"Error in status ingestion loop: {e}")
                 await asyncio.sleep(30)
 
-    async def _provider_health_loop(self):
+    async def _provider_health_loop(self, initial_delay: float = 0.0):
         """Continuously monitor provider health"""
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
                 await self._update_provider_health()
-                # Wait 60 seconds between health checks
-                await asyncio.sleep(60)
+                await self._jittered_sleep(60, jitter=5.0)
             except Exception as e:
                 logger.error(f"Error in provider health loop: {e}")
                 await asyncio.sleep(10)
@@ -225,6 +286,10 @@ class MarketDataIngestionService:
 
                 try:
                     quote: Quote = self.manager.get_quote(symbol)
+                    # Per-symbol delay to stay under Finnhub's 60 req/sec ceiling.
+                    # 8 symbols × 0.15s = 1.2s per quote cycle — well within budget
+                    # even when the bar loop (8×7×0.2s ≈ 11s) fires alongside it.
+                    await asyncio.sleep(0.15)
 
                     # Store in database
                     db_quote = QuoteModel(
@@ -281,6 +346,11 @@ class MarketDataIngestionService:
         db: Session = SessionLocal()
         # (symbol, timeframe) -> Bar — fresh bars to dispatch after commit
         fresh_bars: list[tuple] = []
+        # Bars to bulk-upsert (handles duplicate (symbol, timeframe, timestamp)
+        # via ON CONFLICT DO UPDATE in upsert_bars — get_latest_bar can return
+        # the same minute bar across fetches, which would otherwise raise
+        # UNIQUE constraint failed and abort the entire commit).
+        bars_to_upsert: list[Bar] = []
         try:
             for symbol in self.symbols:
                 for timeframe in self.timeframes:
@@ -291,21 +361,14 @@ class MarketDataIngestionService:
 
                     try:
                         bar: Bar = self.manager.get_latest_bar(symbol, timeframe)
+                        # Per-call delay: 8 symbols × 7 timeframes × 0.2s = ~11s
+                        # per bar cycle. Stays well under Finnhub's 60 req/sec
+                        # ceiling; the stagger ensures the quote/health/signal loops
+                        # land their requests in different seconds.
+                        await asyncio.sleep(0.2)
 
-                        # Store in database
-                        db_bar = BarModel(
-                            symbol=bar.symbol,
-                            timeframe=bar.timeframe,
-                            open=bar.open,
-                            high=bar.high,
-                            low=bar.low,
-                            close=bar.close,
-                            volume=bar.volume,
-                            timestamp=bar.timestamp,
-                            provider=bar.provider,
-                            data_status=bar.data_status.value
-                        )
-                        db.add(db_bar)
+                        # Queue for bulk upsert (handles duplicate timestamps).
+                        bars_to_upsert.append(bar)
 
                         # Update tracking
                         if symbol not in self.last_bar_update:
@@ -318,7 +381,14 @@ class MarketDataIngestionService:
                     except Exception as e:
                         logger.warning(f"Failed to ingest {timeframe} bar for {symbol}: {e}")
 
-            db.commit()
+            # Bulk upsert all fetched bars in a single transaction. Using
+            # upsert_bars (not db.add) prevents UNIQUE constraint failures
+            # when the same minute bar is fetched twice (current-minute bars
+            # collide across consecutive ingestion runs).
+            if bars_to_upsert:
+                from backend.repositories.bar_repository import upsert_bars
+                written = upsert_bars(db, bars_to_upsert)
+                logger.debug(f"Upserted {written} bars")
             # Record ingestion metrics after a successful commit.
             for _ in fresh_bars:
                 record_bar()
@@ -423,12 +493,21 @@ class MarketDataIngestionService:
                 .first()
 
             if db_quote:
+                try:
+                    status = DataStatus(db_quote.data_status)
+                except ValueError:
+                    # Defensive: handle legacy data written with non-enum values (e.g. 'ok').
+                    logger.warning(
+                        "Unknown data_status '%s' for %s quote; treating as LIVE",
+                        db_quote.data_status, symbol
+                    )
+                    status = DataStatus.LIVE
                 return Quote(
                     symbol=db_quote.symbol,
                     price=db_quote.price,
                     timestamp=db_quote.timestamp,
                     provider=db_quote.provider,
-                    data_status=DataStatus(db_quote.data_status),
+                    data_status=status,
                     bid=db_quote.bid,
                     ask=db_quote.ask,
                     volume=db_quote.volume
@@ -447,6 +526,14 @@ class MarketDataIngestionService:
                 .first()
 
             if db_bar:
+                try:
+                    status = DataStatus(db_bar.data_status)
+                except ValueError:
+                    logger.warning(
+                        "Unknown data_status '%s' for %s %s bar; treating as LIVE",
+                        db_bar.data_status, symbol, timeframe
+                    )
+                    status = DataStatus.LIVE
                 return Bar(
                     symbol=db_bar.symbol,
                     timestamp=db_bar.timestamp,
@@ -457,7 +544,7 @@ class MarketDataIngestionService:
                     volume=db_bar.volume,
                     timeframe=db_bar.timeframe,
                     provider=db_bar.provider,
-                    data_status=DataStatus(db_bar.data_status)
+                    data_status=status
                 )
             return None
         finally:
@@ -475,12 +562,16 @@ class MarketDataIngestionService:
 
             quotes = []
             for db_quote in db_quotes:
+                try:
+                    status = DataStatus(db_quote.data_status)
+                except ValueError:
+                    status = DataStatus.LIVE
                 quotes.append(Quote(
                     symbol=db_quote.symbol,
                     price=db_quote.price,
                     timestamp=db_quote.timestamp,
                     provider=db_quote.provider,
-                    data_status=DataStatus(db_quote.data_status),
+                    data_status=status,
                     bid=db_quote.bid,
                     ask=db_quote.ask,
                     volume=db_quote.volume

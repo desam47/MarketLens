@@ -1,0 +1,94 @@
+# =============================================================================
+# MarketLens — Local development stack
+# =============================================================================
+# Brings up:
+#   - the API on http://localhost:8000
+#   - Redis (for caching + rate limiting + pub/sub)
+#   - Jaeger (for distributed tracing; export at 16686)
+#
+# Usage:
+#   docker compose up --build
+#   docker compose down -v   # tear down including volumes
+# =============================================================================
+
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: marketlens-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Database
+      DATABASE_URL: "sqlite:///./data/marketlens.db"
+      # Redis (caching + rate limiting + pub/sub)
+      REDIS_ENABLED: "true"
+      REDIS_URL: "redis://redis:6379/0"
+      # Observability — point OTLP at Jaeger
+      OBSERVABILITY_TRACING_ENABLED: "true"
+      OBSERVABILITY_JAEGER_AGENT_HOST: "jaeger"
+      OBSERVABILITY_JAEGER_AGENT_PORT: "6831"
+      OBSERVABILITY_METRICS_ENABLED: "true"
+      OBSERVABILITY_STRUCTURED_LOGGING_ENABLED: "true"
+      # AI / Market data / CORS
+      AI_ENABLED: "false"
+      MARKET_DATA_PRIMARY_PROVIDER: "yahoo_finance"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:5001"
+      # Run as a non-privileged port inside the container; we map 8000:8000.
+      HOST: "0.0.0.0"
+      PORT: "8000"
+    volumes:
+      # Persist the SQLite database across container restarts.
+      - marketlens-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: marketlens-redis
+    # Default port; explicitly bound so docker-compose networking is stable.
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    container_name: marketlens-jaeger
+    environment:
+      # Collector receives from the API's OTLP gRPC exporter.
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger collector (HTTP)
+      - "6831:6831/udp"  # Jaeger agent (compact thrift)
+      - "6832:6832/udp"  # Jaeger agent (binary thrift)
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    restart: unless-stopped
+
+volumes:
+  marketlens-data:
+    name: marketlens-data
+  redis-data:
+    name: marketlens-redis-data

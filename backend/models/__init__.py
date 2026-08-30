@@ -50,3 +50,15 @@ from .signal import HistoricalSignal as HistoricalSignal
 # Import watchlist models
 from .watchlist import Watchlist as Watchlist
 from .watchlist import WatchlistSymbol as WatchlistSymbol
+
+# Import custom indicator models (Phase 2.3.4)
+from .custom_indicator import CustomIndicator as CustomIndicator
+
+# Import drawing tools models (Phase 2.3.5)
+from .drawing import DrawingTool as DrawingTool
+
+# Import AI template models (Phase 2.4.5)
+from .ai_template import AITemplate as AITemplate
+
+# Import AI analysis job models (Phase 2.5: background AI processing)
+from .ai_analysis_job import AIAnalysisJob as AIAnalysisJob

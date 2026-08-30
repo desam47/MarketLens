@@ -18,12 +18,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.backtesting.engine import DEFAULT_SIGNALS
-from backend.backtesting.experiment_runner import (
+from ...backtesting.engine import DEFAULT_SIGNALS
+from ...backtesting.experiment_runner import (
     ExperimentConfig,
     run_experiment,
 )
-from backend.backtesting.parameters import ExperimentParameters
+from ...backtesting.parameters import ExperimentParameters
 from backend.repositories.experiment_repository import ExperimentRepository
 
 logger = logging.getLogger(__name__)

@@ -13,7 +13,7 @@ type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symb
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-  const [symbol, setSymbol] = useState<string>('AAPL');
+  const [symbol, setSymbol] = useState<string>('SPY');
 
   const renderPage = () => {
     switch (currentPage) {

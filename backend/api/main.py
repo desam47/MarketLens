@@ -5,29 +5,41 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.alerts.engine import alerts_engine
+from backend.config.settings import settings
+from backend.observability.correlation_id import CorrelationIdMiddleware
+from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
 from backend.observability.metrics import start_memory_profiling
-
-from ..config.settings import settings
-from . import analysis, market_context, multitimeframe, regime, strategy, trend
-from .ai.router import router as ai_router
-from .alerts.router import router as alerts_router
-from .aux_data.router import router as aux_data_router
-from .backtest.router import router as backtest_router
-from .market_data_routes import router as market_data_routes_router
-from .nl_search.router import router as nl_search_router
-from .rate_limit import InMemoryRateLimiter, RateLimitMiddleware
-from .scanner.router import router as scanner_router
-from .scanner.ws_router import router as scanner_ws_router
-from .signals.router import router as signals_router
-from .strategy_lab.router import router as strategy_lab_router
-from .structured_logging import configure_logging
-from .system.router import RequestCounterMiddleware
-from .system.router import router as system_router
-from .watchlist.router import router as watchlist_router
+from backend.observability.tracing import initialize_tracing, shutdown_tracing
+from backend.api import analysis, market_context, multitimeframe, regime, strategy, trend
+from backend.api.ai.router import router as ai_router
+from backend.api.alerts.router import router as alerts_router
+from backend.api.aux_data.router import router as aux_data_router
+from backend.api.backtest.router import router as backtest_router
+from backend.api.finnhub.router import router as finnhub_router
+from backend.api.cache import CacheMiddleware
+from backend.api.market_data_routes import router as market_data_routes_router
+from backend.api.nl_search.router import router as nl_search_router
+from backend.api.rate_limit import RedisRateLimiter, RateLimitMiddleware
+from backend.api.realtime import router as realtime_router
+from backend.api.security_headers import SecurityHeadersMiddleware
+from backend.api.scanner.router import router as scanner_router
+from backend.api.scanner.ws_router import router as scanner_ws_router
+from backend.api.signals.router import router as signals_router
+from backend.api.strategy_lab.router import router as strategy_lab_router
+from backend.api.structured_logging import configure_logging
+from backend.api.system.router import RequestCounterMiddleware
+from backend.api.system.router import router as system_router
+from backend.api.watchlist.router import router as watchlist_router
+from backend.api.custom_indicators.router import router as custom_indicators_router
+from backend.api.drawing_tools.router import router as drawing_tools_router
+from backend.api.ai_templates.router import router as ai_templates_router
+from backend.api.ai.jobs import router as ai_jobs_router
 
 # Configure structured JSON logging
 configure_logging(settings.debug)
@@ -36,10 +48,24 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """One-time startup: load enabled alerts and start memory profiling."""
+    """One-time startup: load enabled alerts, start memory profiling, initialize
+    tracing, and pre-warm trend engines so ingestion can dispatch bars immediately."""
     alerts_engine.startup()
     start_memory_profiling()
+    initialize_tracing()
+
+    # Pre-register trend engines for all ingested symbols so bars dispatched
+    # by the ingestion service have listeners from the first tick.
+    try:
+        from backend.api.trend.router import warmup_engines
+        warmed = warmup_engines()
+        for sym, count in warmed.items():
+            logger.info(f"Trend engine warmup: {sym} ({count} quotes)")
+    except Exception as e:
+        logger.warning(f"Trend engine warmup failed: {e}")
+
     yield
+    shutdown_tracing()
 
 
 app = FastAPI(
@@ -48,6 +74,58 @@ app = FastAPI(
     description="Market Intelligence and Quantitative Research Platform",
     lifespan=lifespan,
 )
+
+
+# ── Exception handlers ────────────────────────────────────────────────────────
+
+def _get_correlation_id(request: Request) -> str | None:
+    """Read correlation ID from request state or context variable.
+
+    The CorrelationIdMiddleware sets ``request.state.correlation_id`` before
+    passing to the next handler. If an exception fires *before* that middleware
+    runs (e.g. during routing), the ID may still be in the context variable.
+    """
+    # 1. Prefer the state set by CorrelationIdMiddleware.
+    corr_id = getattr(request.state, "correlation_id", None)
+    if corr_id:
+        return corr_id
+    # 2. Fall back to the context variable (handles pre-dispatch errors).
+    return get_correlation_id()
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Attach X-Correlation-ID to HTTP exceptions (400, 404, 422, etc.)."""
+    corr_id = _get_correlation_id(request)
+    headers = {}
+    if corr_id:
+        headers["X-Correlation-ID"] = corr_id
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def _generic_exception_handler(request: Request, exc: Exception):
+    """Attach X-Correlation-ID to uncaught exceptions (500 errors).
+
+    The correlation ID lets operators search logs for the request even when
+    Starlette's error middleware swallows the exception before the
+    CorrelationIdMiddleware can write the header normally.
+    """
+    corr_id = _get_correlation_id(request)
+    logger.error("Unhandled exception", exc_info=exc)
+    headers = {}
+    if corr_id:
+        headers["X-Correlation-ID"] = corr_id
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers=headers,
+    )
+
 
 # CORS: use a configurable allowlist instead of "*" so the API is safe to
 # expose to non-localhost clients. Default allows the local dev server
@@ -72,15 +150,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate limiting on write/mutation endpoints. Uses an in-process token bucket
-# keyed by client IP — sufficient for a single-instance deployment. For
-# multi-instance production, swap in a Redis-backed implementation behind
-# the same interface.
-_write_limiter = InMemoryRateLimiter(
+# Correlation ID middleware runs first so every subsequent middleware and
+# endpoint can include the ID in logs and traces.
+app.add_middleware(CorrelationIdMiddleware)
+
+# Security headers: applied to every response, including error
+# responses from inner middlewares (rate-limit 429, cache 304).
+# Must run *outside* the rate-limit middleware so 429s still get the
+# headers — middleware ordering in Starlette is LIFO for dispatch.
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiting on write/mutation endpoints. Uses Redis-backed implementation
+# for distributed rate limiting across multiple instances, with fallback to
+# in-memory limiter if Redis is unavailable.
+_write_limiter = RedisRateLimiter(
     max_requests=settings.rate_limit.max_requests_per_window,
     window_seconds=settings.rate_limit.window_seconds,
 )
 app.add_middleware(RateLimitMiddleware, limiter=_write_limiter)
+app.add_middleware(CacheMiddleware)
 app.add_middleware(RequestCounterMiddleware)
 
 # Include API routers
@@ -93,8 +181,10 @@ app.include_router(market_data_routes_router)
 app.include_router(watchlist_router)
 app.include_router(alerts_router)
 app.include_router(backtest_router)
+app.include_router(finnhub_router)
 app.include_router(scanner_router)
 app.include_router(scanner_ws_router)
+app.include_router(realtime_router)
 app.include_router(analysis.router)
 app.include_router(market_context.router)
 app.include_router(signals_router)
@@ -102,6 +192,10 @@ app.include_router(ai_router)
 app.include_router(nl_search_router)
 app.include_router(aux_data_router)
 app.include_router(strategy_lab_router)
+app.include_router(custom_indicators_router)
+app.include_router(drawing_tools_router)
+app.include_router(ai_templates_router)
+app.include_router(ai_jobs_router)
 app.include_router(system_router)
 
 
@@ -123,13 +217,66 @@ async def system_status():
         "version": settings.app_version,
         "debug": settings.debug,
         "market_data_provider": settings.market_data.primary_provider,
+        "market_data_fallback_providers": settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,
         "timestamp": datetime.now(UTC).isoformat()
     }
 
-# Additional API routers will be included here as phases progress
-# from . import market_data, indicators, etc.
-# app.include_router(market_data.router)
+
+@app.get("/api/system/config")
+async def system_config():
+    """Live system configuration read directly from the .env file.
+
+    Returns current environment values so operators can see what the system
+    is actually configured with, including any changes made to .env that
+    haven't triggered a server restart yet. Falls back to cached settings
+    for fields that can't be read from the env file.
+    """
+    import os
+    from pathlib import Path
+    from datetime import datetime
+
+    # Read primary and fallback providers directly from .env file.
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    env_primary = None
+    env_fallbacks = None
+    if env_path.exists():
+        env_vars = {}
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env_vars[k.strip()] = v.strip()
+
+        env_primary = env_vars.get("MARKET_DATA_PRIMARY_PROVIDER")
+        # fallback is stored as a JSON list string, e.g. '["yahoo_finance"]'
+        import json as _json
+        raw_fallback = env_vars.get("MARKET_DATA_FALLBACK_PROVIDERS", "[]")
+        try:
+            env_fallbacks = _json.loads(raw_fallback)
+        except Exception:
+            env_fallbacks = []
+
+    return {
+        "service": settings.app_name,
+        "version": settings.app_version,
+        "market_data_primary_provider": env_primary or settings.market_data.primary_provider,
+        "market_data_fallback_providers": env_fallbacks or settings.market_data.fallback_providers,
+        "ai_enabled": settings.ai.enabled,
+        "config_source": "live",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+# CacheMiddleware and RateLimitMiddleware are registered via
+# `app.add_middleware(...)` (the LIFO chain). They are BaseHTTPMiddleware
+# subclasses that short-circuit on 304 / 429 responses — and FastAPI's
+# `ExceptionMiddleware` sits outside the BaseHTTPMiddleware chain, so the
+# short-circuit Response does not reach outer BaseHTTPMiddleware instances
+# (SecurityHeadersMiddleware). To keep a single source of truth for the
+# security-header baseline, both middlewares inline the same headers via
+# `SecurityHeadersMiddleware._static_headers()` in their short-circuit
+# paths. See `docs/Version_2/phase_audit_v2.md` for the full rationale.
 
 if __name__ == "__main__":
     import uvicorn

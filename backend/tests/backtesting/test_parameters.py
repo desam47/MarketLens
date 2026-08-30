@@ -44,7 +44,7 @@ class TestExperimentParametersDefaults(unittest.TestCase):
         self.assertEqual(params.weight_rsi, w.rsi)
         self.assertEqual(params.weight_macd, w.macd)
         self.assertEqual(params.weight_adx, w.adx)
-        self.assertEqual(params.weight_volume, w.volume)
+        self.assertEqual(params.weight_volume, w.relative_volume)
         self.assertEqual(params.weight_momentum, w.momentum)
         self.assertEqual(params.weight_supertrend, w.supertrend)
         self.assertEqual(params.weight_bollinger, w.bollinger)

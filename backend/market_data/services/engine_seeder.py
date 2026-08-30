@@ -166,8 +166,17 @@ class EngineRegistry:
         return notified
 
     def dispatch_bar(self, symbol: str, timeframe: str, price: float,
-                     volume: float, timestamp) -> int:
-        """Fan out a fresh bar to engines registered for that timeframe on this symbol."""
+                     volume: float, timestamp,
+                     high: float | None = None,
+                     low: float | None = None,
+                     open_price: float | None = None) -> int:
+        """Fan out a fresh bar to engines registered for that timeframe on this symbol.
+
+        Callbacks are invoked with the full bar context: ``symbol``, ``timeframe``,
+        ``price``, ``volume``, ``timestamp`` plus optional OHLCV. Engine
+        ``update()`` methods should accept these as ``**kwargs`` (or
+        explicitly named params) to remain forward-compatible.
+        """
         key = self._key(f"bar:{timeframe}", symbol)
         with self._lock:
             callbacks = list(self._entries.get(key, []))
@@ -176,7 +185,9 @@ class EngineRegistry:
         notified = 0
         for cb in callbacks:
             try:
-                cb(price=price, volume=volume, timestamp=timestamp)
+                cb(symbol=symbol, timeframe=timeframe,
+                   price=price, volume=volume, timestamp=timestamp,
+                   high=high, low=low, open_price=open_price)
                 notified += 1
             except Exception as e:
                 logger.warning(f"Engine update failed for {symbol}/{timeframe} (bar): {e}")

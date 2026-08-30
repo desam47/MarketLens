@@ -11,8 +11,8 @@
  *   - Key levels
  *   - Provider/model attribution
  */
-import React, { useEffect, useState, useCallback } from 'react';
-import api, { AIAnalysisResult, AIConfig } from '../services/api';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import api, { AIAnalysisResult, AIConfig, AIJobStatusResponse } from '../services/api';
 
 interface AIAnalysisPanelProps {
   symbol: string;
@@ -56,6 +56,10 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
   const [error, setError] = useState<string | null>(null);
   const [hasRun, setHasRun] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
+  const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
+  const [backgroundError, setBackgroundError] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
 
   // Fetch AI config on mount so the user knows whether the feature is available.
   useEffect(() => {
@@ -70,6 +74,14 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
     if (!symbol) return;
     setLoading(true);
     setError(null);
+    // Clear any stale background job state
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setBackgroundJobId(null);
+    setBackgroundStatus(null);
+    setBackgroundError(null);
     try {
       const result = await api.analyzeSymbol(symbol, timeframe);
       setAnalysis(result);
@@ -81,6 +93,59 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
       setLoading(false);
     }
   }, [symbol, timeframe]);
+
+  // ── Background job runner ─────────────────────────────────────────────
+
+  const runBackground = useCallback(async (templateId?: number) => {
+    if (!symbol) return;
+    setBackgroundError(null);
+    setBackgroundStatus('queued');
+    try {
+      const { job_id } = await api.enqueueAIJob({
+        symbol,
+        timeframe,
+        template_id: templateId,
+      });
+      setBackgroundJobId(job_id);
+      // Start polling
+      const poll = async () => {
+        try {
+          const status: AIJobStatusResponse = await api.getAIJob(job_id);
+          setBackgroundStatus(status.status);
+          if (status.status === 'finished' && status.result) {
+            setAnalysis(status.result as AIAnalysisResult);
+            setHasRun(true);
+            setBackgroundStatus('done');
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+          } else if (status.status === 'failed') {
+            setBackgroundError(status.error || 'Job failed');
+            setBackgroundStatus('failed');
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+          }
+        } catch (_) {
+          // Keep polling; worker may not have started yet
+        }
+      };
+      pollRef.current = window.setInterval(poll, 2000) as unknown as number;
+    } catch (e: any) {
+      setBackgroundError(e?.message || 'Failed to enqueue job');
+      setBackgroundStatus(null);
+    }
+  }, [symbol, timeframe]);
+
+  // Expose runBackground via a data attribute so AITemplatesPanel can trigger it.
+  // (Simple cross-component communication without context or prop-drilling.)
+  useEffect(() => {
+    const el = document.getElementById('ai-analysis-panel');
+    if (el) {
+      (el as any).runBackground = runBackground;
+    }
+    return () => {
+      if (el) delete (el as any).runBackground;
+    };
+  }, [runBackground]);
 
   // Auto-run on mount when AI is enabled and the symbol changes.
   useEffect(() => {
@@ -111,8 +176,18 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
     }
   }, [config]);
 
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current !== null) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
   return (
-    <div className="card ai-analysis-card">
+    <div id="ai-analysis-panel" className="card ai-analysis-card">
       <div className="ai-header-row">
         <h2>
           <span className="ai-icon">🤖</span> AI Analysis
@@ -135,15 +210,43 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
             </span>
           </label>
         )}
-        <button
-          className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
-          onClick={runAnalysis}
-          disabled={loading || aiDisabled}
-          title={aiDisabled ? 'AI is disabled' : 'Re-run AI analysis'}
-        >
-          {loading ? '⟳ Analyzing…' : hasRun ? '↻ Re-run' : '✨ Analyze'}
-        </button>
+        {backgroundStatus === 'queued' || backgroundStatus === 'started' ? (
+          <button
+            className="btn btn-small btn-loading"
+            disabled
+            title="Background analysis in progress"
+          >
+            ⏳ {backgroundStatus === 'queued' ? 'Queued…' : 'Running…'}
+          </button>
+        ) : (
+          <button
+            className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
+            onClick={runAnalysis}
+            disabled={loading || aiDisabled}
+            title={aiDisabled ? 'AI is disabled' : 'Re-run AI analysis'}
+          >
+            {loading ? '⟳ Analyzing…' : hasRun ? '↻ Re-run' : '✨ Analyze'}
+          </button>
+        )}
       </div>
+
+      {backgroundStatus === 'queued' && (
+        <div className="ai-loading">
+          <p>⏳ Job queued — polling for result…</p>
+          <p className="info-text">Poll every 2 seconds until done</p>
+        </div>
+      )}
+      {backgroundStatus === 'started' && (
+        <div className="ai-loading">
+          <p>⚙️ Analysis in progress…</p>
+          <p className="info-text">Still computing indicators and querying the AI model</p>
+        </div>
+      )}
+      {backgroundError && (
+        <div className="ai-error">
+          <p>⚠️ Background job failed: {backgroundError}</p>
+        </div>
+      )}
 
       {aiDisabled && (
         <div className="ai-disabled-info">

@@ -20,6 +20,12 @@ dist/
 # Environment
 .env
 .env.local
+# Per-directory .env files are NOT supported — all config must live at the
+# repo-root .env. Subfolder .env files are silently ignored by pydantic-settings
+# (which reads env_file relative to CWD, not to the settings module) and
+# historically caused confusion. See backend/config/settings.py _ENV_FILE.
+backend/.env
+frontend/.env
 
 # IDE / editor
 .vscode/

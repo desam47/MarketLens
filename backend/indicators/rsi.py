@@ -3,6 +3,8 @@ Relative Strength Index (RSI) indicator
 """
 from typing import Any
 
+import numpy as np
+
 from .base_indicator import BaseIndicator
 
 
@@ -20,21 +22,19 @@ class RSIIndicator(BaseIndicator):
         if not data or len(data) < self.period + 1:
             return []
 
-        # Extract close prices
-        closes = [float(d['close']) for d in data]
+        # Extract close prices as numpy array
+        closes = np.array([float(d['close']) for d in data])
 
-        # Calculate price changes
-        changes = []
-        for i in range(1, len(closes)):
-            changes.append(closes[i] - closes[i-1])
+        # Calculate price changes (vectorized)
+        changes = np.diff(closes)
 
-        # Separate gains and losses
-        gains = [max(change, 0) for change in changes]
-        losses = [max(-change, 0) for change in changes]
+        # Separate gains and losses (vectorized)
+        gains = np.maximum(changes, 0)
+        losses = np.maximum(-changes, 0)
 
-        # Calculate initial average gain and loss
-        avg_gain = sum(gains[:self.period]) / self.period
-        avg_loss = sum(losses[:self.period]) / self.period
+        # Calculate initial average gain and loss (vectorized)
+        avg_gain = np.mean(gains[:self.period])
+        avg_loss = np.mean(losses[:self.period])
 
         # Calculate RSI
         rsi_values = [None] * self.period  # First 'period' values are undefined
@@ -46,7 +46,8 @@ class RSIIndicator(BaseIndicator):
             rsi = 100 - (100 / (1 + rs))
             rsi_values.append(rsi)
 
-        # Calculate remaining RSI values using Wilder's smoothing
+        # Calculate remaining RSI values using Wilder's smoothing (vectorized approach)
+        # We'll use the same iterative approach but with numpy arrays for efficiency
         for i in range(self.period, len(gains)):
             avg_gain = (avg_gain * (self.period - 1) + gains[i]) / self.period
             avg_loss = (avg_loss * (self.period - 1) + losses[i]) / self.period

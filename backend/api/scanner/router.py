@@ -20,14 +20,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.repositories.watchlist_repository import WatchlistRepository
-from backend.scanner.filters import (
+from ...scanner.filters import (
     AndFilter,
     DailyBullish,
     OrFilter,
     default_registry,
 )
-from backend.scanner.ranking import RankingEngine, default_ranking_engine
-from backend.scanner.scanner import ScanResult, market_scanner
+from ...scanner.ranking import RankingEngine, default_ranking_engine
+from ...scanner.scanner import ScanResult, market_scanner
 
 from ..dependencies import get_db
 
@@ -58,6 +58,11 @@ class _ScanResultResponse(BaseModel):
     rank: int | None = None
     signals: list[str]
     trend_signals: dict[str, Any]
+    # True when the symbol's watchlist row is enabled. Surfaced in the UI so
+    # disabled rows can still be shown (greyed out) and re-enabled from the
+    # watchlist table. Defaults to True for non-watchlist scan endpoints
+    # (``/top-movers``, ``/scan``) where the concept doesn't apply.
+    is_enabled: bool = True
 
 
 class _RankedResponse(BaseModel):
@@ -134,6 +139,7 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
         rank=result.rank,
         signals=list(result.signals or []),
         trend_signals=result.trend_signals or {},
+        is_enabled=getattr(result, "is_enabled", True),
     )
 
 
@@ -389,33 +395,70 @@ async def get_signals_for_symbol(symbol: str):
 async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     """Scan every enabled symbol in ``watchlist_id`` and return them ranked.
 
-    Symbols are scanned concurrently via ``asyncio.to_thread`` so wall-clock
-    latency is roughly ``ceil(N / workers)`` rather than N serial HTTP round-trips.
+    Includes disabled rows in the response (with ``is_enabled=False``) so the
+    UI can render them greyed out and let the user re-enable or remove them
+    without a second round-trip. Disabled rows are not actually scanned —
+    they get a stub entry derived from the last cached scan if available,
+    otherwise they appear with neutral score ``0.0``.
+
+    Enabled symbols are scanned concurrently via ``asyncio.to_thread`` so
+    wall-clock latency is roughly ``ceil(N / workers)`` rather than N serial
+    HTTP round-trips.
     """
     repo = WatchlistRepository(db)
     watchlist = repo.get_watchlist(watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
-    if not watchlist_symbols:
+    # Pull BOTH enabled and disabled rows so the UI can manage them.
+    all_rows = repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+    if not all_rows:
         return _RankedResponse(
             timestamp="", count=0, results=[]
         )
 
-    symbols = [ws.symbol for ws in watchlist_symbols]
-    # ``scan_symbols_async`` populates self.scan_results and self.last_scan_time.
-    await market_scanner.scan_symbols_async(symbols)
-    ranked = market_scanner.rank_symbols(symbols)
+    enabled_rows = [ws for ws in all_rows if ws.is_enabled]
+    disabled_rows = [ws for ws in all_rows if not ws.is_enabled]
 
-    # rank_symbols stores the result in scan_results with rank assigned.
-    # Build the response in rank order, not scan order.
+    # Only the enabled symbols need a live scan.
+    enabled_symbols = [ws.symbol for ws in enabled_rows]
+    if enabled_symbols:
+        await market_scanner.scan_symbols_async(enabled_symbols)
+        ranked = market_scanner.rank_symbols(enabled_symbols)
+    else:
+        ranked = []
+
     by_symbol = {r.symbol.upper(): r for r in market_scanner.scan_results.values()}
     results: list[_ScanResultResponse] = []
+
+    # 1) Enabled rows: in rank order with real scan data.
     for sym, _score in ranked:
         result = by_symbol.get(sym.upper())
         if result is not None:
             results.append(_result_to_dict(result))
+
+    # 2) Disabled rows: append as stubs so the user can re-enable or delete
+    #    them. Use the last cached scan if available, otherwise neutral
+    #    placeholders. ``is_enabled=False`` tells the UI to grey them out.
+    for ws in disabled_rows:
+        cached = by_symbol.get(ws.symbol.upper())
+        if cached is not None:
+            entry = _result_to_dict(cached)
+            entry.is_enabled = False
+            results.append(entry)
+        else:
+            results.append(_ScanResultResponse(
+                symbol=ws.symbol,
+                timestamp="",
+                quote=None,
+                indicator_values={},
+                scores={},
+                total_score=0.0,
+                rank=None,
+                signals=[],
+                trend_signals={},
+                is_enabled=False,
+            ))
 
     last_scan = market_scanner.last_scan_time
     return _RankedResponse(

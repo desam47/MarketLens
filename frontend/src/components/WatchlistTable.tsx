@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import api, { WatchlistScanResult, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { FixedSizeList, ListChildComponentProps } from 'react-window';
+import api, { WatchlistScanResult, WatchlistSymbol, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
 
 interface WatchlistTableProps {
   watchlistId: number;
@@ -19,6 +20,12 @@ interface RowData {
   rs: RelativeStrengthSignal | null;
   raw: WatchlistScanResult;
 }
+
+// Threshold: above this row count, switch to a virtualized list. Below, a
+// regular table renders more cleanly (sticky header, full column widths).
+const VIRT_THRESHOLD = 30;
+const VIRT_ROW_HEIGHT = 44;
+const VIRT_HEIGHT = 480;
 
 // Derive trend direction from signals list.
 function deriveDirection(signals: string[]): 'bullish' | 'bearish' | 'neutral' {
@@ -85,16 +92,30 @@ const SortIcon = React.memo(function SortIcon({ column, sortCol, sortDir }: {
   return <span className="sort-icon sort-active">{sortDir === 'asc' ? '↑' : '↓'}</span>;
 });
 
-// Per-row presentation, memoized so re-renders only happen when this row's
-// data or callbacks change — not on every parent state tick (sort, scan, etc.).
-// Without this, every sort click or scan refresh re-renders all 10-50 rows.
-const WatchlistRow = React.memo(function WatchlistRow({
-  row,
-  onSelectSymbol,
-}: {
-  row: RowData;
+// Row renderer for the virtualized list. Mirrors WatchlistRow's column
+// layout but uses absolute positioning (react-window handles it) and
+// CSS grid instead of <tr>/<td> so columns align with the header.
+const VirtualizedRow = React.memo(function VirtualizedRow({
+  index,
+  style,
+  data,
+}: ListChildComponentProps<{
+  rows: RowData[];
   onSelectSymbol: (symbol: string) => void;
-}) {
+  onToggleSymbol: (symbol: string, currentEnabled: boolean) => void;
+  onDeleteSymbol: (symbol: string) => void;
+  pendingSymbol: string | null;
+  pendingAction: 'toggle' | 'delete' | null;
+}>) {
+  const { rows, onSelectSymbol, onToggleSymbol, onDeleteSymbol,
+    pendingSymbol, pendingAction } = data;
+  const row = rows[index];
+
+  const isPending = pendingSymbol === row.symbol;
+  const isDeleting = isPending && pendingAction === 'delete';
+  const isToggling = isPending && pendingAction === 'toggle';
+  const rowEnabled = row.raw.is_enabled !== false;
+
   const priceColor = row.changePct == null
     ? ''
     : row.changePct > 0
@@ -115,35 +136,57 @@ const WatchlistRow = React.memo(function WatchlistRow({
     : `${fmt(row.rs.rs_pct)}% ${RS_CLASS_LABELS[row.rs.classification] ?? ''}`;
 
   return (
-    <tr
+    <div
+      style={style}
+      className="virt-row watchlist-table-row"
       onClick={() => onSelectSymbol(row.symbol)}
-      className="watchlist-table-row"
     >
-      <td className="td-symbol">{row.symbol}</td>
-      <td className={`td-price ${priceColor}`}>
+      <div className="virt-cell td-symbol">{row.symbol}</div>
+      <div className={`virt-cell td-price ${priceColor}`}>
         {row.price != null ? `$${fmt(row.price)}` : '—'}
         {row.changePct != null && (
           <span className="price-chg">
             {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%
           </span>
         )}
-      </td>
-      <td>
+      </div>
+      <div className="virt-cell">
         <span className={`trend-badge trend-${row.trendDir}`}>
           {TREND_ICONS[row.trendDir]} {TREND_LABELS[row.trendDir]}
         </span>
-      </td>
-      <td className={`td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
+      </div>
+      <div className={`virt-cell td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
-      </td>
-      <td className="td-confidence">
+      </div>
+      <div className="virt-cell td-confidence">
         <div className="conf-bar">
           <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
         </div>
         <span className="conf-label">{fmt(row.confidence, 0)}%</span>
-      </td>
-      <td className={`td-rs ${rsCls}`}>{rsLbl}</td>
-    </tr>
+      </div>
+      <div className={`virt-cell td-rs ${rsCls}`}>{rsLbl}</div>
+      <div
+        className="virt-cell td-actions"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          className="row-action-btn"
+          title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+          disabled={isToggling}
+          onClick={() => onToggleSymbol(row.symbol, rowEnabled)}
+        >
+          {rowEnabled ? '⏸' : '▶'}
+        </button>
+        <button
+          className="row-action-btn row-action-danger"
+          title="Remove from watchlist"
+          disabled={isDeleting}
+          onClick={() => onDeleteSymbol(row.symbol)}
+        >
+          {isDeleting ? '…' : '×'}
+        </button>
+      </div>
+    </div>
   );
 });
 
@@ -160,6 +203,9 @@ export function WatchlistTable({
   const [error, setError] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState(sortColumn);
   const [sortDir, setSortDir] = useState(sortDirection);
+  const [pendingSymbol, setPendingSymbol] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<'toggle' | 'delete' | null>(null);
+  const listRef = useRef<FixedSizeList>(null);
 
   const fetchData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -215,18 +261,73 @@ export function WatchlistTable({
     fetchData();
   }, [fetchData]);
 
-  // Sorting.
-  const sorted = [...rows].sort((a, b) => {
-    let cmp = 0;
-    switch (sortCol) {
-      case 'symbol': cmp = a.symbol.localeCompare(b.symbol); break;
-      case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break;
-      case 'score': cmp = a.score - b.score; break;
-      case 'confidence': cmp = a.confidence - b.confidence; break;
-      case 'rs': cmp = (a.rs?.rs_pct ?? 0) - (b.rs?.rs_pct ?? 0); break;
+  // --- Per-symbol actions -----------------------------------------------
+
+  const handleToggleSymbol = useCallback(async (symbol: string, currentEnabled: boolean) => {
+    setPendingSymbol(symbol);
+    setPendingAction('toggle');
+    try {
+      if (currentEnabled) {
+        await api.disableSymbol(watchlistId, symbol);
+      } else {
+        await api.enableSymbol(watchlistId, symbol);
+      }
+      await fetchData(true);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update symbol');
+    } finally {
+      setPendingSymbol(null);
+      setPendingAction(null);
     }
-    return sortDir === 'asc' ? cmp : -cmp;
-  });
+  }, [watchlistId, fetchData]);
+
+  const handleDeleteSymbol = useCallback(async (symbol: string) => {
+    if (!window.confirm(`Remove ${symbol} from this watchlist?`)) return;
+    setPendingSymbol(symbol);
+    setPendingAction('delete');
+    try {
+      await api.removeSymbolFromWatchlist(watchlistId, symbol);
+      setRows(prev => prev.filter(r => r.symbol !== symbol));
+    } catch (err: any) {
+      setError(err?.message || 'Failed to remove symbol');
+    } finally {
+      setPendingSymbol(null);
+      setPendingAction(null);
+    }
+  }, [watchlistId]);
+
+  // Sorting. Memoized so the virtualized list reuses the same array
+  // reference when the underlying rows + sort haven't changed.
+  const sorted = useMemo(() => {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      switch (sortCol) {
+        case 'symbol': cmp = a.symbol.localeCompare(b.symbol); break;
+        case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break;
+        case 'score': cmp = a.score - b.score; break;
+        case 'confidence': cmp = a.confidence - b.confidence; break;
+        case 'rs': cmp = (a.rs?.rs_pct ?? 0) - (b.rs?.rs_pct ?? 0); break;
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return copy;
+  }, [rows, sortCol, sortDir]);
+
+  // Stable callback for the virtualized list. Without this, every parent
+  // re-render would create a new function identity, forcing react-window
+  // to re-render every visible row.
+  const itemData = useMemo(
+    () => ({
+      rows: sorted,
+      onSelectSymbol,
+      onToggleSymbol: handleToggleSymbol,
+      onDeleteSymbol: handleDeleteSymbol,
+      pendingSymbol,
+      pendingAction,
+    }),
+    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, pendingSymbol, pendingAction],
+  );
 
   const toggleSort = (col: typeof sortCol) => {
     if (sortCol === col) {
@@ -256,10 +357,12 @@ export function WatchlistTable({
     );
   }
 
+  const useVirtual = sorted.length > VIRT_THRESHOLD;
+
   return (
     <div className="watchlist-table-container">
       <div className="watchlist-table-toolbar">
-        <span className="table-count">{sorted.length} symbols</span>
+        <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
         {scanTimestamp && (
           <span className="table-timestamp">
             Scanned {new Date(scanTimestamp).toLocaleTimeString()}
@@ -275,7 +378,41 @@ export function WatchlistTable({
       </div>
 
       {sorted.length === 0 ? (
-        <p className="empty-state">No enabled symbols in this watchlist.</p>
+        <p className="empty-state">No symbols in this watchlist.</p>
+      ) : useVirtual ? (
+        <div className="watchlist-virt">
+          <div className="watchlist-virt-header">
+            <div className="virt-cell th" onClick={() => toggleSort('symbol')}>
+              Symbol <SortIcon column="symbol" sortCol={sortCol} sortDir={sortDir} />
+            </div>
+            <div className={`virt-cell th ${thClass('price')}`} onClick={() => toggleSort('price')}>
+              Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
+            </div>
+            <div className="virt-cell th">Trend</div>
+            <div className={`virt-cell th ${thClass('score')}`} onClick={() => toggleSort('score')}>
+              Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
+            </div>
+            <div className={`virt-cell th ${thClass('confidence')}`} onClick={() => toggleSort('confidence')}>
+              Conf <SortIcon column="confidence" sortCol={sortCol} sortDir={sortDir} />
+            </div>
+            <div className={`virt-cell th ${thClass('rs')}`} onClick={() => toggleSort('rs')}>
+              Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
+            </div>
+            <div className="virt-cell th">Actions</div>
+          </div>
+          <FixedSizeList
+            ref={listRef}
+            height={VIRT_HEIGHT}
+            itemCount={sorted.length}
+            itemSize={VIRT_ROW_HEIGHT}
+            width="100%"
+            itemData={itemData}
+            itemKey={(idx, data) => data.rows[idx].symbol}
+            className="watchlist-virt-body"
+          >
+            {VirtualizedRow}
+          </FixedSizeList>
+        </div>
       ) : (
         <div className="watchlist-table-scroll">
           <table className="watchlist-table">
@@ -297,6 +434,7 @@ export function WatchlistTable({
                 <th className={thClass('rs')} onClick={() => toggleSort('rs')}>
                   Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
                 </th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -305,6 +443,10 @@ export function WatchlistTable({
                   key={row.symbol}
                   row={row}
                   onSelectSymbol={onSelectSymbol}
+                  onToggleSymbol={handleToggleSymbol}
+                  onDeleteSymbol={handleDeleteSymbol}
+                  pendingSymbol={pendingSymbol}
+                  pendingAction={pendingAction}
                 />
               ))}
             </tbody>
@@ -314,5 +456,101 @@ export function WatchlistTable({
     </div>
   );
 }
+
+// Per-row presentation, memoized so re-renders only happen when this row's
+// data or callbacks change — not on every parent state tick (sort, scan, etc.).
+// Without this, every sort click or scan refresh re-renders all 10-50 rows.
+const WatchlistRow = React.memo(function WatchlistRow({
+  row,
+  onSelectSymbol,
+  onToggleSymbol,
+  onDeleteSymbol,
+  pendingSymbol,
+  pendingAction,
+}: {
+  row: RowData;
+  onSelectSymbol: (symbol: string) => void;
+  onToggleSymbol: (symbol: string, currentEnabled: boolean) => void;
+  onDeleteSymbol: (symbol: string) => void;
+  pendingSymbol: string | null;
+  pendingAction: 'toggle' | 'delete' | null;
+}) {
+  const priceColor = row.changePct == null
+    ? ''
+    : row.changePct > 0
+      ? 'price-up'
+      : row.changePct < 0
+        ? 'price-down'
+        : '';
+  const rsCls = !row.rs
+    ? ''
+    : (() => {
+        const c = row.rs.classification ?? 'unknown';
+        if (c === 'strong_outperformer' || c === 'outperformer') return 'rs-bullish';
+        if (c === 'strong_underperformer' || c === 'underperformer') return 'rs-bearish';
+        return '';
+      })();
+  const rsLbl = !row.rs
+    ? '—'
+    : `${fmt(row.rs.rs_pct)}% ${RS_CLASS_LABELS[row.rs.classification] ?? ''}`;
+
+  const rowEnabled = row.raw.is_enabled !== false;
+  const isPending = pendingSymbol === row.symbol;
+  const isToggling = isPending && pendingAction === 'toggle';
+  const isDeleting = isPending && pendingAction === 'delete';
+
+  return (
+    <tr
+      onClick={() => onSelectSymbol(row.symbol)}
+      className={`watchlist-table-row${rowEnabled ? '' : ' row-disabled'}`}
+    >
+      <td className="td-symbol">
+        {row.symbol}
+        {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
+      </td>
+      <td className={`td-price ${priceColor}`}>
+        {row.price != null ? `$${fmt(row.price)}` : '—'}
+        {row.changePct != null && (
+          <span className="price-chg">
+            {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%
+          </span>
+        )}
+      </td>
+      <td>
+        <span className={`trend-badge trend-${row.trendDir}`}>
+          {TREND_ICONS[row.trendDir]} {TREND_LABELS[row.trendDir]}
+        </span>
+      </td>
+      <td className={`td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
+        {row.score > 0 ? '+' : ''}{fmt(row.score)}
+      </td>
+      <td className="td-confidence">
+        <div className="conf-bar">
+          <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
+        </div>
+        <span className="conf-label">{fmt(row.confidence, 0)}%</span>
+      </td>
+      <td className={`td-rs ${rsCls}`}>{rsLbl}</td>
+      <td className="td-actions" onClick={(e) => e.stopPropagation()}>
+        <button
+          className="row-action-btn"
+          title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+          disabled={isToggling}
+          onClick={() => onToggleSymbol(row.symbol, rowEnabled)}
+        >
+          {rowEnabled ? '⏸' : '▶'}
+        </button>
+        <button
+          className="row-action-btn row-action-danger"
+          title="Remove from watchlist"
+          disabled={isDeleting}
+          onClick={() => onDeleteSymbol(row.symbol)}
+        >
+          {isDeleting ? '…' : '×'}
+        </button>
+      </td>
+    </tr>
+  );
+});
 
 export default WatchlistTable;

@@ -13,6 +13,18 @@ yfinance==0.2.36
 httpx>=0.25
 curl_cffi>=0.7
 tenacity>=8.0
+# Background job queue (Phase 2.5)
+rq>=1.16
+redis>=5.0
+
+# OpenTelemetry for distributed tracing
+opentelemetry-api==1.24.0
+opentelemetry-sdk==1.24.0
+opentelemetry-instrumentation==0.45b0
+opentelemetry-instrumentation-fastapi==0.45b0
+opentelemetry-instrumentation-sqlalchemy==0.45b0
+opentelemetry-instrumentation-redis==0.45b0
+opentelemetry-exporter-jaeger==1.21.0
 
 # Test-only dependencies. Kept in this file because CI installs from
 # requirements.txt and the test suite needs pytest + the FastAPI

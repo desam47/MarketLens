@@ -67,6 +67,11 @@ class ScannerBroadcastManager:
         # id(websocket) -> websocket (for fan-out on broadcast)
         self._sockets: dict[int, WebSocket] = {}
         self._lock = asyncio.Lock()
+        # Lifetime counters for metrics.
+        self._connections_total: int = 0
+        self._disconnections_total: int = 0
+        self._messages_sent: int = 0
+        self._broadcasts_total: int = 0
 
     async def subscribe(self, ws: WebSocket, symbol: str) -> None:
         async with self._lock:
@@ -105,6 +110,25 @@ class ScannerBroadcastManager:
     def get_subscribed_symbols(self) -> set[str]:
         return set(self._subs.keys())
 
+    def get_stats(self) -> dict:
+        """Return observability counters for the metrics endpoint.
+
+        Note: ``_subs`` is mutated on the event loop without holding
+        ``_lock`` here because the dict-snapshot is best-effort — the
+        numbers may be slightly stale but are good enough for monitoring.
+        """
+        total_subscriptions = sum(len(ids) for ids in self._subs.values())
+        return {
+            "active_connections": len(self._sockets),
+            "subscribed_symbols": len(self._subs),
+            "total_subscriptions": total_subscriptions,
+            "subs_by_symbol": {k: len(v) for k, v in self._subs.items()},
+            "connections_total": self._connections_total,
+            "disconnections_total": self._disconnections_total,
+            "messages_sent_total": self._messages_sent,
+            "broadcasts_total": self._broadcasts_total,
+        }
+
     async def broadcast(self, symbol: str, payload: dict[str, Any]) -> None:
         """Send ``payload`` to every socket subscribed to ``symbol``.
 
@@ -116,10 +140,12 @@ class ScannerBroadcastManager:
             ws_ids = list(self._subs.get(key, ()))
             sockets = [self._sockets[ws_id] for ws_id in ws_ids if ws_id in self._sockets]
 
+        self._broadcasts_total += 1
         dead: list[int] = []
         for ws in sockets:
             try:
                 await ws.send_json(payload)
+                self._messages_sent += 1
             except Exception as e:
                 # Broken pipe / client closed mid-send. Mark for cleanup;
                 # don't propagate — other subscribers should still get the
@@ -322,6 +348,7 @@ async def scanner_websocket(websocket: WebSocket):
     # process. Cheap to call repeatedly — the dispatcher memoizes
     # itself.
     install()
+    broadcast_manager._connections_total += 1
 
     try:
         while True:
@@ -365,3 +392,4 @@ async def scanner_websocket(websocket: WebSocket):
     finally:
         # Make sure we don't leak the socket in the subscription set.
         await broadcast_manager.remove_socket(websocket)
+        broadcast_manager._disconnections_total += 1

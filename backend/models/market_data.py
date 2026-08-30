@@ -57,6 +57,16 @@ class ProviderStatus(BaseModel):
     last_success: datetime | None = None
     error_message: str | None = None
     timestamp: datetime
+    # v2.2 — circuit breaker observability.
+    circuit_breaker_state: str = "CLOSED"
+    consecutive_failures: int = 0
+    total_successes: int = 0
+    total_failures: int = 0
+    # Cumulative error_count for the last reporting window. Useful for
+    # the health endpoint to surface a single "error_count" alongside
+    # the running breaker stats above.
+    error_count: int = 0
+    last_error: str | None = None
 
 class ProviderCapabilities(BaseModel):
     provider_name: str

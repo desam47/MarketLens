@@ -10,7 +10,7 @@ from backend.market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_quotes,
 )
-from backend.multitimeframe.multi_timeframe_engine import (
+from ...multitimeframe.multi_timeframe_engine import (
     PRESET_NAMES,
     MultiTimeframeEngine,
     MultiTimeframeSnapshot,
@@ -41,8 +41,8 @@ def _seed_mtf_from_bars(symbol: str, engine: MultiTimeframeEngine) -> None:
     for open/high/low — which causes `get_current_trend()` to return None
     for longer timeframes (30m, 1wk) even when bars are persisted.
     """
-    from backend.database import SessionLocal
-    from backend.models.market_data_sql import BarModel
+    from ...database import SessionLocal
+    from ...models.market_data_sql import BarModel
 
     db = SessionLocal()
     try:

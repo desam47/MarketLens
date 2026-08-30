@@ -10,7 +10,7 @@ from unittest.mock import patch
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 
-from backend.models.market_data import DataStatus, Quote
+from backend.models.market_data import Bar, DataStatus, Quote
 from backend.scanner.scanner import Scanner, ScanResult
 
 
@@ -303,18 +303,41 @@ class TestScanner(unittest.TestCase):
 
     @patch('backend.scanner.scanner.market_data_manager')
     def test_scan_symbols(self, mock_market_data_manager):
-        """Test scanning multiple symbols"""
-        # Setup mock quotes
-        def get_quote_side_effect(symbol):
+        """Test scanning multiple symbols.
+
+        scan_symbols() uses get_batch_quotes() (not get_quote()). The mock must
+        return real Quote/Bar objects so that downstream arithmetic in
+        _calculate_indicators and TrendEngine.update() succeeds.
+        """
+        # Real Quote factory for the batch call path.
+        def make_quote(symbol: str) -> Quote:
             return Quote(
                 symbol=symbol,
                 price=100.0 + hash(symbol) % 50,
                 timestamp=datetime.now(),
                 provider="yahoo_finance",
                 data_status=DataStatus.DELAYED,
-                volume=1000000
+                volume=1000000,
             )
-        mock_market_data_manager.get_quote.side_effect = get_quote_side_effect
+
+        def make_bar(symbol: str) -> Bar:
+            return Bar(
+                symbol=symbol,
+                timestamp=datetime.now(),
+                open=100.0, high=105.0, low=95.0, close=102.0,
+                volume=1000000, timeframe="1d",
+                provider="yahoo_finance", data_status=DataStatus.DELAYED,
+            )
+
+        # scan_symbols() calls get_batch_quotes / get_batch_historical_bars first.
+        mock_market_data_manager.get_batch_quotes.side_effect = (
+            lambda symbols: {s: make_quote(s) for s in symbols}
+        )
+        mock_market_data_manager.get_batch_historical_bars.return_value = {}
+        # Individual call paths (fallback / indicator enrichment).
+        mock_market_data_manager.get_quote.side_effect = lambda s: make_quote(s)
+        mock_market_data_manager.get_latest_bar.return_value = make_bar("MOCK")
+        mock_market_data_manager.get_historical_bars.return_value = [make_bar("MOCK")]
 
         # Scan symbols
         symbols = ["AAPL", "GOOGL", "MSFT"]
@@ -326,8 +349,8 @@ class TestScanner(unittest.TestCase):
             self.assertEqual(results[i].symbol, symbol)
             self.assertIsNotNone(results[i].quote)
 
-        # Should have called get_quote for each symbol
-        self.assertEqual(mock_market_data_manager.get_quote.call_count, 3)
+        # Should have called get_batch_quotes for the 3 symbols
+        self.assertEqual(mock_market_data_manager.get_batch_quotes.call_count, 1)
 
     def test_rank_symbols(self):
         """Test ranking symbols"""

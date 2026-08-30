@@ -9,11 +9,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from backend.database import SessionLocal
-from backend.divergence import DivergenceEngine
-from backend.repositories import bar_repository
-from backend.support_resistance import SupportResistanceEngine
-from backend.transitions import TrendTransitionEngine
+from ...database import SessionLocal
+from ...divergence import DivergenceEngine
+from ...repositories import bar_repository
+from ...support_resistance import SupportResistanceEngine
+from ...transitions import TrendTransitionEngine
 
 logger = logging.getLogger(__name__)
 

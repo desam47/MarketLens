@@ -9,7 +9,7 @@ timestamp, level, logger, message, and any `extra={...}` fields passed
 to the log call.
 
 Usage:
-    from backend.api.structured_logging import get_logger
+    from .structured_logging import get_logger
     log = get_logger(__name__)
     log.info("engine updated", extra={"symbol": "AAPL", "price": 313.45})
 
@@ -59,6 +59,23 @@ class JsonFormatter(logging.Formatter):
                 # Non-serializable values: stringify so we don't crash the
                 # log handler and lose the entire line.
                 payload[key] = repr(value)
+
+        # Attach correlation_id from the contextvar (if any) so all log
+        # lines emitted during a request can be grouped by the ID.
+        # This is a soft dependency: the contextvar module is optional
+        # and we degrade gracefully if it's not available.
+        if "correlation_id" not in payload:
+            try:
+                from backend.observability.correlation_id import (
+                    get_correlation_id,
+                )
+
+                cid = get_correlation_id()
+                if cid:
+                    payload["correlation_id"] = cid
+            except ImportError:
+                # Observability module not in path — fine, skip.
+                pass
 
         # Exception info, if any — formatted as a string for readability.
         if record.exc_info:

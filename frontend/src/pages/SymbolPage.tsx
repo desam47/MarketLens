@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import api, {
   Bar,
   Divergence,
@@ -7,13 +7,34 @@ import api, {
   Transition,
 } from '../services/api';
 import { CandlestickChart } from '../components/CandlestickChart';
+import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SymbolInput } from '../components/SymbolInput';
-import { AIAnalysisPanel } from '../components/AIAnalysisPanel';
-import { NewsPanel } from '../components/NewsPanel';
-import { FundamentalsPanel } from '../components/FundamentalsPanel';
-import { OptionsPanel } from '../components/OptionsPanel';
+
+// Heavy panels are loaded on demand so the initial route bundle stays small.
+// Each panel makes its own API calls and isn't needed for the first paint.
+const AIAnalysisPanel = lazy(() =>
+  import('../components/AIAnalysisPanel').then(m => ({ default: m.AIAnalysisPanel })),
+);
+const NewsPanel = lazy(() =>
+  import('../components/NewsPanel').then(m => ({ default: m.NewsPanel })),
+);
+const FundamentalsPanel = lazy(() =>
+  import('../components/FundamentalsPanel').then(m => ({ default: m.FundamentalsPanel })),
+);
+const OptionsPanel = lazy(() =>
+  import('../components/OptionsPanel').then(m => ({ default: m.OptionsPanel })),
+);
+const CustomIndicatorsPanel = lazy(() =>
+  import('../components/CustomIndicatorsPanel').then(m => ({ default: m.CustomIndicatorsPanel })),
+);
+const DrawingToolsPanel = lazy(() =>
+  import('../components/DrawingToolsPanel').then(m => ({ default: m.DrawingToolsPanel })),
+);
+const AITemplatesPanel = lazy(() =>
+  import('../components/AITemplatesPanel').then(m => ({ default: m.AITemplatesPanel })),
+);
 
 interface SymbolPageProps {
   symbol: string;
@@ -301,6 +322,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [divergences, setDivergences] = useState<Divergence[]>([]);
   const [bars, setBars] = useState<Bar[]>([]);
   const [timeframe, setTimeframe] = useState('1d');
+  const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
   const [loading, setLoading] = useState(true);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
 
@@ -364,6 +386,24 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             <option value="4h">4 Hour</option>
             <option value="15m">15 Min</option>
           </select>
+          <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
+            <button
+              type="button"
+              className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
+              onClick={() => setChartMode('single')}
+              title="Single timeframe chart"
+            >
+              Single
+            </button>
+            <button
+              type="button"
+              className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
+              onClick={() => setChartMode('multi')}
+              title="Multi-timeframe grid (4 charts side by side)"
+            >
+              Multi-TF
+            </button>
+          </div>
           <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={() => fetchData()} />
           <button className="btn" onClick={fetchData}>↻ Refresh</button>
         </div>
@@ -388,15 +428,36 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             signals={scanResult?.signals}
             symbol={symbol}
           />
-          <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-          <NewsPanel symbol={symbol} />
-          <FundamentalsPanel symbol={symbol} />
-          <OptionsPanel symbol={symbol} />
+          <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
+            <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading news…</div>}>
+            <NewsPanel symbol={symbol} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading fundamentals…</div>}>
+            <FundamentalsPanel symbol={symbol} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading options…</div>}>
+            <OptionsPanel symbol={symbol} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
+            <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading drawings…</div>}>
+            <DrawingToolsPanel symbol={symbol} timeframe={timeframe} />
+          </Suspense>
+          <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
+            <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
+          </Suspense>
           <MTFScoreGrid
             trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
             symbol={symbol}
           />
-          <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} />
+          {chartMode === 'single' ? (
+            <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} />
+          ) : (
+            <MultiTimeframeChartGrid symbol={symbol} timeframes={['1d', '1h', '15m', '5m']} />
+          )}
           <BarsTable bars={bars} />
         </div>
       )}

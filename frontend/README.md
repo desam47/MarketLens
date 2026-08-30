@@ -31,6 +31,21 @@ REACT_APP_API_URL=http://localhost:5001/api
 npm run build
 ```
 
+### Bundle Analysis
+
+To inspect the production bundle and find what's contributing to size:
+
+```bash
+npm run build:analyze
+```
+
+This runs `craco build` with the `webpack-bundle-analyzer` plugin enabled. It writes:
+
+- `build/stats.html` — interactive treemap (open in browser)
+- `build/stats.json` — raw stats file for further analysis
+
+The plugin is configured in `craco.config.js` and only activates when `ANALYZE=true` is set, so regular `npm run build` is unaffected.
+
 ## Features
 
 - **Dashboard** — Real-time market regime, trends, confluence, and strategy analysis

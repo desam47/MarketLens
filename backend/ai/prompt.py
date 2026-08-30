@@ -190,3 +190,32 @@ def build_user_prompt(context_dict: dict[str, Any]) -> str:
         "Respond with a single JSON object as specified.\n\n"
         f"<context>\n{body}\n</context>"
     )
+
+
+# --- Template rendering (Phase 2.4.5) -----------------------------------
+
+# Matches ``{{variable}}`` tokens where ``variable`` is one-or-more
+# word characters (letters, digits, underscore). Whitespace inside the
+# braces is tolerated so ``{{ symbol }}`` and ``{{symbol}}`` both work.
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+
+
+def render_template(template: str, variables: dict[str, Any]) -> str:
+    """Substitute ``{{variable}}`` tokens in ``template`` with values.
+
+    Unknown variables (declared in the template but not in
+    ``variables``) are replaced with an empty string. Non-string
+    values are coerced via ``str()``. Numeric values are rendered
+    with their default ``str()`` representation so the template
+    author can pick formatting by passing a stringified value.
+
+    >>> render_template("Analyze {{symbol}} on {{timeframe}}", {"symbol": "AAPL", "timeframe": "1d"})
+    'Analyze AAPL on 1d'
+    >>> render_template("Hello {{name}}", {})
+    'Hello '
+    """
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        value = variables.get(name, "")
+        return str(value) if value is not None else ""
+    return _TEMPLATE_VAR_RE.sub(_replace, template)

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from backend.engines.timeframe import Timeframe
+from ...engines.timeframe import Timeframe
 from backend.market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_quotes,
@@ -23,6 +23,36 @@ _engines: dict[str, TrendEngine] = {}
 # Timeframes we ingest bars for. Used to register the trend engine with the
 # live-tick registry under each bar:{tf} key. Must match the ingestion service.
 _TREND_TIMEFRAMES = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "1d", "1wk")
+
+# Symbols to pre-warm engines for at startup (reads from ingestion defaults).
+_WARMUP_SYMBOLS: tuple[str, ...] = ()
+try:
+    # Import lazily to avoid circular imports at module-load time.
+    from backend.market_data.services.ingestion_service import ingestion_service
+    _WARMUP_SYMBOLS = tuple(ingestion_service.symbols)
+except Exception:
+    _WARMUP_SYMBOLS = ("SPY", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX")
+
+
+def warmup_engines() -> dict[str, int]:
+    """Pre-register trend engines for all ingestion symbols so bars dispatched
+    by the ingestion service immediately reach a listener.
+
+    This eliminates the cold-start gap where bars arrive before any API
+    request has triggered engine registration.
+    Returns a dict of symbol -> number of historical quotes seeded.
+    """
+    results = {}
+    for symbol in _WARMUP_SYMBOLS:
+        try:
+            engine = get_engine(symbol)
+            count = seed_engine_from_quotes(symbol, engine.update)
+            results[symbol] = count
+            logger.info(f"Warmed up trend engine for {symbol} ({count} quotes seeded)")
+        except Exception as e:
+            logger.warning(f"Failed to warm up trend engine for {symbol}: {e}")
+            results[symbol] = 0
+    return results
 
 def get_engine(symbol: str) -> TrendEngine:
     """Get or create trend engine for symbol, seeding from DB on first access.

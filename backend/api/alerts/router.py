@@ -11,7 +11,7 @@ from backend.alerts.conditions import VALID_CONDITION_TYPES
 from backend.alerts.engine import alerts_engine
 from backend.repositories.alert_repository import AlertRepository
 
-from ..dependencies import get_db
+from backend.api.dependencies import get_db
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -128,6 +128,8 @@ def update_alert(alert_id: int, payload: AlertUpdate, db: Session = Depends(get_
         parameter=payload.parameter,
         is_enabled=payload.is_enabled,
     )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
 
     is_price_alert = updated.condition_type in (
         "price_above", "price_below", "pct_change_above"

@@ -13,20 +13,27 @@ Query parameters:
 - ``timeframe`` (optional, default "1d"): primary analysis window
 - ``max_tokens`` (optional): override max_tokens for this call
 - ``temperature`` (optional): override temperature for this call
+- ``template_id`` (optional): override the system prompt with a saved
+  user template (see ``/api/ai/templates``). Variables are
+  substituted from the analysis context. Omit to use the default.
 
 ``GET /api/ai/status`` — health snapshot of the AI provider chain.
 ``GET /api/ai/config`` — frontend-safe configuration (no API key).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from backend.ai import (
+from ...ai import (
     UncertaintyResponse,
     ai_manager,
 )
-from backend.ai.analyze import analyze_symbol
+from ...ai.analyze import analyze_symbol
+from ...ai.prompt import SYSTEM_PROMPT
+from ...database import get_db
+from ..ai_templates.router import resolve_and_render
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -59,7 +66,7 @@ class ConfigResponse(BaseModel):
     model: str
     base_url: str
     timeout: float
-    max_tokens: int
+    max_tokens: float
     temperature: float
     api_key_set: bool
 
@@ -83,6 +90,8 @@ class AnalyzeResponse(BaseModel):
     provider: str = "unknown"
     model: str = "unknown"
     is_uncertain: bool = False
+    template_id: int | None = None
+    template_name: str | None = None
 
 
 # --- Endpoints -----------------------------------------------------
@@ -98,6 +107,17 @@ def analyze(
     timeframe: str = Query(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$"),
     max_tokens: int | None = Query(default=None, ge=100, le=8192),
     temperature: float | None = Query(default=None, ge=0.0, le=2.0),
+    template_id: int | None = Query(
+        default=None,
+        ge=1,
+        description=(
+            "Optional ID of a saved AI template. If provided, the template's "
+            "system_prompt is rendered with the analysis context and used in "
+            "place of the built-in SYSTEM_PROMPT. Variables declared by the "
+            "template must be available in the context (symbol, timeframe, ...)."
+        ),
+    ),
+    db: Session = Depends(get_db),
 ) -> AnalyzeResponse:
     """Run an AI market analysis for ``symbol``.
 
@@ -108,12 +128,55 @@ def analyze(
 
     This endpoint intentionally never returns HTTP 500 for expected
     failure modes (no data, AI off, provider down, parse failure).
+
+    If ``template_id`` is supplied, the template's system prompt is
+    rendered with the available context variables (symbol, timeframe)
+    and used in place of the built-in default.
     """
+    # Resolve which template (if any) drives this call.
+    # - Explicit template_id wins.
+    # - Otherwise we fall back to the active default template.
+    # - Otherwise we use the hard-coded SYSTEM_PROMPT.
+    from backend.models import AITemplate
+    resolved_template_id = template_id
+    tmpl_obj: AITemplate | None = None
+    if resolved_template_id is not None:
+        tmpl_obj = (
+            db.query(AITemplate).filter(AITemplate.id == resolved_template_id).first()
+        )
+        if tmpl_obj is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"AI template {resolved_template_id} not found",
+            )
+    else:
+        tmpl_obj = (
+            db.query(AITemplate)
+            .filter(
+                AITemplate.is_default == True,  # noqa: E712
+                AITemplate.is_active == True,   # noqa: E712
+            )
+            .first()
+        )
+        if tmpl_obj is not None:
+            resolved_template_id = tmpl_obj.id
+
+    # Render the template (raises 400/404 on failure) so a malformed
+    # template fails fast with 400 rather than silently falling back.
+    rendered_system: str | None = None
+    if tmpl_obj is not None:
+        rendered_system = resolve_and_render(
+            db,
+            resolved_template_id,
+            {"symbol": symbol.upper(), "timeframe": timeframe},
+        )
+
     result = analyze_symbol(
         symbol=symbol.upper(),
         timeframe=timeframe,
         max_tokens=max_tokens,
         temperature=temperature,
+        system_prompt_override=rendered_system,
     )
 
     return AnalyzeResponse(
@@ -127,6 +190,8 @@ def analyze(
         provider=ai_manager.settings.provider,
         model=ai_manager.settings.model,
         is_uncertain=isinstance(result, UncertaintyResponse),
+        template_id=resolved_template_id,
+        template_name=tmpl_obj.name if tmpl_obj else None,
     )
 
 
