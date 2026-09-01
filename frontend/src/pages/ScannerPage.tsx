@@ -11,9 +11,11 @@
  * Symbol page.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { ScanResult, Watchlist, WatchlistSymbol } from '../services/api';
 import { useScannerStream } from '../hooks/useScannerStream';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ScannerTableSkeleton } from '../components/skeletons/ScannerTableSkeleton';
 import { ErrorBanner } from '../components/ErrorBanner';
 
 interface ScannerPageProps {
@@ -59,16 +61,16 @@ const ScannerRow = React.memo(function ScannerRow({
 }) {
   const freshness = freshnessClass(result?.timestamp ?? null);
   return (
-    <tr
-      className={result ? '' : 'row-pending'}
+    <div
+      className={`scanner-vrow ${result ? '' : 'row-pending'}`}
       onClick={() => onSelectSymbol(sym)}
     >
-      <td className="cell-symbol">{sym}</td>
-      <td>{result?.quote?.price?.toFixed(2) ?? '—'}</td>
-      <td className={result ? scoreClass(result.total_score) : ''}>
+      <div className="scanner-vcell cell-symbol">{sym}</div>
+      <div className="scanner-vcell">{result?.quote?.price?.toFixed(2) ?? '—'}</div>
+      <div className={`scanner-vcell ${result ? scoreClass(result.total_score) : ''}`}>
         {result ? result.total_score.toFixed(1) : '…'}
-      </td>
-      <td className="cell-signals">
+      </div>
+      <div className="scanner-vcell cell-signals">
         {err ? (
           <span className="error-text" title={err}>err</span>
         ) : result && result.signals.length > 0 ? (
@@ -80,13 +82,34 @@ const ScannerRow = React.memo(function ScannerRow({
         ) : (
           <span className="info-text">waiting</span>
         )}
-      </td>
-      <td className={`cell-freshness ${freshness}`}>
+      </div>
+      <div className={`scanner-vcell cell-freshness ${freshness}`}>
         {freshnessLabel(result?.timestamp ?? null)}
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 });
+
+// Virtualized row renderer for react-window FixedSizeList.
+const ROW_HEIGHT = 48;
+
+type RowItem = { sym: string; result: ScanResult | null };
+type VirtualRowData = { rows: RowItem[]; errors: Record<string, string>; onSelectSymbol: (s: string) => void };
+
+function VirtualRow({ index, style, data }: ListChildComponentProps<VirtualRowData>) {
+  const { rows, errors, onSelectSymbol } = data;
+  const { sym, result } = rows[index];
+  return (
+    <div style={style}>
+      <ScannerRow
+        sym={sym}
+        result={result ?? null}
+        err={errors[sym]}
+        onSelectSymbol={onSelectSymbol}
+      />
+    </div>
+  );
+}
 
 export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
@@ -272,35 +295,31 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
       </div>
 
       {loadingSymbols ? (
-        <LoadingSpinner message="Loading symbols…" />
+        <ScannerTableSkeleton />
       ) : subscribedSymbols.length === 0 ? (
         <div className="empty-state">
           This watchlist has no enabled symbols. Add some on the Watchlist page.
         </div>
       ) : (
         <div className="scanner-table-wrapper">
-          <table className="scanner-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Price</th>
-                <th>Score</th>
-                <th>Signals</th>
-                <th>Last Update</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ sym, result }) => (
-                <ScannerRow
-                  key={sym}
-                  sym={sym}
-                  result={result ?? null}
-                  err={errors[sym]}
-                  onSelectSymbol={onSelectSymbol}
-                />
-              ))}
-            </tbody>
-          </table>
+          {/* Static header — always visible */}
+          <div className="scanner-vheader">
+            <div className="scanner-vheader-cell">Symbol</div>
+            <div className="scanner-vheader-cell">Price</div>
+            <div className="scanner-vheader-cell">Score</div>
+            <div className="scanner-vheader-cell">Signals</div>
+            <div className="scanner-vheader-cell">Last Update</div>
+          </div>
+          {/* Virtualized body — react-window only renders visible rows */}
+          <FixedSizeList
+            height={Math.min(rows.length * ROW_HEIGHT, 500)}
+            itemCount={rows.length}
+            itemSize={ROW_HEIGHT}
+            width="100%"
+            itemData={{ rows, errors, onSelectSymbol }}
+          >
+            {VirtualRow}
+          </FixedSizeList>
         </div>
       )}
     </div>

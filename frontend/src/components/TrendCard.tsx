@@ -34,6 +34,8 @@ export function TrendCard({ trend }: TrendCardProps) {
 
   const timeframeLabels: Record<string, string> = {
     '1m': '1 Min',
+    '2m': '2 Min',
+    '3m': '3 Min',
     '5m': '5 Min',
     '15m': '15 Min',
     '30m': '30 Min',

@@ -28,6 +28,7 @@ class WatchlistCreate(WatchlistBase):
 class WatchlistUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    is_active: bool | None = None
 
 class WatchlistResponse(WatchlistBase):
     model_config = ConfigDict(from_attributes=True)
@@ -49,6 +50,14 @@ class WatchlistSymbolResponse(WatchlistSymbolBase):
     watchlist_id: int
     added_at: datetime
     position: int
+    notes: str | None = None
+
+
+class WatchlistSymbolUpdate(BaseModel):
+    """Body for PATCH /api/watchlists/{id}/symbols/{symbol}."""
+
+    notes: str | None = None
+    is_enabled: bool | None = None
 
 
 class ImportRequest(BaseModel):
@@ -71,8 +80,13 @@ class ImportResponse(BaseModel):
 
 # Watchlist endpoints
 @router.get("/", response_model=list[WatchlistResponse])
-def get_watchlists(active_only: bool = True, db: Session = Depends(get_db)):
-    """Get all watchlists"""
+def get_watchlists(active_only: bool = False, db: Session = Depends(get_db)):
+    """Get all watchlists.
+
+    Defaults to ``active_only=False`` so the user can see and re-enable
+    watchlists they previously disabled. Set ``?active_only=true`` to hide
+    disabled ones (used by the market-data ingestion service).
+    """
     repo = WatchlistRepository(db)
     watchlists = repo.get_watchlists(active_only=active_only)
     return watchlists
@@ -99,7 +113,8 @@ def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session 
     updated_watchlist = repo.update_watchlist(
         watchlist_id=watchlist_id,
         name=watchlist.name,
-        description=watchlist.description
+        description=watchlist.description,
+        is_active=watchlist.is_active,
     )
     if updated_watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
@@ -180,6 +195,32 @@ def disable_symbol_in_watchlist(watchlist_id: int, symbol: str, db: Session = De
     # Return the updated symbol
     watchlist_symbol = repo.get_watchlist_symbol(watchlist_id, symbol)
     return watchlist_symbol
+
+
+@router.patch("/{watchlist_id}/symbols/{symbol}", response_model=WatchlistSymbolResponse)
+def update_watchlist_symbol(
+    watchlist_id: int,
+    symbol: str,
+    payload: WatchlistSymbolUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update symbol metadata (notes, enabled state).
+
+    Lets the UI show an Edit dialog without round-tripping through the
+    separate enable/disable endpoints.
+    """
+    repo = WatchlistRepository(db)
+    if repo.get_watchlist(watchlist_id) is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    updated = repo.update_symbol_in_watchlist(
+        watchlist_id=watchlist_id,
+        symbol=symbol,
+        notes=payload.notes,
+        is_enabled=payload.is_enabled,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Symbol not found in watchlist")
+    return updated
 
 @router.put("/{watchlist_id}/symbols/reorder", response_model=list[WatchlistSymbolResponse])
 def reorder_watchlist_symbols(watchlist_id: int, symbol_order: list[str], db: Session = Depends(get_db)):

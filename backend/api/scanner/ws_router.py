@@ -206,12 +206,37 @@ class ScannerDispatcher:
         self._cooldown_seconds: float = 30.0
 
     def register(self) -> None:
-        """Attach to ``engine_registry`` (idempotent)."""
+        """Attach to ``engine_registry`` (idempotent).
+
+        The dispatcher listens for *every* quote event so it can re-scan
+        whatever symbols currently have WebSocket subscribers. The
+        registry keys callbacks by ``(kind, symbol)`` though, so we
+        can't just register once for a wildcard — we have to register
+        against each symbol the ingestion service knows about. Symbols
+        added to the watchlist after registration are picked up via
+        ``register_for_symbol()`` from the watchlist API endpoints.
+        """
         if self._registered:
             return
-        engine_registry.register("quote", "__SCANNER_DISPATCHER__", self._on_quote)
+        # Pre-register against any symbols already being ingested so the
+        # first quote after server start fires the dispatcher. New
+        # symbols are added as they're added to the watchlist via
+        # ``register_for_symbol``.
+        try:
+            from backend.market_data.services.ingestion_service import ingestion_service
+            for sym in ingestion_service.symbols:
+                engine_registry.register("quote", sym, self._on_quote)
+        except Exception as e:
+            logger.debug(f"Initial symbol registration skipped: {e}")
         self._registered = True
         logger.info("ScannerDispatcher registered with engine_registry")
+
+    def register_for_symbol(self, symbol: str) -> None:
+        """Register the dispatcher for a single symbol (called when a
+        symbol is added to the watchlist at runtime)."""
+        if not self._registered:
+            self.register()
+        engine_registry.register("quote", symbol.upper(), self._on_quote)
 
     def _on_quote(self, **_: Any) -> None:
         """Sync callback invoked by ``engine_registry.dispatch_quote``.

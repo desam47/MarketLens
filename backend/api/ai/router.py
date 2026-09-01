@@ -22,6 +22,8 @@ Query parameters:
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -31,9 +33,9 @@ from ...ai import (
     ai_manager,
 )
 from ...ai.analyze import analyze_symbol
-from ...ai.prompt import SYSTEM_PROMPT
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
+from ..rate_limit import _ai_limiter, check_rate_limit
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -97,12 +99,36 @@ class AnalyzeResponse(BaseModel):
 # --- Endpoints -----------------------------------------------------
 
 
+def _sync_resolve_template(db: Session, template_id: int | None):
+    """Synchronous helper: resolve which AI template to use for a call."""
+    from backend.models import AITemplate
+    if template_id is not None:
+        tmpl_obj = db.query(AITemplate).filter(AITemplate.id == template_id).first()
+        if tmpl_obj is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"AI template {template_id} not found",
+            )
+        return tmpl_obj.id, tmpl_obj
+
+    # No explicit ID: look up the active default.
+    tmpl_obj = (
+        db.query(AITemplate)
+        .filter(
+            AITemplate.is_default == True,  # noqa: E712
+            AITemplate.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+    return tmpl_obj.id if tmpl_obj else None, tmpl_obj
+
+
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
     status_code=status.HTTP_200_OK,
 )
-def analyze(
+async def analyze(
     symbol: str = Query(..., min_length=1, max_length=10),
     timeframe: str = Query(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$"),
     max_tokens: int | None = Query(default=None, ge=100, le=8192),
@@ -118,6 +144,7 @@ def analyze(
         ),
     ),
     db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
 ) -> AnalyzeResponse:
     """Run an AI market analysis for ``symbol``.
 
@@ -133,51 +160,36 @@ def analyze(
     rendered with the available context variables (symbol, timeframe)
     and used in place of the built-in default.
     """
-    # Resolve which template (if any) drives this call.
-    # - Explicit template_id wins.
-    # - Otherwise we fall back to the active default template.
-    # - Otherwise we use the hard-coded SYSTEM_PROMPT.
-    from backend.models import AITemplate
-    resolved_template_id = template_id
-    tmpl_obj: AITemplate | None = None
-    if resolved_template_id is not None:
-        tmpl_obj = (
-            db.query(AITemplate).filter(AITemplate.id == resolved_template_id).first()
-        )
-        if tmpl_obj is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"AI template {resolved_template_id} not found",
-            )
-    else:
-        tmpl_obj = (
-            db.query(AITemplate)
-            .filter(
-                AITemplate.is_default == True,  # noqa: E712
-                AITemplate.is_active == True,   # noqa: E712
-            )
-            .first()
-        )
-        if tmpl_obj is not None:
-            resolved_template_id = tmpl_obj.id
+    # 1. Resolve the active template (DB read — run in thread to avoid
+    #    blocking the FastAPI worker on I/O).
+    resolved_template_id, tmpl_obj = await asyncio.to_thread(
+        _sync_resolve_template, db, template_id
+    )
 
-    # Render the template (raises 400/404 on failure) so a malformed
-    # template fails fast with 400 rather than silently falling back.
+    # 2. Render the template system prompt if one is active.
+    #    resolve_and_render() may do DB reads — wrap it too.
     rendered_system: str | None = None
     if tmpl_obj is not None:
-        rendered_system = resolve_and_render(
+        rendered_system = await asyncio.to_thread(
+            resolve_and_render,
             db,
             resolved_template_id,
             {"symbol": symbol.upper(), "timeframe": timeframe},
         )
 
-    result = analyze_symbol(
-        symbol=symbol.upper(),
-        timeframe=timeframe,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system_prompt_override=rendered_system,
-    )
+    # 3. Call the LLM (blocking HTTP — the most expensive operation).
+    #    asyncio.to_thread frees the worker thread so concurrent requests
+    #    can be served while the LLM response is in flight.
+    def _call_analyze():
+        return analyze_symbol(
+            symbol=symbol.upper(),
+            timeframe=timeframe,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system_prompt_override=rendered_system,
+        )
+
+    result = await asyncio.to_thread(_call_analyze)
 
     return AnalyzeResponse(
         summary=result.summary,
@@ -196,18 +208,24 @@ def analyze(
 
 
 @router.get("/status", response_model=list[ProviderStatusResponse])
-def ai_status() -> list[ProviderStatusResponse]:
+async def ai_status() -> list[ProviderStatusResponse]:
     """Return the health of each provider in the AI chain."""
-    return [
-        ProviderStatusResponse(name=s.name, healthy=s.healthy, is_primary=s.is_primary, error=s.error)
-        for s in ai_manager.status()
-    ]
+    # ai_manager.status() walks the provider chain and may make a health
+    # probe (HTTP ping) — keep it off the event loop.
+    return await asyncio.to_thread(
+        lambda: [
+            ProviderStatusResponse(
+                name=s.name, healthy=s.healthy, is_primary=s.is_primary, error=s.error
+            )
+            for s in ai_manager.status()
+        ]
+    )
 
 
 @router.get("/config", response_model=ConfigResponse)
-def ai_config() -> ConfigResponse:
+async def ai_config() -> ConfigResponse:
     """Return the frontend-safe AI configuration (no API key)."""
-    cfg = ai_manager.safe_config()
+    cfg = await asyncio.to_thread(lambda: ai_manager.safe_config())
     return ConfigResponse(**cfg)
 
 
@@ -217,13 +235,13 @@ class ConfigUpdateRequest(BaseModel):
 
 
 @router.patch("/config", response_model=ConfigResponse)
-def update_ai_config(body: ConfigUpdateRequest) -> ConfigResponse:
+async def update_ai_config(body: ConfigUpdateRequest) -> ConfigResponse:
     """Update the AI configuration at runtime.
 
     Only ``enabled`` is supported for now — flipping it True/False
     takes effect immediately without restarting the server.
     """
     if body.enabled is not None:
-        ai_manager.set_enabled(body.enabled)
+        await asyncio.to_thread(ai_manager.set_enabled, body.enabled)
     cfg = ai_manager.safe_config()
     return ConfigResponse(**cfg)

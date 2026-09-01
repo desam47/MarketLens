@@ -11,6 +11,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import api, { AITemplate, AITemplatePreview } from '../services/api';
+import { renderTemplate, parseVariables, type RenderContext } from './templateRenderer';
 
 interface AITemplatesPanelProps {
   /** Symbol+timeframe context for "Run with template" actions. */
@@ -216,6 +217,9 @@ export function AITemplatesPanel({ symbol, timeframe }: AITemplatesPanelProps) {
     setMode('create');
   };
 
+  // Render context for client-side template preview — built-in variables only.
+  const renderCtx: RenderContext = { symbol, timeframe };
+
   const openEdit = (tmpl: AITemplate) => {
     setEditing(tmpl);
     setFormName(tmpl.name);
@@ -305,27 +309,12 @@ export function AITemplatesPanel({ symbol, timeframe }: AITemplatesPanelProps) {
     if (!formPrompt.trim()) return;
     setPreviewLoading(true);
     try {
-      // For create/edit preview, we render with the current form values.
-      // Since there's no "preview without saving" endpoint, we render client-side
-      // by mimicking what the backend does.
-      const vars = formVariables.split(',').map(v => v.trim()).filter(Boolean);
-      const rendered = formPrompt.replace(
-        /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g,
-        (_, name) => {
-          if (name === 'symbol') return symbol;
-          if (name === 'timeframe') return timeframe;
-          return `{{${name}}}`;
-        },
-      );
-      const variables_used: Record<string, string> = {};
-      if (vars.includes('symbol')) variables_used.symbol = symbol;
-      if (vars.includes('timeframe')) variables_used.timeframe = timeframe;
-      const missing = vars.filter(v => v !== 'symbol' && v !== 'timeframe');
+      const result = renderTemplate(formPrompt, renderCtx);
       setPreviewResult({
         template_id: editing?.id ?? 0,
-        system_prompt_rendered: rendered,
-        variables_used,
-        missing_variables: missing,
+        system_prompt_rendered: result.system_prompt_rendered,
+        variables_used: result.variables_used,
+        missing_variables: result.missing_variables,
       });
     } catch (_) {
       /* non-fatal */

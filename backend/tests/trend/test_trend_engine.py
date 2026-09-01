@@ -213,6 +213,9 @@ class TestPhase6Scenarios(unittest.TestCase):
     def setUp(self):
         # Dedicated engine per test — no warm-up bleed.
         self.engine = TrendEngine("TEST")
+        # Reset the shared timeframe engine so _seen_timestamps from the
+        # previous test doesn't cause duplicate-tick rejection in this test.
+        self.engine.timeframe_engine.reset()
         # Phase 6 spec tests use 1-minute spacing for synthetic price
         # series. The data-quality gap check (added later, in
         # ``_settings.data_quality.max_tick_gap_seconds``) would log a

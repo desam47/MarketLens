@@ -1,6 +1,7 @@
 """
 Alert API endpoints.
 """
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,7 @@ from backend.alerts.engine import alerts_engine
 from backend.repositories.alert_repository import AlertRepository
 
 from backend.api.dependencies import get_db
+from backend.api.rate_limit import _alerts_limiter, check_rate_limit
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -70,49 +72,61 @@ class AlertTriggerResponse(BaseModel):
 
 
 @router.get("/", response_model=list[AlertResponse])
-def list_alerts(db: Session = Depends(get_db)):
+async def list_alerts(db: Session = Depends(get_db)):
     """List all alerts."""
     repo = AlertRepository(db)
-    return repo.get_all()
+    return await asyncio.to_thread(repo.get_all)
 
 
 @router.post("/", response_model=AlertResponse, status_code=status.HTTP_201_CREATED)
-def create_alert(payload: AlertCreate, db: Session = Depends(get_db)):
+async def create_alert(
+    payload: AlertCreate,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_alerts_limiter)),
+):
     """Create a new alert."""
     repo = AlertRepository(db)
-    alert = repo.create(
-        name=payload.name,
-        symbol=payload.symbol,
-        condition_type=payload.condition_type,
-        parameter=payload.parameter,
-    )
+
+    def _do_create():
+        return repo.create(
+            name=payload.name,
+            symbol=payload.symbol,
+            condition_type=payload.condition_type,
+            parameter=payload.parameter,
+        )
+
+    alert = await asyncio.to_thread(_do_create)
     # Immediately register the price callback so the engine evaluates it.
-    alerts_engine.register_for_alert(alert)
+    await asyncio.to_thread(alerts_engine.register_for_alert, alert)
     return alert
 
 
 @router.get("/active", response_model=list[AlertTriggerResponse])
-def list_active_triggers(db: Session = Depends(get_db)):
+async def list_active_triggers(db: Session = Depends(get_db)):
     """Triggers fired in the last 24 hours."""
     repo = AlertRepository(db)
-    return repo.get_recent_triggers()
+    return await asyncio.to_thread(repo.get_recent_triggers)
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
-def get_alert(alert_id: int, db: Session = Depends(get_db)):
+async def get_alert(alert_id: int, db: Session = Depends(get_db)):
     """Get a single alert by ID."""
     repo = AlertRepository(db)
-    alert = repo.get_by_id(alert_id)
+    alert = await asyncio.to_thread(repo.get_by_id, alert_id)
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
 
 
 @router.put("/{alert_id}", response_model=AlertResponse)
-def update_alert(alert_id: int, payload: AlertUpdate, db: Session = Depends(get_db)):
+async def update_alert(
+    alert_id: int,
+    payload: AlertUpdate,
+    db: Session = Depends(get_db),
+):
     """Update an existing alert."""
     repo = AlertRepository(db)
-    existing = repo.get_by_id(alert_id)
+    existing = await asyncio.to_thread(repo.get_by_id, alert_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Alert not found")
 
@@ -121,13 +135,16 @@ def update_alert(alert_id: int, payload: AlertUpdate, db: Session = Depends(get_
         "price_above", "price_below", "pct_change_above"
     )
 
-    updated = repo.update(
-        alert_id,
-        name=payload.name,
-        condition_type=payload.condition_type,
-        parameter=payload.parameter,
-        is_enabled=payload.is_enabled,
-    )
+    def _do_update():
+        return repo.update(
+            alert_id,
+            name=payload.name,
+            condition_type=payload.condition_type,
+            parameter=payload.parameter,
+            is_enabled=payload.is_enabled,
+        )
+
+    updated = await asyncio.to_thread(_do_update)
     if updated is None:
         raise HTTPException(status_code=404, detail="Alert not found")
 
@@ -136,28 +153,28 @@ def update_alert(alert_id: int, payload: AlertUpdate, db: Session = Depends(get_
     )
 
     if was_price_alert and (not is_price_alert or not updated.is_enabled):
-        alerts_engine.unregister_for_alert(updated)
+        await asyncio.to_thread(alerts_engine.unregister_for_alert, updated)
     elif is_price_alert and updated.is_enabled:
-        alerts_engine.register_for_alert(updated)
+        await asyncio.to_thread(alerts_engine.register_for_alert, updated)
 
     return updated
 
 
 @router.delete("/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_alert(alert_id: int, db: Session = Depends(get_db)):
+async def delete_alert(alert_id: int, db: Session = Depends(get_db)):
     """Delete an alert and all its triggers."""
     repo = AlertRepository(db)
-    existing = repo.get_by_id(alert_id)
+    existing = await asyncio.to_thread(repo.get_by_id, alert_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    alerts_engine.unregister_for_alert(existing)
-    repo.delete(alert_id)
+    await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
+    await asyncio.to_thread(repo.delete, alert_id)
 
 
 @router.get("/{alert_id}/triggers", response_model=list[AlertTriggerResponse])
-def get_alert_triggers(alert_id: int, limit: int = 100, db: Session = Depends(get_db)):
+async def get_alert_triggers(alert_id: int, limit: int = 100, db: Session = Depends(get_db)):
     """Trigger history for a specific alert."""
     repo = AlertRepository(db)
-    if repo.get_by_id(alert_id) is None:
+    if await asyncio.to_thread(repo.get_by_id, alert_id) is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    return repo.get_triggers(alert_id, limit=limit)
+    return await asyncio.to_thread(repo.get_triggers, alert_id, limit=limit)

@@ -6,6 +6,8 @@ detection engines against the most recent stored bars. They require no
 live-tick state and can be served purely from the historical bar cache.
 """
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
@@ -18,6 +20,19 @@ from ...transitions import TrendTransitionEngine
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
@@ -128,10 +143,7 @@ async def get_transitions(
             "transitions": [t.to_dict() for t in transitions],
             "count": len(transitions),
             "latest_score": scores[-1],
-            "latest_timestamp": (
-                arrays["timestamps"][-1].isoformat()
-                if arrays["timestamps"] else None
-            ),
+            "latest_timestamp": _to_dashboard_tz(arrays["timestamps"][-1]) if arrays["timestamps"] else None,
         }
     except HTTPException:
         raise
@@ -252,7 +264,7 @@ async def get_recent_bars(
             "timeframe": timeframe,
             "bars": [
                 {
-                    "timestamp": b["timestamp"].isoformat() if b.get("timestamp") else None,
+                    "timestamp": _to_dashboard_tz(b.get("timestamp")),
                     "open": b["open"],
                     "high": b["high"],
                     "low": b["low"],

@@ -67,6 +67,12 @@ export function useScannerStream({
     // If nothing is wanted, disconnect entirely.
     if (symbols.length === 0) {
       sub.disconnect();
+    } else {
+      // Connect the socket if it's not already open. Reset explicitlyClosed
+      // in case the component re-mounted after an unmount-disconnect, so the
+      // socket can reconnect without needing a manual refresh().
+      (sub as any).explicitlyClosed = false;
+      sub.connect();
     }
 
     return () => {
@@ -136,6 +142,9 @@ export function useScannerStream({
     subRef.current.disconnect();
     setLiveResults({});
     setErrors({});
+    // Reset the "explicitly closed" flag so connect() actually opens the socket.
+    // The subscriber instance is reused across mounts so this state persists.
+    (subRef.current as any).explicitlyClosed = false;
     subRef.current.connect();
   }, []);
 

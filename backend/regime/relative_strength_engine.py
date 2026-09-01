@@ -7,7 +7,7 @@ UNDERPERFORMER / STRONG_UNDERPERFORMER.
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
@@ -128,7 +128,7 @@ class RelativeStrengthEngine:
         Returns one RelativeStrengthSignal per configured benchmark plus
         the sector ETF signal if the engine was seeded with sector ETF data.
         """
-        ts = timestamp or datetime.now()
+        ts = timestamp or datetime.now(timezone.utc)
         signals = []
 
         for benchmark in self._cfg.benchmark_list():

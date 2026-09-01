@@ -23,13 +23,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Copy requirements first to leverage Docker layer caching. Installing
+# Copy pyproject.toml first to leverage Docker layer caching. Installing
 # from a file that's stable between source changes means we don't have
 # to rebuild the venv on every code change.
-COPY backend/requirements.txt /build/requirements.txt
+COPY pyproject.toml /build/pyproject.toml
 RUN python -m venv /build/.venv \
     && /build/.venv/bin/pip install --upgrade pip \
-    && /build/.venv/bin/pip install -r /build/requirements.txt
+    && /build/.venv/bin/pip install /build/pyproject.toml
 
 
 # ----- Stage 2: runtime -----

@@ -10,7 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.api.multitimeframe.router import _MTF_TIMEFRAMES, router
+from backend.api.multitimeframe.router import router
+from backend.multitimeframe.multi_timeframe_engine import (
+    PRESET_DAY_TRADING,
+    PRESET_SCALPER,
+    PRESET_SWING,
+)
 
 # Disable data-quality log noise during tests.
 logging.getLogger("backend.data_quality").setLevel(logging.CRITICAL)
@@ -92,23 +97,27 @@ class TestMTFLiveTickRegistration:
     """
 
     def test_mtf_timeframes_include_1m(self):
-        """1m is in _MTF_TIMEFRAMES — the user-visible shortest horizon."""
-        assert "1m" in _MTF_TIMEFRAMES
+        """Scalper preset includes 1m — the user-visible shortest horizon."""
+        from backend.engines.timeframe import Timeframe
+        assert Timeframe.ONE_MINUTE in PRESET_SCALPER
 
     def test_mtf_timeframes_include_30m_and_1wk(self):
-        """30m and 1wk are both registered for live-tick dispatch."""
-        assert "30m" in _MTF_TIMEFRAMES
-        assert "1wk" in _MTF_TIMEFRAMES
+        """Day-trading and swing presets cover the full range."""
+        from backend.engines.timeframe import Timeframe
+        assert Timeframe.THIRTY_MINUTE in PRESET_DAY_TRADING
+        assert Timeframe.ONE_WEEK in PRESET_SWING
 
     def test_mtf_timeframes_match_ingestion_default(self):
-        """Router subscribes to the same set the ingestion service fetches.
+        """All presets together cover the ingestion default timeframes.
 
         4h is excluded from the ingestion default (yfinance has no native
         4h interval) but registered in the router for any future
         provider-derived 4h bars.
         """
-        # The ingestion service default lives in code; the canonical
-        # truth is the union minus 4h, since 4h is router-only.
-        # Assert each ingestion TF is registered.
-        for tf in ("1m", "5m", "15m", "30m", "1h", "1d", "1wk"):
-            assert tf in _MTF_TIMEFRAMES, f"{tf} missing from _MTF_TIMEFRAMES"
+        from backend.engines.timeframe import Timeframe
+        # The scalper preset covers minute-level TFs; day_trading covers
+        # intraday; swing covers daily and weekly.
+        for tf_str in ("1m", "5m", "15m", "30m", "1h", "1d", "1wk"):
+            tf = Timeframe(tf_str)
+            in_any = tf in PRESET_SCALPER or tf in PRESET_DAY_TRADING or tf in PRESET_SWING
+            assert in_any, f"{tf_str} missing from all presets"

@@ -13,7 +13,9 @@ internal ``scan_results`` dict holds the last result per symbol for
 subsequent quick reads.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -30,10 +32,24 @@ from ...scanner.ranking import RankingEngine, default_ranking_engine
 from ...scanner.scanner import ScanResult, market_scanner
 
 from ..dependencies import get_db
+from backend.api.ttl_cache import _scan_cache, ttl_cached
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # --- Response models ---------------------------------------------------
@@ -114,9 +130,7 @@ def _quote_to_dict(quote) -> _QuoteResponse | None:
         bid=getattr(quote, "bid", None),
         ask=getattr(quote, "ask", None),
         volume=getattr(quote, "volume", None),
-        timestamp=(
-            quote.timestamp.isoformat() if getattr(quote, "timestamp", None) else None
-        ),
+        timestamp=_to_dashboard_tz(getattr(quote, "timestamp", None)) or None,
         provider=getattr(quote, "provider", None),
     )
 
@@ -131,7 +145,7 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
     """
     return _ScanResultResponse(
         symbol=result.symbol,
-        timestamp=result.timestamp.isoformat() if result.timestamp else "",
+        timestamp=_to_dashboard_tz(result.timestamp),
         quote=_quote_to_dict(result.quote),
         indicator_values=result.indicator_values or {},
         scores=result.scores or {},
@@ -274,10 +288,19 @@ async def get_top_movers(
     """
     repo = WatchlistRepository(db)
     if watchlist_id is None:
+        # Find the first active watchlist that actually has symbols.
+        # New (potentially empty) watchlists can shadow populated ones in the
+        # default sort order.
         watchlists = repo.get_watchlists(active_only=True)
-        if not watchlists:
+        for wl in watchlists:
+            symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            if symbols:
+                watchlist_id = wl.id
+                break
+        else:
+            # All active watchlists are empty — return empty result rather
+            # than silently scanning nothing.
             return []
-        watchlist_id = watchlists[0].id
 
     watchlist = repo.get_watchlist(watchlist_id)
     if watchlist is None:
@@ -338,22 +361,36 @@ async def get_watchlist_rankings(
 
 # --- Symbol-level endpoints -------------------------------------------
 
+async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
+    """Run the full scan pipeline and notify the alerts engine.
+
+    Extracted so it can be wrapped by ``ttl_cached`` — the cache
+    stores the serialised response dict, not the raw ``ScanResult``.
+    The alerts engine is notified on every real scan (not on cache hits).
+    """
+    result = market_scanner.scan_symbol(symbol.upper())
+    from backend.alerts.engine import alerts_engine
+    alerts_engine.evaluate_scan_result(result)
+    return _result_to_dict(result)
+
+
+@ttl_cached(_scan_cache, key_fn=lambda s: s.upper())
+async def _cached_scan(symbol: str) -> _ScanResultResponse:
+    return await _scan_and_notify(symbol)
+
+
 @router.get("/{symbol}", response_model=_ScanResultResponse)
 async def scan_symbol(symbol: str):
     """Scan a single symbol and return the full result.
 
-    Runs the full scan pipeline: quote → indicators → scores → signals.
-    For an uncached symbol this triggers live YFinance calls. The
-    result is also stored in the scanner's internal cache (keyed by
-    symbol) so subsequent reads via ``GET /api/scanner/{symbol}/cached``
-    are cheap.
+    Wrapped in a 10s TTL cache (v2.1 Item 1.2). Repeated requests
+    within the TTL window return the cached response without re-running
+    the scan pipeline. The result is also stored in the scanner's
+    internal ``scan_results`` dict (keyed by symbol) so subsequent
+    reads via ``GET /api/scanner/{symbol}/cached`` are cheap.
     """
     try:
-        result = market_scanner.scan_symbol(symbol.upper())
-        # Notify the alerts engine so signal_equals alerts can fire.
-        from backend.alerts.engine import alerts_engine
-        alerts_engine.evaluate_scan_result(result)
-        return _result_to_dict(result)
+        return await _cached_scan(symbol.upper())
     except Exception as e:
         logger.error(f"Error scanning symbol {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -462,7 +499,7 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
 
     last_scan = market_scanner.last_scan_time
     return _RankedResponse(
-        timestamp=last_scan.isoformat() if last_scan else "",
+        timestamp=_to_dashboard_tz(last_scan),
         count=len(results),
         results=results,
     )

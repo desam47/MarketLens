@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _EXEMPT_PATH_PREFIXES = (
     "/api/health",
     "/api/system/status",
+    "/api/market-data/ingestion",
     "/docs",
     "/openapi.json",
     "/redoc",

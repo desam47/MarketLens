@@ -13,7 +13,8 @@ The actual counters live in ``backend/observability/metrics.py`` so the
 scanner, ingestion, and bar repository can import them without pulling
 in FastAPI (avoids circular imports).
 """
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
@@ -30,6 +31,19 @@ from ...observability.metrics import (
 from ...observability.prometheus import render_prometheus_text
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 class PerformanceResponse(BaseModel):
@@ -107,7 +121,7 @@ async def get_performance() -> PerformanceResponse:
     """Return live process and service metrics."""
     snap = get_snapshot()
     return PerformanceResponse(
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=_to_dashboard_tz(datetime.now(UTC)),
         uptime_seconds=snap["uptime_seconds"],
         memory_rss_mb=snap["memory_rss_mb"],
         cpu_load=snap["cpu_load"],

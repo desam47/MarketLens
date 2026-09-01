@@ -11,7 +11,8 @@ Each group is independently gated: when its provider is disabled
 The rest of the API is unaffected.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -26,6 +27,23 @@ from backend.models.aux_data import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/aux-data", tags=["aux-data"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _to_dashboard_tz(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +84,7 @@ def _disabled_resp(category: str) -> dict:
     return {
         "detail": f"The {category} provider is disabled.",
         "hint": f"Set {env_var} in your environment to enable it.",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": _to_dashboard_tz(_now_utc()),
     }
 
 
@@ -143,5 +161,5 @@ async def get_aux_providers():
         news=aux_data_manager.news.get_statuses(),
         fundamentals=aux_data_manager.fundamentals.get_statuses(),
         options=aux_data_manager.options.get_statuses(),
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )

@@ -3,6 +3,53 @@ name = "marketlens"
 version = "0.1.0"
 requires-python = ">=3.12"
 
+dependencies = [
+    # Core framework
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.22.0",
+    "pydantic==2.13.4",
+    "pydantic-settings>=2.0,<3.0",
+    "python-dotenv==1.0.0",
+
+    # Database
+    "SQLAlchemy>=2.0,<3.0",
+    "alembic>=1.13,<2.0",
+
+    # Market data
+    "yfinance==0.2.36",
+    "httpx>=0.25",
+    "curl_cffi>=0.7",
+
+    # Resilience
+    "tenacity>=8.0",
+
+    # In-process TTL cache for hot API endpoints (v2.1).
+    "cachetools>=5.4",
+
+    # Background job queue (Phase 2.5).
+    "rq>=1.16",
+    "redis>=5.0",
+
+    # OpenTelemetry for distributed tracing.
+    "opentelemetry-api==1.24.0",
+    "opentelemetry-sdk==1.24.0",
+    "opentelemetry-instrumentation==0.45b0",
+    "opentelemetry-instrumentation-fastapi==0.45b0",
+    "opentelemetry-instrumentation-sqlalchemy==0.45b0",
+    "opentelemetry-instrumentation-redis==0.45b0",
+    "opentelemetry-exporter-jaeger==1.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-benchmark",
+    "pytest-cov>=5.0",
+    "mypy==1.11.2",
+    "types-requests",
+    "ruff==0.6.9",
+]
+
 # ---------------------------------------------------------------------------
 # Ruff — Python linter + formatter runner
 # ---------------------------------------------------------------------------
@@ -55,3 +102,32 @@ check_untyped_defs = true
 warn_unused_ignores = false
 warn_redundant_casts = false
 no_implicit_optional = false
+
+# ---------------------------------------------------------------------------
+# Coverage — pytest-cov configuration
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+# We measure the production code under `backend/`. Tests, scripts, and
+# generated files (`__init__.py` for packages) are excluded so the
+# percentage reflects real coverage of the shipping code.
+source = ["backend"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "*/migrations/*",
+]
+
+[tool.coverage.report]
+# Show lines that weren't hit, but only the first 10 missing per file
+# to keep the CI log readable.
+show_missing = true
+skip_covered = false
+sort = "Cover"
+exclude_lines = [
+    # Standard "pragma: no cover" marker
+    "pragma: no cover",
+    # Defensive asserts that only fire when invariants are violated
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

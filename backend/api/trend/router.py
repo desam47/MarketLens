@@ -1,122 +1,115 @@
 """
 API endpoints for trend analysis
+
+All TrendEngine instances are sourced from the shared registry
+(``backend.api.trend.registry``). This guarantees that the trend API,
+multi-timeframe API, and any future consumer share the same warmed-up
+engine per symbol — no signal divergence from independent warmup paths.
 """
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
-from ...engines.timeframe import Timeframe
-from backend.market_data.services.engine_seeder import (
-    engine_registry,
-    seed_engine_from_quotes,
-)
-from backend.trend.trend_engine import TrendEngine
+from backend.api.ttl_cache import _trend_cache
+
+from .registry import get_engine
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trend", tags=["trend"])
 
-# In a real implementation, these would be dependency injected or managed as services
-_engines: dict[str, TrendEngine] = {}
-
-# Timeframes we ingest bars for. Used to register the trend engine with the
-# live-tick registry under each bar:{tf} key. Must match the ingestion service.
-_TREND_TIMEFRAMES = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "1d", "1wk")
-
-# Symbols to pre-warm engines for at startup (reads from ingestion defaults).
-_WARMUP_SYMBOLS: tuple[str, ...] = ()
-try:
-    # Import lazily to avoid circular imports at module-load time.
-    from backend.market_data.services.ingestion_service import ingestion_service
-    _WARMUP_SYMBOLS = tuple(ingestion_service.symbols)
-except Exception:
-    _WARMUP_SYMBOLS = ("SPY", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX")
+# Convert UTC timestamps → America/New_York (auto EST/EDT) for the
+# dashboard. Without this the browser sees "2026-08-31T15:18:08" with no
+# offset and JavaScript interprets it as local time — wrong for users
+# outside the server's timezone.
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
-def warmup_engines() -> dict[str, int]:
-    """Pre-register trend engines for all ingestion symbols so bars dispatched
-    by the ingestion service immediately reach a listener.
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
-    This eliminates the cold-start gap where bars arrive before any API
-    request has triggered engine registration.
-    Returns a dict of symbol -> number of historical quotes seeded.
-    """
-    results = {}
-    for symbol in _WARMUP_SYMBOLS:
-        try:
-            engine = get_engine(symbol)
-            count = seed_engine_from_quotes(symbol, engine.update)
-            results[symbol] = count
-            logger.info(f"Warmed up trend engine for {symbol} ({count} quotes seeded)")
-        except Exception as e:
-            logger.warning(f"Failed to warm up trend engine for {symbol}: {e}")
-            results[symbol] = 0
-    return results
-
-def get_engine(symbol: str) -> TrendEngine:
-    """Get or create trend engine for symbol, seeding from DB on first access.
-
-    The trend engine maintains all timeframes internally from a single tick
-    stream. We register the same update callback for every timeframe we ingest
-    so the engine sees one event per bar close per timeframe.
-    """
-    symbol = symbol.upper()
-    if symbol not in _engines:
-        engine = TrendEngine(symbol)
-        _engines[symbol] = engine
-        count = seed_engine_from_quotes(symbol, engine.update)
-        if count > 0:
-            logger.info(f"Seeded trend engine for {symbol} with {count} historical quotes")
-        # Register for live-tick updates. The trend engine buckets ticks into
-        # timeframes internally, so it should be notified of every bar event
-        # for every timeframe we ingest.
-        for tf in _TREND_TIMEFRAMES:
-            engine_registry.register(f"bar:{tf}", symbol, engine.update)
-    return _engines[symbol]
 
 @router.get("/{symbol}/current/{timeframe}")
 async def get_current_trend(symbol: str, timeframe: str):
-    """Get current trend for symbol and timeframe"""
+    """Get current trend for symbol and timeframe.
+
+    Wrapped in a 30s TTL cache (v2.1 Item 1.2), keyed by
+    ``symbol:timeframe`` so different timeframes don't share entries.
+    """
     try:
         # Validate timeframe
+        from backend.engines.timeframe import Timeframe
+
         try:
             tf = Timeframe(timeframe)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
 
-        engine = get_engine(symbol.upper())
+        sym = symbol.upper()
+        cache_key = f"{sym}:{timeframe}"
+        cached = _trend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # Reuse the shared, pre-warmed TrendEngine from the registry.
+        engine = get_engine(sym)
         trend_signal = engine.get_current_trend(tf)
 
         if trend_signal is None:
-            return {
-                "symbol": symbol.upper(),
+            payload = {
+                "symbol": sym,
                 "timeframe": timeframe,
                 "direction": "unknown",
                 "strength": "unknown",
                 "confidence": 0.0,
-                "timestamp": None
+                "timestamp": None,
             }
-
-        return {
-            "symbol": trend_signal.symbol,
-            "timeframe": trend_signal.timeframe.value,
-            "direction": trend_signal.direction.value,
-            "strength": trend_signal.strength.value,
-            "confidence": trend_signal.confidence,
-            "timestamp": trend_signal.timestamp.isoformat() if trend_signal.timestamp else None
-        }
+        else:
+            payload = {
+                "symbol": trend_signal.symbol,
+                "timeframe": trend_signal.timeframe.value,
+                "direction": trend_signal.direction.value,
+                "strength": trend_signal.strength.value,
+                "confidence": trend_signal.confidence,
+                "timestamp": _to_dashboard_tz(trend_signal.timestamp),
+            }
+        _trend_cache[cache_key] = payload
+        return payload
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting trend for {symbol} {timeframe}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
+@router.delete("/{symbol}/cache/{timeframe}")
+async def clear_trend_cache(symbol: str, timeframe: str):
+    """Invalidate the TTL cache for a (symbol, timeframe) pair.
+
+    Useful when a stale "unknown" response was cached during a cold-start
+    window and the engine now has data. The next GET recomputes from the
+    live TrendEngine.
+    """
+    cache_key = f"{symbol.upper()}:{timeframe}"
+    _trend_cache.pop(cache_key, None)
+    return {"symbol": symbol.upper(), "timeframe": timeframe, "cache": "cleared"}
+
+
 @router.get("/{symbol}/history/{timeframe}")
 async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100):
     """Get trend history for symbol and timeframe"""
     try:
-        # Validate timeframe
+        from backend.engines.timeframe import Timeframe
+
         try:
             tf = Timeframe(timeframe)
         except ValueError:
@@ -134,11 +127,11 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
                     "strength": signal.strength.value,
                     "confidence": signal.confidence,
                     "score": signal.score,
-                    "timestamp": signal.timestamp.isoformat() if signal.timestamp else None
+                    "timestamp": _to_dashboard_tz(signal.timestamp),
                 }
                 for signal in history
             ],
-            "count": len(history)
+            "count": len(history),
         }
     except HTTPException:
         raise
@@ -146,12 +139,14 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
         logger.error(f"Error getting trend history for {symbol} {timeframe}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
 @router.post("/{symbol}/update/{timeframe}")
 async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
-                      timestamp: str | None = None):
+                       timestamp: str | None = None):
     """Update trend engine with new market data"""
     try:
-        # Validate timeframe
+        from backend.engines.timeframe import Timeframe
+
         try:
             Timeframe(timeframe)
         except ValueError:
@@ -165,14 +160,18 @@ async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
         engine.update(
             price=price,
             volume=volume,
-            timestamp=ts
+            timestamp=ts,
         )
+
+        # Invalidate TTL cache for this (symbol, timeframe) so the
+        # next GET reflects the new bar.
+        _trend_cache.pop(f"{symbol.upper()}:{timeframe}", None)
 
         return {
             "symbol": symbol.upper(),
             "timeframe": timeframe,
             "status": "updated",
-            "timestamp": ts.isoformat()
+            "timestamp": _to_dashboard_tz(ts),
         }
     except HTTPException:
         raise

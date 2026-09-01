@@ -267,6 +267,8 @@ class TestPhase7Alignments(unittest.TestCase):
         from backend.config.settings import settings
         self._original_gap = settings.data_quality.max_tick_gap_seconds
         settings.data_quality.max_tick_gap_seconds = 86400.0
+        self.engine = MultiTimeframeEngine("AAPL")
+        self.engine.reset()
 
     def tearDown(self):
         from backend.config.settings import settings

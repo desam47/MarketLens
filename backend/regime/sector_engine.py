@@ -6,7 +6,7 @@ sector trend, and market (SPY) trend to produce an alignment score.
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
@@ -208,7 +208,7 @@ class SectorEngine:
     def get_current_signal(self,
                            timestamp: datetime | None = None) -> SectorSignal:
         """Compute and return the current sector signal."""
-        ts = timestamp or datetime.now()
+        ts = timestamp or datetime.now(timezone.utc)
 
         stock_trend = self._get_trend_str(self._stock_eng)
         sector_trend = self._get_trend_str(self._sector_eng) if self._sector_eng else "unknown"

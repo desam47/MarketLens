@@ -2,7 +2,8 @@
 API endpoints for strategy selection
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
@@ -21,6 +22,19 @@ from ...strategy.strategy_selector import StrategySelector
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/strategy", tags=["strategy"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # Only the selector itself needs per-symbol state (selection history).
@@ -74,7 +88,7 @@ async def get_current_strategy(symbol: str):
                 "strength": strategy_signal.confluence_signal.strength if strategy_signal.confluence_signal else None,
                 "alignment_score": strategy_signal.confluence_signal.alignment_score if strategy_signal.confluence_signal else None
             } if strategy_signal.confluence_signal else None,
-            "timestamp": strategy_signal.timestamp.isoformat() if strategy_signal.timestamp else None
+            "timestamp": _to_dashboard_tz(strategy_signal.timestamp)
         }
     except Exception as e:
         logger.error(f"Error getting strategy for {symbol}: {e}")
@@ -94,7 +108,7 @@ async def get_strategy_history(symbol: str, limit: int | None = 100):
                     "strategy_type": signal.strategy_type.value,
                     "confidence": signal.confidence,
                     "timeframe": signal.timeframe,
-                    "timestamp": signal.timestamp.isoformat() if signal.timestamp else None
+                    "timestamp": _to_dashboard_tz(signal.timestamp)
                 }
                 for signal in history
             ],
@@ -179,7 +193,7 @@ async def select_strategy_manual(symbol: str,
             "confidence": strategy_signal.confidence,
             "timeframe": strategy_signal.timeframe,
             "parameters": strategy_signal.parameters,
-            "timestamp": strategy_signal.timestamp.isoformat() if strategy_signal.timestamp else None
+            "timestamp": _to_dashboard_tz(strategy_signal.timestamp)
         }
     except Exception as e:
         logger.error(f"Error selecting strategy manually for {symbol}: {e}")

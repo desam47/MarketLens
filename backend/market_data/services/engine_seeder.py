@@ -18,11 +18,27 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 from backend.database import SessionLocal
 from backend.models.market_data_sql import BarModel, QuoteModel
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_aware(dt) -> datetime | None:
+    """Normalize a datetime to timezone-aware UTC.
+
+    Naive datetimes are assumed UTC per the canonical store policy. Aware
+    datetimes in other zones are first converted to UTC, then to timezone-aware.
+    This prevents "can't subtract offset-naive and offset-aware datetimes" when
+    engine update callbacks compare timestamps with datetime.now(timezone.utc).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def seed_engine_from_quotes(symbol: str, update_fn: Callable, max_points: int = 200) -> int:
@@ -51,7 +67,7 @@ def seed_engine_from_quotes(symbol: str, update_fn: Callable, max_points: int = 
             try:
                 update_fn(price=float(q.price or 0.0),
                           volume=int(q.volume or 0),
-                          timestamp=q.timestamp)
+                          timestamp=_ensure_aware(q.timestamp))
             except Exception as e:
                 logger.debug(f"Seed tick failed for {symbol} @ {q.timestamp}: {e}")
         return len(rows)
@@ -74,10 +90,9 @@ def seed_engine_from_bars(symbol: str, timeframe: str, update_fn: Callable,
         rows.reverse()
         for b in rows:
             try:
-                # The bar's close is the canonical "tick" price; volume from the bar
                 update_fn(price=float(b.close or 0.0),
                           volume=int(b.volume or 0),
-                          timestamp=b.timestamp)
+                          timestamp=_ensure_aware(b.timestamp))
             except Exception as e:
                 logger.debug(f"Seed bar failed for {symbol}/{timeframe} @ {b.timestamp}: {e}")
         return len(rows)

@@ -1,6 +1,17 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { WatchlistScanResult, WatchlistSymbol, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
+import {
+  deriveDirection,
+  estimateConfidence,
+  fmt,
+  priceCellClass,
+  rsCellClass,
+  rsCellLabel,
+  TREND_ICONS,
+  TREND_LABELS,
+  isRowEnabled,
+} from './watchlistUtils';
 
 interface WatchlistTableProps {
   watchlistId: number;
@@ -27,62 +38,6 @@ const VIRT_THRESHOLD = 30;
 const VIRT_ROW_HEIGHT = 44;
 const VIRT_HEIGHT = 480;
 
-// Derive trend direction from signals list.
-function deriveDirection(signals: string[]): 'bullish' | 'bearish' | 'neutral' {
-  if (signals.length === 0) return 'neutral';
-  const bullishSignals = [
-    'daily_bullish', 'mtf_bullish', 'breakout', 'strong_trend',
-    'trend_strengthens', 'full_alignment', 'bullish_divergence',
-    'trend_crosses_above_70',
-  ];
-  const bearishSignals = [
-    'daily_bearish', 'mtf_bearish', 'breakdown', 'weak_trend',
-    'trend_weakens', 'timeframe_conflict', 'bearish_divergence',
-    'trend_crosses_below_70',
-  ];
-  const bullCount = signals.filter(s => bullishSignals.includes(s)).length;
-  const bearCount = signals.filter(s => bearishSignals.includes(s)).length;
-  if (bullCount > bearCount) return 'bullish';
-  if (bearCount > bullCount) return 'bearish';
-  return 'neutral';
-}
-
-// Estimate confidence from score magnitude (0-100).
-function estimateConfidence(score: number): number {
-  const abs = Math.abs(score);
-  if (abs >= 70) return 90;
-  if (abs >= 50) return 75;
-  if (abs >= 30) return 60;
-  if (abs >= 15) return 45;
-  return 30;
-}
-
-const TREND_ICONS: Record<string, string> = {
-  bullish: '🐂',
-  bearish: '🐻',
-  neutral: '➡',
-};
-
-const TREND_LABELS: Record<string, string> = {
-  bullish: 'Uptrend',
-  bearish: 'Downtrend',
-  neutral: 'Neutral',
-};
-
-const RS_CLASS_LABELS: Record<string, string> = {
-  strong_outperformer: 'Strong Outperformer',
-  outperformer: 'Outperformer',
-  inline: 'Inline',
-  underperformer: 'Underperformer',
-  strong_underperformer: 'Strong Underperformer',
-  unknown: '—',
-};
-
-function fmt(n: number | null | undefined, decimals = 2): string {
-  if (n == null) return '—';
-  return n.toFixed(decimals);
-}
-
 const SortIcon = React.memo(function SortIcon({ column, sortCol, sortDir }: {
   column: string;
   sortCol: string;
@@ -102,47 +57,32 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
 }: ListChildComponentProps<{
   rows: RowData[];
   onSelectSymbol: (symbol: string) => void;
-  onToggleSymbol: (symbol: string, currentEnabled: boolean) => void;
+  onToggleSymbol: (symbol: string) => void;
   onDeleteSymbol: (symbol: string) => void;
+  togglingSymbol: string | null;
   pendingSymbol: string | null;
-  pendingAction: 'toggle' | 'delete' | null;
+  pendingAction: 'delete' | null;
 }>) {
   const { rows, onSelectSymbol, onToggleSymbol, onDeleteSymbol,
-    pendingSymbol, pendingAction } = data;
+    togglingSymbol, pendingSymbol, pendingAction } = data;
   const row = rows[index];
 
   const isPending = pendingSymbol === row.symbol;
   const isDeleting = isPending && pendingAction === 'delete';
-  const isToggling = isPending && pendingAction === 'toggle';
-  const rowEnabled = row.raw.is_enabled !== false;
-
-  const priceColor = row.changePct == null
-    ? ''
-    : row.changePct > 0
-      ? 'price-up'
-      : row.changePct < 0
-        ? 'price-down'
-        : '';
-  const rsCls = !row.rs
-    ? ''
-    : (() => {
-        const c = row.rs.classification ?? 'unknown';
-        if (c === 'strong_outperformer' || c === 'outperformer') return 'rs-bullish';
-        if (c === 'strong_underperformer' || c === 'underperformer') return 'rs-bearish';
-        return '';
-      })();
-  const rsLbl = !row.rs
-    ? '—'
-    : `${fmt(row.rs.rs_pct)}% ${RS_CLASS_LABELS[row.rs.classification] ?? ''}`;
+  const isToggling = togglingSymbol === row.symbol;
+  const rowEnabled = isRowEnabled(row.raw);
 
   return (
     <div
       style={style}
-      className="virt-row watchlist-table-row"
+      className={`virt-row watchlist-table-row${rowEnabled ? '' : ' row-disabled'}`}
       onClick={() => onSelectSymbol(row.symbol)}
     >
-      <div className="virt-cell td-symbol">{row.symbol}</div>
-      <div className={`virt-cell td-price ${priceColor}`}>
+      <div className="virt-cell td-symbol">
+        {row.symbol}
+        {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
+      </div>
+      <div className={`virt-cell td-price ${priceCellClass(row.changePct)}`}>
         {row.price != null ? `$${fmt(row.price)}` : '—'}
         {row.changePct != null && (
           <span className="price-chg">
@@ -164,18 +104,18 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
         </div>
         <span className="conf-label">{fmt(row.confidence, 0)}%</span>
       </div>
-      <div className={`virt-cell td-rs ${rsCls}`}>{rsLbl}</div>
+      <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          className="row-action-btn"
+          className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
           title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
           disabled={isToggling}
-          onClick={() => onToggleSymbol(row.symbol, rowEnabled)}
+          onClick={() => onToggleSymbol(row.symbol)}
         >
-          {rowEnabled ? '⏸' : '▶'}
+          {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
         </button>
         <button
           className="row-action-btn row-action-danger"
@@ -204,7 +144,8 @@ export function WatchlistTable({
   const [sortCol, setSortCol] = useState(sortColumn);
   const [sortDir, setSortDir] = useState(sortDirection);
   const [pendingSymbol, setPendingSymbol] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<'toggle' | 'delete' | null>(null);
+  const [pendingAction, setPendingAction] = useState<'delete' | null>(null);
+  const [togglingSymbol, setTogglingSymbol] = useState<string | null>(null);
   const listRef = useRef<FixedSizeList>(null);
 
   const fetchData = useCallback(async (refresh = false) => {
@@ -263,26 +204,34 @@ export function WatchlistTable({
 
   // --- Per-symbol actions -----------------------------------------------
 
-  const handleToggleSymbol = useCallback(async (symbol: string, currentEnabled: boolean) => {
-    setPendingSymbol(symbol);
-    setPendingAction('toggle');
+  const handleToggleSymbol = useCallback(async (symbol: string) => {
+    const row = rows.find(r => r.symbol === symbol);
+    if (!row) return;
+    const nextEnabled = row.raw.is_enabled === false; // toggle
+    setTogglingSymbol(symbol);
+    // Optimistic update so the UI responds instantly.
+    setRows(prev => prev.map(r =>
+      r.symbol === symbol
+        ? { ...r, raw: { ...r.raw, is_enabled: nextEnabled } }
+        : r
+    ));
     try {
-      if (currentEnabled) {
-        await api.disableSymbol(watchlistId, symbol);
-      } else {
-        await api.enableSymbol(watchlistId, symbol);
-      }
-      await fetchData(true);
+      await api.updateWatchlistSymbol(watchlistId, symbol, { is_enabled: nextEnabled });
     } catch (err: any) {
-      setError(err?.message || 'Failed to update symbol');
+      // Roll back on failure.
+      setRows(prev => prev.map(r =>
+        r.symbol === symbol
+          ? { ...r, raw: { ...r.raw, is_enabled: !nextEnabled } }
+          : r
+      ));
+      setError(err?.message || 'Failed to toggle symbol');
     } finally {
-      setPendingSymbol(null);
-      setPendingAction(null);
+      setTogglingSymbol(null);
     }
-  }, [watchlistId, fetchData]);
+  }, [rows, watchlistId]);
 
   const handleDeleteSymbol = useCallback(async (symbol: string) => {
-    if (!window.confirm(`Remove ${symbol} from this watchlist?`)) return;
+    if (!window.confirm(`Permanently remove ${symbol} from this watchlist?`)) return;
     setPendingSymbol(symbol);
     setPendingAction('delete');
     try {
@@ -323,10 +272,11 @@ export function WatchlistTable({
       onSelectSymbol,
       onToggleSymbol: handleToggleSymbol,
       onDeleteSymbol: handleDeleteSymbol,
+      togglingSymbol,
       pendingSymbol,
       pendingAction,
     }),
-    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, pendingSymbol, pendingAction],
+    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction],
   );
 
   const toggleSort = (col: typeof sortCol) => {
@@ -445,6 +395,7 @@ export function WatchlistTable({
                   onSelectSymbol={onSelectSymbol}
                   onToggleSymbol={handleToggleSymbol}
                   onDeleteSymbol={handleDeleteSymbol}
+                  togglingSymbol={togglingSymbol}
                   pendingSymbol={pendingSymbol}
                   pendingAction={pendingAction}
                 />
@@ -465,39 +416,22 @@ const WatchlistRow = React.memo(function WatchlistRow({
   onSelectSymbol,
   onToggleSymbol,
   onDeleteSymbol,
+  togglingSymbol,
   pendingSymbol,
   pendingAction,
 }: {
   row: RowData;
   onSelectSymbol: (symbol: string) => void;
-  onToggleSymbol: (symbol: string, currentEnabled: boolean) => void;
+  onToggleSymbol: (symbol: string) => void;
   onDeleteSymbol: (symbol: string) => void;
+  togglingSymbol: string | null;
   pendingSymbol: string | null;
-  pendingAction: 'toggle' | 'delete' | null;
+  pendingAction: 'delete' | null;
 }) {
-  const priceColor = row.changePct == null
-    ? ''
-    : row.changePct > 0
-      ? 'price-up'
-      : row.changePct < 0
-        ? 'price-down'
-        : '';
-  const rsCls = !row.rs
-    ? ''
-    : (() => {
-        const c = row.rs.classification ?? 'unknown';
-        if (c === 'strong_outperformer' || c === 'outperformer') return 'rs-bullish';
-        if (c === 'strong_underperformer' || c === 'underperformer') return 'rs-bearish';
-        return '';
-      })();
-  const rsLbl = !row.rs
-    ? '—'
-    : `${fmt(row.rs.rs_pct)}% ${RS_CLASS_LABELS[row.rs.classification] ?? ''}`;
-
-  const rowEnabled = row.raw.is_enabled !== false;
+  const rowEnabled = isRowEnabled(row.raw);
   const isPending = pendingSymbol === row.symbol;
-  const isToggling = isPending && pendingAction === 'toggle';
   const isDeleting = isPending && pendingAction === 'delete';
+  const isToggling = togglingSymbol === row.symbol;
 
   return (
     <tr
@@ -508,7 +442,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
         {row.symbol}
         {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
       </td>
-      <td className={`td-price ${priceColor}`}>
+      <td className={`td-price ${priceCellClass(row.changePct)}`}>
         {row.price != null ? `$${fmt(row.price)}` : '—'}
         {row.changePct != null && (
           <span className="price-chg">
@@ -530,15 +464,15 @@ const WatchlistRow = React.memo(function WatchlistRow({
         </div>
         <span className="conf-label">{fmt(row.confidence, 0)}%</span>
       </td>
-      <td className={`td-rs ${rsCls}`}>{rsLbl}</td>
+      <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
         <button
-          className="row-action-btn"
+          className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
           title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
           disabled={isToggling}
-          onClick={() => onToggleSymbol(row.symbol, rowEnabled)}
+          onClick={() => onToggleSymbol(row.symbol)}
         >
-          {rowEnabled ? '⏸' : '▶'}
+          {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
         </button>
         <button
           className="row-action-btn row-action-danger"

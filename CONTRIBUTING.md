@@ -25,10 +25,9 @@ cd marketlens
 python3.12 -m venv .venv
 source .venv/bin/activate
 
-# Install runtime + test deps
+# Install runtime + dev deps
 pip install --upgrade pip
-pip install -r backend/requirements.txt
-pip install -r backend/requirements-dev.txt
+pip install -e ".[dev]"
 
 # Install pre-commit hooks (runs ruff on every commit)
 pip install pre-commit

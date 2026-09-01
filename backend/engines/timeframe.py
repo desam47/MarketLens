@@ -2,7 +2,7 @@
 Timeframe/candle engine for aggregating market data
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from typing import Any
 
@@ -10,6 +10,20 @@ from ..models.market_data import Bar, DataStatus
 from .market_calendar import SessionType, USMarketCalendar, us_market_calendar
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_aware(dt: datetime) -> datetime:
+    """Normalize a datetime to timezone-aware UTC.
+
+    Naive datetimes are assumed UTC per the canonical store policy. Aware
+    datetimes in other zones are converted to UTC. This ensures consistent
+    comparisons across all timestamp operations in this module.
+    """
+    if dt is None:
+        raise ValueError("timestamp must not be None")
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 class Timeframe(StrEnum):
     """Supported timeframes"""
@@ -146,6 +160,9 @@ class TimeframeEngine:
     def _get_candle_start_time(self, timestamp: datetime,
                                timeframe: Timeframe) -> datetime:
         """Calculate the start time for a candle given a timestamp"""
+        # Normalize to aware UTC so candle-start comparisons later in this
+        # module (gap detection) work even when callers pass naive datetimes.
+        timestamp = _ensure_aware(timestamp)
         if timeframe == Timeframe.TICK:
             return timestamp
 
@@ -262,6 +279,9 @@ class TimeframeEngine:
         period after the prior candle, the prior one is marked DataStatus.GAP).
         Session type is stamped onto each new candle at open time.
         """
+        # Normalize timestamp so all downstream operations are timezone-aware.
+        timestamp = _ensure_aware(timestamp)
+
         # --- Phase 4: duplicate-tick detection (fires once per tick) ---
         # A tick with a previously-seen timestamp is a duplicate. We allow the
         # same tick timestamp to fan out across multiple timeframes (it crosses
@@ -405,6 +425,12 @@ class TimeframeEngine:
             if timeframe != Timeframe.TICK:
                 self.candles[timeframe].clear()
                 self.current_candles[timeframe] = None
+            self._last_candle_open[timeframe] = None
+            self._seen_candle_starts[timeframe] = set()
+        self._seen_timestamps.clear()
+        self.duplicate_count = 0
+        self.gap_count = 0
+        self.incomplete_count = 0
         self.subscribers.clear()
 
 class MultiSymbolTimeframeEngine:

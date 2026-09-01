@@ -55,6 +55,31 @@ class SignalRepository:
             .first()
         )
 
+    def get_latest_per_timeframe(
+        self, symbol: str, timeframes: list[str]
+    ) -> dict[str, HistoricalSignal]:
+        """Most recent signal for a symbol, one per timeframe.
+
+        Returns a mapping of timeframe -> signal. Timeframes with no
+        signal are omitted from the result; callers can detect "no data
+        for this symbol" by checking whether the dict is empty.
+        """
+        symbol = symbol.upper()
+        latest: dict[str, HistoricalSignal] = {}
+        for tf in timeframes:
+            signal = (
+                self.db.query(HistoricalSignal)
+                .filter(
+                    HistoricalSignal.symbol == symbol,
+                    HistoricalSignal.timeframe == tf,
+                )
+                .order_by(desc(HistoricalSignal.timestamp))
+                .first()
+            )
+            if signal is not None:
+                latest[tf] = signal
+        return latest
+
     def get_history(
         self,
         symbol: str | None = None,

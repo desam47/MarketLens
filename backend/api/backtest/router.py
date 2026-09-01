@@ -9,6 +9,7 @@ time the response is sent).
 Phase 14 adds a ``POST /walk-forward`` endpoint that splits a date
 range into train/test windows and returns a list of run_ids.
 """
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -25,6 +26,7 @@ from backend.backtesting.engine import (
 from backend.repositories.backtest_repository import BacktestRepository
 
 from ..dependencies import get_db
+from ..rate_limit import _backtest_limiter, check_rate_limit
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
@@ -211,14 +213,18 @@ class WalkForwardResponse(BaseModel):
 
 
 @router.get("/", response_model=list[BacktestResponse])
-def list_runs(limit: int = 50, db: Session = Depends(get_db)):
+async def list_runs(limit: int = 50, db: Session = Depends(get_db)):
     """List recent backtest runs (newest first)."""
     repo = BacktestRepository(db=db)
-    return repo.list_runs(limit=limit)
+    return await asyncio.to_thread(repo.list_runs, limit=limit)
 
 
 @router.post("/", response_model=BacktestResponse, status_code=status.HTTP_201_CREATED)
-def create_backtest(payload: BacktestCreate, db: Session = Depends(get_db)):
+async def create_backtest(
+    payload: BacktestCreate,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_backtest_limiter)),
+):
     """Run a backtest synchronously and return the resulting run.
 
     The engine persists a ``BacktestRun`` with ``status='running'``
@@ -239,23 +245,33 @@ def create_backtest(payload: BacktestCreate, db: Session = Depends(get_db)):
         timeframe=payload.timeframe,
         strategy_version=payload.strategy_version,
     )
-    run_id = backtest_engine.run(config)
+    # Run the engine in a thread so it doesn't block the FastAPI worker
+    # while iterating through historical bars.
+    run_id = await asyncio.to_thread(backtest_engine.run, config)
+
     # Patch the OOS flag if the caller provided one.
     if payload.out_of_sample is not None:
         repo = BacktestRepository(db=db)
-        repo.update_run_status(run_id, status="completed", out_of_sample=payload.out_of_sample)
+        await asyncio.to_thread(
+            repo.update_run_status, run_id, status="completed", out_of_sample=payload.out_of_sample
+        )
+
     # Re-fetch on the open request session so the response model can
     # read all attributes before the session is closed by the
     # dependency teardown.
     repo = BacktestRepository(db=db)
-    fresh = repo.get_run(run_id)
+    fresh = await asyncio.to_thread(repo.get_run, run_id)
     if fresh is None:
         raise HTTPException(status_code=500, detail="Backtest run not found after creation")
     return fresh
 
 
 @router.post("/walk-forward", response_model=WalkForwardResponse)
-def walk_forward(payload: WalkForwardCreate, db: Session = Depends(get_db)):
+async def walk_forward(
+    payload: WalkForwardCreate,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_backtest_limiter)),
+):
     """Run a walk-forward analysis.
 
     Splits ``[start_date, end_date)`` into ``n_splits`` equal windows,
@@ -273,7 +289,9 @@ def walk_forward(payload: WalkForwardCreate, db: Session = Depends(get_db)):
         test_pct=payload.test_pct,
         strategy_version=payload.strategy_version,
     )
-    run_ids = walk_forward_analyze(config)
+    # walk_forward_analyze runs N backtests in a loop — keep it off the
+    # FastAPI worker thread.
+    run_ids = await asyncio.to_thread(walk_forward_analyze, config)
     if not run_ids:
         raise HTTPException(
             status_code=400,
@@ -281,35 +299,39 @@ def walk_forward(payload: WalkForwardCreate, db: Session = Depends(get_db)):
         )
     # Hydrate all runs for the response.
     repo = BacktestRepository(db=db)
-    runs = [repo.get_run(rid) for rid in run_ids]
-    runs = [r for r in runs if r is not None]
+
+    async def _hydrate_one(rid: int):
+        return await asyncio.to_thread(repo.get_run, rid)
+
+    hydrated = await asyncio.gather(*(_hydrate_one(rid) for rid in run_ids))
+    runs = [r for r in hydrated if r is not None]
     return WalkForwardResponse(run_ids=run_ids, runs=runs)
 
 
 @router.get("/{run_id}", response_model=BacktestResponse)
-def get_run(run_id: int, db: Session = Depends(get_db)):
+async def get_run(run_id: int, db: Session = Depends(get_db)):
     repo = BacktestRepository(db=db)
-    run = repo.get_run(run_id)
+    run = await asyncio.to_thread(repo.get_run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Backtest run not found")
     return run
 
 
 @router.get("/{run_id}/trades", response_model=list[BacktestTradeResponse])
-def get_trades(run_id: int, db: Session = Depends(get_db)):
+async def get_trades(run_id: int, db: Session = Depends(get_db)):
     """Per-signal trade rows for a run (entry/exit/forward returns)."""
     repo = BacktestRepository(db=db)
-    run = repo.get_run(run_id)
+    run = await asyncio.to_thread(repo.get_run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Backtest run not found")
-    return repo.get_trades(run_id)
+    return await asyncio.to_thread(repo.get_trades, run_id)
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_run(run_id: int, db: Session = Depends(get_db)):
+async def delete_run(run_id: int, db: Session = Depends(get_db)):
     """Delete a backtest run and its child trade rows."""
     repo = BacktestRepository(db=db)
-    ok = repo.delete_run(run_id)
+    ok = await asyncio.to_thread(repo.delete_run, run_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Backtest run not found")
     return None

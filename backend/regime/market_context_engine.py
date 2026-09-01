@@ -12,7 +12,7 @@ configurable via MarketContextSettings.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..config.settings import settings
@@ -115,7 +115,7 @@ class MarketContextEngine:
         ts = max(
             (e.get_current_regime().timestamp for e in self.sub_engines.values()
              if e.get_current_regime()),
-            default=datetime.now(),
+            default=datetime.now(timezone.utc),
         )
 
         signal = MarketContextSignal(

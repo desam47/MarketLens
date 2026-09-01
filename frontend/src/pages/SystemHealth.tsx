@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api, { HealthData, SystemStatus, SystemConfig } from '../services/api';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { SkeletonBlock } from '../components/SkeletonBlock';
 import { ErrorBanner } from '../components/ErrorBanner';
 
 export function SystemHealth() {
@@ -35,25 +35,17 @@ export function SystemHealth() {
 
   const handleToggle = async () => {
     if (toggling || !ingestionStatus) return;
-    const targetState = !ingestionStatus.is_running;
     setToggling(true);
     try {
       const result = await api.toggleIngestion();
-      // Optimistic update: apply the response immediately so the checkbox
-      // doesn't desync from the backend. The background-thread cleanup on
-      // stop() can take a few seconds to fully unwind, so we keep `toggling`
-      // set for a short window to absorb rapid re-clicks.
-      setIngestionStatus((prev: any) => prev ? { ...prev, is_running: result.is_running } : prev);
-      // Re-fetch the full status once the backend settles. Stopping a daemon
-      // thread can take up to ~5s (join timeout in ingestion_service.stop),
-      // so we wait long enough for is_running to reflect the final state.
-      setTimeout(() => fetchData(), targetState ? 1500 : 5500);
+      // Trust the toggle response as the source of truth — no re-fetch needed.
+      setIngestionStatus((prev: any) =>
+        prev ? { ...prev, is_running: result.is_running } : prev
+      );
     } catch (err: any) {
       setError(`Toggle failed: ${err.message}`);
     } finally {
-      // Hold the disabled state for ~1s after the API call returns so a
-      // rapid second click doesn't queue a duplicate request.
-      setTimeout(() => setToggling(false), 1000);
+      setToggling(false);
     }
   };
 
@@ -61,7 +53,28 @@ export function SystemHealth() {
     fetchData();
   }, []);
 
-  if (loading) return <LoadingSpinner message="Checking system health..." />;
+  if (loading) {
+    return (
+      <div className="system-health">
+        <div className="health-header">
+          <h1>System Health</h1>
+          <SkeletonBlock width="120px" height="2.25rem" radius={6} />
+        </div>
+        <div className="health-grid">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="health-card">
+              <SkeletonBlock width="50%" height="1.1rem" />
+              <div className="skeleton-rows">
+                {Array.from({ length: 3 }).map((_, j) => (
+                  <SkeletonBlock key={j} width={j === 2 ? "60%" : "100%"} height="0.8rem" />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="system-health">

@@ -69,6 +69,7 @@ class WebullSettings(BaseSettings):
     enabled: bool = Field(default=False)
     app_key: str = Field(default="")
     app_secret: str = Field(default="")
+    use_sandbox: bool = Field(default=True)
     rate_limit_per_minute: int = Field(default=120)
     request_timeout: float = Field(default=15.0)
 
@@ -197,27 +198,29 @@ class TrendSignalWeights(BaseSettings):
     normalized internally by ``TrendEngine._calculate_trend`` (it sums
     the weights of components that have a current value, so a component
     that hasn't warmed up yet is silently excluded from the average).
+
+    Phase 6.1 weights: tuned to emphasize price-action indicators
+    (EMA, MACD, SuperTrend) over oscillators (RSI), and to give ADX
+    a real directional vote via DI+/DI- rather than only strength.
+    Bollinger Bands is enabled (was 0.0) so the structure signal counts.
     """
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
-    # EMA crossover (Phase 6 spec: "EMA structure")
-    ema: float = 0.3
-    # RSI overbought/oversold
-    rsi: float = 0.2
-    # MACD histogram sign
-    macd: float = 0.2
-    # ADX is used for *strength* (not direction), so this weight is
-    # applied as a multiplier on confidence — it does not contribute to
-    # the directional ``score``. Kept here so a single block of settings
-    # exposes every component.
+    # EMA crossover — the spine of trend direction.
+    ema: float = 0.25
+    # RSI: scaled continuous signal around the 50 midpoint, not binary.
+    rsi: float = 0.10
+    # MACD: continuous histogram, normalized by ATR.
+    macd: float = 0.20
+    # ADX: directional vote from DI+/DI-, weighted by trend strength.
     adx: float = 0.15
-    # Volume confirmation (relative to its own SMA)
-    relative_volume: float = 0.1
-    # Momentum (ROC sign)
-    momentum: float = 0.05
-    # SuperTrend direction (close above/below the line)
-    supertrend: float = 0.15
-    # Market structure (Bollinger %B deviation from 0.5)
-    bollinger: float = 0.0
+    # Volume confirmation (relative to its own SMA).
+    relative_volume: float = 0.05
+    # Momentum (ROC scaled continuous, normalized by ATR).
+    momentum: float = 0.10
+    # SuperTrend direction (close above/below the line).
+    supertrend: float = 0.20
+    # Market structure (Bollinger %B deviation from 0.5).
+    bollinger: float = 0.10
 
 
 class IndicatorDefaults(BaseSettings):
@@ -477,10 +480,29 @@ class ObservabilitySettings(BaseSettings):
     structured_log_level: str = Field(default="INFO")
 
 
+def _version_factory() -> str:
+    """Default factory for ``Settings.app_version``.
+
+    Reads the git commit hash (and optional tag) from ``version.txt`` at
+    the project root.  The pre-commit hook writes this file on every
+    commit, so the value always reflects the source-tree state the
+    server is running from.  Falls back to "dev" when the file is
+    missing (e.g. running from a tarball release without git).
+    """
+    try:
+        from backend.version import get_version
+        return get_version()
+    except Exception:
+        return "dev"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
-    app_version: str = "0.1.0"
+    # ``app_version`` is written by the pre-commit hook to version.txt at
+    # the repo root.  ``get_version()`` falls back to "dev" when the file
+    # is absent, so the server always starts with a valid version string.
+    app_version: str = Field(default_factory=_version_factory)
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG", "debug"))
     host: str = Field(default="0.0.0.0", validation_alias=AliasChoices("HOST", "host"))
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "port"))

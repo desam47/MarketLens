@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from ...backtesting.engine import DEFAULT_SIGNALS
 from ...backtesting.experiment_runner import (
@@ -28,6 +29,19 @@ from backend.repositories.experiment_repository import ExperimentRepository
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/strategy-lab", tags=["strategy-lab"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # --- Request models ----------------------------------------------------
@@ -211,6 +225,16 @@ class ExperimentResponse(BaseModel):
     # Runs
     run_ids_json: str | None = None
 
+    @field_serializer(
+        "start_date", "end_date",
+        "is_start", "is_end",
+        "val_start", "val_end",
+        "oos_start", "oos_end",
+        "created_at", "completed_at",
+    )
+    def _serialize_tz(self, value: datetime | None) -> str | None:
+        return _to_dashboard_tz(value)
+
 
 class ExperimentCompareResponse(BaseModel):
     """Side-by-side comparison of two or more experiments."""
@@ -333,8 +357,8 @@ async def get_experiment_runs(experiment_id: int) -> dict:
         run_rows.append({
             "id": r.id,
             "symbol": r.symbol,
-            "start_date": r.start_date.isoformat() if r.start_date else None,
-            "end_date": r.end_date.isoformat() if r.end_date else None,
+            "start_date": _to_dashboard_tz(r.start_date),
+            "end_date": _to_dashboard_tz(r.end_date),
             "status": r.status,
             "out_of_sample": r.out_of_sample,
             "win_rate_1d": r.win_rate_1d,

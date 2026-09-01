@@ -21,8 +21,9 @@ Concurrency model
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -34,6 +35,19 @@ logger = logging.getLogger(__name__)
 # /api/market-data/ws) to avoid colliding with the HTTP
 # ``/api/market-data/{symbol}`` route family.
 router = APIRouter(prefix="/api/realtime", tags=["realtime-ws"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -215,11 +229,7 @@ class RealtimeDispatcher:
                 "low": data.get("low"),
                 "close": data.get("close"),
                 "volume": data.get("volume"),
-                "timestamp": (
-                    data.get("timestamp").isoformat()
-                    if isinstance(data.get("timestamp"), datetime)
-                    else data.get("timestamp")
-                ),
+                "timestamp": _to_dashboard_tz(data.get("timestamp")) if isinstance(data.get("timestamp"), datetime) else data.get("timestamp"),
             },
         }
         await self._manager.broadcast(key, payload)

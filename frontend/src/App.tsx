@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import api from './services/api';
 import { Dashboard } from './pages/Dashboard';
 import { WatchlistPage } from './pages/WatchlistPage';
 import { SystemHealth } from './pages/SystemHealth';
@@ -7,34 +8,56 @@ import { BacktestPage } from './pages/BacktestPage';
 import { SymbolPage } from './pages/SymbolPage';
 import { ScannerPage } from './pages/ScannerPage';
 import { HistoricalSignalsPage } from './pages/HistoricalSignalsPage';
+import { PageErrorBoundary } from './components/PageErrorBoundary';
 import './styles/App.css';
 
 type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'scanner' | 'signals';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  // Default to the first symbol from the first populated watchlist.
+  // Falls back to 'SPY' only if no watchlist has symbols (e.g. first run).
   const [symbol, setSymbol] = useState<string>('SPY');
+
+  useEffect(() => {
+    // Fetch the first populated watchlist and set its first symbol as default.
+    // Sequential: try watchlists in order until one has symbols.
+    let cancelled = false;
+    api.getWatchlists().then(async (watchlists) => {
+      for (const wl of watchlists) {
+        if (cancelled) break;
+        const symbols = await api.getWatchlistSymbols(wl.id);
+        if (symbols.length > 0) {
+          if (!cancelled) setSymbol(symbols[0].symbol);
+          break;
+        }
+      }
+    }).catch(() => {
+      // Network error — stay on SPY so the dashboard still renders.
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <Dashboard symbol={symbol} onSymbolChange={setSymbol} />;
+        return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'watchlist':
-        return <WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} />;
+        return <PageErrorBoundary pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary>;
       case 'scanner':
-        return <ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} />;
+        return <PageErrorBoundary pageName="Live Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary>;
       case 'symbol':
-        return <SymbolPage symbol={symbol} onSymbolChange={setSymbol} />;
+        return <PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'alerts':
-        return <AlertsPage />;
+        return <PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary>;
       case 'backtest':
-        return <BacktestPage />;
+        return <PageErrorBoundary pageName="Backtest"><BacktestPage /></PageErrorBoundary>;
       case 'health':
-        return <SystemHealth />;
+        return <PageErrorBoundary pageName="System Health"><SystemHealth /></PageErrorBoundary>;
       case 'signals':
-        return <HistoricalSignalsPage />;
+        return <PageErrorBoundary pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary>;
       default:
-        return <Dashboard symbol={symbol} onSymbolChange={setSymbol} />;
+        return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
   };
 

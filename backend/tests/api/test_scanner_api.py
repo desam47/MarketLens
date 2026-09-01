@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.api import ttl_cache as _ttl_cache_module
 from backend.models.market_data import DataStatus, Quote
 from backend.scanner.scanner import ScanResult
 
@@ -79,6 +80,12 @@ class TestScannerAPI(unittest.TestCase):
         self.mock_scanner.scan_symbols_async = AsyncMock(
             side_effect=lambda symbols: self.mock_scanner.scan_symbols(symbols)
         )
+        # Clear the in-process TTL caches so a previous test's mock
+        # doesn't leak into this one's assertions.
+        _ttl_cache_module._scan_cache.clear()
+        _ttl_cache_module._regime_cache.clear()
+        _ttl_cache_module._trend_cache.clear()
+        _ttl_cache_module._quote_cache.clear()
 
     def tearDown(self):
         self.scanner_patch.stop()

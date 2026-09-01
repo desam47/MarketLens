@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api, { Watchlist } from '../services/api';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { WatchlistSkeleton } from '../components/skeletons/WatchlistSkeleton';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { WatchlistTable } from '../components/WatchlistTable';
 
@@ -36,8 +36,14 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     try {
       const data = await api.getWatchlists();
       setWatchlists(data);
-      if (data.length > 0 && !selectedId) {
-        setSelectedId(data[0].id);
+      // Re-select the first watchlist if the current selection was removed
+      // (e.g., after a delete or if it was disabled).
+      if (data.length > 0) {
+        if (!data.find(w => w.id === selectedId)) {
+          setSelectedId(data[0].id);
+        }
+      } else {
+        setSelectedId(null);
       }
       // Fetch counts for each watchlist (best-effort, non-blocking)
       const counts: Record<number, number> = {};
@@ -111,9 +117,9 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     if (!window.confirm('Delete this watchlist?')) return;
     try {
       await api.deleteWatchlist(id);
-      const remaining = watchlists.filter(w => w.id !== id);
-      setWatchlists(remaining);
-      setSelectedId(remaining[0]?.id || null);
+      // Re-fetch the watchlists from the API rather than filtering stale local
+      // state, so we stay in sync with any concurrent changes.
+      await fetchWatchlists();
     } catch (err: any) {
       setError(err.message);
     }
@@ -174,7 +180,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     }
   };
 
-  if (loading) return <LoadingSpinner message="Loading watchlists..." />;
+  if (loading) return <WatchlistSkeleton />;
 
   return (
     <div className="watchlist-page">
@@ -266,11 +272,29 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
               {watchlists.map(w => (
                 <li
                   key={w.id}
-                  className={selectedId === w.id ? 'active' : ''}
+                  className={selectedId === w.id ? `active${w.is_active === false ? ' sidebar-disabled' : ''}` : (w.is_active === false ? 'sidebar-disabled' : '')}
                   onClick={() => setSelectedId(w.id)}
                 >
-                  {w.name}
+                  <span className="wl-sidebar-name">{w.name}</span>
+                  {w.is_active === false && <span className="wl-sidebar-tag">off</span>}
                   <span className="symbol-count">{symbolCounts[w.id] ?? '…'}</span>
+                  <button
+                    className="wl-sidebar-toggle"
+                    title={w.is_active === false ? 'Enable watchlist' : 'Disable watchlist'}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const next = !(w.is_active ?? true);
+                      try {
+                        const updated = await api.updateWatchlist(w.id, { is_active: next } as any);
+                        setWatchlists(watchlists.map(x => x.id === updated.id ? updated : x));
+                        setInfo(next ? `Enabled "${updated.name}"` : `Disabled "${updated.name}"`);
+                      } catch (err: any) {
+                        setError(err.message);
+                      }
+                    }}
+                  >
+                    {w.is_active === false ? '⏵' : '⏸'}
+                  </button>
                 </li>
               ))}
             </ul>
@@ -281,7 +305,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
           {selectedWatchlist ? (
             <>
               <div className="watchlist-title-bar">
-                <h2>{selectedWatchlist.name}</h2>
+                <h2>{selectedWatchlist.name}{selectedWatchlist.is_active === false && <span className="wl-disabled-badge">Disabled</span>}</h2>
                 <div className="watchlist-actions">
                   <button
                     className="btn"

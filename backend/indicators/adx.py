@@ -243,6 +243,11 @@ class ADXIndicator(BaseIndicator):
             di_plus = (self._smoothed_dm_plus / self._smoothed_tr) * 100.0
             di_minus = (self._smoothed_dm_minus / self._smoothed_tr) * 100.0
 
+        # Phase 6.1: surface DI+/DI- as instance attributes so
+        # TrendEngine._calculate_trend can read them for directional scoring.
+        self._di_plus = di_plus
+        self._di_minus = di_minus
+
         di_sum = di_plus + di_minus
         if di_sum == 0:
             dx = 0.0

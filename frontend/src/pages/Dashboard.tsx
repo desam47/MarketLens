@@ -11,6 +11,7 @@ import { SymbolInput } from '../components/SymbolInput';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { DashboardSkeleton } from '../components/skeletons/DashboardSkeleton';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
 
 interface DashboardProps {
@@ -64,7 +65,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     try {
       const [regimeResult, trendsResult, confluenceResult, strategyResult, mktCtxResult, sectorResult] = await Promise.all([
         safeCall(() => api.getRegime(symbol)),
-        safeCall(() => api.getTrends(symbol, ['15m', '1h', '4h', '1d'])),
+        safeCall(() => api.getTrends(symbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk'])),
         safeCall(() => api.getConfluence(symbol, selectedPreset)),
         safeCall(() => api.getStrategy(symbol)),
         safeCall(() => api.getMarketContext()),
@@ -143,7 +144,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {loading ? (
-        <LoadingSpinner message="Loading market data..." />
+        <DashboardSkeleton />
       ) : (
         <div className="dashboard-grid">
           <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />
@@ -158,16 +159,21 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           <div className="trends-section">
             <h2>Multi-Timeframe Trend</h2>
             <div className="trend-grid">
-              {trends.map((trend) => (
+              {trends.slice(0, 5).map((trend) => (
                 <TrendCard key={trend.timeframe} trend={trend} />
               ))}
-              {trends.length === 0 && !trendsError && (
-                <p className="empty-state">No trend data available</p>
-              )}
-              {trendsError && (
-                <p className="empty-state">⚠ Failed to load trends: {trendsError}</p>
-              )}
             </div>
+            <div className="trend-grid">
+              {trends.slice(5).map((trend) => (
+                <TrendCard key={trend.timeframe} trend={trend} />
+              ))}
+            </div>
+            {trends.length === 0 && !trendsError && (
+              <p className="empty-state">No trend data available</p>
+            )}
+            {trendsError && (
+              <p className="empty-state">⚠ Failed to load trends: {trendsError}</p>
+            )}
           </div>
           <TopMoversCard onSelectSymbol={onSymbolChange} />
           <NLSearchBar onSelectSymbol={onSymbolChange} />

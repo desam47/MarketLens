@@ -1,0 +1,50 @@
+#!/bin/bash
+# pre-commit hook: stamp the current semantic version into version.txt.
+#
+# Format:  v<tag>                          if HEAD is exactly on a tag
+#          v<tag>-<n>-g<hash>              if N commits past the nearest tag
+#          v0.0.0-g<hash>                  if no tag exists in history yet
+#
+# Examples:
+#   v2.1.0           HEAD is the v2.1.0 tag itself
+#   v2.1.0-3-g54448ba  3 commits past v2.1.0
+#   v0.0.0-g54448ba  no version tags exist yet
+#
+# Create a new version with:  git tag v2.2.0
+#
+# To install, run this once after cloning:
+#   ln -sf scripts/git-hooks/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VERSION_FILE="$REPO_ROOT/version.txt"
+
+# If HEAD is exactly on a tag, that IS the version.
+if TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
+    echo "$TAG" > "$VERSION_FILE"
+else
+    # Find the most recent version tag reachable from HEAD.
+    # ``--match 'v*'`` restricts to version tags; ``--abbrev=7`` keeps the
+    # hash short and consistent.  ``git describe --tags --always`` falls
+    # back to just the hash if no tag is reachable, which we normalize to
+    # ``v0.0.0-<hash>`` so the version string is always valid semver.
+    DESC=$(git describe --tags --match 'v*' --long --abbrev=7 HEAD 2>/dev/null \
+           || git rev-parse --short HEAD)
+    if [[ "$DESC" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]+$ ]]; then
+        # Reformat "v2.1.0-3-g54448ba" → "v2.1.0+3.g54448ba" so the
+        # version reads as semver+build metadata (PEP 440-friendly,
+        # easier to parse in logs and the System Health page).
+        BASE="${DESC%%-*}"            # v2.1.0
+        AHEAD="${DESC#*-}"            # 3-g54448ba
+        COMMITS="${AHEAD%%-*}"        # 3
+        HASH="${DESC##*-g}"           # 54448ba
+        echo "${BASE}+${COMMITS}.g${HASH}" > "$VERSION_FILE"
+    else
+        # No version tag in history — use v0.0.0 as a placeholder.
+        HASH="$DESC"
+        echo "v0.0.0+g.${HASH}" > "$VERSION_FILE"
+    fi
+fi
+
+echo "version.txt updated: $(cat "$VERSION_FILE")"

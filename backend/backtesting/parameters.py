@@ -64,15 +64,18 @@ class ExperimentParameters(BaseModel):
         description="Within trending: RSI below this → bearish regime",
     )
 
-    # --- Signal weights (for Scanner; used in replay only for completeness) ---
-    weight_ema: float = Field(default=0.30, ge=0.0, le=2.0)
-    weight_rsi: float = Field(default=0.20, ge=0.0, le=2.0)
+    # --- Signal weights (for Scanner; used in replay only for completeness).
+    # Defaults must mirror ``settings.trend.signal_weights`` — the live
+    # engine rebalances these in Phase 6.1 (see TrendSignalWeights), and
+    # tests/backtesting/test_parameters.py asserts equality for each.
+    weight_ema: float = Field(default=0.25, ge=0.0, le=2.0)
+    weight_rsi: float = Field(default=0.10, ge=0.0, le=2.0)
     weight_macd: float = Field(default=0.20, ge=0.0, le=2.0)
     weight_adx: float = Field(default=0.15, ge=0.0, le=2.0)
-    weight_volume: float = Field(default=0.10, ge=0.0, le=2.0)
-    weight_momentum: float = Field(default=0.05, ge=0.0, le=2.0)
-    weight_supertrend: float = Field(default=0.15, ge=0.0, le=2.0)
-    weight_bollinger: float = Field(default=0.0, ge=0.0, le=2.0)
+    weight_volume: float = Field(default=0.05, ge=0.0, le=2.0)
+    weight_momentum: float = Field(default=0.10, ge=0.0, le=2.0)
+    weight_supertrend: float = Field(default=0.20, ge=0.0, le=2.0)
+    weight_bollinger: float = Field(default=0.10, ge=0.0, le=2.0)
 
     def indicator_defaults(self) -> dict[str, int | float]:
         """Return a dict compatible with ``IndicatorDefaults`` field names.

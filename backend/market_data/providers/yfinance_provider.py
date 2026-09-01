@@ -104,7 +104,7 @@ class YFinanceProvider(BaseMarketDataProvider):
         """
         return Bar(
             symbol=symbol.upper(),
-            timestamp=datetime.utcfromtimestamp(ts_arr[index]),
+            timestamp=datetime.fromtimestamp(int(ts_arr[index]), tz=timezone.utc),
             open=float(opens[index]) if opens[index] is not None else 0.0,
             high=float(highs[index]) if highs[index] is not None else 0.0,
             low=float(lows[index]) if lows[index] is not None else 0.0,
@@ -152,9 +152,9 @@ class YFinanceProvider(BaseMarketDataProvider):
                 or 0
             )
             try:
-                ts = datetime.utcfromtimestamp(int(ts_epoch)) if ts_epoch else datetime.utcnow()
+                ts = datetime.fromtimestamp(int(ts_epoch), tz=timezone.utc) if ts_epoch else datetime.now(timezone.utc)
             except (TypeError, ValueError, OSError):
-                ts = datetime.utcnow()
+                ts = datetime.now(timezone.utc)
 
             quote = Quote(
                 symbol=symbol.upper(),
@@ -337,7 +337,7 @@ class YFinanceProvider(BaseMarketDataProvider):
         try:
             chart = self._fetch_chart(symbol, interval="1d", range_="1d")
             meta = self._meta(chart)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             is_open = bool(meta.get("marketState") in ("REGULAR", "PRE", "POST"))
             status = MarketStatus(
                 symbol=symbol.upper(),

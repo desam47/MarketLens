@@ -1,15 +1,22 @@
 """
 API endpoints for multi-timeframe analysis
+
+TrendEngine instances are sourced from the shared registry
+(``backend.api.trend.registry``) so the per-timeframe signals in the
+confluence response match the signals from ``/api/trend/{symbol}/current/{tf}``.
+Both endpoints read the same warmed-up TrendEngine state, eliminating the
+signal divergence that arose from independent warmup paths.
+
+The MTF engine still owns its own confluence weight and alignment
+computations (per-preset), but delegates its per-TF trend data to the
+shared engines.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.market_data.services.engine_seeder import (
-    engine_registry,
-    seed_engine_from_quotes,
-)
 from ...multitimeframe.multi_timeframe_engine import (
     PRESET_NAMES,
     MultiTimeframeEngine,
@@ -17,99 +24,88 @@ from ...multitimeframe.multi_timeframe_engine import (
     TimeframeTrendSnapshot,
 )
 
+from ...market_data.services.engine_seeder import engine_registry
+from ..trend.registry import get_engine as get_shared_trend_engine
+
+# All timestamps in this response are emitted in America/New_York so the
+# dashboard renders them in EST/EDT without each caller converting. Mirror
+# of the helper in backend.api.main (kept inline here to avoid a circular
+# import between the multitimeframe router and main).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    """Return ``value`` as an ISO string in America/New_York.
+
+    Naive datetimes are treated as UTC (matches what the trend engines
+    produce internally). Returns ``None`` for ``None`` so callers don't
+    have to special-case the empty state.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/multitimeframe", tags=["multitimeframe"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 # Engines are keyed by (symbol, preset) so the dashboard can switch
 # presets without losing warmup on the previous one.
 _engines: dict[tuple[str, str], MultiTimeframeEngine] = {}
 
-# Timeframes we ingest bars for. Used to register the confluence engine with
-# the live-tick registry under each bar:{tf} key, so it gets notified per-TF.
-# Must match what the ingestion service publishes.
-_MTF_TIMEFRAMES = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk")
-
-
-def _seed_mtf_from_bars(symbol: str, engine: MultiTimeframeEngine) -> None:
-    """Seed each per-TF trend engine from historical bars with full OHLCV.
-
-    Replays bars oldest→newest directly into each TrendEngine so that the
-    TrendEngine's indicators (SuperTrend, BollingerBands, EMA, etc.) have
-    proper OHLC data to initialize and compute from.  Without this, the
-    seeder only passes close+volume and the indicators silently get None
-    for open/high/low — which causes `get_current_trend()` to return None
-    for longer timeframes (30m, 1wk) even when bars are persisted.
-    """
-    from ...database import SessionLocal
-    from ...models.market_data_sql import BarModel
-
-    db = SessionLocal()
-    try:
-        for tf in engine.analysis_timeframes:
-            trend_eng = engine.trend_engines.get(tf)
-            if trend_eng is None:
-                continue
-            rows = (
-                db.query(BarModel)
-                .filter(
-                    BarModel.symbol == symbol.upper(),
-                    BarModel.timeframe == tf.value,
-                )
-                .order_by(BarModel.timestamp.asc())
-                .limit(200)
-                .all()
-            )
-            for bar in rows:
-                try:
-                    # TrendEngine.update signature is (price, volume, timestamp, provider).
-                    # We use the bar's close as the canonical price; the
-                    # engine's indicator warmup is intentionally price-only
-                    # (see trend_engine._update_indicators which synthesizes
-                    # OHLC from the price tick).
-                    trend_eng.update(
-                        price=float(bar.close or 0.0),
-                        volume=int(bar.volume or 0),
-                        timestamp=bar.timestamp,
-                    )
-                except Exception:
-                    pass  # Indicator warmup errors during seed are non-fatal
-            if rows:
-                logger.info(
-                    f"Seeded {symbol}/{tf.value} with {len(rows)} historical bars "
-                    f"(preset={engine.preset_name})"
-                )
-    finally:
-        db.close()
-
 
 def get_engine(symbol: str, preset: str = "day_trading") -> MultiTimeframeEngine:
-    """Get or create multi-timeframe engine for (symbol, preset).
+    """Get or create a multi-timeframe engine for (symbol, preset).
 
-    Each preset gets its own engine instance so they don't compete for
-    the same in-memory trend state — the scalper preset's 1m trend
-    engine is independent of the swing preset's 1wk trend engine.
+    The MTF engine delegates per-timeframe trend data to the shared
+    TrendEngine instances from ``backend.api.trend.registry``.  This means
+    ``get_current_confluence().timeframe_signals["15m"]`` returns the same
+    direction/strength/confidence as ``GET /api/trend/SPY/current/15m``.
     """
     symbol = symbol.upper()
     key = (symbol, preset)
     if key not in _engines:
         engine = MultiTimeframeEngine(symbol, preset=preset)
         _engines[key] = engine
-        # Seed from quotes (tick-level) for fast micro-trend setup.
-        quote_count = seed_engine_from_quotes(symbol, engine.update)
-        if quote_count > 0:
-            logger.info(
-                f"Seeded confluence engine for {symbol} ({preset}) "
-                f"with {quote_count} historical quotes"
-            )
-        # Seed each per-TF trend engine from historical bars with full
-        # OHLCV data.  We seed the TrendEngine directly (not via
-        # ``engine.update``) so the MTF history isn't polluted with
-        # rows that were only seeded, not live ticks.
-        _seed_mtf_from_bars(symbol, engine)
-        # Register for live-tick updates per timeframe (same pattern as trend)
-        for tf in _MTF_TIMEFRAMES:
-            engine_registry.register(f"bar:{tf}", symbol, engine.update)
+
+        # Inject the shared, pre-warmed TrendEngine for each active timeframe.
+        # The shared engines are already seeded from BarModel OHLCV and
+        # registered for live-tick updates by ``get_shared_trend_engine``.
+        for tf in engine.analysis_timeframes:
+            shared = get_shared_trend_engine(symbol)
+            # The shared engine is keyed by symbol only (one engine per symbol),
+            # so all MTF presets share the same underlying per-TF TrendEngine.
+            # This is intentional: the trend signal for 15m should be identical
+            # regardless of which preset is selected.
+            engine.trend_engines[tf] = shared
+
+        # Register this MTF engine with the engine registry so it receives
+        # bar dispatches from the ingestion service.  When ingestion calls
+        # ``engine_registry.dispatch_bar(symbol, timeframe, ...)``, the MTF
+        # engine's ``update()`` is invoked, which calls
+        # ``_generate_confluence_signal()`` to populate confluence_history.
+        # Without this, the MTF engine's confluence endpoint always returned
+        # empty signals because ``update()`` was never called.
+        for tf in engine.analysis_timeframes:
+            engine_registry.register(f"bar:{tf.value}", symbol, engine.update)
+
     return _engines[key]
 
 
@@ -128,7 +124,7 @@ def _serialize_timeframe_snapshot(snap: TimeframeTrendSnapshot) -> dict:
     return {
         "symbol": snap.symbol,
         "timeframe": snap.timeframe.value,
-        "timestamp": snap.timestamp.isoformat() if snap.timestamp else None,
+        "timestamp": _to_dashboard_tz(snap.timestamp),
         "direction": snap.direction.value,
         "score": snap.score,
         "strength": snap.strength,
@@ -142,7 +138,7 @@ def _serialize_snapshot(snap: MultiTimeframeSnapshot) -> dict:
     """Serialize a MultiTimeframeSnapshot to a JSON-friendly dict."""
     return {
         "symbol": snap.symbol,
-        "timestamp": snap.timestamp.isoformat() if snap.timestamp else None,
+        "timestamp": _to_dashboard_tz(snap.timestamp),
         "preset": snap.preset,
         "direction": snap.direction.value,
         "strength": snap.strength,
@@ -179,7 +175,6 @@ async def get_current_confluence(
                 "alignment_score": 0.0,
                 "timeframe_signals": {},
                 "timestamp": None,
-                # Phase 7: extended fields default to neutral/no-signal.
                 "bullish_alignment": 0.0,
                 "bearish_alignment": 0.0,
                 "conflicting": 0,
@@ -196,7 +191,7 @@ async def get_current_confluence(
                 "direction": signal.direction.value,
                 "strength": signal.strength.value,
                 "confidence": signal.confidence,
-                "timestamp": signal.timestamp.isoformat() if signal.timestamp else None
+                "timestamp": _to_dashboard_tz(signal.timestamp),
             }
 
         return {
@@ -205,8 +200,7 @@ async def get_current_confluence(
             "strength": confluence_signal.strength,
             "alignment_score": confluence_signal.alignment_score,
             "timeframe_signals": timeframe_signals,
-            "timestamp": confluence_signal.timestamp.isoformat() if confluence_signal.timestamp else None,
-            # Phase 7: spec-derived alignment + horizon direction fields.
+            "timestamp": _to_dashboard_tz(confluence_signal.timestamp),
             "bullish_alignment": getattr(confluence_signal, "bullish_alignment", 0.0),
             "bearish_alignment": getattr(confluence_signal, "bearish_alignment", 0.0),
             "conflicting": getattr(confluence_signal, "conflicting", 0),
@@ -238,11 +232,11 @@ async def get_mtf_history(
                     "direction": signal.direction.value,
                     "strength": signal.strength,
                     "alignment_score": signal.alignment_score,
-                    "timestamp": signal.timestamp.isoformat() if signal.timestamp else None
+                    "timestamp": _to_dashboard_tz(signal.timestamp),
                 }
                 for signal in history
             ],
-            "count": len(history)
+            "count": len(history),
         }
     except Exception as e:
         logger.error(f"Error getting MTF history for {symbol}: {e}")
@@ -254,7 +248,7 @@ async def get_mtf_snapshot(
     symbol: str,
     preset: str = Query(default="day_trading", description="Trading style preset"),
 ):
-    """Get the current multi-timeframe snapshot for symbol (Phase 7).
+    """Get the current multi-timeframe snapshot for symbol.
 
     Returns the full ``MultiTimeframeSnapshot`` model: per-timeframe trend
     snapshots, alignment scores, conflicting count, and short / intermediate /
@@ -283,7 +277,7 @@ async def get_mtf_snapshot_history(
     limit: int | None = 100,
     preset: str = Query(default="day_trading", description="Trading style preset"),
 ):
-    """Get multi-timeframe snapshot history for symbol (Phase 7)."""
+    """Get multi-timeframe snapshot history for symbol."""
     try:
         engine = get_engine(symbol.upper(), preset=preset)
         history = engine.get_snapshot_history(limit=limit)
@@ -305,23 +299,30 @@ async def update_mtf(
     timestamp: str | None = None,
     preset: str = Query(default="day_trading", description="Trading style preset"),
 ):
-    """Update multi-timeframe engine with new market data"""
+    """Update multi-timeframe engine with new market data.
+
+    Delegates to the shared TrendEngine instances (which are already registered
+    for live-tick updates), so no additional registration is needed.
+    """
     try:
         engine = get_engine(symbol.upper(), preset=preset)
 
         # Parse timestamp if provided
         ts = datetime.fromisoformat(timestamp) if timestamp else datetime.now()
 
+        # The MTF engine's update() delegates to each per-TF TrendEngine.
+        # Those TrendEngines are shared with the trend API, so this single
+        # call updates both the trend endpoint and the confluence endpoint.
         engine.update(
             price=price,
             volume=volume,
-            timestamp=ts
+            timestamp=ts,
         )
 
         return {
             "symbol": symbol.upper(),
             "status": "updated",
-            "timestamp": ts.isoformat()
+            "timestamp": _to_dashboard_tz(ts),
         }
     except Exception as e:
         logger.error(f"Error updating MTF for {symbol}: {e}")

@@ -1147,6 +1147,67 @@ h4 {
   justify-content: flex-end;
 }
 
+/* Edit symbol modal extras */
+.modal .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.modal .form-row label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.modal textarea {
+  padding: 0.75rem;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modal textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.modal .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.modal .checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.modal .char-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* Notes indicator on watchlist rows */
+.td-symbol .row-notes-indicator {
+  margin-left: 4px;
+  font-size: 0.75rem;
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* System Health */
 .system-health {
   max-width: 1200px;
@@ -1328,7 +1389,88 @@ h4 {
   font-size: 0.9rem;
 }
 
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+.skeleton-block {
+  background: linear-gradient(
+    90deg,
+    var(--bg-secondary) 0%,
+    var(--bg-tertiary) 40%,
+    var(--bg-secondary) 80%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Spacing inside skeleton cards */
+.skeleton-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
 /* Error Banner */
+.page-error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  padding: 2rem;
+}
+
+.page-error-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 2rem;
+  max-width: 500px;
+  text-align: center;
+}
+
+.page-error-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.page-error-card h2 {
+  margin: 0 0 0.5rem;
+  color: var(--text-primary);
+  font-size: 1.25rem;
+}
+
+.page-error-name {
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.page-error-message {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-align: left;
+  overflow-x: auto;
+  max-height: 120px;
+  margin-bottom: 1rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.page-error-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -2143,6 +2285,21 @@ h4 {
   overflow-x: auto;
 }
 
+/* Scanner table: virtualized body uses CSS Grid to match the header columns. */
+.scanner-table-virtualized {
+  width: 100%;
+  /* Column proportions: Symbol 15% | Price 20% | Score 15% | Signals 35% | Updated 15% */
+  display: grid;
+  grid-template-columns: 15% 20% 15% 35% 15%;
+}
+
+.scanner-table-header {
+  display: grid;
+  grid-template-columns: 15% 20% 15% 35% 15%;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+}
+
 .scanner-table {
   width: 100%;
   border-collapse: collapse;
@@ -2159,6 +2316,49 @@ h4 {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   background-color: var(--bg-tertiary, transparent);
+}
+
+/* Virtualized scanner header (used with react-window). */
+.scanner-vheader {
+  display: grid;
+  grid-template-columns: 15% 20% 15% 35% 15%;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-tertiary, transparent);
+}
+
+.scanner-vheader-cell {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Virtualized scanner row. */
+.scanner-vrow {
+  display: grid;
+  grid-template-columns: 15% 20% 15% 35% 15%;
+  align-items: center;
+  width: 100%;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+  border-bottom: 1px solid var(--border);
+}
+
+.scanner-vrow:hover {
+  background-color: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+}
+
+.scanner-vrow.row-pending {
+  opacity: 0.6;
+}
+
+.scanner-vcell {
+  padding: 0.65rem 1rem;
+  font-size: 0.875rem;
 }
 
 .scanner-table tbody tr {
@@ -4420,4 +4620,94 @@ h4 {
   justify-content: flex-end;
   gap: 8px;
   padding-top: 4px;
+}
+
+/* Watchlist disable/enable */
+.wl-disabled-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #6b7280;
+  background: #e5e7eb;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.wl-sidebar-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sidebar-disabled {
+  opacity: 0.6;
+}
+
+.btn-success {
+  background-color: #10b981;
+  color: white;
+  border: 1px solid #059669;
+}
+
+.btn-success:hover {
+  background-color: #059669;
+}
+
+.btn-secondary {
+  background-color: #6b7280;
+  color: white;
+  border: 1px solid #4b5563;
+}
+
+.btn-secondary:hover {
+  background-color: #4b5563;
+}
+
+/* Sidebar watchlist items with inline toggle */
+.watchlist-sidebar li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.wl-sidebar-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wl-sidebar-toggle {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #9ca3af;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.wl-sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+.sidebar-disabled .wl-sidebar-toggle {
+  color: #10b981;
+}
+
+.sidebar-disabled .wl-sidebar-toggle:hover {
+  color: #059669;
 }

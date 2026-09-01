@@ -15,7 +15,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from tenacity import (
@@ -209,6 +209,20 @@ def _register_finnhub() -> None:
 
 
 _register_finnhub()
+
+
+# Register Webull class at module import time (if eligible).  Mirrors the
+# Finnhub registration above.  Without this call the WebullProvider never
+# makes it into _PROVIDER_CLASSES even when WEBULL_ENABLED=true and
+# credentials are configured, and the manager logs the "not registered"
+# warning at every startup.
+def _register_webull() -> None:
+    webull_cls = _get_webull_class()
+    if webull_cls is not None:
+        _PROVIDER_CLASSES["webull"] = webull_cls
+
+
+_register_webull()
 
 
 class _PerProviderRateLimiter:
@@ -430,9 +444,19 @@ _EXPECTED_BAR_COUNTS: dict[tuple[str, str], int] = {
 }
 
 
+def _ensure_aware(dt) -> datetime | None:
+    """Ensure a datetime is timezone-aware in UTC, per canonical store policy."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _newest_bar_age_seconds(bars: list[Bar]) -> float | None:
     """Age of the newest bar in seconds, or None if no bars."""
     if not bars:
         return None
     newest = max(bar.timestamp for bar in bars)
-    return (datetime.now() - newest).total_seconds()
+    newest_aware = _ensure_aware(newest)
+    return (datetime.now(timezone.utc) - newest_aware).total_seconds()

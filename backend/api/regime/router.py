@@ -2,7 +2,8 @@
 API endpoints for market regime analysis
 """
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
@@ -13,10 +14,25 @@ from ...market_data.services.engine_seeder import (
 from backend.regime.market_regime_engine import MarketRegimeEngine
 from backend.regime.relative_strength_engine import RelativeStrengthEngine
 from backend.regime.sector_engine import SectorEngine
+from backend.api.ttl_cache import _regime_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/regime", tags=["regime"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
+
 
 # In a real implementation, these would be dependency injected or managed as services
 _engines: dict[str, MarketRegimeEngine] = {}
@@ -83,17 +99,26 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
 async def get_current_regime(symbol: str):
     """Get current market regime for symbol.
 
+    Wrapped in a 30s TTL cache (v2.1 Item 1.2). The engine itself
+    already keeps its state in ``_engines`` — the TTL cache adds a
+    time-bound safety net so back-to-back dashboard refreshes don't
+    re-serialise the response every time.
+
     Response includes `data_age_seconds` (time since the engine last saw a
     tick) and `freshness` (one of fresh|recent|stale|stuck|unknown) so the
     dashboard can tell the user whether the signal is current or stale.
     """
+    key = symbol.upper()
     try:
-        engine = get_engine(symbol.upper())
+        cached = _regime_cache.get(key)
+        if cached is not None:
+            return cached
+        engine = get_engine(key)
         regime_signal = engine.get_current_regime()
 
         if regime_signal is None:
-            return {
-                "symbol": symbol.upper(),
+            payload = {
+                "symbol": key,
                 "regime": "unknown",
                 "confidence": 0.0,
                 "strength": 0.0,
@@ -102,18 +127,20 @@ async def get_current_regime(symbol: str):
                 "data_age_seconds": None,
                 "freshness": "unknown",
             }
-
-        age = _data_age_seconds(regime_signal.timestamp)
-        return {
-            "symbol": regime_signal.symbol,
-            "regime": regime_signal.regime.value,
-            "confidence": regime_signal.confidence,
-            "strength": regime_signal.strength,
-            "supporting_factors": regime_signal.supporting_factors,
-            "timestamp": regime_signal.timestamp.isoformat() if regime_signal.timestamp else None,
-            "data_age_seconds": age,
-            "freshness": _freshness(age),
-        }
+        else:
+            age = _data_age_seconds(regime_signal.timestamp)
+            payload = {
+                "symbol": regime_signal.symbol,
+                "regime": regime_signal.regime.value,
+                "confidence": regime_signal.confidence,
+                "strength": regime_signal.strength,
+                "supporting_factors": regime_signal.supporting_factors,
+                "timestamp": _to_dashboard_tz(regime_signal.timestamp),
+                "data_age_seconds": age,
+                "freshness": _freshness(age),
+            }
+        _regime_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting regime for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -133,7 +160,7 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
                     "confidence": signal.confidence,
                     "strength": signal.strength,
                     "supporting_factors": signal.supporting_factors,
-                    "timestamp": signal.timestamp.isoformat() if signal.timestamp else None,
+                    "timestamp": _to_dashboard_tz(signal.timestamp),
                     "data_age_seconds": _data_age_seconds(signal.timestamp),
                     "freshness": _freshness(_data_age_seconds(signal.timestamp)),
                 }
@@ -167,10 +194,13 @@ async def update_regime(symbol: str, price: float, volume: float,
             open_price=open_price
         )
 
+        # Invalidate TTL cache so the next GET reflects the new tick.
+        _regime_cache.pop(symbol.upper(), None)
+
         return {
             "symbol": symbol.upper(),
             "status": "updated",
-            "timestamp": ts.isoformat()
+            "timestamp": _to_dashboard_tz(ts)
         }
     except Exception as e:
         logger.error(f"Error updating regime for {symbol}: {e}")

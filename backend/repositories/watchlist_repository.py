@@ -41,7 +41,8 @@ class WatchlistRepository:
         return watchlist
 
     def update_watchlist(self, watchlist_id: int, name: str | None = None,
-                        description: str | None = None) -> Watchlist | None:
+                        description: str | None = None,
+                        is_active: bool | None = None) -> Watchlist | None:
         """Update an existing watchlist"""
         watchlist = self.get_watchlist(watchlist_id)
         if watchlist:
@@ -49,18 +50,31 @@ class WatchlistRepository:
                 watchlist.name = name
             if description is not None:
                 watchlist.description = description
+            if is_active is not None:
+                watchlist.is_active = is_active
             self.db.commit()
             self.db.refresh(watchlist)
         return watchlist
 
     def delete_watchlist(self, watchlist_id: int) -> bool:
-        """Delete a watchlist"""
+        """Hard delete a watchlist and all of its symbol rows.
+
+        The caller explicitly chose "Delete" from the UI, so the row goes
+        away. We still must drop the child ``WatchlistSymbol`` rows first
+        — they reference ``watchlists.id`` via FK, and the SQLAlchemy
+        relationship isn't configured with cascade-delete, so leaving them
+        in place raises an IntegrityError on commit.
+        """
         watchlist = self.get_watchlist(watchlist_id)
-        if watchlist:
-            watchlist.is_active = False  # Soft delete
-            self.db.commit()
-            return True
-        return False
+        if not watchlist:
+            return False
+        # Hard delete the children first to satisfy the FK constraint.
+        self.db.query(WatchlistSymbol).filter(
+            WatchlistSymbol.watchlist_id == watchlist_id
+        ).delete(synchronize_session=False)
+        self.db.delete(watchlist)
+        self.db.commit()
+        return True
 
     # Watchlist symbol operations
     def get_watchlist_symbols(self, watchlist_id: int, enabled_only: bool = True) -> list[WatchlistSymbol]:
@@ -142,13 +156,32 @@ class WatchlistRepository:
         return watchlist_symbol
 
     def remove_symbol_from_watchlist(self, watchlist_id: int, symbol: str) -> bool:
-        """Remove a symbol from a watchlist"""
+        """Permanently remove a symbol from a watchlist (hard delete)."""
         watchlist_symbol = self.get_watchlist_symbol(watchlist_id, symbol)
         if watchlist_symbol:
-            watchlist_symbol.is_enabled = False  # Soft delete
+            self.db.delete(watchlist_symbol)
             self.db.commit()
             return True
         return False
+
+    def update_symbol_in_watchlist(
+        self,
+        watchlist_id: int,
+        symbol: str,
+        notes: str | None = None,
+        is_enabled: bool | None = None,
+    ) -> WatchlistSymbol | None:
+        """Update symbol metadata (notes, enabled state)."""
+        watchlist_symbol = self.get_watchlist_symbol(watchlist_id, symbol)
+        if watchlist_symbol is None:
+            return None
+        if notes is not None:
+            watchlist_symbol.notes = notes if notes.strip() else None
+        if is_enabled is not None:
+            watchlist_symbol.is_enabled = is_enabled
+        self.db.commit()
+        self.db.refresh(watchlist_symbol)
+        return watchlist_symbol
 
     def enable_symbol_in_watchlist(self, watchlist_id: int, symbol: str) -> bool:
         """Enable a symbol in a watchlist"""

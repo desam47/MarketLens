@@ -21,7 +21,7 @@ from collections import defaultdict, deque
 from typing import Optional
 
 import redis
-from fastapi import Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -56,9 +56,16 @@ class RedisRateLimiter:
     Falls back to in-memory rate limiter if Redis is unavailable.
     """
 
-    def __init__(self, max_requests: int, window_seconds: int):
+    def __init__(self, max_requests: int, window_seconds: int, name: str = "global"):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        # ``name`` namespaces the Redis key so the global write-method
+        # middleware and per-endpoint limiters do not share a counter.
+        # Without it, every request hits two limiters but they INCR
+        # the same key, so the tighter cap is reached at half its real
+        # budget. The in-memory fallback's per-IP dict already keys
+        # separately by limiter instance, so it does not need namespacing.
+        self.name = name
         self._fallback_limiter = InMemoryRateLimiter(max_requests, window_seconds)
         self._redis_client: Optional[redis.Redis] = None
         self._initialize_redis()
@@ -129,7 +136,10 @@ class RedisRateLimiter:
         ts = now if now is not None else time.time()
         # Use integer timestamp for Redis key to bucket by fixed window
         window_key = int(ts // self.window_seconds)
-        redis_key = f"rate_limit:{client_ip}:{window_key}"
+        # Namespace by ``self.name`` so per-endpoint limiters do not
+        # share their Redis key with the global write-method middleware.
+        # See RedisRateLimiter.__init__ docstring for the rationale.
+        redis_key = f"rate_limit:{self.name}:{client_ip}:{window_key}"
 
         try:
             # Double-check redis_client is not None before using it
@@ -180,6 +190,10 @@ class RedisRateLimiter:
             "window_seconds": self.window_seconds,
             "fallback": self._fallback_limiter.get_stats(),
         }
+
+    def stats(self) -> dict:
+        """Alias for ``get_stats()`` for callers that prefer the shorter name."""
+        return self.get_stats()
 
 
 class InMemoryRateLimiter:
@@ -322,3 +336,91 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
+
+
+# ----------------------------------------------------------------------
+# Per-endpoint rate limiters (v2.1 Item 1.10)
+# ----------------------------------------------------------------------
+#
+# These are tighter second-tier limits applied to the most expensive
+# write endpoints on top of the global write-method middleware
+# (30 req/min). They exist so a runaway client cannot hammer the LLM
+# (AI), pollute the alert registration set (alerts), or queue up
+# long-running backtests (backtest).
+#
+# Stacking is intentional: the global middleware caps total write
+# traffic per IP at 30/min, and these add a per-endpoint sub-cap.
+
+# AI — LLM calls are slow and expensive. 10/min is generous for a UI
+# but stops a stuck script from spinning up a cost run.
+_ai_limiter = RedisRateLimiter(max_requests=10, window_seconds=60, name="ai")
+
+# Alerts — moderate cost (DB writes + engine registration). 30/min
+# matches the global write cap, but tracks the IP independently so a
+# heavy scanner run doesn't crowd out the user.
+_alerts_limiter = RedisRateLimiter(max_requests=30, window_seconds=60, name="alerts")
+
+# Backtest — full backtests and walk-forward analyses can take many
+# minutes. 5/min per IP is plenty for a UI and stops accidental
+# double-clicks from queueing expensive runs.
+_backtest_limiter = RedisRateLimiter(max_requests=5, window_seconds=60, name="backtest")
+
+
+def _client_ip(request: Request) -> str:
+    """Extract the real client IP, honoring X-Forwarded-For.
+
+    Mirrors the logic in ``RateLimitMiddleware.dispatch`` so per-endpoint
+    limiters and the global middleware share the same client identification.
+    """
+    return (
+        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
+def check_rate_limit(limiter: RedisRateLimiter):
+    """Build a FastAPI dependency that enforces ``limiter`` for one endpoint.
+
+    Usage::
+
+        @router.post("/expensive")
+        async def expensive_endpoint(
+            _rl: None = Depends(check_rate_limit(_ai_limiter)),
+        ):
+            ...
+
+    The dependency is independent of the global ``RateLimitMiddleware``:
+    both run, and the stricter one wins (i.e. the per-endpoint limit
+    fires before the global cap is reached).
+    """
+
+    async def _dep(request: Request) -> None:
+        client_ip = _client_ip(request)
+        allowed, remaining = limiter.is_allowed(client_ip)
+        if not allowed:
+            logger.warning(
+                "per-endpoint rate limit exceeded",
+                extra={
+                    "client_ip": client_ip,
+                    "path": request.url.path,
+                    "method": request.method,
+                    "limiter_max": limiter.max_requests,
+                    "limiter_window": limiter.window_seconds,
+                },
+            )
+            # Reuse the same header style as the middleware so clients
+            # see a consistent shape whether they hit the global cap
+            # or a per-endpoint cap.
+            headers = {
+                "Retry-After": str(limiter.window_seconds),
+                "X-RateLimit-Limit": str(limiter.max_requests),
+                "X-RateLimit-Remaining": "0",
+            }
+            headers.update(SecurityHeadersMiddleware._static_headers())
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests. Please slow down and try again later.",
+                headers=headers,
+            )
+
+    return _dep

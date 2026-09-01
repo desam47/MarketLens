@@ -173,6 +173,7 @@ export interface WatchlistSymbol {
   is_enabled: boolean;
   added_at: string;
   position: number;
+  notes?: string | null;
 }
 
 // Alerts
@@ -329,6 +330,8 @@ export interface WatchlistScanResult {
   timestamp: string;
   /** True when the watchlist row is enabled. Defaults to true. */
   is_enabled?: boolean;
+  /** Optional notes attached to the symbol in the watchlist. */
+  notes?: string | null;
 }
 
 export interface WatchlistScanResponse {
@@ -1184,14 +1187,23 @@ class ApiService {
   }
 
   async addSymbolToWatchlist(watchlistId: number, symbol: string): Promise<WatchlistSymbol> {
-    return this.fetch<WatchlistSymbol>(`/watchlists/${watchlistId}/symbols`, {
+    const result = await this.fetch<WatchlistSymbol>(`/watchlists/${watchlistId}/symbols`, {
       method: 'POST',
       body: JSON.stringify({ symbol }),
     });
+    // Sync ingestion service so it starts tracking the new symbol.
+    this.refreshIngestionSymbols().catch(() => {/* non-fatal */});
+    return result;
   }
 
   async removeSymbolFromWatchlist(watchlistId: number, symbol: string): Promise<void> {
-    return this.del(`/watchlists/${watchlistId}/symbols/${symbol}`);
+    await this.del(`/watchlists/${watchlistId}/symbols/${symbol}`);
+    // Sync ingestion service so it stops tracking the removed symbol.
+    this.refreshIngestionSymbols().catch(() => {/* non-fatal */});
+  }
+
+  async refreshIngestionSymbols(): Promise<{ message: string; symbols: string[] }> {
+    return this.fetch('/market-data/ingestion/symbols/refresh', { method: 'POST' });
   }
 
   async reorderSymbols(watchlistId: number, symbols: string[]): Promise<void> {
@@ -1212,6 +1224,17 @@ class ApiService {
     return this.fetch<WatchlistSymbol>(
       `/watchlists/${watchlistId}/symbols/${symbol}/disable`,
       { method: 'PUT' },
+    );
+  }
+
+  async updateWatchlistSymbol(
+    watchlistId: number,
+    symbol: string,
+    updates: { notes?: string | null; is_enabled?: boolean },
+  ): Promise<WatchlistSymbol> {
+    return this.fetch<WatchlistSymbol>(
+      `/watchlists/${watchlistId}/symbols/${symbol}`,
+      { method: 'PATCH', body: JSON.stringify(updates) },
     );
   }
 

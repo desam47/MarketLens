@@ -3,7 +3,8 @@ Main API application for MarketLens
 """
 import logging
 from contextlib import asynccontextmanager
-from datetime import UTC
+from datetime import UTC, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,22 +46,72 @@ from backend.api.ai.jobs import router as ai_jobs_router
 configure_logging(settings.debug)
 logger = logging.getLogger(__name__)
 
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
+
 # Create FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """One-time startup: load enabled alerts, start memory profiling, initialize
     tracing, and pre-warm trend engines so ingestion can dispatch bars immediately."""
+
+    # Run Alembic migrations at startup so schema is always current.
+    # Alembic is configured in /alembic/; it reads DATABASE_URL from the
+    # environment (the same env-var that powers the rest of the app).
+    try:
+        import os
+        import subprocess
+        completed = subprocess.run(
+            ["alembic", "upgrade", "head"],
+            capture_output=True, text=True,
+            env={**os.environ, "DATABASE_URL": settings.database.url},
+        )
+        if completed.returncode == 0 and completed.stdout.strip():
+            for line in completed.stdout.strip().splitlines():
+                if line.strip():
+                    logger.info("[alembic] %s", line.strip())
+        elif completed.returncode != 0:
+            logger.warning("[alembic] upgrade failed: %s", completed.stderr.strip())
+    except Exception:
+        logger.warning("Alembic migration failed; continuing", exc_info=True)
+
     alerts_engine.startup()
     start_memory_profiling()
     initialize_tracing()
 
+    # Start the market data ingestion service FIRST so it loads its
+    # symbol list from the active watchlist before the trend warmup
+    # iterates over those symbols.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        if not ingestion_service.is_running:
+            ingestion_service.start()
+            logger.info(
+                f"Market data ingestion started for {len(ingestion_service.symbols)} "
+                f"symbols: {ingestion_service.symbols}"
+            )
+        else:
+            logger.info("Market data ingestion already running")
+    except Exception as e:
+        logger.warning(f"Ingestion service startup failed: {e}")
+
     # Pre-register trend engines for all ingested symbols so bars dispatched
     # by the ingestion service have listeners from the first tick.
     try:
-        from backend.api.trend.router import warmup_engines
+        from backend.api.trend.registry import warmup_engines
         warmed = warmup_engines()
         for sym, count in warmed.items():
-            logger.info(f"Trend engine warmup: {sym} ({count} quotes)")
+            logger.info(f"Trend engine warmup: {sym} ({count} bars)")
     except Exception as e:
         logger.warning(f"Trend engine warmup failed: {e}")
 
@@ -162,10 +213,15 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # Rate limiting on write/mutation endpoints. Uses Redis-backed implementation
 # for distributed rate limiting across multiple instances, with fallback to
-# in-memory limiter if Redis is unavailable.
+# in-memory limiter if Redis is unavailable.  ``name="global"`` namespaces
+# its Redis key so the per-endpoint limiters (AI, alerts, backtest) do not
+# share a counter with the global cap — otherwise each write would
+# increment the same key twice and the tighter cap would fire at half
+# its real budget.
 _write_limiter = RedisRateLimiter(
     max_requests=settings.rate_limit.max_requests_per_window,
     window_seconds=settings.rate_limit.window_seconds,
+    name="global",
 )
 app.add_middleware(RateLimitMiddleware, limiter=_write_limiter)
 app.add_middleware(CacheMiddleware)
@@ -219,7 +275,7 @@ async def system_status():
         "market_data_provider": settings.market_data.primary_provider,
         "market_data_fallback_providers": settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,
-        "timestamp": datetime.now(UTC).isoformat()
+        "timestamp": _to_dashboard_tz(datetime.now(UTC))
     }
 
 
@@ -264,7 +320,7 @@ async def system_config():
         "market_data_fallback_providers": env_fallbacks or settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,
         "config_source": "live",
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": _to_dashboard_tz(datetime.now(UTC)),
     }
 
 

@@ -24,12 +24,24 @@ from backend.models import (
     QuoteModel,
 )
 from backend.observability import record_bar, set_ingestion_running
+from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
 
 from .engine_seeder import engine_registry
 from .manager import MarketDataManager
 
 logger = logging.getLogger(__name__)
+
+# Symbols that are always ingested regardless of watchlist contents.
+# The regime / market-context engine analyses these market-benchmark symbols
+# to determine the overall market regime. Without them the Market Context
+# panel stays at "unknown". They are deduplicated against the watchlist so
+# adding them manually has no effect.
+#
+# Note: ^VIX is excluded because it is an index (not a US_STOCK) and most
+# providers reject it or return stale data. SPY + QQQ alone are sufficient
+# for regime classification.
+_MARKET_REGIME_SYMBOLS: tuple[str, ...] = ("SPY", "QQQ")
 
 
 class MarketDataIngestionService:
@@ -40,10 +52,12 @@ class MarketDataIngestionService:
         Initialize the ingestion service
 
         Args:
-            symbols: List of symbols to track (default: popular stocks)
+            symbols: List of symbols to track (default: loaded from active watchlist on start)
             timeframes: List of timeframes to track (default: common timeframes)
         """
-        self.symbols = symbols or ["SPY", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX"]
+        # Defer watchlist loading until start() — DB may not be ready at __init__ time.
+        self.symbols = symbols or []
+        self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
         self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
         self.manager = MarketDataManager()
         self.is_running = False
@@ -58,6 +72,40 @@ class MarketDataIngestionService:
             self.last_quote_update[symbol] = datetime.min
             self.last_status_update[symbol] = datetime.min
             self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+
+    def _load_symbols_from_watchlist(self) -> list[str]:
+        """Load symbols from the active watchlist in the database.
+
+        Strategy: find the first active watchlist that has at least one
+        enabled symbol. This avoids the trap where an empty newer watchlist
+        shadows an older populated one.
+
+        Returns an empty list if no watchlist has any enabled symbols.
+        Ingestion simply becomes a no-op in that case — the user must add
+        a symbol to a watchlist before market data will start flowing.
+        """
+        try:
+            db = SessionLocal()
+            try:
+                repo = WatchlistRepository(db)
+                watchlists = repo.get_watchlists(active_only=True)
+                # Iterate newest-first (get_watchlists already orders this
+                # way) and pick the first watchlist that has enabled symbols.
+                for wl in watchlists:
+                    symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+                    if symbols:
+                        symbol_list = [s.symbol.upper() for s in symbols]
+                        logger.info(f"Loaded {len(symbol_list)} symbols from watchlist '{wl.name}': {symbol_list}")
+                        return symbol_list
+                if watchlists:
+                    logger.info("Active watchlists exist but all are empty — no symbols to ingest")
+                else:
+                    logger.info("No active watchlist found — no symbols to ingest")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Failed to load symbols from watchlist: {e}")
+        return []
 
     def start(self):
         """Start the ingestion service in a background thread.
@@ -75,9 +123,33 @@ class MarketDataIngestionService:
             logger.warning("Ingestion service is already running")
             return
 
+        # Load symbols from active watchlist if none were explicitly set.
+        # Done here (not in __init__) so the DB is guaranteed to be ready.
+        if not self.symbols:
+            self.symbols = self._load_symbols_from_watchlist()
+            # Always include the market-regime benchmark symbols (SPY/QQQ/IWM/VIX)
+            # regardless of watchlist contents. The regime engine analyses these
+            # to produce the Market Context panel; without them the panel stays
+            # at "unknown". Dedupe case-insensitively so user-added duplicates
+            # are collapsed.
+            existing = {s.upper() for s in self.symbols}
+            for core in _MARKET_REGIME_SYMBOLS:
+                if core.upper() not in existing:
+                    self.symbols.append(core)
+            logger.info(
+                f"Always-included market-regime symbols: "
+                f"{[s for s in self.symbols if s in _MARKET_REGIME_SYMBOLS]}"
+            )
+            # Re-initialise tracking dicts for the loaded symbols.
+            for symbol in self.symbols:
+                if symbol not in self.last_quote_update:
+                    self.last_quote_update[symbol] = datetime.min
+                    self.last_status_update[symbol] = datetime.min
+                    self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+
         self.is_running = True
         set_ingestion_running(True)
-        logger.info("Starting market data ingestion service in background thread")
+        logger.info(f"Starting market data ingestion service for {len(self.symbols)} symbols in background thread")
 
         # Capture the correlation ID from the current contextvar so it can be
         # re-installed in the background thread. Daemon threads don't inherit
@@ -163,6 +235,29 @@ class MarketDataIngestionService:
                 pass
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+
+    def refresh_symbols_from_watchlist(self) -> list[str]:
+        """Reload the symbol list from the active watchlist.
+
+        Adds any new symbols (and their per-timeframe tracking dicts) to the
+        running service. Symbols that were removed from the watchlist stay in
+        the tracking dicts but are no longer fetched — this avoids the cost
+        of tearing down and re-creating the loops.
+
+        Returns the new (full) symbol list. If the service is not running,
+        only updates ``self.symbols`` and the tracking dicts.
+        """
+        new_symbols = self._load_symbols_from_watchlist()
+        old_set = set(self.symbols)
+        new_set = set(new_symbols)
+        added = new_set - old_set
+        for symbol in added:
+            self.last_quote_update[symbol] = datetime.min
+            self.last_status_update[symbol] = datetime.min
+            self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+        self.symbols = new_symbols
+        logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
+        return self.symbols
 
     async def _jittered_sleep(self, base_seconds: float, jitter: float = 1.0) -> None:
         """Sleep for ``base_seconds ± jitter`` to decorrelate loop timing.
@@ -411,6 +506,18 @@ class MarketDataIngestionService:
             )
             if notified:
                 logger.debug(f"Dispatched {symbol}/{timeframe} bar to {notified} engine(s)")
+            # Invalidate the trend TTL cache for this (symbol, timeframe) so
+            # the next /api/trend/{symbol}/current/{timeframe} call gets a
+            # fresh result instead of a stale "unknown" response from
+            # before the engine had data. Lazy import to avoid a circular
+            # dep: ingestion_service is imported by api.market_data_routes,
+            # so importing backend.api here at module load would loop.
+            try:
+                from backend.api.ttl_cache import _trend_cache
+                _trend_cache.pop(f"{symbol.upper()}:{timeframe}", None)
+            except Exception:
+                # Cache invalidation is best-effort; don't fail ingestion.
+                pass
 
     async def _ingest_market_status(self):
         """Ingest market status for all symbols"""

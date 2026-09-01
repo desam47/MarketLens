@@ -6,6 +6,8 @@ sub-regimes. Single global engine (no symbol) — there's just one market
 context at a time.
 """
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
@@ -19,29 +21,72 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/market-context", tags=["market-context"])
 
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
+
+
 # One global instance (Phase 8 spec §1 — market-wide aggregate)
 _engine: MarketContextEngine | None = None
 
 
 def _seed_sub_engine(symbol: str, context_engine: MarketContextEngine) -> int:
-    """Replay a sub-index's stored quotes through its sub-engine.
+    """Replay a sub-index's stored daily bars through its sub-engine.
 
-    Returns the number of quotes replayed. Without seeding, sub-engines
-    start cold and the market context stays "unknown" until enough live
-    ticks arrive (slow on restart). With ~200 historical quotes, each
-    sub-engine's EMA50/ADX14 indicators warm up immediately.
+    Returns the number of bars replayed. Without seeding, sub-engines start
+    cold and the market context stays "unknown" until enough live ticks arrive
+    (slow on restart). With ~200 historical bars, each sub-engine's
+    EMA50/ADX14 indicators warm up immediately.
+
+    Seeds from BarModel (OHLC bars) rather than QuoteModel because some
+    indices (QQQ, IWM) have daily bars in the DB but no quote rows.
     """
+    from backend.database import SessionLocal
+    from backend.models.market_data_sql import BarModel
+
     sub = context_engine.sub_engines.get(symbol.upper())
     if sub is None:
         return 0
-    return seed_engine_from_quotes(
-        symbol,
-        lambda **kw: sub.update(  # ignore high/low/open from quote rows
-            price=kw.get("price", 0.0),
-            volume=kw.get("volume", 0),
-            timestamp=kw.get("timestamp"),
-        ),
-    )
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(BarModel)
+            .filter(
+                BarModel.symbol == symbol.upper(),
+                BarModel.timeframe == "1d",
+            )
+            .order_by(BarModel.timestamp.asc())
+            .limit(200)
+            .all()
+        )
+        for bar in rows:
+            # BarModel stores naive UTC datetimes (the SQLAlchemy DateTime
+            # column has no tzinfo=True). The sub-engine's regime signal
+            # timestamp flows into a max() call that compares against
+            # datetime.now(timezone.utc) (aware) — comparing naive vs aware
+            # raises TypeError. Tag every bar timestamp as UTC before
+            # pushing it through the engine.
+            ts = bar.timestamp
+            if ts is not None and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            sub.update(
+                price=float(bar.close or 0.0),
+                volume=int(bar.volume or 0),
+                timestamp=ts,
+            )
+        return len(rows)
+    finally:
+        db.close()
 
 
 def get_engine() -> MarketContextEngine:
@@ -95,7 +140,9 @@ async def get_current_context():
                 "contributing_factors": {"reason": "no_data"},
                 "timestamp": None,
             }
-        return signal.to_dict()
+        d = signal.to_dict()
+        d["timestamp"] = _to_dashboard_tz(signal.timestamp)
+        return d
     except Exception as e:
         logger.error(f"Error getting market context: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -107,8 +154,13 @@ async def get_context_history(limit: int | None = 100):
     try:
         engine = get_engine()
         history = engine.get_history(limit=limit)
+        out = []
+        for s in history:
+            d = s.to_dict()
+            d["timestamp"] = _to_dashboard_tz(s.timestamp)
+            out.append(d)
         return {
-            "history": [s.to_dict() for s in history],
+            "history": out,
             "count": len(history),
         }
     except Exception as e:

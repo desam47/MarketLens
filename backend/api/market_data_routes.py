@@ -2,7 +2,8 @@
 Market Data API Routes
 Endpoints for controlling data ingestion and accessing historical data
 """
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,12 +15,26 @@ from backend.models.market_data import Bar, MarketStatus, Quote
 
 from backend.market_data.services.ingestion_service import ingestion_service
 from backend.market_data.services.manager import _rate_limiter, _redis_cache, market_data_manager
+from backend.api.ttl_cache import _quote_cache
 
 router = APIRouter(
     prefix="/api/market-data",
     tags=["market-data"],
     responses={404: {"description": "Not found"}},
 )
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 class IngestionStatusResponse(BaseModel):
     is_running: bool
@@ -65,6 +80,9 @@ async def toggle_ingestion(background_tasks: BackgroundTasks):
         return {"is_running": False, "message": "Ingestion service stopped"}
     # BackgroundTasks.add_task handles sync callables correctly — see
     # ingestion_service.start() implementation (daemon thread pattern).
+    # start() sets is_running=True synchronously at the top, so the
+    # response value is accurate even though the async loop hasn't yet
+    # completed its first iteration.
     background_tasks.add_task(ingestion_service.start)
     return {"is_running": True, "message": "Ingestion service started"}
 
@@ -75,12 +93,12 @@ async def get_ingestion_status():
         is_running=ingestion_service.is_running,
         symbols=ingestion_service.symbols,
         timeframes=ingestion_service.timeframes,
-        last_quote_updates={k: v.isoformat() if v != datetime.min else ""
+        last_quote_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
                           for k, v in ingestion_service.last_quote_update.items()},
-        last_bar_updates={symbol: {tf: ts.isoformat() if ts != datetime.min else ""
+        last_bar_updates={symbol: {tf: _to_dashboard_tz(ts) if ts != datetime.min else ""
                                  for tf, ts in timeframes.items()}
                          for symbol, timeframes in ingestion_service.last_bar_update.items()},
-        last_status_updates={k: v.isoformat() if v != datetime.min else ""
+        last_status_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
                            for k, v in ingestion_service.last_status_update.items()}
     )
 
@@ -95,6 +113,18 @@ async def update_symbols(request: SymbolsRequest):
             ingestion_service.last_status_update[symbol] = datetime.min
             ingestion_service.last_bar_update[symbol] = {tf: datetime.min for tf in ingestion_service.timeframes}
     return {"message": f"Updated symbols to: {request.symbols}"}
+
+
+@router.post("/ingestion/symbols/refresh")
+async def refresh_symbols_from_watchlist():
+    """Reload the symbol list from the active watchlist.
+
+    Called automatically when symbols are added/removed from the watchlist,
+    so the ingestion service stays in sync.
+    """
+    symbols = ingestion_service.refresh_symbols_from_watchlist()
+    return {"message": f"Synced {len(symbols)} symbols from watchlist", "symbols": symbols}
+
 
 @router.post("/ingestion/timeframes")
 async def update_timeframes(request: TimeframesRequest):
@@ -111,10 +141,20 @@ async def update_timeframes(request: TimeframesRequest):
 
 @router.get("/quote/{symbol}", response_model=Quote)
 async def get_latest_quote(symbol: str, db: Session = Depends(get_db)):
-    """Get the latest quote for a symbol"""
-    quote = ingestion_service.get_latest_quote(symbol.upper())
+    """Get the latest quote for a symbol.
+
+    Wrapped in a 5s TTL cache (v2.1 Item 1.2) to reduce redundant
+    database reads when the dashboard polls at a higher rate than the
+    ingestion service updates.
+    """
+    key = symbol.upper()
+    cached = _quote_cache.get(key)
+    if cached is not None:
+        return cached
+    quote = ingestion_service.get_latest_quote(key)
     if quote is None:
         raise HTTPException(status_code=404, detail=f"No quote data found for {symbol}")
+    _quote_cache[key] = quote
     return quote
 
 @router.get("/quote/{symbol}/history", response_model=list[Quote])

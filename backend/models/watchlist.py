@@ -37,6 +37,8 @@ class WatchlistSymbol(Base):
     added_at = Column(DateTime, default=datetime.utcnow)
     # Position for ordering/reordering symbols within the watchlist
     position = Column(Integer, default=0)
+    # Optional notes about this symbol (e.g. "watching for breakout", "entry at $150")
+    notes = Column(Text, nullable=True)
 
     # Relationship to watchlist
     watchlist = relationship("Watchlist", back_populates="symbols")

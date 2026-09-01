@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -31,6 +32,19 @@ from ...nl_search.schema import NLFilters, NLSearchResponse, Ranking
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/nl-search", tags=["nl-search"])
+
+# All timestamps in responses → America/New_York (EST/EDT auto-handled).
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 
 # --- Request / response models -----------------------------------------
@@ -166,7 +180,7 @@ async def nl_search(
             ai_translation_used=(parser_used == "ai"),
             reason=f"Internal error: {e}",
             parser_used=parser_used,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=_to_dashboard_tz(datetime.now(UTC)),
         )
 
     # --- Step 4: AI explanation ---
@@ -207,7 +221,7 @@ async def nl_search(
         ai_translation_used=(parser_used == "ai"),
         reason=reason,
         parser_used=parser_used,
-        timestamp=datetime.now(UTC).isoformat(),
+        timestamp=_to_dashboard_tz(datetime.now(UTC)),
     )
 
 

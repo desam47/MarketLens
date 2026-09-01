@@ -14,20 +14,45 @@ All endpoints read/write through ``SignalRepository`` so the API and the
 ingestion service share one path to the DB.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
 from backend.repositories.signal_repository import SignalRepository
 from backend.services.signal_recorder import signal_recorder
+from backend.market_data.services.ingestion_service import ingestion_service
 
 from ..dependencies import get_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
+
+# All timestamps are persisted in UTC. The dashboard lives in New York
+# time, so every response converts UTC → America/New_York (which auto-
+# handles EST/EDT). The browser receives an ISO string with the offset
+# baked in (e.g. "2026-08-31T11:18:08.206223-04:00") so it never
+# has to guess.
+_DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+
+def _to_dashboard_tz(value: datetime | None) -> datetime | None:
+    """Convert a UTC datetime to the dashboard's local time.
+
+    Naive datetimes are assumed to be UTC (the canonical store). Aware
+    datetimes in other zones are first converted to UTC, then to the
+    dashboard zone. Returns None unchanged.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.astimezone(_DASHBOARD_TZ)
 
 
 class SignalResponse(BaseModel):
@@ -56,6 +81,11 @@ class SignalResponse(BaseModel):
     mfe: float | None
     mae: float | None
     created_at: datetime | None
+
+    @field_serializer("timestamp", "created_at")
+    def _serialize_tz(self, value: datetime | None) -> str | None:
+        converted = _to_dashboard_tz(value)
+        return converted.isoformat() if converted else None
 
 
 class RegimePerformance(BaseModel):
@@ -107,39 +137,54 @@ def get_regime_performance(db: Session = Depends(get_db)):
 
 @router.get("/research/count-by-regime", response_model=list[RegimeCount])
 def get_signal_count_by_regime(db: Session = Depends(get_db)):
-    """Count of signals by market regime."""
     repo = SignalRepository(db)
     return repo.count_by_regime()
 
 
 @router.post("/backfill", response_model=BackfillResponse)
-def trigger_backfill(batch_size: int = Query(50, le=500)):
+def trigger_backfill(
+    batch_size: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
     """Manually trigger outcome backfill.
 
-    Useful for ad-hoc research after seeding historical bars. The
-    ingestion service also calls this on a 90-second schedule.
+    Records forward outcomes (5/10/20-bar returns, MFE, MAE) for signals
+    that don't yet have them.
     """
     updated = signal_recorder.backfill_outcomes(batch_size=batch_size)
     return BackfillResponse(updated=updated)
 
 
 @router.post("/record")
-def record_now(symbols: list[str] | None = None, timeframes: list[str] | None = None):
-    """Manually trigger a recording pass for the given symbols/timeframes.
-
-    If not provided, uses the ingestion service's tracked symbol/timeframe
-    list. Useful for backfilling signals when new bars land.
-    """
-    if not symbols or not timeframes:
-        from ...market_data.services.ingestion_service import ingestion_service
-        symbols = symbols or ingestion_service.symbols
-        timeframes = timeframes or ingestion_service.timeframes
-    recorded = signal_recorder.record_from_recent_bars(symbols, timeframes)
-    return {"recorded": recorded}
+def record_signal(
+    symbol: str,
+    timeframe: str,
+    trend_score: float | None = None,
+    trend_state: str | None = None,
+    strength: float | None = None,
+    market_regime: str | None = None,
+    price: float | None = None,
+    timestamp: datetime | None = None,
+):
+    """Record a signal for a symbol/timeframe manually."""
+    sig = signal_recorder.record_signal(
+        symbol=symbol,
+        timeframe=timeframe,
+        trend_score=trend_score,
+        trend_state=trend_state,
+        strength=strength,
+        market_regime=market_regime,
+        price=price,
+        timestamp=timestamp,
+    )
+    if sig is None:
+        return {"status": "duplicate_or_skipped"}
+    return {"status": "recorded", "id": sig.id, "timestamp": _to_dashboard_tz(sig.timestamp).isoformat() if sig.timestamp else None}
 
 
 @router.get("/{signal_id}", response_model=SignalResponse)
 def get_signal(signal_id: int, db: Session = Depends(get_db)):
+    """Get a single signal by ID."""
     repo = SignalRepository(db)
     signal = repo.get_by_id(signal_id)
     if signal is None:
@@ -148,31 +193,21 @@ def get_signal(signal_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/symbol/{symbol}/latest", response_model=dict[str, SignalResponse])
-def get_latest_signals_for_symbol(
-    symbol: str, db: Session = Depends(get_db)
-):
-    """Latest signal per timeframe for a given symbol."""
-    sym = symbol.upper()
-    # Use a union: fetch the most recent signal for each timeframe the
-    # caller cares about. We don't have an explicit list, so we lean on
-    # the ingestion service's configured timeframes.
-    from ...market_data.services.ingestion_service import ingestion_service
+def get_latest_signals(symbol: str, db: Session = Depends(get_db)):
+    """Get the most recent signal for each timeframe for a symbol."""
     repo = SignalRepository(db)
-    out: dict[str, SignalResponse] = {}
-    for tf in ingestion_service.timeframes:
-        sig = repo.get_latest(sym, tf)
-        if sig is not None:
-            out[tf] = SignalResponse.model_validate(sig)
-    if not out:
-        raise HTTPException(
-            status_code=404, detail=f"No signals found for {sym}"
-        )
-    return out
+    latest = repo.get_latest_per_timeframe(symbol.upper(), ingestion_service.timeframes)
+    if not latest:
+        raise HTTPException(status_code=404, detail="No signals found for this symbol")
+    return latest
 
 
 @router.delete("/old", response_model=dict)
-def delete_old_signals(days: int = Query(90, ge=1), db: Session = Depends(get_db)):
-    """Delete signals older than N days. Returns count removed."""
+def delete_old_signals(
+    older_than_days: int = Query(30, ge=1),
+    db: Session = Depends(get_db),
+):
+    """Delete signals older than N days."""
     repo = SignalRepository(db)
-    count = repo.delete_older_than(days)
-    return {"deleted": count, "older_than_days": days}
+    deleted = repo.delete_older_than(older_than_days)
+    return {"deleted": deleted}

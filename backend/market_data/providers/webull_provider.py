@@ -1,30 +1,31 @@
 """
-Webull Open API v3 market data provider.
+Webull Open API market data provider using the official webull-openapi-python-sdk.
 
-Implements ``MarketDataProvider`` using the Webull Open Platform API.
-OAuth 2.0 device flow is used to obtain and refresh access tokens.
-Tokens are held in process-memory only and refreshed automatically.
+Authentication, HMAC-SHA256 signing, and token management are handled entirely
+by the official SDK. We use:
+  - ``TradeClient``  to bootstrap the access token (one call at init)
+  - ``DataClient``   for all market data queries (quotes, bars)
 
-Authentication credentials are sourced from ``settings.webull``:
-  - WEBULL_ENABLED          — must be true to activate this provider
-  - WEBULL_APP_KEY          — client ID from the Webull Open Platform
-  - WEBULL_APP_SECRET       — client secret from the Webull Open Platform
+Environment: test/sandbox by default (``api.sandbox.webull.com``). Set
+``WEBULL_USE_SANDBOX=false`` in .env to switch to production (``api.webull.com``).
+
+Credentials are sourced from ``settings.webull``:
+  - WEBULL_ENABLED    — must be true to activate this provider
+  - WEBULL_APP_KEY    — app key from the Webull Open Platform developer portal
+  - WEBULL_APP_SECRET — app secret from the Webull Open Platform developer portal
+  - WEBULL_USE_SANDBOX — "true" (default) for sandbox, "false" for production
 
 Security constraints
 -------------------
-- APP_KEY and APP_SECRET are never logged (checked before any log call).
-- Tokens are never persisted to disk.
-- Auth errors return a generic message to callers; full detail goes to logs.
+- ``app_key`` and ``app_secret`` are never logged.
+- Tokens are held in-process-memory only by the SDK; they are never persisted
+  to disk.
 """
 from __future__ import annotations
 
 import logging
-import threading
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
-
-import requests
 
 from backend.config.settings import settings as _settings
 from backend.models.market_data import (
@@ -40,340 +41,206 @@ from ..provider import BaseMarketDataProvider
 
 logger = logging.getLogger(__name__)
 
-# Webull Open API v3 base URL
-_BASE_URL = "https://openapi.webull.com/api/v3"
-
-# Timeframe → Webull interval string
-_INTERVAL_MAP: dict[str, str] = {
-    "1m": "m1",
-    "2m": "m2",
-    "5m": "m5",
-    "15m": "m15",
-    "30m": "m30",
-    "60m": "m60",
-    "1h": "m60",
-    "1d": "d1",
-    "1wk": "w1",
-    "1mo": "m1",  # Webull doesn't have native monthly; approximate with daily
+# Our timeframe → Webull SDK timespan.  The SDK uses m1/m5/m15/m30/m60/d/w.
+# 2m/3m fall back to m1 (Webull's closest equivalent); 1mo → d (daily approx).
+_TIMEFRAME_TO_TIMESPAN: dict[str, str] = {
+    "1m":  "M1",
+    "2m":  "M1",
+    "3m":  "M1",
+    "5m":  "M5",
+    "15m": "M15",
+    "30m": "M30",
+    "60m": "M60",
+    "1h":  "M60",
+    "1d":  "D",
+    "1wk": "W",
+    "1mo": "D",
 }
 
-# Range string mapping
-_RANGE_MAP: dict[str, str] = {
-    "1d": "1d",
-    "5d": "5d",
-    "1mo": "1mo",
-    "3mo": "3mo",
-    "6mo": "6mo",
-    "1y": "1y",
-    "2y": "2y",
-    "5y": "5y",
+# Map our ``range_`` to an approximate bar count so the SDK's count param
+# covers the requested window.  These are conservative (more bars than needed
+# is fine; fewer is not).
+_RANGE_TO_COUNT: dict[str, int] = {
+    "1d":  1,
+    "5d":  5,
+    "1mo": 22,
+    "3mo": 65,
+    "6mo": 130,
+    "1y":  252,
+    "2y":  504,
+    "5y":  1260,
 }
 
 
-class _TokenStore:
-    """Thread-safe in-memory token store with auto-refresh.
-
-    Tokens are refreshed when ``expires_at`` is within ``refresh_buffer``
-    seconds of the current time.
-    """
-
-    def __init__(
-        self,
-        access_token: str,
-        refresh_token: str,
-        expires_at: float,
-    ) -> None:
-        self.access_token = access_token
-        self.refresh_token = refresh_token
-        self.expires_at = expires_at
-        self._lock = threading.Lock()
-
-    def is_expired(self, buffer: float = 60.0) -> bool:
-        """True when the token expires within ``buffer`` seconds."""
-        with self._lock:
-            return time.time() >= (self.expires_at - buffer)
-
-    def update(
-        self,
-        access_token: str,
-        refresh_token: str,
-        expires_in: int,
-    ) -> None:
-        """Replace stored tokens after a refresh."""
-        with self._lock:
-            self.access_token = access_token
-            self.refresh_token = refresh_token
-            self.expires_at = time.time() + expires_in
-
-
-class WebullAuthError(Exception):
-    """Raised when Webull authentication fails."""
+def _epoch_ms_to_utc(ms: int | str | float | None) -> datetime:
+    """Convert a Webull epoch-millisecond timestamp to a tz-aware UTC datetime."""
+    if ms is None:
+        return datetime.now(timezone.utc)
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return datetime.now(timezone.utc)
 
 
 class WebullProvider(BaseMarketDataProvider):
-    """Webull Open API v3 provider.
+    """Webull Market Data provider backed by the official Python SDK.
 
-    Activates only when ``settings.webull.enabled`` is true and
-    ``settings.webull.app_key`` / ``app_secret`` are non-empty.
+    Activates when ``settings.webull.enabled`` is true and both
+    ``app_key`` / ``app_secret`` are non-empty.
     """
 
     def __init__(self) -> None:
         super().__init__("webull")
         self._settings = _settings.webull
-        self._token: _TokenStore | None = None
-        self._session = requests.Session()
-        self._session.headers.update({
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
 
-        # Lazily attempt authentication; the manager will mark the provider
-        # unavailable if the first call raises.
-        self._authenticate()
-
-    # ---------------------------------------------------------------- auth
-    def _authenticate(self) -> None:
-        """Run the OAuth 2.0 device flow to obtain an access token."""
         app_key = self._settings.app_key
         app_secret = self._settings.app_secret
 
         if not app_key or not app_secret:
             raise WebullAuthError(
-                "Webull app_key or app_secret is not configured. "
-                "Set WEBULL_ENABLED=true, WEBULL_APP_KEY, and WEBULL_APP_SECRET."
+                "WEBULL_APP_KEY and WEBULL_APP_SECRET must be set. "
+                "Obtain credentials at https://developer.webull.com"
             )
 
-        try:
-            # Step 1: request device code
-            device_resp = self._session.post(
-                f"{_BASE_URL}/oauth2/device/code",
-                json={"appKey": app_key, "appSecret": app_secret},
-                timeout=self._settings.request_timeout,
-            )
-            if device_resp.status_code != 200:
-                raise WebullAuthError(
-                    f"Webull device code request failed: HTTP {device_resp.status_code}"
-                )
-            device_data = device_resp.json()
+        # The official SDK handles HMAC signing and token refresh internally.
+        # Import lazily so a missing SDK only breaks this provider.
+        from webull.core.client import ApiClient as _ApiClient
+        from webull.trade.trade_client import TradeClient as _TradeClient
+        from webull.data.data_client import DataClient as _DataClient
 
-            device_code = device_data["deviceCode"]
-            user_code = device_data.get("userCode", "")
-            interval = device_data.get("interval", 5)
-            # expires_in is the polling window; token itself may last longer
-            poll_timeout = device_data.get("expiresIn", 1800)
-            verification_uri = device_data.get("verificationUriComplete", "")
+        # Determine sandbox vs production.
+        use_sandbox = _settings.webull.use_sandbox
+        region = "us"  # sandbox/production are both under the US region endpoint
 
-            logger.info(
-                "Webull device flow initiated — please authorize at: %s (code: %s)",
-                verification_uri or device_data.get("verificationUri", "N/A"),
-                user_code,
-            )
+        self._api_client = _ApiClient(app_key, app_secret, region)
+        endpoint = "api.sandbox.webull.com" if use_sandbox else "api.webull.com"
+        self._api_client.add_endpoint(region, endpoint)
+        logger.info("Webull SDK configured for %s", endpoint)
 
-            # Step 2: poll until user approves
-            deadline = time.time() + poll_timeout
-            while time.time() < deadline:
-                token_resp = self._session.post(
-                    f"{_BASE_URL}/oauth2/device/token",
-                    json={
-                        "appKey": app_key,
-                        "appSecret": app_secret,
-                        "deviceCode": device_code,
-                        "grantType": "urn:ietf:params:oauth:grant-type:device_code",
-                    },
-                    timeout=self._settings.request_timeout,
-                )
-                token_data = token_resp.json()
+        # Bootstrap: one TradeClient call acquires the initial access token.
+        # Without this, DataClient init fails because it also needs a token.
+        _TradeClient(self._api_client).account_v2.get_account_list()
+        logger.info("Webull token bootstrap succeeded")
 
-                if token_resp.status_code == 200:
-                    self._token = _TokenStore(
-                        access_token=token_data["accessToken"],
-                        refresh_token=token_data["refreshToken"],
-                        expires_at=time.time() + token_data.get("expiresIn", 3600),
-                    )
-                    logger.info("Webull OAuth2 authentication succeeded")
-                    return
+        self._data_client = _DataClient(self._api_client)
+        self._reset_error_state()
 
-                error_code = token_data.get("error", "")
-                if error_code == "authorization_pending":
-                    time.sleep(interval)
-                    continue
-                elif error_code == "slow_down":
-                    time.sleep(interval * 2)
-                    continue
-                else:
-                    raise WebullAuthError(
-                        f"Webull token request failed: error={error_code}, "
-                        f"description={token_data.get('error_description', 'N/A')}"
-                    )
-
-            raise WebullAuthError("Webull authorization timed out — user did not approve in time.")
-
-        except requests.RequestException as e:
-            raise WebullAuthError(f"Webull authentication network error: {e}") from e
-
-    def _ensure_token(self) -> str:
-        """Return a valid access token, refreshing if necessary."""
-        if self._token is None:
-            self._authenticate()
-        if self._token is None:
-            raise WebullAuthError("Webull token store is not initialized.")
-        if self._token.is_expired():
-            self._refresh_token()
-        # SAFETY: never log the raw token value.
-        return self._token.access_token
-
-    def _refresh_token(self) -> None:
-        """Exchange the refresh token for a new access token."""
-        app_key = self._settings.app_key
-        app_secret = self._settings.app_secret
-        assert self._token is not None
-
-        try:
-            resp = self._session.post(
-                f"{_BASE_URL}/oauth2/refresh/token",
-                json={
-                    "appKey": app_key,
-                    "appSecret": app_secret,
-                    "refreshToken": self._token.refresh_token,
-                    "grantType": "refresh_token",
-                },
-                timeout=self._settings.request_timeout,
-            )
-            if resp.status_code != 200:
-                logger.warning("Webull token refresh failed: HTTP %d — re-authenticating", resp.status_code)
-                self._token = None
-                self._authenticate()
-                return
-
-            data = resp.json()
-            self._token.update(
-                access_token=data["accessToken"],
-                refresh_token=data["refreshToken"],
-                expires_in=data.get("expiresIn", 3600),
-            )
-            logger.info("Webull token refreshed successfully")
-        except requests.RequestException as e:
-            logger.warning("Webull token refresh network error: %s — re-authenticating", e)
-            self._token = None
-            self._authenticate()
-
-    def _headers(self, require_auth: bool = False) -> dict[str, str]:
-        """Build request headers, optionally including an access token."""
-        headers = dict(self._session.headers)
-        if require_auth:
-            token = self._ensure_token()
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
-
-    # ---------------------------------------------------------------- http helpers
-    def _get(self, path: str, require_auth: bool = False, **kwargs: Any) -> dict:
-        """GET from the Webull API, returning parsed JSON."""
-        kwargs.setdefault("timeout", self._settings.request_timeout)
-        resp = self._session.get(
-            f"{_BASE_URL}{path}",
-            headers=self._headers(require_auth),
-            **kwargs,
-        )
-        if resp.status_code == 401:
-            logger.warning("Webull 401 — attempting token refresh")
-            self._refresh_token()
-            resp = self._session.get(
-                f"{_BASE_URL}{path}",
-                headers=self._headers(require_auth),
-                **kwargs,
-            )
-        if resp.status_code == 429:
-            # Rate limited — raise RuntimeError so the circuit breaker counts it
-            raise RuntimeError(f"Webull HTTP 429 rate limited")
-        if resp.status_code != 200:
-            # SECURITY: never log raw response body — it could contain credentials
-            logger.warning("Webull API error: HTTP %s on %s", resp.status_code, path)
-            raise RuntimeError(f"Webull API HTTP {resp.status_code} on {path}")
-        return resp.json()
-
-    # ---------------------------------------------------------------- public interface
+    # ---------------------------------------------------------------- quote
     def get_quote(self, symbol: str) -> Quote:
-        """Get the latest quote for a symbol.
-
-        Webull quote endpoint requires no auth for basic market data.
-        """
+        sym = symbol.upper()
         try:
-            data = self._get(f"/quote/{symbol.upper()}", require_auth=False)
-            field = data.get("quote", data)
-            price = float(field.get("close") or field.get("last", 0.0))
-            ts_epoch = field.get("timestamp") or field.get("tradeTime") or 0
-            try:
-                ts = datetime.fromtimestamp(int(ts_epoch) / 1000, tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
-                ts = datetime.now(timezone.utc)
+            resp = self._data_client.market_data.get_snapshot(sym, "US_STOCK")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Webull snapshot HTTP {resp.status_code}")
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                raise RuntimeError(f"Webull returned empty snapshot for {sym}")
+            field = data[0]
+
+            ts = _epoch_ms_to_utc(field.get("quote_time") or field.get("last_trade_time"))
 
             quote = Quote(
-                symbol=symbol.upper(),
-                price=price,
+                symbol=sym,
+                price=float(field.get("price") or 0),
                 timestamp=ts,
                 provider=self.name,
                 data_status=DataStatus.DELAYED,
-                bid=field.get("bid"),
-                ask=field.get("ask"),
-                volume=field.get("volume"),
+                bid=float(field["bid"]) if field.get("bid") else None,
+                ask=float(field["ask"]) if field.get("ask") else None,
+                volume=int(field.get("volume") or 0) if field.get("volume") else None,
             )
             self._reset_error_state()
             return quote
         except Exception as e:
-            self._handle_error(e, f"get_quote({symbol})")
+            self._handle_error(e, f"get_quote({sym})")
             raise
 
-    def get_bar(self, symbol: str, timeframe: str, timestamp: datetime) -> Bar:
-        """Get the historical bar closest to the given timestamp."""
-        bars = self.get_historical_bars(symbol, timeframe=timeframe, range_="3mo")
-        if not bars:
-            raise ValueError(f"No bar data for {symbol} at {timeframe}")
-        target = timestamp.timestamp()
-        closest = min(bars, key=lambda b: abs(b.timestamp.timestamp() - target))
-        return closest
+    def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
+        """Batch snapshot via comma-separated symbol string (SDK supports this)."""
+        if not symbols:
+            return {}
+        sym_str = ",".join(s.upper() for s in symbols)
+        try:
+            resp = self._data_client.market_data.get_snapshot(sym_str, "US_STOCK")
+            results: dict[str, Quote] = {}
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    for field in data:
+                        sym = field.get("symbol", "").upper()
+                        ts = _epoch_ms_to_utc(
+                            field.get("quote_time") or field.get("last_trade_time")
+                        )
+                        results[sym] = Quote(
+                            symbol=sym,
+                            price=float(field.get("price") or 0),
+                            timestamp=ts,
+                            provider=self.name,
+                            data_status=DataStatus.DELAYED,
+                            bid=float(field["bid"]) if field.get("bid") else None,
+                            ask=float(field["ask"]) if field.get("ask") else None,
+                            volume=int(field.get("volume") or 0)
+                            if field.get("volume") else None,
+                        )
+            # Return empty entries for any missing symbols.
+            for sym in symbols:
+                sym_upper = sym.upper()
+                if sym_upper not in results:
+                    results[sym_upper] = Quote(
+                        symbol=sym_upper,
+                        price=0.0,
+                        timestamp=datetime.now(timezone.utc),
+                        provider=self.name,
+                        data_status=DataStatus.ERROR,
+                    )
+            self._reset_error_state()
+            return results
+        except Exception as e:
+            self._handle_error(e, f"get_batch_quotes({symbols})")
+            # Return error quotes for all on failure.
+            return {
+                s.upper(): Quote(
+                    symbol=s.upper(),
+                    price=0.0,
+                    timestamp=datetime.now(timezone.utc),
+                    provider=self.name,
+                    data_status=DataStatus.ERROR,
+                )
+                for s in symbols
+            }
 
-    def get_latest_bar(self, symbol: str, timeframe: str) -> Bar:
-        """Get the most recent bar for a symbol."""
-        bars = self.get_historical_bars(symbol, timeframe=timeframe, range_="1mo")
-        if not bars:
-            raise ValueError(f"No bar data for {symbol} at {timeframe}")
-        return bars[-1]
-
+    # ---------------------------------------------------------------- bars
     def get_historical_bars(
         self,
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
     ) -> list[Bar]:
-        """Get a series of historical bars."""
+        sym = symbol.upper()
         try:
-            interval = _INTERVAL_MAP.get(timeframe, "d1")
-            r = _RANGE_MAP.get(range_, "3mo")
+            timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
+            count = _RANGE_TO_COUNT.get(range_, 200)
 
-            data = self._get(
-                f"/bars/{symbol.upper()}",
-                require_auth=False,
-                params={"interval": interval, "extend": "0", "needRange": "1"},
+            resp = self._data_client.market_data.get_history_bar(
+                sym, "US_STOCK", timespan, count=str(count)
             )
-            rows = data.get("bars", []) or data.get("data", []) or []
-            if not rows:
+            if resp.status_code != 200:
+                raise RuntimeError(f"Webull bars HTTP {resp.status_code}")
+            data = resp.json()
+            if not isinstance(data, list):
                 self._reset_error_state()
                 return []
 
             bars: list[Bar] = []
-            for row in rows:
-                try:
-                    ts = datetime.fromtimestamp(int(row["t"]) / 1000, tz=timezone.utc)
-                except (KeyError, TypeError, ValueError):
-                    continue
+            for row in data:
                 bars.append(Bar(
-                    symbol=symbol.upper(),
-                    timestamp=ts,
-                    open=float(row.get("o", 0.0)),
-                    high=float(row.get("h", 0.0)),
-                    low=float(row.get("l", 0.0)),
-                    close=float(row.get("c", 0.0)),
-                    volume=int(row.get("v", 0)),
+                    symbol=sym,
+                    timestamp=_epoch_ms_to_utc(row.get("time")),
+                    open=float(row.get("open") or 0),
+                    high=float(row.get("high") or 0),
+                    low=float(row.get("low") or 0),
+                    close=float(row.get("close") or 0),
+                    volume=int(row.get("volume") or 0) if row.get("volume") else 0,
                     timeframe=timeframe,
                     provider=self.name,
                     data_status=DataStatus.HISTORICAL,
@@ -381,80 +248,84 @@ class WebullProvider(BaseMarketDataProvider):
             self._reset_error_state()
             return bars
         except Exception as e:
-            self._handle_error(e, f"get_historical_bars({symbol})")
+            self._handle_error(e, f"get_historical_bars({sym})")
             raise
 
-    def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
-        """Batch quotes are not supported by Webull — fall back to individual calls."""
-        results: dict[str, Quote] = {}
-        for sym in symbols:
-            try:
-                results[sym] = self.get_quote(sym)
-            except Exception:
-                results[sym] = Quote(
-                    symbol=sym.upper(),
-                    price=0.0,
-                    timestamp=datetime.now(timezone.utc),
-                    provider=self.name,
-                    data_status=DataStatus.ERROR,
-                )
-        return results
+    def get_latest_bar(self, symbol: str, timeframe: str = "1d") -> Bar:
+        """Fetch the single most-recent bar."""
+        sym = symbol.upper()
+        bars = self.get_historical_bars(sym, timeframe=timeframe, range_="1d")
+        if not bars:
+            raise ValueError(f"No {timeframe} bar data for {sym}")
+        return bars[-1]
 
+    def get_bar(self, symbol: str, timeframe: str, timestamp: datetime) -> Bar:
+        """Return the bar closest to ``timestamp``."""
+        sym = symbol.upper()
+        bars = self.get_historical_bars(sym, timeframe=timeframe, range_="1y")
+        if not bars:
+            raise ValueError(f"No {timeframe} bar data for {sym}")
+        target = timestamp.timestamp()
+        closest = min(bars, key=lambda b: abs(b.timestamp.timestamp() - target))
+        return closest
+
+    # ---------------------------------------------------------------- market status
     def get_market_status(self, symbol: str) -> MarketStatus:
-        """Return market status from the quote endpoint."""
+        sym = symbol.upper()
         try:
-            data = self._get(f"/quote/{symbol.upper()}", require_auth=False)
-            field = data.get("quote", data)
-            # Webull sends isOpen True/False or a state string.
-            state = field.get("marketStatus", field.get("marketState", ""))
-            is_open = str(state).upper() in ("OPEN", "REGULAR", "PRE", "POST", "TRUE")
-            tz_name = str(field.get("timezone", "America/New_York"))
-            try:
-                now = datetime.now(timezone.utc)
-                next_open = now.replace(hour=9, minute=30, second=0)  # rough estimate
-                next_close = now.replace(hour=16, minute=0, second=0)
-            except Exception:
-                next_open = None
-                next_close = None
-
+            resp = self._data_client.market_data.get_snapshot(sym, "US_STOCK")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Webull status HTTP {resp.status_code}")
+            field = (resp.json() or [{}])[0]
+            state = str(field.get("marketStatus") or field.get("marketState") or "")
+            is_open = state.upper() in ("OPEN", "REGULAR", "PRE", "POST", "TRUE")
             status = MarketStatus(
-                symbol=symbol.upper(),
+                symbol=sym,
                 is_open=is_open,
-                next_open=next_open,
-                next_close=next_close,
-                timezone=tz_name,
+                next_open=None,   # not available in snapshot
+                next_close=None,  # not available in snapshot
+                timezone="America/New_York",
                 provider=self.name,
                 timestamp=datetime.now(timezone.utc),
             )
             self._reset_error_state()
             return status
         except Exception as e:
-            self._handle_error(e, f"get_market_status({symbol})")
+            self._handle_error(e, f"get_market_status({sym})")
             raise
 
+    # ---------------------------------------------------------------- capabilities
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
             provider_name=self.name,
             supports_historical_bars=True,
             supports_latest_quote=True,
             supports_latest_bar=True,
-            supports_batch_quotes=False,
+            supports_batch_quotes=True,   # comma-separated snapshot is supported
             supports_market_status=True,
             min_timeframe="1m",
-            max_timeframe="2y",
+            max_timeframe="1y",
         )
 
     def is_available(self) -> bool:
-        """True when authentication succeeded and the token is valid."""
+        """True when SDK bootstrapping succeeded and data client is ready."""
+        return self._data_client is not None
+
+    def get_provider_status(self) -> ProviderStatus:
         try:
-            # Quick check: token exists and is not expired
-            if self._token is None:
-                return False
-            if self._token.is_expired(buffer=10.0):
-                self._refresh_token()
-            # Ping with a lightweight request
-            self._get("/quote/AAPL", require_auth=False)
-            return True
+            return ProviderStatus(
+                provider_name=self.name,
+                is_healthy=True,
+                timestamp=datetime.now(timezone.utc),
+            )
         except Exception as e:
-            logger.debug("Webull availability check failed: %s", e)
-            return False
+            return ProviderStatus(
+                provider_name=self.name,
+                is_healthy=False,
+                error_message=str(e),
+                timestamp=datetime.now(timezone.utc),
+            )
+
+
+class WebullAuthError(Exception):
+    """Raised when Webull SDK fails to bootstrap or credentials are invalid."""

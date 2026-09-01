@@ -3,7 +3,7 @@ Multi-timeframe analysis engine for detecting trend confluence and alignment.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 
 from ..config.settings import settings
@@ -256,6 +256,23 @@ class MultiTimeframeEngine:
         for timeframe in self.analysis_timeframes:
             self.trend_engines[timeframe] = TrendEngine(self.symbol)
 
+    def reset(self) -> None:
+        """Reset all per-symbol state so this engine instance is fresh.
+
+        This clears the shared timeframe engine's tick/candle tracking and the
+        per-TF trend signal histories. Call this in test setUp when re-using
+        the same ``symbol`` across multiple tests to prevent state from the
+        previous test leaking into the next.
+        """
+        from ..engines.timeframe import multi_symbol_timeframe_engine
+        tf_engine = multi_symbol_timeframe_engine.engines.get(self.symbol)
+        if tf_engine is not None:
+            tf_engine.reset()
+        self.confluence_history.clear()
+        self.snapshot_history.clear()
+        for engine in self.trend_engines.values():
+            engine.trend_history.clear()
+
     def update(self, price: float, volume: float, timestamp: datetime,
                provider: str = "", **_: object) -> None:
         """Update all timeframe engines with new market data"""
@@ -280,6 +297,31 @@ class MultiTimeframeEngine:
                 timeframe_signals[timeframe] = trend
 
         if not timeframe_signals:
+            # No per-TF trend signals available for this bar. Fall back to
+            # the last known confluence signal (with the new bar's timestamp)
+            # so the MTF display always shows live data rather than going
+            # silent when a bar arrives but doesn't cross any trend threshold.
+            # Only fall back when we have a previous signal to base on.
+            if self.confluence_history:
+                prev = self.confluence_history[-1]
+                signal = ConfluenceSignal(
+                    symbol=self.symbol,
+                    direction=prev.direction,
+                    strength=prev.strength,
+                    alignment_score=prev.alignment_score,
+                    timeframe_signals=prev.timeframe_signals,
+                    timestamp=timestamp,
+                    bullish_alignment=prev.bullish_alignment,
+                    bearish_alignment=prev.bearish_alignment,
+                    conflicting=prev.conflicting,
+                    short_term_direction=prev.short_term_direction,
+                    intermediate_direction=prev.intermediate_direction,
+                    higher_direction=prev.higher_direction,
+                    preset=self.preset_name,
+                )
+                self.confluence_history.append(signal)
+                if len(self.confluence_history) > 1000:
+                    self.confluence_history = self.confluence_history[-1000:]
             return
 
         # Existing alignment score (dominant-direction fraction)
@@ -500,7 +542,7 @@ class MultiTimeframeEngine:
         (Phase 6) rather than the 4-class ``TrendDirection`` — the spec
         calls for the more granular bucket.
         """
-        ts = timestamp or datetime.now()
+        ts = timestamp or datetime.now(timezone.utc)
         timeframe_signals = self.get_all_timeframe_trends()
         if not timeframe_signals:
             return None

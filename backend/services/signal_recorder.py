@@ -17,7 +17,7 @@ yet, the function leaves the row alone and returns it to the queue.
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, func
 
@@ -66,7 +66,17 @@ class SignalRecorder:
         """
         sym = symbol.upper()
         tf = timeframe
-        ts = timestamp or datetime.utcnow()
+        # Always store as timezone-aware UTC. Without ``tzinfo=UTC`` the
+        # value serializes as ``2026-08-31T15:23:00`` (no offset), and
+        # JavaScript's ``new Date()`` treats that as LOCAL time — producing
+        # wrong timestamps in the dashboard. The ``+00:00`` suffix forces
+        # correct UTC interpretation in the browser.
+        if timestamp is None:
+            ts = datetime.now(timezone.utc)
+        elif timestamp.tzinfo is None:
+            ts = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            ts = timestamp
 
         # Skip if we already recorded this exact bar (dedup).
         key = (sym, tf, ts)
