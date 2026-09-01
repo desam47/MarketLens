@@ -13,6 +13,7 @@ const directionColors: Record<string, string> = {
   uptrend: '#22c55e',
   weak_uptrend: '#84cc16',
   neutral: '#f59e0b',
+  sideways: '#f59e0b',
   weak_downtrend: '#f97316',
   downtrend: '#ef4444',
   strong_downtrend: '#dc2626',
@@ -147,7 +148,7 @@ export function ConfluenceCard({ confluence, error, selectedPreset, onPresetChan
                   className="signal-dir"
                   style={{ color: directionColors[signal.direction] || '#9ca3af' }}
                 >
-                  {signal.direction === 'uptrend' ? '↑' : signal.direction === 'downtrend' ? '↓' : '→'}
+                  {signal.direction === 'uptrend' ? '↑' : signal.direction === 'downtrend' ? '↓' : signal.direction === 'sideways' ? '↔' : '?'}
                 </span>
               </div>
             ))}
