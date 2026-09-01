@@ -28,6 +28,7 @@ from backend.api.market_data_routes import router as market_data_routes_router
 from backend.api.nl_search.router import router as nl_search_router
 from backend.api.rate_limit import RedisRateLimiter, RateLimitMiddleware
 from backend.api.realtime import router as realtime_router
+from backend.version import get_version
 from backend.api.security_headers import SecurityHeadersMiddleware
 from backend.api.scanner.router import router as scanner_router
 from backend.api.scanner.ws_router import router as scanner_ws_router
@@ -261,7 +262,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.app_name,
-        "version": settings.app_version
+        "version": get_version()
     }
 
 @app.get("/api/system/status")
@@ -270,7 +271,7 @@ async def system_status():
     from datetime import datetime
     return {
         "service": settings.app_name,
-        "version": settings.app_version,
+        "version": get_version(),
         "debug": settings.debug,
         "market_data_provider": settings.market_data.primary_provider,
         "market_data_fallback_providers": settings.market_data.fallback_providers,
@@ -315,7 +316,7 @@ async def system_config():
 
     return {
         "service": settings.app_name,
-        "version": settings.app_version,
+        "version": get_version(),
         "market_data_primary_provider": env_primary or settings.market_data.primary_provider,
         "market_data_fallback_providers": env_fallbacks or settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,

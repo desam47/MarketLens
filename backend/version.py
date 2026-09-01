@@ -3,6 +3,11 @@ Git-based version info.
 
 Read from ``version.txt`` (written by the pre-commit hook on every commit).
 Falls back to "dev" when not available so the server starts without git.
+
+Important: the file is re-read on every call so the version reflects the
+latest commit even when the backend is long-running (the file is rewritten
+in place by the hook — same path, new contents). The cost is one ~200-byte
+file read per call, which is negligible.
 """
 
 from __future__ import annotations
@@ -26,17 +31,13 @@ def _read_version() -> str:
     return "dev"
 
 
-# Module-level singleton — computed once at import time.
-_version_string: str | None = None
-
-
 def get_version() -> str:
     """Return the current version string.
 
-    On first call, reads ``version.txt``. Subsequent calls return the cached
-    value so the file is read at most once per process lifetime.
+    Re-reads ``version.txt`` on every call so the value tracks the file as
+    it is rewritten by the pre-commit hook. The earlier module-level cache
+    was wrong: it froze the version to whatever was in the file at server
+    startup, so the System Health page showed a stale value until the
+    backend was restarted.
     """
-    global _version_string
-    if _version_string is None:
-        _version_string = _read_version()
-    return _version_string
+    return _read_version()
