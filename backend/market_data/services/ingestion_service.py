@@ -183,7 +183,15 @@ class MarketDataIngestionService:
                         set_correlation_id(captured_corr_id)
                     except Exception:
                         pass
+                # Phase 3.3.16: seed-check — backfill any symbol whose oldest
+                # bar is more than 700 days old (stale DB state). Run this
+                # before the loops so the ingestion pipeline starts with
+                # fresh data.
+                self._loop.run_until_complete(self._seed_check())
                 self._loop.run_until_complete(self._run_loops())
+            except asyncio.CancelledError:
+                # stop() was called — cancelled is a clean exit, not an error.
+                pass
             finally:
                 self._loop.run_until_complete(self._loop.shutdown_asyncgens())
                 self._loop.close()
@@ -282,6 +290,56 @@ class MarketDataIngestionService:
         """
         offset = random.uniform(-jitter, jitter)
         await asyncio.sleep(max(0, base_seconds + offset))
+
+    async def _seed_check(self) -> None:
+        """Phase 3.3.16 — backfill symbols whose history is missing or stale.
+
+        On startup, for each watched symbol, check whether the oldest bar in
+        the DB is more than 700 days old (i.e. effectively missing). If so,
+        schedule a backfill. This is the "seed" path: the first run after
+        a fresh DB, or after switching retention, picks up the missing
+        history.
+
+        Symbols already in the backfill queue (single-flight) are skipped.
+        """
+        from datetime import timedelta as _td
+        from sqlalchemy import func as _func
+        from backend.config.settings import settings as _settings
+        from backend.models.market_data_sql import BarModel as _BarModel
+        from backend.market_data.services.backfill_service import (
+            backfill_symbol_history,
+        )
+
+        retention_days = _settings.market_data.bar_retention_days
+        threshold = datetime.now() - _td(days=700)
+        symbols = list(self.symbols)
+        if not symbols:
+            return
+        for symbol in symbols:
+            try:
+                db = SessionLocal()
+                try:
+                    oldest = (
+                        db.query(_func.min(_BarModel.timestamp))
+                        .filter(_BarModel.symbol == symbol.upper())
+                        .scalar()
+                    )
+                finally:
+                    db.close()
+                # No data at all, or data older than the seed threshold.
+                if oldest is None or oldest < threshold:
+                    logger.info(
+                        f"_seed_check: scheduling backfill for {symbol} "
+                        f"(oldest={oldest})"
+                    )
+                    # Run in the background — we don't want to block the
+                    # ingestion loops on a single symbol's backfill.
+                    asyncio.create_task(
+                        _safe_backfill(symbol, retention_days)
+                    )
+            except Exception as e:
+                logger.warning(f"_seed_check: failed for {symbol}: {e}")
+
 
     async def _quote_ingestion_loop(self, initial_delay: float = 0.0):
         """Continuously ingest quote data.
@@ -515,6 +573,29 @@ class MarketDataIngestionService:
                     from backend.market_data.services.cache import _redis_cache
                     for sym in upserted_symbols:
                         _redis_cache.invalidate_bars_for_symbol(sym)
+                    # Phase 3.3.13: run rolling retention prune after each
+                    # successful ingest cycle. We only prune when there is at
+                    # least one bar older than (retention + 1 day) so the check
+                    # is cheap (indexed scan) in steady-state.
+                    from datetime import timedelta as _td
+                    from backend.repositories.bar_repository import prune_bars_older_than
+                    from backend.config.settings import settings as _settings
+                    retention_days = _settings.market_data.bar_retention_days
+                    cutoff = datetime.now() - _td(days=retention_days + 1)
+                    # Count how many bars are older than the prune threshold.
+                    from backend.models.market_data_sql import BarModel as _BarModel
+                    stale_count = (
+                        db.query(_BarModel.id)
+                        .filter(_BarModel.timestamp < cutoff)
+                        .count()
+                    )
+                    if stale_count > 0:
+                        deleted = prune_bars_older_than(db, cutoff)
+                        if deleted:
+                            logger.info(
+                                f"Rolling retention: pruned {deleted} bars older "
+                                f"than {cutoff.date()} (retention={retention_days}d)"
+                            )
             # Record ingestion metrics after a successful commit.
             record_bars(len(fresh_bars))
         except Exception as e:
@@ -717,6 +798,22 @@ class MarketDataIngestionService:
             return quotes
         finally:
             db.close()
+
+async def _safe_backfill(symbol: str, retention_days: int) -> None:
+    """Run backfill for ``symbol``, logging but not raising on failure."""
+    from backend.market_data.services.backfill_service import (
+        backfill_symbol_history,
+    )
+    try:
+        result = await backfill_symbol_history(symbol, days=retention_days)
+        if result.get("skipped"):
+            return
+        logger.info(
+            f"_seed_check backfill for {symbol}: "
+            f"tier1={result['tier1_written']}, tier2={result['tier2_written']}"
+        )
+    except Exception as e:
+        logger.warning(f"_seed_check backfill for {symbol} failed: {e}")
 
 # Global instance for easy access
 ingestion_service = MarketDataIngestionService()

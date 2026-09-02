@@ -157,8 +157,8 @@ def trigger_backfill(
 
 @router.post("/record")
 def record_signal(
-    symbol: str,
-    timeframe: str,
+    symbol: str | None = None,
+    timeframe: str | None = None,
     trend_score: float | None = None,
     trend_state: str | None = None,
     strength: float | None = None,
@@ -166,7 +166,34 @@ def record_signal(
     price: float | None = None,
     timestamp: datetime | None = None,
 ):
-    """Record a signal for a symbol/timeframe manually."""
+    """Record a signal for a symbol/timeframe manually.
+
+    Two modes:
+      * **Single record** — pass ``symbol`` and ``timeframe``: records one
+        signal via ``signal_recorder.record_signal`` and returns
+        ``{"status": "recorded", ...}`` or ``{"status": "duplicate_or_skipped"}``.
+      * **Bulk from recent bars** — omit both: walks the most recent stored
+        bar for every (symbol, timeframe) in the ingestion service and records
+        signals for each. Returns ``{"recorded": N}`` where ``N`` is the
+        count of new rows written.
+
+    The bulk mode is what the ingestion loop uses internally; the test
+    suite validates it via ``record_from_recent_bars`` to ensure the
+    endpoint round-trips through the same code path.
+    """
+    # Bulk mode: no explicit symbol/timeframe → record from recent bars
+    # using the ingestion service's active symbol list.
+    if symbol is None and timeframe is None:
+        symbols = list(ingestion_service.symbols)
+        recorded = signal_recorder.record_from_recent_bars(symbols)
+        return {"recorded": recorded}
+
+    # Single-record mode: explicit symbol/timeframe required.
+    if symbol is None or timeframe is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Both 'symbol' and 'timeframe' must be provided for single-record mode",
+        )
     sig = signal_recorder.record_signal(
         symbol=symbol,
         timeframe=timeframe,
@@ -210,4 +237,4 @@ def delete_old_signals(
     """Delete signals older than N days."""
     repo = SignalRepository(db)
     deleted = repo.delete_older_than(older_than_days)
-    return {"deleted": deleted}
+    return {"deleted": deleted, "older_than_days": older_than_days}

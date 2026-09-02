@@ -165,8 +165,9 @@ class TestSignalsAPI(unittest.TestCase):
     def test_latest_signals_per_symbol(self):
         self._seed(symbol="AAPL", timeframe="1d", timestamp=datetime(2025, 1, 1), price=100.0)
         self._seed(symbol="AAPL", timeframe="1d", timestamp=datetime(2025, 1, 5), price=120.0)
-        # Patch the ingestion service timeframes to be just ["1d"] for this test
-        with patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ing:
+        # Patch the router module's ingestion_service binding (the source-module
+        # patch doesn't reach the router's `from ... import ingestion_service`).
+        with patch("backend.api.signals.router.ingestion_service") as mock_ing:
             mock_ing.timeframes = ["1d"]
             r = self.client.get("/api/signals/symbol/AAPL/latest")
         self.assertEqual(r.status_code, 200)
@@ -176,13 +177,13 @@ class TestSignalsAPI(unittest.TestCase):
 
     def test_latest_signals_uppercases_symbol(self):
         self._seed(symbol="AAPL", timeframe="1d", price=100.0)
-        with patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ing:
+        with patch("backend.api.signals.router.ingestion_service") as mock_ing:
             mock_ing.timeframes = ["1d"]
             r = self.client.get("/api/signals/symbol/aapl/latest")
         self.assertEqual(r.status_code, 200)
 
     def test_latest_signals_404_when_no_data(self):
-        with patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ing:
+        with patch("backend.api.signals.router.ingestion_service") as mock_ing:
             mock_ing.timeframes = ["1d"]
             r = self.client.get("/api/signals/symbol/NOPE/latest")
         self.assertEqual(r.status_code, 404)
@@ -233,7 +234,9 @@ class TestSignalsAPI(unittest.TestCase):
 
     @patch("backend.api.signals.router.signal_recorder.record_from_recent_bars", return_value=5)
     def test_record_now_uses_ingestion_service_defaults(self, mock_record):
-        with patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ing:
+        # Patch the router module's ingestion_service binding (the source-module
+        # patch doesn't reach the router's `from ... import ingestion_service`).
+        with patch("backend.api.signals.router.ingestion_service") as mock_ing:
             mock_ing.symbols = ["AAPL", "MSFT"]
             mock_ing.timeframes = ["1d", "1h"]
             r = self.client.post("/api/signals/record")
@@ -253,7 +256,7 @@ class TestSignalsAPI(unittest.TestCase):
         # Insert two signals at different ages
         self._seed(symbol="AAPL", timestamp=now - timedelta(days=400))
         self._seed(symbol="MSFT", timestamp=now - timedelta(days=10))
-        r = self.client.delete("/api/signals/old?days=180")
+        r = self.client.delete("/api/signals/old?older_than_days=180")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["deleted"], 1)
