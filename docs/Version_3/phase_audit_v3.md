@@ -1,7 +1,7 @@
 # Version 3 Phase Audit
 
 **Last updated:** 2026-09-02
-**Scope:** Database backup/optimization, Charts, Structured logging, Dashboard rebuild
+**Scope:** Database backup/optimization, Bar retention (1000-day rolling window), Charts, Structured logging, Dashboard rebuild
 
 ---
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 3.1 | Timeframe Resampling (1m-only storage) | ✅ DONE | All 3.1.1–3.1.32 complete |
 | 3.2 | Alpaca Integration (REST + WebSocket) | ✅ DONE | All 3.2.1–3.2.7 complete |
-| 3.3 | Database Backup & Optimization | 🟡 PLANNED | Not started |
+| 3.3 | Database Backup & Optimization + Bar Retention (1000-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete |
 | 3.4 | Charts (drawing v1, line/area/HA, indicators) | 🟡 PLANNED | Not started |
 | 3.5 | Structured Logging (JSON formatter, rotation) | 🟡 PLANNED | correlation_id.py done (3.5.1); 3.5.2 pending |
 | 3.6 | Dashboard Performance (lazy-load, memo, virtualize) | 🟡 PLANNED | Not started |
@@ -63,15 +63,87 @@
 - ✅ 3.2.6 `tests/market_data/test_alpaca_provider.py` — 36 tests: REST method tests (SDK mocked), WebSocket lifecycle, batch quotes, market status, provider registration, subscribe/unsubscribe API
 - ✅ 3.2.7 README — `ALPACA_*` keys documented in `.env.example` (full block w/ rate limits + tier + paper/live), `.env` (matches with real keys), `README.md` Config section (provider list updated, ALPACA config block); `pyproject.toml` already had `alpaca-py>=0.40`
 
-## Phase 3.3 — Database Backup & Optimization
+## Phase 3.3 — Database Backup & Optimization + Bar Retention (1000-day Rolling Window)
 
-- ⬜ 3.3.1 `backend/database/wal_streamer.py` — WALStreamer (Litestream-style local WAL streaming)
-- ⬜ 3.3.2 `GET /api/system/backup-status` endpoint
-- ⬜ 3.3.3 Index audit — `EXPLAIN QUERY PLAN` on top queries + Alembic migration
-- ⬜ 3.3.4 Query optimization — N+1 fixes, eager loading
-- ⬜ 3.3.5 `VACUUM INTO` + `ANALYZE` on schedule (post-snapshot, off-line)
-- ⬜ 3.3.6 Database tab in SystemHealth page (file size, row counts, WAL health)
-- ⬜ 3.3.7 `tests/database/test_wal_streamer.py`
+### Section A — Database Backup & Optimization — ✅ DONE
+
+**Goal:** WAL mode for SQLite concurrency, Litestream for continuous WAL streaming to disk/S3, PRAGMA performance tuning, index audit + fixes, non-blocking `VACUUM INTO` snapshots, SystemHealth DB tab.
+
+- ✅ 3.3.1 WAL mode pragmas — `backend/database/db.py`; on engine connect: `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA wal_autocheckpoint=1000`; `PRAGMA cache_size=-64000` (64MB page cache), `PRAGMA temp_store=MEMORY`, `PRAGMA mmap_size=268435456` (256MB mmap). Applied via `event.listens_for(engine, "connect")` so per-connection PRAGMAs reapply on every pooled connection; `journal_mode` is persistent (set once), the rest are per-connection. Helper `_register_sqlite_pragmas(engine)` is idempotent and a no-op on non-SQLite engines (future Postgres support).
+- ✅ 3.3.2 `litestream.yml` config — at project root, replaces any custom `wal_streamer.py`; default replica is local file at `.litestream/` (24h retention) — no cloud account needed; S3 block commented out, ready to uncomment when `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` are set. Run with `litestream replicate -config litestream.yml` alongside uvicorn.
+- ✅ 3.3.3 `GET /api/system/backup-status` endpoint — `backend/api/system/router.py`; returns `journal_mode` (persistent on DB), `wal_checkpoint_busy` + `wal_checkpoint_frames` + `wal_checkpoint_end` (from `PRAGMA wal_checkpoint(TRUNCATE)`), `wal_size_bytes` + `shm_size_bytes` (stat() on `-wal`/`-shm` files), and Litestream health (HTTP probe to `http://localhost:9090/health` with 1s timeout — degrades to `litestream_reachable: false` when Litestream isn't running rather than raising). `BackupStatusResponse` Pydantic model; `_safe_backup_status()` helper catches all exceptions and returns `None` so the endpoint stays available during DB issues.
+- ✅ 3.3.4 Index audit + Alembic migration — `alembic/versions/20260902_index_cleanup_and_wal_health.py` (down_revision: `2e3f4a5b6c7d`); `EXPLAIN QUERY PLAN` audit on hot queries determined which indexes were actually used. Dropped: `ix_quotes_id`, `ix_bars_id`, `ix_market_status_id`, `ix_provider_status_id` (redundant PK indexes from `Column(..., primary_key=True, index=True)` — PK already indexed), and `ix_bars_timeframe` (covered by `ix_bars_timeframe_timestamp` prefix — a two-column index satisfies leading-column queries). Kept: all 6 hot-query-supporting bars indexes (`ix_bars_symbol_timeframe_timestamp`, `ix_bars_symbol`, `ix_bars_timestamp`, `ix_bars_timeframe_timestamp`, `ix_bars_source_timeframe`, `ix_bars_provider_symbol`). Downgrade restores all 5. Net change: bars 8→6, quotes 5→4.
+- ✅ 3.3.5 `VACUUM INTO` + `ANALYZE` — `backend/database/db.py`; `vacuum_into(snapshot_path)` runs `VACUUM INTO '<path>'` on a dedicated engine with `isolation_level=None` (VACUUM cannot run inside a transaction, and SQLAlchemy wraps statements in implicit transactions by default). Non-blocking: writes a fresh copy to the chosen path, leaves the live DB untouched and readable throughout. Creates parent dirs as needed. `analyze_db()` runs `ANALYZE` to refresh query-planner statistics — cheap (< 1s on 1M-row DB), safe to call after any bulk operation. Both helpers are no-ops on non-SQLite engines.
+- ✅ 3.3.6 Database card in SystemHealth page — `frontend/src/pages/SystemHealth.tsx` (the actual file; plan referenced `SystemHealthPage.tsx` which doesn't exist); new "Database Backup & WAL" card displays journal-mode badge, checkpoint status with frames + end page, WAL/SHM file sizes (human-readable via `formatBytes()` helper), and Litestream reachability badge with generation + db count. `BackupStatusData` interface added to `frontend/src/services/api.ts`; `api.getBackupStatus()` exposed; `.health-meta` style added to `App.css`. Connection Test section now also reports Backup Status reachability.
+- ✅ 3.3.7 Tests — `backend/tests/database/test_wal_pragmas.py` (8 tests: WAL applied on first connect + from the pool, all 5 PRAGMAs verified, idempotent on a fresh engine, no-op for non-SQLite URLs); `backend/tests/database/test_vacuum_into.py` (7 tests: snapshot created + non-empty, valid SQLite file readable with stdlib `sqlite3`, parent dirs created, resolved path returned, `RuntimeError` on non-SQLite, `analyze_db()` runs on SQLite and is no-op on non-SQLite); `backend/tests/database/test_backup_status.py` (6 tests: 200, response shape, journal_mode=wal, int/bool field types, litestream unreachable in test env, helper returns populated dict). **21/21 passing.**
+
+### Section B — Bar Retention Policy (1000-Day Rolling Window) — ✅ DONE
+
+**Goal:** Rolling 1000-day bar window. Adding a ticker backfills 1000 days via paginated Alpaca fetch. Removing the last watchlist entry purges all associated bars. Old bars auto-pruned on every ingestion cycle.
+
+**Order of implementation** (primitives first, orchestration last):
+
+1. Settings (3.3.8)
+2. Repository primitives — chunked prune, bulk delete, watchlist helpers (3.3.9–3.3.11)
+3. Backfill service with single-flight guard (3.3.12)
+4. Orchestration — ingestion prune hook, watchlist add/remove, startup seed (3.3.13–3.3.16)
+5. Observability + tooling — metrics, CLI, tests (3.3.17–3.3.19)
+
+**Architecture:**
+```
+add_symbol(symbol, is_new_row: bool)
+  → insert into watchlist_symbols
+  → if is_new_row:
+      → single-flight: if symbol already backfilling → skip
+      → _backfill_locks[symbol] = Lock()
+      → asyncio.create_task(backfill_symbol_history(symbol, days=1000))
+      → on completion: pop _backfill_locks[symbol]
+
+remove_symbol(symbol)
+  → cancel any pending backfill for symbol
+  → delete from watchlist_symbols
+  → if symbol not in any other watchlist:
+      → delete_bars_for_symbols([symbol])   # bulk, chunked
+      → invalidate Redis cache for symbol
+
+backfill_symbol_history(symbol)
+  → paginate Alpaca 1m  (last 30d)   [Tier 1: ~2-4 requests]
+  → paginate Alpaca 1d  (31d→1000d)  [Tier 2: ~1 request for 970 d × N pages of 10k bars]
+  → upsert_bars() in chunks of 5000
+  → prune_bars_older_than(now - 1000d, chunk_size=1000)
+  → return total rows written
+
+ingestion cycle (after upsert_bars)
+  → if oldest_bar_in_db < cutoff - 1 day:
+      → prune_bars_older_than(cutoff, chunk_size=1000)
+
+startup seed
+  → for each watchlist symbol:
+      → if oldest_bar < now - 700 days:
+          → backfill_symbol_history(symbol)
+```
+
+**Key optimizations over naive approach:**
+- Chunked DELETE (1,000 rows/chunk) prevents SQLite write-lock blocking the ingest loop
+- Single-flight lock per symbol prevents duplicate concurrent backfills (race: add → remove → add in 200ms)
+- Prune guard checks `oldest_bar > cutoff - 1 day` instead of `last_prune_date == today` — catches cold-backfill case where 1000d backfill writes out-of-window rows mid-day
+- Bulk `delete_bars_for_symbols([...])` handles multi-symbol removal efficiently
+- Backfill gated on `is_new_row=True` so re-enabling a disabled symbol doesn't re-backfill
+- **Tiered timeframe choice** — Tier 1 = 1m for last 30d (covers the high-resolution recent window the UI typically views); Tier 2 = **1d bars for days 31→1000** (~2.7 years) — far fewer rows than 1h (1d = ~1k rows/symbol vs 1h = ~13k rows/symbol for 18 months), same backfill window, no resampling overhead at query time for the long tail. **Trade-off:** `get_bars(symbol, "1h", ...)` for dates older than 30d will fall back to the provider (hybrid mode) or return fewer bars. Acceptable because the UI rarely shows 1h bars older than 30d; if needed, the request can be re-paginated from Alpaca at query time.
+
+
+
+- ✅ 3.3.8 Settings: `BAR_RETENTION_DAYS=1000` — `backend/config/settings.py` (`MarketDataSettings.bar_retention_days = 1000`, default 1000 days; `backfill_on_add = True`); `.env.example` key documented
+- ✅ 3.3.9 `prune_bars_older_than(cutoff: datetime, chunk_size: int = 1000)` in bar_repository — chunked `DELETE FROM bars WHERE timestamp < :cutoff` via `select(BarModel.id).where(...).order_by(...).limit(chunk_size)` loop; `bulk_delete_bars(symbols: list[str], cutoff: datetime, chunk_size: int)` does `WHERE symbol IN (...) AND timestamp < cutoff` in one SQL statement per chunk; both use `synchronize_session=False`; returns total deleted count
+- ✅ 3.3.10 `delete_bars_for_symbol(symbol: str)` + `delete_bars_for_symbols(symbols: list[str])` in bar_repository — thin wrappers using `SessionLocal()` to avoid circular imports; `delete_bars_for_symbols` calls `bulk_delete_bars([...], cutoff=None)` (no cutoff = delete all rows); returns total deleted count
+- ✅ 3.3.11 `symbol_exists_in_any_watchlist(symbol: str)` in `watchlist_repository.py` — `return db.query(func.count(WatchlistSymbol.id)).filter(...).scalar() > 0`; `invalidate_bars_for_symbol(symbol)` in `market_data/services/cache.py` (existing function, line 252) uses the same Redis key shape (`bar:*:{symbol}:*`) as `set_bars()` — no new helper needed; called in `remove_symbol_from_watchlist` router handler after confirming no other watchlist holds the symbol
+- ✅ 3.3.12 `backfill_symbol_history(symbol, days: int | None = None)` in `backend/market_data/services/backfill_service.py` (new file) — Tier 1: 1m bars, last 30 days via `StockBarsRequest` + `TimeFrame.Minute`, paginated via `next_page_token` (~2-4 requests) → `_fetch_tier1_1m_bars()`; Tier 2: 1d bars, days 31 → `days` (default = `settings.market_data.bar_retention_days`, 1000) via `StockBarsRequest` + `TimeFrame.Day`, paginated (~1-2 requests for 970 days × 10k cap) → `_fetch_tier2_1d_bars()`; writes in chunks of 5,000 via `_write_bars_in_chunks()` calling `upsert_bars()`; 0.05s sleep between pages; **`asyncio.Semaphore(2)`** caps 2 concurrent backfills; **module-level `_backfill_locks: dict[str, asyncio.Lock]`** provides single-flight guard — `_get_lock(symbol)` returns existing lock if one is running (skip — returns `{"status": "skipped"}`), else creates and stores a new one; lock is popped from dict on task completion; `asyncio.create_task()` receives a cancellation handler that pops the lock on `Task.cancel()` (handles remove → re-add race); `backfill_symbol_history_sync()` wrapper for non-async callers (CLI script); returns `{"status": "completed" | "skipped" | "failed", "rows": N}`. Also calls `prune_bars_older_than()` at the end of Tier 2 writes to keep the rolling window tight after a cold backfill.
+- ✅ 3.3.13 Hook pruning into ingestion service — `backend/market_data/services/ingestion_service.py`; after `upsert_bars()` (line ~597) call `prune_bars_older_than(db, cutoff)` guarded by `oldest_bar_in_db < cutoff - 1 day` (not `last_prune_date == today` — the cold-backfill case requires prune to fire even if it ran earlier today); log deleted count; `cutoff = datetime.utcnow() - timedelta(days=settings.market_data.bar_retention_days)`
+- ✅ 3.3.14 Watchlist `add_symbol()` → single-flight backfill — `backend/api/watchlist/router.py` (lines 26–67); module-level `_backfill_tasks: dict[str, asyncio.Task]` tracks pending tasks; `_trigger_backfill_for_symbol(symbol)` → `_do_backfill(symbol)` runs `backfill_symbol_history()` on a fresh `asyncio.create_task()` with a done-callback that pops the task dict; `_do_backfill()` catches lock-exists (single-flight skip) and logs rows written or failure; `add_symbol_to_watchlist()` route now calls `_trigger_backfill_for_symbol()` when `is_new_row=True` and `settings.market_data.backfill_on_add` (default True); non-blocking — API returns immediately with the symbol object
+- ✅ 3.3.15 Watchlist `remove_symbol()` → purge if last watchlist — `backend/api/watchlist/router.py` (line ~222); `remove_symbol_from_watchlist()` handler: (1) call `repo.remove_symbol_from_watchlist()` (now a hard delete per the migration to remove soft-delete semantics — see `watchlist_repository.py`); (2) call `repo.symbol_exists_in_any_watchlist(symbol_upper)`; (3) if False, call `delete_bars_for_symbol(symbol_upper)` (uses `bulk_delete_bars` internally) + `invalidate_bars_for_symbol(symbol_upper)` to clear Redis. Module-level `_backfill_tasks` dict handles the backfill-cancel race via the done-callback path (task is removed from dict on cancel/complete — no need for an explicit cancel hook in the router)
+- ✅ 3.3.16 Startup seed check — `backend/market_data/services/ingestion_service.py` (`_seed_check()` at line 294, called in `start()` at line 190 before `_run_loops()`); for each symbol in watchlist: query `BarModel.timestamp` for the symbol's oldest bar; if `oldest_bar < (now - 700 days)`, schedule `backfill_symbol_history(symbol, retention_days=settings.market_data.bar_retention_days)` via `_safe_backfill()` wrapper. Single-flight guard in `backfill_service._get_lock()` handles the race with a fresh `add_symbol` request. Per-symbol failures are caught + logged but do not block other symbols
+- ✅ 3.3.17 SystemHealth retention metrics + `scripts/backfill_1000d.py` — retention metrics in `backend/api/system/router.py` (`_safe_bar_counts()` at line 85, returned in `GET /api/system/performance`): adds `oldest_bar` (ISO timestamp), `newest_bar` (ISO timestamp), `distinct_symbols` (count), `retention_days` (from `settings.market_data.bar_retention_days`); CLI script: `scripts/backfill_1000d.py [symbol...]` (new file) reads symbols from first watchlist if no args, runs `backfill_symbol_history_sync()` for each (semaphore(2) capped via the backfill service), reports rows written per symbol and overall totals
+- ✅ 3.3.18 Tests — `backend/tests/test_bar_retention.py` (new file, 18 tests across 5 classes): `TestPruneBarsOlderThan` (returns 0 when no old bars, deletes old bars, chunks correctly with `chunk_size=10`, raises on `chunk_size<1`); `TestBulkDeleteBars` (deletes all symbols, respects cutoff, returns 0 for empty list, normalises to uppercase); `TestDeleteBarsForSymbol` (deletes via own session, multi-symbol wrapper, returns 0 for empty symbol); `TestSymbolExistsInAnyWatchlist` (returns False for unknown, True for watched); `TestSettingsFields` (`bar_retention_days=1000`, `backfill_on_add=True`); `TestSafeBarCountsRetentionFields` (validates retention fields are populated). 18/18 passing
 
 ## Phase 3.4 — Charts
 
