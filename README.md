@@ -683,13 +683,22 @@ DATABASE_URL=sqlite:////absolute/path/to/marketlens.db   # Always use absolute p
 DATABASE_ECHO=false                                       # SQL query logging
 
 # ── Market Data ─────────────────────────────────────────────────────────────
-MARKET_DATA_PRIMARY_PROVIDER=yahoo_finance               # yahoo_finance | finnhub | webull
+MARKET_DATA_PRIMARY_PROVIDER=yahoo_finance               # yahoo_finance | finnhub | webull | alpaca
 MARKET_DATA_FALLBACK_PROVIDERS=["finnhub"]               # Fallback chain
 MARKET_DATA_RATE_LIMIT_PER_MINUTE=60
 MARKET_DATA_CACHE_TTL_SECONDS=300
 
 FINNHUB_ENABLED=true
 FINNHUB_API_KEY=<your_key>
+
+# Alpaca — REST + real-time WebSocket streaming (v3.2)
+ALPACA_ENABLED=false
+ALPACA_API_KEY=<your_key>
+ALPACA_SECRET_KEY=<your_secret>
+ALPACA_PAPER=true                                      # true = paper, false = live
+ALPACA_DATA_TIER=iex                                   # iex (free) | sip (paid)
+ALPACA_RATE_LIMIT_PER_MINUTE=200
+ALPACA_STREAM_RATE_LIMIT_PER_MINUTE=1000
 
 # ── AI (optional) ────────────────────────────────────────────────────────────
 AI_ENABLED=false                                          # Set true to enable
