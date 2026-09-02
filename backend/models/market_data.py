@@ -39,6 +39,10 @@ class Bar(BaseModel):
     timeframe: str  # e.g., "1m", "5m", "1h", "1d"
     provider: str
     data_status: DataStatus
+    # Phase 3.1: 'raw' = from provider, 'resampled' = computed from 1m at read time.
+    # Only present when the source is known. Default None for backward compat with
+    # callers that don't send this field.
+    source: str | None = None
 
 class MarketStatus(BaseModel):
     symbol: str

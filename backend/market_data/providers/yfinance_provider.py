@@ -34,11 +34,12 @@ _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 _INTERVAL_MAP = {
     "1m": "1m", "2m": "2m", "5m": "5m", "15m": "15m", "30m": "30m",
     "60m": "60m", "90m": "90m", "1h": "60m",
+    "4h": "60m",   # yfinance has no 4h; fetch 1h bars and resample at read time
     "1d": "1d", "5d": "5d", "1wk": "1wk", "1mo": "1mo", "3mo": "3mo",
 }
 _RANGE_MAP = {
     "1m": "1d", "5m": "5d", "15m": "5d", "30m": "5d",
-    "1h": "1mo", "1d": "6mo", "1wk": "2y", "1mo": "5y",
+    "1h": "1mo", "4h": "1mo", "1d": "6mo", "1wk": "2y", "1mo": "5y",
 }
 
 

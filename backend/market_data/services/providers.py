@@ -225,6 +225,38 @@ def _register_webull() -> None:
 _register_webull()
 
 
+def _get_alpaca_class() -> type[MarketDataProvider] | None:
+    """Lazy resolver for AlpacaProvider.
+
+    Deferred so a missing ``requests`` install only breaks the Alpaca
+    path, not Yahoo Finance. The class is skipped entirely when
+    ``ALPACA_ENABLED`` is false or credentials are not set.
+    """
+    try:
+        from ..providers.alpaca_provider import AlpacaProvider
+    except Exception as e:
+        logger.warning(f"AlpacaProvider is not importable: {e}")
+        return None
+
+    alpaca_settings = _settings.alpaca
+    if not alpaca_settings.enabled:
+        return None
+    if not alpaca_settings.api_key or not alpaca_settings.secret_key:
+        logger.warning("Alpaca provider enabled but ALPACA_API_KEY or ALPACA_SECRET_KEY is not set — skipping registration")
+        return None
+    return AlpacaProvider
+
+
+def _register_alpaca() -> None:
+    alpaca_cls = _get_alpaca_class()
+    if alpaca_cls is not None:
+        _PROVIDER_CLASSES["alpaca"] = alpaca_cls
+        logger.info("Alpaca provider registered")
+
+
+_register_alpaca()
+
+
 class _PerProviderRateLimiter:
     """Sliding-window rate limiter keyed by provider name.
 

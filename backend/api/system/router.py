@@ -63,6 +63,8 @@ class PerformanceResponse(BaseModel):
     cache: dict | None = None
     rate_limit: dict | None = None
     websocket: dict | None = None
+    bars: dict | None = None  # Phase 3.1: bars_stored, bars_1m_only, bars_resampled
+    providers: dict | None = None  # Phase 3.6: per-provider health (incl. Alpaca WS status)
 
     class Config:
         arbitrary_types_allowed = True
@@ -74,6 +76,45 @@ class RequestCounterMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         record_http_request()
         return await call_next(request)
+
+
+def _safe_bar_counts() -> dict | None:
+    """Query the bars table for storage metrics.
+
+    Phase 3.1: all stored rows have timeframe='1m' and source='raw'.
+    bars_resampled is always 0 because resampling is a read-time operation
+    (no rows are persisted as resampled). These fields are useful for
+    confirming the Phase 3.1 contract is honoured and for monitoring
+    storage growth.
+    """
+    try:
+        from sqlalchemy import func
+        from ...database import SessionLocal
+        from ...models.market_data_sql import BarModel
+        db = SessionLocal()
+        try:
+            total = db.query(func.count(BarModel.id)).scalar() or 0
+            bars_1m = (
+                db.query(func.count(BarModel.id))
+                .filter(BarModel.timeframe == "1m")
+                .scalar()
+                or 0
+            )
+            bars_resampled = (
+                db.query(func.count(BarModel.id))
+                .filter(BarModel.source == "resampled")
+                .scalar()
+                or 0
+            )
+            return {
+                "bars_stored": total,
+                "bars_1m_only": bars_1m,
+                "bars_resampled": bars_resampled,
+            }
+        finally:
+            db.close()
+    except Exception:
+        return None
 
 
 def _safe_cache_stats() -> dict | None:
@@ -108,10 +149,52 @@ def _safe_rate_limit_stats() -> dict | None:
 
 
 def _safe_websocket_stats() -> dict | None:
-    """Pull WebSocket connection + broadcast stats."""
+    """Pull WebSocket connection + broadcast stats from both scanner and realtime streams."""
     try:
-        from ..scanner.ws_router import broadcast_manager
-        return broadcast_manager.get_stats()
+        from ..scanner.ws_router import broadcast_manager as scanner_bm
+        from ..realtime.ws_router import broadcast_manager as realtime_bm
+        return {
+            "scanner": scanner_bm.get_stats(),
+            "realtime": realtime_bm.get_stats(),
+        }
+    except Exception:
+        return None
+
+
+def _safe_provider_stats() -> dict | None:
+    """Per-provider health snapshot, keyed by provider name.
+
+    Returns ``{provider_name: {is_healthy, last_error, ws_status (alpaca only)}}``
+    for every provider registered in the MarketDataManager. Returns ``None``
+    on import failure so the endpoint stays available.
+
+    Phase 3.6: includes Alpaca's WebSocket status string in the per-provider
+    payload so the system health UI can surface live-stream health.
+    """
+    try:
+        from ...market_data.services.manager import MarketDataManager
+
+        manager = MarketDataManager()
+        out: dict = {}
+        for name, provider in manager.providers.items():
+            try:
+                status = provider.get_provider_status()
+                entry = {
+                    "is_healthy": status.is_healthy,
+                    "last_error": status.error_message,
+                    "circuit_breaker_state": status.circuit_breaker_state,
+                    "consecutive_failures": status.consecutive_failures,
+                    "total_successes": status.total_successes,
+                    "total_failures": status.total_failures,
+                }
+                # Surface Alpaca's WebSocket status if available.
+                ws_status = getattr(provider, "_ws_status", None)
+                if ws_status is not None:
+                    entry["ws_status"] = ws_status
+                out[name] = entry
+            except Exception as exc:
+                out[name] = {"is_healthy": False, "last_error": str(exc)}
+        return out
     except Exception:
         return None
 
@@ -146,6 +229,8 @@ async def get_performance() -> PerformanceResponse:
         cache=_safe_cache_stats(),
         rate_limit=_safe_rate_limit_stats(),
         websocket=_safe_websocket_stats(),
+        bars=_safe_bar_counts(),
+        providers=_safe_provider_stats(),
     )
 
 

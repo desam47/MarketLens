@@ -35,11 +35,13 @@ from .providers import (
     _get_finnhub_class,
     _get_per_provider_rate_limit,
     _get_webull_class,
+    _get_alpaca_class,
     _newest_bar_age_seconds,
     _provider_call_with_breaker,
     _provider_retry,
     _rate_limiter,
     _register_finnhub,
+    _register_alpaca,
 )
 from backend.market_data.providers.yfinance_provider import YFinanceProvider
 
@@ -77,7 +79,9 @@ __all__ = [
     # Lazy resolvers
     "_get_webull_class",
     "_get_finnhub_class",
+    "_get_alpaca_class",
     "_register_finnhub",
+    "_register_alpaca",
     # For test patches
     "_settings",
     "redis",

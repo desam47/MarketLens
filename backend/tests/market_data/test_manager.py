@@ -4,7 +4,7 @@ Tests for MarketDataManager
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
@@ -50,11 +50,22 @@ class TestMarketDataManager(unittest.TestCase):
         self._redis_cache_patcher.stop()
 
     def test_initialization(self):
-        """Test that manager initializes with Yahoo Finance primary and Finnhub fallback."""
+        """Test that manager initializes with Yahoo Finance primary and Finnhub fallback.
+
+        The exact list of registered providers grows as new integrations land
+        (alpaca, webull, etc.), so assert on the structural contract instead
+        of a hard-coded list: both yfinance and finnhub are present, yfinance
+        appears before finnhub in the priority list (yfinance is primary per
+        settings), and at least 2 Phase-2 providers are registered.
+        """
         self.assertIn("yahoo_finance", self.manager.providers)
         self.assertIn("finnhub", self.manager.providers)
-        self.assertEqual(len(self.manager.provider_priority), 2)
-        self.assertEqual(self.manager.provider_priority, ["yahoo_finance", "finnhub"])
+        # yfinance is primary per default settings — must precede finnhub (fallback).
+        yf_idx = self.manager.provider_priority.index("yahoo_finance")
+        fh_idx = self.manager.provider_priority.index("finnhub")
+        self.assertLess(yf_idx, fh_idx, "yfinance must be higher priority than finnhub")
+        # At least the two Phase 2 providers present.
+        self.assertGreaterEqual(len(self.manager.provider_priority), 2)
 
     def test_add_provider(self):
         """Test adding a new provider"""
@@ -201,7 +212,7 @@ class TestMarketDataManager(unittest.TestCase):
     def test_get_historical_bars_stale_returns_stale_status(self):
         """Intraday cache older than TTL is returned with DataStatus.STALE."""
         now = datetime.now()
-        old_ts = now - timedelta(seconds=600)  # 10 min old — over default TTL (300s)
+        old_ts = now - timedelta(seconds=600)  # 10 min old — over TTL (300s)
         # Need 312+ bars to pass the 80% count gate (390 expected for 1m/1d).
         cached = [self._make_bar("AAPL", "1m", old_ts) for _ in range(320)]
         mock_db = MagicMock()
@@ -210,10 +221,15 @@ class TestMarketDataManager(unittest.TestCase):
             "backend.repositories.bar_repository"
         ) as mock_repo, \
              patch(
-            "backend.market_data.services.manager._settings"
-        ) as mock_settings:
+            "backend.market_data.services.manager_class.get_settings"
+        ) as mock_get_settings, \
+             patch(
+            "backend.market_data.services.manager_class.get_redis_cache"
+        ) as mock_get_redis_cache:
             mock_repo.get_bars.return_value = cached
-            mock_settings.market_data.cache_ttl_seconds = 300
+            mock_get_redis_cache.return_value = self.mock_redis
+            mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
+            mock_get_settings.return_value.redis.enabled = True
             self.manager.providers = {
                 "yahoo_finance": MagicMock(is_available=lambda: True)
             }
@@ -239,10 +255,15 @@ class TestMarketDataManager(unittest.TestCase):
             "backend.repositories.bar_repository"
         ) as mock_repo, \
              patch(
-            "backend.market_data.services.manager._settings"
-        ) as mock_settings:
+            "backend.market_data.services.manager_class.get_settings"
+        ) as mock_get_settings, \
+             patch(
+            "backend.market_data.services.manager_class.get_redis_cache"
+        ) as mock_get_redis_cache:
             mock_repo.get_bars.return_value = cached
-            mock_settings.market_data.cache_ttl_seconds = 300
+            mock_get_redis_cache.return_value = self.mock_redis
+            mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
+            mock_get_settings.return_value.redis.enabled = True
             self.manager.providers = {
                 "yahoo_finance": MagicMock(is_available=lambda: True)
             }
@@ -280,19 +301,32 @@ class TestMarketDataManager(unittest.TestCase):
 
     def test_get_historical_bars_cache_ttl_ceiling(self):
         """When the intraday cache is fresher than TTL, it is used as-is (no provider call)."""
-        now = datetime.now()
+        # Use timezone-aware UTC now to match the production code's
+        # ``datetime.now(timezone.utc)`` age calculation — avoids a 4-hour
+        # offset when the host's local timezone differs from UTC.
+        now = datetime.now(timezone.utc)
         fresh_ts = now - timedelta(seconds=10)  # well under TTL
         cached = [self._make_bar("AAPL", "5m", fresh_ts) for _ in range(80)]
         mock_db = MagicMock()
 
+        # ``manager_class`` calls ``get_settings()`` and ``get_redis_cache()``
+        # (functions) rather than the module-level ``_settings`` / ``_redis_cache``
+        # attributes, so we patch the functions at their actual call site.
         with patch(
             "backend.repositories.bar_repository"
         ) as mock_repo, \
              patch(
-            "backend.market_data.services.manager._settings"
-        ) as mock_settings:
+            "backend.market_data.services.manager_class.get_settings"
+        ) as mock_get_settings, \
+             patch(
+            "backend.market_data.services.manager_class.get_redis_cache"
+        ) as mock_get_redis_cache:
             mock_repo.get_bars.return_value = cached
-            mock_settings.market_data.cache_ttl_seconds = 300
+            # Mirror the setUp's Redis-miss-everything mock through the getter.
+            mock_get_redis_cache.return_value = self.mock_redis
+            # Mock settings: TTL = 300s, Redis enabled, defaults for the rest.
+            mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
+            mock_get_settings.return_value.redis.enabled = True
             self.manager.providers = {
                 "yahoo_finance": MagicMock(is_available=lambda: True)
             }

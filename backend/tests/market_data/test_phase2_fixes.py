@@ -29,11 +29,20 @@ class TestProviderRegistry(unittest.TestCase):
         self.assertIn("yahoo_finance", _PROVIDER_CLASSES)
 
     def test_init_uses_default_settings(self):
-        """Default settings (yfinance primary, finnhub fallback) init both providers."""
+        """Default settings (yfinance primary, finnhub fallback) init both providers.
+
+        The exact registered set grows as new integrations land (alpaca, webull, etc.),
+        so assert on the structural contract: yfinance is primary, finnhub is a
+        fallback (yfinance precedes finnhub in the priority list), and at least
+        2 providers are present.
+        """
         mgr = MarketDataManager()
         self.assertIn("yahoo_finance", mgr.providers)
         self.assertIn("finnhub", mgr.providers)
-        self.assertEqual(mgr.provider_priority, ["yahoo_finance", "finnhub"])
+        yf_idx = mgr.provider_priority.index("yahoo_finance")
+        fh_idx = mgr.provider_priority.index("finnhub")
+        self.assertLess(yf_idx, fh_idx, "yfinance must be higher priority than finnhub")
+        self.assertGreaterEqual(len(mgr.provider_priority), 2)
 
     def test_init_with_fallback(self, *_):
         """A fallback in settings ends up registered with priority 1."""

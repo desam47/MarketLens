@@ -28,6 +28,62 @@ redis = _shared.redis
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+
+def _bar_to_json(bar: Bar) -> str:
+    """Serialize a single ``Bar`` to a JSON string.
+
+    ``model_dump()`` produces a dict; ``json.dumps(..., default=str)`` handles
+    non-standard types (datetime, Enum) that are not natively JSON-serializable.
+    """
+    return json.dumps(bar.model_dump(), default=str)
+
+
+def _bars_to_json(bars: list[Bar]) -> str:
+    """Serialize a list of ``Bar`` objects to a JSON string."""
+    return json.dumps([bar.model_dump() for bar in bars], default=str)
+
+
+def _quote_to_json(quote: Quote) -> str:
+    """Serialize a single ``Quote`` to a JSON string."""
+    return json.dumps(quote.model_dump(), default=str)
+
+
+# ---------------------------------------------------------------------------
+# TTL table
+# ---------------------------------------------------------------------------
+
+# Phase 3.1: per-timeframe cache TTLs for resampled bar series.
+# Higher-TF resamples are stable for longer than 1m data, so they
+# can be cached for longer without serving stale values. Values are
+# the minimum *and* maximum cache freshness — clients see a fresh
+# resample every TTL window. The ``1m`` entry is the default for any
+# 1m cache key (we still cache 1m bars for the same window so the
+# resample path is faster on the next read).
+_BAR_CACHE_TTL: dict[str, int] = {
+    "1m":  60,       # 1m: every minute is a new bar
+    "5m":  120,      # 5m: refresh every 2 minutes
+    "15m": 180,
+    "30m": 240,
+    "1h":  300,
+    "4h":  360,      # 4h: refresh every 6 minutes
+    "1d":  600,      # 10 minutes — plan spec
+    "5d":  1200,     # 20 minutes
+    "1wk": 3600,     # 1 hour   — plan spec
+    "1mo": 3600,
+}
+
+# Default TTL for any timeframe not in the table.
+_BAR_CACHE_DEFAULT_TTL = 300
+
+
+def get_bar_cache_ttl(timeframe: str) -> int:
+    """Return the Redis cache TTL (seconds) for a resampled bar series."""
+    return _BAR_CACHE_TTL.get(timeframe, _BAR_CACHE_DEFAULT_TTL)
+
+
 class RedisCache:
     """Redis-based caching layer for market data."""
 
@@ -99,18 +155,33 @@ class RedisCache:
             logger.warning(f"Failed to get bars from Redis for {symbol}:{timeframe}: {e}")
             return None
 
-    def set_bars(self, symbol: str, timeframe: str, bars: list[Bar]) -> bool:
-        """Cache bar data for symbol/timeframe."""
+    def set_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        bars: list[Bar],
+        ttl: int | None = None,
+    ) -> bool:
+        """Cache bar data for symbol/timeframe.
+
+        Phase 3.1: ``ttl`` overrides the default per-TF TTL when set.
+        Callers that cache resampled series should pass the desired TTL
+        explicitly (e.g. ``ttl=get_bar_cache_ttl(timeframe)``) so the
+        right cache age applies regardless of the global default.
+        """
         if not self.is_available():
             return False
         try:
             settings = _shared.get_settings()
             key = self._make_bar_key(symbol, timeframe)
-            bars_data = [bar.model_dump() for bar in bars]
-            data = json.dumps(bars_data, default=str)
-            self._client.setex(key, settings.redis.bar_data_ttl, data)
+            data = _bars_to_json(bars)
+            effective_ttl = ttl if ttl is not None else settings.redis.bar_data_ttl
+            self._client.setex(key, effective_ttl, data)
             self._enforce_size_limit("bars")
-            logger.debug(f"Cached {len(bars)} bars for {symbol}:{timeframe} in Redis")
+            logger.debug(
+                f"Cached {len(bars)} bars for {symbol}:{timeframe} "
+                f"(TTL={effective_ttl}s) in Redis"
+            )
             return True
         except Exception as e:
             logger.warning(f"Failed to cache bars to Redis for {symbol}:{timeframe}: {e}")
@@ -137,7 +208,7 @@ class RedisCache:
         try:
             settings = _shared.get_settings()
             key = self._make_quote_key(symbol)
-            data = json.dumps(quote.model_dump(), default=str)
+            data = _quote_to_json(quote)
             self._client.setex(key, settings.redis.quote_ttl, data)
             self._enforce_size_limit("quotes")
             logger.debug(f"Cached quote for {symbol} in Redis")
@@ -165,10 +236,9 @@ class RedisCache:
         if not self.is_available():
             return False
         try:
-            settings = _shared.get_settings()
             key = self._make_latest_bar_key(symbol, timeframe)
-            data = json.dumps(bar.model_dump(), default=str)
-            self._client.setex(key, settings.redis.bar_data_ttl, data)
+            data = _bar_to_json(bar)
+            self._client.setex(key, get_bar_cache_ttl(timeframe), data)
             try:
                 self._client.publish(f"marketlens:bar_updates:{symbol}:{timeframe}", data)
             except Exception:
@@ -178,6 +248,54 @@ class RedisCache:
         except Exception as e:
             logger.warning(f"Failed to cache latest bar to Redis for {symbol}:{timeframe}: {e}")
             return False
+
+    def invalidate_bars_for_symbol(self, symbol: str) -> int:
+        """Invalidate all cached bar series and latest-bar entries for a symbol.
+
+        Called by the ingestion service after a successful 1m upsert so the
+        next read recomputes the resampled series from the DB instead of
+        serving the stale cached version (which could be up to ``_BAR_CACHE_TTL``
+        seconds out of date — 600s for 1d, 3600s for 1wk).
+
+        Returns the number of Redis keys deleted. Returns 0 when Redis is
+        unavailable; callers should treat that as a non-fatal cache miss.
+
+        Notes on key patterns:
+          - Bar series:   ``marketlens:bars:{symbol}:*`` (5m, 1h, 1d, 1wk, etc.)
+          - Latest bar:   ``marketlens:latest_bar:{symbol}:*`` (1m, 5m, etc.)
+        We use ``SCAN`` instead of ``KEYS`` to avoid blocking Redis on large
+        keyspaces (a single bar symbol has at most ~10 keys, so SCAN is overkill
+        but it's the same pattern used elsewhere for consistency).
+        """
+        if not self.is_available():
+            return 0
+        try:
+            patterns = [
+                f"marketlens:bars:{symbol}:*",
+                f"marketlens:latest_bar:{symbol}:*",
+            ]
+            total_deleted = 0
+            for pattern in patterns:
+                keys: list[str] = []
+                cursor = 0
+                while True:
+                    cursor, batch = self._client.scan(
+                        cursor=cursor, match=pattern, count=100
+                    )
+                    keys.extend(batch)
+                    if cursor == 0:
+                        break
+                if keys:
+                    self._client.delete(*keys)
+                    total_deleted += len(keys)
+            if total_deleted:
+                logger.debug(
+                    f"Invalidated {total_deleted} cached bar keys for {symbol}"
+                )
+            return total_deleted
+        except Exception as e:
+            logger.warning(f"Failed to invalidate bar cache for {symbol}: {e}")
+            return 0
 
     def _enforce_size_limit(self, cache_type: str):
         """Enforce size limits by removing oldest keys when limits are exceeded."""
@@ -209,7 +327,7 @@ class RedisCache:
             return
         try:
             channel = f"marketlens:bar_updates:{symbol}:{timeframe}"
-            message = json.dumps(bar.model_dump(), default=str)
+            message = _bar_to_json(bar)
             self._client.publish(channel, message)
             logger.debug(f"Published bar update for {symbol}:{timeframe} to Redis")
         except Exception as e:
@@ -221,7 +339,7 @@ class RedisCache:
             return
         try:
             channel = f"marketlens:quote_updates:{symbol}"
-            message = json.dumps(quote.model_dump(), default=str)
+            message = _quote_to_json(quote)
             self._client.publish(channel, message)
             logger.debug(f"Published quote update for {symbol} to Redis")
         except Exception as e:

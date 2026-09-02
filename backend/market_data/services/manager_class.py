@@ -23,6 +23,7 @@ from backend.models.market_data import (
 from ..circuit_breaker import CircuitState
 from ..provider import MarketDataProvider
 from ._providers import get_redis_cache, get_settings
+from .cache import get_bar_cache_ttl
 from .providers import (
     _EXPECTED_BAR_COUNTS,
     _INTRADAY_TIMEFRAMES,
@@ -169,13 +170,15 @@ class MarketDataManager:
             raise last_error
         raise RuntimeError("No available providers")
 
-    def get_latest_bar(self, symbol: str, timeframe: str) -> Bar:
+    def get_latest_bar(
+        self, symbol: str, timeframe: str, use_cache: bool = True
+    ) -> Bar:
         """Get latest bar for a symbol with fallback.
 
-        Reads from Redis first, then falls through the provider list on miss.
-        Successful fetches are written back to Redis.
+        Reads from Redis first (if ``use_cache=True``), then falls through the
+        provider list on miss. Successful fetches are written back to Redis.
         """
-        if get_settings().redis.enabled:
+        if use_cache and get_settings().redis.enabled:
             cached_bar = get_redis_cache().get_latest_bar(symbol, timeframe)
             if cached_bar is not None:
                 self._cache_stats["bar_hits"] += 1
@@ -292,7 +295,10 @@ class MarketDataManager:
                         f"age {age:.1f}s)"
                     )
                     if get_settings().redis.enabled:
-                        get_redis_cache().set_bars(symbol, timeframe, cached)
+                        get_redis_cache().set_bars(
+                            symbol, timeframe, cached,
+                            ttl=get_bar_cache_ttl(timeframe),
+                        )
                     return cached
             except Exception as e:
                 logger.warning(f"Bar cache lookup failed for {symbol}: {e}")
@@ -332,7 +338,10 @@ class MarketDataManager:
                 )
 
         if get_settings().redis.enabled and use_cache:
-            get_redis_cache().set_bars(symbol, timeframe, bars)
+            get_redis_cache().set_bars(
+                symbol, timeframe, bars,
+                ttl=get_bar_cache_ttl(timeframe),
+            )
             if bars:
                 get_redis_cache().publish_bar_update(symbol, timeframe, bars[-1])
 
@@ -472,7 +481,10 @@ class MarketDataManager:
                             )
                             for symbol, bars in batch_bars.items():
                                 if symbol in symbols_to_fetch and bars:
-                                    get_redis_cache().set_bars(symbol, timeframe, bars)
+                                    get_redis_cache().set_bars(
+                                        symbol, timeframe, bars,
+                                        ttl=get_bar_cache_ttl(timeframe),
+                                    )
                                     if bars:
                                         get_redis_cache().publish_bar_update(
                                             symbol, timeframe, bars[-1]

@@ -58,6 +58,22 @@ class TestPerformanceEndpointStats(unittest.TestCase):
         self.assertEqual(body["rate_limit"]["backend"], "in_memory")
         self.assertEqual(body["rate_limit"]["fallback"]["total_allowed"], 100)
 
+    def test_performance_includes_bars_block(self):
+        """Phase 3.1: bars_stored, bars_1m_only, bars_resampled are surfaced."""
+        with patch("backend.api.system.router._safe_bar_counts") as m_bars:
+            m_bars.return_value = {
+                "bars_stored": 10_000,
+                "bars_1m_only": 10_000,
+                "bars_resampled": 0,
+            }
+            resp = self.client.get("/api/system/performance")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertIn("bars", body)
+        self.assertEqual(body["bars"]["bars_stored"], 10_000)
+        self.assertEqual(body["bars"]["bars_1m_only"], 10_000)
+        self.assertEqual(body["bars"]["bars_resampled"], 0)
+
     def test_performance_includes_websocket_block(self):
         with patch("backend.api.system.router._safe_websocket_stats") as m_ws:
             m_ws.return_value = {

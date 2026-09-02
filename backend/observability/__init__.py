@@ -8,6 +8,7 @@ create a circular import — the API routers import the services).
 from .metrics import (
     get_snapshot,
     record_bar,
+    record_bars,
     record_http_request,
     record_scan,
     set_ingestion_running,
@@ -18,6 +19,7 @@ from .metrics import (
 __all__ = [
     "get_snapshot",
     "record_bar",
+    "record_bars",
     "record_http_request",
     "record_scan",
     "set_ingestion_running",

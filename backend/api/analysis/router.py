@@ -39,7 +39,9 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
     """Load bars from DB and reshape for engine consumption.
 
     Returns dicts with ``open/high/low/close/volume/timestamp`` keys
-    that the Phase 9 engines accept.
+    that the Phase 9 engines accept. ``source`` is propagated for
+    Phase 3.1 so the API can distinguish ``"raw"`` from ``"resampled"``
+    bars.
     """
     db = SessionLocal()
     try:
@@ -55,6 +57,7 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
             "close": b.close,
             "volume": b.volume,
             "timestamp": b.timestamp,
+            "source": b.source,
         })
     return out
 
@@ -254,14 +257,24 @@ async def get_recent_bars(
     symbol: str,
     timeframe: str = "1d",
     limit: int = 60,
+    resample_from: str | None = None,
 ):
-    """Return the most recent bars for charting / table views."""
+    """Return the most recent bars for charting / table views.
+
+    Phase 3.1: higher-timeframe bars (5m, 15m, 30m, 1h, 1d, 1wk) are
+    resampled from 1m at read time. The ``source`` field on each bar
+    indicates ``"raw"`` (stored directly) or ``"resampled"`` (derived
+    from 1m). The ``resample_from`` query parameter is an optional hint
+    — set to ``"1m"`` when requesting higher timeframes to document the
+    source. It does not change behaviour; it only annotates the response.
+    """
     symbol = symbol.upper()
     try:
         bars = _load_bars(symbol, timeframe, limit=limit)
         return {
             "symbol": symbol,
             "timeframe": timeframe,
+            "resample_from": resample_from,
             "bars": [
                 {
                     "timestamp": _to_dashboard_tz(b.get("timestamp")),
@@ -270,6 +283,7 @@ async def get_recent_bars(
                     "low": b["low"],
                     "close": b["close"],
                     "volume": b["volume"],
+                    "source": b.get("source"),
                 }
                 for b in bars
             ],

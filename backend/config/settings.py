@@ -17,6 +17,13 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 # point at this single file so there's one source of truth for local config.
 _ENV_FILE = str(_PROJECT_ROOT / ".env")
 
+# Hard-coded database URL. Computed from the settings file location, NOT from
+# the process CWD. This is the permanent fix for the "watchlist disappears on
+# restart from wrong CWD" bug — the path is resolved at import time and never
+# changes for the lifetime of the process.
+_DB_PATH = (_PROJECT_ROOT / "marketlens.db").resolve()
+_DB_URL = f"sqlite:///{_DB_PATH}"
+
 
 class RedisSettings(BaseSettings):
     """Redis configuration for caching and pub/sub."""
@@ -77,7 +84,7 @@ class WebullSettings(BaseSettings):
 class MarketDataSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MARKET_DATA_", extra="ignore")
     primary_provider: str = Field(default="finnhub")
-    fallback_providers: list[str] = Field(default_factory=lambda: ["yahoo_finance", "webull"])
+    fallback_providers: list[str] = Field(default_factory=lambda: ["yahoo_finance", "webull", "alpaca"])
     # Global rate limit (used when no per-provider override is set).
     rate_limit_per_minute: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=300)
@@ -86,6 +93,40 @@ class MarketDataSettings(BaseSettings):
     yahoo_finance_rate_limit_per_minute: int = Field(default=60)
     finnhub_rate_limit_per_minute: int = Field(default=1200)
     webull_rate_limit_per_minute: int = Field(default=120)
+    alpaca_rate_limit_per_minute: int = Field(default=60)
+
+
+class AlpacaSettings(BaseSettings):
+    """Alpaca market data provider configuration (v3.6).
+
+    Provides both REST API (quotes, bars, market status) and real-time
+    WebSocket streaming for live bars/trades/quotes.
+
+    **Data Tiers:**
+      - Free tier (IEX): 200 req/min REST, free real-time data for US equities
+      - Paid tier (SIP): higher rate limits + full SIP market data
+
+    **Provider chain position:** Added as fallback after webull, yfinance.
+    Enable via ALPACA_ENABLED=true with valid API credentials.
+
+    **WebSocket:** The provider maintains a persistent WebSocket connection
+    to Alpaca's streaming API. It starts on first subscription and stays
+    connected as long as clients are subscribed.
+
+    **Credentials:** ``api_key`` and ``secret_key`` are sourced from
+    ``ALPACA_API_KEY`` / ``ALPACA_SECRET_KEY``. The provider is skipped
+    (not registered) when ``enabled=false`` or credentials are absent.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="ALPACA_", extra="ignore")
+    enabled: bool = Field(default=False)
+    api_key: str = Field(default="")
+    secret_key: str = Field(default="")
+    # Paper trading (paper.alpaca.ai) by default; set to false for live trading.
+    paper: bool = Field(default=True)
+    # Data tier: "iex" (free) or "sip" (paid). Determines symbol availability
+    # and rate limits. Auto-detected from credentials when possible.
+    data_tier: str = Field(default="iex")
+    request_timeout: float = Field(default=15.0)
 
 
 class AISettings(BaseSettings):
@@ -145,31 +186,39 @@ class WatchlistSettings(BaseSettings):
 
 
 class DatabaseSettings(BaseSettings):
+    """Database configuration.
+
+    The DB path is **hard-coded** to ``<project_root>/marketlens.db`` and
+    cannot be overridden via ``DATABASE_URL`` in ``.env`` or the process
+    environment. This is intentional: the previous design allowed
+    ``DATABASE_URL`` to be set to a relative path, which silently created
+    a new empty DB in whatever directory the server was started from,
+    causing the "watchlist disappeared after restart from wrong dir" bug.
+
+    If you need a different DB (tests, production Postgres), set the
+    ``MARKETLENS_DB_OVERRIDE`` environment variable to the desired URL.
+    """
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="DATABASE_", extra="ignore")
-    url: str = Field(default="sqlite:///./marketlens.db")
+    # The URL is the hard-coded project-root path. The field validator below
+    # forces this value, ignoring anything pydantic-settings read from env.
+    url: str = ""  # Set by the validator below; never read from env.
     echo: bool = Field(default=False)
     pool_size: int = Field(default=5)
 
-    @field_validator("url")
+    @field_validator("url", mode="before")
     @classmethod
-    def _resolve_relative_url(cls, v: str) -> str:
-        """Normalise SQLite URLs to absolute paths relative to the project root.
+    def _force_project_root_db(cls, v: str | None) -> str:
+        """Force the DB URL to the project-root path regardless of env.
 
-        ``sqlite:///./foo.db`` and ``sqlite:///foo.db`` resolve relative to the
-        project root (``_PROJECT_ROOT``), not to whatever directory the server
-        happens to be started from.  This prevents data from being silently
-        written to a different file every time CWD changes.
-        Absolute URLs (``sqlite:///absolute/path.db``) and non-SQLite URLs are
-        returned unchanged.
+        This is a permanent fix for the "watchlist disappears on restart
+        from wrong dir" bug. The hard-coded path is computed from
+        ``_PROJECT_ROOT`` at import time, so it cannot be misconfigured
+        by the process CWD or by an accidental ``DATABASE_URL`` in ``.env``.
+
+        To use a different DB (tests, production Postgres), set
+        ``MARKETLENS_DB_OVERRIDE`` to the URL.
         """
-        if not v.startswith("sqlite:///"):
-            return v
-        # Strip the ``sqlite:///`` prefix to get the file path portion.
-        path_part = v[len("sqlite:///") :]
-        if os.path.isabs(path_part):
-            return v
-        # ``sqlite:///./foo.db`` → ``sqlite:///absolute/path/to/foo.db``
-        return f"sqlite:///{(_PROJECT_ROOT / path_part.lstrip('./')).resolve()}"
+        return os.environ.get("MARKETLENS_DB_OVERRIDE") or _DB_URL
 
 
 class CORSSettings(BaseSettings):
@@ -510,6 +559,7 @@ class Settings(BaseSettings):
     market_data: MarketDataSettings = Field(default_factory=MarketDataSettings)
     finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     webull: WebullSettings = Field(default_factory=WebullSettings)
+    alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
     ai: AISettings = Field(default_factory=AISettings)
     watchlist: WatchlistSettings = Field(default_factory=WatchlistSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)

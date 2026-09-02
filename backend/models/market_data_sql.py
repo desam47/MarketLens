@@ -46,14 +46,24 @@ class BarModel(Base):
     timestamp = Column(DateTime, nullable=False, index=True)  # Bar close time
     provider = Column(String(50), nullable=False)
     data_status = Column(String(20), nullable=False)
+    # Phase 3.1: 'raw' for rows ingested from a provider, 'resampled' for
+    # rows derived from 1m at read time. Higher-TF rows are read-time only
+    # and never persisted, so existing rows default to 'raw'.
+    source = Column(String(20), nullable=False, server_default="raw")
 
     # Composite indexes for common queries.
     # ix_bars_symbol_timeframe_timestamp is UNIQUE so concurrent upsert_bars
     # calls cannot create duplicate bars for the same (symbol, timeframe, timestamp).
+    # Phase 3.1: the index is named ``ix_bars_source_timeframe`` (column
+    # order: source first, then timeframe) so the most selective predicate
+    # — filtering by source='raw' or 'resampled' — is the prefix. Renamed
+    # from the previous ``ix_bars_timeframe_source`` order. See Alembic
+    # migration ``rename_bars_index_to_source_timeframe``.
     __table_args__ = (
         Index('ix_bars_symbol_timeframe_timestamp', 'symbol', 'timeframe', 'timestamp', unique=True),
         Index('ix_bars_provider_symbol', 'provider', 'symbol'),
         Index('ix_bars_timeframe_timestamp', 'timeframe', 'timestamp'),
+        Index('ix_bars_source_timeframe', 'source', 'timeframe'),
     )
 
     def __repr__(self):

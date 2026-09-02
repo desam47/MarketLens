@@ -114,10 +114,22 @@ def record_scan(duration_ms: float) -> None:
 
 
 def record_bar() -> None:
-    """Called by the bar repository on every successful upsert."""
+    """Called by the bar repository on every successful upsert of one bar."""
     global _ingestion_last_bar_time, _ingestion_total_bars
     _ingestion_last_bar_time = datetime.now(UTC)
     _ingestion_total_bars += 1
+
+
+def record_bars(n: int) -> None:
+    """Called by the bar repository on every successful bulk upsert.
+
+    More efficient than calling record_bar() in a loop because it updates
+    the timestamp once instead of N times, and increments the counter by N
+    instead of N separate +1 operations.
+    """
+    global _ingestion_last_bar_time, _ingestion_total_bars
+    _ingestion_last_bar_time = datetime.now(UTC)
+    _ingestion_total_bars += n
 
 
 def set_ingestion_running(running: bool) -> None:

@@ -3,6 +3,7 @@ Watchlist API endpoints
 """
 from datetime import datetime
 from io import StringIO
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
@@ -40,6 +41,7 @@ class WatchlistResponse(WatchlistBase):
 class WatchlistSymbolBase(BaseModel):
     symbol: str
     is_enabled: bool = True
+    entity_type: Literal["stock", "etf"] | None = None
 
 class WatchlistSymbolCreate(WatchlistSymbolBase):
     pass
@@ -58,6 +60,7 @@ class WatchlistSymbolUpdate(BaseModel):
 
     notes: str | None = None
     is_enabled: bool | None = None
+    entity_type: Literal["stock", "etf"] | None = None
 
 
 class ImportRequest(BaseModel):
@@ -150,7 +153,8 @@ def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db
         raise HTTPException(status_code=404, detail="Watchlist not found")
     watchlist_symbol = repo.add_symbol_to_watchlist(
         watchlist_id=watchlist_id,
-        symbol=symbol.symbol
+        symbol=symbol.symbol,
+        entity_type=symbol.entity_type or "stock",
     )
     return watchlist_symbol
 
@@ -217,6 +221,7 @@ def update_watchlist_symbol(
         symbol=symbol,
         notes=payload.notes,
         is_enabled=payload.is_enabled,
+        entity_type=payload.entity_type,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Symbol not found in watchlist")

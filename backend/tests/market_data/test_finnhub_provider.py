@@ -13,13 +13,14 @@ from unittest.mock import patch, MagicMock
 from backend.market_data.providers.finnhub_provider import FinnhubProvider
 
 
-def _mock_response(status_code=200, json_data=None, text="") -> MagicMock:
+def _mock_response(status_code=200, json_data=None, text="", content_type="application/json") -> MagicMock:
     """Build a requests.Response-like mock with .ok, .status_code, .json()."""
     resp = MagicMock()
     resp.status_code = status_code
     resp.ok = 200 <= status_code < 300
     resp.text = text or ""
     resp.json.return_value = json_data if json_data is not None else {}
+    resp.headers = {"Content-Type": content_type}
     return resp
 
 
@@ -41,6 +42,19 @@ class TestFinnhubProviderQuote(unittest.TestCase):
         self.assertEqual(quote.price, 150.50)
         self.assertEqual(quote.provider, "finnhub")
         self.assertEqual(quote.data_status.value, "DELAYED")
+
+    @patch("backend.market_data.providers.finnhub_provider.requests.get")
+    def test_get_quote_handles_free_tier_no_bid_ask(self, mock_get):
+        # Finnhub free tier /quote returns only `c` (close), not `b`/`a`.
+        # Provider must accept None for bid/ask without raising.
+        mock_get.return_value = _mock_response(200, {
+            "c": 325.13, "d": 8.28, "dp": 2.61, "h": 327.30,
+            "l": 314.73, "o": 316.98, "pc": 316.85, "t": 1700000000
+        })
+        quote = self.provider.get_quote("AAPL")
+        self.assertEqual(quote.price, 325.13)
+        self.assertIsNone(quote.bid)
+        self.assertIsNone(quote.ask)
 
     @patch("backend.market_data.providers.finnhub_provider.requests.get")
     def test_get_quote_raises_on_429(self, mock_get):
@@ -136,6 +150,24 @@ class TestFinnhubProviderBatchQuotes(unittest.TestCase):
         self.assertEqual(result, {})
         mock_get.assert_not_called()
 
+    @patch("backend.market_data.providers.finnhub_provider.requests.get")
+    @patch("backend.market_data.services.providers._rate_limiter")
+    @patch("backend.market_data.services.providers._get_breaker")
+    def test_batch_quotes_honours_rate_limiter(self, mock_get_breaker, mock_rl, mock_get):
+        """Each symbol must call _rate_limiter.acquire before the HTTP request."""
+        mock_get_breaker.return_value.call.return_value = MagicMock(
+            price=150.0, bid=None, ask=None, data_status=MagicMock(value="DELAYED"),
+            timestamp=datetime.now(timezone.utc), symbol="AAPL",
+            provider="finnhub",
+        )
+        result = self.provider.get_batch_quotes(["AAPL", "SPY", "QQQ"])
+
+        # Rate limiter acquire must be called once per symbol.
+        self.assertEqual(mock_rl.acquire.call_count, 3)
+        # Circuit breaker call must be called once per symbol.
+        self.assertEqual(mock_get_breaker.return_value.call.call_count, 3)
+        self.assertEqual(len(result), 3)
+
 
 class TestFinnhubProviderMarketStatus(unittest.TestCase):
     def setUp(self):
@@ -156,6 +188,19 @@ class TestFinnhubProviderMarketStatus(unittest.TestCase):
         mock_get.return_value = _mock_response(200, {"session": "closed"})
         status = self.provider.get_market_status("AAPL")
         self.assertFalse(status.is_open)
+
+    @patch("backend.market_data.providers.finnhub_provider.requests.get")
+    def test_get_market_status_raises_on_html_response(self, mock_get):
+        # Free tier quirk: /market-status returns 200 OK with HTML body.
+        # Provider must raise cleanly so the chain can fall through.
+        mock_get.return_value = _mock_response(
+            200, text="<!DOCTYPE html><html>...</html>",
+            content_type="text/html; charset=utf-8",
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.get_market_status("AAPL")
+        self.assertIn("non-JSON", str(ctx.exception))
+        self.assertIn("tier restriction", str(ctx.exception))
 
 
 class TestFinnhubProviderAvailability(unittest.TestCase):

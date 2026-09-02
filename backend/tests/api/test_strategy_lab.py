@@ -13,7 +13,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test_strategy_lab.db")
+os.environ.setdefault("MARKETLENS_DB_OVERRIDE", "sqlite:////tmp/test_strategy_lab.db")
 
 from fastapi.testclient import TestClient
 

@@ -49,6 +49,8 @@ _FINNHUB_RESOLUTION_MAP: dict[str, str] = {
     "30m": "30",
     "60m": "60",
     "1h": "60",   # Finnhub uses "60" for hourly
+    "4h": "60",   # Finnhub has no 4h; fetch 60-min bars and let the
+                    # caller resample to 4h at read time
     "90m": "60",  # No 90m, approximate with 60
     "1d": "D",
     "5d": "D",    # No 5d, approximate with daily
@@ -122,6 +124,16 @@ class FinnhubProvider(BaseMarketDataProvider):
         if not r.ok:
             raise RuntimeError(
                 f"Finnhub HTTP {r.status_code} for {endpoint}: {r.text[:200]}"
+            )
+
+        # Free tier quirk: some endpoints (e.g. /market-status) return
+        # 200 OK with an HTML body instead of JSON. Detect via Content-Type
+        # and raise cleanly so the provider chain can fall through.
+        ctype = r.headers.get("Content-Type", "")
+        if "json" not in ctype.lower():
+            raise RuntimeError(
+                f"Finnhub {endpoint} returned non-JSON response "
+                f"(Content-Type={ctype!r}) — likely a tier restriction"
             )
 
         data = r.json()
@@ -225,7 +237,13 @@ class FinnhubProvider(BaseMarketDataProvider):
             raise
 
     def get_latest_bar(self, symbol: str, timeframe: str) -> Bar:
-        """Get the most recent bar for a symbol and timeframe."""
+        """Get the most recent bar for a symbol and timeframe.
+
+        Phase 3.1: when ``timeframe == "1m"`` the candle endpoint with
+        resolution "1" returns bars up to ~1 month old on Finnhub's free
+        tier. The ``datetime.now()`` target ensures the returned bar is the
+        most recent 1m bar available.
+        """
         return self.get_bar(symbol, timeframe, datetime.now(timezone.utc))
 
     def get_historical_bars(
@@ -298,13 +316,34 @@ class FinnhubProvider(BaseMarketDataProvider):
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         """Get quotes for multiple symbols.
 
-        Finnhub has no batch endpoint, so we loop and collect.
+        Finnhub has no batch endpoint, so we loop and collect. Each call
+        is gated by the per-provider rate limiter and the circuit breaker
+        so a burst of N symbols can't cascade into 429s / OPEN state.
         Symbols that fail return an ERROR quote rather than raising.
         """
+        if not symbols:
+            return {}
+
+        # Lazy imports to avoid circular dependency: services/ → providers/.
+        from backend.market_data.services.providers import (
+            _get_breaker,
+            _get_per_provider_rate_limit,
+            _rate_limiter,
+        )
+
+        provider_name = self.name
+        breaker = _get_breaker(provider_name)
+        limit = _get_per_provider_rate_limit(provider_name)
+
         results: dict[str, Quote] = {}
         for symbol in symbols:
             try:
-                results[symbol.upper()] = self.get_quote(symbol)
+                # Honour the per-provider rate limit before the call so
+                # bursts of N symbols are throttled to ``limit``/min.
+                _rate_limiter.acquire(provider_name, limit)
+                # Route through the circuit breaker so a single failure
+                # doesn't cascade into 429s across the whole batch.
+                results[symbol.upper()] = breaker.call(self.get_quote, symbol)
             except Exception:
                 results[symbol.upper()] = Quote(
                     symbol=symbol.upper(),

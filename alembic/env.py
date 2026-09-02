@@ -21,18 +21,18 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # ---------------------------------------------------------------------------
-# Database URL — read from environment, matching the rest of the app.
+# Database URL — use the same hard-coded path the app uses.
 # ---------------------------------------------------------------------------
-# ``alembic.ini`` leaves ``sqlalchemy.url`` blank; we populate it here from
-# ``DATABASE_URL`` so the same env-var that powers the FastAPI app also
-# powers migrations.
+# ``backend.config.settings.DatabaseSettings`` hard-codes the DB path to
+# ``<project_root>/marketlens.db`` (computed from the settings file's location,
+# not the process CWD). This prevents the "watchlist disappeared on restart
+# from wrong dir" bug. We import from there instead of reading
+# ``DATABASE_URL`` from the environment.
 #
-# The fallback is the same default used by ``backend/config/settings.py`` so
-# running alembic with no env-var still works against ``marketlens.db``.
-_database_url: str | None = os.environ.get(
-    "DATABASE_URL",
-    "sqlite:////Users/dips/projects/MarketLens/marketlens.db",
-)
+# The override mechanism (set ``DatabaseSettings._DB_URL_OVERRIDE`` before
+# construction) is also honored — tests that need a temp DB can use it.
+from backend.config.settings import settings as _app_settings
+_database_url: str = _app_settings.database.url
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy models — import all so ``Base.metadata`` is complete.

@@ -161,23 +161,30 @@ class SignalRecorder:
         return updated
 
     def record_from_recent_bars(
-        self, symbols: list[str], timeframes: list[str]
+        self, symbols: list[str]
     ) -> int:
         """Walk the latest stored bar per (symbol, timeframe) and record signals.
 
-        For each (symbol, timeframe) pair, reads the most recent bar from
-        the DB. If we haven't recorded that bar yet, snapshots the trend
-        state by calling the in-memory MultiTimeframeEngine and writes a
-        HistoricalSignal row.
+        Phase 3.1 note: the bars table only stores 1m bars. The subquery
+        queries all ``timeframe`` values that have rows for the given symbols,
+        so signals are recorded for whatever timeframes are available — not
+        just the ingestion timeframes. If higher-TF bars are backfilled later
+        (e.g. via ``backfill_1m.py`` and provider fetch at 1d), signals for
+        those timeframes will automatically appear.
 
         Returns the count of new signals written.
         """
-        if not symbols or not timeframes:
+        if not symbols:
             return 0
         recorded = 0
         db = SessionLocal()
         try:
             # Find the most recent bar per (symbol, timeframe) in one query.
+            # Note: ``BarModel.timeframe`` is included in the GROUP BY so we
+            # get one row per (symbol, timeframe) pair — not just one per symbol.
+            # Before Phase 3.1: the table had 1m/5m/15m/30m/1h/1d/1wk bars.
+            # After Phase 3.1: only 1m bars exist; higher-TF signals are only
+            # recorded once backfill_1m.py + provider fetch adds those bars.
             subq = (
                 db.query(
                     BarModel.symbol,
@@ -185,7 +192,6 @@ class SignalRecorder:
                     func.max(BarModel.timestamp).label("ts"),
                 )
                 .filter(BarModel.symbol.in_([s.upper() for s in symbols]))
-                .filter(BarModel.timeframe.in_(timeframes))
                 .group_by(BarModel.symbol, BarModel.timeframe)
             ).subquery()
 

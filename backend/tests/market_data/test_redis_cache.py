@@ -15,6 +15,12 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
+from backend.market_data.services.cache import (
+    _bar_to_json,
+    _bars_to_json,
+    _quote_to_json,
+    get_bar_cache_ttl,
+)
 from backend.market_data.services.manager import RedisCache
 from backend.models.market_data import Bar, DataStatus, Quote
 
@@ -222,7 +228,8 @@ class TestRedisCacheGetSet(unittest.TestCase):
             self.mock_client.setex.assert_called_once()
             call_args = self.mock_client.setex.call_args
             self.assertEqual(call_args[0][0], "marketlens:latest_bar:AAPL:1d")
-            self.assertEqual(call_args[0][1], 300)  # TTL
+            # Per-TF TTL from get_bar_cache_ttl("1d") = 600s
+            self.assertEqual(call_args[0][1], 600)
             self.mock_client.publish.assert_called_once()
             pub_call = self.mock_client.publish.call_args[0]
             self.assertEqual(pub_call[0], "marketlens:bar_updates:AAPL:1d")
@@ -241,6 +248,106 @@ class TestRedisCacheGetSet(unittest.TestCase):
                 data_status=DataStatus.LIVE,
             ))
             self.assertFalse(result)
+
+
+class TestBarCacheTTL(unittest.TestCase):
+    """Phase 3.1: per-TF cache TTLs for resampled bar series.
+
+    Higher-TF resamples (1d, 1wk) are stable for longer than 1m, so we
+    cache them for longer. ``set_bars`` must honour the override when
+    supplied, fall back to the per-TF default otherwise, and only fall
+    back to the global ``bar_data_ttl`` when the TF is unknown.
+    """
+
+    def test_get_bar_cache_ttl_known_timeframes(self):
+        """Known TFs return their per-TF TTL."""
+        self.assertEqual(get_bar_cache_ttl("1m"), 60)
+        self.assertEqual(get_bar_cache_ttl("5m"), 120)
+        self.assertEqual(get_bar_cache_ttl("15m"), 180)
+        self.assertEqual(get_bar_cache_ttl("30m"), 240)
+        self.assertEqual(get_bar_cache_ttl("1h"), 300)
+        self.assertEqual(get_bar_cache_ttl("4h"), 360)
+        self.assertEqual(get_bar_cache_ttl("1d"), 600)
+        self.assertEqual(get_bar_cache_ttl("1wk"), 3600)
+        self.assertEqual(get_bar_cache_ttl("1mo"), 3600)
+
+    def test_get_bar_cache_ttl_unknown_returns_default(self):
+        """Unknown TFs return the default 300s."""
+        self.assertEqual(get_bar_cache_ttl("2m"), 300)
+        self.assertEqual(get_bar_cache_ttl("2h"), 300)
+
+    def test_set_bars_uses_default_bar_data_ttl(self):
+        """When no TTL override is passed, the global bar_data_ttl is used."""
+        bar = Bar(
+            symbol="AAPL", timestamp=datetime.now(),
+            open=100, high=101, low=99, close=100.5, volume=1000,
+            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+        )
+        mock_client = MagicMock()
+        mock_client.ping.return_value = True
+        with patch("backend.market_data.services.manager._settings") as mock_settings, \
+             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+            mock_settings.redis.enabled = True
+            mock_settings.redis.url = "redis://localhost:6379"
+            mock_settings.redis.password = None
+            mock_settings.redis.bar_data_ttl = 300
+            mock_redis_class.from_url.return_value = mock_client
+            cache = RedisCache()
+
+            cache.set_bars("AAPL", "1d", [bar])
+
+        call_args = mock_client.setex.call_args
+        self.assertEqual(call_args[0][1], 300)
+
+    def test_set_bars_uses_ttl_override(self):
+        """An explicit ttl= argument is honoured regardless of the TF."""
+        bar = Bar(
+            symbol="AAPL", timestamp=datetime.now(),
+            open=100, high=101, low=99, close=100.5, volume=1000,
+            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+        )
+        mock_client = MagicMock()
+        mock_client.ping.return_value = True
+        with patch("backend.market_data.services.manager._settings") as mock_settings, \
+             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+            mock_settings.redis.enabled = True
+            mock_settings.redis.url = "redis://localhost:6379"
+            mock_settings.redis.password = None
+            mock_settings.redis.bar_data_ttl = 300
+            mock_redis_class.from_url.return_value = mock_client
+            cache = RedisCache()
+
+            cache.set_bars("AAPL", "1d", [bar], ttl=42)
+
+        call_args = mock_client.setex.call_args
+        self.assertEqual(call_args[0][1], 42)
+
+    def test_set_bars_per_tf_ttl_via_getter(self):
+        """Wiring pattern: callers pass ttl=get_bar_cache_ttl(tf) explicitly."""
+        bar = Bar(
+            symbol="AAPL", timestamp=datetime.now(),
+            open=100, high=101, low=99, close=100.5, volume=1000,
+            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+        )
+        mock_client = MagicMock()
+        mock_client.ping.return_value = True
+        with patch("backend.market_data.services.manager._settings") as mock_settings, \
+             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+            mock_settings.redis.enabled = True
+            mock_settings.redis.url = "redis://localhost:6379"
+            mock_settings.redis.password = None
+            # Even if the global default is 300, the explicit per-TF
+            # TTL for 1d (600) takes precedence.
+            mock_settings.redis.bar_data_ttl = 300
+            mock_redis_class.from_url.return_value = mock_client
+            cache = RedisCache()
+
+            cache.set_bars(
+                "AAPL", "1d", [bar], ttl=get_bar_cache_ttl("1d")
+            )
+
+        call_args = mock_client.setex.call_args
+        self.assertEqual(call_args[0][1], 600)
 
 
 class TestRedisCachePubSub(unittest.TestCase):
@@ -456,6 +563,169 @@ class TestRedisCacheErrorHandling(unittest.TestCase):
         )
         result = self.cache.set_quote("AAPL", quote)
         self.assertFalse(result)
+
+
+class TestInvalidateBarsForSymbol(unittest.TestCase):
+    """Phase 3.1 cache-invalidation hook: after a 1m bar is upserted, the
+    ingestion service must invalidate all cached bar series for that symbol
+    so the next read recomputes from the DB instead of serving the stale
+    cached version (TTL can be 1h for 1wk)."""
+
+    def _make_bar(self, symbol: str, timeframe: str = "1m"):
+        from datetime import datetime
+        return Bar(
+            symbol=symbol,
+            timeframe=timeframe,
+            open=100.0, high=101.0, low=99.0, close=100.5,
+            volume=1000,
+            timestamp=datetime.now(),
+            provider="test",
+            data_status=DataStatus.HISTORICAL,
+        )
+
+    def test_invalidate_deletes_bar_series_keys(self):
+        """Both bar series and latest_bar keys for the symbol are deleted."""
+        cache = RedisCache()
+        cache._client = MagicMock()
+        # First pattern: bar series. Second pattern: latest_bar.
+        # Each pattern's SCAN loop runs once (cursor=0) and returns its batch.
+        cache._client.scan.side_effect = [
+            (0, ["marketlens:bars:AAPL:1d", "marketlens:bars:AAPL:1h"]),
+            (0, ["marketlens:latest_bar:AAPL:1m"]),
+        ]
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 3)
+        # Two DELETE calls — one per pattern, each batched.
+        self.assertEqual(cache._client.delete.call_count, 2)
+
+    def test_invalidate_does_not_touch_other_symbols(self):
+        """Only the named symbol's keys are scanned — others are untouched."""
+        cache = RedisCache()
+        cache._client = MagicMock()
+        # First scan (bar series) returns only AAPL keys; second (latest_bar) returns empty.
+        cache._client.scan.side_effect = [
+            (0, ["marketlens:bars:AAPL:1d", "marketlens:bars:AAPL:1h"]),
+            (0, []),
+        ]
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 2)
+        # Verify SCAN was called with AAPL-specific patterns (not wildcards)
+        scan_patterns = [call.kwargs["match"] for call in cache._client.scan.call_args_list]
+        self.assertIn("marketlens:bars:AAPL:*", scan_patterns)
+        self.assertIn("marketlens:latest_bar:AAPL:*", scan_patterns)
+        # MSFT keys would not match the AAPL pattern — confirm we don't touch them
+        self.assertNotIn("marketlens:bars:MSFT:*", scan_patterns)
+
+    def test_invalidate_returns_zero_when_no_keys(self):
+        """No cached keys → returns 0, no DELETE call."""
+        cache = RedisCache()
+        cache._client = MagicMock()
+        cache._client.scan.return_value = (0, [])
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 0)
+        cache._client.delete.assert_not_called()
+
+    def test_invalidate_handles_paginated_scan(self):
+        """SCAN may return keys in multiple pages (cursor != 0). All pages merged."""
+        cache = RedisCache()
+        cache._client = MagicMock()
+        # Pattern 1: page 1 returns cursor=5, page 2 returns cursor=0 (done).
+        # Pattern 2: page 1 returns cursor=0 immediately (done).
+        cache._client.scan.side_effect = [
+            (5, ["marketlens:bars:AAPL:1d"]),
+            (0, ["marketlens:bars:AAPL:1h"]),
+            (0, ["marketlens:latest_bar:AAPL:1m"]),
+        ]
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 3)
+
+    def test_invalidate_returns_zero_when_redis_unavailable(self):
+        """If Redis is down, invalidate is a no-op and returns 0."""
+        cache = RedisCache()
+        cache._client = None  # disconnected
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 0)
+
+    def test_invalidate_returns_zero_on_redis_error(self):
+        """A SCAN failure doesn't crash the ingestion path — returns 0."""
+        cache = RedisCache()
+        cache._client = MagicMock()
+        cache._client.scan.side_effect = ConnectionError("Redis went away")
+
+        n = cache.invalidate_bars_for_symbol("AAPL")
+        self.assertEqual(n, 0)
+
+
+class TestBarQuoteJsonHelpers(unittest.TestCase):
+    """The cache module exposes ``_bar_to_json`` / ``_bars_to_json`` /
+    ``_quote_to_json`` helpers used by every Redis write path (cache
+    set + pub/sub publish). They centralise the ``model_dump()`` +
+    ``json.dumps(default=str)`` pattern that used to be duplicated in
+    five places in cache.py and one in ws_router."""
+
+    def test_bar_to_json_round_trip(self):
+        bar = Bar(
+            symbol="AAPL",
+            timestamp=datetime(2025, 6, 1, 10, 0),
+            open=100.0, high=101.0, low=99.0, close=100.5,
+            volume=1000, timeframe="1m",
+            provider="yahoo_finance", data_status=DataStatus.LIVE,
+        )
+        s = _bar_to_json(bar)
+        # Round-trip through the same data path Redis would use.
+        restored = Bar.model_validate_json(s)
+        self.assertEqual(restored.symbol, bar.symbol)
+        self.assertEqual(restored.timeframe, bar.timeframe)
+        self.assertEqual(restored.open, bar.open)
+
+    def test_bars_to_json_round_trip(self):
+        bars = [
+            Bar(
+                symbol="AAPL", timestamp=datetime(2025, 6, 1, 10, i),
+                open=100.0, high=101.0, low=99.0, close=100.5,
+                volume=1000, timeframe="1m",
+                provider="yahoo_finance", data_status=DataStatus.LIVE,
+            )
+            for i in range(3)
+        ]
+        s = _bars_to_json(bars)
+        restored_list = [Bar.model_validate(b) for b in
+                         __import__("json").loads(s)]
+        self.assertEqual(len(restored_list), 3)
+        self.assertEqual(restored_list[0].symbol, "AAPL")
+
+    def test_quote_to_json_round_trip(self):
+        quote = Quote(
+            symbol="AAPL", price=150.0,
+            timestamp=datetime(2025, 6, 1, 10, 0),
+            provider="yahoo_finance", data_status=DataStatus.DELAYED,
+        )
+        s = _quote_to_json(quote)
+        restored = Quote.model_validate_json(s)
+        self.assertEqual(restored.price, 150.0)
+        self.assertEqual(restored.symbol, "AAPL")
+
+    def test_bar_to_json_serializes_datetime(self):
+        """datetime fields must serialize (default=str) — they are not
+        natively JSON-serializable."""
+        import json
+        bar = Bar(
+            symbol="AAPL",
+            timestamp=datetime(2025, 6, 1, 10, 0, 30, 123456),
+            open=100.0, high=101.0, low=99.0, close=100.5,
+            volume=1000, timeframe="1m",
+            provider="yahoo_finance", data_status=DataStatus.LIVE,
+        )
+        s = _bar_to_json(bar)
+        # No exception during json.dumps; payload is valid JSON.
+        payload = json.loads(s)
+        self.assertEqual(payload["symbol"], "AAPL")
+        self.assertIn("timestamp", payload)
 
 
 if __name__ == "__main__":

@@ -67,15 +67,15 @@ async def lifespan(app: FastAPI):
     tracing, and pre-warm trend engines so ingestion can dispatch bars immediately."""
 
     # Run Alembic migrations at startup so schema is always current.
-    # Alembic is configured in /alembic/; it reads DATABASE_URL from the
-    # environment (the same env-var that powers the rest of the app).
+    # Alembic reads the DB URL directly from ``backend.config.settings``,
+    # which hard-codes the path to ``<project_root>/marketlens.db``.
     try:
-        import os
         import subprocess
         completed = subprocess.run(
             ["alembic", "upgrade", "head"],
             capture_output=True, text=True,
-            env={**os.environ, "DATABASE_URL": settings.database.url},
+            # DATABASE_URL is intentionally omitted — alembic/env.py now imports
+            # the URL directly from backend.config.settings, ignoring the env var.
         )
         if completed.returncode == 0 and completed.stdout.strip():
             for line in completed.stdout.strip().splitlines():

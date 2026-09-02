@@ -239,10 +239,12 @@ class TestSignalsAPI(unittest.TestCase):
             r = self.client.post("/api/signals/record")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["recorded"], 5)
-        # The recorder should have been called with the default symbols/timeframes
+        # The recorder should have been called with the symbols from ingestion service
         args, _ = mock_record.call_args
         self.assertEqual(args[0], ["AAPL", "MSFT"])
-        self.assertEqual(args[1], ["1d", "1h"])
+        # timeframes argument was removed (Phase 3.1 — bars table is 1m-only;
+        # record_from_recent_bars queries all available timeframes)
+        self.assertEqual(len(args), 1)
 
     # --- delete old ---
 

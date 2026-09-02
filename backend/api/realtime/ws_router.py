@@ -171,6 +171,76 @@ broadcast_manager = RealtimeBroadcastManager()
 
 
 # ---------------------------------------------------------------------------
+# Provider-aware broadcasting (v3.6 — Alpaca WebSocket integration)
+# ---------------------------------------------------------------------------
+
+# Tracks which provider stream is the active source for a given (symbol, tf).
+# Keys: "{SYMBOL}:{TF}" → "alpaca" | "local" (local = engine_registry dispatcher).
+_provider_stream_registry: dict[str, str] = {}
+_provider_stream_lock = asyncio.Lock()
+
+
+async def set_provider_stream(symbol: str, timeframe: str, provider: str) -> None:
+    """Record that ``provider`` is the active stream source for (symbol, tf).
+
+    Used by the Alpaca WebSocket client to claim ownership of bar pushes for
+    a subscribed symbol. While the local ``engine_registry`` dispatcher is
+    also active, this is informational only — the local dispatcher naturally
+    short-circuits when ``has_subscribers`` returns false.
+
+    Args:
+        symbol: Ticker symbol (uppercased)
+        timeframe: Timeframe string (e.g., "1m", "5m")
+        provider: Provider name (e.g., "alpaca") or "local" to clear.
+    """
+    key = RealtimeBroadcastManager._make_key(symbol, timeframe)
+    async with _provider_stream_lock:
+        if provider == "local":
+            _provider_stream_registry.pop(key, None)
+        else:
+            _provider_stream_registry[key] = provider
+
+
+def get_provider_stream(symbol: str, timeframe: str) -> str | None:
+    """Return the active provider stream source for (symbol, tf), or None."""
+    key = RealtimeBroadcastManager._make_key(symbol, timeframe)
+    return _provider_stream_registry.get(key)
+
+
+async def _broadcast_bar(bar: Any, symbol: str | None = None, timeframe: str | None = None) -> None:
+    """Provider-side helper: broadcast a bar to WebSocket subscribers.
+
+    This is the function providers (e.g., Alpaca WebSocket client) call to
+    push live bars into the existing realtime channel. The signature
+    matches the ``on_bar`` callback contract used by ``AlpacaWebSocketClient``.
+
+    Args:
+        bar: ``Bar`` model from ``backend.models.market_data``
+        symbol: Optional symbol override; defaults to ``bar.symbol``.
+        timeframe: Optional timeframe override; defaults to ``bar.timeframe``.
+    """
+    sym = (symbol or bar.symbol).upper()
+    tf = (timeframe or bar.timeframe).lower()
+    if not broadcast_manager.has_subscribers(sym, tf):
+        return
+    bar_data = bar.model_dump()
+    # Convert timestamp to the dashboard timezone for client display.
+    bar_data["timestamp"] = (
+        _to_dashboard_tz(bar.timestamp)
+        if isinstance(bar.timestamp, datetime)
+        else bar.timestamp
+    )
+    payload = {
+        "type": "bar_update",
+        "symbol": sym,
+        "timeframe": tf,
+        "data": bar_data,
+    }
+    key = RealtimeBroadcastManager._make_key(sym, tf)
+    await broadcast_manager.broadcast(key, payload)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -257,6 +327,75 @@ def reset() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Provider stream management (v3.6)
+# ---------------------------------------------------------------------------
+
+# Tracks per-provider subscription state to avoid duplicate connections.
+# provider name → {symbol → count of subscribers}
+_provider_subscription_counts: dict[str, dict[str, int]] = {}
+_provider_subscription_lock = asyncio.Lock()
+
+
+async def _maybe_start_provider_stream(provider: str, symbol: str, timeframe: str) -> None:
+    """Start a provider's stream for ``symbol`` if this is the first subscription.
+
+    Idempotent — safe to call on every subscribe message.
+    """
+    if provider != "alpaca":
+        return
+
+    sym_upper = symbol.upper()
+    async with _provider_subscription_lock:
+        _provider_subscription_counts.setdefault(provider, {})
+        _provider_subscription_counts[provider].setdefault(sym_upper, 0)
+        _provider_subscription_counts[provider][sym_upper] += 1
+
+    # Already subscribed — no need to start.
+    if _provider_subscription_counts.get(provider, {}).get(sym_upper, 0) > 1:
+        return
+
+    # Start the Alpaca stream.
+    try:
+        from backend.market_data.services.manager import market_data_manager
+
+        provider_instance = market_data_manager.providers.get(provider)
+        if provider_instance and hasattr(provider_instance, "subscribe"):
+            provider_instance.subscribe(sym_upper, timeframe)
+            logger.info("Alpaca stream started for %s (%s)", sym_upper, timeframe)
+    except Exception:
+        logger.exception("Failed to start Alpaca stream for %s", sym_upper)
+
+
+async def _maybe_stop_provider_stream(provider: str, symbol: str, timeframe: str) -> None:
+    """Stop a provider's stream for ``symbol`` if this was the last subscriber.
+
+    Idempotent — safe to call on every unsubscribe message.
+    """
+    if provider != "alpaca":
+        return
+
+    sym_upper = symbol.upper()
+    async with _provider_subscription_lock:
+        counts = _provider_subscription_counts.setdefault(provider, {})
+        counts[sym_upper] = max(0, counts.get(sym_upper, 0) - 1)
+        still_subscribed = counts.get(sym_upper, 0) > 0
+
+    if still_subscribed:
+        return
+
+    # Last subscriber gone — stop the stream.
+    try:
+        from backend.market_data.services.manager import market_data_manager
+
+        provider_instance = market_data_manager.providers.get(provider)
+        if provider_instance and hasattr(provider_instance, "unsubscribe"):
+            provider_instance.unsubscribe(sym_upper, timeframe)
+            logger.info("Alpaca stream stopped for %s (%s)", sym_upper, timeframe)
+    except Exception:
+        logger.exception("Failed to stop Alpaca stream for %s", sym_upper)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
@@ -301,18 +440,32 @@ async def realtime_websocket(websocket: WebSocket):
             action = msg.get("action") if isinstance(msg, dict) else None
             symbol = msg.get("symbol") if isinstance(msg, dict) else None
             timeframe = msg.get("timeframe") if isinstance(msg, dict) else None
+            provider = msg.get("provider") if isinstance(msg, dict) else None
 
             if action == "subscribe" and isinstance(symbol, str) and symbol:
                 tf = (timeframe or "1m") if isinstance(timeframe, str) else "1m"
                 await broadcast_manager.subscribe(websocket, symbol, tf)
+                # If client requested a specific provider, route the stream
+                # through it (v3.6 — currently supports "alpaca").
+                if provider and isinstance(provider, str) and provider != "local":
+                    await set_provider_stream(symbol, tf, provider)
+                    await _maybe_start_provider_stream(provider, symbol, tf)
                 await websocket.send_json({
                     "type": "subscribed",
                     "symbol": symbol.upper(),
                     "timeframe": tf,
+                    "provider": provider or "local",
                 })
             elif action == "unsubscribe" and isinstance(symbol, str) and symbol:
                 tf = (timeframe or "1m") if isinstance(timeframe, str) else "1m"
                 await broadcast_manager.unsubscribe(websocket, symbol, tf)
+                # If no more local subscribers and a provider stream is active,
+                # tear it down.
+                if not broadcast_manager.has_subscribers(symbol, tf):
+                    active = get_provider_stream(symbol, tf)
+                    if active:
+                        await _maybe_stop_provider_stream(active, symbol, tf)
+                        await set_provider_stream(symbol, tf, "local")
                 await websocket.send_json({
                     "type": "unsubscribed",
                     "symbol": symbol.upper(),

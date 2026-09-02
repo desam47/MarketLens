@@ -24,6 +24,41 @@ Security constraints
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+
+# Redirect the webull SDK's default log file from the CWD-relative
+# ``webull_trade_sdk.log`` to an absolute path inside the project tree.
+# The SDK's ``set_file_logger`` is called at runtime (not at import time),
+# so patching it here — before the SDK classes are ever instantiated —
+# reliably redirects all SDK logging to the project without touching site-packages.
+_WEBULL_LOG = Path(__file__).resolve().parents[3] / "logs" / "webull_trade_sdk.log"
+_WEBULL_LOG.parent.mkdir(exist_ok=True)
+
+import webull.core.client as _wb_client  # noqa: E402
+
+_orig_set_file_logger = _wb_client.ApiClient.set_file_logger
+
+def _patched_set_file_logger(
+    self,
+    path,
+    log_level=logging.DEBUG,
+    logger_name="webull.core",
+    format_string=None,
+    when="H",
+    interval=1,
+    backup_count=72,
+):
+    # Replace a bare filename with the project-local absolute path so the
+    # log file is always created inside the project, regardless of CWD.
+    abs_path = str(_WEBULL_LOG) if Path(path).name == path else path
+    return _orig_set_file_logger(
+        self, abs_path, log_level, logger_name, format_string, when, interval, backup_count
+    )
+
+
+_wb_client.ApiClient.set_file_logger = _patched_set_file_logger
+
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -52,9 +87,41 @@ _TIMEFRAME_TO_TIMESPAN: dict[str, str] = {
     "30m": "M30",
     "60m": "M60",
     "1h":  "M60",
+    "4h":  "M60",   # Webull's 60-minute bar, combined from 4×15m
     "1d":  "D",
     "1wk": "W",
     "1mo": "D",
+}
+
+# Phase 3.1: per-timeframe bar counts per trading day. Used to compute
+# how many bars to request for a given (range_, timeframe) pair so
+# 1m fetches pull enough rows. Webull only serves ~30 days of 1m
+# history, so callers should not request 1m beyond 1mo.
+_BARS_PER_DAY: dict[str, int] = {
+    "1m":   390,    # 6.5h × 60
+    "2m":   195,    # 6.5h × 30
+    "3m":   130,    # 6.5h × 20
+    "5m":   78,     # 6.5h × 12
+    "15m":  26,     # 6.5h × 4
+    "30m":  13,     # 6.5h × 2
+    "60m":  7,      # 6.5h / 1h
+    "1h":   7,
+    "4h":   2,      # 6.5h / 4h
+    "1d":   1,
+    "1wk":  1,      # only one weekly bar per day
+    "1mo":  1,
+}
+
+# Trading days per range_ string.
+_RANGE_DAYS: dict[str, int] = {
+    "1d":   1,
+    "5d":   5,
+    "1mo":  22,     # ~22 trading days per month
+    "3mo":  65,
+    "6mo":  130,
+    "1y":   252,
+    "2y":   504,
+    "5y":   1260,
 }
 
 # Map our ``range_`` to an approximate bar count so the SDK's count param
@@ -73,13 +140,89 @@ _RANGE_TO_COUNT: dict[str, int] = {
 
 
 def _epoch_ms_to_utc(ms: int | str | float | None) -> datetime:
-    """Convert a Webull epoch-millisecond timestamp to a tz-aware UTC datetime."""
+    """Convert a Webull timestamp to a tz-aware UTC datetime.
+
+    The Webull SDK returns timestamps as either:
+      * an integer / float of epoch milliseconds (older code paths), or
+      * an ISO 8601 string like ``"2026-09-01T18:46:00.000+0000"`` (current).
+
+    Both shapes must be handled; otherwise every bar in a batch ends up
+    stamped with ``datetime.now(...)`` and downstream median-gap detection
+    sees zero-second gaps (3.1.22 fails to catch the resulting M1→tick
+    downgrade).
+    """
     if ms is None:
         return datetime.now(timezone.utc)
+
+    # Numeric path: epoch milliseconds.
+    if isinstance(ms, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            return datetime.now(timezone.utc)
+
+    # String path: ISO 8601 with trailing ``+0000`` or ``+00:00`` (Webull
+    # omits the colon in the UTC offset). ``fromisoformat`` pre-3.11 does
+    # not understand the ``+0000`` form, so normalize first.
+    text = str(ms).strip()
+    if text.endswith("+0000"):
+        text = text[:-5] + "+00:00"
     try:
-        return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc)
-    except (TypeError, ValueError, OSError):
+        dt = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
         return datetime.now(timezone.utc)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+# Reverse map: Webull SDK timespan → our canonical timeframe label.
+# Used to detect when Webull returns a coarser resolution than requested
+# (free-tier accounts may downsample 1m → 5m regardless of M1 request).
+_TIMESPAN_TO_TIMEFRAME: dict[str, str] = {
+    "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m",
+    "M60": "1h", "D": "1d", "W": "1wk",
+}
+
+
+def _infer_actual_timeframe(timespan: str, bars: list) -> str:
+    """Infer the actual resolution Webull returned, falling back to the
+    requested timespan when the data is consistent with it.
+
+    Webull's free tier sometimes silently downgrades M1 to M5. We detect
+    that by computing the median gap between consecutive bar timestamps
+    and snapping to the nearest standard timeframe.
+
+    Returns a canonical timeframe string ("1m", "5m", ...).
+    """
+    if len(bars) < 2:
+        return _TIMESPAN_TO_TIMEFRAME.get(timespan, timespan)
+
+    timestamps = sorted(bars)  # in-place sort just in case
+    gaps = [
+        (timestamps[i + 1] - timestamps[i]).total_seconds()
+        for i in range(len(timestamps) - 1)
+    ]
+    # Use the median to avoid being skewed by intra-day session gaps.
+    gaps_sorted = sorted(gaps)
+    median_gap = gaps_sorted[len(gaps_sorted) // 2]
+
+    # Snap to the nearest standard bar duration. 1m is preferred up to 90s,
+    # 5m up to 6 min, etc. (Allows some jitter from session boundaries.)
+    if median_gap <= 90:
+        return "1m"
+    if median_gap <= 360:
+        return "5m"
+    if median_gap <= 1080:
+        return "15m"
+    if median_gap <= 2160:
+        return "30m"
+    if median_gap <= 4500:
+        return "1h"
+    if median_gap <= 90000:
+        return "1d"
+    return "1wk"
 
 
 class WebullProvider(BaseMarketDataProvider):
@@ -103,8 +246,8 @@ class WebullProvider(BaseMarketDataProvider):
             )
 
         # The official SDK handles HMAC signing and token refresh internally.
-        # Import lazily so a missing SDK only breaks this provider.
-        from webull.core.client import ApiClient as _ApiClient
+        # The ApiClient is already imported at module load (to install our
+        # log-path patch); only the trade/data clients are imported lazily.
         from webull.trade.trade_client import TradeClient as _TradeClient
         from webull.data.data_client import DataClient as _DataClient
 
@@ -112,7 +255,7 @@ class WebullProvider(BaseMarketDataProvider):
         use_sandbox = _settings.webull.use_sandbox
         region = "us"  # sandbox/production are both under the US region endpoint
 
-        self._api_client = _ApiClient(app_key, app_secret, region)
+        self._api_client = _wb_client.ApiClient(app_key, app_secret, region)
         endpoint = "api.sandbox.webull.com" if use_sandbox else "api.webull.com"
         self._api_client.add_endpoint(region, endpoint)
         logger.info("Webull SDK configured for %s", endpoint)
@@ -219,7 +362,13 @@ class WebullProvider(BaseMarketDataProvider):
         sym = symbol.upper()
         try:
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
-            count = _RANGE_TO_COUNT.get(range_, 200)
+            # Phase 3.1: for 1m, compute count from _BARS_PER_DAY × days in range.
+            # This ensures "1mo" fetches ~22 trading days × 390 bars = ~8580 bars.
+            if timeframe == "1m":
+                days_per_range = _RANGE_DAYS.get(range_, 65)
+                count = days_per_range * _BARS_PER_DAY["1m"]
+            else:
+                count = _RANGE_TO_COUNT.get(range_, 200)
 
             resp = self._data_client.market_data.get_history_bar(
                 sym, "US_STOCK", timespan, count=str(count)
@@ -245,16 +394,51 @@ class WebullProvider(BaseMarketDataProvider):
                     provider=self.name,
                     data_status=DataStatus.HISTORICAL,
                 ))
+            # Webull returns bars newest-first; sort chronologically (oldest→newest)
+            # so callers (bar_repository, chart display) get predictable ordering.
+            bars.sort(key=lambda b: b.timestamp)
             self._reset_error_state()
+
+            # Webull's free tier silently downgrades M1 → M5. Detect that
+            # from the actual inter-bar gaps and re-stamp each bar's
+            # ``timeframe`` field so storage + signal recording reflect
+            # the true resolution. Without this, callers get 1m signals
+            # aligned to 5-minute boundaries.
+            # NOTE: the API returns bars newest-first; we compute gaps from
+            # the absolute differences so the order does not matter.
+            if bars and len(bars) >= 2:
+                actual_tf = _infer_actual_timeframe(
+                    timespan,
+                    sorted(b.timestamp for b in bars),  # chronological
+                )
+                if actual_tf != timeframe:
+                    logger.debug(
+                        f"Webull downgraded {sym} {timeframe} → {actual_tf} "
+                        f"for {len(bars)} bars (free-tier behavior)"
+                    )
+                    for bar in bars:
+                        bar.timeframe = actual_tf
+
             return bars
         except Exception as e:
             self._handle_error(e, f"get_historical_bars({sym})")
             raise
 
     def get_latest_bar(self, symbol: str, timeframe: str = "1d") -> Bar:
-        """Fetch the single most-recent bar."""
+        """Fetch the single most-recent bar.
+
+        Phase 3.1: for ``timeframe == "1m"`` we must request a window
+        wide enough to capture the most recent 1m bar (Webull returns
+        bars oldest→newest; the last bar is the latest 1m). The
+        ``range_="1d"`` argument fetches one day of 1m bars, which is
+        sufficient to find the latest 1m bar. For higher timeframes the
+        existing single-bar window still applies.
+        """
         sym = symbol.upper()
-        bars = self.get_historical_bars(sym, timeframe=timeframe, range_="1d")
+        # 1m: pull 1 day of 1m bars; the last one is the latest.
+        # 1d/1wk: one bar is enough.
+        range_ = "1d"
+        bars = self.get_historical_bars(sym, timeframe=timeframe, range_=range_)
         if not bars:
             raise ValueError(f"No {timeframe} bar data for {sym}")
         return bars[-1]

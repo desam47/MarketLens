@@ -19,6 +19,8 @@ dependencies = [
     "yfinance==0.2.36",
     "httpx>=0.25",
     "curl_cffi>=0.7",
+    # Alpaca SDK (REST + WebSocket clients for v3.6).
+    "alpaca-py>=0.40",
 
     # Resilience
     "tenacity>=8.0",

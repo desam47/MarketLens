@@ -123,7 +123,8 @@ class WatchlistRepository:
         ).first()
 
     def add_symbol_to_watchlist(self, watchlist_id: int, symbol: str,
-                               position: int | None = None) -> WatchlistSymbol:
+                               position: int | None = None,
+                               entity_type: str | None = None) -> WatchlistSymbol:
         """Add a symbol to a watchlist"""
         symbol = symbol.upper()
 
@@ -148,7 +149,8 @@ class WatchlistRepository:
         watchlist_symbol = WatchlistSymbol(
             watchlist_id=watchlist_id,
             symbol=symbol,
-            position=position
+            position=position,
+            entity_type=entity_type,
         )
         self.db.add(watchlist_symbol)
         self.db.commit()
@@ -170,8 +172,9 @@ class WatchlistRepository:
         symbol: str,
         notes: str | None = None,
         is_enabled: bool | None = None,
+        entity_type: str | None = None,
     ) -> WatchlistSymbol | None:
-        """Update symbol metadata (notes, enabled state)."""
+        """Update symbol metadata (notes, enabled state, entity type)."""
         watchlist_symbol = self.get_watchlist_symbol(watchlist_id, symbol)
         if watchlist_symbol is None:
             return None
@@ -179,6 +182,8 @@ class WatchlistRepository:
             watchlist_symbol.notes = notes if notes.strip() else None
         if is_enabled is not None:
             watchlist_symbol.is_enabled = is_enabled
+        if entity_type is not None:
+            watchlist_symbol.entity_type = entity_type
         self.db.commit()
         self.db.refresh(watchlist_symbol)
         return watchlist_symbol

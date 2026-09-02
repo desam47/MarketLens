@@ -23,7 +23,7 @@ from backend.models import (
     Quote,
     QuoteModel,
 )
-from backend.observability import record_bar, set_ingestion_running
+from backend.observability import record_bar, record_bars, set_ingestion_running
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
 
@@ -57,8 +57,9 @@ class MarketDataIngestionService:
         """
         # Defer watchlist loading until start() — DB may not be ready at __init__ time.
         self.symbols = symbols or []
-        self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
-        self.timeframes = timeframes or ["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
+        # Phase 3.1: store only 1m bars. Higher timeframes are derived at
+        # read time by resample_ohlcv() in bar_repository.get_bars().
+        self.timeframes = timeframes or ["1m"]
         self.manager = MarketDataManager()
         self.is_running = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -72,6 +73,13 @@ class MarketDataIngestionService:
             self.last_quote_update[symbol] = datetime.min
             self.last_status_update[symbol] = datetime.min
             self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+            # Phase 3.1: prune any pre-existing non-1m timeframe entries from
+            # the dict. Since we only ingest 1m bars, higher-TF keys are never
+            # written and should not linger from a pre-3.1 state.
+            self.last_bar_update[symbol] = {
+                k: v for k, v in self.last_bar_update[symbol].items()
+                if k == "1m"
+            }
 
     def _load_symbols_from_watchlist(self) -> list[str]:
         """Load symbols from the active watchlist in the database.
@@ -145,7 +153,10 @@ class MarketDataIngestionService:
                 if symbol not in self.last_quote_update:
                     self.last_quote_update[symbol] = datetime.min
                     self.last_status_update[symbol] = datetime.min
-                    self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+                    # Phase 3.1: only track 1m updates. Higher TFs are
+                    # resampled at read time, so we never want to throttle
+                    # ingestion based on them.
+                    self.last_bar_update[symbol] = {"1m": datetime.min}
 
         self.is_running = True
         set_ingestion_running(True)
@@ -254,7 +265,8 @@ class MarketDataIngestionService:
         for symbol in added:
             self.last_quote_update[symbol] = datetime.min
             self.last_status_update[symbol] = datetime.min
-            self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+            # Phase 3.1: only track 1m updates.
+            self.last_bar_update[symbol] = {"1m": datetime.min}
         self.symbols = new_symbols
         logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
         return self.symbols
@@ -291,12 +303,15 @@ class MarketDataIngestionService:
                 await asyncio.sleep(5)  # Short delay before retry
 
     async def _bar_ingestion_loop(self, initial_delay: float = 0.0):
-        """Continuously ingest bar data.
+        """Continuously ingest 1m bar data.
 
-        The bar loop is the heaviest: 8 symbols × 7 timeframes = 56 calls
-        per cycle. With a per-call delay of 0.2s the cycle takes ~11s,
-        which keeps us well under Finnhub's 60 req/sec ceiling even when
-        the quote and health loops fire alongside it.
+        Phase 3.1: ingestion is 1m-only. Higher timeframes are derived
+        at read time by ``resample_ohlcv()`` in bar_repository.get_bars().
+
+        Cycle: 8 symbols × 1 timeframe = 8 calls. With a per-call delay
+        of 0.2s the cycle takes ~1.6s, which keeps us well under
+        Finnhub's 60 req/sec ceiling even when the quote and health
+        loops fire alongside it.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
@@ -322,7 +337,6 @@ class MarketDataIngestionService:
                 recorded = await asyncio.to_thread(
                     signal_recorder.record_from_recent_bars,
                     self.symbols,
-                    self.timeframes,
                 )
                 if recorded:
                     logger.debug(f"Recorded {recorded} historical signals")
@@ -448,33 +462,41 @@ class MarketDataIngestionService:
         bars_to_upsert: list[Bar] = []
         try:
             for symbol in self.symbols:
-                for timeframe in self.timeframes:
-                    # Check if we need to update
-                    last_update = self.last_bar_update.get(symbol, {}).get(timeframe, datetime.min)
-                    if datetime.now() - last_update < timedelta(minutes=1):  # Min 1min between bar updates
-                        continue
+                # Phase 3.1: we only ingest 1m bars. Higher TFs are
+                # resampled at read time, so iterating self.timeframes
+                # here would issue duplicate per-TF requests per symbol.
+                # last_bar_update[symbol] only ever has the "1m" key.
+                last_update = self.last_bar_update.get(symbol, {}).get(
+                    "1m", datetime.min
+                )
+                if datetime.now() - last_update < timedelta(minutes=1):
+                    # Min 1min between 1m bar updates.
+                    continue
 
-                    try:
-                        bar: Bar = self.manager.get_latest_bar(symbol, timeframe)
-                        # Per-call delay: 8 symbols × 7 timeframes × 0.2s = ~11s
-                        # per bar cycle. Stays well under Finnhub's 60 req/sec
-                        # ceiling; the stagger ensures the quote/health/signal loops
-                        # land their requests in different seconds.
-                        await asyncio.sleep(0.2)
+                try:
+                    bar: Bar = self.manager.get_latest_bar(symbol, "1m", use_cache=False)
+                    # Per-call delay: 8 symbols × 1 timeframe × 0.2s = ~1.6s
+                    # per bar cycle. Stays well under Finnhub's 60 req/sec
+                    # ceiling; the stagger ensures the quote/health/signal loops
+                    # land their requests in different seconds.
+                    await asyncio.sleep(0.2)
 
-                        # Queue for bulk upsert (handles duplicate timestamps).
-                        bars_to_upsert.append(bar)
+                    # Queue for bulk upsert (handles duplicate timestamps).
+                    bars_to_upsert.append(bar)
 
-                        # Update tracking
-                        if symbol not in self.last_bar_update:
-                            self.last_bar_update[symbol] = {}
-                        self.last_bar_update[symbol][timeframe] = datetime.now()
-                        fresh_bars.append((bar.symbol, bar.timeframe, bar))
+                    # Update tracking
+                    if symbol not in self.last_bar_update:
+                        self.last_bar_update[symbol] = {}
+                    self.last_bar_update[symbol]["1m"] = datetime.now()
+                    fresh_bars.append((bar.symbol, bar.timeframe, bar))
 
-                        logger.debug(f"Ingested {timeframe} bar for {symbol}: O:{bar.open} H:{bar.high} L:{bar.low} C:{bar.close}")
+                    logger.debug(
+                        f"Ingested 1m bar for {symbol}: "
+                        f"O:{bar.open} H:{bar.high} L:{bar.low} C:{bar.close}"
+                    )
 
-                    except Exception as e:
-                        logger.warning(f"Failed to ingest {timeframe} bar for {symbol}: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to ingest 1m bar for {symbol}: {e}")
 
             # Bulk upsert all fetched bars in a single transaction. Using
             # upsert_bars (not db.add) prevents UNIQUE constraint failures
@@ -484,9 +506,17 @@ class MarketDataIngestionService:
                 from backend.repositories.bar_repository import upsert_bars
                 written = upsert_bars(db, bars_to_upsert)
                 logger.debug(f"Upserted {written} bars")
+                # Phase 3.1: invalidate cached bar series for every symbol that
+                # just received new 1m bars. Without this, the Redis cache
+                # (TTL up to 3600s for 1wk) would serve stale resampled data
+                # until it naturally expires.
+                upserted_symbols = {b.symbol.upper() for b in bars_to_upsert}
+                if upserted_symbols:
+                    from backend.market_data.services.cache import _redis_cache
+                    for sym in upserted_symbols:
+                        _redis_cache.invalidate_bars_for_symbol(sym)
             # Record ingestion metrics after a successful commit.
-            for _ in fresh_bars:
-                record_bar()
+            record_bars(len(fresh_bars))
         except Exception as e:
             logger.error(f"Error committing bars to database: {e}")
             db.rollback()

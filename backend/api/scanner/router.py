@@ -79,6 +79,8 @@ class _ScanResultResponse(BaseModel):
     # watchlist table. Defaults to True for non-watchlist scan endpoints
     # (``/top-movers``, ``/scan``) where the concept doesn't apply.
     is_enabled: bool = True
+    # Entity classification from the watchlist row: "stock" or "etf".
+    entity_type: str | None = "stock"
 
 
 class _RankedResponse(BaseModel):
@@ -457,6 +459,9 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     enabled_rows = [ws for ws in all_rows if ws.is_enabled]
     disabled_rows = [ws for ws in all_rows if not ws.is_enabled]
 
+    # Build a symbol → entity_type map so we can tag each scan result.
+    entity_map = {ws.symbol.upper(): ws.entity_type for ws in all_rows}
+
     # Only the enabled symbols need a live scan.
     enabled_symbols = [ws.symbol for ws in enabled_rows]
     if enabled_symbols:
@@ -472,7 +477,9 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     for sym, _score in ranked:
         result = by_symbol.get(sym.upper())
         if result is not None:
-            results.append(_result_to_dict(result))
+            entry = _result_to_dict(result)
+            entry.entity_type = entity_map.get(sym.upper()) or "stock"
+            results.append(entry)
 
     # 2) Disabled rows: append as stubs so the user can re-enable or delete
     #    them. Use the last cached scan if available, otherwise neutral
@@ -482,6 +489,7 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
         if cached is not None:
             entry = _result_to_dict(cached)
             entry.is_enabled = False
+            entry.entity_type = ws.entity_type or "stock"
             results.append(entry)
         else:
             results.append(_ScanResultResponse(
@@ -495,6 +503,7 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
                 signals=[],
                 trend_signals={},
                 is_enabled=False,
+                entity_type=ws.entity_type or "stock",
             ))
 
     last_scan = market_scanner.last_scan_time

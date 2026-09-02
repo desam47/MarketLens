@@ -151,8 +151,10 @@ class TestGetHistoricalBars(unittest.TestCase):
         bars = p.get_historical_bars("spy", timeframe="1d", range_="5d")
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[0].symbol, "SPY")
-        self.assertEqual(bars[0].close, 100.5)
-        self.assertEqual(bars[1].close, 99.5)
+        # Phase 3.1.22: bars are sorted chronologically (oldest→newest).
+        # ``bars[0]`` is yesterday's bar (t2), ``bars[1]`` is today's (t1).
+        self.assertEqual(bars[0].close, 99.5)
+        self.assertEqual(bars[1].close, 100.5)
         self.assertEqual(bars[0].timeframe, "1d")
         self.assertEqual(bars[0].data_status.value, "HISTORICAL")
 
@@ -183,6 +185,106 @@ class TestGetHistoricalBars(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             p.get_historical_bars("spy")
         self.assertIn("500", str(ctx.exception))
+
+
+# ---------------------------------------------------------------------------
+# Webull free-tier M1→M5 downscale detection
+# ---------------------------------------------------------------------------
+class TestTimeframeInference(unittest.TestCase):
+    """Webull's free tier silently downgrades M1 requests to M5 resolution.
+    ``_infer_actual_timeframe`` must detect that from inter-bar gaps and
+    re-stamp each bar's ``timeframe`` field, so storage + signal recording
+    reflect the true resolution."""
+
+    def test_infers_1m_for_60s_gaps(self):
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        from datetime import datetime, timezone, timedelta
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        bars = [base + timedelta(seconds=60 * i) for i in range(10)]
+        self.assertEqual(_infer_actual_timeframe("M1", bars), "1m")
+
+    def test_infers_5m_for_300s_gaps(self):
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        from datetime import datetime, timezone, timedelta
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        bars = [base + timedelta(seconds=300 * i) for i in range(10)]
+        self.assertEqual(_infer_actual_timeframe("M1", bars), "5m")
+
+    def test_infers_15m_for_900s_gaps(self):
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        from datetime import datetime, timezone, timedelta
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        bars = [base + timedelta(seconds=900 * i) for i in range(10)]
+        self.assertEqual(_infer_actual_timeframe("M1", bars), "15m")
+
+    def test_infers_1h_for_3600s_gaps(self):
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        from datetime import datetime, timezone, timedelta
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        bars = [base + timedelta(seconds=3600 * i) for i in range(10)]
+        self.assertEqual(_infer_actual_timeframe("M1", bars), "1h")
+
+    def test_falls_back_to_timespan_when_too_few_bars(self):
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        self.assertEqual(_infer_actual_timeframe("M1", []), "1m")
+        self.assertEqual(_infer_actual_timeframe("M5", []), "5m")
+
+    def test_median_robust_to_outliers(self):
+        """One huge gap (lunch break) shouldn't pull inference to a coarser TF."""
+        from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+        from datetime import datetime, timezone, timedelta
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        # 9 1-minute bars + 1 big gap, then 9 more
+        bars = [base + timedelta(seconds=60 * i) for i in range(9)]
+        bars += [base + timedelta(seconds=60 * 18 + i) for i in range(9)]
+        self.assertEqual(_infer_actual_timeframe("M1", bars), "1m")
+
+    def test_provider_restamps_downgraded_bars(self):
+        """When Webull returns 5m bars under an M1 request, each Bar's
+        ``timeframe`` field should be re-stamped to "5m" so storage
+        downstream reflects the actual resolution."""
+        import time as _time
+        # Build 5 bars spaced 5 minutes apart (simulating free-tier M5 data)
+        now_ms = int(_time.time() * 1000)
+        rows = []
+        for i in range(5):
+            rows.append({
+                "time": now_ms - (300_000 * i),
+                "open": 100.0, "high": 101.0, "low": 99.0,
+                "close": 100.5, "volume": 1000000,
+            })
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = rows
+        mock_data.market_data.get_history_bar.return_value = mock_resp
+        p = _make_provider(mock_data)
+        bars = p.get_historical_bars("spy", timeframe="1m", range_="1d")
+        self.assertEqual(len(bars), 5)
+        # All bars should be re-stamped from "1m" → "5m"
+        for bar in bars:
+            self.assertEqual(bar.timeframe, "5m")
+
+    def test_provider_keeps_1m_for_true_1m_data(self):
+        """When the response is genuinely 1m, the timeframe stays as 1m."""
+        import time as _time
+        now_ms = int(_time.time() * 1000)
+        rows = []
+        for i in range(5):
+            rows.append({
+                "time": now_ms - (60_000 * i),
+                "open": 100.0, "high": 101.0, "low": 99.0,
+                "close": 100.5, "volume": 1000000,
+            })
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = rows
+        mock_data.market_data.get_history_bar.return_value = mock_resp
+        p = _make_provider(mock_data)
+        bars = p.get_historical_bars("spy", timeframe="1m", range_="1d")
+        for bar in bars:
+            self.assertEqual(bar.timeframe, "1m")
 
 
 # ---------------------------------------------------------------------------
