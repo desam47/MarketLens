@@ -88,6 +88,12 @@ class MarketDataSettings(BaseSettings):
     # Global rate limit (used when no per-provider override is set).
     rate_limit_per_minute: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=300)
+    # Phase 3.3.8: Rolling bar window. Bars older than this are pruned
+    # from the DB on every ingestion cycle. Default 1000 days ≈ 3 trading years.
+    bar_retention_days: int = Field(default=1000)
+    # Phase 3.3.14: When a symbol is freshly added to a watchlist, trigger
+    # a background backfill of bar history. Set False to disable backfills.
+    backfill_on_add: bool = Field(default=True)
     # Per-provider rate limit overrides keyed by provider name.
     # Values are sourced from MARKET_DATA_<PROVIDER_NAME>_RATE_LIMIT_PER_MINUTE.
     yahoo_finance_rate_limit_per_minute: int = Field(default=60)

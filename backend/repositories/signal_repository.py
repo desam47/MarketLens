@@ -87,12 +87,19 @@ class SignalRepository:
         limit: int = 1000,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
+        symbols: list[str] | None = None,
     ) -> list[HistoricalSignal]:
-        """Historical signal records with optional filters."""
+        """Historical signal records with optional filters.
+
+        ``symbol`` filters to a single symbol; ``symbols`` filters to any
+        of a list. If both are given, ``symbol`` wins (single-symbol query).
+        """
         q = self.db.query(HistoricalSignal)
 
         if symbol:
             q = q.filter(HistoricalSignal.symbol == symbol.upper())
+        elif symbols:
+            q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
         if timeframe:
             q = q.filter(HistoricalSignal.timeframe == timeframe)
         if start_time:
@@ -108,10 +115,26 @@ class SignalRepository:
 
     def delete_older_than(self, days: int = 90) -> int:
         """Delete signals older than ``days`` days. Returns count deleted."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now() - timedelta(days=days)
         count = (
             self.db.query(HistoricalSignal)
             .filter(HistoricalSignal.timestamp < cutoff)
+            .delete(synchronize_session="fetch")
+        )
+        self.db.commit()
+        return count
+
+    def delete_for_symbol(self, symbol: str) -> int:
+        """Delete all signal rows for ``symbol`` (all timeframes).
+
+        Called by the watchlist removal path when a symbol leaves every
+        active watchlist — bars and signals are both purged so nothing
+        orphaned remains in the DB.
+        """
+        sym = symbol.upper()
+        count = (
+            self.db.query(HistoricalSignal)
+            .filter(HistoricalSignal.symbol == sym)
             .delete(synchronize_session="fetch")
         )
         self.db.commit()
@@ -159,41 +182,45 @@ class SignalRepository:
         self.db.refresh(signal)
         return signal
 
-    def count_by_regime(self) -> list[dict[str, Any]]:
-        """Count of signals grouped by market regime."""
-        rows = (
-            self.db.query(
-                HistoricalSignal.market_regime,
-                func.count(HistoricalSignal.id).label("count"),
-            )
-            .filter(HistoricalSignal.market_regime.isnot(None))
-            .group_by(HistoricalSignal.market_regime)
-            .all()
-        )
+    def count_by_regime(
+        self, symbols: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Count of signals grouped by market regime.
+
+        If ``symbols`` is given, only signals for those symbols are counted.
+        """
+        q = self.db.query(
+            HistoricalSignal.market_regime,
+            func.count(HistoricalSignal.id).label("count"),
+        ).filter(HistoricalSignal.market_regime.isnot(None))
+        if symbols:
+            q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
+        rows = q.group_by(HistoricalSignal.market_regime).all()
         return [{"regime": r.market_regime, "count": r.count} for r in rows]
 
-    def get_performance_by_regime(self) -> list[dict[str, Any]]:
+    def get_performance_by_regime(
+        self, symbols: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Average forward returns grouped by market regime.
 
-        Only includes signals that have outcomes computed.
+        Only includes signals that have outcomes computed. If ``symbols``
+        is given, only signals for those symbols are included.
         """
-        rows = (
-            self.db.query(
-                HistoricalSignal.market_regime,
-                func.avg(HistoricalSignal.return_5b).label("avg_return_5b"),
-                func.avg(HistoricalSignal.return_10b).label("avg_return_10b"),
-                func.avg(HistoricalSignal.return_20b).label("avg_return_20b"),
-                func.avg(HistoricalSignal.mfe).label("avg_mfe"),
-                func.avg(HistoricalSignal.mae).label("avg_mae"),
-                func.count(HistoricalSignal.id).label("count"),
-            )
-            .filter(
-                HistoricalSignal.market_regime.isnot(None),
-                HistoricalSignal.return_5b.isnot(None),
-            )
-            .group_by(HistoricalSignal.market_regime)
-            .all()
+        q = self.db.query(
+            HistoricalSignal.market_regime,
+            func.avg(HistoricalSignal.return_5b).label("avg_return_5b"),
+            func.avg(HistoricalSignal.return_10b).label("avg_return_10b"),
+            func.avg(HistoricalSignal.return_20b).label("avg_return_20b"),
+            func.avg(HistoricalSignal.mfe).label("avg_mfe"),
+            func.avg(HistoricalSignal.mae).label("avg_mae"),
+            func.count(HistoricalSignal.id).label("count"),
+        ).filter(
+            HistoricalSignal.market_regime.isnot(None),
+            HistoricalSignal.return_5b.isnot(None),
         )
+        if symbols:
+            q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
+        rows = q.group_by(HistoricalSignal.market_regime).all()
         return [
             {
                 "regime": r.market_regime,
@@ -222,3 +249,21 @@ class SignalRepository:
     def get_signal_count(self) -> int:
         """Total count of historical signals."""
         return self.db.query(func.count(HistoricalSignal.id)).scalar() or 0
+
+
+def delete_signals_for_symbol(symbol: str) -> int:
+    """Delete every signal row for ``symbol`` from the DB.
+
+    Returns the number of rows deleted. Use this when a symbol is removed
+    from every watchlist and we no longer want any historical signals for it.
+    """
+    from backend.database import SessionLocal  # avoid circular import
+
+    if not symbol:
+        return 0
+    db = SessionLocal()
+    try:
+        repo = SignalRepository(db)
+        return repo.delete_for_symbol(symbol)
+    finally:
+        db.close()

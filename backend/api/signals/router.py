@@ -14,8 +14,7 @@ All endpoints read/write through ``SignalRepository`` so the API and the
 ingestion service share one path to the DB.
 """
 import logging
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, field_serializer
@@ -24,6 +23,7 @@ from sqlalchemy.orm import Session
 from backend.repositories.signal_repository import SignalRepository
 from backend.services.signal_recorder import signal_recorder
 from backend.market_data.services.ingestion_service import ingestion_service
+from backend.utils.timezone import format_edt_iso
 
 from ..dependencies import get_db
 
@@ -31,28 +31,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 
-# All timestamps are persisted in UTC. The dashboard lives in New York
-# time, so every response converts UTC → America/New_York (which auto-
-# handles EST/EDT). The browser receives an ISO string with the offset
-# baked in (e.g. "2026-08-31T11:18:08.206223-04:00") so it never
-# has to guess.
-_DASHBOARD_TZ = ZoneInfo("America/New_York")
-
 
 def _to_dashboard_tz(value: datetime | None) -> datetime | None:
-    """Convert a UTC datetime to the dashboard's local time.
+    """Convert a datetime to America/New_York.
 
-    Naive datetimes are assumed to be UTC (the canonical store). Aware
-    datetimes in other zones are first converted to UTC, then to the
-    dashboard zone. Returns None unchanged.
+    Naive datetimes are treated as NY local time (the project's storage
+    convention since 2026-09-02). Aware datetimes are converted to NY.
+    Returns None unchanged.
     """
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ)
+    from backend.utils.timezone import to_ny
+
+    return to_ny(value)
 
 
 class SignalResponse(BaseModel):
@@ -84,8 +73,11 @@ class SignalResponse(BaseModel):
 
     @field_serializer("timestamp", "created_at")
     def _serialize_tz(self, value: datetime | None) -> str | None:
-        converted = _to_dashboard_tz(value)
-        return converted.isoformat() if converted else None
+        # Always emit with explicit EDT/EST offset (e.g. "…-04:00") so
+        # the browser parses the value as NY local time regardless of
+        # the user's actual timezone. format_edt_iso handles naive-NY
+        # (project convention) and aware datetimes uniformly.
+        return format_edt_iso(value)
 
 
 class RegimePerformance(BaseModel):
@@ -115,30 +107,90 @@ def list_signals(
     symbol: str | None = None,
     timeframe: str | None = None,
     limit: int = Query(100, le=1000),
+    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
     db: Session = Depends(get_db),
 ):
-    """List historical signals with optional filters."""
+    """List historical signals with optional filters.
+
+    By default, only signals for symbols in the active watchlist are returned
+    — this prevents stale rows for deleted symbols from polluting the
+    dashboard. Pass ``include_all=true`` to query across all symbols (used
+    by research endpoints).
+    """
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    watchlist_symbols: list[str] = []
+    if not include_all:
+        wl_repo = WatchlistRepository(db)
+        for wl in wl_repo.get_watchlists(active_only=True):
+            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            if syms:
+                watchlist_symbols = [s.symbol.upper() for s in syms]
+                break
+
+    # If no watchlist has symbols, return empty rather than all historical rows.
+    if not include_all and not watchlist_symbols:
+        return []
+
     repo = SignalRepository(db)
     return repo.get_history(
-        symbol=symbol, timeframe=timeframe, limit=limit
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        symbols=watchlist_symbols if not include_all else None,
     )
 
 
 @router.get("/research/regime-performance", response_model=list[RegimePerformance])
-def get_regime_performance(db: Session = Depends(get_db)):
+def get_regime_performance(
+    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
+    db: Session = Depends(get_db),
+):
     """Average forward returns by market regime.
 
     Only signals that have outcomes computed (return_5b IS NOT NULL)
-    are included.
+    are included. By default, only signals for symbols in the active
+    watchlist are counted — pass ``include_all=true`` to include
+    signals for symbols that have been removed from the watchlist
+    (used by offline research).
     """
+    watchlist_symbols: list[str] | None = None
+    if not include_all:
+        from backend.repositories.watchlist_repository import WatchlistRepository
+        wl_repo = WatchlistRepository(db)
+        for wl in wl_repo.get_watchlists(active_only=True):
+            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            if syms:
+                watchlist_symbols = [s.symbol.upper() for s in syms]
+                break
+        if not watchlist_symbols:
+            return []  # no watchlist symbols → nothing to report
     repo = SignalRepository(db)
-    return repo.get_performance_by_regime()
+    return repo.get_performance_by_regime(symbols=watchlist_symbols)
 
 
 @router.get("/research/count-by-regime", response_model=list[RegimeCount])
-def get_signal_count_by_regime(db: Session = Depends(get_db)):
+def get_signal_count_by_regime(
+    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
+    db: Session = Depends(get_db),
+):
+    """Count of historical signals grouped by market regime.
+
+    By default, only counts signals for symbols in the active watchlist.
+    """
+    watchlist_symbols: list[str] | None = None
+    if not include_all:
+        from backend.repositories.watchlist_repository import WatchlistRepository
+        wl_repo = WatchlistRepository(db)
+        for wl in wl_repo.get_watchlists(active_only=True):
+            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            if syms:
+                watchlist_symbols = [s.symbol.upper() for s in syms]
+                break
+        if not watchlist_symbols:
+            return []  # no watchlist symbols → nothing to report
     repo = SignalRepository(db)
-    return repo.count_by_regime()
+    return repo.count_by_regime(symbols=watchlist_symbols)
 
 
 @router.post("/backfill", response_model=BackfillResponse)

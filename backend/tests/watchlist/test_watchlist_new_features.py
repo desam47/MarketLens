@@ -24,6 +24,8 @@ def _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=
     m.is_enabled = is_enabled
     m.position = position
     m.added_at = datetime(2024, 1, 1, 0, 0, 0)
+    m.entity_type = "stock"
+    m.notes = None
     return m
 
 

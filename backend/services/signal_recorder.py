@@ -66,17 +66,16 @@ class SignalRecorder:
         """
         sym = symbol.upper()
         tf = timeframe
-        # Always store as timezone-aware UTC. Without ``tzinfo=UTC`` the
-        # value serializes as ``2026-08-31T15:23:00`` (no offset), and
-        # JavaScript's ``new Date()`` treats that as LOCAL time — producing
-        # wrong timestamps in the dashboard. The ``+00:00`` suffix forces
-        # correct UTC interpretation in the browser.
+        # Store as naive America/New_York (EDT/EST) to match the bar table
+        # convention (2026-09-02+). The signal API serializes these with an
+        # explicit ``-04:00``/``-05:00`` suffix so the browser parses them
+        # correctly regardless of local timezone.
+        from backend.utils.timezone import to_ny, now_ny
+
         if timestamp is None:
-            ts = datetime.now(timezone.utc)
-        elif timestamp.tzinfo is None:
-            ts = timestamp.replace(tzinfo=timezone.utc)
+            ts = now_ny()
         else:
-            ts = timestamp
+            ts = to_ny(timestamp)
 
         # Skip if we already recorded this exact bar (dedup).
         key = (sym, tf, ts)
@@ -216,6 +215,49 @@ class SignalRecorder:
             db.rollback()
         finally:
             db.close()
+        return recorded
+
+    def backfill_signals_for_symbol(
+        self,
+        symbol: str,
+        timeframe: str | None = None,
+        max_bars: int = 5000,
+    ) -> int:
+        """Record signals for all stored bars of ``symbol`` (not just the latest).
+
+        Use this when a symbol is first added to the watchlist — it walks
+        the full backfilled history and writes a signal row for every bar
+        that doesn't already have one. Dedup is by
+        (symbol, timeframe, timestamp) so re-runs are no-ops.
+
+        ``max_bars`` caps the work per call to avoid blowing the request
+        budget. For 1m history, 5 000 ≈ 1 trading week. The caller can
+        invoke this in a loop or schedule it on the ingestion tick to cover
+        larger ranges.
+
+        Returns the count of new signals written.
+        """
+        sym = symbol.upper()
+        recorded = 0
+        db = SessionLocal()
+        try:
+            q = db.query(BarModel).filter(BarModel.symbol == sym)
+            if timeframe is not None:
+                q = q.filter(BarModel.timeframe == timeframe)
+            q = q.order_by(BarModel.timestamp.desc()).limit(max_bars)
+            bars = q.all()
+
+            for bar in bars:
+                if self._record_from_bar(bar, db):
+                    recorded += 1
+        except Exception as e:
+            logger.error(f"backfill_signals_for_symbol({sym}) failed: {e}")
+            db.rollback()
+        finally:
+            db.close()
+        logger.info(
+            f"backfill_signals_for_symbol({sym}): recorded {recorded} new signals"
+        )
         return recorded
 
     def _record_from_bar(self, bar, db) -> bool:

@@ -11,7 +11,22 @@ import type { RelativeStrengthSignal } from '../services/api';
 /** Format a number for display, returning '—' for null/undefined. */
 export function fmt(n: number | null | undefined, decimals = 2): string {
   if (n == null) return '—';
-  return n.toFixed(decimals);
+  return trimZeros(n.toFixed(decimals));
+}
+
+/** Strip unnecessary trailing zeros from a fixed-point string (e.g. "0.2900" → "0.29"). */
+function trimZeros(s: string): string {
+  if (s.includes('.')) {
+    s = s.replace(/0+$/, '');   // trailing zeros
+    s = s.replace(/\.$/, '');   // lone decimal point
+  }
+  return s;
+}
+
+/** Format a price with up to 4 significant decimals, no trailing zeros. */
+export function fmtPrice(p: number | null | undefined): string {
+  if (p == null) return '—';
+  return trimZeros(p.toFixed(4));
 }
 
 // ── Signal → trend direction ─────────────────────────────────────────────────

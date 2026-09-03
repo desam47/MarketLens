@@ -124,8 +124,16 @@ class WatchlistRepository:
 
     def add_symbol_to_watchlist(self, watchlist_id: int, symbol: str,
                                position: int | None = None,
-                               entity_type: str | None = None) -> WatchlistSymbol:
-        """Add a symbol to a watchlist"""
+                               entity_type: str | None = None) -> tuple[WatchlistSymbol, bool]:
+        """Add a symbol to a watchlist.
+
+        Returns a tuple ``(WatchlistSymbol, is_new_row)``. ``is_new_row`` is
+        True if a brand-new ``WatchlistSymbol`` row was inserted, False if
+        the symbol already existed (and was possibly re-enabled).
+
+        Phase 3.3.14: the router uses ``is_new_row`` to decide whether to
+        trigger a backfill of bar history for the symbol.
+        """
         symbol = symbol.upper()
 
         # Check if symbol already exists in watchlist
@@ -136,7 +144,7 @@ class WatchlistRepository:
                 existing.is_enabled = True
                 self.db.commit()
                 self.db.refresh(existing)
-            return existing
+            return existing, False
 
         # Determine position if not provided
         if position is None:
@@ -155,7 +163,7 @@ class WatchlistRepository:
         self.db.add(watchlist_symbol)
         self.db.commit()
         self.db.refresh(watchlist_symbol)
-        return watchlist_symbol
+        return watchlist_symbol, True
 
     def remove_symbol_from_watchlist(self, watchlist_id: int, symbol: str) -> bool:
         """Permanently remove a symbol from a watchlist (hard delete)."""
@@ -165,6 +173,23 @@ class WatchlistRepository:
             self.db.commit()
             return True
         return False
+
+    def symbol_exists_in_any_watchlist(self, symbol: str) -> bool:
+        """Check whether ``symbol`` appears in any active watchlist (any list).
+
+        Used by the purge path to decide whether a symbol should have its
+        bars deleted when it is removed from a specific watchlist: if it
+        still exists in any other watchlist, we preserve the bars.
+        """
+        result = (
+            self.db.query(func.count(WatchlistSymbol.id))
+            .filter(and_(
+                WatchlistSymbol.symbol == symbol.upper(),
+                WatchlistSymbol.is_enabled.is_(True),
+            ))
+            .scalar()
+        )
+        return (result or 0) > 0
 
     def update_symbol_in_watchlist(
         self,

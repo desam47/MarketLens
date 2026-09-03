@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import api, { Bar, BarsResult } from '../services/api';
 import { CandlestickChart, ChartType } from './CandlestickChart';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
+import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 interface MultiTimeframeChartGridProps {
   symbol: string;
@@ -15,7 +16,7 @@ interface MultiTimeframeChartGridProps {
   liveUpdate?: boolean;
 }
 
-const DEFAULT_TIMEFRAMES = ['1d', '1h', '15m', '5m'];
+const DEFAULT_TIMEFRAMES = DEFAULT_GRID_TIMEFRAMES;
 
 interface PanelState {
   timeframe: string;
@@ -24,17 +25,7 @@ interface PanelState {
   error: string | null;
 }
 
-const TF_LABELS: Record<string, string> = {
-  '1m': '1m',
-  '5m': '5m',
-  '15m': '15m',
-  '30m': '30m',
-  '1h': '1h',
-  '4h': '4h',
-  '1d': 'Daily',
-  '1wk': 'Weekly',
-  '1mo': 'Monthly',
-};
+const TF_LABELS = TIMEFRAME_LABELS;
 
 /**
  * Multi-timeframe chart grid: 1, 2, or 4 charts side-by-side so traders can

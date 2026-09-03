@@ -4,7 +4,9 @@ Market data models for MarketLens
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
+
+from backend.utils.timezone import format_edt_iso
 
 
 class DataStatus(StrEnum):
@@ -28,6 +30,11 @@ class Quote(BaseModel):
     ask: float | None = None
     volume: int | None = None
 
+    @field_serializer("timestamp")
+    def _ser_ts(self, ts: datetime) -> str:
+        # Always emit with explicit EDT/EST offset.
+        return format_edt_iso(ts)
+
 class Bar(BaseModel):
     symbol: str
     timestamp: datetime
@@ -44,6 +51,12 @@ class Bar(BaseModel):
     # callers that don't send this field.
     source: str | None = None
 
+    @field_serializer("timestamp")
+    def _ser_ts(self, ts: datetime) -> str:
+        # Always emit with explicit EDT/EST offset so JavaScript parses
+        # the value correctly regardless of browser timezone.
+        return format_edt_iso(ts)
+
 class MarketStatus(BaseModel):
     symbol: str
     is_open: bool
@@ -52,6 +65,12 @@ class MarketStatus(BaseModel):
     timezone: str
     provider: str
     timestamp: datetime
+
+    @field_serializer("timestamp", "next_open", "next_close")
+    def _ser_ny(self, ts: datetime | None) -> str | None:
+        # Emit as America/New_York ISO with explicit offset (e.g. -04:00 / -05:00)
+        # so JavaScript parses it correctly regardless of browser timezone.
+        return format_edt_iso(ts)
 
 class ProviderStatus(BaseModel):
     provider_name: str
@@ -71,6 +90,12 @@ class ProviderStatus(BaseModel):
     # the running breaker stats above.
     error_count: int = 0
     last_error: str | None = None
+
+    @field_serializer("timestamp", "last_success")
+    def _ser_ny(self, ts: datetime | None) -> str | None:
+        # Emit as America/New_York ISO with explicit offset (e.g. -04:00 / -05:00)
+        # so JavaScript parses it correctly regardless of browser timezone.
+        return format_edt_iso(ts)
 
 class ProviderCapabilities(BaseModel):
     provider_name: str

@@ -156,6 +156,20 @@ export interface SystemConfig {
   timestamp: string;
 }
 
+// Phase 3.3.3: WAL mode + Litestream health snapshot.
+export interface BackupStatusData {
+  timestamp: string;
+  journal_mode: string;
+  wal_checkpoint_busy: boolean;
+  wal_checkpoint_frames: number;
+  wal_checkpoint_end: number;
+  wal_size_bytes: number;
+  shm_size_bytes: number;
+  litestream_reachable: boolean;
+  litestream_generation: string | null;
+  litestream_dbs: any[] | null;
+}
+
 export interface Watchlist {
   id: number;
   name: string;
@@ -174,6 +188,7 @@ export interface WatchlistSymbol {
   added_at: string;
   position: number;
   notes?: string | null;
+  entity_type?: 'stock' | 'etf' | null;
 }
 
 // Alerts
@@ -332,6 +347,8 @@ export interface WatchlistScanResult {
   is_enabled?: boolean;
   /** Optional notes attached to the symbol in the watchlist. */
   notes?: string | null;
+  /** Entity classification: "stock" or "etf". Defaults to "stock". */
+  entity_type?: 'stock' | 'etf' | null;
 }
 
 export interface WatchlistScanResponse {
@@ -1073,6 +1090,11 @@ class ApiService {
     return this.fetch<SystemConfig>('/system/config');
   }
 
+  // Phase 3.3.3: WAL + Litestream backup health.
+  async getBackupStatus(): Promise<BackupStatusData> {
+    return this.fetch<BackupStatusData>('/system/backup-status');
+  }
+
   // Market Regime
   async getRegime(symbol: string): Promise<RegimeData> {
     return this.fetch<RegimeData>(`/regime/${symbol}/current`);
@@ -1186,10 +1208,10 @@ class ApiService {
     return this.del(`/watchlists/${id}`);
   }
 
-  async addSymbolToWatchlist(watchlistId: number, symbol: string): Promise<WatchlistSymbol> {
+  async addSymbolToWatchlist(watchlistId: number, symbol: string, entityType: 'stock' | 'etf' = 'stock'): Promise<WatchlistSymbol> {
     const result = await this.fetch<WatchlistSymbol>(`/watchlists/${watchlistId}/symbols`, {
       method: 'POST',
-      body: JSON.stringify({ symbol }),
+      body: JSON.stringify({ symbol, entity_type: entityType }),
     });
     // Sync ingestion service so it starts tracking the new symbol.
     this.refreshIngestionSymbols().catch(() => {/* non-fatal */});

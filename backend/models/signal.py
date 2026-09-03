@@ -21,6 +21,7 @@ from sqlalchemy import (
 )
 
 from backend.database import Base
+from backend.utils.timezone import now_ny
 
 
 class HistoricalSignal(Base):
@@ -76,7 +77,7 @@ class HistoricalSignal(Base):
         index=True,
     )
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=now_ny)
 
     def __repr__(self):
         return (f"<HistoricalSignal(id={self.id}, symbol={self.symbol} "

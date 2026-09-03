@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { HistoricalSignal, RegimeCount, RegimePerformance } from '../services/api';
+import { fmtPrice } from './watchlistUtils';
+import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+
+const strPrice = fmtPrice;
 
 interface HistoricalSignalCardProps {
   /** Optional default symbol to filter on. */
   defaultSymbol?: string;
 }
-
-const TIMEFRAMES = ['1d', '4h', '1h', '30m', '15m', '5m', '1m'];
 
 function fmtPct(v: number | null | undefined): string {
   if (v == null) return '—';
@@ -165,7 +167,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
           <span>Timeframe</span>
           <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
             {TIMEFRAMES.map((tf) => (
-              <option key={tf} value={tf}>{tf}</option>
+              <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
             ))}
           </select>
         </label>
@@ -234,7 +236,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
                   <td><strong>{s.symbol}</strong></td>
                   <td>{s.timeframe}</td>
                   <td>{fmtDateTime(s.timestamp)}</td>
-                  <td>{s.price == null ? '—' : s.price.toFixed(2)}</td>
+                  <td>{s.price == null ? '—' : strPrice(s.price)}</td>
                   <td>{s.trend_state || '—'}</td>
                   <td>{s.trend_score == null ? '—' : s.trend_score.toFixed(1)}</td>
                   <td>

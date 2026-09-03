@@ -21,6 +21,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [newSymbol, setNewSymbol] = useState('');
+  const [newSymbolType, setNewSymbolType] = useState<'stock' | 'etf'>('stock');
   const [newWatchlistName, setNewWatchlistName] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showRename, setShowRename] = useState(false);
@@ -105,9 +106,10 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
     if (!newSymbol.trim() || !selectedWatchlist) return;
     const symbol = newSymbol.toUpperCase().trim();
     try {
-      await api.addSymbolToWatchlist(selectedWatchlist.id, symbol);
+      await api.addSymbolToWatchlist(selectedWatchlist.id, symbol, newSymbolType);
       await fetchWatchlists();
       setNewSymbol('');
+      setNewSymbolType('stock');
     } catch (err: any) {
       setError(err.message);
     }
@@ -353,6 +355,15 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
                   onChange={e => setNewSymbol(e.target.value.toUpperCase())}
                   maxLength={5}
                 />
+                <select
+                  className="entity-type-select"
+                  value={newSymbolType}
+                  onChange={e => setNewSymbolType(e.target.value as 'stock' | 'etf')}
+                  title="Symbol type"
+                >
+                  <option value="stock">Stock</option>
+                  <option value="etf">ETF</option>
+                </select>
                 <button type="submit" className="btn btn-primary">Add</button>
               </form>
 

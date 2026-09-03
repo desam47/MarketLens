@@ -88,9 +88,10 @@ def main() -> None:
         sys.exit(0)
 
     from backend.market_data.services.backfill_service import backfill_symbol_history_sync
-    from backend.config.settings import get_settings
+    # settings.py exports a module-level ``settings`` instance; there is no
+    # get_settings() factory (this script referenced one that never existed).
+    from backend.config.settings import settings
 
-    settings = get_settings()
     days = args.days if args.days is not None else settings.market_data.bar_retention_days
     logger.info(f"Retention window: {days} days")
 

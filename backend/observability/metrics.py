@@ -14,7 +14,7 @@ import threading
 import time
 import tracemalloc
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 _start_time = time.time()
 _tracemalloc_started = False
@@ -110,13 +110,13 @@ def record_scan(duration_ms: float) -> None:
     global _scanner_total_scans, _scanner_total_scan_time_ms, _scanner_last_scan_time
     _scanner_total_scans += 1
     _scanner_total_scan_time_ms += duration_ms
-    _scanner_last_scan_time = datetime.now(UTC)
+    _scanner_last_scan_time = datetime.now()
 
 
 def record_bar() -> None:
     """Called by the bar repository on every successful upsert of one bar."""
     global _ingestion_last_bar_time, _ingestion_total_bars
-    _ingestion_last_bar_time = datetime.now(UTC)
+    _ingestion_last_bar_time = datetime.now()
     _ingestion_total_bars += 1
 
 
@@ -128,7 +128,7 @@ def record_bars(n: int) -> None:
     instead of N separate +1 operations.
     """
     global _ingestion_last_bar_time, _ingestion_total_bars
-    _ingestion_last_bar_time = datetime.now(UTC)
+    _ingestion_last_bar_time = datetime.now()
     _ingestion_total_bars += n
 
 
@@ -223,7 +223,7 @@ def _get_memory_mb() -> float:
 
 def get_snapshot() -> dict:
     """Return a JSON-serializable snapshot of the current metrics."""
-    now = datetime.now(UTC)
+    now = datetime.now()
     avg_scan_ms = (
         _scanner_total_scan_time_ms / _scanner_total_scans
         if _scanner_total_scans > 0

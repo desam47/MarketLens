@@ -5,7 +5,7 @@ import collections.abc
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, text
+from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
 
 from backend.models.market_data import Bar, DataStatus
@@ -483,3 +483,154 @@ def _log_slow_query(
         # internals differently, we still have the timing + parameter
         # log above.
         logger.debug(f"slow_query: EXPLAIN unavailable for {op}: {e}")
+
+
+# Phase 3.3.9: Bar retention helpers.
+#
+# These functions delete bars in chunks so a long retention window doesn't
+# generate one giant transaction. The caller is expected to be running
+# inside a background loop or script, so yielding control back to the event
+# loop is the caller's responsibility — we keep these synchronous so they
+# can be used both from sync (script) and async (loop) code.
+
+
+def prune_bars_older_than(
+    db: Session,
+    cutoff: datetime,
+    chunk_size: int = 1000,
+) -> int:
+    """Delete bars older than ``cutoff`` in chunks of ``chunk_size`` rows.
+
+    Returns the total number of rows deleted across all chunks. The function
+    commits after each chunk so progress is durable if the process is
+    killed mid-run.
+
+    Phase 3.3.9: runs on every ingestion tick. We rely on the
+    ``(symbol, timeframe, timestamp)`` unique index for cheap row lookup;
+    for SQLite the index keeps the DELETE plan index-driven.
+    """
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+
+    total_deleted = 0
+    # We loop until a chunk deletes 0 rows. We use a subquery with LIMIT
+    # so SQLite picks an index scan instead of a full table scan.
+    while True:
+        # Pick the rows to delete in this chunk: any bar whose timestamp
+        # is older than cutoff. We order by id so the LIMIT is stable.
+        subq = (
+            select(BarModel.id)
+            .where(BarModel.timestamp < cutoff)
+            .order_by(BarModel.id.asc())
+            .limit(chunk_size)
+        )
+        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(
+            synchronize_session=False
+        )
+        db.commit()
+        if deleted == 0:
+            break
+        total_deleted += deleted
+        logger.debug(
+            f"prune_bars_older_than: deleted {deleted} rows "
+            f"(total {total_deleted}) older than {cutoff.isoformat()}"
+        )
+        # If a chunk didn't fill up, we've drained everything.
+        if deleted < chunk_size:
+            break
+
+    if total_deleted:
+        logger.info(
+            f"prune_bars_older_than: removed {total_deleted} bars older than "
+            f"{cutoff.isoformat()}"
+        )
+    return total_deleted
+
+
+def bulk_delete_bars(
+    db: Session,
+    symbols: collections.abc.Iterable[str],
+    cutoff: datetime | None = None,
+    chunk_size: int = 1000,
+) -> int:
+    """Delete all bars for ``symbols`` (optionally also older than ``cutoff``).
+
+    Used by the watchlist purge path when a symbol is removed from every
+    watchlist. ``symbols`` is normalised to upper-case. Returns the total
+    rows deleted.
+
+    If ``cutoff`` is None, ALL bars for the symbols are deleted.
+    """
+    sym_list = [s.upper() for s in symbols if s]
+    if not sym_list:
+        return 0
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+
+    total_deleted = 0
+    while True:
+        subq = (
+            select(BarModel.id)
+            .where(BarModel.symbol.in_(sym_list))
+            .order_by(BarModel.id.asc())
+        )
+        if cutoff is not None:
+            subq = subq.where(BarModel.timestamp < cutoff)
+        subq = subq.limit(chunk_size)
+
+        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(
+            synchronize_session=False
+        )
+        db.commit()
+        if deleted == 0:
+            break
+        total_deleted += deleted
+        if deleted < chunk_size:
+            break
+
+    if total_deleted:
+        logger.info(
+            f"bulk_delete_bars: removed {total_deleted} bars for {len(sym_list)} symbols"
+        )
+    return total_deleted
+
+
+# Phase 3.3.10: per-symbol purge helpers.
+#
+# These are thin wrappers around bulk_delete_bars but they exist as
+# separate, intent-revealing functions so the watchlist code reads
+# naturally: "if the symbol is no longer watched, delete_bars_for_symbol".
+
+
+def delete_bars_for_symbol(symbol: str) -> int:
+    """Delete every bar row for ``symbol`` from the DB.
+
+    Returns the number of rows deleted. Use this when a symbol is removed
+    from EVERY watchlist and we no longer want any history for it.
+    """
+    from backend.database.db import SessionLocal  # avoid circular import
+
+    if not symbol:
+        return 0
+    db = SessionLocal()
+    try:
+        return bulk_delete_bars(db, [symbol.upper()])
+    finally:
+        db.close()
+
+
+def delete_bars_for_symbols(symbols: collections.abc.Iterable[str]) -> int:
+    """Delete every bar row for each symbol in ``symbols``.
+
+    Returns the total number of rows deleted across all symbols.
+    """
+    from backend.database.db import SessionLocal
+
+    sym_list = [s for s in symbols if s]
+    if not sym_list:
+        return 0
+    db = SessionLocal()
+    try:
+        return bulk_delete_bars(db, sym_list)
+    finally:
+        db.close()

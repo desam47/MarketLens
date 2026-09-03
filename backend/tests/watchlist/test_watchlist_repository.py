@@ -94,10 +94,12 @@ class TestWatchlistRepository(unittest.TestCase):
         # Patch WatchlistSymbol constructor
         with patch('backend.repositories.watchlist_repository.WatchlistSymbol', return_value=mock_watchlist_symbol):
             # Test
-            result = self.repo.add_symbol_to_watchlist(1, "AAPL")
+            result, is_new = self.repo.add_symbol_to_watchlist(1, "AAPL")
 
             # Assertions
+            # Phase 3.3.14: add_symbol_to_watchlist now returns (symbol, is_new_row)
             self.assertEqual(result, mock_watchlist_symbol)
+            self.assertTrue(is_new)
             self.repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
             self.mock_db.add.assert_called_once_with(mock_watchlist_symbol)
             self.mock_db.commit.assert_called_once()
@@ -116,17 +118,22 @@ class TestWatchlistRepository(unittest.TestCase):
         self.mock_db.refresh = MagicMock()
 
         # Test
-        result = self.repo.add_symbol_to_watchlist(1, "AAPL")
+        result, is_new = self.repo.add_symbol_to_watchlist(1, "AAPL")
 
         # Assertions
+        # Phase 3.3.14: returning a tuple (symbol, is_new_row=False for re-enable)
         self.assertEqual(result, mock_watchlist_symbol)
+        self.assertFalse(is_new)
         self.repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
         self.assertTrue(mock_watchlist_symbol.is_enabled)  # Should be re-enabled
         self.mock_db.commit.assert_called_once()
         self.mock_db.refresh.assert_called_once_with(mock_watchlist_symbol)
 
     def test_remove_symbol_from_watchlist(self):
-        """Test removing a symbol from a watchlist"""
+        """Test removing a symbol from a watchlist.
+        Phase 3.3.15: this is now a hard delete (db.delete + commit), not a
+        soft-disable. The router handles the bars-purge follow-up after.
+        """
         # Setup mocks
         mock_watchlist_symbol = MagicMock(spec=WatchlistSymbol)
         mock_watchlist_symbol.id = 1
@@ -134,6 +141,7 @@ class TestWatchlistRepository(unittest.TestCase):
         mock_watchlist_symbol.symbol = "AAPL"
         mock_watchlist_symbol.is_enabled = True
         self.repo.get_watchlist_symbol = MagicMock(return_value=mock_watchlist_symbol)
+        self.mock_db.delete = MagicMock()
         self.mock_db.commit = MagicMock()
 
         # Test
@@ -142,7 +150,8 @@ class TestWatchlistRepository(unittest.TestCase):
         # Assertions
         self.assertTrue(result)
         self.repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
-        self.assertFalse(mock_watchlist_symbol.is_enabled)  # Should be disabled
+        # Phase 3.3.15: hard delete via db.delete(), not soft-disable.
+        self.mock_db.delete.assert_called_once_with(mock_watchlist_symbol)
         self.mock_db.commit.assert_called_once()
 
     def test_reorder_watchlist_symbols(self):

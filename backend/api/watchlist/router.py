@@ -1,22 +1,95 @@
 """
 Watchlist API endpoints
 """
+import asyncio
+import logging
 from datetime import datetime
 from io import StringIO
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
 from backend.config.settings import settings as _settings
 from backend.repositories.watchlist_repository import WatchlistRepository
+from backend.repositories.bar_repository import delete_bars_for_symbol
+from backend.repositories.signal_repository import delete_signals_for_symbol
 from backend.symbols.validator import validate_symbol
+from backend.utils.timezone import format_edt_iso
 
 from ..dependencies import get_db
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/watchlists", tags=["watchlists"])
+
+# Phase 3.3.14: track pending backfill coroutines keyed by symbol so
+# we can await them before the ingestion loop picks up a freshly added symbol.
+# Values are asyncio.Task | None.
+_backfill_tasks: dict[str, asyncio.Task] = {}
+
+
+def _trigger_backfill_for_symbol(symbol: str) -> None:
+    """Trigger an async backfill for ``symbol`` and register the task.
+
+    Phase 3.3.14: called by ``add_symbol_to_watchlist`` when a symbol is
+    freshly added. The task is stored in ``_backfill_tasks`` so the remove
+    path (3.3.15) can cancel it before purging bars.
+    """
+    if not _settings.market_data.backfill_on_add:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running event loop (sync context) — use asyncio.run.
+        asyncio.run(_do_backfill(symbol))
+        return
+    # Running loop: schedule the coroutine.
+    task = loop.create_task(_do_backfill(symbol))
+    _backfill_tasks[symbol.upper()] = task
+    task.add_done_callback(
+        lambda t: _backfill_tasks.pop(symbol.upper(), None)
+    )
+    logger.debug(f"_trigger_backfill_for_symbol: scheduled backfill task for {symbol}")
+
+
+async def _do_backfill(symbol: str) -> None:
+    """Run the backfill coroutine and log outcomes.
+
+    Phase 3.3.14 fix: after bars are written, immediately record signals
+    so the dashboard shows data without waiting for the next 90s loop cycle.
+    """
+    try:
+        from backend.market_data.services.backfill_service import (
+            backfill_symbol_history,
+        )
+        result = await backfill_symbol_history(symbol)
+        if result.get("skipped"):
+            logger.debug(f"backfill for {symbol} skipped (already in progress)")
+        else:
+            logger.info(
+                f"backfill complete for {symbol}: "
+                f"tier1={result['tier1_written']}, tier2={result['tier2_written']}, "
+                f"took {result['duration_s']}s"
+            )
+            # Immediately record signals for ALL the newly backfilled bars so
+            # the dashboard shows data without waiting for the 90s loop cycle.
+            # Use backfill_signals_for_symbol (all bars) for initial backfill;
+            # record_from_recent_bars (latest bar only) is reserved for the
+            # live ingestion loop where we only want new bars.
+            try:
+                from backend.services.signal_recorder import signal_recorder
+                recorded = signal_recorder.backfill_signals_for_symbol(symbol.upper())
+                if recorded:
+                    logger.info(
+                        f"Recorded {recorded} signals for {symbol} after backfill"
+                    )
+            except Exception as sig_e:
+                logger.warning(f"Signal recording after backfill failed for {symbol}: {sig_e}")
+    except Exception as e:
+        logger.error(f"backfill failed for {symbol}: {e}")
 
 # Pydantic models for request/response
 class WatchlistBase(BaseModel):
@@ -38,6 +111,13 @@ class WatchlistResponse(WatchlistBase):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("created_at", "updated_at")
+    def _serialize_tz(self, value: datetime | None) -> str | None:
+        # Naive datetimes are NY local time (project convention since
+        # 2026-09-02). format_edt_iso attaches the explicit EDT/EST
+        # offset so the browser parses the value as NY local time.
+        return format_edt_iso(value)
+
 class WatchlistSymbolBase(BaseModel):
     symbol: str
     is_enabled: bool = True
@@ -53,6 +133,10 @@ class WatchlistSymbolResponse(WatchlistSymbolBase):
     added_at: datetime
     position: int
     notes: str | None = None
+
+    @field_serializer("added_at")
+    def _serialize_tz(self, value: datetime | None) -> str | None:
+        return format_edt_iso(value)
 
 
 class WatchlistSymbolUpdate(BaseModel):
@@ -145,22 +229,34 @@ def get_watchlist_symbols(watchlist_id: int, enabled_only: bool = True, db: Sess
 
 @router.post("/{watchlist_id}/symbols", response_model=WatchlistSymbolResponse, status_code=status.HTTP_201_CREATED)
 def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db: Session = Depends(get_db)):
-    """Add a symbol to a watchlist"""
+    """Add a symbol to a watchlist.
+
+    Phase 3.3.14: if the symbol is newly added (not re-enabled), a background
+    backfill of bar history is triggered automatically.
+    """
     repo = WatchlistRepository(db)
     # First check if watchlist exists
     watchlist = repo.get_watchlist(watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
-    watchlist_symbol = repo.add_symbol_to_watchlist(
+    watchlist_symbol, is_new_row = repo.add_symbol_to_watchlist(
         watchlist_id=watchlist_id,
         symbol=symbol.symbol,
         entity_type=symbol.entity_type or "stock",
     )
+    # Phase 3.3.14: trigger backfill for freshly added symbols.
+    if is_new_row:
+        _trigger_backfill_for_symbol(symbol.symbol.upper())
     return watchlist_symbol
 
 @router.delete("/{watchlist_id}/symbols/{symbol}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
-    """Remove a symbol from a watchlist"""
+    """Remove a symbol from a watchlist.
+
+    Phase 3.3.15: cancels any pending backfill for the symbol and, if the
+    symbol is no longer present in any other watchlist, purges its bars
+    from the database.
+    """
     repo = WatchlistRepository(db)
     # First check if watchlist exists
     watchlist = repo.get_watchlist(watchlist_id)
@@ -169,6 +265,41 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     success = repo.remove_symbol_from_watchlist(watchlist_id=watchlist_id, symbol=symbol)
     if not success:
         raise HTTPException(status_code=404, detail="Symbol not found in watchlist")
+    # Phase 3.3.15: cancel any pending backfill task for this symbol.
+    symbol_upper = symbol.upper()
+    pending_task = _backfill_tasks.pop(symbol_upper, None)
+    if pending_task is not None and not pending_task.done():
+        pending_task.cancel()
+        logger.debug(f"cancelled pending backfill for {symbol_upper}")
+    # Drop the dedup cache so a re-added symbol isn't suppressed as a
+    # "duplicate" of its now-deleted historical signals.
+    try:
+        from backend.services.signal_recorder import signal_recorder
+        signal_recorder._last_recorded = {
+            (s, tf, ts): ts
+            for (s, tf, ts) in signal_recorder._last_recorded
+            if s != symbol_upper
+        }
+    except Exception as e:
+        logger.debug(f"signal_recorder cache cleanup skipped: {e}")
+    # Phase 3.3.15: purge bars and signals if the symbol is no longer in any watchlist.
+    if not repo.symbol_exists_in_any_watchlist(symbol_upper):
+        try:
+            deleted = delete_bars_for_symbol(symbol_upper)
+            if deleted:
+                logger.info(
+                    f"purged {deleted} bars for {symbol_upper} (no longer in any watchlist)"
+                )
+        except Exception as e:
+            logger.warning(f"failed to purge bars for {symbol_upper}: {e}")
+        try:
+            deleted = delete_signals_for_symbol(symbol_upper)
+            if deleted:
+                logger.info(
+                    f"purged {deleted} signals for {symbol_upper} (no longer in any watchlist)"
+                )
+        except Exception as e:
+            logger.warning(f"failed to purge signals for {symbol_upper}: {e}")
 
 @router.put("/{watchlist_id}/symbols/{symbol}/enable", response_model=WatchlistSymbolResponse)
 def enable_symbol_in_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
@@ -316,7 +447,9 @@ def import_watchlist_symbols(
         if not result.valid:
             errors.append(f"{symbol}: {result.error or 'invalid'}")
             continue
-        repo.add_symbol_to_watchlist(watchlist_id, symbol)
+        _, is_new_row = repo.add_symbol_to_watchlist(watchlist_id, symbol)
+        if is_new_row:
+            _trigger_backfill_for_symbol(symbol)
         imported.append(symbol)
         slots_left -= 1
 
@@ -356,3 +489,29 @@ def export_watchlist(
 
     # JSON path: reuse the response model to keep the shape consistent.
     return [WatchlistSymbolResponse.model_validate(s) for s in symbols]
+
+
+class BackfillResponse(BaseModel):
+    """Result of a manual backfill trigger."""
+    symbols: list[str]
+    status: str
+
+
+@router.post("/{watchlist_id}/backfill", response_model=BackfillResponse)
+def trigger_watchlist_backfill(watchlist_id: int, db: Session = Depends(get_db)):
+    """Manually trigger a full backfill for all symbols in a watchlist.
+
+    Phase 3.3.14 fix: backfill was already wired into the per-symbol add path
+    (``add_symbol_to_watchlist`` and ``import_watchlist_symbols``), but symbols
+    added before that fix existed never got backfilled. This endpoint lets the
+    user retroactively fill historical bars for those symbols.
+    """
+    repo = WatchlistRepository(db)
+    if repo.get_watchlist(watchlist_id) is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=False)
+    triggered = []
+    for ws in symbols:
+        _trigger_backfill_for_symbol(ws.symbol.upper())
+        triggered.append(ws.symbol.upper())
+    return BackfillResponse(symbols=triggered, status="backfill triggered")

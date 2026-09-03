@@ -87,9 +87,10 @@ class TestWatchlistCRUD(unittest.TestCase):
         resp = self.client.delete(f"/api/watchlists/{wl_id}")
         self.assertEqual(resp.status_code, 204, msg=resp.text)
 
-        # Subsequent delete is a no-op (idempotent handler returns 204).
+        # Phase 3.3.15: hard delete removes the row, so a second delete now
+        # returns 404 (the row is genuinely gone, not just soft-disabled).
         resp = self.client.delete(f"/api/watchlists/{wl_id}")
-        self.assertEqual(resp.status_code, 204, msg=resp.text)
+        self.assertEqual(resp.status_code, 404, msg=resp.text)
 
     def test_add_symbol_to_watchlist(self) -> None:
         # Create a watchlist.

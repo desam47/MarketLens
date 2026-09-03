@@ -17,6 +17,10 @@ import { useScannerStream } from '../hooks/useScannerStream';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ScannerTableSkeleton } from '../components/skeletons/ScannerTableSkeleton';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { fmtPrice } from '../components/watchlistUtils';
+
+/** Format a price with up to 4 decimals, trimming trailing zeros. */
+const strPrice = fmtPrice;
 
 interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
@@ -66,7 +70,7 @@ const ScannerRow = React.memo(function ScannerRow({
       onClick={() => onSelectSymbol(sym)}
     >
       <div className="scanner-vcell cell-symbol">{sym}</div>
-      <div className="scanner-vcell">{result?.quote?.price?.toFixed(2) ?? '—'}</div>
+      <div className="scanner-vcell">{result?.quote?.price != null ? strPrice(result.quote.price) : '—'}</div>
       <div className={`scanner-vcell ${result ? scoreClass(result.total_score) : ''}`}>
         {result ? result.total_score.toFixed(1) : '…'}
       </div>

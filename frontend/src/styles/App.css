@@ -1267,6 +1267,12 @@ h4 {
   color: white;
 }
 
+/* Secondary detail text shown alongside a primary badge/value. */
+.health-meta {
+  color: var(--text-secondary, #9ca3af);
+  font-size: 0.8em;
+}
+
 /* Live-config badge shown next to values read directly from .env.
  * Indicates the value reflects current env state without needing a
  * server restart, distinguishing it from cached settings. */
@@ -2781,6 +2787,37 @@ h4 {
   font-variant-numeric: tabular-nums;
 }
 
+/* Keep the Type column narrow in the regular table. */
+.td-type {
+  text-align: center;
+  width: 64px;
+}
+
+/* Entity-type tag (Stock / ETF). Small pill so the Type column doesn't
+   dominate the row visually next to the symbol. */
+.entity-tag {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+
+.entity-tag-stock {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.entity-tag-etf {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
 .td-price {
   font-variant-numeric: tabular-nums;
 }
@@ -2888,7 +2925,7 @@ h4 {
 
 .watchlist-virt-header {
   display: grid;
-  grid-template-columns: 80px 1fr 120px 80px 100px 1fr 70px;
+  grid-template-columns: 80px 60px 1fr 120px 80px 100px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   height: 36px;
@@ -2906,7 +2943,7 @@ h4 {
 /* Each cell in the virtualized row uses the same column grid as the header. */
 .virt-row {
   display: grid;
-  grid-template-columns: 80px 1fr 120px 80px 100px 1fr 70px;
+  grid-template-columns: 80px 60px 1fr 120px 80px 100px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);

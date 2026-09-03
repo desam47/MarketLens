@@ -1,12 +1,11 @@
 """
 Watchlist data models for MarketLens
 """
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
+from backend.utils.timezone import now_ny
 
 
 class Watchlist(Base):
@@ -17,8 +16,8 @@ class Watchlist(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=now_ny)
+    updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
 
     # Relationship to watchlist symbols
     symbols = relationship("WatchlistSymbol", back_populates="watchlist", cascade="all, delete-orphan")
@@ -34,11 +33,15 @@ class WatchlistSymbol(Base):
     watchlist_id = Column(Integer, ForeignKey("watchlists.id"), nullable=False)
     symbol = Column(String(10), nullable=False, index=True)  # Stock symbols are typically short
     is_enabled = Column(Boolean, default=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=now_ny)
     # Position for ordering/reordering symbols within the watchlist
     position = Column(Integer, default=0)
     # Optional notes about this symbol (e.g. "watching for breakout", "entry at $150")
     notes = Column(Text, nullable=True)
+    # Entity classification for the symbol. Currently "stock" or "etf".
+    # Nullable for backward-compat with rows that pre-date this column;
+    # the API defaults to "stock" when null.
+    entity_type = Column(String(16), nullable=True)
 
     # Relationship to watchlist
     watchlist = relationship("Watchlist", back_populates="symbols")

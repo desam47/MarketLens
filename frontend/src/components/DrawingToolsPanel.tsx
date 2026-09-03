@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api, { DrawingTool, DrawingType } from '../services/api';
+import { fmtPrice } from './watchlistUtils';
+
+const strPrice = fmtPrice;
 
 const DRAWING_TYPES: { key: DrawingType; label: string; needsEnd: boolean }[] = [
   { key: 'trend_line', label: 'Trend Line', needsEnd: true },
@@ -294,9 +297,9 @@ export function DrawingToolsPanel({ symbol, timeframe }: DrawingToolsPanelProps)
                 <code className="drawing-type">{d.drawing_type}</code>
               </div>
               <div className="drawing-coords">
-                <span>From: {d.start_timestamp.slice(0, 16)} @ ${d.start_price.toFixed(2)}</span>
+                <span>From: {d.start_timestamp.slice(0, 16)} @ ${strPrice(d.start_price)}</span>
                 {d.end_timestamp && d.end_price !== null && (
-                  <span> → {d.end_timestamp.slice(0, 16)} @ ${d.end_price.toFixed(2)}</span>
+                  <span> → {d.end_timestamp.slice(0, 16)} @ ${strPrice(d.end_price)}</span>
                 )}
               </div>
             </div>

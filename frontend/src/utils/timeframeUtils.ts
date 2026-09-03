@@ -1,0 +1,22 @@
+/** All supported chart timeframes, in descending order of granularity. */
+export const TIMEFRAMES = [
+  '1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk',
+] as const;
+export type Timeframe = typeof TIMEFRAMES[number];
+
+/** Human-readable labels for timeframe selectors. */
+export const TIMEFRAME_LABELS: Record<string, string> = {
+  '1m':  '1 Min',
+  '2m':  '2 Min',
+  '3m':  '3 Min',
+  '5m':  '5 Min',
+  '15m': '15 Min',
+  '30m': '30 Min',
+  '1h':  '1 Hour',
+  '4h':  '4 Hour',
+  '1d':  'Daily',
+  '1wk': 'Weekly',
+};
+
+/** Default timeframes shown in the multi-chart grid. */
+export const DEFAULT_GRID_TIMEFRAMES = ['1m', '5m', '15m', '1h'];

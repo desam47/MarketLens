@@ -1,13 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import api, { HealthData, SystemStatus, SystemConfig } from '../services/api';
+import api, { HealthData, SystemStatus, SystemConfig, BackupStatusData } from '../services/api';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 import { ErrorBanner } from '../components/ErrorBanner';
+
+/** Human-readable byte formatter for WAL/SHM file sizes. */
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 export function SystemHealth() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [ingestionStatus, setIngestionStatus] = useState<any>(null);
+  const [backupStatus, setBackupStatus] = useState<BackupStatusData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
@@ -16,16 +25,18 @@ export function SystemHealth() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, statusData, configData, ingestionData] = await Promise.all([
+      const [healthData, statusData, configData, ingestionData, backupData] = await Promise.all([
         api.getHealth().catch(() => null),
         api.getSystemStatus().catch(() => null),
         api.getSystemConfig().catch(() => null),
         api.getIngestionStatus().catch(() => null),
+        api.getBackupStatus().catch(() => null),
       ]);
       setHealth(healthData);
       setSystemStatus(statusData);
       setSystemConfig(configData);
       setIngestionStatus(ingestionData);
+      setBackupStatus(backupData);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -190,6 +201,51 @@ export function SystemHealth() {
         </div>
 
         <div className="health-card">
+          <h2>Database Backup &amp; WAL</h2>
+          {backupStatus ? (
+            <div className="health-details">
+              <p>
+                <strong>Journal Mode:</strong>{' '}
+                <span className={`status-badge ${backupStatus.journal_mode === 'wal' ? 'status-ok' : 'status-warning'}`}>
+                  {backupStatus.journal_mode.toUpperCase()}
+                </span>
+              </p>
+              <p>
+                <strong>WAL Checkpoint:</strong>{' '}
+                <span className={`status-badge ${backupStatus.wal_checkpoint_busy ? 'status-warning' : 'status-ok'}`}>
+                  {backupStatus.wal_checkpoint_busy ? 'Busy' : 'Idle'}
+                </span>
+                <span className="health-meta">
+                  {' '}— {backupStatus.wal_checkpoint_frames} frames, end page {backupStatus.wal_checkpoint_end}
+                </span>
+              </p>
+              <p>
+                <strong>WAL File:</strong>{' '}
+                {formatBytes(backupStatus.wal_size_bytes)}
+              </p>
+              <p>
+                <strong>SHM File:</strong>{' '}
+                {formatBytes(backupStatus.shm_size_bytes)}
+              </p>
+              <p>
+                <strong>Litestream:</strong>{' '}
+                <span className={`status-badge ${backupStatus.litestream_reachable ? 'status-ok' : 'status-error'}`}>
+                  {backupStatus.litestream_reachable ? 'Streaming' : 'Not Reachable'}
+                </span>
+                {backupStatus.litestream_reachable && backupStatus.litestream_generation != null && (
+                  <span className="health-meta">
+                    {' '}— gen {backupStatus.litestream_generation}
+                    {backupStatus.litestream_dbs ? ` (${backupStatus.litestream_dbs.length} db)` : ''}
+                  </span>
+                )}
+              </p>
+            </div>
+          ) : (
+            <p className="info-text">Backup status unavailable.</p>
+          )}
+        </div>
+
+        <div className="health-card">
           <h2>Connection Test</h2>
           <div className="connection-status">
             <p>Testing API connectivity...</p>
@@ -205,6 +261,10 @@ export function SystemHealth() {
               <div className="test-row">
                 <span>Data Ingestion:</span>
                 <span className={ingestionStatus ? '✓' : '✗'}>{ingestionStatus ? '✓' : '✗'}</span>
+              </div>
+              <div className="test-row">
+                <span>Backup Status:</span>
+                <span className={backupStatus ? '✓' : '✗'}>{backupStatus ? '✓' : '✗'}</span>
               </div>
             </div>
           </div>

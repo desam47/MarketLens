@@ -5,6 +5,7 @@ import {
   deriveDirection,
   estimateConfidence,
   fmt,
+  fmtPrice,
   priceCellClass,
   rsCellClass,
   rsCellLabel,
@@ -22,6 +23,7 @@ interface WatchlistTableProps {
 
 interface RowData {
   symbol: string;
+  entityType: 'stock' | 'etf' | null;
   price: number | null;
   change: number | null;
   changePct: number | null;
@@ -82,8 +84,15 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
         {row.symbol}
         {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
       </div>
+      <div className="virt-cell td-type">
+        {row.entityType === 'etf' ? (
+          <span className="entity-tag entity-tag-etf">ETF</span>
+        ) : (
+          <span className="entity-tag entity-tag-stock">Stock</span>
+        )}
+      </div>
       <div className={`virt-cell td-price ${priceCellClass(row.changePct)}`}>
-        {row.price != null ? `$${fmt(row.price)}` : '—'}
+        {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
         {row.changePct != null && (
           <span className="price-chg">
             {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%
@@ -161,6 +170,7 @@ export function WatchlistTable({
       // Build row data from scan results (no RS yet).
       const baseRows: RowData[] = scanResults.map((r): RowData => ({
         symbol: r.symbol,
+        entityType: (r.entity_type as 'stock' | 'etf' | null) ?? 'stock',
         price: r.quote?.price ?? null,
         change: r.quote ? (r.quote as any).change ?? null : null,
         changePct: r.quote ? (r.quote as any).changePercent ?? null : null,
@@ -335,6 +345,7 @@ export function WatchlistTable({
             <div className="virt-cell th" onClick={() => toggleSort('symbol')}>
               Symbol <SortIcon column="symbol" sortCol={sortCol} sortDir={sortDir} />
             </div>
+            <div className="virt-cell th">Type</div>
             <div className={`virt-cell th ${thClass('price')}`} onClick={() => toggleSort('price')}>
               Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
             </div>
@@ -371,6 +382,7 @@ export function WatchlistTable({
                 <th className={thClass('symbol')} onClick={() => toggleSort('symbol')}>
                   Symbol <SortIcon column="symbol" sortCol={sortCol} sortDir={sortDir} />
                 </th>
+                <th>Type</th>
                 <th className={thClass('price')} onClick={() => toggleSort('price')}>
                   Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
                 </th>
@@ -442,8 +454,15 @@ const WatchlistRow = React.memo(function WatchlistRow({
         {row.symbol}
         {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
       </td>
+      <td className="td-type">
+        {row.entityType === 'etf' ? (
+          <span className="entity-tag entity-tag-etf">ETF</span>
+        ) : (
+          <span className="entity-tag entity-tag-stock">Stock</span>
+        )}
+      </td>
       <td className={`td-price ${priceCellClass(row.changePct)}`}>
-        {row.price != null ? `$${fmt(row.price)}` : '—'}
+        {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
         {row.changePct != null && (
           <span className="price-chg">
             {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%

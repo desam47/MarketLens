@@ -37,6 +37,8 @@ def _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=
     m.is_enabled = is_enabled
     m.position = position
     m.added_at = datetime(2024, 1, 1, 0, 0, 0)
+    m.entity_type = "stock"
+    m.notes = None
     return m
 
 
@@ -80,7 +82,7 @@ class TestWatchlistAPI(unittest.TestCase):
         self.assertEqual(data[1]["name"], "Watchlist 2")
 
         # Verify mock was called correctly
-        self.mock_repo.get_watchlists.assert_called_once_with(active_only=True)
+        self.mock_repo.get_watchlists.assert_called_once_with(active_only=False)
 
     def test_create_watchlist(self):
         """Test creating a new watchlist"""
@@ -151,7 +153,8 @@ class TestWatchlistAPI(unittest.TestCase):
         self.mock_repo.update_watchlist.assert_called_once_with(
             watchlist_id=1,
             name="Updated Watchlist",
-            description="An updated watchlist"
+            description="An updated watchlist",
+            is_active=None,
         )
 
     def test_delete_watchlist(self):
@@ -170,10 +173,13 @@ class TestWatchlistAPI(unittest.TestCase):
 
     def test_add_symbol_to_watchlist(self):
         """Test adding a symbol to a watchlist"""
-        # Setup mock
-        self.mock_repo.add_symbol_to_watchlist.return_value = _mock_symbol(
+        # Setup mock — Phase 3.3.14 returns (symbol, is_new_row)
+        mock_sym = _mock_symbol(
             id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0
         )
+        mock_sym.entity_type = "stock"
+        mock_sym.notes = None
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True)
 
         # Test
         symbol_data = {
@@ -189,10 +195,11 @@ class TestWatchlistAPI(unittest.TestCase):
         self.assertEqual(data["watchlist_id"], 1)
         self.assertTrue(data["is_enabled"])
 
-        # Verify mock was called correctly (router only passes symbol, not position)
+        # Verify mock was called correctly (router passes symbol and entity_type)
         self.mock_repo.add_symbol_to_watchlist.assert_called_once_with(
             watchlist_id=1,
-            symbol="AAPL"
+            symbol="AAPL",
+            entity_type="stock",
         )
 
     def test_remove_symbol_from_watchlist(self):

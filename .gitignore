@@ -41,6 +41,11 @@ marketlens.db
 *.db
 *.sqlite
 *.sqlite3
+# WAL mode (Phase 3.3.1) creates these alongside the DB; Litestream
+# (3.3.2) creates snapshot/wal files in its own directory.
+*.db-wal
+*.db-shm
+.litestream/
 
 # Logs
 *.log

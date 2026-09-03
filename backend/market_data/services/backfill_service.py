@@ -68,22 +68,40 @@ async def _fetch_tier1_1m_bars(
 ) -> list[Bar]:
     """Fetch 1m bars for ``symbol`` covering the last ``days`` calendar days.
 
-    Returns bars sorted ascending by timestamp. The primary/fallback provider
-    chain is used via ``manager.get_historical_bars()``.
+    Returns bars sorted ascending by timestamp.
+
+    Each provider returns as much as it can in a single request:
+      - Alpaca  — up to ~90 days of 1m bars (free tier IEX, auto-paginated)
+      - yfinance — no hard limit, full range returned
+      - Webull   — capped at ~1,650 bars (~4 trading days); excess is
+                   silently truncated by the provider
+    The caller receives whatever the primary provider returns for the requested
+    window; no client-side chunking is needed because the manager handles
+    fallback between providers.
     """
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
     tf = "1m"
+    # Map the requested day count to a provider-supported range string.
+    # Alpaca accepts: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y.
+    # We pick the smallest range that covers ``days`` (for free-tier 1m
+    # bars, that's 3mo — the largest window Alpaca auto-paginates).
+    if days <= 1:
+        range_str = "1d"
+    elif days <= 5:
+        range_str = "5d"
+    elif days <= 30:
+        range_str = "1mo"
+    elif days <= 90:
+        range_str = "3mo"
+    else:
+        range_str = "3mo"  # free-tier 1m cap; tier-2 1d fills the rest
     try:
-        bars: list[Bar] = manager.get_historical_bars(
+        bars = manager.get_historical_bars(
             symbol=symbol,
             timeframe=tf,
-            range_=None,
+            range_=range_str,
             use_cache=False,
             db=db_session,
         )
-        # Filter to the requested window (manager may widen the range).
-        bars = [b for b in bars if start <= b.timestamp <= end]
         bars.sort(key=lambda b: b.timestamp)
         logger.debug(
             f"tier1: got {len(bars)} 1m bars for {symbol} "
@@ -116,7 +134,14 @@ async def _fetch_tier2_1d_bars(
     # as the maximum safe bucket; the results are filtered below.
     now = datetime.now(timezone.utc)
     start_cutoff = now - timedelta(days=days_start)
-    end_cutoff = now - timedelta(days=max(1, days_end))
+    # Convert cutoff to NY naive (same timezone as bar timestamps).
+    from backend.utils.timezone import to_ny
+    start_cutoff_ny = to_ny(start_cutoff)
+    # NOTE: no end_cutoff filter. 1d bars are historical records with no overlap
+    # concern with tier-1's 1m bars. Fetching all available 1d bars (up to the
+    # Alpaca free-tier window) is safe and avoids gaps like the one caused by
+    # filtering to "30 days ago" — which cut off at Aug 3 instead of today.
+    end_cutoff_ny = None  # keep for docstring compatibility, unused below
 
     try:
         # Lazily import so the module is loadable even if Alpaca deps are absent.
@@ -128,8 +153,8 @@ async def _fetch_tier2_1d_bars(
             timeframe="1d",
             range_="5y",  # Alpaca free tier ≈ 1000 IEX days
         )
-        # Filter to the requested window [start_cutoff, end_cutoff].
-        bars = [b for b in bars if start_cutoff <= b.timestamp <= end_cutoff]
+        # Filter on the start boundary only; fetch through today.
+        bars = [b for b in bars if start_cutoff_ny <= b.timestamp]
         bars.sort(key=lambda b: b.timestamp)
         logger.debug(
             f"tier2: got {len(bars)} 1d bars for {symbol} "

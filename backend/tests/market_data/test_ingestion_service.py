@@ -85,6 +85,12 @@ class TestCorrelationIdPropagation(unittest.TestCase):
         # Wrap _run_loops so it captures the correlation ID as seen from
         # inside the daemon thread, but otherwise exits quickly.
         orig_run_loops = self.service._run_loops
+        orig_seed_check = self.service._seed_check
+
+        async def patched_seed_check():
+            # No-op: skip the real DB-touching seed check so the patched
+            # _run_loops runs immediately and the test doesn't need a DB.
+            return None
 
         async def patched_run_loops():
             # Snapshot the contextvar from inside the daemon thread's
@@ -97,6 +103,7 @@ class TestCorrelationIdPropagation(unittest.TestCase):
             # run_until_complete() finishes and stop() can join the thread.
             await asyncio.sleep(0.05)
 
+        self.service._seed_check = patched_seed_check
         self.service._run_loops = patched_run_loops
 
         try:
@@ -118,6 +125,7 @@ class TestCorrelationIdPropagation(unittest.TestCase):
             )
         finally:
             self.service._run_loops = orig_run_loops
+            self.service._seed_check = orig_seed_check
             self.service.stop()
             time.sleep(0.3)
 
@@ -126,10 +134,15 @@ class TestCorrelationIdPropagation(unittest.TestCase):
         set_correlation_id(None)
 
         orig_run_loops = self.service._run_loops
+        orig_seed_check = self.service._seed_check
+
+        async def patched_seed_check():
+            return None
 
         async def quick_exit():
             await asyncio.sleep(0.05)
 
+        self.service._seed_check = patched_seed_check
         self.service._run_loops = quick_exit
 
         try:
@@ -145,6 +158,7 @@ class TestCorrelationIdPropagation(unittest.TestCase):
             )
         finally:
             self.service._run_loops = orig_run_loops
+            self.service._seed_check = orig_seed_check
             if self.service.is_running:
                 self.service.stop()
                 time.sleep(0.3)

@@ -28,8 +28,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -50,6 +51,7 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
+from backend.utils.timezone import NY, UTC, to_ny, ny_to_utc
 
 from ..provider import BaseMarketDataProvider
 
@@ -106,11 +108,15 @@ def _resolve_feed(data_tier: str) -> DataFeed:
     return DataFeed.IEX
 
 
-def _ts_to_utc(dt: datetime) -> datetime:
-    """Return ``dt`` as a UTC-aware datetime. Naive datetimes are assumed UTC."""
+def _ts_to_ny(dt: datetime) -> datetime:
+    """Return ``dt`` as a naive America/New_York datetime (EDT/EST).
+
+    All timestamps are stored in NY local time. Naive inputs are assumed UTC
+    (our historical convention). Aware inputs are converted via ZoneInfo.
+    """
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(NY).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +199,7 @@ class AlpacaWebSocketClient:
         try:
             our_bar = Bar(
                 symbol=str(bar.symbol).upper(),
-                timestamp=_ts_to_utc(bar.timestamp),
+                timestamp=_ts_to_ny(bar.timestamp),
                 open=float(bar.open),
                 high=float(bar.high),
                 low=float(bar.low),
@@ -386,7 +392,7 @@ class AlpacaProvider(BaseMarketDataProvider):
         """Convert an ``alpaca.data.models.Bar`` to our internal ``Bar`` model."""
         return Bar(
             symbol=symbol.upper(),
-            timestamp=_ts_to_utc(bar.timestamp),
+            timestamp=_ts_to_ny(bar.timestamp),
             open=float(bar.open),
             high=float(bar.high),
             low=float(bar.low),
@@ -423,7 +429,7 @@ class AlpacaProvider(BaseMarketDataProvider):
             quote = Quote(
                 symbol=symbol.upper(),
                 price=price,
-                timestamp=_ts_to_utc(sdk_quote.timestamp),
+                timestamp=_ts_to_ny(sdk_quote.timestamp),
                 provider=self.name,
                 data_status=DataStatus.DELAYED,
                 bid=bp,
@@ -443,7 +449,7 @@ class AlpacaProvider(BaseMarketDataProvider):
         """Get historical bar closest to ``timestamp`` via the SDK."""
         try:
             tf = _resolve_tf(timeframe)
-            target = _ts_to_utc(timestamp)
+            target = _ts_to_ny(timestamp)
             start = target.timestamp() - 86400  # ±1 day window
             end = target.timestamp() + 86400
 
@@ -470,7 +476,7 @@ class AlpacaProvider(BaseMarketDataProvider):
             target_ts = target.timestamp()
             closest = min(
                 bars_list,
-                key=lambda b: abs(_ts_to_utc(b.timestamp).timestamp() - target_ts),
+                key=lambda b: abs(_ts_to_ny(b.timestamp).timestamp() - target_ts),
             )
             return self._bar_from_sdk(symbol, closest, timeframe)
 
@@ -479,13 +485,29 @@ class AlpacaProvider(BaseMarketDataProvider):
             raise
 
     def get_latest_bar(self, symbol: str, timeframe: str) -> Bar:
-        """Get the most recent bar for ``symbol`` via the SDK."""
+        """Get the most recent bar for ``symbol`` via the SDK.
+
+        v3.6.1 fix: pass ``start`` (today's midnight NY) and ``end`` (now − 15min
+        to dodge the IEX-free-tier "recent SIP" 403). Without ``start``, the SDK
+        on a default ``limit=5`` returns the wrong 5 bars (overnight pre-market
+        data), which then lands in the DB as a stale 04:00 timestamp while real
+        trading is happening at 15:50.
+        """
         try:
             tf = _resolve_tf(timeframe)
+            # Today midnight in NY → convert to UTC for the SDK.
+            from backend.utils.timezone import now_ny as _now_ny
+            today_ny = _now_ny().replace(hour=0, minute=0, second=0, microsecond=0)
+            start_utc = NY.localize(today_ny) if hasattr(NY, "localize") else \
+                today_ny.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+            # Cap end at now-15min to avoid the IEX 403 on recent SIP data.
+            end_utc = datetime.now(timezone.utc) - timedelta(minutes=15)
             req = StockBarsRequest(
                 symbol_or_symbols=symbol.upper(),
                 timeframe=tf,
-                limit=5,
+                start=start_utc,
+                end=end_utc,
+                limit=1000,
             )
             client = self._get_data_client()
             barset = client.get_stock_bars(req)
@@ -506,23 +528,33 @@ class AlpacaProvider(BaseMarketDataProvider):
         timeframe: str = "1d",
         range_: str = "3mo",
     ) -> list[Bar]:
-        """Fetch a series of OHLCV bars via the SDK."""
+        """Fetch a series of OHLCV bars via the SDK.
+
+        v3.6.x fix: pass ``feed=DataFeed.IEX`` (free-tier requirement) and
+        ``end=now-15min`` (free-tier recent-data rule). The SDK auto-paginates
+        up to 10,000 bars per page, so a 30-day 1m request returns the full
+        set in one call.
+
+        Without ``feed=IEX`` the SIP-default request returns 403 on the free
+        tier. Without ``end``, the SDK returns the OLDEST 10k bars from
+        ``start`` forward (not what callers expect for a "30d" range).
+        """
         try:
             tf = _resolve_tf(timeframe)
             duration = _RANGE_SECONDS.get(range_, 7776000)
-            end_ts = datetime.now(timezone.utc)
-            start_ts = end_ts.timestamp() - duration
+            end_ts = datetime.now(timezone.utc) - timedelta(minutes=15)
+            start_ts = end_ts - timedelta(seconds=duration)
 
-            # NOTE: ``end`` is intentionally omitted. Including ``end=now``
-            # triggers Alpaca's "subscription does not permit querying
-            # recent SIP data" 403 on the IEX-free tier. The SDK accepts a
-            # request with only ``start`` and returns its latest available
-            # (delayed) bars.
             req = StockBarsRequest(
                 symbol_or_symbols=symbol.upper(),
                 timeframe=tf,
-                start=datetime.fromtimestamp(start_ts, tz=timezone.utc),
-                limit=10000,  # Alpaca max
+                start=start_ts,
+                end=end_ts,
+                feed=_resolve_feed(self._data_tier),
+                # NOTE: no ``limit=`` here. The SDK auto-paginates through all
+                # pages, so omitting ``limit`` returns the full window (up to ~50k
+                # rows). The Alpaca API enforces its own page size of 10k rows;
+                # the SDK's get_stock_bars() handles page tokens transparently.
             )
             client = self._get_data_client()
             barset = client.get_stock_bars(req)
@@ -573,7 +605,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                     results[sym] = Quote(
                         symbol=sym,
                         price=0.0,
-                        timestamp=_ts_to_utc(sdk_q.timestamp),
+                        timestamp=_ts_to_ny(sdk_q.timestamp),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -581,7 +613,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                 results[sym] = Quote(
                     symbol=sym,
                     price=price,
-                    timestamp=_ts_to_utc(sdk_q.timestamp),
+                    timestamp=_ts_to_ny(sdk_q.timestamp),
                     provider=self.name,
                     data_status=DataStatus.DELAYED,
                     bid=bp,
@@ -617,10 +649,10 @@ class AlpacaProvider(BaseMarketDataProvider):
                 symbol=symbol.upper(),
                 is_open=bool(clock.is_open),
                 next_open=(
-                    _ts_to_utc(clock.next_open) if clock.next_open is not None else None
+                    _ts_to_ny(clock.next_open) if clock.next_open is not None else None
                 ),
                 next_close=(
-                    _ts_to_utc(clock.next_close)
+                    _ts_to_ny(clock.next_close)
                     if clock.next_close is not None
                     else None
                 ),
@@ -690,7 +722,7 @@ class AlpacaProvider(BaseMarketDataProvider):
             rate_limit_remaining=base.rate_limit_remaining,
             last_success=base.last_success,
             error_message=(base.error_message or "") + extra,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=_ts_to_ny(datetime.now(timezone.utc)),
             circuit_breaker_state=base.circuit_breaker_state,
             consecutive_failures=base.consecutive_failures,
             total_successes=base.total_successes,

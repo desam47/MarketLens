@@ -10,6 +10,9 @@
  */
 import React, { useCallback, useRef, useState } from 'react';
 import api, { NLSearchResultItem } from '../services/api';
+import { fmtPrice } from './watchlistUtils';
+
+const strPrice = fmtPrice;
 
 interface NLSearchBarProps {
   onSelectSymbol?: (symbol: string) => void;
@@ -83,7 +86,7 @@ function ResultRow({
         {item.rsi != null ? item.rsi.toFixed(1) : '—'}
       </td>
       {item.price != null && (
-        <td className="nl-price">${item.price.toFixed(2)}</td>
+        <td className="nl-price">${strPrice(item.price)}</td>
       )}
     </tr>
   );

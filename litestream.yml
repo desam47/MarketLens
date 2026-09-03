@@ -1,0 +1,43 @@
+# Litestream — Continuous SQLite WAL streaming
+# https://litestream.io/
+#
+# Run alongside uvicorn:
+#   litestream replicate -config litestream.yml
+#
+# For local-only backup (no S3): set DB_PATH below and remove the `s3:` block.
+# Litestream will stream WAL frames to the local `replicas:` directory.
+#
+# For S3 backup: set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and
+# AWS_REGION env vars (or use IAM roles on EC2), then switch `replicas:`
+# to the `s3:` block.  Delete the local `file:` block.
+#
+# Retention: Litestream keeps all WAL frames needed to reconstruct
+# the DB up to the `retention` value. Set `retention: 24h` for local
+# disk (cheap) or `retention: 7d` for S3.  The Phase 3.3 retention
+# policy (1000-day bar window) is independent — Litestream handles
+# DB file integrity, not bar-level data eviction.
+
+# DB path — must match the absolute path in .env / settings.py.
+# DO NOT use a relative path here; Litestream needs the full path.
+db-path: /Users/dips/projects/MarketLens/marketlens.db
+
+# Access credentials via environment variables (not hard-coded here):
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#   AWS_REGION (default: us-east-1)
+#   LITESTREAM_S3_ENDPOINT (optional, for MinIO / Cloudflare R2)
+
+# Replicas
+replicas:
+  # ── Local disk (default — works without any cloud account) ────────────────
+  - type: file
+    path: /Users/dips/projects/MarketLens/.litestream
+    retention: 24h
+
+  # ── S3 (uncomment to enable) ────────────────────────────────────────────
+  # - type: s3
+  #   bucket: your-marketlens-backup-bucket
+  #   region: us-east-1
+  #   path: marketlens
+  #   retention: 7d
+  #   sync-interval: 1s   # flush WAL frames to S3 every second

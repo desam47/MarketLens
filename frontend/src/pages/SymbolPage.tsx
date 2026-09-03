@@ -11,6 +11,7 @@ import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SymbolInput } from '../components/SymbolInput';
+import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
 // Each panel makes its own API calls and isn't needed for the first paint.
@@ -90,6 +91,12 @@ function barColor(close: number, open: number): string {
 function str(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toFixed(2);
+}
+
+/** Format a price with up to 4 decimals, trimming trailing zeros (e.g. 0.29, 761.0542). */
+function strPrice(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 // --- Transitions panel ---
@@ -175,7 +182,7 @@ function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: numb
       {latestClose != null && (
         <div className="current-price">
           <span className="price-label">Last</span>
-          <span className="price-value">${str(latestClose)}</span>
+          <span className="price-value">${strPrice(latestClose)}</span>
         </div>
       )}
       {levels.length === 0 ? (
@@ -201,7 +208,7 @@ function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: numb
                     {items.slice(0, 6).map((l, i) => (
                       <tr key={i}>
                         <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
-                        <td className="sr-price">${str(l.price)}</td>
+                        <td className="sr-price">${strPrice(l.price)}</td>
                         <td className="sr-strength">
                           <div className="mini-bar">
                             <div
@@ -294,10 +301,10 @@ function BarsTable({ bars }: { bars: Bar[] }) {
                 return (
                   <tr key={i}>
                     <td>{b.timestamp ? new Date(b.timestamp).toLocaleDateString() : '—'}</td>
-                    <td>${str(b.open)}</td>
-                    <td>${str(b.high)}</td>
-                    <td>${str(b.low)}</td>
-                    <td style={{ color: c }}>${str(b.close)}</td>
+                    <td>${strPrice(b.open)}</td>
+                    <td>${strPrice(b.high)}</td>
+                    <td>${strPrice(b.low)}</td>
+                    <td style={{ color: c }}>${strPrice(b.close)}</td>
                     <td>{(b.volume / 1000).toFixed(0)}k</td>
                     <td style={{ color: c }}>{chg > 0 ? '+' : ''}{chg.toFixed(2)}%</td>
                   </tr>
@@ -359,7 +366,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
-  const priceDisplay = currentPrice != null ? `$${currentPrice.toFixed(2)}` : '—';
+  const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
 
   return (
     <div className="symbol-page">
@@ -381,10 +388,9 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             value={timeframe}
             onChange={e => setTimeframe(e.target.value)}
           >
-            <option value="1d">Daily</option>
-            <option value="1h">1 Hour</option>
-            <option value="4h">4 Hour</option>
-            <option value="15m">15 Min</option>
+            {TIMEFRAMES.map(tf => (
+              <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
+            ))}
           </select>
           <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
             <button
@@ -456,7 +462,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           {chartMode === 'single' ? (
             <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} />
           ) : (
-            <MultiTimeframeChartGrid symbol={symbol} timeframes={['1d', '1h', '15m', '5m']} />
+            <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
           )}
           <BarsTable bars={bars} />
         </div>

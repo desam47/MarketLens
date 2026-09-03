@@ -5,33 +5,44 @@ import json
 import os
 import sys
 import unittest
+import tempfile
 from datetime import datetime
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-from backend.database import Base, SessionLocal, engine
+from backend.database import Base
 from backend.models import Experiment
 from backend.repositories.experiment_repository import ExperimentRepository
 
 
-def _create_tables():
-    Base.metadata.create_all(bind=engine)
-
-
-def _drop_tables():
-    Base.metadata.drop_all(bind=engine)
+def _make_engine():
+    """Create a fresh temp SQLite engine for isolated testing."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    eng = create_engine(f"sqlite:///{tmp.name}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=eng)
+    return eng, tmp.name
 
 
 class TestExperimentRepository(unittest.TestCase):
     def setUp(self):
-        _drop_tables()
-        _create_tables()
-        self.repo = ExperimentRepository()
+        self._eng, self._path = _make_engine()
+        self._Session = sessionmaker(bind=self._eng, expire_on_commit=False)
+        self._session = self._Session()
+        self.repo = ExperimentRepository(db=self._session)
         self._exp_counter = 0
 
     def tearDown(self):
         self.repo.close()
-        _drop_tables()
+        self._session.close()
+        self._eng.dispose()
+        import os as _os
+        for p in [self._path, self._path + "-wal", self._path + "-shm"]:
+            if _os.path.exists(p):
+                _os.unlink(p)
 
     def _seed(self, **overrides) -> Experiment:
         self._exp_counter += 1
@@ -164,7 +175,7 @@ class TestExperimentRepository(unittest.TestCase):
 
     def test_get_runs_for_experiment_returns_runs(self):
         from backend.models import BacktestRun
-        session = SessionLocal()
+        session = self._Session()
         try:
             run = BacktestRun(
                 symbol="AAPL",
@@ -191,7 +202,7 @@ class TestExperimentRepository(unittest.TestCase):
 
     def test_get_regime_breakdown_empty(self):
         from backend.models import BacktestRun
-        session = SessionLocal()
+        session = self._Session()
         try:
             run = BacktestRun(
                 symbol="AAPL",
