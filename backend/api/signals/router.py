@@ -108,6 +108,7 @@ def list_signals(
     timeframe: str | None = None,
     limit: int = Query(100, le=1000),
     include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
+    completed_only: bool = Query(False, description="Only return signals with completed outcomes (return_5b IS NOT NULL)"),
     db: Session = Depends(get_db),
 ):
     """List historical signals with optional filters.
@@ -138,6 +139,7 @@ def list_signals(
         timeframe=timeframe,
         limit=limit,
         symbols=watchlist_symbols if not include_all else None,
+        completed_only=completed_only,
     )
 
 

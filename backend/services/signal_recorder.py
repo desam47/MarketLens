@@ -394,7 +394,20 @@ class SignalRecorder:
                 return False
             signal.price = anchor_price
 
-        # Pull the next REQUIRED_FORWARD_BARS bars.
+        # Pull the next REQUIRED_FORWARD_BARS bars in the same timeframe as
+        # the signal. For a 1d signal these are 1d bars (5/10/20-day returns);
+        # for a 1m signal they are 1m bars (5/10/20-minute returns).
+        #
+        # Special case for 1d: the 1d bar table currently mixes two kinds of
+        # rows — proper midnight (00:00) daily bars and 13:30 intraday
+        # snapshots. The latter leak in via the Alpaca provider's free-tier
+        # feed and were backfilled alongside the 1d series. To keep the
+        # forward-outcome math aligned to calendar days, normalize the anchor
+        # to midnight: future bars are "anything strictly after the prior
+        # midnight", which excludes same-day 13:30 noise.
+        if signal.timeframe == "1d":
+            anchor_ts = anchor_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+
         future_bars = (
             db.query(BarModel)
             .filter(
@@ -407,14 +420,26 @@ class SignalRecorder:
             .all()
         )
 
-        if len(future_bars) < 20:
-            # Not enough data yet — leave the row alone.
+        if not future_bars:
+            # No data after the signal at all — leave the row alone.
             return False
 
+        # Compute whatever windows are available now; the missing ones stay
+        # None and get filled in by future backfill runs as more bars arrive.
+        # This used to require len >= 20 (== 20b window) which left a 19-bar
+        # blind spot at the data edge — signals 20 days back from the edge
+        # were stuck with NULL until the 20th day, even though their 5b/10b
+        # windows were already computable.
         return_5b = self._return_at_bar(future_bars, anchor_price, 5)
         return_10b = self._return_at_bar(future_bars, anchor_price, 10)
         return_20b = self._return_at_bar(future_bars, anchor_price, 20)
         mfe, mae = self._mfe_mae(future_bars, anchor_price)
+
+        # Only skip if even MFE/MAE are None — that means there are no
+        # future bars at all (the "zero future bars" case already returned
+        # False above, but this guards against the rare 0-bar query result).
+        if mfe is None and mae is None:
+            return False
 
         repo.update_outcomes(
             signal.id,
@@ -463,7 +488,14 @@ class SignalRecorder:
     def _price_at(
         self, db, symbol: str, timeframe: str, ts: datetime
     ) -> float | None:
-        """Return the close price for the matching bar, or None."""
+        """Return the close price for the matching bar, or None.
+
+        For 1d, normalise the timestamp to midnight so we look up the
+        canonical daily bar rather than the same-day 13:30 intraday
+        snapshot that may also be in the table.
+        """
+        if timeframe == "1d":
+            ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)
         row = (
             db.query(BarModel.close)
             .filter(

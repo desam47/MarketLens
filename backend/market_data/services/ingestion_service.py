@@ -384,7 +384,7 @@ class MarketDataIngestionService:
 
             try:
                 backfilled = await asyncio.to_thread(
-                    signal_recorder.backfill_outcomes
+                    signal_recorder.backfill_outcomes, 200
                 )
                 if backfilled:
                     logger.debug(f"Backfilled {backfilled} signal outcomes")

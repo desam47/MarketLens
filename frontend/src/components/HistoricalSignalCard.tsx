@@ -41,6 +41,7 @@ function regimeBadgeClass(regime: string | null | undefined): string {
 export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCardProps) {
   const [symbol, setSymbol] = useState(defaultSymbol);
   const [timeframe, setTimeframe] = useState('1d');
+  const [completedOnly, setCompletedOnly] = useState(true);
   const [signals, setSignals] = useState<HistoricalSignal[]>([]);
   const [regimePerformance, setRegimePerformance] = useState<RegimePerformance[]>([]);
   const [regimeCounts, setRegimeCounts] = useState<RegimeCount[]>([]);
@@ -64,6 +65,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         symbol.trim().toUpperCase() || undefined,
         timeframe,
         100,
+        completedOnly,
       );
       setSignals(rows);
     } catch (err: any) {
@@ -72,7 +74,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
     } finally {
       setLoading(false);
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, completedOnly]);
 
   const loadResearch = useCallback(async () => {
     try {
@@ -170,6 +172,14 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
               <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
             ))}
           </select>
+        </label>
+        <label className="checkbox-label" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={completedOnly}
+            onChange={(e) => setCompletedOnly(e.target.checked)}
+          />
+          <span>With outcomes only</span>
         </label>
         <button className="btn btn-primary" onClick={loadSignals} disabled={loading}>
           {loading ? 'Loading…' : 'Refresh'}

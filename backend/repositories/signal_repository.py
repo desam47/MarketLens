@@ -88,11 +88,15 @@ class SignalRepository:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         symbols: list[str] | None = None,
+        completed_only: bool = False,
     ) -> list[HistoricalSignal]:
         """Historical signal records with optional filters.
 
         ``symbol`` filters to a single symbol; ``symbols`` filters to any
         of a list. If both are given, ``symbol`` wins (single-symbol query).
+
+        ``completed_only`` skips rows where return_5b IS NULL (i.e. outcomes
+        haven't been computed yet because not enough future bars exist).
         """
         q = self.db.query(HistoricalSignal)
 
@@ -106,6 +110,8 @@ class SignalRepository:
             q = q.filter(HistoricalSignal.timestamp >= start_time)
         if end_time:
             q = q.filter(HistoricalSignal.timestamp <= end_time)
+        if completed_only:
+            q = q.filter(HistoricalSignal.return_5b.isnot(None))
 
         return (
             q.order_by(desc(HistoricalSignal.timestamp))
@@ -145,15 +151,13 @@ class SignalRepository:
     def get_signals_needing_outcomes(self, limit: int = 100) -> list[HistoricalSignal]:
         """Signals whose forward outcomes haven't been computed yet.
 
-        Scans for the oldest N rows where return_5b IS NULL and outcome_computed
-        is not True, sorted oldest-first so we fill in order.
+        Any row with return_5b IS NULL needs processing — that covers both
+        freshly-created signals and rows whose outcomes were reset. Sorting
+        oldest-first ensures we fill in order from the beginning of history.
         """
         return (
             self.db.query(HistoricalSignal)
-            .filter(
-                HistoricalSignal.return_5b.is_(None),
-                func.coalesce(HistoricalSignal._outcome_missing, True).is_(True),
-            )
+            .filter(HistoricalSignal.return_5b.is_(None))
             .order_by(HistoricalSignal.timestamp.asc())
             .limit(limit)
             .all()

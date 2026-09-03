@@ -1399,11 +1399,13 @@ class ApiService {
     symbol?: string,
     timeframe?: string,
     limit = 100,
+    completedOnly = false,
   ): Promise<HistoricalSignal[]> {
     const params = new URLSearchParams();
     if (symbol) params.set('symbol', symbol);
     if (timeframe) params.set('timeframe', timeframe);
     params.set('limit', String(limit));
+    if (completedOnly) params.set('completed_only', 'true');
     return this.fetch<HistoricalSignal[]>(`/signals/?${params.toString()}`);
   }
 
