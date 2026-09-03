@@ -13,6 +13,7 @@ from ..engines.timeframe import (
     multi_symbol_timeframe_engine,
 )
 from ..indicators.base_indicator import IndicatorEngine
+from ..utils.timezone import NY, UTC
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,18 @@ _TIMEFRAME_EMA: dict[Timeframe, tuple[int, int]] = {
 def _ensure_aware(dt: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC.
 
-    Naive datetimes are assumed UTC per the canonical store policy. Aware
-    datetimes in other zones are converted to UTC. This ensures the trend
-    engine's internal ``_last_update_time`` is always timezone-aware, so
-    stale/duplicate/gap checks work consistently regardless of whether the
-    caller passed a naive or aware datetime.
+    Naive datetimes are interpreted as **America/New_York**, not UTC — the
+    DB and the provider layer both store naive NY wall time (see
+    ``backend/utils/timezone``). Stamping such a value as UTC shifted every
+    engine timestamp 4-5h into the past, which surfaced as a permanently
+    "stuck" dashboard. Expressed in UTC here so this module's existing
+    stale/duplicate/gap arithmetic is unchanged.
     """
     if dt is None:
         raise ValueError("timestamp must not be None")
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=NY)
+    return dt.astimezone(UTC)
 
 class TrendDirection(StrEnum):
     """Trend direction"""

@@ -3,6 +3,8 @@ Alert repository for data access operations.
 """
 from datetime import UTC, datetime, timedelta
 
+from backend.utils.timezone import now_ny
+
 from sqlalchemy import and_, desc
 
 from backend.database import SessionLocal
@@ -103,7 +105,7 @@ class AlertRepository:
             alert.parameter = parameter
         if is_enabled is not None:
             alert.is_enabled = is_enabled
-        alert.updated_at = datetime.utcnow()
+        alert.updated_at = now_ny()
         self.db.commit()
         self.db.refresh(alert)
         return alert

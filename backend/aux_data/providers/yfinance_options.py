@@ -17,6 +17,8 @@ computed from the raw DataFrames in this module.
 import logging
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 import pandas as pd
 
 from backend.models.aux_data import (
@@ -79,7 +81,7 @@ class YFinanceOptionsProvider(OptionsProvider):
                 near_term_iv=near_term_iv,
                 iv_rank=iv_rank,
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
 
         except Exception as exc:
@@ -88,7 +90,7 @@ class YFinanceOptionsProvider(OptionsProvider):
             return OptionsResponse(
                 symbol=symbol.upper(),
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
 
     # ------------------------------------------------------------------ helpers

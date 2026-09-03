@@ -477,12 +477,15 @@ _EXPECTED_BAR_COUNTS: dict[tuple[str, str], int] = {
 
 
 def _ensure_aware(dt) -> datetime | None:
-    """Ensure a datetime is timezone-aware in UTC, per canonical store policy."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+    """Ensure a datetime is timezone-aware UTC.
+
+    Naive input is interpreted as America/New_York (the project's storage
+    convention), then converted to UTC. Previously this stamped naive values
+    as UTC and returned aware values unconverted, so ``_newest_bar_age_seconds``
+    could compare two different zones and under-report staleness by 4-5h.
+    """
+    from backend.utils.timezone import ny_to_utc
+    return ny_to_utc(dt)
 
 
 def _newest_bar_age_seconds(bars: list[Bar]) -> float | None:
@@ -491,4 +494,6 @@ def _newest_bar_age_seconds(bars: list[Bar]) -> float | None:
         return None
     newest = max(bar.timestamp for bar in bars)
     newest_aware = _ensure_aware(newest)
+    if newest_aware is None:
+        return None
     return (datetime.now(timezone.utc) - newest_aware).total_seconds()

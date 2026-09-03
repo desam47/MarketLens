@@ -14,6 +14,8 @@ called by it. Each is disabled by default (AUX_*_ENABLED=false).
 from abc import ABC, abstractmethod
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 from backend.models.aux_data import (
     AuxProviderStatus,
     FundamentalsResponse,
@@ -40,8 +42,8 @@ class NewsProvider(ABC):
             provider_type="news",
             is_healthy=self._is_healthy,
             last_error=self._last_error,
-            last_success=datetime.utcnow() if self._is_healthy else None,
-            timestamp=datetime.utcnow(),
+            last_success=now_ny() if self._is_healthy else None,
+            timestamp=now_ny(),
         )
 
     def _mark_error(self, exc: Exception) -> None:
@@ -71,8 +73,8 @@ class FundamentalProvider(ABC):
             provider_type="fundamentals",
             is_healthy=self._is_healthy,
             last_error=self._last_error,
-            last_success=datetime.utcnow() if self._is_healthy else None,
-            timestamp=datetime.utcnow(),
+            last_success=now_ny() if self._is_healthy else None,
+            timestamp=now_ny(),
         )
 
     def _mark_error(self, exc: Exception) -> None:
@@ -106,8 +108,8 @@ class OptionsProvider(ABC):
             provider_type="options",
             is_healthy=self._is_healthy,
             last_error=self._last_error,
-            last_success=datetime.utcnow() if self._is_healthy else None,
-            timestamp=datetime.utcnow(),
+            last_success=now_ny() if self._is_healthy else None,
+            timestamp=now_ny(),
         )
 
     def _mark_error(self, exc: Exception) -> None:

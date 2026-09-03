@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
+from backend.utils.timezone import ensure_aware_ny
 from ...market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_quotes,
@@ -26,13 +27,9 @@ _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
+    from backend.utils.timezone import format_edt_iso
+
+    return format_edt_iso(value)
 
 
 # One global instance (Phase 8 spec §1 — market-wide aggregate)
@@ -70,15 +67,11 @@ def _seed_sub_engine(symbol: str, context_engine: MarketContextEngine) -> int:
             .all()
         )
         for bar in rows:
-            # BarModel stores naive UTC datetimes (the SQLAlchemy DateTime
-            # column has no tzinfo=True). The sub-engine's regime signal
-            # timestamp flows into a max() call that compares against
-            # datetime.now(timezone.utc) (aware) — comparing naive vs aware
-            # raises TypeError. Tag every bar timestamp as UTC before
-            # pushing it through the engine.
-            ts = bar.timestamp
-            if ts is not None and ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+            # BarModel stores naive **America/New_York** datetimes (the
+            # SQLAlchemy DateTime column has no tzinfo=True). Engines compare
+            # against aware values, so stamp the zone before pushing through.
+            # This previously tagged them UTC, shifting every bar 4-5h.
+            ts = ensure_aware_ny(bar.timestamp)
             sub.update(
                 price=float(bar.close or 0.0),
                 volume=int(bar.volume or 0),

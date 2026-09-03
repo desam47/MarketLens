@@ -28,13 +28,9 @@ _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _to_dashboard_tz(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
+    from backend.utils.timezone import format_edt_iso
+
+    return format_edt_iso(value) or ""
 
 class IngestionStatusResponse(BaseModel):
     is_running: bool

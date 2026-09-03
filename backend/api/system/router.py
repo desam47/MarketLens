@@ -14,10 +14,12 @@ scanner, ingestion, and bar repository can import them without pulling
 in FastAPI (avoids circular imports).
 """
 from datetime import UTC, datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from ...observability import (
@@ -37,13 +39,9 @@ _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
+    from backend.utils.timezone import format_edt_iso
+
+    return format_edt_iso(value)
 
 
 class PerformanceResponse(BaseModel):
@@ -64,6 +62,8 @@ class PerformanceResponse(BaseModel):
     rate_limit: dict | None = None
     websocket: dict | None = None
     bars: dict | None = None  # Phase 3.1: bars_stored, bars_1m_only, bars_resampled
+    # Phase 3.3.17: retention fields are nested in the bars dict above
+    # (oldest_bar, newest_bar, distinct_symbols, retention_days).
     providers: dict | None = None  # Phase 3.6: per-provider health (incl. Alpaca WS status)
 
     class Config:
@@ -86,6 +86,9 @@ def _safe_bar_counts() -> dict | None:
     (no rows are persisted as resampled). These fields are useful for
     confirming the Phase 3.1 contract is honoured and for monitoring
     storage growth.
+
+    Phase 3.3.17: also returns retention metrics — oldest/newest bar per
+    symbol, distinct symbol count, and the configured retention window.
     """
     try:
         from sqlalchemy import func
@@ -106,10 +109,34 @@ def _safe_bar_counts() -> dict | None:
                 .scalar()
                 or 0
             )
+            # Phase 3.3.17 retention metrics
+            oldest_bar = (
+                db.query(func.min(BarModel.timestamp)).scalar()
+            )
+            newest_bar = (
+                db.query(func.max(BarModel.timestamp)).scalar()
+            )
+            distinct_symbols = (
+                db.query(func.count(func.distinct(BarModel.symbol))).scalar()
+                or 0
+            )
+            try:
+                from ...config.settings import settings as _s
+                retention_days = _s.market_data.bar_retention_days
+            except Exception:
+                retention_days = 1000
             return {
                 "bars_stored": total,
                 "bars_1m_only": bars_1m,
                 "bars_resampled": bars_resampled,
+                "oldest_bar": (
+                    oldest_bar.isoformat() if oldest_bar else None
+                ),
+                "newest_bar": (
+                    newest_bar.isoformat() if newest_bar else None
+                ),
+                "distinct_symbols": int(distinct_symbols),
+                "retention_days": int(retention_days),
             }
         finally:
             db.close()
@@ -258,3 +285,122 @@ async def prometheus_metrics() -> Response:
     """
     text = render_prometheus_text()
     return Response(content=text, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.3.3 — Backup / WAL health
+# ---------------------------------------------------------------------------
+
+BackupStatusResponse: type = None  # defined after the helper
+
+
+def _safe_backup_status() -> dict | None:
+    """Return WAL checkpoint + Litestream health snapshot.
+
+    ``PRAGMA wal_checkpoint(TRUNCATE)`` does a passive checkpoint then
+    truncates the WAL file to zero bytes if all frames were committed —
+    it is always safe to call and never blocks readers or writers.
+
+    Litestream exposes its health via HTTP GET to
+    ``http://localhost:9090`` (default port when running
+    ``litestream replicate``).  When Litestream is not running the
+    request times out and we surface ``litestream_reachable: false``
+    rather than raising.
+
+    Returns ``None`` on any failure so the endpoint stays available
+    even when the DB is in a bad state.
+    """
+    try:
+        from ...database import engine
+
+        if not str(engine.url).startswith("sqlite:"):
+            return None
+
+        db_path = Path(str(engine.url).replace("sqlite:///", ""))
+
+        with engine.connect() as conn:
+            # Checkpoint: returns (checkpointed_pages, wal_frames, end_page)
+            checkpoint_result = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            journal_mode = conn.execute(text("PRAGMA journal_mode")).scalar()
+
+            # WAL file size (may be 0 if no writes have happened since last checkpoint)
+            wal_path = db_path.with_suffix(".db-wal")
+            wal_size_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+
+            # SHM file size (always present when WAL is active)
+            shm_path = db_path.with_suffix(".db-shm")
+            shm_size_bytes = shm_path.stat().st_size if shm_path.exists() else 0
+
+        # Litestream health (non-blocking; times out in 1s if not running)
+        litestream_reachable = False
+        litestream_generation = None
+        litestream_dbs = None
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "http://localhost:9090/health",
+                headers={"Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    import json
+                    data = json.loads(resp.read())
+                    litestream_reachable = True
+                    litestream_generation = data.get("generation")
+                    litestream_dbs = data.get("dbs")
+        except Exception:
+            pass  # Litestream not running — surface reachable=false
+
+        return {
+            "journal_mode": str(journal_mode),
+            "wal_checkpoint_busy": bool(checkpoint_result[0]),   # pages still in WAL
+            "wal_checkpoint_frames": int(checkpoint_result[1]),   # total WAL frames
+            "wal_checkpoint_end": int(checkpoint_result[2]),      # WAL end page
+            "wal_size_bytes": wal_size_bytes,
+            "shm_size_bytes": shm_size_bytes,
+            "litestream_reachable": litestream_reachable,
+            "litestream_generation": litestream_generation,
+            "litestream_dbs": litestream_dbs,
+        }
+    except Exception:
+        return None
+
+
+class BackupStatusResponse(BaseModel):
+    """Response shape for GET /api/system/backup-status."""
+    timestamp: str
+    journal_mode: str
+    wal_checkpoint_busy: bool
+    wal_checkpoint_frames: int
+    wal_checkpoint_end: int
+    wal_size_bytes: int
+    shm_size_bytes: int
+    litestream_reachable: bool
+    litestream_generation: str | None
+    litestream_dbs: list | None
+
+
+@router.get("/backup-status", response_model=BackupStatusResponse)
+async def get_backup_status() -> BackupStatusResponse:
+    """Return WAL + Litestream backup health.
+
+    Phase 3.3.3: exposes checkpoint status, WAL file size, and Litestream
+    streaming state so the SystemHealth DB tab can show at-a-glance backup
+    health without requiring CLI access.
+    """
+    status = _safe_backup_status()
+    if status is None:
+        # Degrade gracefully — return a known-unhealthy shape.
+        return BackupStatusResponse(
+            timestamp=_to_dashboard_tz(datetime.now(UTC)),
+            journal_mode="unknown",
+            wal_checkpoint_busy=False,
+            wal_checkpoint_frames=0,
+            wal_checkpoint_end=0,
+            wal_size_bytes=0,
+            shm_size_bytes=0,
+            litestream_reachable=False,
+            litestream_generation=None,
+            litestream_dbs=None,
+        )
+    return BackupStatusResponse(timestamp=_to_dashboard_tz(datetime.now(UTC)), **status)

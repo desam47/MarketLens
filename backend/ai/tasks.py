@@ -20,6 +20,8 @@ import logging
 import traceback
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 from backend.ai.analyze import analyze_symbol
 from backend.api.ai_templates.router import resolve_and_render
 from backend.database import SessionLocal
@@ -182,9 +184,9 @@ def _update_status(
             return
         record.status = status
         if status == "started":
-            record.started_at = datetime.utcnow()
+            record.started_at = now_ny()
         elif status in ("finished", "failed"):
-            record.completed_at = datetime.utcnow()
+            record.completed_at = now_ny()
         if result is not None:
             record.result = json.dumps(result)
         if error is not None:

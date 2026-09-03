@@ -2,11 +2,12 @@
 Timeframe/candle engine for aggregating market data
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
 from ..models.market_data import Bar, DataStatus
+from ..utils.timezone import NY, UTC
 from .market_calendar import SessionType, USMarketCalendar, us_market_calendar
 
 logger = logging.getLogger(__name__)
@@ -15,15 +16,16 @@ logger = logging.getLogger(__name__)
 def _ensure_aware(dt: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC.
 
-    Naive datetimes are assumed UTC per the canonical store policy. Aware
-    datetimes in other zones are converted to UTC. This ensures consistent
-    comparisons across all timestamp operations in this module.
+    Naive datetimes are interpreted as **America/New_York**, not UTC — the
+    DB and the provider layer both store naive NY wall time (see
+    ``backend/utils/timezone``). Expressed in UTC here so this module's
+    existing candle-boundary arithmetic is unchanged.
     """
     if dt is None:
         raise ValueError("timestamp must not be None")
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=NY)
+    return dt.astimezone(UTC)
 
 class Timeframe(StrEnum):
     """Supported timeframes"""

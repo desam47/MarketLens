@@ -28,43 +28,24 @@ from ...market_data.services.engine_seeder import engine_registry
 from ..trend.registry import get_engine as get_shared_trend_engine
 
 # All timestamps in this response are emitted in America/New_York so the
-# dashboard renders them in EST/EDT without each caller converting. Mirror
-# of the helper in backend.api.main (kept inline here to avoid a circular
-# import between the multitimeframe router and main).
+# dashboard renders them in EST/EDT without each caller converting.
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
     """Return ``value`` as an ISO string in America/New_York.
 
-    Naive datetimes are treated as UTC (matches what the trend engines
-    produce internally). Returns ``None`` for ``None`` so callers don't
-    have to special-case the empty state.
+    Naive datetimes are NY wall time (project storage convention).
+    Returns ``None`` for ``None`` so callers don't special-case empty.
     """
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
+    from backend.utils.timezone import format_edt_iso
+
+    return format_edt_iso(value)
+
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/multitimeframe", tags=["multitimeframe"])
-
-# All timestamps in responses → America/New_York (EST/EDT auto-handled).
-_DASHBOARD_TZ = ZoneInfo("America/New_York")
-
-
-def _to_dashboard_tz(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
 
 # Engines are keyed by (symbol, preset) so the dashboard can switch
 # presets without losing warmup on the previous one.

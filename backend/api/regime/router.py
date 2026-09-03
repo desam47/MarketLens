@@ -2,14 +2,14 @@
 API endpoints for market regime analysis
 """
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
 from ...market_data.services.engine_seeder import (
     engine_registry,
-    seed_engine_from_quotes,
+    seed_engine_from_bars,
 )
 from backend.regime.market_regime_engine import MarketRegimeEngine
 from backend.regime.relative_strength_engine import RelativeStrengthEngine
@@ -25,13 +25,17 @@ _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
-    return value.astimezone(_DASHBOARD_TZ).isoformat()
+    """Serialize a datetime as an ISO string in America/New_York.
+
+    Naive values are NY wall time (project convention). Delegates to the
+    shared helper so every router renders the same stored timestamp
+    identically — this copy used to be the only one that read naive as NY
+    while sixteen others read it as UTC, so the same bar rendered 4-5h
+    apart depending on which endpoint you hit.
+    """
+    from backend.utils.timezone import format_edt_iso
+
+    return format_edt_iso(value)
 
 
 # In a real implementation, these would be dependency injected or managed as services
@@ -64,18 +68,20 @@ def _freshness(age_seconds: float | None) -> str:
 
 
 def _data_age_seconds(ts: datetime | None) -> float | None:
-    """Seconds between `ts` and now. Returns None if ts is missing/naive-naive mismatch.
+    """Seconds between ``ts`` and now. Returns None if ts is missing.
 
-    We compare in UTC because ingested bar/quote timestamps are UTC-naive (from
-    yfinance's `regularMarketTime` epoch). Mixing tz-aware and tz-naive would
-    raise — we normalize here.
+    Stored timestamps are naive America/New_York (project convention since
+    2026-09-02), so we compare against naive NY time. Previously this used
+    ``datetime.now(UTC).replace(tzinfo=None)`` which caused 4–5h skew on
+    every freshness computation (the timestamp was treated as UTC when it
+    was actually NY).
     """
     if ts is None:
         return None
-    now = datetime.now(UTC).replace(tzinfo=None)
+    from backend.utils.timezone import now_ny
     if ts.tzinfo is not None:
         ts = ts.replace(tzinfo=None)
-    delta = (now - ts).total_seconds()
+    delta = (now_ny() - ts).total_seconds()
     # Negative ages (server clock skew, or ts from "the future") don't make
     # sense for freshness; clamp to 0.
     return max(0.0, delta)
@@ -88,11 +94,44 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
         engine = MarketRegimeEngine(symbol)
         _engines[symbol] = engine
         # Seed historical data from DB so we return real signals immediately
-        count = seed_engine_from_quotes(symbol, engine.update)
+        count = seed_engine_from_bars(symbol, "1m", engine.update)
         if count > 0:
-            logger.info(f"Seeded regime engine for {symbol} with {count} historical quotes")
-        # Register for live-tick updates from the ingestion service
-        engine_registry.register("quote", symbol, engine.update)
+            logger.info(f"Seeded regime engine for {symbol} with {count} historical bars")
+        # Register for live-tick updates from the ingestion service. Both
+        # quote and bar events feed the regime engine — quotes give us
+        # intra-minute updates (more frequent), bars give us canonical
+        # OHLCV at minute boundaries. Without the bar hook, the regime
+        # signal timestamp lags the bar timestamp by 30s+ (the quote
+        # loop's interval) and the dashboard shows "stale" even when
+        # bars are flowing.
+
+        # dispatch_bar passes (symbol, timeframe, price, volume, timestamp,
+        # high, low, open_price) but engine.update only accepts the latter
+        # six — wrap it to drop the two extras.
+        def bar_update(**kwargs):
+            logger.debug(
+                f"bar_update callback invoked for {symbol} @ {kwargs.get('timestamp')} "
+                f"(price={kwargs.get('price')})"
+            )
+            engine.update(
+                price=kwargs["price"],
+                volume=kwargs["volume"],
+                timestamp=kwargs["timestamp"],
+                high=kwargs.get("high"),
+                low=kwargs.get("low"),
+                open_price=kwargs.get("open_price"),
+            )
+            # Invalidate the regime TTL cache so the next API call reflects
+            # the freshly-updated regime engine state (not the 30s-TTL stale
+            # response that would otherwise be returned).
+            _regime_cache.pop(symbol, None)
+        # NOTE: quote-frequency updates are intentionally NOT fed to the regime
+        # engine. Alpaca free tier stops returning fresh quotes after 16:00 ET,
+        # causing stale 16:00:05 timestamps to overwrite the correct bar-driven
+        # regime timestamp every 10s. Regime signals are derived from bar-level
+        # indicators (ADX, ATR, Bollinger Bands) and need only minute-boundary
+        # updates. The bar:1m dispatch below provides those.
+        engine_registry.register("bar:1m", symbol, bar_update)
     return _engines[symbol]
 
 @router.get("/{symbol}/current")

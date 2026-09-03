@@ -14,6 +14,8 @@ The manager mirrors the ``MarketDataManager`` pattern from Phase 2:
 import logging
 import time
 from datetime import datetime
+
+from backend.utils.timezone import now_ny
 from typing import Literal
 
 from backend.config.settings import settings as _settings
@@ -141,16 +143,16 @@ class _CategoryManager:
 
     def _empty_response(self, symbol: str):
         if self.provider_type is NewsProvider:
-            return NewsResponse(symbol=symbol.upper(), items=[], provider="none", timestamp=datetime.utcnow())
+            return NewsResponse(symbol=symbol.upper(), items=[], provider="none", timestamp=now_ny())
         if self.provider_type is FundamentalProvider:
             from backend.models.aux_data import FundamentalsItem
             return FundamentalsResponse(
                 symbol=symbol.upper(),
                 data=FundamentalsItem(symbol=symbol.upper()),
                 provider="none",
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
-        return OptionsResponse(symbol=symbol.upper(), provider="none", timestamp=datetime.utcnow())
+        return OptionsResponse(symbol=symbol.upper(), provider="none", timestamp=now_ny())
 
 
 class AuxDataManager:
@@ -164,7 +166,7 @@ class AuxDataManager:
     def get_news(self, symbol: str, limit: int = 20) -> NewsResponse:
         if not self.news.is_enabled():
             logger.info("News provider is disabled (AUX_NEWS_ENABLED=false)")
-            return NewsResponse(symbol=symbol.upper(), items=[], provider="disabled", timestamp=datetime.utcnow())
+            return NewsResponse(symbol=symbol.upper(), items=[], provider="disabled", timestamp=now_ny())
         return self.news._dispatch("get_news", symbol, limit)
 
     def get_fundamentals(self, symbol: str) -> FundamentalsResponse:
@@ -175,14 +177,14 @@ class AuxDataManager:
                 symbol=symbol.upper(),
                 data=FundamentalsItem(symbol=symbol.upper()),
                 provider="disabled",
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
         return self.fundamentals._dispatch("get_fundamentals", symbol)
 
     def get_options(self, symbol: str, expiration: str | None = None) -> OptionsResponse:
         if not self.options.is_enabled():
             logger.info("Options provider is disabled (AUX_OPTIONS_ENABLED=false)")
-            return OptionsResponse(symbol=symbol.upper(), provider="disabled", timestamp=datetime.utcnow())
+            return OptionsResponse(symbol=symbol.upper(), provider="disabled", timestamp=now_ny())
         return self.options._dispatch("get_options", symbol, expiration)
 
     def get_all_statuses(self) -> dict[str, list[AuxProviderStatus]]:

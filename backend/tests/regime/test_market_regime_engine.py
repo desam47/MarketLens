@@ -28,7 +28,10 @@ class TestMarketRegimeEngine(unittest.TestCase):
         self.assertIsNotNone(self.engine.bb_indicator)
         self.assertIsNotNone(self.engine.ema_fast)
         self.assertIsNotNone(self.engine.ema_slow)
-        self.assertIsInstance(self.engine.regime_history, list)
+        # regime_history is a bounded deque internally; the public accessor is
+        # what callers rely on, and it returns a list.
+        self.assertEqual(len(self.engine.regime_history), 0)
+        self.assertIsInstance(self.engine.get_regime_history(), list)
 
     def test_engine_update_with_data(self):
         """Test updating the engine with market data"""

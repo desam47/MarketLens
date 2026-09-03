@@ -18,27 +18,24 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime
 
 from backend.database import SessionLocal
 from backend.models.market_data_sql import BarModel, QuoteModel
+from backend.utils.timezone import ensure_aware_ny
 
 logger = logging.getLogger(__name__)
 
 
 def _ensure_aware(dt) -> datetime | None:
-    """Normalize a datetime to timezone-aware UTC.
+    """Normalize a datetime to timezone-aware America/New_York.
 
-    Naive datetimes are assumed UTC per the canonical store policy. Aware
-    datetimes in other zones are first converted to UTC, then to timezone-aware.
-    This prevents "can't subtract offset-naive and offset-aware datetimes" when
-    engine update callbacks compare timestamps with datetime.now(timezone.utc).
+    Thin alias for ``backend.utils.timezone.ensure_aware_ny`` — kept as a
+    module-level name because the ingestion service imports it from here.
+    Naive datetimes are NY local time (project convention); see that module
+    for why interpreting them as UTC is a 4-5h bug.
     """
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    return ensure_aware_ny(dt)
 
 
 def seed_engine_from_quotes(symbol: str, update_fn: Callable, max_points: int = 200) -> int:
@@ -195,6 +192,10 @@ class EngineRegistry:
         key = self._key(f"bar:{timeframe}", symbol)
         with self._lock:
             callbacks = list(self._entries.get(key, []))
+        logger.debug(
+            f"dispatch_bar: {symbol}/{timeframe} @ {timestamp} — "
+            f"{len(callbacks)} engine(s) registered for key={key!r}"
+        )
         if not callbacks:
             return 0
         notified = 0
@@ -204,6 +205,7 @@ class EngineRegistry:
                    price=price, volume=volume, timestamp=timestamp,
                    high=high, low=low, open_price=open_price)
                 notified += 1
+                logger.debug(f"dispatch_bar: notified engine cb={cb} for {symbol}/{timeframe}")
             except Exception as e:
                 logger.warning(f"Engine update failed for {symbol}/{timeframe} (bar): {e}")
         return notified

@@ -9,7 +9,7 @@ import random
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
@@ -28,20 +28,10 @@ from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
 
 from .engine_seeder import engine_registry
+from .engine_seeder import _ensure_aware
 from .manager import MarketDataManager
 
 logger = logging.getLogger(__name__)
-
-# Symbols that are always ingested regardless of watchlist contents.
-# The regime / market-context engine analyses these market-benchmark symbols
-# to determine the overall market regime. Without them the Market Context
-# panel stays at "unknown". They are deduplicated against the watchlist so
-# adding them manually has no effect.
-#
-# Note: ^VIX is excluded because it is an index (not a US_STOCK) and most
-# providers reject it or return stale data. SPY + QQQ alone are sufficient
-# for regime classification.
-_MARKET_REGIME_SYMBOLS: tuple[str, ...] = ("SPY", "QQQ")
 
 
 class MarketDataIngestionService:
@@ -135,19 +125,10 @@ class MarketDataIngestionService:
         # Done here (not in __init__) so the DB is guaranteed to be ready.
         if not self.symbols:
             self.symbols = self._load_symbols_from_watchlist()
-            # Always include the market-regime benchmark symbols (SPY/QQQ/IWM/VIX)
-            # regardless of watchlist contents. The regime engine analyses these
-            # to produce the Market Context panel; without them the panel stays
-            # at "unknown". Dedupe case-insensitively so user-added duplicates
-            # are collapsed.
-            existing = {s.upper() for s in self.symbols}
-            for core in _MARKET_REGIME_SYMBOLS:
-                if core.upper() not in existing:
-                    self.symbols.append(core)
-            logger.info(
-                f"Always-included market-regime symbols: "
-                f"{[s for s in self.symbols if s in _MARKET_REGIME_SYMBOLS]}"
-            )
+            # Only ingest what the watchlist contains. If no watchlist has symbols,
+            # ingestion is a no-op — everything shows empty until the user adds stocks.
+            if self.symbols:
+                logger.info(f"Loaded {len(self.symbols)} symbols from watchlist: {self.symbols}")
             # Re-initialise tracking dicts for the loaded symbols.
             for symbol in self.symbols:
                 if symbol not in self.last_quote_update:
@@ -235,9 +216,9 @@ class MarketDataIngestionService:
         """
         if not self.is_running:
             return
+        logger.info("Stopping market data ingestion service")
         self.is_running = False
         set_ingestion_running(False)
-        logger.info("Stopping market data ingestion service")
         # If the background thread is still running, ask the event loop to
         # cancel its tasks. We use ``call_soon_threadsafe`` because the
         # loop is owned by a different thread.
@@ -489,12 +470,17 @@ class MarketDataIngestionService:
         # Push fresh ticks into the in-memory analysis engines (e.g. regime)
         # after the DB write succeeded. Engine updates are sync + fast, safe
         # to call from the asyncio loop.
+        #
+        # The timestamp MUST be normalized before dispatch. Providers return
+        # naive NY wall time; the downstream trend/timeframe engines stamp a
+        # bare naive value according to their own convention. Passing the raw
+        # value here is what pinned the regime signal 4-5h in the past.
         for q in fresh_quotes:
             notified = engine_registry.dispatch_quote(
                 symbol=q.symbol,
                 price=q.price,
                 volume=q.volume or 0,
-                timestamp=q.timestamp,
+                timestamp=_ensure_aware(q.timestamp),
                 # Quote objects only carry bid/ask — engines that need OHLC
                 # fall back to `price` for missing fields (see regime engine).
                 high=None, low=None, open_price=None,
@@ -512,6 +498,11 @@ class MarketDataIngestionService:
         logger.debug("Ingesting bars")
         db: Session = SessionLocal()
         # (symbol, timeframe) -> Bar — fresh bars to dispatch after commit
+        # Each tuple now also carries the DB-stored (BarModel) row, so the
+        # dispatch step can use the canonical DB timestamp instead of the
+        # provider's. The provider's timestamp can be stale when it returns
+        # an older bar than the DB already has (e.g. Alpaca free-tier not
+        # including extended hours).
         fresh_bars: list[tuple] = []
         # Bars to bulk-upsert (handles duplicate (symbol, timeframe, timestamp)
         # via ON CONFLICT DO UPDATE in upsert_bars — get_latest_bar can return
@@ -546,7 +537,7 @@ class MarketDataIngestionService:
                     if symbol not in self.last_bar_update:
                         self.last_bar_update[symbol] = {}
                     self.last_bar_update[symbol]["1m"] = datetime.now()
-                    fresh_bars.append((bar.symbol, bar.timeframe, bar))
+                    fresh_bars.append((bar.symbol, bar.timeframe, bar, bar.timestamp))
 
                     logger.debug(
                         f"Ingested 1m bar for {symbol}: "
@@ -606,17 +597,89 @@ class MarketDataIngestionService:
             db.close()
 
         # Dispatch fresh bars to in-memory engines (trend, multitimeframe).
-        # The engine_registry routes by bar:{timeframe} key.
-        for symbol, timeframe, bar in fresh_bars:
-            notified = engine_registry.dispatch_bar(
-                symbol=symbol,
-                timeframe=timeframe,
-                price=bar.close,
-                volume=bar.volume or 0,
-                timestamp=bar.timestamp,
+        # The engine_registry routes by bar:{timeframe} key and passes the full
+        # OHLCV context to every registered callback.
+        # Phase 3.6 fix: dispatch the DB bar's timestamp, not the provider's.
+        # The provider (Alpaca free tier) may return stale timestamps for extended
+        # hours bars, while the DB holds the canonical NY timestamps written by
+        # _ts_to_ny during upsert. Dispatching the DB timestamp ensures the
+        # regime engine sees the same wall-clock value that the DB stores.
+        from backend.models.market_data_sql import BarModel as _BarModel
+        # Nothing new this cycle — skip the session + query entirely. The bar
+        # loop runs more often than bars actually close, so this is the common
+        # path.
+        if not fresh_bars:
+            return
+        # One grouped read for every (symbol, timeframe) we just wrote, instead
+        # of a query per symbol inside the dispatch loop. The subquery picks the
+        # newest timestamp per pair; the join pulls the matching full row.
+        with SessionLocal() as dispatch_db:
+            symbols = {s.upper() for s, _tf, _b, _p in fresh_bars}
+            timeframes = {tf for _s, tf, _b, _p in fresh_bars}
+
+            latest_sq = (
+                dispatch_db.query(
+                    _BarModel.symbol.label("symbol"),
+                    _BarModel.timeframe.label("timeframe"),
+                    func.max(_BarModel.timestamp).label("max_ts"),
+                )
+                .filter(
+                    _BarModel.symbol.in_(symbols),
+                    _BarModel.timeframe.in_(timeframes),
+                )
+                .group_by(_BarModel.symbol, _BarModel.timeframe)
+                .subquery()
             )
-            if notified:
-                logger.debug(f"Dispatched {symbol}/{timeframe} bar to {notified} engine(s)")
+            latest_rows = (
+                dispatch_db.query(_BarModel)
+                .join(
+                    latest_sq,
+                    and_(
+                        _BarModel.symbol == latest_sq.c.symbol,
+                        _BarModel.timeframe == latest_sq.c.timeframe,
+                        _BarModel.timestamp == latest_sq.c.max_ts,
+                    ),
+                )
+                .all()
+            )
+            latest_by_key = {
+                (row.symbol.upper(), row.timeframe): row for row in latest_rows
+            }
+
+            for symbol, timeframe, bar, _provider_ts in fresh_bars:
+                db_bar = latest_by_key.get((symbol.upper(), timeframe))
+                if db_bar is not None:
+                    dispatch_ts = _ensure_aware(db_bar.timestamp)
+                    dispatch_payload = dict(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        price=db_bar.close if db_bar.close is not None else bar.close,
+                        volume=db_bar.volume if db_bar.volume is not None else (bar.volume or 0),
+                        timestamp=dispatch_ts,
+                        high=db_bar.high if db_bar.high is not None else bar.high,
+                        low=db_bar.low if db_bar.low is not None else bar.low,
+                        open_price=db_bar.open if db_bar.open is not None else bar.open,
+                    )
+                else:
+                    # Fallback to provider bar if DB query somehow missed it.
+                    dispatch_ts = _ensure_aware(bar.timestamp)
+                    dispatch_payload = dict(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        price=bar.close,
+                        volume=bar.volume or 0,
+                        timestamp=dispatch_ts,
+                        high=bar.high,
+                        low=bar.low,
+                        open_price=bar.open,
+                    )
+
+                notified = engine_registry.dispatch_bar(**dispatch_payload)
+                if notified:
+                    logger.debug(
+                        f"Dispatched {symbol}/{timeframe} bar to {notified} engine(s) "
+                        f"ts={dispatch_ts}"
+                    )
             # Invalidate the trend TTL cache for this (symbol, timeframe) so
             # the next /api/trend/{symbol}/current/{timeframe} call gets a
             # fresh result instead of a stale "unknown" response from
@@ -800,7 +863,12 @@ class MarketDataIngestionService:
             db.close()
 
 async def _safe_backfill(symbol: str, retention_days: int) -> None:
-    """Run backfill for ``symbol``, logging but not raising on failure."""
+    """Run backfill for ``symbol``, logging but not raising on failure.
+
+    After backfill completes, immediately record signals for the newly
+    written bars so they show up in the dashboard without waiting for
+    the 90s signal recording loop.
+    """
     from backend.market_data.services.backfill_service import (
         backfill_symbol_history,
     )
@@ -812,6 +880,19 @@ async def _safe_backfill(symbol: str, retention_days: int) -> None:
             f"_seed_check backfill for {symbol}: "
             f"tier1={result['tier1_written']}, tier2={result['tier2_written']}"
         )
+        # Record signals for the freshly backfilled bars so they appear
+        # in the dashboard immediately, not on the next 90s cycle.
+        # Use backfill_signals_for_symbol so all backfilled history is
+        # recorded, not just the most recent bar.
+        try:
+            from backend.services.signal_recorder import signal_recorder
+            recorded = signal_recorder.backfill_signals_for_symbol(symbol.upper())
+            if recorded:
+                logger.debug(
+                    f"Recorded {recorded} signals for {symbol} after seed backfill"
+                )
+        except Exception as sig_e:
+            logger.warning(f"Signal recording after seed backfill failed for {symbol}: {sig_e}")
     except Exception as e:
         logger.warning(f"_seed_check backfill for {symbol} failed: {e}")
 

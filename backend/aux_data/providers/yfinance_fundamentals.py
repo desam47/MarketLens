@@ -8,6 +8,8 @@ schema; unavailable fields are left as ``None``.
 import logging
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 from backend.models.aux_data import FundamentalsItem, FundamentalsResponse
 
 from ..provider import FundamentalProvider
@@ -89,7 +91,7 @@ class YFinanceFundamentalsProvider(FundamentalProvider):
                 symbol=symbol.upper(),
                 data=data,
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
 
         except Exception as exc:
@@ -99,7 +101,7 @@ class YFinanceFundamentalsProvider(FundamentalProvider):
                 symbol=symbol.upper(),
                 data=FundamentalsItem(symbol=symbol.upper()),
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
 
     @staticmethod

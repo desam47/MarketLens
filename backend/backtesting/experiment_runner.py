@@ -21,6 +21,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 from backend.config.settings import settings as _settings
 from backend.models import BacktestRun
 from backend.repositories.backtest_repository import BacktestRepository
@@ -254,7 +256,7 @@ def run_experiment(config: ExperimentConfig) -> int:
         exp_repo.update_status(
             experiment_id,
             status="completed",
-            completed_at=datetime.utcnow(),
+            completed_at=now_ny(),
         )
     finally:
         exp_repo.close()
@@ -352,7 +354,7 @@ def _mark_failed(experiment_id: int, error: str) -> None:
             experiment_id,
             status="failed",
             error=error[:500],
-            completed_at=datetime.utcnow(),
+            completed_at=now_ny(),
         )
     finally:
         repo.close()

@@ -7,6 +7,8 @@ with ``title``, ``publisher``, ``providerPublishTime`` and related symbols.
 import logging
 from datetime import datetime
 
+from backend.utils.timezone import now_ny
+
 from backend.models.aux_data import NewsItem, NewsResponse
 
 from ..provider import NewsProvider
@@ -33,12 +35,12 @@ class YFinanceNewsProvider(NewsProvider):
                 try:
                     pub_ms = article.get("providerPublishTime", 0)
                     pub_dt = (
-                        datetime.fromtimestamp(pub_ms, tz=datetime.utcnow().astimezone().tzinfo)
+                        datetime.fromtimestamp(pub_ms, tz=now_ny().astimezone().tzinfo)
                         if pub_ms
-                        else datetime.utcnow()
+                        else now_ny()
                     )
                 except Exception:
-                    pub_dt = datetime.utcnow()
+                    pub_dt = now_ny()
 
                 # relevance = number of related tickers that match the symbol,
                 # capped at 1.0. If no related-tickers data, use a default of 0.5.
@@ -62,7 +64,7 @@ class YFinanceNewsProvider(NewsProvider):
                 symbol=symbol.upper(),
                 items=items,
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )
 
         except Exception as exc:
@@ -72,5 +74,5 @@ class YFinanceNewsProvider(NewsProvider):
                 symbol=symbol.upper(),
                 items=[],
                 provider=self.name,
-                timestamp=datetime.utcnow(),
+                timestamp=now_ny(),
             )

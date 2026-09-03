@@ -2,7 +2,9 @@
 Market regime detection engine for identifying market conditions.
 """
 import logging
+from collections import deque
 from datetime import datetime
+from itertools import islice
 from enum import StrEnum
 from typing import Any
 
@@ -83,12 +85,17 @@ class MarketRegimeEngine:
         self.ema_fast = EMAIndicator(period=20)
         self.ema_slow = EMAIndicator(period=50)
 
-        # Regime history
-        self.regime_history: list[RegimeSignal] = []
+        # Regime history. Bounded deque so the cap is enforced by the
+        # container on append (O(1)) instead of re-slicing the whole list
+        # on every tick once the cap is reached.
+        self.max_regime_history = 1000
+        self.regime_history: deque[RegimeSignal] = deque(maxlen=self.max_regime_history)
 
         # Price history for breakout detection
-        self.price_history: list[tuple[datetime, float]] = []
         self.max_price_history = 100
+        self.price_history: deque[tuple[datetime, float]] = deque(
+            maxlen=self.max_price_history
+        )
 
         # Regime thresholds (these would ideally be configurable)
         self.volatility_threshold_high = 0.05  # 5% ATR as % of price
@@ -134,10 +141,9 @@ class MarketRegimeEngine:
         self.ema_fast.update({'close': price})
         self.ema_slow.update({'close': price})
 
-        # Update price history for breakout detection
+        # Update price history for breakout detection. The deque's maxlen
+        # evicts the oldest entry automatically — no manual re-slice needed.
         self.price_history.append((timestamp, price))
-        if len(self.price_history) > self.max_price_history:
-            self.price_history = self.price_history[-self.max_price_history:]
 
         # Generate regime signal
         self._generate_regime_signal(timestamp)
@@ -182,12 +188,9 @@ class MarketRegimeEngine:
             timestamp=timestamp
         )
 
-        # Store in history
+        # Store in history. The deque's maxlen caps it at
+        # self.max_regime_history and evicts the oldest on overflow.
         self.regime_history.append(signal)
-
-        # Keep only last 1000 signals
-        if len(self.regime_history) > 1000:
-            self.regime_history = self.regime_history[-1000:]
 
     def _classify_regime(self, confluence_signal: ConfluenceSignal,
                         overall_trend: TrendSignal,
@@ -311,10 +314,15 @@ class MarketRegimeEngine:
         return None
 
     def get_regime_history(self, limit: int | None = None) -> list[RegimeSignal]:
-        """Get market regime signal history"""
-        if limit is None:
-            return self.regime_history.copy()
-        return self.regime_history[-limit:] if len(self.regime_history) > limit else self.regime_history.copy()
+        """Get market regime signal history, oldest → newest."""
+        # regime_history is a deque, which does not support slicing — take
+        # the last `limit` entries via islice over the tail.
+        if limit is None or limit >= len(self.regime_history):
+            return list(self.regime_history)
+        if limit <= 0:
+            return []
+        return list(islice(self.regime_history,
+                           len(self.regime_history) - limit, None))
 
     def get_regime_for_timeframe(self, timeframe: Timeframe) -> RegimeSignal | None:
         """Get regime analysis for a specific timeframe (simplified - returns overall)"""
@@ -336,7 +344,11 @@ class MarketRegimeEngine:
         if len(self.regime_history) < lookback:
             return 0.0
 
-        recent_regimes = [signal.regime for signal in self.regime_history[-lookback:]]
+        recent_regimes = [
+            signal.regime
+            for signal in islice(self.regime_history,
+                                 len(self.regime_history) - lookback, None)
+        ]
         if not recent_regimes:
             return 0.0
 
