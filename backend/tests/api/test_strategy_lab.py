@@ -8,6 +8,7 @@ queries are exercised end-to-end.
 """
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 
@@ -15,13 +16,63 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
 os.environ.setdefault("MARKETLENS_DB_OVERRIDE", "sqlite:////tmp/test_strategy_lab.db")
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
-from backend.database import Base, engine
+import backend.database as _database_pkg
+import backend.database.db as _database_impl
+from backend.database import Base
 from backend.models import Experiment
 
-# Build a fresh in-memory schema before any tests run.
+# ---------------------------------------------------------------------------
+# Isolate this module onto its own temporary database.
+# ---------------------------------------------------------------------------
+# The MARKETLENS_DB_OVERRIDE above only takes effect if this module is the
+# first thing to import backend.config.settings. During a full-suite run it
+# is not: other test modules import it first, the settings singleton is built
+# with the real DATABASE_URL, and backend.database.engine ends up bound to the
+# developer's live marketlens.db. A drop_all() in setUp then wiped every
+# table, which is exactly what happened on 2026-09-02 (all bars plus the
+# user's watchlist).
+#
+# So do not depend on import order. Build an explicit temp engine and rebind
+# the module attributes. The strategy-lab router resolves SessionLocal lazily
+# (``from backend.database import SessionLocal`` inside the handler), so
+# rebinding the attribute is picked up on every request.
+_TMP_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_TMP_DB.close()
+
+engine = create_engine(
+    f"sqlite:///{_TMP_DB.name}",
+    connect_args={"check_same_thread": False},
+)
+_TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+for _mod in (_database_pkg, _database_impl):
+    _mod.engine = engine
+    _mod.SessionLocal = _TestSessionLocal
+
+# ExperimentRepository captures SessionLocal at import time (line 11 of
+# experiment_repository.py: ``from backend.database import SessionLocal``).
+# Rebind there too so any repository instances the router spawns use the
+# isolated test session rather than the production one.
+import backend.repositories.experiment_repository as _exp_repo
+_exp_repo.SessionLocal = _TestSessionLocal
+
+
+def tearDownModule():
+    """Drop the temp database file once every test in this module has run."""
+    engine.dispose()
+    try:
+        os.unlink(_TMP_DB.name)
+    except OSError:
+        pass
+
+
+# Build a fresh schema on the temp DB before any tests run.
 Base.metadata.create_all(bind=engine)
 
 
