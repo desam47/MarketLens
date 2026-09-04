@@ -25,6 +25,7 @@ from backend.models.market_data import (
     ProviderCapabilities,
     Quote,
 )
+from backend.utils.timezone import to_ny
 
 from ..provider import BaseMarketDataProvider
 
@@ -105,7 +106,7 @@ class YFinanceProvider(BaseMarketDataProvider):
         """
         return Bar(
             symbol=symbol.upper(),
-            timestamp=datetime.fromtimestamp(int(ts_arr[index]), tz=timezone.utc),
+            timestamp=to_ny(datetime.fromtimestamp(int(ts_arr[index]), tz=timezone.utc)),
             open=float(opens[index]) if opens[index] is not None else 0.0,
             high=float(highs[index]) if highs[index] is not None else 0.0,
             low=float(lows[index]) if lows[index] is not None else 0.0,
@@ -160,7 +161,7 @@ class YFinanceProvider(BaseMarketDataProvider):
             quote = Quote(
                 symbol=symbol.upper(),
                 price=float(price),
-                timestamp=ts,
+                timestamp=to_ny(ts),
                 provider=self.name,
                 data_status=DataStatus.DELAYED,
                 bid=meta.get("bid"),
@@ -280,7 +281,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                     quote = Quote(
                         symbol=symbol_upper,
                         price=float(item.get("regularMarketPrice", 0.0)),
-                        timestamp=datetime.fromtimestamp(item.get("regularMarketTime", 0), timezone.utc),
+                        timestamp=to_ny(datetime.fromtimestamp(item.get("regularMarketTime", 0), timezone.utc)),
                         provider=self.name,
                         data_status=DataStatus.DELAYED,
                         bid=item.get("bid"),
@@ -293,7 +294,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                     results[symbol] = Quote(
                         symbol=symbol_upper,
                         price=0.0,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=to_ny(datetime.now(timezone.utc)),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -347,7 +348,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                 next_close=None,
                 timezone=meta.get("exchangeTimezoneShortName", "UTC"),
                 provider=self.name,
-                timestamp=now,
+                timestamp=to_ny(now),
             )
             self._reset_error_state()
             return status

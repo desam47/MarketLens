@@ -592,13 +592,25 @@ class SignalRecorder:
         return True
 
     def _classify_trend_from_bar(self, bar) -> str:
-        """Classify a single bar as bullish/bearish/neutral using close vs SMA-proxy.
+        """Classify a bar as bullish/bearish/neutral.
 
-        The MTF engine is in-process state. To avoid hard-coupling, we use
-        a simple close-vs-open heuristic here. The signal's ``structure``
-        field is the source of truth for richer trend state; this is the
-        fallback when the MTF engine isn't available.
+        Primary path: read the in-process trend engine's current signal for
+        (symbol, timeframe). The engine has 200 bars of seeded history plus
+        live ticks, so EMA/RSI/MACD/ADX/SuperTrend/Bollinger/ROC all
+        contribute — far more reliable than a 1-bar heuristic.
+
+        Fallback: close-vs-open when the engine is unavailable (e.g. for
+        timeframes not registered in the trend engine, or during the
+        very first bars before the engine has any signals).
         """
+        engine_signal = self._get_trend_signal(bar.symbol, bar.timeframe)
+        if engine_signal is not None and engine_signal.score is not None:
+            score = engine_signal.score
+            if score >= 30:
+                return "bullish"
+            if score <= -30:
+                return "bearish"
+            return "neutral"
         try:
             close = float(bar.close or 0)
             open_ = float(bar.open or close)
@@ -611,7 +623,17 @@ class SignalRecorder:
             return "neutral"
 
     def _score_from_bar(self, bar) -> float:
-        """Build a -100..+100 score from close vs open."""
+        """Build a -100..+100 score.
+
+        Primary path: read from the in-process trend engine's current
+        signal (weighted EMA+RSI+MACD+ADX+SuperTrend+BB+ROC composite).
+
+        Fallback: pct move from open to close, scaled 5× (so 0.2% move
+        → ±1 score).
+        """
+        engine_signal = self._get_trend_signal(bar.symbol, bar.timeframe)
+        if engine_signal is not None and engine_signal.score is not None:
+            return float(engine_signal.score)
         try:
             close = float(bar.close or 0)
             open_ = float(bar.open or close)
@@ -621,6 +643,23 @@ class SignalRecorder:
             return max(min(pct * 5.0, 100.0), -100.0)
         except Exception:
             return 0.0
+
+    def _get_trend_signal(self, symbol: str, timeframe: str):
+        """Look up the current trend signal from the in-process registry.
+
+        Returns ``None`` if the engine isn't initialized or has no signal
+        yet for the requested (symbol, timeframe). Lazy-imports the
+        registry to avoid a circular import at module load.
+        """
+        try:
+            from backend.api.trend.registry import get_engine
+            from backend.engines.timeframe import Timeframe
+
+            tf = Timeframe(timeframe)
+            engine = get_engine(symbol)
+            return engine.get_current_trend(tf)
+        except Exception:
+            return None
 
     def _classify_volume(self, bar) -> str:
         """Crude volume classification — no historical baseline here."""

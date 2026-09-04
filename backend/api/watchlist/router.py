@@ -42,8 +42,13 @@ def _trigger_backfill_for_symbol(symbol: str) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No running event loop (sync context) — use asyncio.run.
-        asyncio.run(_do_backfill(symbol))
+        # No running event loop (sync context) — run in a thread pool to avoid
+        # re-entering an existing loop. asyncio.run() would fail if called from
+        # within another asyncio.run() context (e.g. from a gap-fill task).
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, _do_backfill(symbol))
+            future.result(timeout=600)
         return
     # Running loop: schedule the coroutine.
     task = loop.create_task(_do_backfill(symbol))

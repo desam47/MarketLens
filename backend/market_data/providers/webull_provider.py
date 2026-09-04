@@ -385,6 +385,7 @@ class WebullProvider(BaseMarketDataProvider):
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
                 count = days_per_range * _BARS_PER_DAY["1m"]
+                count = min(count, 1650)  # Webull free-tier cap for M1
             else:
                 count = _RANGE_TO_COUNT.get(range_, 200)
 

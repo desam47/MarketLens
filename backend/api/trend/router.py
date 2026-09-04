@@ -67,6 +67,8 @@ async def get_current_trend(symbol: str, timeframe: str):
                 "direction": "unknown",
                 "strength": "unknown",
                 "confidence": 0.0,
+                "score": None,
+                "classification": None,
                 "timestamp": None,
             }
         else:
@@ -76,6 +78,10 @@ async def get_current_trend(symbol: str, timeframe: str):
                 "direction": trend_signal.direction.value,
                 "strength": trend_signal.strength.value,
                 "confidence": trend_signal.confidence,
+                "score": trend_signal.score,
+                "classification": trend_signal.classification.value
+                    if hasattr(trend_signal.classification, "value")
+                    else trend_signal.classification,
                 "timestamp": _to_dashboard_tz(trend_signal.timestamp),
             }
         _trend_cache[cache_key] = payload
