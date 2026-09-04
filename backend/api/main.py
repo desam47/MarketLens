@@ -112,6 +112,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Trend engine warmup failed: {e}")
 
+    # Signal hygiene: fill gaps and enforce retention caps on every restart so
+    # any ticker added before these fixes get patched automatically.
+    try:
+        from backend.api.main_helpers import run_signal_hygiene
+        gaps = run_signal_hygiene()
+        for sym, (tfs, pruned) in gaps.items():
+            for tf, filled in tfs.items():
+                if filled:
+                    logger.info(f"Signal hygiene: {sym}/{tf} — filled {filled} missing signals")
+            if pruned:
+                logger.info(f"Signal hygiene: {sym} — pruned {pruned} out-of-cap rows")
+    except Exception as e:
+        logger.warning(f"Signal hygiene check failed: {e}")
+
     yield
     shutdown_tracing()
 

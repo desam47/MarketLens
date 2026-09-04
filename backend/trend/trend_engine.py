@@ -315,13 +315,21 @@ class TrendEngine:
                 self.indicators[timeframe] = stack
 
     def update(self, price: float, volume: float,
-               timestamp: datetime, provider: str = "", **_: object):
+               timestamp: datetime, provider: str = "",
+               only_timeframe: Timeframe | None = None,
+               **_: object):
         """Update trend engine with new market data.
 
         Phase 0 Principle 15 — data quality validated before analysis.
         Normalizes ``timestamp`` to timezone-aware UTC so all internal comparisons
         (stale, gap, duplicate checks) work consistently even when callers pass
         naive datetimes.
+
+        ``only_timeframe`` is a seeder-only kwarg: when set, only the trend
+        signal for that timeframe is generated. Live ingestion never sets it.
+        Per-tf seeding in ``backend.api.trend.registry`` sets it so feeding 1h
+        bars doesn't pollute ``trend_history[1m]`` with 1h timestamps (which
+        would otherwise mask the real recent 1m signals in the last-100 cap).
         """
         timestamp = _ensure_aware(timestamp)
         # Phase 0 Principle 15 — data quality validated before analysis.
@@ -375,7 +383,7 @@ class TrendEngine:
         self._update_indicators_from_candles(timestamp)
 
         # Generate trend signals from the updated indicators.
-        self._generate_trend_signals(timestamp)
+        self._generate_trend_signals(timestamp, only_timeframe=only_timeframe)
 
         # Record state for the next update() call.
         self._last_update_time = now
@@ -443,11 +451,20 @@ class TrendEngine:
                         f"Error updating {name} indicator for {timeframe}: {e}"
                     )
 
-    def _generate_trend_signals(self, timestamp: datetime):
-        """Generate trend signals for each timeframe"""
+    def _generate_trend_signals(self, timestamp: datetime,
+                               only_timeframe: Timeframe | None = None):
+        """Generate trend signals for each timeframe.
+
+        ``only_timeframe`` restricts signal generation to a single timeframe —
+        used by per-timeframe seeding in ``backend.api.trend.registry`` so
+        that 1h seeding doesn't pollute ``trend_history[1m]`` with 1h
+        timestamps. Live ingestion passes ``None`` (all timeframes).
+        """
         for timeframe, indicators in self.indicators.items():
             if timeframe == Timeframe.TICK:
                 continue  # Skip tick timeframe for trend analysis
+            if only_timeframe is not None and timeframe != only_timeframe:
+                continue
 
             try:
                 signal = self._analyze_timeframe_trend(timeframe, indicators, timestamp)

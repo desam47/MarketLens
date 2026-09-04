@@ -38,12 +38,34 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
     that the Phase 9 engines accept. ``source`` is propagated for
     Phase 3.1 so the API can distinguish ``"raw"`` from ``"resampled"``
     bars.
+
+    1d partial-bar guard: during RTH (before 16:00 ET Mon-Fri), the most
+    recent 1d bar is dropped so the UI never shows today's incomplete bar.
     """
     db = SessionLocal()
     try:
-        bars = bar_repository.get_bars(db, symbol, timeframe, limit=limit)
+        # Use desc=True so the most recent bars come first — charts and
+        # tables need the latest data, not the oldest.
+        bars = bar_repository.get_bars(db, symbol, timeframe, limit=limit, desc=True)
     finally:
         db.close()
+
+    # Drop today's 1d bar until after market close (16:00 ET Mon-Fri).
+    # Bar timestamps are stored in UTC (NY=UTC-4 in Sep).  16:00 ET = 20:00 UTC.
+    # 1d bar timestamps are at 00:00 UTC of the trading day, so we compare
+    # the bar's UTC date against today's ET date — not blindly drop the
+    # newest bar, which would also discard yesterday's completed bar.
+    if timeframe == "1d" and bars:
+        now_utc = datetime.now(timezone.utc)
+        ny = now_utc.astimezone(ZoneInfo("America/New_York"))
+        today_et = ny.date()
+        if ny.weekday() < 5 and ny.hour < 20:
+            newest = bars[0]
+            bar_date_et = newest.timestamp.astimezone(ZoneInfo("America/New_York")).date() \
+                if newest.timestamp.tzinfo else newest.timestamp.date()
+            if bar_date_et == today_et:
+                bars = bars[1:]  # drop today's partial bar
+
     out: list[dict] = []
     for b in bars:
         out.append({

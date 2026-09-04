@@ -399,6 +399,77 @@ All three providers implement the same `BaseMarketDataProvider` interface and al
 
 ---
 
+## Phase 3.7 — All-Timeframe Live Ingestion + Resample-at-Write + Backfill Config
+
+**Why now:** Phase 3.1 made the *read* side resample on-the-fly from 1m bars. But:
+
+- 1m-only storage means higher-TF bars (5m, 15m, 1h, 4h, 1d) are computed at every read. Caching helps but is fundamentally less efficient than storing the bars once.
+- 1h backfill is missing entirely.
+- Backfill provider names are hardcoded in `backfill_service.py` — can't swap primary without a code change.
+- Alpaca free tier lags 1m bars by ~15 min — live 1m needs Webull or yfinance.
+- 1d bars at 13:30 ET are a known noise artifact from the Alpaca free tier.
+
+**Decision:**
+
+1. Make every backfill provider configurable via `.env` (`BACKFILL_*_PRIMARY`, `BACKFILL_*_FALLBACK`, `BACKFILL_*_GAPFILL`).
+2. Add a 1h backfill tier alongside the existing 1m and 1d tiers.
+3. Add yfinance/webull gap-fill for the 1m 15-min lag window.
+4. Live ingestion switches primary to Webull (chain: Webull → yfinance → Alpaca).
+5. Move resample from read-time to write-time: 2m/3m/5m/15m/30m/4h/1wk are persisted to the DB by background loops, then read as direct rows.
+6. Drop 13:30 noise from 1d bars during both live ingestion and backfill.
+
+### Items
+
+#### 3.7.1 Backfill settings + per-TF chains
+- `BackfillSettings` in `backend/config/settings.py` with per-timeframe primary/gapfill/fallback fields + rate-limit knobs.
+- All providers loaded via `MarketDataManager._PROVIDER_INSTANCES` (no hardcoded provider names in `backfill_service.py`).
+
+#### 3.7.2 1m backfill with gap-fill
+- `_fetch_tier1_1m_bars()` fetches Alpaca primary, then yfinance/webull fills the latest 15-min lag window. Dedupe by timestamp.
+- Range: 1d / 5d / 1mo / 3mo (Alpaca free-tier 1m cap).
+
+#### 3.7.3 1h backfill (new tier)
+- `_fetch_tier2_1h_bars()` — Alpaca primary, yfinance/webull fallback.
+- Range: 6mo / 1y / 2y based on `days` parameter.
+- Up to ~2 years of 1h history per symbol.
+
+#### 3.7.4 1d backfill — 13:30 noise guard + .env providers
+- `_fetch_tier2_1d_bars()` — drops bars where `hour == 13 and minute == 30` (Alpaca free-tier noise).
+- Provider chain from `BACKFILL_1D_PRIMARY` / `BACKFILL_1D_FALLBACK`.
+
+#### 3.7.5 Live ingestion loops
+- 1m: existing `_bar_ingestion_loop` (no change) — uses `MarketDataManager` which auto-resolves Webull → yfinance → Alpaca from `.env`.
+- 1h: new `_1h_write_loop()` — fires every hour at :05 past, writes 1h bar.
+- 1d: new `_daily_write_loop()` — fires at 16:05 ET, writes 1d bar + resamples 1wk.
+
+#### 3.7.6 Resample-at-write loops
+- `_resample_and_upsert(target_tf, source_tf)` — fetches source bars, resamples via `backend.utils.resampler.resample_ohlcv`, upserts confirmed-closed buckets (end-time < now).
+- 2m/3m/5m/15m/30m: every 2 minutes from 1m bars.
+- 4h: every 4 hours at :05 past (00:05, 04:05, 08:05, 12:05, 16:05, 20:05 ET).
+- 1wk: daily at 16:05 ET from 1d bars.
+
+#### 3.7.7 Direct-read bar repository
+- `BarRepository.get_bars()` returns rows directly (no read-time resample).
+- Add 2m/3m to `_TF_MULTIPLIER` and `_WIDENING_HOURS`.
+
+#### 3.7.8 Drop read-time resample fallback
+- Remove `is_resampled = timeframe != "1m"` gate in `get_bars()`.
+- Remove the `fallback_provider` callable (was added in 3.1.16 for read-time fallback — no longer needed since all TFs are stored).
+
+### Risks
+- **Bars table size growth** with 10 stored timeframes per symbol: estimate ~10× growth. The rolling 1000-day prune keeps it bounded; 1m alone is the dominant storage consumer.
+- **Write contention**: 4 new async loops running concurrently with the existing 5 (quote, bar, status, provider_health, signal_recording). All share `SessionLocal()`; the 1m write path already handles this pattern.
+- **Provider chain misconfig**: a typo in `BACKFILL_1M_PRIMARY=foooo` logs a warning + skips (existing pattern in `MarketDataManager._initialize_providers`).
+
+### Verification
+- `backfill_symbol_history_sync("AAPL", days=30)` — backfill completes with `tier1_written`, `tier2_written` (1h), `tier3_written` (1d) all > 0.
+- `SELECT provider, COUNT(*) FROM bars WHERE timeframe='1m' GROUP BY provider` — see `alpaca` for the bulk and `yfinance` for the most recent 1–3 rows (gap-fill).
+- `SELECT * FROM bars WHERE timeframe='1d' AND timestamp LIKE '%13:30%';` — 0 rows.
+- All 10 timeframes have rows after 1 day: `SELECT timeframe, COUNT(*) FROM bars GROUP BY timeframe;`
+- All resampler tests still pass.
+
+---
+
 ## Open questions
 
 1. Backup encryption? (Probably no — local disk, single-user. Revisit if multi-tenant.)

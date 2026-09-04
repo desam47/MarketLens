@@ -31,6 +31,7 @@ interface CandlestickChartProps {
   onError?: (err: Error) => void;
   initialChartType?: ChartType;
   showVolume?: boolean;
+  showMarkers?: boolean;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -43,6 +44,7 @@ function CandlestickChartImpl({
   onError,
   initialChartType = 'candlestick',
   showVolume = true,
+  showMarkers = false,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -241,8 +243,8 @@ function CandlestickChartImpl({
       volumeRef.current.setData(volData);
     }
 
-    // Markers
-    if (transitions.length > 0) {
+    // Markers — only shown when showMarkers is true
+    if (showMarkers && transitions.length > 0) {
       const markers = transitions
         .filter(t => t.timestamp)
         .map(t => {
@@ -367,7 +369,8 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.height === next.height &&
     prev.onError === next.onError &&
     prev.initialChartType === next.initialChartType &&
-    prev.showVolume === next.showVolume
+    prev.showVolume === next.showVolume &&
+    prev.showMarkers === next.showMarkers
   );
 });
 

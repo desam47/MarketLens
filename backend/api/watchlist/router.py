@@ -14,8 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.config.settings import settings as _settings
 from backend.repositories.watchlist_repository import WatchlistRepository
-from backend.repositories.bar_repository import delete_bars_for_symbol
-from backend.repositories.signal_repository import delete_signals_for_symbol
+from backend.services.purge_service import purge_symbol_from_database_safe
 from backend.symbols.validator import validate_symbol
 from backend.utils.timezone import format_edt_iso
 
@@ -209,11 +208,51 @@ def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session 
 
 @router.delete("/{watchlist_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
-    """Delete a watchlist"""
+    """Delete a watchlist and purge per-symbol data for any symbol that
+    no longer appears in any remaining watchlist.
+
+    Without this cascade, deleting a watchlist leaves orphaned bars,
+    signals, quotes, and market_status rows in the DB for symbols that
+    were only present in that watchlist. Mirrors the cleanup done by
+    ``remove_symbol_from_watchlist``.
+    """
     repo = WatchlistRepository(db)
+    # Capture the symbols that are about to be removed with the watchlist
+    # so we can decide which need per-symbol purge afterwards.
+    symbols_in_watchlist = [
+        s.symbol.upper()
+        for s in repo.get_watchlist_symbols(watchlist_id, enabled_only=False)
+    ]
     success = repo.delete_watchlist(watchlist_id)
     if not success:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+    # Cascade: for any symbol that no longer appears in any watchlist,
+    # purge ALL per-symbol data (bars, signals, quotes, market_status,
+    # alerts, alert_triggers, ai_analysis_jobs, backtest_runs, backtest_trades,
+    # drawing_tools). Single transaction via purge_service.
+    for symbol_upper in symbols_in_watchlist:
+        if repo.symbol_exists_in_any_watchlist(symbol_upper):
+            continue  # still watched elsewhere — leave its data alone
+        result = purge_symbol_from_database_safe(symbol_upper)
+        if result["total"] > 0:
+            logger.info(
+                f"purged {result['total']} rows for {symbol_upper} "
+                f"(watchlist {watchlist_id} deleted, no remaining watchlist): "
+                f"bars={result['bars']}, signals={result['signals']}, "
+                f"quotes={result['quotes']}, alerts={result['alerts']}, "
+                f"ai_jobs={result['ai_analysis_jobs']}, "
+                f"backtest_runs={result['backtest_runs']}, "
+                f"drawings={result['drawing_tools']}"
+            )
+
+    # Phase 3.8.6+: notify ingestion service so it stops fetching all
+    # symbols from the deleted watchlist immediately.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        ingestion_service.refresh_symbols_from_watchlist()
+    except Exception as e:
+        logger.debug(f"ingestion refresh after watchlist delete failed: {e}")
+
 
 # Watchlist symbol endpoints
 @router.get("/{watchlist_id}/symbols", response_model=list[WatchlistSymbolResponse])
@@ -282,24 +321,31 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
         }
     except Exception as e:
         logger.debug(f"signal_recorder cache cleanup skipped: {e}")
-    # Phase 3.3.15: purge bars and signals if the symbol is no longer in any watchlist.
+    # Phase 3.3.15 / Phase 3.x: purge ALL per-symbol data if the symbol
+    # is no longer in any watchlist. Covers bars, signals, quotes,
+    # market_status, alerts, alert_triggers, ai_analysis_jobs,
+    # backtest_runs/trades, and drawing_tools.
     if not repo.symbol_exists_in_any_watchlist(symbol_upper):
-        try:
-            deleted = delete_bars_for_symbol(symbol_upper)
-            if deleted:
-                logger.info(
-                    f"purged {deleted} bars for {symbol_upper} (no longer in any watchlist)"
-                )
-        except Exception as e:
-            logger.warning(f"failed to purge bars for {symbol_upper}: {e}")
-        try:
-            deleted = delete_signals_for_symbol(symbol_upper)
-            if deleted:
-                logger.info(
-                    f"purged {deleted} signals for {symbol_upper} (no longer in any watchlist)"
-                )
-        except Exception as e:
-            logger.warning(f"failed to purge signals for {symbol_upper}: {e}")
+        result = purge_symbol_from_database_safe(symbol_upper)
+        if result["total"] > 0:
+            logger.info(
+                f"purged {result['total']} rows for {symbol_upper} "
+                f"(no longer in any watchlist): "
+                f"bars={result['bars']}, signals={result['signals']}, "
+                f"quotes={result['quotes']}, alerts={result['alerts']}, "
+                f"ai_jobs={result['ai_analysis_jobs']}, "
+                f"backtest_runs={result['backtest_runs']}, "
+                f"drawings={result['drawing_tools']}"
+            )
+
+    # Phase 3.8.6+: notify ingestion service so it stops fetching deleted
+    # symbols immediately — prevents stale live bars from accumulating.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        ingestion_service.refresh_symbols_from_watchlist()
+    except Exception as e:
+        logger.debug(f"ingestion refresh after symbol delete failed: {e}")
+
 
 @router.put("/{watchlist_id}/symbols/{symbol}/enable", response_model=WatchlistSymbolResponse)
 def enable_symbol_in_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):

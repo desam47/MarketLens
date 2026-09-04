@@ -348,7 +348,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       safe(() => api.getTransitions(symbol, timeframe)),
       safe(() => api.getSupportResistance(symbol, timeframe)),
       safe(() => api.getDivergences(symbol, timeframe)),
-      safe(() => api.getAnalysisBars(symbol, timeframe)),
+      safe(() => api.getAnalysisBars(symbol, timeframe, 500)),
       safe(() => api.getScanResult(symbol)),
     ]);
     setQuote(q.data);

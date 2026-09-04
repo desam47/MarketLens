@@ -51,6 +51,54 @@ from backend.market_data.providers.yfinance_provider import YFinanceProvider
 # share the same object identity.
 _settings = _shared._settings
 
+# Phase 3.7: provider chain helpers used by backfill_service.py.
+# These resolve provider names from settings at call time so .env changes
+# take effect without restarting the process.
+
+
+def get_1m_gapfill_providers() -> list[str]:
+    """1m gap-fill providers — fills the ~15 min lag window where Alpaca lags."""
+    from backend.config.settings import settings as _s
+    return _s.backfill.get_1m_gapfill_providers()
+
+
+def get_1m_fallback_providers() -> list[str]:
+    """1m fallback providers (after primary Alpaca fails)."""
+    from backend.config.settings import settings as _s
+    return _s.backfill.get_1m_fallback_providers()
+
+
+def get_1h_1d_fallback_providers(timeframe: str) -> list[str]:
+    """Fallback provider names for 1h or 1d backfill from .env."""
+    from backend.config.settings import settings as _s
+    return _s.backfill.get_fallback_providers(timeframe)
+
+
+def get_backfill_primary_provider(timeframe: str) -> MarketDataManager | None:
+    """Instantiate the primary backfill provider for ``timeframe`` from .env.
+
+    The provider name is read from BACKFILL_{TF}_PRIMARY (e.g. BACKFILL_1M_PRIMARY).
+    The provider class is resolved from the global registry (``_PROVIDER_CLASSES``)
+    so any provider in the registry can be used as primary without code changes.
+    Returns None if the provider name is unknown or the class cannot be imported.
+    """
+    from backend.config.settings import settings as _s
+
+    primary_name = _s.backfill.get_primary_provider(timeframe)
+    provider_cls = _PROVIDER_CLASSES.get(primary_name)
+    if provider_cls is None:
+        logger.warning(
+            f"Unknown backfill primary provider {primary_name!r} for {timeframe} — "
+            f"available: {list(_PROVIDER_CLASSES.keys())}"
+        )
+        return None
+    try:
+        return provider_cls()
+    except Exception as e:
+        logger.warning(f"Failed to instantiate backfill primary {primary_name}: {e}")
+        return None
+
+
 __all__ = [
     # Classes
     "MarketDataManager",
@@ -86,4 +134,8 @@ __all__ = [
     "_settings",
     "redis",
     "YFinanceProvider",
+    # Phase 3.7 provider chain helpers
+    "get_1m_gapfill_providers",
+    "get_1m_fallback_providers",
+    "get_1h_1d_fallback_providers",
 ]

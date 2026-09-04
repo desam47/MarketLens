@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
 from backend.observability import record_bar, record_bars
-from backend.utils.resampler import resample_ohlcv, ResampleError
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +19,12 @@ logger = logging.getLogger(__name__)
 # Each value is a conservative upper bound on the 1m data per output bar,
 # used for ``fetch_limit = limit * multiplier``.
 #
-# The _WIDENING_HOURS table below is used for the lower-bound widening
-# (from_ts - timedelta) and is proportional to the calendar period, which
-# is distinct from the trading-minute estimate used for fetch_limit.
+# Phase 3.7: all 10 timeframes are now stored rows (1m/2m/3m/5m/15m/30m/1h/4h/1d/1wk).
+# The multiplier and widening tables cover every timeframe so get_bars()
+# can serve them all directly from the DB.
 _TF_MULTIPLIER: dict[str, int] = {
+    "2m": 2,
+    "3m": 3,
     "5m": 5,
     "15m": 15,
     "30m": 30,
@@ -36,6 +37,8 @@ _TF_MULTIPLIER: dict[str, int] = {
 # Hours to widen the from_ts lower bound so the leading resampled bucket
 # is complete. Proportional to the calendar period of each timeframe.
 _WIDENING_HOURS: dict[str, int] = {
+    "2m": 0,
+    "3m": 0,
     "5m": 0,
     "15m": 0,
     "30m": 1,
@@ -166,101 +169,36 @@ def get_bars(
     from_ts: datetime | None = None,
     to_ts: datetime | None = None,
     fallback_provider: collections.abc.Callable[[str, str], list[Bar]] | None = None,
+    desc: bool = False,
 ) -> list[Bar]:
-    """Return bars for (symbol, timeframe), ordered oldest → newest.
+    """Return bars for (symbol, timeframe), ordered oldest → newest by default.
 
-    Phase 3.1: the storage layer only holds 1m bars. When the caller
-    requests a higher timeframe (5m, 15m, 30m, 1h, 1d, 1wk) this function
-    transparently fetches 1m rows from the DB and resamples them in-memory
-    using ``resample_ohlcv``.
+    Phase 3.7: the storage layer holds ALL 10 timeframes as direct rows
+    (1m/2m/3m/5m/15m/30m/1h/4h/1d/1wk). The resample-at-write loops in
+    ingestion_service.py persist non-base timeframes, so ``get_bars``
+    becomes a straight DB query — no read-time resampling required.
 
-    For ``timeframe == "1m"`` the query hits the index directly and
-    returns raw rows.
+    ``from_ts`` / ``to_ts`` are optional time-range filters and translate
+    into a ``WHERE timestamp >= from_ts AND timestamp <= to_ts`` clause.
+    ``limit`` (if set) limits the number of rows returned.
+    ``desc=True`` returns the most recent ``limit`` bars ordered newest → oldest.
 
-    For higher timeframes, the function fetches enough 1m bars to satisfy
-    ``limit`` (with a 1m-multiplier safety margin), resamples, and slices
-    the result to ``limit``.
-
-    ``from_ts`` / ``to_ts`` are optional time-range filters. For the 1m
-    fast path they translate into a ``WHERE timestamp >= from_ts AND
-    timestamp <= to_ts`` clause. For higher timeframes, the same
-    filters are applied to the underlying 1m fetch *before* resampling,
-    so the result respects the requested window. The fetcher widens the
-    1m range by the resample multiplier on the from side so a window
-    that starts mid-bucket still produces a complete leading bar
-    (otherwise the open/close of the first bar would be clipped).
-
-    Phase 3.1.8: if the DB returns fewer bars than required to honour
-    ``limit`` *after* resampling, and ``fallback_provider`` is supplied
-    (a ``Callable[[symbol, timeframe], list[Bar]]``), the function
-    falls back to fetching the target timeframe directly from the
-    provider. The fallback only triggers when 1m coverage is
-    insufficient — most cold-cache and short-window requests are served
-    purely from the DB. Use this to backfill missing data transparently
-    for the 1d/1wk timeframes that yfinance serves without 1m backing.
-
-    The ``(symbol, timeframe, timestamp)`` unique index on the table provides
-    deduplication — no two rows share the same triple. (Pre-existing rows
-    inserted before the index was added are a data-quality concern for
-    migration, not for query-time deduplication; removing the now-redundant
-    .distinct() call improves query performance.)
+    The ``(symbol, timeframe, timestamp)`` unique index on the table
+    provides deduplication.
 
     Phase 20 perf: slow queries (≥ 100ms) are logged with their EXPLAIN
     plan so expensive query patterns surface during development.
     """
     import time
 
-    # Determine multiplier and per-path fetch parameters. For 1m the
-    # multiplier is 1 (no widening, no resampling); for higher TFs the
-    # multiplier controls how much 1m data to over-fetch so resampling
-    # produces a complete leading bucket.
-    is_resampled = timeframe != "1m"
-    multiplier = _TF_MULTIPLIER.get(timeframe) if is_resampled else None
-    if is_resampled and multiplier is None:
-        # Unsupported target (e.g. 2m, 4h) — return empty so callers don't
-        # silently get wrong data.
-        logger.warning(f"get_bars: unsupported timeframe {timeframe!r}; returning []")
-        return []
-
-    # Bound the upper edge when the caller gave us a ``from_ts`` but no
-    # ``to_ts`` and no ``limit``. Otherwise the query walks the entire
-    # history from the widened lower bound to the latest bar — for a
-    # multi-year backtest or a user-supplied start date, that's
-    # potentially millions of rows. Cap the upper bound at ``now()`` so
-    # the read is symmetric and bounded.
-    fetch_limit = (limit * multiplier) if (limit and is_resampled) else limit
-    effective_to_ts = to_ts
-    if (
-        is_resampled
-        and from_ts is not None
-        and effective_to_ts is None
-        and not fetch_limit
-    ):
-        effective_to_ts = datetime.now(timezone.utc)
-        logger.debug(
-            f"get_bars: capping to_ts to now() for {symbol} {timeframe} "
-            f"(from_ts={from_ts}, no to_ts or limit)"
-        )
-
-    # Widen the lower bound so the leading resampled bucket contains a
-    # complete set of 1m contributing bars (otherwise open = first 1m
-    # in window, not first 1m of the bucket). Use the WIDENING_HOURS
-    # table for calendar-proportional widening (e.g. 1wk → 168h = 1 week)
-    # instead of the minute-based multiplier which is only for fetch_limit.
-    # On the 1m fast path the original ``from_ts`` is used directly.
-    widen_hours = _WIDENING_HOURS.get(timeframe, 0) if is_resampled else 0
-    effective_from_ts = (
-        from_ts - timedelta(hours=widen_hours)
-        if (is_resampled and from_ts is not None)
-        else from_ts
-    )
-
-    rows, elapsed_ms = _fetch_1m_bars(
+    rows, elapsed_ms = _fetch_bars(
         db,
         symbol=symbol,
-        from_ts=effective_from_ts,
-        to_ts=effective_to_ts,
-        limit=fetch_limit,
+        timeframe=timeframe,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+        desc=desc,
     )
 
     _log_slow_query(
@@ -271,73 +209,27 @@ def get_bars(
         limit=limit,
         from_ts=from_ts,
         to_ts=to_ts,
-        fetch_limit=fetch_limit,
         elapsed_ms=elapsed_ms,
     )
 
-    if not is_resampled:
-        return [_model_to_bar(row) for row in rows]
-
-    # Higher TF path: resample 1m rows into the requested timeframe.
-    bars_1m = [_model_to_bar(row) for row in rows]
-    try:
-        resampled = resample_ohlcv(bars_1m, timeframe)
-    except ResampleError as e:
-        logger.warning(f"get_bars: resample failed for {symbol}/{timeframe}: {e}")
-        return []
-
-    # Apply the from_ts filter on the resampled output (the leading bar
-    # may have been included by the multiplier widening above).
-    if from_ts is not None:
-        resampled = [b for b in resampled if b.timestamp >= from_ts]
-
-    # Phase 3.1.8: if we have fewer resampled bars than requested and
-    # a fallback provider is supplied, try fetching the target timeframe
-    # directly from the provider. This handles the cold-cache / recent-backfill
-    # case where the DB has no 1m rows for the requested window.
-    if limit is not None and len(resampled) < limit and fallback_provider is not None:
-        try:
-            provider_bars = fallback_provider(symbol.upper(), timeframe)
-            if provider_bars:
-                # Filter provider bars to the requested window.
-                if from_ts is not None:
-                    provider_bars = [b for b in provider_bars if b.timestamp >= from_ts]
-                if to_ts is not None:
-                    provider_bars = [b for b in provider_bars if b.timestamp <= to_ts]
-                if provider_bars:
-                    # Phase 3.1.8: mark these as source="raw" since they
-                    # came from the provider (not resampled from 1m).
-                    for b in provider_bars:
-                        b.source = "raw"
-                    logger.debug(
-                        f"get_bars: hybrid fallback returned {len(provider_bars)} "
-                        f"{timeframe} bars for {symbol} (DB had {len(resampled)})"
-                    )
-                    return provider_bars[-limit:] if limit else provider_bars
-        except Exception as e:
-            logger.warning(
-                f"get_bars: hybrid fallback failed for {symbol}/{timeframe}: {e}"
-            )
-            # Fall through: return whatever we got from resampling.
-
-    if limit is not None:
-        return resampled[-limit:]
-    return resampled
+    return [_model_to_bar(row) for row in rows]
 
 
-def _fetch_1m_bars(
+def _fetch_bars(
     db: Session,
     symbol: str,
+    timeframe: str,
     from_ts: datetime | None,
     to_ts: datetime | None,
     limit: int | None,
+    desc: bool = False,
 ) -> tuple[list[BarModel], float]:
-    """Fetch 1m rows for ``symbol`` with the given time window and limit.
+    """Fetch bars for ``symbol`` at ``timeframe`` directly from the DB.
 
-    Used by both the 1m fast path and the resample path: the only
-    difference between the two is the limit and the widened ``from_ts``
-    passed in, which is handled by the caller. Returns the rows and the
-    elapsed wall-clock time in milliseconds.
+    Phase 3.7: all 10 timeframes are now stored rows, so this is a
+    straight indexed query. Returns rows and elapsed wall-clock time in
+    milliseconds. Ordered oldest → newest by default; ``desc=True`` orders
+    newest → oldest.
     """
     import time
 
@@ -346,10 +238,10 @@ def _fetch_1m_bars(
         .filter(
             and_(
                 BarModel.symbol == symbol.upper(),
-                BarModel.timeframe == "1m",
+                BarModel.timeframe == timeframe,
             )
         )
-        .order_by(BarModel.timestamp.asc())
+        .order_by(BarModel.timestamp.desc() if desc else BarModel.timestamp.asc())
     )
     if from_ts is not None:
         query = query.filter(BarModel.timestamp >= from_ts)
@@ -413,8 +305,8 @@ def _has_unique_constraint(db: Session, table: str, columns: tuple[str, ...]) ->
     # quotes inside a single-quoted SQL string are escape-by-doubling,
     # not by backslash. Use parameter binding for the LIKE fragment and
     # manually quote each column.
-    col_list = ", ".join(f"'{c}'" for c in columns)
-    like_fragment = f"%{col_list}%"
+    col_list = ", ".join(columns)
+    like_fragment = f"%({col_list})%"
     result = db.execute(
         text(
             "SELECT name FROM sqlite_master "

@@ -15,6 +15,7 @@ The forward-outcome calculation is fully isolated from the live engine:
 it only reads stored ``BarModel`` rows. If 20 future bars don't exist
 yet, the function leaves the row alone and returns it to the queue.
 """
+import bisect
 import json
 import logging
 from datetime import datetime, timezone
@@ -132,12 +133,21 @@ class SignalRecorder:
         finally:
             db.close()
 
-    def backfill_outcomes(self, batch_size: int = 50) -> int:
+    def backfill_outcomes(self, batch_size: int = 1000) -> int:
         """Compute forward outcomes for signals that have enough future data.
 
         Returns the number of signals updated. Safe to call on a schedule
-        (e.g. every minute from the ingestion service) — it only touches
+        (e.g. every 90s from the ingestion service) — it only touches
         rows that have at least REQUIRED_FORWARD_BARS future bars stored.
+
+        Performance (Phase 3.x optimization):
+          - 1 query to fetch candidate signals
+          - 1 query to bulk-pre-fetch all future bars for the batch
+            (vs N+1 — one query per candidate)
+          - Binary search locates each candidate's bars in the pre-fetched
+            (symbol, timeframe) bucket
+          - Single commit at the end of the batch
+            (vs one commit per candidate)
         """
         db = SessionLocal()
         updated = 0
@@ -147,17 +157,140 @@ class SignalRecorder:
             if not candidates:
                 return 0
 
-            # Pre-fetch all future bars for all symbols/timeframes in one go
-            # to avoid N+1 queries. Keyed by (symbol, timeframe, anchor_ts).
+            # Resolve anchor prices for any candidates missing a price.
+            # Bulk-load the (symbol, timeframe, ts) → close lookup in one
+            # query rather than per-signal _price_at() round-trips.
+            self._bulk_fill_anchor_prices(db, candidates)
+
+            # Bulk pre-fetch of all future bars for all (symbol, timeframe)
+            # pairs in the candidate set, starting from the earliest anchor
+            # so we can serve every signal in the batch.
+            future_bars_by_pair = self._bulk_prefetch_future_bars(
+                db, candidates
+            )
+
+            # Compute outcomes in Python; persist via a single commit.
             for signal in candidates:
-                if self._compute_outcome_for_signal(signal, repo):
+                if self._compute_outcome_for_signal(
+                    signal, repo, future_bars_by_pair
+                ):
                     updated += 1
+            db.commit()
         except Exception as e:
             logger.error(f"Outcome backfill failed: {e}")
             db.rollback()
         finally:
             db.close()
         return updated
+
+    # --- Bulk helpers for backfill_outcomes --------------------------------
+
+    def _bulk_fill_anchor_prices(
+        self,
+        db,
+        candidates: list[HistoricalSignal],
+    ) -> None:
+        """Fill missing ``signal.price`` for candidates in one query.
+
+        Mutates each candidate in place. Candidates with a valid price
+        already set are left alone. For 1d signals, the anchor timestamp
+        is normalized to midnight to match the canonical daily bar.
+        """
+        missing: list[HistoricalSignal] = [
+            s for s in candidates
+            if s.price is None or s.price <= 0
+        ]
+        if not missing:
+            return
+
+        # Group by (symbol, timeframe) so we can issue one query per pair.
+        # This is still fewer round-trips than the previous per-signal
+        # _price_at() approach (which was N queries for N missing prices).
+        from collections import defaultdict
+        by_pair: dict[tuple[str, str], list[HistoricalSignal]] = defaultdict(list)
+        for s in missing:
+            ts = s.timestamp
+            if s.timeframe == "1d":
+                ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)
+            by_pair[(s.symbol, s.timeframe)].append(s)
+            # Stash the normalized anchor so the bulk-fetch can reuse it
+            # without recomputing the 1d midnight normalization below.
+            s._bulk_anchor_ts = ts  # type: ignore[attr-defined]
+
+        for (symbol, timeframe), sigs in by_pair.items():
+            ts_set = {s._bulk_anchor_ts for s in sigs}  # type: ignore[attr-defined]
+            rows = (
+                db.query(BarModel.timestamp, BarModel.close)
+                .filter(
+                    BarModel.symbol == symbol,
+                    BarModel.timeframe == timeframe,
+                    BarModel.timestamp.in_(ts_set),
+                )
+                .all()
+            )
+            close_by_ts = {row.timestamp: float(row.close or 0) for row in rows}
+            for s in sigs:
+                close = close_by_ts.get(s._bulk_anchor_ts)  # type: ignore[attr-defined]
+                if close and close > 0:
+                    s.price = close
+
+    def _bulk_prefetch_future_bars(
+        self,
+        db,
+        candidates: list[HistoricalSignal],
+    ) -> dict[tuple[str, str], list[BarModel]]:
+        """Fetch all future bars for the candidate set in one query.
+
+        Returns a dict keyed by (symbol, timeframe) → sorted list of
+        BarModel rows with ``timestamp`` strictly after the earliest
+        anchor in that pair. The caller uses ``bisect`` to find each
+        candidate's 25-bar window from this single fetch.
+        """
+        if not candidates:
+            return {}
+
+        from collections import defaultdict
+        # Track the earliest anchor per (symbol, timeframe) so the bulk
+        # query grabs everything the batch will ever need.
+        earliest_anchor: dict[tuple[str, str], datetime] = {}
+        for s in candidates:
+            anchor = s.timestamp
+            if s.timeframe == "1d":
+                anchor = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+            key = (s.symbol, s.timeframe)
+            existing = earliest_anchor.get(key)
+            if existing is None or anchor < existing:
+                earliest_anchor[key] = anchor
+
+        # Build OR conditions for (symbol=X AND timeframe=Y AND timestamp > anchor)
+        # grouped by pair. SQLAlchemy doesn't accept a tuple_ IN easily across
+        # SQLite + Postgres, so we OR the per-pair clauses.
+        pair_clauses = []
+        for (symbol, timeframe), anchor in earliest_anchor.items():
+            pair_clauses.append(
+                and_(
+                    BarModel.symbol == symbol,
+                    BarModel.timeframe == timeframe,
+                    BarModel.timestamp > anchor,
+                )
+            )
+        from sqlalchemy import or_
+        rows = (
+            db.query(BarModel)
+            .filter(or_(*pair_clauses))
+            .order_by(
+                BarModel.symbol.asc(),
+                BarModel.timeframe.asc(),
+                BarModel.timestamp.asc(),
+            )
+            .all()
+        )
+
+        # Bucket by (symbol, timeframe) for the binary search.
+        buckets: dict[tuple[str, str], list[BarModel]] = defaultdict(list)
+        for bar in rows:
+            buckets[(bar.symbol, bar.timeframe)].append(bar)
+        return buckets
 
     def record_from_recent_bars(
         self, symbols: list[str]
@@ -221,7 +354,7 @@ class SignalRecorder:
         self,
         symbol: str,
         timeframe: str | None = None,
-        max_bars: int = 5000,
+        max_bars: int = 50000,
     ) -> int:
         """Record signals for all stored bars of ``symbol`` (not just the latest).
 
@@ -231,25 +364,50 @@ class SignalRecorder:
         (symbol, timeframe, timestamp) so re-runs are no-ops.
 
         ``max_bars`` caps the work per call to avoid blowing the request
-        budget. For 1m history, 5 000 ≈ 1 trading week. The caller can
-        invoke this in a loop or schedule it on the ingestion tick to cover
-        larger ranges.
+        budget. The default of 50 000 covers ~6 months of 1m bars at
+        typical trading density (≈ 250 bars/day × 6 × 21 ≈ 31 500 bars).
+        For shorter timeframes with denser data (1m), the high limit
+        ensures the full history is captured in one shot. The caller can
+        also invoke this in a loop for very long histories (years of data).
 
-        Returns the count of new signals written.
+        When called with ``timeframe=None``, iterates **per timeframe** so
+        every stored timeframe gets its own ``max_bars`` budget. Without
+        this, the cross-TF query is dominated by 1m bars (which arrive
+        last) and higher-TF bars (1h, 1d) get starved — leaving the
+        historical_signals table missing entries for 1d/1h even when
+        bars exist for those timeframes.
+
+        Performance (Phase 3.x optimization):
+          - 1 query to fetch existing signal timestamps for dedup
+            (vs N — one per bar in the legacy per-bar path)
+          - bulk_save_objects() inserts all new signals in one round-trip
+          - single commit per (symbol, timeframe) pair
+            (vs one commit per bar in the legacy per-bar path)
         """
         sym = symbol.upper()
         recorded = 0
         db = SessionLocal()
         try:
-            q = db.query(BarModel).filter(BarModel.symbol == sym)
             if timeframe is not None:
-                q = q.filter(BarModel.timeframe == timeframe)
-            q = q.order_by(BarModel.timestamp.desc()).limit(max_bars)
-            bars = q.all()
+                timeframes = [timeframe]
+            else:
+                # Iterate per timeframe so each gets its own max_bars budget.
+                timeframes = [
+                    tf for (tf,) in
+                    db.query(BarModel.timeframe)
+                      .filter(BarModel.symbol == sym)
+                      .distinct()
+                      .all()
+                ]
+                # Order timeframes so shorter (denser) ones go first — they
+                # produce the most rows for the budget. 1d/1wk go last so
+                # the cap doesn't get eaten by sub-hour bars.
+                order = ["1m", "2m", "3m", "5m", "15m", "30m",
+                         "1h", "4h", "1d", "1wk"]
+                timeframes.sort(key=lambda t: order.index(t) if t in order else 99)
 
-            for bar in bars:
-                if self._record_from_bar(bar, db):
-                    recorded += 1
+            for tf in timeframes:
+                recorded += self._bulk_record_bars(db, sym, tf, max_bars)
         except Exception as e:
             logger.error(f"backfill_signals_for_symbol({sym}) failed: {e}")
             db.rollback()
@@ -260,11 +418,131 @@ class SignalRecorder:
         )
         return recorded
 
+    def _bulk_record_bars(
+        self,
+        db,
+        symbol: str,
+        timeframe: str,
+        max_bars: int,
+    ) -> int:
+        """Bulk-record signals for one (symbol, timeframe) using dedup set + bulk insert.
+
+        Strategy (Phase 3.x optimization):
+          1. Fetch the (symbol, timeframe) bars (capped at max_bars).
+          2. Fetch the existing signal timestamps for that pair in one
+             ``IN()``-style query and build an O(1) dedup set.
+          3. For each bar not in the set, build the signal record and
+             collect into a list. No DB I/O in the loop.
+          4. Single ``bulk_save_objects()`` + single ``db.commit()`` for
+             the whole batch. In-process dedup cache is populated
+             post-commit so subsequent live ingestion also sees them.
+
+        Returns the number of new signals written.
+        """
+        bars = (
+            db.query(BarModel)
+            .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
+            .order_by(BarModel.timestamp.desc())
+            .limit(max_bars)
+            .all()
+        )
+        if not bars:
+            return 0
+
+        # Step 1: bulk-fetch existing signal timestamps for this pair.
+        # Note: the bars query is desc; we need an asc-ordered list of
+        # timestamps for the dedup set. Pull only the timestamp column.
+        existing_ts = {
+            ts for (ts,) in db.query(HistoricalSignal.timestamp)
+            .filter(
+                HistoricalSignal.symbol == symbol,
+                HistoricalSignal.timeframe == timeframe,
+            )
+            .all()
+        }
+
+        # Step 2: build the per-bar signal records in Python (no DB I/O).
+        new_records: list[dict] = []
+        for bar in bars:
+            ts = bar.timestamp
+            if ts in existing_ts:
+                continue
+            # The in-process cache guards against rapid duplicate calls
+            # within a single process (e.g. two concurrent ingestion
+            # ticks). On a hot reload it can be stale, so the DB dedup
+            # above is the source of truth.
+            cache_key = (symbol, timeframe, ts)
+            if cache_key in self._last_recorded:
+                continue
+
+            trend_state = self._classify_trend_from_bar(bar)
+            trend_score = self._score_from_bar(bar)
+            volume_state = self._classify_volume(bar)
+            market_regime = self._get_market_regime()
+
+            new_records.append({
+                "symbol": symbol,
+                "timestamp": ts,
+                "timeframe": timeframe,
+                "price": float(bar.close or 0),
+                "trend_score": trend_score,
+                "trend_state": trend_state,
+                "strength": min(abs(trend_score) / 100.0, 1.0) if trend_score is not None else None,
+                "market_regime": market_regime,
+                "relative_strength": None,
+                "sector_alignment": None,
+                "volume_state": volume_state,
+                "momentum": trend_score,
+                "structure": trend_state,
+                "confidence_inputs": json.dumps({
+                    "bar_close": float(bar.close or 0),
+                    "bar_high": float(bar.high or 0),
+                    "bar_low": float(bar.low or 0),
+                }),
+                "strategy_version": "v1",
+                "data_quality": "good",
+                "_outcome_missing": True,
+            })
+            # Mark in the cache so the post-commit in-process cache
+            # can be populated without an extra query.
+            self._last_recorded[cache_key] = ts
+
+        if not new_records:
+            return 0
+
+        # Step 3: bulk insert. SQLAlchemy's bulk_save_objects skips the
+        # unit-of-work per-row overhead, and we commit once at the end.
+        # We pass return_defaults=False because the autoincrement PK
+        # isn't needed by the caller (we return count).
+        objects = [HistoricalSignal(**r) for r in new_records]
+        try:
+            db.bulk_save_objects(objects, return_defaults=False)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            # Roll back the in-process cache so a retry can repopulate.
+            for r in new_records:
+                self._last_recorded.pop(
+                    (r["symbol"], r["timeframe"], r["timestamp"]), None
+                )
+            logger.error(
+                f"_bulk_record_bars({symbol}, {timeframe}, n={len(new_records)}) "
+                f"failed: {e}"
+            )
+            raise
+        return len(new_records)
+
     def _record_from_bar(self, bar, db) -> bool:
         """Build a snapshot for a single bar and write a signal row.
 
         Returns True if a new signal was persisted.
         """
+        # Skip webull :30 noise in 1h — Webull returns 1h bars at :30 offsets
+        # (09:30, 10:30...) instead of the standard :00 boundaries. These
+        # are not valid hour-close bars.
+        if bar.timeframe == "1h" and bar.timestamp.minute == 30:
+            return False
+
         key = (bar.symbol.upper(), bar.timeframe, bar.timestamp)
         if key in self._last_recorded:
             return False
@@ -373,19 +651,29 @@ class SignalRecorder:
     # --- Internal helpers ---------------------------------------------------
 
     def _compute_outcome_for_signal(
-        self, signal: HistoricalSignal, repo: SignalRepository
+        self,
+        signal: HistoricalSignal,
+        repo: SignalRepository,
+        future_bars_by_pair: dict[tuple[str, str], list[BarModel]] | None = None,
     ) -> bool:
-        """Compute and persist forward outcomes for one signal row.
+        """Compute forward outcomes for one signal row.
 
         Returns True if outcomes were updated, False if the row was
         left alone (insufficient future data).
+
+        When ``future_bars_by_pair`` is provided, future bars are sliced
+        from the pre-fetched (symbol, timeframe) bucket using ``bisect``
+        — no DB round-trip. When it's ``None``, the function falls back
+        to the original per-signal query (used by the legacy direct
+        callers and tests).
         """
         db = repo.db
-        anchor_ts = signal.timestamp
         anchor_price = signal.price
         if anchor_price is None or anchor_price <= 0:
-            # Try to recover the price from the matching bar
-            anchor_price = self._price_at(db, signal.symbol, signal.timeframe, anchor_ts)
+            # Try to recover the price from the matching bar. The bulk
+            # path normally fills this in advance; this fallback covers
+            # direct callers (tests) and any rows the bulk pass missed.
+            anchor_price = self._price_at(db, signal.symbol, signal.timeframe, signal.timestamp)
             if anchor_price is None or anchor_price <= 0:
                 logger.debug(
                     f"Cannot compute outcomes for signal {signal.id}: "
@@ -406,19 +694,34 @@ class SignalRecorder:
         # to midnight: future bars are "anything strictly after the prior
         # midnight", which excludes same-day 13:30 noise.
         if signal.timeframe == "1d":
-            anchor_ts = anchor_ts.replace(hour=0, minute=0, second=0, microsecond=0)
+            anchor_ts = signal.timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            anchor_ts = signal.timestamp
 
-        future_bars = (
-            db.query(BarModel)
-            .filter(
-                BarModel.symbol == signal.symbol,
-                BarModel.timeframe == signal.timeframe,
-                BarModel.timestamp > anchor_ts,
+        if future_bars_by_pair is not None:
+            pair = (signal.symbol, signal.timeframe)
+            bucket = future_bars_by_pair.get(pair)
+            if bucket is None:
+                future_bars = []
+            else:
+                # Bucket is sorted ascending by timestamp (guaranteed by the
+                # bulk query's ORDER BY). Binary-search for the first row
+                # strictly greater than anchor_ts.
+                keys = [b.timestamp for b in bucket]
+                idx = bisect.bisect_right(keys, anchor_ts)
+                future_bars = bucket[idx:idx + REQUIRED_FORWARD_BARS]
+        else:
+            future_bars = (
+                db.query(BarModel)
+                .filter(
+                    BarModel.symbol == signal.symbol,
+                    BarModel.timeframe == signal.timeframe,
+                    BarModel.timestamp > anchor_ts,
+                )
+                .order_by(BarModel.timestamp.asc())
+                .limit(REQUIRED_FORWARD_BARS)
+                .all()
             )
-            .order_by(BarModel.timestamp.asc())
-            .limit(REQUIRED_FORWARD_BARS)
-            .all()
-        )
 
         if not future_bars:
             # No data after the signal at all — leave the row alone.
@@ -441,14 +744,25 @@ class SignalRecorder:
         if mfe is None and mae is None:
             return False
 
-        repo.update_outcomes(
-            signal.id,
-            return_5b=return_5b,
-            return_10b=return_10b,
-            return_20b=return_20b,
-            mfe=mfe,
-            mae=mae,
-        )
+        # Direct ORM attribute mutation (no per-signal commit). The bulk
+        # caller commits once at the end of the batch; the legacy direct
+        # caller (used by tests) commits via repo.update_outcomes below.
+        if future_bars_by_pair is not None:
+            signal.return_5b = return_5b
+            signal.return_10b = return_10b
+            signal.return_20b = return_20b
+            signal.mfe = mfe
+            signal.mae = mae
+            signal._outcome_missing = False
+        else:
+            repo.update_outcomes(
+                signal.id,
+                return_5b=return_5b,
+                return_10b=return_10b,
+                return_20b=return_20b,
+                mfe=mfe,
+                mae=mae,
+            )
         logger.debug(
             f"Outcomes backfilled for {signal.symbol} @ {anchor_ts}: "
             f"5b={return_5b}, 10b={return_10b}, 20b={return_20b}, "

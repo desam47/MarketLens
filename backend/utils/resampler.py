@@ -34,7 +34,10 @@ _NY_TZ = ZoneInfo("America/New_York")
 
 # Minute counts keyed by timeframe string. Anything not in this table
 # raises ValueError from resample_ohlcv so callers fail fast.
+# Phase 3.7: added 2m/3m to support resample-at-write for sub-hour TFs.
 _TF_MINUTES: dict[str, int] = {
+    "2m": 2,
+    "3m": 3,
     "5m": 5,
     "15m": 15,
     "30m": 30,

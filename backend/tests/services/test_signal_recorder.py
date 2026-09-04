@@ -190,11 +190,30 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertEqual(sig._outcome_missing, False)
 
     def test_backfill_outcomes_skips_when_insufficient_bars(self):
-        """With only 10 future bars (< 20 needed), outcomes should not be computed."""
+        """With zero future bars, the row is left alone (no MFE/MAE possible)."""
         anchor_ts = datetime(2025, 1, 1)
         anchor_price = 100.0
         self._seed_signal("AAPL", anchor_ts, anchor_price)
-        # Seed only 10 future bars (less than the 20-bar minimum)
+        # No future bars seeded at all.
+
+        updated = self.recorder.backfill_outcomes(batch_size=10)
+        self.assertEqual(updated, 0)
+
+        with self.Session() as db:
+            sig = db.query(HistoricalSignal).first()
+        self.assertIsNone(sig.return_5b)
+
+    def test_backfill_outcomes_partial_fill_with_ten_bars(self):
+        """With 10 future bars: 5b filled, 10b filled, 20b=None, MFE/MAE filled.
+
+        Partial-fill design: as soon as ANY outcome window is computable,
+        we write what we have and leave the rest NULL. The next backfill
+        pass fills them in as more bars arrive.
+        """
+        anchor_ts = datetime(2025, 1, 1)
+        anchor_price = 100.0
+        self._seed_signal("AAPL", anchor_ts, anchor_price)
+        # Seed only 10 future bars.
         bars = []
         for i in range(10):
             ts = anchor_ts + timedelta(days=i + 1)
@@ -211,11 +230,16 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             db.commit()
 
         updated = self.recorder.backfill_outcomes(batch_size=10)
-        self.assertEqual(updated, 0)
+        # Signal IS updated (we wrote what we had); 20b is still None.
+        self.assertEqual(updated, 1)
 
         with self.Session() as db:
             sig = db.query(HistoricalSignal).first()
-        self.assertIsNone(sig.return_5b)
+        self.assertIsNotNone(sig.return_5b)
+        self.assertIsNotNone(sig.return_10b)
+        self.assertIsNone(sig.return_20b)  # not enough bars
+        self.assertIsNotNone(sig.mfe)
+        self.assertIsNotNone(sig.mae)
 
     def test_backfill_outcomes_zero_candidates(self):
         """No signals needing outcomes → returns 0."""
@@ -233,6 +257,247 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
 
         updated = self.recorder.backfill_outcomes(batch_size=50)
         self.assertEqual(updated, 1)
+
+    def test_backfill_outcomes_bulk_prefetch_multiple_symbols(self):
+        """Regression: bulk pre-fetch must not cross-contaminate (symbol, timeframe).
+
+        Two symbols (AAPL, MSFT) each with a different number of future bars.
+        The bulk pre-fetch query must not accidentally reuse AAPL's bars for MSFT.
+        """
+        # AAPL: signal at Jan 1 + 5 future bars → partial fill (5b filled, 10b None)
+        aapl_anchor = datetime(2025, 1, 1)
+        self._seed_signal("AAPL", aapl_anchor, 100.0)
+        for i in range(1, 6):
+            ts = aapl_anchor + timedelta(days=i)
+            close = 100.0 + i
+            with self.Session() as db:
+                db.add(BarModel(
+                    symbol="AAPL", timeframe="1d",
+                    timestamp=ts, open=close - 0.1, high=close + 0.1,
+                    low=close - 0.1, close=close,
+                    volume=1_000_000, provider="test",
+                    data_status="historical",
+                ))
+                db.commit()
+
+        # MSFT: signal at Jan 1 + 15 future bars → partial fill (5b+10b filled, 20b None)
+        msft_anchor = datetime(2025, 1, 1)
+        self._seed_signal("MSFT", msft_anchor, 100.0)
+        for i in range(1, 16):
+            ts = msft_anchor + timedelta(days=i)
+            close = 100.0 + i
+            with self.Session() as db:
+                db.add(BarModel(
+                    symbol="MSFT", timeframe="1d",
+                    timestamp=ts, open=close - 0.1, high=close + 0.1,
+                    low=close - 0.1, close=close,
+                    volume=1_000_000, provider="test",
+                    data_status="historical",
+                ))
+                db.commit()
+
+        updated = self.recorder.backfill_outcomes(batch_size=50)
+        self.assertEqual(updated, 2)  # both updated
+
+        # Verify AAPL: only 5b filled (5 bars available)
+        with self.Session() as db:
+            aapl_sig = db.query(HistoricalSignal).filter_by(symbol="AAPL").first()
+            msft_sig = db.query(HistoricalSignal).filter_by(symbol="MSFT").first()
+
+        self.assertIsNotNone(aapl_sig)
+        self.assertIsNotNone(aapl_sig.return_5b)        # 5 bars → 5b filled
+        self.assertIsNone(aapl_sig.return_10b)           # <10 bars → None
+        self.assertIsNone(aapl_sig.return_20b)           # <20 bars → None
+        self.assertIsNotNone(aapl_sig.mfe)               # MFE needs 1 bar → filled
+        self.assertIsNotNone(aapl_sig.mae)
+
+        self.assertIsNotNone(msft_sig)
+        self.assertIsNotNone(msft_sig.return_5b)         # 15 bars → 5b filled
+        self.assertIsNotNone(msft_sig.return_10b)        # 15 bars → 10b filled
+        self.assertIsNone(msft_sig.return_20b)           # <20 bars → None
+        self.assertIsNotNone(msft_sig.mfe)
+        self.assertIsNotNone(msft_sig.mae)
+
+    def test_backfill_outcomes_bulk_prefetch_two_signals_same_symbol(self):
+        """Regression: two signals for the same symbol are handled independently.
+
+        Signal A at Jan 1 (5 future bars → partial).
+        Signal B at Jan 7 (1 future bar → only MFE/MAE, returns None).
+        Both are in the same (AAPL, 1d) bucket but must not share results.
+        """
+        anchor = datetime(2025, 1, 1)
+        price = 100.0
+
+        # Signal A at Jan 1
+        self._seed_signal("AAPL", anchor, price)
+        # 5 future bars
+        for i in range(1, 6):
+            ts = anchor + timedelta(days=i)
+            close = price + i
+            with self.Session() as db:
+                db.add(BarModel(
+                    symbol="AAPL", timeframe="1d",
+                    timestamp=ts, open=close - 0.1, high=close + 0.1,
+                    low=close - 0.1, close=close,
+                    volume=1_000_000, provider="test",
+                    data_status="historical",
+                ))
+                db.commit()
+
+        # Signal B at Jan 7 (1 future bar)
+        sig_b_ts = datetime(2025, 1, 7)
+        self._seed_signal("AAPL", sig_b_ts, price)
+        with self.Session() as db:
+            db.add(BarModel(
+                symbol="AAPL", timeframe="1d",
+                timestamp=datetime(2025, 1, 8),
+                open=110.1, high=110.2, low=110.0, close=110.1,
+                volume=1_000_000, provider="test",
+                data_status="historical",
+            ))
+            db.commit()
+
+        updated = self.recorder.backfill_outcomes(batch_size=50)
+        self.assertEqual(updated, 2)
+
+        with self.Session() as db:
+            sigs = (
+                db.query(HistoricalSignal)
+                .filter_by(symbol="AAPL")
+                .order_by(HistoricalSignal.timestamp.asc())
+                .all()
+            )
+
+        self.assertEqual(len(sigs), 2)
+
+        # Signal A (Jan 1): 5 bars available
+        self.assertEqual(sigs[0].timestamp, anchor)
+        self.assertIsNotNone(sigs[0].return_5b)
+        self.assertIsNone(sigs[0].return_10b)   # only 5 bars
+        self.assertIsNone(sigs[0].return_20b)
+        self.assertIsNotNone(sigs[0].mfe)
+        self.assertIsNotNone(sigs[0].mae)
+
+        # Signal B (Jan 7): 1 bar available → only MFE/MAE
+        self.assertEqual(sigs[1].timestamp, sig_b_ts)
+        self.assertIsNone(sigs[1].return_5b)    # 1 bar not enough for 5b
+        self.assertIsNone(sigs[1].return_10b)
+        self.assertIsNone(sigs[1].return_20b)
+        self.assertIsNotNone(sigs[1].mfe)        # 1 bar → MFE/MAE filled
+        self.assertIsNotNone(sigs[1].mae)
+
+
+class TestSignalRecorderBackfillSignals(unittest.TestCase):
+    """Tests for backfill_signals_for_symbol (the bulk signal-recording path)."""
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+        )
+        HistoricalSignal.__table__.create(self.engine, checkfirst=True)
+        BarModel.__table__.create(self.engine, checkfirst=True)
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.recorder = SignalRecorder()
+        from backend.services import signal_recorder as rec_mod
+        self._sessionlocal_patch = patch.object(
+            rec_mod, "SessionLocal", lambda: self.Session()
+        )
+        self._sessionlocal_patch.start()
+        self.addCleanup(self._sessionlocal_patch.stop)
+
+    def tearDown(self):
+        self.engine.dispose()
+
+    def test_backfill_signals_for_symbol_bulk_inserts_all(self):
+        """Bulk path creates one signal per bar, correctly populating all fields."""
+        sym = "BULK1"
+        tf = "1m"
+        base = datetime(2025, 3, 1, 9, 30)
+        bars = [
+            BarModel(
+                symbol=sym, timeframe=tf,
+                timestamp=base + timedelta(minutes=i),
+                open=100.0 + i * 0.1, high=100.5 + i * 0.1,
+                low=99.5 + i * 0.1, close=100.2 + i * 0.1,
+                volume=10_000, provider="test", data_status="historical",
+            )
+            for i in range(100)
+        ]
+        with self.Session() as db:
+            db.bulk_save_objects(bars)
+            db.commit()
+
+        recorded = self.recorder.backfill_signals_for_symbol(sym, timeframe=tf)
+        self.assertEqual(recorded, 100)
+
+        with self.Session() as db:
+            signals = (
+                db.query(HistoricalSignal)
+                .filter_by(symbol=sym)
+                .order_by(HistoricalSignal.timestamp.asc())
+                .all()
+            )
+        self.assertEqual(len(signals), 100)
+        # Spot-check fields
+        self.assertEqual(signals[0].symbol, sym)
+        self.assertEqual(signals[0].timeframe, tf)
+        self.assertIsNotNone(signals[0].trend_state)
+        self.assertIsNotNone(signals[0].price)
+        self.assertIsNotNone(signals[0].trend_score)
+
+    def test_backfill_signals_for_symbol_dedup_skips_existing(self):
+        """Second call records 0 new signals (DB dedup + in-process cache)."""
+        sym = "BULK2"
+        tf = "1d"
+        base = datetime(2025, 1, 1)
+        bars = [
+            BarModel(
+                symbol=sym, timeframe=tf,
+                timestamp=base + timedelta(days=i),
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=1_000_000, provider="test", data_status="historical",
+            )
+            for i in range(50)
+        ]
+        with self.Session() as db:
+            db.bulk_save_objects(bars)
+            db.commit()
+
+        first = self.recorder.backfill_signals_for_symbol(sym, timeframe=tf)
+        self.assertEqual(first, 50)
+
+        second = self.recorder.backfill_signals_for_symbol(sym, timeframe=tf)
+        self.assertEqual(second, 0)  # all already exist
+
+        with self.Session() as db:
+            count = db.query(HistoricalSignal).filter_by(symbol=sym).count()
+        self.assertEqual(count, 50)
+
+    def test_backfill_signals_for_symbol_respects_max_bars(self):
+        """Capping at max_bars limits the rows processed."""
+        sym = "BULK3"
+        tf = "1m"
+        base = datetime(2025, 3, 1, 9, 30)
+        bars = [
+            BarModel(
+                symbol=sym, timeframe=tf,
+                timestamp=base + timedelta(minutes=i),
+                open=100.0, high=101.0, low=99.0, close=100.0,
+                volume=10_000, provider="test", data_status="historical",
+            )
+            for i in range(200)
+        ]
+        with self.Session() as db:
+            db.bulk_save_objects(bars)
+            db.commit()
+
+        recorded = self.recorder.backfill_signals_for_symbol(sym, timeframe=tf, max_bars=30)
+        self.assertEqual(recorded, 30)
+
+        with self.Session() as db:
+            count = db.query(HistoricalSignal).filter_by(symbol=sym).count()
+        self.assertEqual(count, 30)
 
 
 class TestSignalRecorderHelpers(unittest.TestCase):

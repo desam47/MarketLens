@@ -20,6 +20,13 @@ Security constraints
 - ``app_key`` and ``app_secret`` are never logged.
 - Tokens are held in-process-memory only by the SDK; they are never persisted
   to disk.
+
+Timestamp convention
+-------------------
+All naive datetime values stored in the DB are NY local (EDT/EST).
+``_epoch_ms_to_ny()`` converts UTC timestamps to naive NY via ``to_ny()``
+before they reach the data layer. This matches the Alpaca provider's
+``_ts_to_ny()`` and the ``backend.utils.timezone`` convention.
 """
 from __future__ import annotations
 
@@ -71,6 +78,7 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
+from backend.utils.timezone import to_ny
 
 from ..provider import BaseMarketDataProvider
 
@@ -122,6 +130,8 @@ _RANGE_DAYS: dict[str, int] = {
     "1y":   252,
     "2y":   504,
     "5y":   1260,
+    "15m":  1,      # Phase 3.8: live ingestion recent-window fetch
+    "3h":   1,      # Phase 3.8: 1h recent-window fetch (1 trading day)
 }
 
 # Map our ``range_`` to an approximate bar count so the SDK's count param
@@ -136,11 +146,13 @@ _RANGE_TO_COUNT: dict[str, int] = {
     "1y":  252,
     "2y":  504,
     "5y":  1260,
+    "15m": 30,      # Phase 3.8: 30 × 1m bars (15-min lookback, doubled for safety)
+    "3h":  30,      # Phase 3.8: 30 × 1h bars (3-hour lookback, conservative)
 }
 
 
-def _epoch_ms_to_utc(ms: int | str | float | None) -> datetime:
-    """Convert a Webull timestamp to a tz-aware UTC datetime.
+def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
+    """Convert a Webull timestamp to a naive NY datetime.
 
     The Webull SDK returns timestamps as either:
       * an integer / float of epoch milliseconds (older code paths), or
@@ -150,16 +162,21 @@ def _epoch_ms_to_utc(ms: int | str | float | None) -> datetime:
     stamped with ``datetime.now(...)`` and downstream median-gap detection
     sees zero-second gaps (3.1.22 fails to catch the resulting M1→tick
     downgrade).
+
+    Convention: naive datetimes are always NY local (EDT/EST). This matches
+    ``backend.utils.timezone`` and the Alpaca provider's ``_ts_to_ny()``.
     """
     if ms is None:
-        return datetime.now(timezone.utc)
+        return to_ny(datetime.now(timezone.utc))
 
     # Numeric path: epoch milliseconds.
     if isinstance(ms, (int, float)):
         try:
-            return datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+            return to_ny(
+                datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+            )
         except (TypeError, ValueError, OSError):
-            return datetime.now(timezone.utc)
+            return to_ny(datetime.now(timezone.utc))
 
     # String path: ISO 8601 with trailing ``+0000`` or ``+00:00`` (Webull
     # omits the colon in the UTC offset). ``fromisoformat`` pre-3.11 does
@@ -170,11 +187,12 @@ def _epoch_ms_to_utc(ms: int | str | float | None) -> datetime:
     try:
         dt = datetime.fromisoformat(text)
     except (TypeError, ValueError):
-        return datetime.now(timezone.utc)
+        return to_ny(datetime.now(timezone.utc))
 
+    # Normalise to UTC-aware, then convert to naive NY.
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+    return to_ny(dt.astimezone(timezone.utc))
 
 
 # Reverse map: Webull SDK timespan → our canonical timeframe label.
@@ -280,7 +298,7 @@ class WebullProvider(BaseMarketDataProvider):
                 raise RuntimeError(f"Webull returned empty snapshot for {sym}")
             field = data[0]
 
-            ts = _epoch_ms_to_utc(field.get("quote_time") or field.get("last_trade_time"))
+            ts = _epoch_ms_to_ny(field.get("quote_time") or field.get("last_trade_time"))
 
             quote = Quote(
                 symbol=sym,
@@ -311,7 +329,7 @@ class WebullProvider(BaseMarketDataProvider):
                 if isinstance(data, list):
                     for field in data:
                         sym = field.get("symbol", "").upper()
-                        ts = _epoch_ms_to_utc(
+                        ts = _epoch_ms_to_ny(
                             field.get("quote_time") or field.get("last_trade_time")
                         )
                         results[sym] = Quote(
@@ -332,7 +350,7 @@ class WebullProvider(BaseMarketDataProvider):
                     results[sym_upper] = Quote(
                         symbol=sym_upper,
                         price=0.0,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=to_ny(datetime.now(timezone.utc)),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -345,7 +363,7 @@ class WebullProvider(BaseMarketDataProvider):
                 s.upper(): Quote(
                     symbol=s.upper(),
                     price=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=to_ny(datetime.now(timezone.utc)),
                     provider=self.name,
                     data_status=DataStatus.ERROR,
                 )
@@ -384,7 +402,7 @@ class WebullProvider(BaseMarketDataProvider):
             for row in data:
                 bars.append(Bar(
                     symbol=sym,
-                    timestamp=_epoch_ms_to_utc(row.get("time")),
+                    timestamp=_epoch_ms_to_ny(row.get("time")),
                     open=float(row.get("open") or 0),
                     high=float(row.get("high") or 0),
                     low=float(row.get("low") or 0),
@@ -470,7 +488,7 @@ class WebullProvider(BaseMarketDataProvider):
                 next_close=None,  # not available in snapshot
                 timezone="America/New_York",
                 provider=self.name,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=to_ny(datetime.now(timezone.utc)),
             )
             self._reset_error_state()
             return status
@@ -500,14 +518,14 @@ class WebullProvider(BaseMarketDataProvider):
             return ProviderStatus(
                 provider_name=self.name,
                 is_healthy=True,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=to_ny(datetime.now(timezone.utc)),
             )
         except Exception as e:
             return ProviderStatus(
                 provider_name=self.name,
                 is_healthy=False,
                 error_message=str(e),
-                timestamp=datetime.now(timezone.utc),
+                timestamp=to_ny(datetime.now(timezone.utc)),
             )
 
 

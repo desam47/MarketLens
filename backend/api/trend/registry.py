@@ -85,6 +85,7 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
                         price=float(bar.close or 0.0),
                         volume=int(bar.volume or 0),
                         timestamp=bar.timestamp,
+                        only_timeframe=tf,
                     )
                     seeded += 1
                 except Exception:

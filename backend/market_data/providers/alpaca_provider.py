@@ -86,6 +86,8 @@ _RANGE_SECONDS: dict[str, int] = {
     "1y": 31536000,
     "2y": 63072000,
     "5y": 157680000,
+    "15m": 2700,    # Phase 3.8: 45 min — covers 15-min lookback + buffer
+    "3h":  18000,   # Phase 3.8: 5 hours — covers 3h lookback + buffer
 }
 
 

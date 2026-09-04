@@ -1,6 +1,6 @@
 # Version 3 Phase Audit
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-09-03
 **Scope:** Database backup/optimization, Bar retention (1000-day rolling window), Charts, Structured logging, Dashboard rebuild
 
 ---
@@ -15,6 +15,8 @@
 | 3.4 | Charts (drawing v1, line/area/HA, indicators) | 🟡 PLANNED | Not started |
 | 3.5 | Structured Logging (JSON formatter, rotation) | 🟡 PLANNED | correlation_id.py done (3.5.1); 3.5.2 pending |
 | 3.6 | Dashboard Performance (lazy-load, memo, virtualize) | 🟡 PLANNED | Not started |
+| 3.7 | All-Timeframe Live Ingestion + Resample-at-Write + Backfill Config | ✅ DONE | 3.7.1–3.7.11 complete |
+| 3.8 | Auto Live Gap-fill Loop | ✅ DONE | 3.8.1–3.8.2 complete; verified for NVDA 11:22–11:24 ET |
 
 ---
 
@@ -174,3 +176,26 @@ startup seed
 - ⬜ 3.6.3 Virtualize AlertsCard (>30 rows) and HistoricalSignalCard (>50 rows)
 - ⬜ 3.6.4 `tests/frontend/dashboard.test.tsx` (virtualization thresholds, lazy-load)
 
+## Phase 3.7 — All-Timeframe Live Ingestion + Resample-at-Write + Backfill Config — ✅ DONE
+
+See `docs/Version_3/v3_plan.md` for full spec.
+
+- ✅ 3.7.1 Backfill settings + per-TF chains — `BackfillSettings` in `backend/config/settings.py` with `prefix="BACKFILL_"`, fields `tf_1m_primary/tf_1m_gapfill/tf_1h_primary/tf_1h_fallback/tf_1d_primary/tf_1d_fallback` + `alpaca_rate_limit_per_minute` + `webull_rate_limit_per_minute`; helpers `get_1m_gapfill_providers()` and `get_fallback_providers(timeframe)`. `MarketDataSettings.primary_provider` default flipped from `alpaca` to `webull`; fallbacks default to `["yfinance", "alpaca"]`. `.env` carries all `BACKFILL_*` keys.
+- ✅ 3.7.2 1m backfill with gap-fill — `_fetch_tier1_1m_bars(symbol, days, manager, db)` in `backfill_service.py` fetches Alpaca primary (range 1d/5d/1mo/3mo based on `days`), then iterates `get_1m_gapfill_providers()` (yfinance → webull) for the latest 15-min window. Dedupes by timestamp + sorts ascending. Returns merged list.
+- ✅ 3.7.3 1h backfill tier — `_fetch_tier2_1h_bars(symbol, days)` fetches Alpaca primary (range 6mo/1y/2y), yfinance/webull fallback via `get_1h_1d_fallback_providers("1h")`. `backfill_symbol_history()` calls it as Tier 2 when `retention_days > 0`; up to 730 days.
+- ✅ 3.7.4 1d backfill — `_fetch_tier2_1d_bars(symbol, days_start, days_end)` filters by `start_cutoff_ny`, **drops 13:30 ET noise rows** (`hour==13 and minute==30`); provider chain from `BACKFILL_1D_PRIMARY` / `BACKFILL_1D_FALLBACK`. Wired as Tier 3 in `backfill_symbol_history()`.
+- ✅ 3.7.5 Live ingestion loops — `_write_1h_bars()` + `_1h_write_loop()` (hourly at :05 past ET) and `_write_1d_bars()` + `_daily_write_loop()` (16:05 ET, also runs 1wk resample). 1m loop unchanged — it already uses `MarketDataManager` which auto-resolves Webull → yfinance → Alpaca from `.env`.
+- ✅ 3.7.6 Resample-at-write loops — `_resample_and_upsert(target_tf, source_tf)` reads source bars from DB, calls `resample_ohlcv()`, upserts only confirmed-closed buckets (end-time < now). `_resample_write_loop()` runs every 2 min for 2m/3m/5m/15m/30m from 1m. `_write_4h_bars()` + `_4h_write_loop()` resample 1h → 4h at 4h boundaries. `_daily_write_loop()` also resamples 1wk from 1d at 16:05 ET.
+- ✅ 3.7.7 Direct-read bar repository — `BarRepository.get_bars()` now does a straight DB query against the `(symbol, timeframe, timestamp)` index. Read-time resample path removed. Added 2m/3m to `_TF_MULTIPLIER` and `_WIDENING_HOURS`. The `fallback_provider` parameter on `get_bars()` is retained for backward compat but unused.
+- ✅ 3.7.8 Resampler support for 2m/3m — `resampler.py` `_TF_MINUTES` now has `"2m": 2, "3m": 3` entries; `_bucket_start` dispatches via `_floor_minute` for both.
+- ✅ 3.7.9 Wire all new loops in `_run_loops()` — four new `asyncio.create_task` calls with offsets 25s/28s/31s/34s so they don't burst-trigger provider 429s on startup.
+- ✅ 3.7.10 Update `docs/Version_3/v3_plan.md` with full Phase 3.7 section (decision, items, risks, verification).
+- ✅ 3.7.11 Update `docs/Version_3/phase_audit_v3.md` with scorecard row + per-item checklist (this section).
+
+
+## Phase 3.8 — Auto Live Gap-fill Loop — ✅ DONE
+
+- ✅ 3.8.1 `_gapfill_1m_loop` + `_gapfill_1m_once` in `backend/market_data/services/ingestion_service.py` (lines 405, 441). RTH-gated (09:30–16:00 ET, Mon–Fri), runs every 5 min with ±15s jitter. For each watched symbol, queries `MAX(timestamp)` for 1m bars in DB, calls `_fetch_tier1_1m_bars(symbol, days=1, manager=None)` (Alpaca primary + yfinance/webull gap-fill), filters to bars strictly newer than DB's latest, upserts via `_write_bars_in_chunks`. Idempotent — never overwrites history.
+- ✅ 3.8.2 Wired in `_run_loops()` at line 532 with `initial_delay=37.0` (staggered after existing 5 loops to avoid startup burst).
+- ✅ 3.8.3 Verified end-to-end: NVDA 11:22–11:24 ET gap on 2026-09-03 was filled by the server restart's `_seed_check` running 1000-day backfill. The new loop will catch any future mid-session gaps every 5 min during RTH.
+- ✅ 3.8.4 Cascade purge on watchlist removal — `quote_repository.delete_quotes_for_symbol` + `delete_market_status_for_symbol` added; `backend/api/watchlist/router.py` extended to purge all 4 tables (bars, historical_signals, quotes, market_status) when a symbol is removed from its last watchlist. End-to-end verified with TEST symbol: 211 bars + 211 signals + 1 quote + 1 market_status row all purged on DELETE.

@@ -77,6 +77,14 @@ def get_engine(symbol: str, preset: str = "day_trading") -> MultiTimeframeEngine
             # regardless of which preset is selected.
             engine.trend_engines[tf] = shared
 
+        # Synthesize an initial confluence signal from the shared engine
+        # warmup so the dashboard shows data immediately on first request,
+        # not just after a fresh 1m bar arrives.  Without this, presets
+        # whose timeframes never receive a live dispatch (e.g. ``all``
+        # includes 1d/1wk which only get warmup data) would render empty
+        # until the next bar of any registered TF arrives.
+        engine._generate_confluence_signal(datetime.now(timezone.utc))
+
         # Register this MTF engine with the engine registry so it receives
         # bar dispatches from the ingestion service.  When ingestion calls
         # ``engine_registry.dispatch_bar(symbol, timeframe, ...)``, the MTF
@@ -84,6 +92,14 @@ def get_engine(symbol: str, preset: str = "day_trading") -> MultiTimeframeEngine
         # ``_generate_confluence_signal()`` to populate confluence_history.
         # Without this, the MTF engine's confluence endpoint always returned
         # empty signals because ``update()`` was never called.
+        #
+        # Register for ``bar:1m`` so the MTF engine receives every incoming
+        # 1m bar.  Its ``update()`` ignores the incoming timeframe (it fans
+        # out to each inner TrendEngine which handles its own resampling
+        # boundary).  The per-TF registrations below are unused by ingestion
+        # today (it only dispatches 1m bars) but kept so that if ingestion
+        # ever expands to dispatch multiple TFs, the MTF engine is ready.
+        engine_registry.register("bar:1m", symbol, engine.update)
         for tf in engine.analysis_timeframes:
             engine_registry.register(f"bar:{tf.value}", symbol, engine.update)
 

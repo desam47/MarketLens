@@ -83,14 +83,17 @@ class WebullSettings(BaseSettings):
 
 class MarketDataSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MARKET_DATA_", extra="ignore")
-    primary_provider: str = Field(default="finnhub")
-    fallback_providers: list[str] = Field(default_factory=lambda: ["yahoo_finance", "webull", "alpaca"])
+    # Phase 3.7: live ingestion chain — primary + fallbacks in priority order.
+    # Defaults: webull (primary) → yfinance → alpaca. Configurable via
+    # MARKET_DATA_PRIMARY_PROVIDER / MARKET_DATA_FALLBACK_PROVIDERS.
+    primary_provider: str = Field(default="webull")
+    fallback_providers: list[str] = Field(default_factory=lambda: ["yfinance", "alpaca"])
     # Global rate limit (used when no per-provider override is set).
     rate_limit_per_minute: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=300)
     # Phase 3.3.8: Rolling bar window. Bars older than this are pruned
-    # from the DB on every ingestion cycle. Default 1000 days ≈ 3 trading years.
-    bar_retention_days: int = Field(default=1000)
+    # from the DB on every ingestion cycle. Default 1095 days ≈ 3 calendar years.
+    bar_retention_days: int = Field(default=1095)
     # Phase 3.3.14: When a symbol is freshly added to a watchlist, trigger
     # a background backfill of bar history. Set False to disable backfills.
     backfill_on_add: bool = Field(default=True)
@@ -100,6 +103,78 @@ class MarketDataSettings(BaseSettings):
     finnhub_rate_limit_per_minute: int = Field(default=1200)
     webull_rate_limit_per_minute: int = Field(default=120)
     alpaca_rate_limit_per_minute: int = Field(default=60)
+
+
+class BackfillSettings(BaseSettings):
+    """Phase 3.7: per-timeframe backfill provider chains.
+
+    Each timeframe (1m, 1h, 1d) has an independent primary + fallback
+    chain. The 1m tier also has a separate ``gapfill`` chain for the
+    ~15-minute lag at the tip of Alpaca's free-tier 1m data — yfinance
+    or webull fills that window after the Alpaca fetch.
+
+    Defaults (driven by `.env`):
+      - 1m primary=alpaca,  gapfill=webull,   fallback=webull,yahoo_finance
+      - 1h primary=alpaca,  fallback=webull,yahoo_finance
+      - 1d primary=alpaca,  fallback=webull,yahoo_finance
+    """
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE,
+        env_prefix="BACKFILL_",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    # 1m: alpaca primary; gapfill providers fill the latest ~15 min lag.
+    # Field names use ``env=`` (full env-var name) to read directly from
+    # the .env file — Pydantic's ``validation_alias`` only consults the
+    # process environment, not env_file. The registered provider name
+    # in _PROVIDER_CLASSES is "yahoo_finance" (not "yfinance").
+    tf_1m_primary: str = Field(default="alpaca", env="BACKFILL_1M_PRIMARY")
+    tf_1m_gapfill: str = Field(default="webull", env="BACKFILL_1M_GAPFILL")
+    tf_1m_fallback: str = Field(
+        default="webull,yahoo_finance", env="BACKFILL_1M_FALLBACK"
+    )
+
+    # 1h: alpaca primary; webull first, yahoo_finance second.
+    tf_1h_primary: str = Field(default="alpaca", env="BACKFILL_1H_PRIMARY")
+    tf_1h_fallback: str = Field(
+        default="webull,yahoo_finance", env="BACKFILL_1H_FALLBACK"
+    )
+
+    # 1d: alpaca primary; webull first, yahoo_finance second.
+    tf_1d_primary: str = Field(default="alpaca", env="BACKFILL_1D_PRIMARY")
+    tf_1d_fallback: str = Field(
+        default="webull,yahoo_finance", env="BACKFILL_1D_FALLBACK"
+    )
+
+    def get_1m_gapfill_providers(self) -> list[str]:
+        """Comma-separated list of 1m gapfill providers from the .env."""
+        return [p.strip() for p in self.tf_1m_gapfill.split(",") if p.strip()]
+
+    def get_1m_fallback_providers(self) -> list[str]:
+        """Fallback provider names for 1m backfill from .env (after primary fails)."""
+        return [p.strip() for p in self.tf_1m_fallback.split(",") if p.strip()]
+
+    def get_fallback_providers(self, timeframe: str) -> list[str]:
+        """Comma-separated list of fallback providers for ``timeframe`` (1m/1h/1d)."""
+        if timeframe == "1m":
+            return [p.strip() for p in self.tf_1m_fallback.split(",") if p.strip()]
+        if timeframe in ("1h", "4h"):
+            return [p.strip() for p in self.tf_1h_fallback.split(",") if p.strip()]
+        if timeframe in ("1d", "1wk"):
+            return [p.strip() for p in self.tf_1d_fallback.split(",") if p.strip()]
+        return []
+
+    def get_primary_provider(self, timeframe: str) -> str:
+        """Primary provider name for ``timeframe`` (1m/1h/1d) from .env."""
+        if timeframe == "1m":
+            return self.tf_1m_primary.strip()
+        if timeframe in ("1h", "4h"):
+            return self.tf_1h_primary.strip()
+        if timeframe in ("1d", "1wk"):
+            return self.tf_1d_primary.strip()
+        return "alpaca"  # safe default
 
 
 class AlpacaSettings(BaseSettings):
@@ -563,6 +638,7 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "port"))
 
     market_data: MarketDataSettings = Field(default_factory=MarketDataSettings)
+    backfill: BackfillSettings = Field(default_factory=BackfillSettings)
     finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     webull: WebullSettings = Field(default_factory=WebullSettings)
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)

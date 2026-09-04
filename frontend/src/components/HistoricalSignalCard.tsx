@@ -1,9 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { HistoricalSignal, RegimeCount, RegimePerformance } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
-import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 const strPrice = fmtPrice;
+
+// Historical Signals page only shows the 3 primary timeframes — the
+// sub-hour / 4h / weekly buckets are recorded by the trend engine but
+// not analysed in this view. Keeps the dropdown focused on what users
+// typically want to inspect.
+const SIGNAL_TIMEFRAMES = ['1m', '1h', '1d'] as const;
 
 interface HistoricalSignalCardProps {
   /** Optional default symbol to filter on. */
@@ -18,7 +24,13 @@ function fmtPct(v: number | null | undefined): string {
 
 function fmtDateTime(d: string | null | undefined): string {
   if (!d) return '—';
-  // Trim the timezone offset to keep the table compact.
+  // The API serialises with format_edt_iso() which bakes the ET offset
+  // into the time portion: "2026-09-03T14:05:00-04:00" means the time IS
+  // 14:05 Eastern. We parse just the date+time part and append " ET".
+  const match = d.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})/);
+  if (match) {
+    return match[1].replace('T', ' ') + ' ET';
+  }
   return d.slice(0, 19).replace('T', ' ');
 }
 
@@ -168,7 +180,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
-            {TIMEFRAMES.map((tf) => (
+            {SIGNAL_TIMEFRAMES.map((tf) => (
               <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
             ))}
           </select>

@@ -171,8 +171,14 @@ class SignalRepository:
         return_20b: float | None,
         mfe: float | None,
         mae: float | None,
+        commit: bool = True,
     ) -> HistoricalSignal | None:
-        """Update forward outcomes for a signal row."""
+        """Update forward outcomes for a signal row.
+
+        When ``commit=True`` (the default), the session commits immediately.
+        Pass ``commit=False`` when batching multiple updates together; the
+        caller is responsible for calling ``db.commit()`` once at the end.
+        """
         signal = self.get_by_id(signal_id)
         if signal is None:
             return None
@@ -182,7 +188,8 @@ class SignalRepository:
         signal.mfe = mfe
         signal.mae = mae
         signal._outcome_missing = False
-        self.db.commit()
+        if commit:
+            self.db.commit()
         self.db.refresh(signal)
         return signal
 
