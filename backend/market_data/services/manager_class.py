@@ -29,6 +29,7 @@ from .providers import (
     _INTRADAY_TIMEFRAMES,
     _PROVIDER_CLASSES,
     _call_provider,
+    _call_provider_direct,
     _circuit_breakers,
     _newest_bar_age_seconds,
 )
@@ -346,6 +347,62 @@ class MarketDataManager:
                 get_redis_cache().publish_bar_update(symbol, timeframe, bars[-1])
 
         return bars
+
+    def get_historical_bars_batch(
+        self,
+        symbols: list[str],
+        timeframe: str = "1d",
+        range_: str = "3mo",
+        use_cache: bool = True,
+    ) -> dict[str, list[Bar]]:
+        """Get historical bars for multiple symbols in a single provider call.
+
+        Uses the provider's batch endpoint (e.g. POST /stock/batch-bars for
+        Webull) so all symbols are fetched in one API call instead of N calls.
+        Falls back to individual per-symbol calls if the provider doesn't
+        support batching. Never raises; returns a dict (possibly empty).
+        """
+        if not symbols:
+            return {}
+
+        # Try provider batch method first.
+        result: dict[str, list[Bar]] = {}
+        for provider_name in self._get_available_providers():
+            try:
+                provider = self.providers[provider_name]
+                batch_fn = getattr(provider, "get_historical_bars_batch", None)
+                if batch_fn is None:
+                    # Provider doesn't support batching — fall back to individual calls.
+                    for sym in symbols:
+                        try:
+                            bars = _call_provider(
+                                provider, "get_historical_bars", sym,
+                                timeframe=timeframe, range_=range_,
+                            )
+                            if bars:
+                                result[sym] = bars
+                        except Exception as e:
+                            logger.debug(
+                                f"Batch fallback failed for {sym}: {e}"
+                            )
+                    break
+                else:
+                    # Call the batch method via _call_provider_direct so rate limiting,
+                    # circuit breaking, and structured logging are applied consistently.
+                    result = _call_provider_direct(
+                        provider, batch_fn, symbols,
+                        timeframe=timeframe, range_=range_,
+                    )
+                    if not isinstance(result, dict):
+                        result = {}
+                    break
+            except Exception as e:
+                logger.warning(
+                    f"Batch bars failed from {provider_name}: {e}"
+                )
+                continue
+
+        return result
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         """Get quotes for multiple symbols with fallback."""

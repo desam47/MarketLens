@@ -71,12 +71,21 @@ class RegimeSignal:
 class MarketRegimeEngine:
     """Engine for detecting market regime conditions"""
 
-    def __init__(self, symbol: str):
+    def __init__(self, symbol: str, trend_engine: TrendEngine | None = None,
+                 multitimeframe_engine: MultiTimeframeEngine | None = None):
         self.symbol = symbol
 
-        # Initialize component engines
-        self.trend_engine = TrendEngine(symbol)
-        self.multitimeframe_engine = MultiTimeframeEngine(symbol)
+        # Phase 3.9.2: accept injected component engines so all callers
+        # share the same warmed-up TrendEngine / MultiTimeframeEngine
+        # instead of each instance building its own (which diverged
+        # their indicator state and wasted CPU seeding the same bars
+        # N times). Fall back to creating a fresh engine only when no
+        # shared instance is provided (e.g. unit tests, one-off scripts).
+        self.trend_engine = trend_engine if trend_engine is not None else TrendEngine(symbol)
+        self.multitimeframe_engine = (
+            multitimeframe_engine if multitimeframe_engine is not None
+            else MultiTimeframeEngine(symbol)
+        )
 
         # Initialize technical indicators for regime detection
         self.atr_indicator = ATRIndicator(period=14)

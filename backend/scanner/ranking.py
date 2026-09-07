@@ -188,21 +188,55 @@ class RankingEngine:
 
     # ---- Internal per-category builders --------------------------------
 
+    # Weight map used only for the directional rankings (strongest_bullish /
+    # strongest_bearish). Magnitude-only scores (trend_strength, adx, volatility,
+    # volume) are zeroed out because they don't carry direction — a strong
+    # downtrend and a strong uptrend both have high trend_strength, so including
+    # them washes out the directional signal from momentum/macd/rsi.
+    _DIRECTIONAL_WEIGHTS: dict[str, float] = {
+        "momentum": 1.0,
+        "macd": 1.0,
+        "rsi": 1.0,
+        # zero out magnitude-only scores:
+        "trend_strength": 0.0,
+        "adx": 0.0,
+        "volatility": 0.0,
+        "volume": 0.0,
+    }
+
+    def _directional_score(self, r: ScanResult) -> float:
+        """Average of direction-significant scores only.
+
+        Positive = bullish (rising momentum, oversold RSI), negative = bearish.
+        Magnitude-only scores (trend_strength, adx, volatility, volume) are
+        excluded to avoid diluting the directional signal.
+        """
+        w = self._DIRECTIONAL_WEIGHTS
+        active = {k: v for k, v in r.scores.items() if k in w}
+        if not active:
+            return 0.0
+        total_w = sum(w.get(k, 0.0) for k in active)
+        if total_w == 0:
+            return 0.0
+        return sum(active[k] * w.get(k, 0.0) for k in active) / total_w
+
     def _build_strongest_bullish(
         self, results: list[ScanResult], top_n: int
     ) -> list[RankedEntry]:
         scored = []
         for r in results:
-            total = r.calculate_total_score()
+            total = self._directional_score(r)
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
                     score=total,
                     rank=0,
                     metrics={
-                        "total_score": total,
+                        "directional_score": total,
                         "trend_strength": r.scores.get("trend_strength", 0.0),
                         "momentum": r.scores.get("momentum", 0.0),
+                        "macd": r.scores.get("macd", 0.0),
+                        "rsi": r.scores.get("rsi", 0.0),
                     },
                 )
             )
@@ -214,13 +248,13 @@ class RankingEngine:
     ) -> list[RankedEntry]:
         scored = []
         for r in results:
-            total = r.calculate_total_score()
+            total = self._directional_score(r)
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
                     score=total,
                     rank=0,
-                    metrics={"total_score": total},
+                    metrics={"directional_score": total},
                 )
             )
         scored.sort(key=lambda e: e.score)

@@ -168,16 +168,23 @@ class SectorEngine:
       0.0  — fully conflicting or insufficient data
     """
 
-    def __init__(self, symbol: str):
+    def __init__(self, symbol: str,
+                 stock_engine: TrendEngine | None = None,
+                 sector_engine: TrendEngine | None = None,
+                 market_engine: TrendEngine | None = None):
         self.symbol = symbol.upper()
         self.sector = SECTOR_MAP.get(self.symbol, "Unknown")
         self.sector_etf = SECTOR_ETFS.get(self.sector)
 
-        self._stock_eng = TrendEngine(self.symbol)
-        self._sector_eng = (
+        # Phase 3.9.2: accept injected engines to share with other callers
+        # (e.g. the regime engine). All three engine types (stock, sector
+        # ETF, SPY) are looked up via the shared registry so any other
+        # component that also needs SPY or XLK gets the same instance.
+        self._stock_eng = stock_engine if stock_engine is not None else TrendEngine(self.symbol)
+        self._sector_eng = sector_engine if sector_engine is not None else (
             TrendEngine(self.sector_etf) if self.sector_etf else None
         )
-        self._market_eng = TrendEngine("SPY")
+        self._market_eng = market_engine if market_engine is not None else TrendEngine("SPY")
 
         self._signals: list[SectorSignal] = []
 

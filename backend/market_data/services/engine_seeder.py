@@ -192,10 +192,13 @@ class EngineRegistry:
         key = self._key(f"bar:{timeframe}", symbol)
         with self._lock:
             callbacks = list(self._entries.get(key, []))
-        logger.debug(
-            f"dispatch_bar: {symbol}/{timeframe} @ {timestamp} — "
-            f"{len(callbacks)} engine(s) registered for key={key!r}"
-        )
+        # Phase 3.9.9: guard the f-string so it doesn't evaluate on every
+        # tick when DEBUG is off (this fires for every 1m bar × every symbol).
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"dispatch_bar: {symbol}/{timeframe} @ {timestamp} — "
+                f"{len(callbacks)} engine(s) registered for key={key!r}"
+            )
         if not callbacks:
             return 0
         notified = 0

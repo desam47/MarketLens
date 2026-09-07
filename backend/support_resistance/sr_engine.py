@@ -32,19 +32,26 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from enum import StrEnum
 from typing import Literal
 
 
 class SRType(StrEnum):
-    SWING_HIGH = "swing_high"
-    SWING_LOW = "swing_low"
-    PIVOT_HIGH = "pivot_high"
-    PIVOT_LOW = "pivot_low"
+    TODAY_HIGH = "today_high"
+    TODAY_LOW = "today_low"
     PREV_DAY_HIGH = "prev_day_high"
     PREV_DAY_LOW = "prev_day_low"
+    THIS_WEEK_HIGH = "this_week_high"
+    THIS_WEEK_LOW = "this_week_low"
     PREV_WEEK_HIGH = "prev_week_high"
     PREV_WEEK_LOW = "prev_week_low"
+    ALL_TIME_HIGH = "all_time_high"
+    ALL_TIME_LOW = "all_time_low"
+    PIVOT_HIGH = "pivot_high"
+    PIVOT_LOW = "pivot_low"
+    SWING_HIGH = "swing_high"
+    SWING_LOW = "swing_low"
     CONSOLIDATION_ZONE = "consolidation_zone"
 
 
@@ -178,7 +185,8 @@ class SupportResistanceEngine:
         closes = [b["close"] for b in bars]
         highs = [b["high"] for b in bars]
         lows = [b["low"] for b in bars]
-        latest_close = closes[-1] if closes else None
+        # Bars arrive newest→oldest (desc=True), so closes[0] is the latest close.
+        latest_close = closes[0] if closes else None
 
         timestamps = [b.get("timestamp") for b in bars]
         if timestamps and timestamps[-1] is None:
@@ -186,23 +194,118 @@ class SupportResistanceEngine:
 
         levels: list[SRLevel] = []
 
-        # 1. Swing highs and swing lows
+        # 1. Today's high / low — the most recent bar (index 0 = newest)
+        if n > 0:
+            for price, stype in ((highs[0], SRType.TODAY_HIGH),
+                                  (lows[0], SRType.TODAY_LOW)):
+                levels.append(SRLevel(
+                    price=price,
+                    type=stype,
+                    timeframe=timeframe,
+                    strength=0.8,
+                    touch_count=1,
+                    age=0,
+                    distance_from_price=self._distance_pct(price, latest_close),
+                    origin_index=0,
+                    timestamp=timestamps[0] if timestamps else None,
+                ))
+
+        # 2. This week's running high / low — scan from newest to oldest
+        #     until we hit a week boundary.
+        if timestamps:
+            this_week = getattr(timestamps[0], "isocalendar", lambda: (None, None, None))()
+            if callable(this_week[0]):
+                this_week = None
+            else:
+                this_week = this_week[:2]  # (year, week_number)
+        else:
+            this_week = None
+
+        if this_week:
+            week_high = highs[0]
+            week_low = lows[0]
+            for i in range(n):
+                ts = timestamps[i]
+                wk = getattr(ts, "isocalendar", lambda: (None, None, None))()
+                if callable(wk[0]):
+                    break
+                if wk[:2] != this_week:
+                    break
+                week_high = max(week_high, highs[i])
+                week_low = min(week_low, lows[i])
+            # Always emit this week's H/L — they may match today's H/L
+            # (which is fine; the engine dedup pass will keep the strongest).
+            levels.append(SRLevel(
+                price=week_high, type=SRType.THIS_WEEK_HIGH,
+                timeframe=timeframe, strength=0.75, touch_count=1,
+                age=n - 1,  # oldest bar in this week
+                distance_from_price=self._distance_pct(week_high, latest_close),
+                origin_index=n - 1,
+                timestamp=timestamps[n - 1] if timestamps else None,
+            ))
+            levels.append(SRLevel(
+                price=week_low, type=SRType.THIS_WEEK_LOW,
+                timeframe=timeframe, strength=0.75, touch_count=1,
+                age=n - 1,
+                distance_from_price=self._distance_pct(week_low, latest_close),
+                origin_index=n - 1,
+                timestamp=timestamps[n - 1] if timestamps else None,
+            ))
+
+        # 3. Previous day high / low — scan bars[1:] (skip today's bar) so the
+        #     first detected day change is yesterday→day before, giving correct
+        #     prev_day levels. Keep only the most recent one of each type.
+        if n > 1:
+            day_levels = self._prev_period_levels(
+                highs[1:], lows[1:], closes[1:], "day", timestamps[1:]
+            )
+            day_levels = self._keep_most_recent_of_each_type(day_levels)
+            levels.extend(day_levels)
+
+        # 4. Previous week high / low — scan bars[1:] (skip current week) so the
+        #     first detected week change is prev_week→week before. Keep only the
+        #     most recent one of each type.
+        if n > 1:
+            week_levels = self._prev_period_levels(
+                highs[1:], lows[1:], closes[1:], "week", timestamps[1:]
+            )
+            week_levels = self._keep_most_recent_of_each_type(week_levels)
+            levels.extend(week_levels)
+
+        # 5. All-time high / low — highest high and lowest low in the entire dataset
+        ath_price = max(highs)
+        atl_price = min(lows)
+        ath_idx = highs.index(ath_price)
+        atl_idx = lows.index(atl_price)
+        for price, idx, stype in (
+            (ath_price, ath_idx, SRType.ALL_TIME_HIGH),
+            (atl_price, atl_idx, SRType.ALL_TIME_LOW),
+        ):
+            levels.append(SRLevel(
+                price=price, type=stype, timeframe=timeframe,
+                strength=0.9, touch_count=1,
+                age=self._age(idx, last_index),
+                distance_from_price=self._distance_pct(price, latest_close),
+                origin_index=idx,
+                timestamp=timestamps[idx] if timestamps else None,
+            ))
+
+        # 6. Swing highs / lows — local peaks / troughs confirmed by lookback_period bars
+        # Filter out noise: only keep swings with strength >= 0.1
+        SWING_STRENGTH_FLOOR = 0.1
         swing_high_indices = self._swing_highs(highs)
         swing_low_indices = self._swing_lows(lows)
         for idx in swing_high_indices:
             price = highs[idx]
             strength = self._swing_strength(price, highs, highs[idx:idx+1],
                                              self.lookback_period)
-            age = self._age(idx, last_index)
-            dist = self._distance_pct(price, latest_close)
+            if strength < SWING_STRENGTH_FLOOR:
+                continue
             levels.append(SRLevel(
-                price=price,
-                type=SRType.SWING_HIGH,
-                timeframe=timeframe,
-                strength=strength,
-                touch_count=1,
-                age=age,
-                distance_from_price=dist,
+                price=price, type=SRType.SWING_HIGH, timeframe=timeframe,
+                strength=strength, touch_count=1,
+                age=self._age(idx, last_index),
+                distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
@@ -210,74 +313,54 @@ class SupportResistanceEngine:
             price = lows[idx]
             strength = self._swing_strength(price, lows, lows[idx:idx+1],
                                              self.lookback_period)
-            age = self._age(idx, last_index)
-            dist = self._distance_pct(price, latest_close)
+            if strength < SWING_STRENGTH_FLOOR:
+                continue
             levels.append(SRLevel(
-                price=price,
-                type=SRType.SWING_LOW,
-                timeframe=timeframe,
-                strength=strength,
-                touch_count=1,
-                age=age,
-                distance_from_price=dist,
+                price=price, type=SRType.SWING_LOW, timeframe=timeframe,
+                strength=strength, touch_count=1,
+                age=self._age(idx, last_index),
+                distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
 
-        # 2. Classic pivot high / low (using pivot_period)
-        for i in range(self.pivot_period, n):
+        # 7. Pivot high / low (classic R1 / S1 Camarilla)
+        # Only scan the most recent 50 bars to avoid flooding the output
+        # with one pivot per bar. Older pivots are unlikely to still be
+        # meaningful S/R levels anyway.
+        pp_period = max(self.pivot_period or 5, 1)
+        pivot_start = max(pp_period, n - 50)
+        for i in range(pivot_start, n):
             h = highs[i]
-            low_val = lows[i]
+            lo = lows[i]
             c = closes[i]
-            pp = (h + low_val + c) / 3.0
-            r1 = 2 * pp - low_val
+            pp = (h + lo + c) / 3.0
+            r1 = 2 * pp - lo
             s1 = 2 * pp - h
-            # Pivot high: R1
-            r1_strength = self._swing_strength(r1, highs, [h],
-                                                self.pivot_period)
-            if r1_strength > 0:
-                dist = self._distance_pct(r1, latest_close)
+            # R1 pivot resistance
+            r1_strength = self._swing_strength(r1, highs, [h], pp_period)
+            if r1_strength > 0 and r1 > closes[i]:
                 levels.append(SRLevel(
-                    price=r1,
-                    type=SRType.PIVOT_HIGH,
-                    timeframe=timeframe,
-                    strength=r1_strength * 0.8,
-                    touch_count=1,
+                    price=r1, type=SRType.PIVOT_HIGH, timeframe=timeframe,
+                    strength=r1_strength * 0.8, touch_count=1,
                     age=self._age(i, last_index),
-                    distance_from_price=dist,
+                    distance_from_price=self._distance_pct(r1, latest_close),
                     origin_index=i,
                     timestamp=timestamps[i] if timestamps else None,
                 ))
-            # Pivot low: S1
-            s1_strength = self._swing_strength(s1, lows, [low_val],
-                                                  self.pivot_period)
-            if s1_strength > 0:
-                dist = self._distance_pct(s1, latest_close)
+            # S1 pivot support
+            s1_strength = self._swing_strength(s1, lows, [lo], pp_period)
+            if s1_strength > 0 and s1 < closes[i]:
                 levels.append(SRLevel(
-                    price=s1,
-                    type=SRType.PIVOT_LOW,
-                    timeframe=timeframe,
-                    strength=s1_strength * 0.8,
-                    touch_count=1,
+                    price=s1, type=SRType.PIVOT_LOW, timeframe=timeframe,
+                    strength=s1_strength * 0.8, touch_count=1,
                     age=self._age(i, last_index),
-                    distance_from_price=dist,
+                    distance_from_price=self._distance_pct(s1, latest_close),
                     origin_index=i,
                     timestamp=timestamps[i] if timestamps else None,
                 ))
 
-        # 3. Previous day high / low
-        day_levels = self._prev_period_levels(
-            highs, lows, closes, "day", timestamps
-        )
-        levels.extend(day_levels)
-
-        # 4. Previous week high / low
-        week_levels = self._prev_period_levels(
-            highs, lows, closes, "week", timestamps
-        )
-        levels.extend(week_levels)
-
-        # 5. Merge swing highs / lows into consolidation zones
+        # 8. Merge levels into consolidation zones
         zones = self._build_zones(levels)
         for zone in zones:
             levels.append(zone)
@@ -364,86 +447,77 @@ class SupportResistanceEngine:
         period: Literal["day", "week"],
         timestamps: Sequence | None,
     ) -> list[SRLevel]:
-        """Detect previous day/week high and low levels."""
+        """Detect previous day OR previous week high and low levels.
+
+        Only emits levels for the requested ``period`` ('day' or 'week'),
+        not both. This lets callers request day and week levels independently.
+        """
         if timestamps is None:
             return []
         n = len(timestamps)
         levels: list[SRLevel] = []
-        # We'll scan for the previous period boundary by looking at the
-        # datetime's day/week attributes. Since bars may not be continuous,
-        # we keep track of the previous period's high/low and emit a level
-        # once the period changes.
         if n < 2:
             return levels
 
-        prev_day = None
-        prev_week = None
-        day_bar_indices: list[int] = []
-        week_bar_indices: list[int] = []
+        is_day = period == "day"
+        prev_period: Any = None
+        bar_indices: list[int] = []
+        day_type   = (SRType.PREV_DAY_HIGH,  SRType.PREV_DAY_LOW)
+        week_type  = (SRType.PREV_WEEK_HIGH, SRType.PREV_WEEK_LOW)
+        hi_type: type[SRType]
+        lo_type: type[SRType]
+        if is_day:
+            hi_type, lo_type = SRType.PREV_DAY_HIGH, SRType.PREV_DAY_LOW
+        else:
+            hi_type, lo_type = SRType.PREV_WEEK_HIGH, SRType.PREV_WEEK_LOW
 
         for i in range(n):
             ts = timestamps[i]
             if ts is None:
                 continue
-            day = getattr(ts, "date", lambda: None)()
-            if callable(day):
-                day = ts
-            week = ts.isocalendar()[1] if hasattr(ts, "isocalendar") else None
+            if is_day:
+                cur = getattr(ts, "date", lambda: None)()
+                if callable(cur):
+                    cur = ts
+            else:
+                cur = ts.isocalendar()[1] if hasattr(ts, "isocalendar") else None
 
-            if prev_day is not None and day != prev_day:
-                # Emit previous day levels
-                if day_bar_indices:
-                    ph = max(highs[j] for j in day_bar_indices)
-                    pl = min(lows[j] for j in day_bar_indices)
-                    age = n - max(day_bar_indices)
-                    for price, stype in ((ph, SRType.PREV_DAY_HIGH),
-                                          (pl, SRType.PREV_DAY_LOW)):
+            if prev_period is not None and cur != prev_period:
+                if bar_indices:
+                    ph = max(highs[j] for j in bar_indices)
+                    pl = min(lows[j]  for j in bar_indices)
+                    age = n - max(bar_indices)
+                    for price, stype in ((ph, hi_type), (pl, lo_type)):
                         levels.append(SRLevel(
                             price=price,
                             type=stype,
                             timeframe="",
-                            strength=0.6,
+                            strength=0.6 if is_day else 0.5,
                             touch_count=1,
                             age=age,
                             distance_from_price=self._distance_pct(
-                                price, closes[-1] if closes else None),
-                            origin_index=day_bar_indices[0],
-                            timestamp=timestamps[day_bar_indices[0]],
+                                price, closes[0] if closes else None),
+                            origin_index=bar_indices[0],
+                            timestamp=timestamps[bar_indices[0]],
                         ))
-                day_bar_indices = []
+                bar_indices = []
 
-            if prev_week is not None and week != prev_week:
-                if week_bar_indices:
-                    wh = max(highs[j] for j in week_bar_indices)
-                    wl = min(lows[j] for j in week_bar_indices)
-                    age = n - max(week_bar_indices)
-                    for price, stype in ((wh, SRType.PREV_WEEK_HIGH),
-                                          (wl, SRType.PREV_WEEK_LOW)):
-                        levels.append(SRLevel(
-                            price=price,
-                            type=stype,
-                            timeframe="",
-                            strength=0.5,
-                            touch_count=1,
-                            age=age,
-                            distance_from_price=self._distance_pct(
-                                price, closes[-1] if closes else None),
-                            origin_index=week_bar_indices[0],
-                            timestamp=timestamps[week_bar_indices[0]],
-                        ))
-                week_bar_indices = []
-
-            day_bar_indices.append(i)
-            week_bar_indices.append(i)
-            prev_day = day
-            prev_week = week
+            bar_indices.append(i)
+            prev_period = cur
 
         return levels
 
     def _build_zones(self, levels: list[SRLevel]) -> list[SRLevel]:
-        """Merge nearby swing high/low levels into consolidation zones."""
+        """Merge nearby resistance (high) and support (low) levels into zones."""
         candidates = [level for level in levels
-                      if level.type in (SRType.SWING_HIGH, SRType.SWING_LOW)]
+                      if level.type in (
+                          SRType.TODAY_HIGH, SRType.PREV_DAY_HIGH,
+                          SRType.THIS_WEEK_HIGH, SRType.PREV_WEEK_HIGH,
+                          SRType.ALL_TIME_HIGH, SRType.ALL_TIME_LOW,
+                          SRType.TODAY_LOW, SRType.PREV_DAY_LOW,
+                          SRType.THIS_WEEK_LOW, SRType.PREV_WEEK_LOW,
+                          SRType.SWING_HIGH, SRType.SWING_LOW,
+                      )]
         if len(candidates) < 2:
             return []
 
@@ -489,16 +563,37 @@ class SupportResistanceEngine:
         return out
 
     def _deduplicate(self, levels: list[SRLevel]) -> list[SRLevel]:
-        """Keep the highest-strength level for each unique price bucket."""
-        seen: dict[tuple[SRType, int], SRLevel] = {}
-        # Bucketing by rounding price to 2 decimal places (sensible for stocks)
-        BUCKET = 2
+        """Keep the highest-strength level for each (type, exact price) pair.
+
+        Using exact price (rounded to 4dp) prevents distinct levels that are
+        close but meaningful (e.g. today's high vs prev_day_high on penny stocks)
+        from being incorrectly merged.
+
+        Each prev_* type (prev_day_high, prev_day_low, prev_week_high, prev_week_low)
+        is a distinct temporal context — they are kept separately even at the same price.
+        """
+        seen: dict[tuple[SRType, float], SRLevel] = {}
         for level in levels:
-            bucket = round(level.price, BUCKET)
-            key = (level.type, bucket)
+            key = (level.type, round(level.price, 4))
             if key not in seen or level.strength > seen[key].strength:
                 seen[key] = level
         return list(seen.values())
+
+    def _keep_most_recent_of_each_type(
+        self, levels: list[SRLevel]
+    ) -> list[SRLevel]:
+        """Keep only the most recent level per SRType.
+
+        Bars are ordered newest→oldest, so lower origin_index = more recent.
+        We keep the level with the smallest origin_index per type.
+        """
+        by_type: dict[SRType, SRLevel] = {}
+        for level in levels:
+            if level.type not in by_type:
+                by_type[level.type] = level
+            elif level.origin_index < by_type[level.type].origin_index:
+                by_type[level.type] = level
+        return list(by_type.values())
 
 
 __all__ = [

@@ -101,7 +101,7 @@ class MarketDataSettings(BaseSettings):
     # Values are sourced from MARKET_DATA_<PROVIDER_NAME>_RATE_LIMIT_PER_MINUTE.
     yahoo_finance_rate_limit_per_minute: int = Field(default=60)
     finnhub_rate_limit_per_minute: int = Field(default=1200)
-    webull_rate_limit_per_minute: int = Field(default=120)
+    webull_rate_limit_per_minute: int = Field(default=100)  # ~200/min max sustained
     alpaca_rate_limit_per_minute: int = Field(default=60)
 
 
@@ -126,26 +126,33 @@ class BackfillSettings(BaseSettings):
     )
 
     # 1m: alpaca primary; gapfill providers fill the latest ~15 min lag.
-    # Field names use ``env=`` (full env-var name) to read directly from
-    # the .env file — Pydantic's ``validation_alias`` only consults the
-    # process environment, not env_file. The registered provider name
-    # in _PROVIDER_CLASSES is "yahoo_finance" (not "yfinance").
-    tf_1m_primary: str = Field(default="alpaca", env="BACKFILL_1M_PRIMARY")
-    tf_1m_gapfill: str = Field(default="webull", env="BACKFILL_1M_GAPFILL")
+    tf_1m_primary: str = Field(
+        default="alpaca", validation_alias=AliasChoices("BACKFILL_1M_PRIMARY")
+    )
+    tf_1m_gapfill: str = Field(
+        default="webull", validation_alias=AliasChoices("BACKFILL_1M_GAPFILL")
+    )
     tf_1m_fallback: str = Field(
-        default="webull,yahoo_finance", env="BACKFILL_1M_FALLBACK"
+        default="webull,yahoo_finance",
+        validation_alias=AliasChoices("BACKFILL_1M_FALLBACK"),
     )
 
-    # 1h: alpaca primary; webull first, yahoo_finance second.
-    tf_1h_primary: str = Field(default="alpaca", env="BACKFILL_1H_PRIMARY")
+    # 1h: alpaca primary; webull first, yfinance second.
+    tf_1h_primary: str = Field(
+        default="alpaca", validation_alias=AliasChoices("BACKFILL_1H_PRIMARY")
+    )
     tf_1h_fallback: str = Field(
-        default="webull,yahoo_finance", env="BACKFILL_1H_FALLBACK"
+        default="webull,yahoo_finance",
+        validation_alias=AliasChoices("BACKFILL_1H_FALLBACK"),
     )
 
-    # 1d: alpaca primary; webull first, yahoo_finance second.
-    tf_1d_primary: str = Field(default="alpaca", env="BACKFILL_1D_PRIMARY")
+    # 1d: yfinance primary; webull first, alpaca second.
+    tf_1d_primary: str = Field(
+        default="yfinance", validation_alias=AliasChoices("BACKFILL_1D_PRIMARY")
+    )
     tf_1d_fallback: str = Field(
-        default="webull,yahoo_finance", env="BACKFILL_1D_FALLBACK"
+        default="webull,alpaca",
+        validation_alias=AliasChoices("BACKFILL_1D_FALLBACK"),
     )
 
     def get_1m_gapfill_providers(self) -> list[str]:
@@ -634,6 +641,9 @@ class Settings(BaseSettings):
     # is absent, so the server always starts with a valid version string.
     app_version: str = Field(default_factory=_version_factory)
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG", "debug"))
+    # Log level for the root logger (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+    # Takes precedence over the DEBUG flag. Reads from LOG_LEVEL env var.
+    log_level: str = Field(default="INFO")
     host: str = Field(default="0.0.0.0", validation_alias=AliasChoices("HOST", "host"))
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT", "port"))
 

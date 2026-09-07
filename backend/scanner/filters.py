@@ -108,7 +108,7 @@ class TrendScoreGt(Filter):
         self.threshold = threshold
 
     def matches(self, result: ScanResult) -> bool:
-        return result.calculate_total_score() > self.threshold
+        return result.calculate_signed_total_score() > self.threshold
 
     def describe(self) -> str:
         return f"total_score > {self.threshold}"
@@ -121,7 +121,7 @@ class TrendScoreLt(Filter):
         self.threshold = threshold
 
     def matches(self, result: ScanResult) -> bool:
-        return result.calculate_total_score() < self.threshold
+        return result.calculate_signed_total_score() < self.threshold
 
     def describe(self) -> str:
         return f"total_score < {self.threshold}"

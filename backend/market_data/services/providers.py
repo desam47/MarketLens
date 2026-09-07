@@ -438,6 +438,54 @@ def _call_provider(
     return result
 
 
+def _call_provider_direct(
+    provider: MarketDataProvider,
+    method: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Invoke a pre-resolved callable with per-provider rate limiting and
+    circuit breaking. Used for batch methods that aren't accessed via
+    ``getattr`` (e.g. ``get_historical_bars_batch``).
+
+    Rate limiting is checked before every call so bursts are throttled.
+    The circuit breaker fail-fast path is evaluated before the call so
+    OPEN providers skip the rate limiter entirely.
+    """
+    provider_name = provider.name
+    breaker = _get_breaker(provider_name)
+
+    limit = _get_per_provider_rate_limit(provider_name)
+    _rate_limiter.acquire(provider_name, limit)
+
+    call_started = time.monotonic()
+    logger.debug(
+        "provider_call_start provider=%s method=%s correlation_id=%s",
+        provider_name, method.__name__, _correlation_id_placeholder(),
+    )
+    try:
+        result = _provider_call_with_breaker(
+            provider_name, breaker, method, *args, **kwargs
+        )
+    except Exception as exc:
+        latency_ms = (time.monotonic() - call_started) * 1000.0
+        logger.debug(
+            "provider_call_fail provider=%s method=%s "
+            "latency_ms=%.2f correlation_id=%s error_type=%s",
+            provider_name, method.__name__, latency_ms,
+            _correlation_id_placeholder(), type(exc).__name__,
+        )
+        raise
+    latency_ms = (time.monotonic() - call_started) * 1000.0
+    logger.debug(
+        "provider_call_ok provider=%s method=%s "
+        "latency_ms=%.2f correlation_id=%s",
+        provider_name, method.__name__, latency_ms,
+        _correlation_id_placeholder(),
+    )
+    return result
+
+
 @_provider_retry()
 def _provider_call_with_breaker(
     provider_name: str,

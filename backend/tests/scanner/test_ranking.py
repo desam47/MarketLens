@@ -29,22 +29,33 @@ def _result(
 ) -> ScanResult:
     """Build a ScanResult with convenient kwargs.
 
-    Sets two real sub-scores (trend_strength, momentum) and then overwrites
-    the _total key so that calculate_total_score() returns the desired
-    score without double-counting.
+    ``score`` sets ``_total`` in the scores dict (used by non-directional
+    ranking categories that read it directly). For directional ranking
+    (strongest_bullish / strongest_bearish) the directional scores
+    ``momentum`` and ``macd`` are the primary signals — set those explicitly.
+
+    Note: rsi, macd, adx are added to BOTH ``indicator_values`` (so
+    category builders that read indicators work) and ``scores`` (so the
+    directional ranking has them). In production, ``ScanResult`` carries
+    them in both places too.
     """
     r = ScanResult(symbol, __import__("datetime").datetime.now())
-    r.add_score("trend_strength", trend_strength)
-    r.add_score("momentum", momentum)
+    if trend_strength != 0.0:
+        r.add_score("trend_strength", trend_strength)
+    if momentum != 0.0:
+        r.add_score("momentum", momentum)
     if rsi is not None:
         r.add_indicator("rsi", rsi)
+        r.add_score("rsi", rsi)
     if macd is not None:
         r.add_indicator("macd", macd)
+        r.add_score("macd", macd)
     if adx is not None:
         r.add_indicator("adx", adx)
+        r.add_score("adx", adx)
     if trend_signals:
         r.trend_signals.update(trend_signals)
-    # Overwrite _total so calculate_total_score uses it as the single score.
+    # Non-directional categories use _total directly.
     r.scores["_total"] = score
     return r
 
@@ -85,9 +96,13 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_strongest_bullish_top_n(self):
         results = [
-            _result("LOW", score=30.0),
-            _result("MID", score=55.0),
-            _result("HIGH", score=90.0),
+            # Set directional scores (momentum, macd) so the directional
+            # ranking has a signal to rank by. "score" is the non-directional
+            # _total — set it consistently with the directional sign so the
+            # two rankings stay aligned in this test.
+            _result("LOW", score=30.0, momentum=10.0, macd=0.5),
+            _result("MID", score=55.0, momentum=40.0, macd=2.0),
+            _result("HIGH", score=90.0, momentum=80.0, macd=5.0),
         ]
         out = self.engine.rank(results, top_n=2)
         bullish = out["strongest_bullish"]
@@ -99,14 +114,38 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_strongest_bearish_lowest(self):
         results = [
-            _result("BULL", score=90.0),
-            _result("NEUT", score=50.0),
-            _result("BEAR", score=10.0),
+            # Strongest_bearish is the directional ranking — set
+            # momentum/macd with negative signs for the bearish stock,
+            # positive signs for the bullish one. The "score" field is
+            # the non-directional _total used by other categories.
+            _result("BULL", score=90.0, momentum=60.0, macd=2.0),
+            _result("NEUT", score=50.0, momentum=0.0, macd=0.0),
+            _result("BEAR", score=10.0, momentum=-60.0, macd=-2.0),
         ]
         out = self.engine.rank(results, top_n=2)
         bearish = out["strongest_bearish"]
         self.assertEqual(bearish.entries[0].symbol, "BEAR")
         self.assertEqual(bearish.entries[1].symbol, "NEUT")
+
+    def test_directional_ranking_ignores_magnitude_only_scores(self):
+        # The directional ranking should not let magnitude-only scores
+        # (trend_strength, adx, volatility, volume) drag a bearish stock
+        # into the bullish side. The BULL has a strong trend_strength
+        # but positive momentum; the BEAR also has a strong trend_strength
+        # but negative momentum. Trend strength must NOT wash out the
+        # directional signal.
+        results = [
+            _result("BULL", score=80.0, momentum=40.0, macd=1.0,
+                    trend_strength=80.0, adx=50.0),
+            _result("BEAR", score=80.0, momentum=-40.0, macd=-1.0,
+                    trend_strength=80.0, adx=50.0),
+        ]
+        out = self.engine.rank(results)
+        bullish = {e.symbol: e.score for e in out["strongest_bullish"].entries}
+        bearish = {e.symbol: e.score for e in out["strongest_bearish"].entries}
+        # BULL's directional score should be positive, BEAR's negative.
+        self.assertGreater(bullish["BULL"], 0.0)
+        self.assertLess(bearish["BEAR"], 0.0)
 
     def test_strongest_momentum(self):
         results = [

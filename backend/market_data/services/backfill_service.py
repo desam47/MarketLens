@@ -130,6 +130,8 @@ async def _fetch_tier1_1m_bars(
         alpaca_range = "1d"
     elif days <= 5:
         alpaca_range = "5d"
+    elif days <= 15:
+        alpaca_range = "15d"  # Phase 3.9: 15 trading days
     elif days <= 30:
         alpaca_range = "1mo"
     else:
@@ -147,13 +149,15 @@ async def _fetch_tier1_1m_bars(
             for b in bars:
                 merged[b.timestamp] = b
             primary_returned = len(bars)
-            logger.debug(f"tier1 1m: {provider.__class__.__name__} returned {len(bars)} bars for {symbol}")
+            logger.info(f"tier1 1m: {provider.__class__.__name__} returned {len(bars)} bars for {symbol} (range_={alpaca_range})")
     except Exception as e:
         logger.warning(f"tier1 1m: primary provider failed for {symbol}: {e}")
 
     # 2. Fallback chain — only runs if primary returned zero bars.
     # Providers are loaded from BACKFILL_1M_FALLBACK in .env
     # (default: webull, yahoo_finance). First to return wins.
+    # Phase 3.9: use the same window as the primary so Webull's paginator
+    # can produce up to ~5,850 bars across 4 pages.
     if primary_returned == 0:
         from backend.market_data.services.manager import get_1m_fallback_providers
         for fb_name in get_1m_fallback_providers():
@@ -162,7 +166,7 @@ async def _fetch_tier1_1m_bars(
                 if prov is None:
                     continue
                 bars = prov.get_historical_bars(
-                    symbol=symbol, timeframe=tf, range_="5d"
+                    symbol=symbol, timeframe=tf, range_=alpaca_range
                 )
                 for b in bars:
                     merged[b.timestamp] = b
@@ -172,7 +176,7 @@ async def _fetch_tier1_1m_bars(
                     )
                     break  # stop after first successful fallback
             except Exception as e:
-                logger.debug(f"tier1 1m: {fb_name} fallback failed for {symbol}: {e}")
+                logger.info(f"tier1 1m: {fb_name} fallback failed for {symbol}: {e}")
                 continue
 
     # 3. Gap-fill: webull / yfinance for the latest ~15 min.
@@ -212,61 +216,144 @@ async def _fetch_tier1_1m_bars(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2 — 1h bars: Alpaca primary + yfinance/webull fallback
+# Tier 2 — 1h bars: primary + gap-fill merge (env-driven chain)
 # ---------------------------------------------------------------------------
 
 async def _fetch_tier2_1h_bars(symbol: str, days: int) -> list[Bar]:
-    """Fetch 1h bars — Alpaca primary, yfinance/webull fallback.
+    """Fetch 1h bars — primary + gap-fill (env-driven).
 
-    Range is chosen based on ``days``:
-      - days > 180  → "1y"
-      - otherwise   → "6mo"
+    Webull's M60 endpoint returns 1h bars at clock-hour :00 offsets (9:00,
+    10:00…) but caps at 1,200 bars and omits the 16:00 close bar. Alpaca
+    and yfinance fill those gaps without pulling 5 years of overlapping history.
+
+    Logic:
+      1. Fetch primary provider (BACKFILL_1H_PRIMARY) — Webull by default.
+         This is the authoritative source covering the most recent ~1,200 bars.
+      2. Build the set of timestamps returned by primary.
+      3. For each gap-fill provider (BACKFILL_1H_FALLBACK), fetch bars for
+         the same range but SKIP any bar whose (symbol, timeframe, timestamp)
+         key already exists in the primary set. Only genuinely new timestamps
+         from the fallback are included.
+      4. Result = primary bars + only-new fallback bars. No overlapping history
+         from fallbacks is pulled.
+
+    The fallback chain is fully driven by BACKFILL_1H_PRIMARY and
+    BACKFILL_1H_FALLBACK in .env — no hardcoded provider names here.
     """
     from backend.market_data.services.manager import get_1h_1d_fallback_providers
 
-    if days > 180:
-        range_str = "1y"
-    else:
-        range_str = "6mo"
+    range_str = "5y"
+    from backend.market_data.services.ingestion_service import _normalize_1h_bar
 
-    # Try primary provider from .env (BACKFILL_1H_PRIMARY=alpaca).
+    def _class_name(p) -> str:
+        return p.__class__.__name__
+
+    def _short_name(name: str) -> str:
+        return name.removesuffix("Provider").lower()
+
+    primary_bars: list[Bar] = []
+    primary_provider_name: str | None = None
+
+    # Step 1: Fetch primary provider.
     try:
         from backend.market_data.services.manager import get_backfill_primary_provider
         provider = get_backfill_primary_provider("1h")
         if provider is not None:
+            primary_provider_name = _class_name(provider)
             bars = provider.get_historical_bars(
                 symbol=symbol, timeframe="1h", range_=range_str
             )
-            # Phase 3.8.6: drop bars that don't align to full-hour boundaries.
-            # Alpaca/Webull can return 1h bars at 30-minute offsets (e.g. 10:30
-            # instead of 10:00). Only keep bars where minute == 0.
-            bars = [b for b in bars if b.timestamp.minute == 0]
-            bars.sort(key=_utc_key)
-            logger.debug(f"tier2 1h: {provider.__class__.__name__} returned {len(bars)} bars for {symbol}")
-            return bars
+            normalized = [
+                n for n in (_normalize_1h_bar(b, primary_provider_name) for b in bars)
+                if n is not None
+            ]
+            primary_bars.extend(normalized)
+            logger.debug(
+                f"tier2 1h: {primary_provider_name} (primary, {range_str}) "
+                f"returned {len(normalized)} bars for {symbol}"
+            )
     except Exception as e:
         logger.warning(f"tier2 1h: primary provider failed for {symbol}: {e}")
 
-    # Try fallback providers (BACKFILL_1H_FALLBACK in .env).
+    # Build the set of primary timestamps so we can skip overlapping fallbacks.
+    primary_keys: set[tuple] = {
+        (b.symbol, b.timeframe, b.timestamp) for b in primary_bars
+    }
+
+    # Step 2: For each gap-fill provider, only include bars NOT in primary.
+    # NOTE: use the SAME range_str as the primary so gap-fill providers don't
+    # return 5 years of overlapping history (e.g. Alpaca "5y" would add bars
+    # from 2021 that the primary doesn't cover). The gap-fill providers should
+    # only add bars within the primary's date range — extra timestamps outside
+    # that range are excluded since the user only wants the primary's history
+    # plus the missing bars (e.g. 16:00 close) within it.
+    if not primary_bars:
+        logger.debug("tier2 1h: no primary bars — skipping gap-fill")
+        return []
+
+    primary_min = min(b.timestamp for b in primary_bars)
+    primary_max = max(b.timestamp for b in primary_bars)
+
+    # Allow gap-fill providers to contribute bars up to 1 hour PAST primary_max
+    # so the 16:00 ET close bar (which Webull omits) is not filtered out.
+    # Webull's last bar of the session opens at 15:00 ET, making primary_max
+    # 15:00 ET; the 16:00 ET close bar sits 1 hour later and is valid.
+    primary_max_extended = primary_max + timedelta(hours=1)
+
+    # Per-provider range cap: yahoo_finance 1h endpoint only supports ≤730d.
+    _1H_RANGE_CAPS: dict[str, str] = {
+        "yahoo_finance": "730d",
+    }
+
+    fallback_bars: list[Bar] = []
     for fb_name in get_1h_1d_fallback_providers("1h"):
         try:
             provider = _instantiate_provider(fb_name)
             if provider is None:
                 continue
-
+            fb_class_name = _class_name(provider)
+            fb_range = _1H_RANGE_CAPS.get(fb_name, range_str)
             bars = provider.get_historical_bars(
-                symbol=symbol, timeframe="1h", range_=range_str
+                symbol=symbol, timeframe="1h", range_=fb_range
             )
-            # Phase 3.8.6: keep only full-hour bars.
-            bars = [b for b in bars if b.timestamp.minute == 0]
-            bars.sort(key=_utc_key)
-            logger.debug(f"tier2 1h: {fb_name} returned {len(bars)} bars for {symbol}")
-            return bars
+            # Normalize to :00, then keep only bars whose keys are NOT in
+            # primary AND whose timestamp falls within the primary's date range
+            # (extended by 1h to capture the 16:00 ET close bar).
+            new_bars = []
+            for b in bars:
+                n = _normalize_1h_bar(b, fb_class_name)
+                if n is None:
+                    continue
+                key = (n.symbol, n.timeframe, n.timestamp)
+                if key in primary_keys:
+                    continue
+                # Only include bars within primary's date range (+ 1h buffer).
+                if n.timestamp < primary_min or n.timestamp > primary_max_extended:
+                    continue
+                new_bars.append(n)
+            fallback_bars.extend(new_bars)
+            if new_bars:
+                logger.info(
+                    f"tier2 1h: {fb_class_name} (gap-fill) added "
+                    f"{len(new_bars)} bars for {symbol} — "
+                    f"16:00 / pre-market fills within primary range "
+                    f"({primary_min.strftime('%Y-%m-%d')} → {primary_max.strftime('%Y-%m-%d')})"
+                )
+            elif len(bars) > 0:
+                logger.debug(
+                    f"tier2 1h: {fb_class_name} (gap-fill) returned {len(bars)} bars "
+                    f"but all were already covered by primary — skipping"
+                )
         except Exception as e:
-            logger.debug(f"tier2 1h: {fb_name} fallback failed for {symbol}: {e}")
+            logger.debug(f"tier2 1h: {fb_class_name} gap-fill failed for {symbol}: {e}")
             continue
 
-    return []
+    # Step 3: Combine and return.
+    all_bars = primary_bars + fallback_bars
+    if not all_bars:
+        return []
+    all_bars.sort(key=_utc_key)
+    return all_bars
 
 
 # ---------------------------------------------------------------------------
@@ -426,14 +513,34 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                 tier3_written = 0
 
                 # Tier 1: 1m bars (Alpaca primary + yfinance gap-fill).
-                tier1_days = min(30, retention_days)
+                # Phase 3.9: extend to 15 trading days. WebullProvider paginates
+                # internally (4 pages × 1,650 = 6,600 bars max) when range_="15d"
+                # is passed to get_historical_bars, so primary providers can now
+                # cover the full 15-day window in one call.
+                tier1_days = min(15, retention_days)
                 tier1_bars = await _fetch_tier1_1m_bars(
                     symbol, tier1_days, manager, db
                 )
                 if tier1_bars:
                     tier1_written = await _write_bars_in_chunks(db, tier1_bars)
 
-                # Tier 2: 1h bars — up to ~1 year.
+                # Auto-resample sub-hour timeframes from 1m (lazy import to avoid
+                # circular dependency).
+                # Always resample sub-hour TFs from 1m — upsert is idempotent so
+                # re-running when tier1_written=0 (re-backfill of existing bars) is safe
+                # and ensures 2m/3m/5m/15m/30m bars are populated.
+                from backend.market_data.services.ingestion_service import ingestion_service
+                try:
+                    for tf in ingestion_service._SUBHOUR_TFS:
+                        written_sub = await ingestion_service._resample_and_upsert(
+                            tf, source_tf="1m", _symbol=symbol
+                        )
+                        if written_sub > 0:
+                            logger.info(f"backfill {symbol}: auto-resampled {written_sub} {tf} bars from 1m")
+                except Exception as e:
+                    logger.warning(f"backfill {symbol}: sub-hour resample failed: {e}")
+
+                # Tier 2: 1h bars — range_="5y" always (hits 1,200-bar cap).
                 tier2_days = min(365, retention_days)
                 tier2_bars = await _fetch_tier2_1h_bars(symbol, tier2_days)
                 if tier2_bars:
@@ -448,6 +555,21 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                     )
                     if tier3_bars:
                         tier3_written = await _write_bars_in_chunks(db, tier3_bars)
+
+                # Auto-resample higher timeframes from what was just written.
+                if tier2_written > 0:
+                    try:
+                        written_4h = await ingestion_service._resample_1h_to_4h_and_upsert(_symbol=symbol)
+                        logger.info(f"backfill {symbol}: auto-resampled {written_4h} 4h bars from 1h")
+                    except Exception as e:
+                        logger.warning(f"backfill {symbol}: 4h resample failed: {e}")
+
+                if tier3_written > 0:
+                    try:
+                        written_1wk = await ingestion_service._resample_1d_to_1wk_and_upsert(_symbol=symbol)
+                        logger.info(f"backfill {symbol}: auto-resampled {written_1wk} 1wk bars from 1d")
+                    except Exception as e:
+                        logger.warning(f"backfill {symbol}: 1wk resample failed: {e}")
 
                 duration = time.monotonic() - start_time
                 logger.info(

@@ -7,6 +7,7 @@ Routes in ``backend/api/finnhub/router.py`` call into this service.
 
 **Free tier:** 30 req/sec rate limit (IP-based, no API key required).
 """
+import asyncio
 import logging
 import os
 from datetime import date, datetime, timezone
@@ -59,6 +60,13 @@ class FinnhubService:
         if not data:
             raise ValueError(f"Finnhub returned empty response for {endpoint}")
         return data
+
+    async def _get_async(self, endpoint: str, params: dict | None = None) -> dict:
+        """Async variant of ``_get`` — runs the blocking HTTP call in a
+        worker thread so FastAPI event-loop handlers stay responsive
+        (Phase 3.9.5).
+        """
+        return await asyncio.to_thread(self._get, endpoint, params)
 
     # ---------------------------------------------------------------- company
 

@@ -13,6 +13,7 @@ from typing import Any
 
 from ..config.settings import settings
 from ..trend.trend_engine import TrendEngine
+from ..repositories.bar_repository import get_bars as _get_db_bars
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +62,22 @@ class RelativeStrengthEngine:
     window.
     """
 
-    def __init__(self, symbol: str, lookback_days: int | None = None):
+    def __init__(self, symbol: str, lookback_days: int | None = None,
+                 trend_engines: dict[str, TrendEngine] | None = None):
         self.symbol = symbol.upper()
         self.lookback_days = lookback_days or settings.relative_strength.lookback_days
         self._cfg = settings.relative_strength
 
-        # One trend engine per price stream
-        self._engines: dict[str, TrendEngine] = {
-            sym: TrendEngine(sym)
-            for sym in self._all_symbols()
-        }
+        # Phase 3.9.2: accept injected shared TrendEngines (one per price
+        # stream — the stock plus its benchmarks). Default to building
+        # fresh engines so unit tests and one-off scripts still work.
+        if trend_engines is not None:
+            self._engines: dict[str, TrendEngine] = dict(trend_engines)
+        else:
+            self._engines = {
+                sym: TrendEngine(sym)
+                for sym in self._all_symbols()
+            }
 
         self._price_history: dict[str, list[tuple[datetime, float]]] = {
             sym: [] for sym in self._all_symbols()
@@ -121,6 +128,35 @@ class RelativeStrengthEngine:
         benchmarks = set(self._cfg.benchmark_list())
         return [s for s in self._signals if s.benchmark in benchmarks]
 
+    def _ensure_historical_data(self) -> None:
+        """
+        Seed _price_history from the database for any symbol that has no data yet.
+
+        Called lazily in compute() so that the watchlist page (which creates a
+        fresh engine per API request) gets real RS values instead of always
+        returning UNKNOWN because the live-ingestion pipeline hasn't fed prices yet.
+        """
+        for sym in self._all_symbols():
+            if self._price_history[sym]:
+                continue  # already seeded from live ingestion
+            try:
+                # Lazy import to avoid a circular dependency at module load time.
+                from backend.database import SessionLocal
+                db = SessionLocal()
+                try:
+                    bars = _get_db_bars(
+                        db,
+                        sym,
+                        "1d",
+                        limit=self.lookback_days * 2,
+                    )
+                    for bar in bars:
+                        self._price_history[sym].append((bar.timestamp, bar.close))
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(f"Failed to seed historical 1d bars for {sym}: {e}")
+
     def compute(self, timestamp: datetime | None = None) -> list[RelativeStrengthSignal]:
         """
         Compute relative-strength signals vs all configured benchmarks.
@@ -128,6 +164,7 @@ class RelativeStrengthEngine:
         Returns one RelativeStrengthSignal per configured benchmark plus
         the sector ETF signal if the engine was seeded with sector ETF data.
         """
+        self._ensure_historical_data()
         ts = timestamp or datetime.now(timezone.utc)
         signals = []
 

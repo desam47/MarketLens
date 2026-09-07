@@ -66,7 +66,7 @@ def _patched_set_file_logger(
 _wb_client.ApiClient.set_file_logger = _patched_set_file_logger
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.config.settings import settings as _settings
@@ -124,6 +124,7 @@ _BARS_PER_DAY: dict[str, int] = {
 _RANGE_DAYS: dict[str, int] = {
     "1d":   1,
     "5d":   5,
+    "15d":  15,     # Phase 3.9: 15 trading days ≈ 4 pages of M1
     "1mo":  22,     # ~22 trading days per month
     "3mo":  65,
     "6mo":  130,
@@ -140,6 +141,7 @@ _RANGE_DAYS: dict[str, int] = {
 _RANGE_TO_COUNT: dict[str, int] = {
     "1d":  1,
     "5d":  5,
+    "15d": 15,
     "1mo": 22,
     "3mo": 65,
     "6mo": 130,
@@ -376,7 +378,20 @@ class WebullProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        _start_ts: datetime | None = None,
+        _end_ts: datetime | None = None,
     ) -> list[Bar]:
+        """Fetch historical bars for ``symbol``.
+
+        Supports optional date-window via ``_start_ts`` / ``_end_ts`` (both naive
+        UTC datetimes). When ``_end_ts`` is set, the request uses
+        ``start_time``/``end_time`` params so Webull returns bars within that
+        window instead of the most-recent N bars.
+
+        For 1m bars, when the requested range exceeds Webull's 1,200-bar cap
+        (~3 trading days), multiple pages are fetched automatically (newest→oldest)
+        and merged. For example, ``range_="15d"`` → ~5,850 bars → 5 pages.
+        """
         sym = symbol.upper()
         try:
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
@@ -385,9 +400,17 @@ class WebullProvider(BaseMarketDataProvider):
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
                 count = days_per_range * _BARS_PER_DAY["1m"]
-                count = min(count, 1650)  # Webull free-tier cap for M1
+                count = min(count, 1200)  # Webull M1 API limit (official cap)
             else:
                 count = _RANGE_TO_COUNT.get(range_, 200)
+                count = min(count, 1200)  # Webull D/H API limit
+
+            # For 1m with date-window or multi-page range, use pagination.
+            # 3 trading days × 390 bars/day = 1,170 < 1,200 cap → 4 days triggers paginator.
+            if timeframe == "1m" and (_end_ts is not None or days_per_range > 3):
+                return self._fetch_1m_paginated(
+                    sym, timespan, count, range_, _start_ts, _end_ts
+                )
 
             resp = self._data_client.market_data.get_history_bar(
                 sym, "US_STOCK", timespan, count=str(count)
@@ -399,48 +422,264 @@ class WebullProvider(BaseMarketDataProvider):
                 self._reset_error_state()
                 return []
 
-            bars: list[Bar] = []
-            for row in data:
-                bars.append(Bar(
-                    symbol=sym,
-                    timestamp=_epoch_ms_to_ny(row.get("time")),
-                    open=float(row.get("open") or 0),
-                    high=float(row.get("high") or 0),
-                    low=float(row.get("low") or 0),
-                    close=float(row.get("close") or 0),
-                    volume=int(row.get("volume") or 0) if row.get("volume") else 0,
-                    timeframe=timeframe,
-                    provider=self.name,
-                    data_status=DataStatus.HISTORICAL,
-                ))
-            # Webull returns bars newest-first; sort chronologically (oldest→newest)
-            # so callers (bar_repository, chart display) get predictable ordering.
-            bars.sort(key=lambda b: b.timestamp)
-            self._reset_error_state()
-
-            # Webull's free tier silently downgrades M1 → M5. Detect that
-            # from the actual inter-bar gaps and re-stamp each bar's
-            # ``timeframe`` field so storage + signal recording reflect
-            # the true resolution. Without this, callers get 1m signals
-            # aligned to 5-minute boundaries.
-            # NOTE: the API returns bars newest-first; we compute gaps from
-            # the absolute differences so the order does not matter.
-            if bars and len(bars) >= 2:
-                actual_tf = _infer_actual_timeframe(
-                    timespan,
-                    sorted(b.timestamp for b in bars),  # chronological
-                )
-                if actual_tf != timeframe:
-                    logger.debug(
-                        f"Webull downgraded {sym} {timeframe} → {actual_tf} "
-                        f"for {len(bars)} bars (free-tier behavior)"
-                    )
-                    for bar in bars:
-                        bar.timeframe = actual_tf
+            bars = self._parse_bars(data, sym, timeframe)
 
             return bars
         except Exception as e:
             self._handle_error(e, f"get_historical_bars({sym})")
+            raise
+
+    def _fetch_1m_paginated(
+        self,
+        sym: str,
+        timespan: str,
+        count: int,
+        range_: str,
+        _start_ts: datetime | None,
+        _end_ts: datetime | None,
+    ) -> list[Bar]:
+        """Fetch 1m bars using multiple pages when the window exceeds 1,200 bars.
+
+        Webull's M1 endpoint returns at most 1,200 bars per call (per the
+        official SDK docstring: "the maximum limit is 1200"). For windows
+        requiring more bars (e.g. 15 trading days ≈ 5,850 bars), we fetch
+        backward in time: each page returns the most-recent 1,200 bars up to
+        the current ``end_time``, then we move ``end_time`` to 1 ms before
+        the oldest bar's timestamp and repeat.
+
+        NOTE: Webull's M1 endpoint does NOT respond correctly to the
+        ``start_time`` query parameter (it returns 0 bars whenever start_time
+        is set). We therefore use ``end_time`` ONLY and rely on the oldest
+        bar in each response as the new end_time anchor for the next page.
+
+        Deduplication by timestamp handles the 1-bar overlap between pages.
+
+        Each page costs 1 API call and is subject to the 100 req/min rate
+        limit. 10 pages = ~16 trading days.
+        """
+        now = datetime.now(timezone.utc)
+        end_ts = _end_ts if _end_ts is not None else now
+        start_ts = _start_ts  # informational only; not passed to Webull
+
+        # How many total bars do we need?
+        days_per_range = _RANGE_DAYS.get(range_, 65)
+        target_bars = days_per_range * _BARS_PER_DAY["1m"]
+        # Each page returns up to 1,200 bars (≈ 3 trading days).
+        BARS_PER_PAGE_CAP = 1200
+        bars_per_page = min(target_bars, BARS_PER_PAGE_CAP)
+        num_pages = max(1, (target_bars + bars_per_page - 1) // bars_per_page)
+        # Cap at 10 pages to avoid runaway loops (~16 trading days max).
+        num_pages = min(num_pages, 10)
+
+        logger.info(
+            f"Webull 1m pagination: {sym} range_={range_} → {target_bars} target bars, "
+            f"{num_pages} pages × {bars_per_page}"
+        )
+
+        all_raw: list[dict] = []
+
+        for page_idx in range(num_pages):
+            if end_ts is None or (start_ts is not None and end_ts <= start_ts):
+                break
+
+            page_end_ms = int(end_ts.timestamp() * 1000)
+
+            # NOTE: do NOT set start_time — Webull's M1 endpoint returns 0 bars
+            # whenever start_time is present in the query string.
+            resp = self._data_client.market_data.get_history_bar(
+                sym, "US_STOCK", timespan,
+                count=str(bars_per_page),
+                end_time=str(page_end_ms),
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    f"Webull 1m pagination: page {page_idx+1}/{num_pages} failed for {sym}: "
+                    f"HTTP {resp.status_code}"
+                )
+                break
+
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                logger.warning(
+                    f"Webull 1m pagination: page {page_idx+1}/{num_pages} returned no data for {sym} "
+                    f"— stopping"
+                )
+                break
+
+            logger.info(
+                f"Webull 1m pagination: page {page_idx+1}/{num_pages} for {sym} "
+                f"returned {len(data)} bars (oldest={data[-1].get('time')})"
+            )
+            all_raw.extend(data)
+
+            # Move the window: set end_ts to 1 ms before the oldest bar.
+            oldest = data[-1].get("time")
+            if oldest:
+                oldest_ts = _epoch_ms_to_ny(oldest)
+                end_ts = oldest_ts - timedelta(milliseconds=1)
+            else:
+                break
+
+            self._reset_error_state()
+
+        if not all_raw:
+            return []
+
+        # Deduplicate by timestamp.
+        seen: set[int] = set()
+        unique_raw: list[dict] = []
+        for row in all_raw:
+            ts = row.get("time")
+            if ts and ts not in seen:
+                seen.add(ts)
+                unique_raw.append(row)
+
+        bars = self._parse_bars(unique_raw, sym, "1m")
+
+        # Detect free-tier M1→M5 downgrade from the merged bar set.
+        if bars and len(bars) >= 2:
+            actual_tf = _infer_actual_timeframe(
+                timespan,
+                sorted(b.timestamp for b in bars),
+            )
+            if actual_tf != "1m":
+                logger.debug(
+                    f"Webull downgraded {sym} 1m → {actual_tf} "
+                    f"for {len(bars)} bars (free-tier behavior)"
+                )
+                for bar in bars:
+                    bar.timeframe = actual_tf
+
+        return bars
+
+    def _parse_bars(self, data: list[dict], sym: str, timeframe: str) -> list[Bar]:
+        """Parse Webull JSON rows into Bar objects, newest-first → chronological."""
+        bars: list[Bar] = []
+        for row in data:
+            bars.append(Bar(
+                symbol=sym,
+                timestamp=_epoch_ms_to_ny(row.get("time")),
+                open=float(row.get("open") or 0),
+                high=float(row.get("high") or 0),
+                low=float(row.get("low") or 0),
+                close=float(row.get("close") or 0),
+                volume=int(row.get("volume") or 0) if row.get("volume") else 0,
+                timeframe=timeframe,
+                provider=self.name,
+                data_status=DataStatus.HISTORICAL,
+            ))
+        # Webull returns bars newest-first; sort chronologically (oldest→newest)
+        # so callers (bar_repository, chart display) get predictable ordering.
+        bars.sort(key=lambda b: b.timestamp)
+        self._reset_error_state()
+
+        # Webull's free tier silently downgrades M1 → M5. Detect that
+        # from the actual inter-bar gaps and re-stamp each bar's
+        # ``timeframe`` field so storage + signal recording reflect
+        # the true resolution.
+        timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
+        if bars and len(bars) >= 2:
+            actual_tf = _infer_actual_timeframe(
+                timespan,
+                sorted(b.timestamp for b in bars),  # chronological
+            )
+            if actual_tf != timeframe:
+                logger.debug(
+                    f"Webull downgraded {sym} {timeframe} → {actual_tf} "
+                    f"for {len(bars)} bars (free-tier behavior)"
+                )
+                for bar in bars:
+                    bar.timeframe = actual_tf
+
+        return bars
+
+    def get_historical_bars_batch(
+        self,
+        symbols: list[str],
+        timeframe: str = "1d",
+        range_: str = "3mo",
+    ) -> dict[str, list["Bar"]]:
+        """Fetch historical bars for multiple symbols in a single API call.
+
+        Uses POST /market-data/stock/batch-bars which shares the same 60/min
+        rate limit as the single-symbol GET — but batches up to 100 symbols
+        per call, making it vastly more efficient for watchlist ingestion.
+        Returns a dict mapping symbol → list of bars (oldest→newest).
+        """
+        if not symbols:
+            return {}
+
+        try:
+            timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
+            if timeframe == "1m":
+                days_per_range = _RANGE_DAYS.get(range_, 65)
+                count = min(days_per_range * _BARS_PER_DAY["1m"], 1650)
+            else:
+                count = min(_RANGE_TO_COUNT.get(range_, 200), 1200)
+
+            sym_list = [s.upper() for s in symbols]
+            resp = self._data_client.market_data.get_batch_history_bar(
+                sym_list, "US_STOCK", timespan, count=str(count)
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"Webull batch bars HTTP {resp.status_code}")
+
+            # Response shape (verified 2026-09-07):
+            #   {"result": [{"symbol": "AAPL", "result": [{time,open,...}, ...]},
+            #               {"symbol": "NVDA", "result": [{time,open,...}, ...]}]}
+            # The SDK returns a list under the "result" key with per-symbol
+            # entries. We index by symbol for stable ordering.
+            data = resp.json()
+            rows_by_symbol: dict[str, list[dict]] = {}
+            if isinstance(data, dict) and isinstance(data.get("result"), list):
+                for entry in data["result"]:
+                    if not isinstance(entry, dict):
+                        continue
+                    sym = str(entry.get("symbol") or "").upper()
+                    if not sym:
+                        continue
+                    rows_by_symbol[sym] = entry.get("result") or []
+            elif isinstance(data, dict):
+                # Older / alternative shape: {"AAPL": [...], "NVDA": [...]}
+                rows_by_symbol = {k: v or [] for k, v in data.items() if isinstance(v, list)}
+            else:
+                self._reset_error_state()
+                return {}
+
+            result: dict[str, list["Bar"]] = {}
+            for sym in sym_list:
+                rows = rows_by_symbol.get(sym, [])
+                bars: list["Bar"] = []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    bars.append(Bar(
+                        symbol=sym,
+                        timestamp=_epoch_ms_to_ny(row.get("time")),
+                        open=float(row.get("open") or 0),
+                        high=float(row.get("high") or 0),
+                        low=float(row.get("low") or 0),
+                        close=float(row.get("close") or 0),
+                        volume=int(row.get("volume") or 0) if row.get("volume") else 0,
+                        timeframe=timeframe,
+                        provider=self.name,
+                        data_status=DataStatus.HISTORICAL,
+                    ))
+                bars.sort(key=lambda b: b.timestamp)
+                if bars and len(bars) >= 2:
+                    actual_tf = _infer_actual_timeframe(
+                        timespan,
+                        [b.timestamp for b in bars],
+                    )
+                    if actual_tf != timeframe:
+                        for bar in bars:
+                            bar.timeframe = actual_tf
+                result[sym] = bars
+
+            self._reset_error_state()
+            return result
+        except Exception as e:
+            self._handle_error(e, f"get_historical_bars_batch({symbols})")
             raise
 
     def get_latest_bar(self, symbol: str, timeframe: str = "1d") -> Bar:

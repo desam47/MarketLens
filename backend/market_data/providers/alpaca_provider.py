@@ -80,6 +80,7 @@ _TF_MAP: dict[str, TimeFrame] = {
 _RANGE_SECONDS: dict[str, int] = {
     "1d": 86400,
     "5d": 432000,
+    "15d": 1296000,  # Phase 3.9: 15 trading days
     "1mo": 2592000,
     "3mo": 7776000,
     "6mo": 15552000,

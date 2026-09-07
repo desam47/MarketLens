@@ -7,10 +7,11 @@ import time
 from datetime import datetime
 from typing import Any
 
+from ..api.trend.registry import get_engine as get_trend_engine
+from ..engines.timeframe import Timeframe
 from ..market_data.services.manager import market_data_manager
 from ..models.market_data import Quote
 from ..observability import record_scan
-from ..trend.trend_engine import TrendEngine
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +37,15 @@ class ScanResult:
         self.trend_signals[timeframe] = signal
 
     def add_score(self, name: str, score: float):
-        """Add a score (0-100)"""
-        self.scores[name] = max(0, min(100, score))  # Clamp to 0-100
+        """Add a signed score. Callers are responsible for passing meaningful signs."""
+        self.scores[name] = score
 
     def add_signal(self, signal: str):
         """Add a trading signal"""
         self.signals.append(signal)
 
     def calculate_total_score(self, weights: dict[str, float] | None = None) -> float:
-        """Calculate weighted total score"""
+        """Calculate weighted total score (unsigned magnitude — for display only)."""
         if not self.scores:
             return 0.0
 
@@ -52,7 +53,7 @@ class ScanResult:
             # Equal weighting if no weights provided
             weights = {name: 1.0 for name in self.scores.keys()}
 
-        total_weight = sum(weights.get(name, 0) for name in self.scores.keys())
+        total_weight = sum(abs(weights.get(name, 0)) for name in self.scores.keys())
         if total_weight == 0:
             return 0.0
 
@@ -61,7 +62,28 @@ class ScanResult:
             for name in self.scores.keys()
         )
 
+        # Normalise to a 0-100 scale by dividing by total weight and scaling.
+        # Signed average is divided by abs-sum so direction is preserved.
         return weighted_sum / total_weight
+
+    def calculate_signed_total_score(self, weights: dict[str, float] | None = None) -> float:
+        """Signed weighted average: positive = bullish, negative = bearish.
+
+        Used by the ranking engine so 'strongest_bullish' ranks genuinely
+        bullish stocks above neutral/negative ones, and 'strongest_bearish'
+        ranks genuinely bearish stocks below neutral/positive ones.
+        """
+        if not self.scores:
+            return 0.0
+        if weights is None:
+            weights = {name: 1.0 for name in self.scores.keys()}
+        total_weight = sum(abs(weights.get(name, 0)) for name in self.scores.keys())
+        if total_weight == 0:
+            return 0.0
+        return sum(
+            self.scores.get(name, 0) * weights.get(name, 0)
+            for name in self.scores.keys()
+        ) / total_weight
 
 class Scanner:
     """Market scanner that evaluates and ranks symbols"""
@@ -94,8 +116,11 @@ class Scanner:
                 quote = market_data_manager.get_quote(symbol)
                 result.quote = quote
 
-            # Get trend engine for this symbol
-            trend_engine = TrendEngine(symbol)
+            # Get the shared trend engine for this symbol (Phase 3.9.6)
+            # — was creating a fresh TrendEngine per scan, never seeded, so
+            # all signals were 'unknown'. The registry returns a warmed-up,
+            # live-fed engine.
+            trend_engine = get_trend_engine(symbol)
 
             # Update trend engine with recent data (we'd need historical data in practice)
             # For now, we'll use the quote to update
@@ -107,13 +132,13 @@ class Scanner:
                     quote.provider
                 )
 
-                # Get trend signals for multiple timeframes
+                # Get trend signals for multiple timeframes. Phase 3.9.7:
+                # hoist the import out of the loop so we don't pay the
+                # __import__ cost on every symbol × timeframe.
                 timeframes = ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE",
                              "ONE_HOUR", "FOUR_HOUR", "ONE_DAY"]
                 for tf_str in timeframes:
-                    # Get the Timeframe enum
-                    tf_module = __import__('backend.engines.timeframe', fromlist=['Timeframe'])
-                    tf = getattr(tf_module.Timeframe, tf_str)
+                    tf = getattr(Timeframe, tf_str)
                     trend_signal = trend_engine.get_current_trend(tf)
                     if trend_signal:
                         result.add_trend_signal(tf_str, {
@@ -289,9 +314,17 @@ class Scanner:
         as None by `_calculate_indicators`. We skip those scores here so
         the aggregate does not silently use a default of 0/50 and create
         a misleadingly high or neutral ranking.
+
+        Scores carry signs to preserve direction:
+          - Positive: bullish (rising momentum, oversold bounce, strong uptrend)
+          - Negative: bearish (falling momentum, overbought decline, strong downtrend)
+          - Zero / near-zero: neutral or indeterminate
+        The sum (via ``calculate_signed_total_score``) is the ranking signal.
         """
         try:
-            # Trend strength score (based on ADX and trend confidence)
+            # Trend strength score (based on ADX — magnitude only; direction
+            # comes from the trend_signals dict which the ranking engine reads
+            # separately via _total_trend_confidence / _total_bearish_confidence).
             adx = result.indicator_values.get("adx")
             if adx is not None:
                 # Normalize ADX: 0-25 = weak, 25-50 = moderate, 50-75 = strong, 75+ = very strong
@@ -303,26 +336,26 @@ class Scanner:
                     trend_score = 30 + (adx - 25) * 1.2   # 30-60
                 else:
                     trend_score = adx * 1.2               # 0-30
-                result.add_score("trend_strength", max(0, min(100, trend_score)))
-                result.add_score("adx", max(0, min(100, adx)))
+                result.add_score("trend_strength", trend_score)
+                result.add_score("adx", adx)
             # else: skip — score will be missing rather than zero
 
-            # Momentum score (based on MACD)
+            # Momentum score (based on MACD). Positive MACD = bullish momentum;
+            # negative MACD = bearish momentum. Scale: MACD ≈ [-100, 100] → score [-50, 50].
             macd = result.indicator_values.get("macd")
             if macd is not None:
-                momentum_score = ((macd + 100) / 200) * 100
+                momentum_score = (macd / 2.0)          # [-50, 50], signed
                 result.add_score("momentum", momentum_score)
-                result.add_score("macd", abs(macd))
+                result.add_score("macd", macd)         # raw, signed
 
-            # Volatility score based on the most recent bar's true range,
-            # normalized to 0–100.
+            # Volatility score: magnitude only (0-100), no direction signal.
             atr = result.indicator_values.get("atr", 0) or 0
             close_price = result.indicator_values.get("close", 1) or 1
             atr_pct = (atr / close_price) * 100 if close_price else 0
-            volatility_score = max(0, min(100, atr_pct * 20))
+            volatility_score = min(100, atr_pct * 20)
             result.add_score("volatility", volatility_score)
 
-            # Volume score (based on volume relative to average)
+            # Volume score (based on volume relative to average). Magnitude only.
             volume = result.indicator_values.get("volume", 0) or 0
             if volume > 0:
                 volume_score = min(100, (volume / 1000000) * 10)  # Rough normalization
@@ -330,11 +363,17 @@ class Scanner:
                 volume_score = 0
             result.add_score("volume", volume_score)
 
-            # RSI score: deviation from neutral 50, only when RSI was computed.
+            # RSI score: oversold (< 30) = positive (bullish bounce potential);
+            # overbought (> 70) = negative (bearish reversal risk); neutral zone = 0.
+            # Scale: |rsi - 50| * 2 maps 30 → 40 (oversold) and 70 → -40 (overbought).
             rsi = result.indicator_values.get("rsi")
             if rsi is not None:
-                rsi_deviation = abs(rsi - 50)
-                rsi_score = min(100, rsi_deviation * 2)
+                if rsi < 30:
+                    rsi_score = (30 - rsi) * 2    # 0..40, positive (bullish)
+                elif rsi > 70:
+                    rsi_score = (30 - rsi) * 2    # negative (bearish): e.g. 80 → -20
+                else:
+                    rsi_score = 0                  # neutral zone
                 result.add_score("rsi", rsi_score)
 
         except Exception as e:

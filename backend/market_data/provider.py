@@ -1,6 +1,8 @@
 """
 Market data provider interface and base classes
 """
+import logging
+import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime
 
@@ -11,6 +13,8 @@ from ..models.market_data import (
     ProviderStatus,
     Quote,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataProvider(ABC):
@@ -78,10 +82,13 @@ class BaseMarketDataProvider(MarketDataProvider):
         """Handle and record provider errors"""
         self._last_error = f"{context}: {error!s}" if context else str(error)
         self._is_healthy = False
-        # In a real implementation, you might want to log this
-        import traceback
-        print(f"ERROR in {self.name}.{context}: {error}")
-        print(traceback.format_exc())
+        logger.error(
+            "Provider %s error in %s: %s",
+            self.name,
+            context,
+            error,
+            exc_info=True,
+        )
         raise error
 
     def _reset_error_state(self):
