@@ -2,6 +2,8 @@
 
 **Market Intelligence and Quantitative Research Platform** — real-time market regime detection, multi-timeframe trend analysis, confluence scoring, strategy recommendation, scanner rankings, alerts, backtesting, and optional AI-powered analysis.
 
+> Current version: v3.2.0 · Python 3.12 · FastAPI · React 18 · SQLite
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -22,17 +24,19 @@
 
 MarketLens is a full-stack application that:
 
-1. **Ingests market data** from Yahoo Finance (with Finnhub as a fallback) for any equity symbol
-2. **Computes technical indicators** — RSI, MACD, ATR, ADX, volume metrics, Bollinger Bands
-3. **Detects market regime** — bull/bear/neutral/trend-confirmation using rule-based engines
-4. **Evaluates trends** across 8 timeframes (1m → weekly)
-5. **Generates signals** — bullish/bearish/breakout/breakdown/divergence signals
-6. **Ranks symbols** — composite score combining trend strength, momentum, volatility, and volume
-7. **Recommends strategies** — day trading, swing trading, breakout, mean reversion, etc.
-8. **Manages watchlists** — track any number of symbols, per-symbol notes, bulk import/export
-9. **Fires alerts** — price, % change, RSI threshold, and regime-change triggers
-10. **Backtests strategies** — replay scanner signals over historical bars to measure forward returns
-11. **Optional AI analysis** — plug in any Ollama-compatible LLM for natural-language market commentary
+1. **Ingests market data** from Webull (primary), Alpaca, Yahoo Finance, and Finnhub for any equity or ETF symbol
+2. **Backfills full history** automatically when a ticker is added — 1m (15d), 1h (full), 1d (3 years)
+3. **Computes technical indicators** — RSI, MACD, ATR, ADX, volume metrics, Bollinger Bands, EMA/SMA
+4. **Detects market regime** — bull/bear/neutral/trend-confirmation using rule-based engines
+5. **Evaluates trends** across 8 timeframes (1m → weekly) with multi-timeframe confluence scoring
+6. **Generates signals** — bullish/bearish/breakout/breakdown/divergence signals
+7. **Ranks symbols** — composite score combining trend strength, momentum, volatility, and volume
+8. **Recommends strategies** — day trading, swing trading, breakout, mean reversion, etc.
+9. **Manages watchlists** — track any number of symbols, per-symbol notes, bulk import/export
+10. **Fires alerts** — price, % change, RSI threshold, and regime-change triggers
+11. **Backtests strategies** — replay scanner signals over historical bars to measure forward returns
+12. **Scans markets** — real-time scanner with WebSocket updates, named rankings, top movers
+13. **Optional AI analysis** — plug in any Ollama-compatible LLM for natural-language market commentary
 
 ---
 
@@ -45,31 +49,34 @@ MarketLens is a full-stack application that:
 └────────────────────────────────┬────────────────────────────────────┘
                                  │  HTTP / WebSocket
 ┌────────────────────────────────▼────────────────────────────────────┐
-│                    FastAPI (localhost:5001)                         │
-│                                                                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │
-│  │ API Routers  │  │ Middleware   │  │ Background Services      │ │
-│  │              │  │ CORS         │  │ IngestionService (thread)│ │
-│  │ regime/      │  │ Rate limit   │  │ AlertsEngine            │ │
-│  │ trend/       │  │ Cache        │  │ TrendEngines (per-sym)  │ │
-│  │ scanner/     │  │ Correlation  │  │ ScannerEngine          │ │
-│  │ alerts/      │  │ Security hdr │  │ RegimeEngines          │ │
-│  │ watchlist/   │  │              │  │ BacktestEngine         │ │
-│  │ backtest/    │  │              │  │                        │ │
-│  │ ai/          │  │              │  │                        │ │
-│  │ nl_search/   │  └──────────────┘  └──────────────────────────┘ │
-│  │ signals/     │                                               │
-│  │ strategy/    │  ┌──────────────┐  ┌──────────────────────────┐ │
-│  │ multitimeframe│ │ Data Layer   │  │ External Integrations   │ │
-│  │ finnhub/      │  │              │  │                          │ │
-│  │ market_context│  │ SQLAlchemy   │  │ Yahoo Finance (yfinance) │ │
-│  │ + more...     │  │ Repository   │  │ Finnhub (REST)           │ │
-│  └──────────────┘  │ pattern      │  │ Ollama (LLM, optional)   │ │
-│                     └──────────────┘  │ Redis (cache + rate limit) │ │
-│                                        └──────────────────────────┘ │
-│  ┌─────────────────────────────────────────────────────────────────┐│
-│  │         SQLite (marketlens.db) · PostgreSQL via DATABASE_URL     ││
-│  └─────────────────────────────────────────────────────────────────┘│
+│                    FastAPI (localhost:5001)                          │
+│                                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐   │
+│  │ API Routers  │  │ Middleware   │  │ Background Services      │   │
+│  │              │  │ CORS         │  │ IngestionService (thread)│   │
+│  │ regime/      │  │ Rate limit   │  │  · 1m live loop (~60s)  │   │
+│  │ trend/       │  │ Cache        │  │  · 1h write loop (:02)  │   │
+│  │ scanner/     │  │ Correlation  │  │  · 1h gapfill loop      │   │
+│  │ alerts/      │  │ Security hdr │  │  · 1d write loop        │   │
+│  │ watchlist/   │  └──────────────┘  │ BackfillService (on add)│   │
+│  │ backtest/    │                    │ AlertsEngine            │   │
+│  │ ai/          │                    │ TrendEngines (per-sym)  │   │
+│  │ nl_search/   │                    │ ScannerEngine          │   │
+│  │ signals/     │                    │ RegimeEngines          │   │
+│  │ strategy/    │                    │ BacktestEngine         │   │
+│  │ multitimeframe│                   └──────────────────────────┘   │
+│  │ market_context│                                                   │
+│  │ + more...    │  ┌──────────────┐  ┌──────────────────────────┐   │
+│  └──────────────┘  │ Data Layer   │  │ Market Data Providers    │   │
+│                    │ SQLAlchemy   │  │ Webull  (primary)        │   │
+│                    │ Repository   │  │ Alpaca  (gap-fill, 16:00)│   │
+│                    │ pattern      │  │ Yahoo Finance (curl_cffi)│   │
+│                    └──────────────┘  │ Finnhub (fundamentals)   │   │
+│                                      │ Redis   (cache + pub/sub) │   │
+│                                      └──────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │              SQLite (marketlens.db) at project root              │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -678,45 +685,55 @@ All configuration is driven by environment variables via `pydantic-settings`. Th
 ### Key Environment Variables
 
 ```bash
-# ── Database ────────────────────────────────────────────────────────────────
-DATABASE_URL=sqlite:////absolute/path/to/marketlens.db   # Always use absolute path
-DATABASE_ECHO=false                                       # SQL query logging
-
 # ── Market Data ─────────────────────────────────────────────────────────────
-MARKET_DATA_PRIMARY_PROVIDER=yahoo_finance               # yahoo_finance | finnhub | webull | alpaca
-MARKET_DATA_FALLBACK_PROVIDERS=["finnhub"]               # Fallback chain
-MARKET_DATA_RATE_LIMIT_PER_MINUTE=60
-MARKET_DATA_CACHE_TTL_SECONDS=300
+MARKET_DATA_PRIMARY_PROVIDER=webull          # webull | alpaca | yahoo_finance | finnhub
+MARKET_DATA_FALLBACK_PROVIDERS=["alpaca","yahoo_finance","finnhub"]
+MARKET_DATA_CACHE_TTL_SECONDS=120
+MARKET_DATA_BAR_RETENTION_DAYS=1095          # ~3 trading years
+MARKET_DATA_BACKFILL_ON_ADD=true             # auto-backfill when ticker added
 
+# ── Backfill Provider Chains ─────────────────────────────────────────────────
+BACKFILL_1M_PRIMARY=webull
+BACKFILL_1M_GAPFILL=yahoo_finance
+BACKFILL_1M_FALLBACK=alpaca
+BACKFILL_1H_PRIMARY=webull
+BACKFILL_1H_FALLBACK=alpaca,yahoo_finance    # alpaca fills 16:00 ET close bar
+BACKFILL_1D_PRIMARY=webull
+BACKFILL_1D_FALLBACK=webull
+
+# ── Webull ───────────────────────────────────────────────────────────────────
+WEBULL_ENABLED=true
+WEBULL_APP_KEY=<your_key>
+WEBULL_APP_SECRET=<your_secret>
+
+# ── Alpaca ───────────────────────────────────────────────────────────────────
+ALPACA_ENABLED=true
+ALPACA_API_KEY=<your_key>
+ALPACA_SECRET_KEY=<your_secret>
+ALPACA_PAPER=true
+ALPACA_DATA_TIER=iex                         # iex (free) | sip (paid)
+
+# ── Finnhub ──────────────────────────────────────────────────────────────────
 FINNHUB_ENABLED=true
 FINNHUB_API_KEY=<your_key>
 
-# Alpaca — REST + real-time WebSocket streaming (v3.2)
-ALPACA_ENABLED=false
-ALPACA_API_KEY=<your_key>
-ALPACA_SECRET_KEY=<your_secret>
-ALPACA_PAPER=true                                      # true = paper, false = live
-ALPACA_DATA_TIER=iex                                   # iex (free) | sip (paid)
-ALPACA_RATE_LIMIT_PER_MINUTE=200
-ALPACA_STREAM_RATE_LIMIT_PER_MINUTE=1000
-
 # ── AI (optional) ────────────────────────────────────────────────────────────
-AI_ENABLED=false                                          # Set true to enable
+AI_ENABLED=false
 AI_PROVIDER=ollama
 AI_MODEL=llama3.2
 AI_BASE_URL=http://localhost:11434
 
-# ── Watchlists ───────────────────────────────────────────────────────────────
-WATCHLIST_MAX_SYMBOLS_PER_WATCHLIST=50
-WATCHLIST_MAX_WATCHLISTS=10
+# ── Redis ───────────────────────────────────────────────────────────────────
+REDIS_URL=redis://localhost:6379/0
+REDIS_ENABLED=true                           # false = in-process dict fallback
 
 # ── Rate Limiting ───────────────────────────────────────────────────────────
 RATE_LIMIT_WINDOW_SECONDS=60
-RATE_LIMIT_MAX_REQUESTS_PER_WINDOW=30
+RATE_LIMIT_MAX_REQUESTS_PER_WINDOW=100
 
-# ── Redis ───────────────────────────────────────────────────────────────────
-REDIS_URL=redis://localhost:6379/0
-REDIS_ENABLED=true                                       # false = in-process fallback
+# ── Watchlists ───────────────────────────────────────────────────────────────
+WATCHLIST_MAX_SYMBOLS_PER_WATCHLIST=50
+WATCHLIST_MAX_WATCHLISTS=10
 ```
 
 ### Database Path Safety
@@ -731,24 +748,40 @@ REDIS_ENABLED=true                                       # false = in-process fa
 
 ### IngestionService (`backend/market_data/services/ingestion_service.py`)
 
-Runs in a background thread. Polls live quotes every 30s and historical bars every 5min for all symbols in the first populated watchlist. Dispatches updates to in-process event buses consumed by RegimeEngine, TrendEngine, and ScannerEngine.
+Runs in a background thread. Manages four continuous loops for all symbols in active watchlists:
 
-Key methods:
-- `start()` — launch background thread
-- `stop()` — signal thread shutdown
-- `_fetch_live_quotes()` — poll quotes from active providers
-- `_fetch_historical_bars()` — fetch bars for configured timeframes
-- `_load_symbols_from_watchlist()` — read symbols from DB; returns `[]` if no watchlist has symbols
+| Loop | Fires | Fetches | Window |
+|---|---|---|---|
+| `_1m_loop` | ~every 60s | 1m bars from primary provider | latest only |
+| `_1h_write_loop` | hourly at :02 ET | 1h bars via BACKFILL_1H chain | 5d |
+| `_gapfill_1h_loop` | periodically | 1h bars (catches 16:00 close bar) | 5d |
+| `_1d_write_loop` | daily | 1d bars via BACKFILL_1D chain | 30d |
+
+After each 1m write → resamples **2m/3m/5m/15m/30m** in-process.
+After each 1h write → resamples **4h** in-process.
+After each 1d write → resamples **1wk** in-process.
+
+### BackfillService (`backend/market_data/services/backfill_service.py`)
+
+One-shot historical fetch triggered when a ticker is added to a watchlist (`MARKET_DATA_BACKFILL_ON_ADD=true`). Provider chains are configured via `BACKFILL_1M/1H/1D_PRIMARY` and `BACKFILL_1M/1H/1D_FALLBACK` env vars.
+
+| Timeframe | Default chain | Typical result |
+|---|---|---|
+| 1m | webull → yahoo_finance → alpaca | ~6,000 bars (15d) |
+| 1h | webull → alpaca → yahoo_finance | ~1,200 bars (webull cap) + gap-fill |
+| 1d | webull → webull | ~750 bars (3 years, retention cap) |
+
+Derived timeframes (2m/3m/5m/15m/30m/4h/1wk) are aggregated in-process after base bars are saved.
 
 ### ScannerEngine (`backend/scanner/scanner.py`)
 
 Computes indicators, generates signals, and scores symbols. The singleton `market_scanner` holds per-symbol `ScanResult` dicts.
 
-Key indicators computed: RSI(14), MACD(12,26,9), ATR(14), ADX(14), Bollinger Bands(20,2), volume SMA, price momentum, trend alignment score.
+Key indicators: RSI(14), MACD(12,26,9), ATR(14), ADX(14), Bollinger Bands(20,2), volume SMA, price momentum, trend alignment score.
 
 ### RegimeEngine (`backend/regime/market_regime_engine.py`)
 
-Rule-based engine that classifies market state as:
+Rule-based engine classifying market state as:
 - **bull** — price above 20 EMA + rising ADX
 - **bear** — price below 20 EMA + falling ADX
 - **neutral** — price near EMA + flat ADX
