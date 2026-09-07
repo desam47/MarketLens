@@ -1,15 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import api from './services/api';
 import { Dashboard } from './pages/Dashboard';
-import { WatchlistPage } from './pages/WatchlistPage';
-import { SystemHealth } from './pages/SystemHealth';
-import { AlertsPage } from './pages/AlertsPage';
-import { BacktestPage } from './pages/BacktestPage';
-import { SymbolPage } from './pages/SymbolPage';
-import { ScannerPage } from './pages/ScannerPage';
-import { HistoricalSignalsPage } from './pages/HistoricalSignalsPage';
 import { PageErrorBoundary } from './components/PageErrorBoundary';
 import './styles/App.css';
+
+// Phase 3.6.6: code-split all non-dashboard pages.
+// Dashboard stays in the main bundle — it's the landing page and must be
+// available immediately without a Suspense round-trip.
+const WatchlistPage = lazy(() => import('./pages/WatchlistPage').then(m => ({ default: m.WatchlistPage })));
+const SystemHealth = lazy(() => import('./pages/SystemHealth').then(m => ({ default: m.SystemHealth })));
+const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default: m.AlertsPage })));
+const BacktestPage = lazy(() => import('./pages/BacktestPage').then(m => ({ default: m.BacktestPage })));
+const SymbolPage = lazy(() => import('./pages/SymbolPage').then(m => ({ default: m.SymbolPage })));
+const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
+const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage').then(m => ({ default: m.HistoricalSignalsPage })));
+
+// Loading skeleton while the chunk downloads — keeps the layout stable.
+const PageLoader = () => (
+  <div style={{ padding: '2rem', color: '#888', fontFamily: 'monospace' }}>
+    Loading…
+  </div>
+);
 
 type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'scanner' | 'signals';
 
@@ -43,19 +54,19 @@ export default function App() {
       case 'dashboard':
         return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'watchlist':
-        return <PageErrorBoundary pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'scanner':
-        return <PageErrorBoundary pageName="Live Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Live Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
-        return <PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'alerts':
-        return <PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':
-        return <PageErrorBoundary pageName="Backtest"><BacktestPage /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Backtest"><BacktestPage /></PageErrorBoundary></Suspense>;
       case 'health':
-        return <PageErrorBoundary pageName="System Health"><SystemHealth /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
       case 'signals':
-        return <PageErrorBoundary pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }

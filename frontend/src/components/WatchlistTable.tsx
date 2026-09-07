@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { WatchlistScanResult, WatchlistSymbol, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
+import { parseET } from './chartMath';
 import {
   deriveDirection,
   estimateConfidence,
@@ -181,17 +182,22 @@ export function WatchlistTable({
         raw: r,
       }));
 
-      // Fetch RS for each symbol in parallel (batched, non-blocking).
-      const rsResults = await Promise.allSettled(
-        baseRows.map(row =>
-          api.getRelativeStrength(row.symbol).catch(() => null) as Promise<RelativeStrengthData | null>
-        ),
-      );
+      // Phase 3.9.12: single batched RS call instead of N concurrent calls.
+      // Cuts N HTTP round-trips + connection-pool pressure on the watchlist page.
+      let rsLookup: Record<string, RelativeStrengthData> = {};
+      if (baseRows.length > 0) {
+        try {
+          const batch = await api.getBatchRelativeStrength(baseRows.map(r => r.symbol));
+          rsLookup = (batch.results as Record<string, RelativeStrengthData>) || {};
+        } catch (e) {
+          // Soft-fail: leave rs=null for every row rather than blocking the scan.
+          console.warn('Batch RS failed, rendering without RS column', e);
+        }
+      }
 
-      const finalRows = baseRows.map((row, i) => {
-        const result = rsResults[i];
-        if (result?.status === 'fulfilled' && result.value) {
-          const data = result.value as RelativeStrengthData;
+      const finalRows = baseRows.map((row) => {
+        const data = rsLookup[row.symbol];
+        if (data) {
           // Pick the SPY benchmark for display.
           const spySignal = data.signals.find(s => s.benchmark === 'SPY') ?? data.signals[0] ?? null;
           return { ...row, rs: spySignal };
@@ -325,7 +331,7 @@ export function WatchlistTable({
         <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
         {scanTimestamp && (
           <span className="table-timestamp">
-            Scanned {new Date(scanTimestamp).toLocaleTimeString()}
+            Scanned {parseET(scanTimestamp).toLocaleTimeString()}
           </span>
         )}
         <button

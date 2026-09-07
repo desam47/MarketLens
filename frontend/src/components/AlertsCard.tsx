@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { Alert, AlertTrigger } from '../services/api';
+import { parseET } from './chartMath';
 
 interface AlertsCardProps {
   /** Optional symbol to prefill the form with. */
@@ -36,7 +37,7 @@ function conditionLabel(c: string, p: string): React.ReactNode {
 function formatTime(t: string | null): string {
   if (!t) return '—';
   try {
-    return new Date(t).toLocaleString();
+    return parseET(t).toLocaleString();
   } catch {
     return t;
   }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api, { NewsItem } from '../services/api';
+import { parseET } from './chartMath';
 
 interface NewsPanelProps {
   symbol: string;
@@ -12,7 +13,7 @@ const unusualColors: Record<string, string> = {
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
   try {
-    return new Date(ts).toLocaleDateString(undefined, {
+    return parseET(ts).toLocaleDateString(undefined, {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
   } catch {

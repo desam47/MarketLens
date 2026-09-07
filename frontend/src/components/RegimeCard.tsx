@@ -1,5 +1,6 @@
 import React from 'react';
 import { RegimeData, SectorData } from '../services/api';
+import { parseET } from './chartMath';
 
 interface RegimeCardProps {
   regime: RegimeData | null;
@@ -100,7 +101,7 @@ export function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
       )}
       {regime.timestamp && (
         <div className="timestamp">
-          Updated: {new Date(regime.timestamp).toLocaleTimeString()}
+          Updated: {parseET(regime.timestamp).toLocaleTimeString()}
         </div>
       )}
     </div>

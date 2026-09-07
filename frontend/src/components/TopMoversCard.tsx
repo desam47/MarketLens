@@ -6,19 +6,32 @@ interface TopMoversCardProps {
   onSelectSymbol?: (symbol: string) => void;
 }
 
+// Signal names emitted by backend.scanner._generate_signals (see
+// backend/scanner/scanner.py). The dashboard is read-only — the backend
+// already filtered by ranking category, so this is just a defensive
+// re-classification in case the API returns a wrong-direction symbol.
 const bullishSignals = new Set([
-  'daily_bullish', 'mtf_bullish', 'breakout', 'volume_expansion',
-  'strong_trend', 'trend_strengthens', 'full_alignment', 'bullish_divergence',
+  'MACD_BULLISH', 'RSI_OVERSOLD', 'MULTI_TIMEFRAME_BULLISH',
+  'TREND_BULLISH', 'VOLUME_EXPANSION', 'BREAKOUT',
+  'DAILY_BULLISH', 'MTF_BULLISH', 'STRONG_TREND', 'TREND_STRENGTHENS',
+  'FULL_ALIGNMENT', 'BULLISH_DIVERGENCE',
 ]);
 
 const bearishSignals = new Set([
-  'daily_bearish', 'mtf_bearish', 'breakdown', 'volume_expansion',
-  'weak_trend', 'trend_weakens', 'timeframe_conflict', 'bearish_divergence',
+  'MACD_BEARISH', 'RSI_OVERBOUGHT', 'MULTI_TIMEFRAME_BEARISH',
+  'TREND_BEARISH', 'BREAKDOWN', 'TREND_WEAKENS',
+  'DAILY_BEARISH', 'MTF_BEARISH', 'WEAK_TREND', 'TIMEFRAME_CONFLICT',
+  'BEARISH_DIVERGENCE',
 ]);
 
 function isBullish(r: TopMoverResult): boolean {
-  if (r.signals.length === 0) return r.total_score > 0;
-  // If any bearish signal, lean bearish unless bull signals dominate.
+  // The backend's directional ranking is authoritative. The total_score
+  // it returns is now a *signed* weighted average (positive = bullish,
+  // negative = bearish). A defensive check: if the scanner emitted any
+  // bearish signal and the score is not clearly positive, treat as
+  // bearish; if it emitted any bullish signal and the score is not
+  // clearly negative, treat as bullish. If signals are empty or
+  // unrecognised, fall back to the signed total_score.
   const bullCount = r.signals.filter(s => bullishSignals.has(s)).length;
   const bearCount = r.signals.filter(s => bearishSignals.has(s)).length;
   if (bullCount > bearCount) return true;

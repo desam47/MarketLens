@@ -1,5 +1,6 @@
 import React from 'react';
 import { StrategyData } from '../services/api';
+import { parseET } from './chartMath';
 
 interface StrategyCardProps {
   strategy: StrategyData | null;
@@ -87,7 +88,7 @@ export function StrategyCard({ strategy, error }: StrategyCardProps) {
       )}
       {strategy.timestamp && (
         <div className="timestamp">
-          Updated: {new Date(strategy.timestamp).toLocaleTimeString()}
+          Updated: {parseET(strategy.timestamp).toLocaleTimeString()}
         </div>
       )}
     </div>

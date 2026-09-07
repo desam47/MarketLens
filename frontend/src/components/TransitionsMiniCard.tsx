@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { Transition, TransitionsResult } from '../services/api';
+import { parseET } from './chartMath';
 
 interface TransitionsMiniCardProps {
   symbol: string;
@@ -113,7 +114,7 @@ export function TransitionsMiniCard({
                   {formatScore(t.previous_score)} → {formatScore(t.current_score)}
                 </span>
                 <span className="transition-mini-time">
-                  {t.timestamp ? new Date(t.timestamp).toLocaleDateString() : '—'}
+                  {t.timestamp ? parseET(t.timestamp).toLocaleDateString() : '—'}
                 </span>
               </div>
             );
@@ -123,7 +124,7 @@ export function TransitionsMiniCard({
 
       {latestTimestamp && !loading && recent.length > 0 && (
         <div className="transitions-mini-footer">
-          Updated: {new Date(latestTimestamp).toLocaleString()}
+          Updated: {parseET(latestTimestamp).toLocaleString()}
         </div>
       )}
     </div>

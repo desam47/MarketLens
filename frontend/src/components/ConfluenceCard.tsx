@@ -1,5 +1,6 @@
 import React from 'react';
 import { ConfluenceData } from '../services/api';
+import { parseET } from './chartMath';
 
 interface ConfluenceCardProps {
   confluence: ConfluenceData | null;
@@ -157,7 +158,7 @@ export function ConfluenceCard({ confluence, error, selectedPreset, onPresetChan
       )}
       {confluence.timestamp && (
         <div className="timestamp">
-          Updated: {new Date(confluence.timestamp).toLocaleTimeString()}
+          Updated: {parseET(confluence.timestamp).toLocaleTimeString()}
         </div>
       )}
     </div>

@@ -35,7 +35,7 @@ const TF_LABELS = TIMEFRAME_LABELS;
 export function MultiTimeframeChartGrid({
   symbol,
   timeframes = DEFAULT_TIMEFRAMES,
-  initialChartType = 'candlestick',
+  initialChartType = 'heikin-ashi',
   panelHeight = 320,
   liveUpdate = true,
 }: MultiTimeframeChartGridProps) {
@@ -102,7 +102,7 @@ export function MultiTimeframeChartGrid({
       p.timeframe === tf ? { ...p, loading: true, error: null } : p,
     ));
     try {
-      const res: BarsResult = await api.getAnalysisBars(symbol, tf, 60);
+      const res: BarsResult = await api.getAnalysisBars(symbol, tf, 10000);
       const bars = res?.bars ?? [];
       setPanels(prev => prev.map(p =>
         p.timeframe === tf
@@ -175,6 +175,7 @@ export function MultiTimeframeChartGrid({
                 symbol={symbol}
                 height={panelHeight}
                 initialChartType={chartType}
+                initialActiveOverlays={['supertrend']}
                 showVolume={false}
               />
             )}

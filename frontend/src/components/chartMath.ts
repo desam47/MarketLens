@@ -70,9 +70,25 @@ export const OVERLAYS: OverlayDef[] = [
 
 // --- Time / dedup helpers -------------------------------------------------
 
-/** Convert a bar's ISO timestamp to Unix seconds. */
+/**
+ * Normalise a backend ET-offset ISO timestamp to a UTC Date.
+ *
+ * Backend returns strings like `2026-09-04T15:59:00-04:00`.  Naive
+ * `new Date(str)` parses in the browser's LOCAL timezone, so a browser
+ * in IST would see 15:59 become 10:29 UTC.  This helper strips the
+ * embedded ±HH:MM offset and appends 'Z' so the string is always parsed
+ * as UTC, giving the correct wall-clock time regardless of browser locale.
+ */
+export function parseET(ts: string | null | undefined): Date {
+  if (!ts) return new Date(NaN);
+  // Parse the ISO string with its timezone offset intact — JavaScript Date
+  // handles offsets like -04:00 correctly, so we get the right wall-clock time.
+  return new Date(ts);
+}
+
+/** Convert a bar's ISO timestamp to Unix seconds for lightweight-charts. */
 export function toTime(b: Bar): number {
-  return Math.floor(new Date(b.timestamp).getTime() / 1000);
+  return Math.floor(parseET(b.timestamp).getTime() / 1000);
 }
 
 /**
@@ -83,7 +99,7 @@ export function sortedBars(bars: Bar[]): Bar[] {
   let cached = sortedBarsCache.get(bars);
   if (!cached) {
     cached = [...bars].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      (a, b) => parseET(a.timestamp).getTime() - parseET(b.timestamp).getTime(),
     );
     sortedBarsCache.set(bars, cached);
   }

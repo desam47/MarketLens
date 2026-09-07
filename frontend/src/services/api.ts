@@ -421,6 +421,38 @@ export interface ScanResult {
   trend_signals: Record<string, any>;
 }
 
+// ---- Phase 10: composable filters + named rankings ----
+
+/** A single filter expression — type identifies the filter, params configure it. */
+export interface FilterSpec {
+  type: string;
+  params: Record<string, any>;
+}
+
+/** Metadata for a single named ranking category (label + description). */
+export interface RankingCategoryMeta {
+  name: string;
+  label: string;
+  description: string;
+}
+
+/** A single symbol's rank entry inside a named ranking. */
+export interface RankingEntry {
+  symbol: string;
+  score: number;
+  rank: number;
+  metrics: Record<string, any>;
+}
+
+/** A full named ranking — name + entries + count of eligible symbols. */
+export interface NamedRanking {
+  name: string;
+  label: string;
+  description: string;
+  total_eligible: number;
+  entries: RankingEntry[];
+}
+
 // Phase 17: NL search types
 export interface NLSearchResultItem {
   symbol: string;
@@ -1116,6 +1148,13 @@ class ApiService {
     return this.fetch<RelativeStrengthData>(`/regime/${symbol}/relative-strength`);
   }
 
+  // Phase 3.9.12: batch relative-strength (N symbols in one HTTP round-trip)
+  async getBatchRelativeStrength(
+    symbols: string[],
+  ): Promise<{ results: Record<string, RelativeStrengthData>; count: number }> {
+    return this.fetch(`/regime/batch/relative-strength?symbols=${symbols.map(s => s.toUpperCase()).join(',')}`);
+  }
+
   // Phase 8: sector alignment signal
   async getSector(symbol: string): Promise<SectorData> {
     return this.fetch<SectorData>(`/regime/${symbol}/sector`);
@@ -1468,6 +1507,43 @@ class ApiService {
     const params = new URLSearchParams({ direction, limit: String(limit) });
     if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
     return this.fetch<TopMoverResult[]>(`/scanner/top-movers?${params}`);
+  }
+
+  // Phase 10: composable filters + named rankings
+  async getFilterTypes(): Promise<string[]> {
+    return this.fetch<string[]>('/scanner/filter-types');
+  }
+
+  async applyFilter(
+    body: { filters: FilterSpec[]; match: 'AND' | 'OR' },
+    symbols?: string[],
+  ): Promise<ScanResult[]> {
+    const qs = symbols && symbols.length
+      ? `?symbols=${symbols.map(s => s.toUpperCase()).join(',')}`
+      : '';
+    return this.fetch<ScanResult[]>(`/scanner/filter${qs}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getRankings(
+    body: { filters: FilterSpec[]; match: 'AND' | 'OR' },
+    topN = 10,
+    symbols?: string[],
+  ): Promise<NamedRanking[]> {
+    const params = new URLSearchParams({ top_n: String(topN) });
+    if (symbols && symbols.length) {
+      params.set('symbols', symbols.map(s => s.toUpperCase()).join(','));
+    }
+    return this.fetch<NamedRanking[]>(`/scanner/rankings?${params}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  async getRankingCategories(): Promise<RankingCategoryMeta[]> {
+    return this.fetch<RankingCategoryMeta[]>('/scanner/rankings/categories');
   }
 
   // Phase 12: scan an entire watchlist (for the watchlist table)

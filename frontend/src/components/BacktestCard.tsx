@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { BacktestRun, BacktestTrade } from '../services/api';
+import { parseET } from './chartMath';
 
 interface BacktestCardProps {
   /** Optional symbol to prefill the form with. */
@@ -287,7 +288,7 @@ export function BacktestCard({ defaultSymbol = '' }: BacktestCardProps) {
                 {fmtDate(r.start_date)} → {fmtDate(r.end_date)}{' '}
                 ({r.total_signals == null ? '…' : `${r.total_signals} sigs`})
               </span>
-              <span>{r.created_at ? new Date(r.created_at).toLocaleString() : ''}</span>
+              <span>{r.created_at ? parseET(r.created_at).toLocaleString() : ''}</span>
             </li>
           ))}
         </ul>

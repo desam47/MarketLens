@@ -6,6 +6,7 @@ import api, {
   SRLevel,
   Transition,
 } from '../services/api';
+import { parseET } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -59,15 +60,36 @@ const directionBadge: Record<string, string> = {
 };
 
 const srTypeLabel: Record<string, string> = {
-  swing_high: 'Swing High',
-  swing_low: 'Swing Low',
-  pivot_high: 'Pivot High',
-  pivot_low: 'Pivot Low',
+  today_high: "Today's High",
+  today_low: "Today's Low",
   prev_day_high: 'Prev Day High',
   prev_day_low: 'Prev Day Low',
+  this_week_high: "This Week's High",
+  this_week_low: "This Week's Low",
   prev_week_high: 'Prev Week High',
   prev_week_low: 'Prev Week Low',
+  all_time_high: 'All Time High',
+  all_time_low: 'All Time Low',
+  pivot_high: 'Pivot High',
+  pivot_low: 'Pivot Low',
+  swing_high: 'Swing High',
+  swing_low: 'Swing Low',
   consolidation_zone: 'Zone',
+};
+
+// Display order for the S/R panel — today, prev day, this week, prev week, all time.
+// Lower number = higher in the list. Levels not in this map are appended at the end.
+const srTypeOrder: Record<string, number> = {
+  today_high: 0,
+  prev_day_high: 1,
+  this_week_high: 2,
+  prev_week_high: 3,
+  all_time_high: 4,
+  today_low: 0,
+  prev_day_low: 1,
+  this_week_low: 2,
+  prev_week_low: 3,
+  all_time_low: 4,
 };
 
 function formatDelta(delta: number): string {
@@ -114,7 +136,7 @@ function TransitionsPanel({
   timeframe: string;
 }) {
   const scoreColor = latestScore > 0 ? '#10b981' : latestScore < 0 ? '#ef4444' : '#9ca3af';
-  const recent = transitions.slice(-20).reverse(); // newest first, limit 20
+  const recent = transitions.slice(0, 20); // already newest first, limit 20
 
   return (
     <div className="card analysis-card">
@@ -138,7 +160,7 @@ function TransitionsPanel({
         </span>
       </div>
       {latestTimestamp && (
-        <div className="timestamp">Updated: {new Date(latestTimestamp).toLocaleString()}</div>
+        <div className="timestamp">Updated: {parseET(latestTimestamp).toLocaleString()}</div>
       )}
       {recent.length === 0 ? (
         <p className="empty-state">No transitions detected</p>
@@ -160,7 +182,7 @@ function TransitionsPanel({
                   <span>{directionBadge[t.direction] || '—'} {t.direction}</span>
                   <span>Δ {formatDelta(t.delta)}</span>
                   <span>{t.magnitude.toFixed(1)} mag</span>
-                  {t.timestamp && <span>{new Date(t.timestamp).toLocaleDateString()}</span>}
+                  {t.timestamp && <span>{parseET(t.timestamp).toLocaleDateString()}</span>}
                 </div>
               </div>
             );
@@ -173,8 +195,26 @@ function TransitionsPanel({
 
 // --- S/R Levels panel ---
 function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: number | null }) {
-  const resistances = levels.filter(l => l.type.includes('high') || l.type === 'swing_high' || l.type === 'pivot_high' || l.type === 'consolidation_zone');
-  const supports = levels.filter(l => l.type.includes('low') || l.type === 'swing_low' || l.type === 'pivot_low');
+  // Only show levels on the *correct* side of current price: a "high"-type
+  // level is resistance only if it's above current price (if it's below,
+  // price has broken through it and it's no longer meaningful resistance).
+  // Similarly a "low"-type level is support only if it's below current
+  // price. This prevents showing a column of "Support" prices that are
+  // actually above the current price (e.g. after a gap-down).
+  // Consolidation zones are dropped from the per-side list — they are a
+  // separate concept (a cluster of swings) and not a directional S/R level.
+  const above = (p: number) => latestClose != null && p > latestClose;
+  const below = (p: number) => latestClose != null && p < latestClose;
+  const resistances = levels
+    .filter(l =>
+      !['consolidation_zone', 'pivot_high', 'pivot_low', 'swing_high', 'swing_low'].includes(l.type) && l.type.includes('high')
+    )
+    .sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
+  const supports = levels
+    .filter(l =>
+      !['consolidation_zone', 'pivot_high', 'pivot_low', 'swing_high', 'swing_low'].includes(l.type) && l.type.includes('low')
+    )
+    .sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
 
   return (
     <div className="card analysis-card">
@@ -205,21 +245,31 @@ function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: numb
                     </tr>
                   </thead>
                   <tbody>
-                    {items.slice(0, 6).map((l, i) => (
-                      <tr key={i}>
-                        <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
-                        <td className="sr-price">${strPrice(l.price)}</td>
-                        <td className="sr-strength">
-                          <div className="mini-bar">
-                            <div
-                              className="mini-fill"
-                              style={{ width: `${(l.strength * 100).toFixed(0)}%`, backgroundColor: color }}
-                            />
-                          </div>
-                        </td>
-                        <td className="sr-dist">{pct(l.distance_from_price)}</td>
-                      </tr>
-                    ))}
+                    {items.slice(0, 8).map((l, i) => {
+                      // Resistance distances are positive (above), support
+                      // distances are negative (below) by sign convention.
+                      const absDist = l.distance_from_price != null
+                        ? Math.abs(l.distance_from_price)
+                        : null;
+                      const dist = absDist == null
+                        ? null
+                        : label === 'Support' ? -absDist : absDist;
+                      return (
+                        <tr key={i}>
+                          <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
+                          <td className="sr-price">${strPrice(l.price)}</td>
+                          <td className="sr-strength">
+                            <div className="mini-bar">
+                              <div
+                                className="mini-fill"
+                                style={{ width: `${(l.strength * 100).toFixed(0)}%`, backgroundColor: color }}
+                              />
+                            </div>
+                          </td>
+                          <td className="sr-dist">{pct(dist)}</td>
+                        </tr>
+                      );
+                    })}
                     {items.length === 0 && (
                       <tr><td colSpan={4} className="empty-cell">—</td></tr>
                     )}
@@ -259,7 +309,7 @@ function DivergencesPanel({ divergences }: { divergences: Divergence[] }) {
                   <span>{directionBadge[d.direction] || '—'} {d.direction}</span>
                   <span>price: {str(d.pivot_b_price)}</span>
                   <span>ind: {str(d.pivot_b_indicator)}</span>
-                  {d.timestamp && <span>{new Date(d.timestamp).toLocaleDateString()}</span>}
+                  {d.timestamp && <span>{parseET(d.timestamp).toLocaleDateString()}</span>}
                 </div>
               </div>
             );
@@ -272,7 +322,7 @@ function DivergencesPanel({ divergences }: { divergences: Divergence[] }) {
 
 // --- Bars table ---
 function BarsTable({ bars }: { bars: Bar[] }) {
-  const shown = bars.slice(-30).reverse(); // newest first
+  // Backend returns newest→oldest (desc=True), so index 0 is already latest
   return (
     <div className="card analysis-card">
       <h2>Recent Bars</h2>
@@ -293,20 +343,30 @@ function BarsTable({ bars }: { bars: Bar[] }) {
               </tr>
             </thead>
             <tbody>
-              {shown.map((b, i) => {
-                const chg = i < shown.length - 1 && shown[i + 1].close > 0
-                  ? ((b.close - shown[i + 1].close) / shown[i + 1].close * 100)
-                  : 0;
+              {bars.map((b, i) => {
+                // Each bar shows % change from the next older bar (bars[i+1])
+                const prev = bars[i + 1];
+                // Positive chg = price went UP from older bar to this bar
+                const chg = prev && prev.close > 0
+                  ? ((prev.close - b.close) / b.close * 100)
+                  : null;
                 const c = barColor(b.close, b.open);
                 return (
                   <tr key={i}>
-                    <td>{b.timestamp ? new Date(b.timestamp).toLocaleDateString() : '—'}</td>
+                    <td>{b.timestamp ? (() => {
+                        const d = parseET(b.timestamp);
+                        const date = d.toLocaleDateString();
+                        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                        return `${date} ${time}`;
+                    })() : '—'}</td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
                     <td style={{ color: c }}>${strPrice(b.close)}</td>
                     <td>{(b.volume / 1000).toFixed(0)}k</td>
-                    <td style={{ color: c }}>{chg > 0 ? '+' : ''}{chg.toFixed(2)}%</td>
+                    <td style={{ color: c }}>
+                      {chg !== null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
+                    </td>
                   </tr>
                 );
               })}
@@ -348,7 +408,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       safe(() => api.getTransitions(symbol, timeframe)),
       safe(() => api.getSupportResistance(symbol, timeframe)),
       safe(() => api.getDivergences(symbol, timeframe)),
-      safe(() => api.getAnalysisBars(symbol, timeframe, 500)),
+      safe(() => api.getAnalysisBars(symbol, timeframe, 10000)),
       safe(() => api.getScanResult(symbol)),
     ]);
     setQuote(q.data);
@@ -460,7 +520,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
           />
           {chartMode === 'single' ? (
-            <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} />
+            <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} initialActiveOverlays={['supertrend']} />
           ) : (
             <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
           )}

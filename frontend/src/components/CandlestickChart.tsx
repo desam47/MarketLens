@@ -13,6 +13,7 @@ import {
   getChartData,
   getHeikinAshi,
   getOverlayData,
+  parseET,
   type OverlayKey,
   type OverlayPoint,
 } from './chartMath';
@@ -30,6 +31,7 @@ interface CandlestickChartProps {
   height?: number;
   onError?: (err: Error) => void;
   initialChartType?: ChartType;
+  initialActiveOverlays?: OverlayKey[];
   showVolume?: boolean;
   showMarkers?: boolean;
 }
@@ -42,7 +44,8 @@ function CandlestickChartImpl({
   transitions = [],
   height = 400,
   onError,
-  initialChartType = 'candlestick',
+  initialChartType = 'heikin-ashi',
+  initialActiveOverlays = ['ema9', 'ema21'],
   showVolume = true,
   showMarkers = false,
 }: CandlestickChartProps) {
@@ -54,7 +57,7 @@ function CandlestickChartImpl({
   const [err, setErr] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [activeOverlays, setActiveOverlays] = useState<Set<OverlayKey>>(
-    () => new Set<OverlayKey>(['ema9', 'ema21']),
+    () => new Set<OverlayKey>(initialActiveOverlays),
   );
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
 
@@ -248,7 +251,7 @@ function CandlestickChartImpl({
       const markers = transitions
         .filter(t => t.timestamp)
         .map(t => {
-          const ts = Math.floor(new Date(t.timestamp!).getTime() / 1000);
+          const ts = Math.floor(parseET(t.timestamp!).getTime() / 1000);
           const isBull = t.direction === 'bullish';
           return {
             time: ts,

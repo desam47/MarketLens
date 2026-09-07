@@ -6,6 +6,9 @@
  * any subscribed symbol's scan_result arrives, replacing the row with the
  * fresh score/signals.
  *
+ * Phase 10 adds a composable filter builder and named rankings panel
+ * in a collapsible sidebar.
+ *
  * The page is intentionally read-only — the goal is observation. A user
  * who wants to dig into a symbol clicks the row to navigate to the
  * Symbol page.
@@ -15,9 +18,12 @@ import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { ScanResult, Watchlist, WatchlistSymbol } from '../services/api';
 import { useScannerStream } from '../hooks/useScannerStream';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { parseET } from '../components/chartMath';
 import { ScannerTableSkeleton } from '../components/skeletons/ScannerTableSkeleton';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { fmtPrice } from '../components/watchlistUtils';
+import { FilterBuilder } from '../components/FilterBuilder';
+import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
 
 /** Format a price with up to 4 decimals, trimming trailing zeros. */
 const strPrice = fmtPrice;
@@ -26,6 +32,56 @@ interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
 }
 
+// ---------------------------------------------------------------------------
+// Trend column — maps backend TF key to display label and sort priority
+// ---------------------------------------------------------------------------
+interface TrendTf {
+  key: string;      // key in trend_signals Record (e.g. "ONE_MINUTE")
+  short: string;    // badge label  (e.g. "1m")
+}
+const TREND_TFS: TrendTf[] = [
+  { key: 'ONE_MINUTE',   short: '1m'  },
+  { key: 'FIVE_MINUTE',  short: '5m'  },
+  { key: 'FIFTEEN_MINUTE', short: '15m' },
+  { key: 'ONE_HOUR',     short: '1h'  },
+  { key: 'FOUR_HOUR',    short: '4h'  },
+  { key: 'ONE_DAY',      short: '1d'  },
+];
+
+function trendBadge(direction: string | undefined): { className: string; arrow: string; title: string } {
+  const arrow = direction === 'uptrend' ? '▲'
+             : direction === 'downtrend' ? '▼'
+             : '◆';
+  const cls = direction === 'uptrend'   ? 'trend-badge trend-up'
+            : direction === 'downtrend' ? 'trend-badge trend-down'
+            : 'trend-badge trend-neutral';
+  return { className: cls, arrow, title: direction ?? 'unknown' };
+}
+
+function TrendColumn({ trendSignals }: { trendSignals: Record<string, any> }) {
+  return (
+    <div className="scanner-vcell cell-trend">
+      {TREND_TFS.map(({ key, short }) => {
+        const sig = trendSignals?.[key];
+        const b = trendBadge(sig?.direction);
+        return (
+          <span
+            key={key}
+            className={b.className}
+            title={sig ? `${short}: ${b.title} (conf ${(sig.confidence * 100).toFixed(0)}%)` : `${short}: no data`}
+          >
+            <span className="trend-arrow">{b.arrow}</span>
+            <span className="trend-label">{short}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Score / freshness helpers
+// ---------------------------------------------------------------------------
 function scoreClass(score: number): string {
   if (score >= 30) return 'score-bullish';
   if (score <= -30) return 'score-bearish';
@@ -34,7 +90,7 @@ function scoreClass(score: number): string {
 
 function freshnessClass(ts: string | null): string {
   if (!ts) return 'freshness-stale';
-  const ageSec = (Date.now() - new Date(ts).getTime()) / 1000;
+  const ageSec = (Date.now() - parseET(ts).getTime()) / 1000;
   if (ageSec < 60) return 'freshness-fresh';
   if (ageSec < 300) return 'freshness-recent';
   return 'freshness-stale';
@@ -42,10 +98,21 @@ function freshnessClass(ts: string | null): string {
 
 function freshnessLabel(ts: string | null): string {
   if (!ts) return '—';
-  const ageSec = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  const ageSec = Math.max(0, (Date.now() - parseET(ts).getTime()) / 1000);
   if (ageSec < 60) return `${Math.floor(ageSec)}s ago`;
   if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
   return `${Math.floor(ageSec / 3600)}h ago`;
+}
+
+/** Format a timestamp as HH:MM:SS in the user's local timezone. */
+function formatClockTime(ts: string | null): string {
+  if (!ts) return '—';
+  const d = parseET(ts);
+  if (isNaN(d.getTime())) return '—';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
 }
 
 // Scanner table row, memoized so a fresh quote on one symbol does not
@@ -74,6 +141,7 @@ const ScannerRow = React.memo(function ScannerRow({
       <div className={`scanner-vcell ${result ? scoreClass(result.total_score) : ''}`}>
         {result ? result.total_score.toFixed(1) : '…'}
       </div>
+      <TrendColumn trendSignals={result?.trend_signals ?? {}} />
       <div className="scanner-vcell cell-signals">
         {err ? (
           <span className="error-text" title={err}>err</span>
@@ -87,15 +155,19 @@ const ScannerRow = React.memo(function ScannerRow({
           <span className="info-text">waiting</span>
         )}
       </div>
-      <div className={`scanner-vcell cell-freshness ${freshness}`}>
-        {freshnessLabel(result?.timestamp ?? null)}
+      <div
+        className={`scanner-vcell cell-freshness ${freshness}`}
+        title={result?.timestamp ?? undefined}
+      >
+        <div className="freshness-time">{formatClockTime(result?.timestamp ?? null)}</div>
+        <div className="freshness-age">{freshnessLabel(result?.timestamp ?? null)}</div>
       </div>
     </div>
   );
 });
 
 // Virtualized row renderer for react-window FixedSizeList.
-const ROW_HEIGHT = 48;
+const ROW_HEIGHT = 56;
 
 type RowItem = { sym: string; result: ScanResult | null };
 type VirtualRowData = { rows: RowItem[]; errors: Record<string, string>; onSelectSymbol: (s: string) => void };
@@ -115,6 +187,8 @@ function VirtualRow({ index, style, data }: ListChildComponentProps<VirtualRowDa
   );
 }
 
+type SidebarTab = 'filters' | 'rankings';
+
 export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<number | null>(null);
@@ -123,6 +197,12 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [loadingSymbols, setLoadingSymbols] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'score' | 'symbol'>('score');
+
+  // Phase 10: filter sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('rankings');
+  /** When a filter is applied, this holds the filtered results. */
+  const [filterResults, setFilterResults] = useState<ScanResult[] | null>(null);
 
   // Fetch watchlists on mount.
   useEffect(() => {
@@ -177,8 +257,6 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   // listener identity is stable across renders.
   const onUpdate = useCallback(() => undefined, []);
   const onScanError = useCallback((sym: string, msg: string) => {
-    // Surface as a non-blocking error — the row will show stale data and
-    // the connection status will reflect the upstream.
     console.warn(`Scanner error for ${sym}: ${msg}`);
   }, []);
 
@@ -188,10 +266,20 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     onError: onScanError,
   });
 
+  // Build the visible rows — filter results override live results when active
   const rows = useMemo(() => {
-    // For each subscribed symbol, build a row from the live result if
-    // available; otherwise render a placeholder so the table layout
-    // doesn't shift as results trickle in.
+    if (filterResults !== null) {
+      // Filter mode: show filtered results sorted by total_score desc
+      const out = filterResults.map(r => ({ sym: r.symbol, result: r }));
+      if (sortBy === 'symbol') {
+        out.sort((a, b) => a.sym.localeCompare(b.sym));
+      } else {
+        out.sort((a, b) => (b.result?.total_score ?? -Infinity) - (a.result?.total_score ?? -Infinity));
+      }
+      return out;
+    }
+
+    // Normal mode: show live results
     const out = subscribedSymbols.map((sym) => {
       const result = liveResults[sym];
       return { sym, result };
@@ -202,7 +290,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
       out.sort((a, b) => (b.result?.total_score ?? -Infinity) - (a.result?.total_score ?? -Infinity));
     }
     return out;
-  }, [subscribedSymbols, liveResults, sortBy]);
+  }, [subscribedSymbols, liveResults, sortBy, filterResults]);
 
   const connectionDot = connectionStatus === 'open' ? 'dot-green'
     : connectionStatus === 'connecting' ? 'dot-amber'
@@ -213,12 +301,34 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     : 'Disconnected';
 
   const stats = useMemo(() => {
+    if (filterResults !== null) {
+      const bullish = filterResults.filter((r) => r.total_score >= 30).length;
+      const bearish = filterResults.filter((r) => r.total_score <= -30).length;
+      return { total: filterResults.length, scanned: filterResults.length, bullish, bearish, neutral: filterResults.length - bullish - bearish };
+    }
     const all = Object.values(liveResults);
     const bullish = all.filter((r) => r.total_score >= 30).length;
     const bearish = all.filter((r) => r.total_score <= -30).length;
     const neutral = all.length - bullish - bearish;
     return { total: subscribedSymbols.length, scanned: all.length, bullish, bearish, neutral };
-  }, [liveResults, subscribedSymbols]);
+  }, [liveResults, subscribedSymbols, filterResults]);
+
+  // Phase 10: handlers
+  const handleFilterResults = useCallback((results: ScanResult[]) => {
+    setFilterResults(results);
+  }, []);
+
+  const handleClearFilter = useCallback(() => {
+    setFilterResults(null);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen(v => !v);
+  }, []);
+
+  const handleSelectSymbol = useCallback((s: string) => {
+    onSelectSymbol(s);
+  }, [onSelectSymbol]);
 
   if (loadingWatchlists) {
     return <LoadingSpinner message="Loading watchlists…" />;
@@ -241,91 +351,159 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
 
   return (
     <div className="page scanner-page">
-      <div className="scanner-header">
-        <div>
-          <h1>Live Scanner</h1>
-          <p className="info-text">
-            Streaming scan results over WebSocket. Updates push as the ingestion
-            service ingests fresh quotes.
-          </p>
-        </div>
-        <div className="scanner-header-actions">
-          <span className={`connection-pill ${connectionDot}`} title={`Status: ${connectionLabel}`}>
-            <span className="dot" /> {connectionLabel}
-          </span>
-          <select
-            className="watchlist-select"
-            value={selectedWatchlistId ?? ''}
-            onChange={(e) => setSelectedWatchlistId(Number(e.target.value))}
+      {/* Main content: sidebar + table */}
+      <div className="scanner-layout">
+        {/* Left sidebar — filter builder + rankings */}
+        <aside className={`scanner-sidebar ${sidebarOpen ? 'open' : ''}`}>
+          {/* Sidebar toggle */}
+          <button
+            className="sidebar-toggle-btn"
+            onClick={toggleSidebar}
+            title={sidebarOpen ? 'Close sidebar' : 'Open filters & rankings'}
           >
-            {watchlists.map((wl) => (
-              <option key={wl.id} value={wl.id}>{wl.name}</option>
-            ))}
-          </select>
-          <select
-            className="sort-select"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'score' | 'symbol')}
-            title="Sort order"
-          >
-            <option value="score">Sort: Score</option>
-            <option value="symbol">Sort: Symbol</option>
-          </select>
-          <button className="btn btn-primary" onClick={refresh}>Refresh</button>
-        </div>
-      </div>
+            {sidebarOpen ? '◀' : '▶'}
+          </button>
 
-      <div className="scanner-stats">
-        <div className="metric">
-          <span className="metric-label">Subscribed</span>
-          <span className="metric-value">{stats.total}</span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Scanned</span>
-          <span className="metric-value">{stats.scanned}</span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Bullish</span>
-          <span className="metric-value score-bullish">{stats.bullish}</span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Bearish</span>
-          <span className="metric-value score-bearish">{stats.bearish}</span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Neutral</span>
-          <span className="metric-value score-neutral">{stats.neutral}</span>
-        </div>
-      </div>
+          {sidebarOpen && (
+            <>
+              {/* Tab switcher */}
+              <div className="sidebar-tabs">
+                <button
+                  className={`sidebar-tab ${sidebarTab === 'rankings' ? 'active' : ''}`}
+                  onClick={() => setSidebarTab('rankings')}
+                >
+                  Rankings
+                </button>
+                <button
+                  className={`sidebar-tab ${sidebarTab === 'filters' ? 'active' : ''}`}
+                  onClick={() => setSidebarTab('filters')}
+                >
+                  Filters
+                </button>
+              </div>
 
-      {loadingSymbols ? (
-        <ScannerTableSkeleton />
-      ) : subscribedSymbols.length === 0 ? (
-        <div className="empty-state">
-          This watchlist has no enabled symbols. Add some on the Watchlist page.
-        </div>
-      ) : (
-        <div className="scanner-table-wrapper">
-          {/* Static header — always visible */}
-          <div className="scanner-vheader">
-            <div className="scanner-vheader-cell">Symbol</div>
-            <div className="scanner-vheader-cell">Price</div>
-            <div className="scanner-vheader-cell">Score</div>
-            <div className="scanner-vheader-cell">Signals</div>
-            <div className="scanner-vheader-cell">Last Update</div>
+              {/* Tab panels */}
+              <div className="sidebar-panel">
+                {sidebarTab === 'rankings' && (
+                  <NamedRankingsPanel
+                    symbols={subscribedSymbols}
+                    topN={10}
+                    onSelectSymbol={handleSelectSymbol}
+                  />
+                )}
+                {sidebarTab === 'filters' && (
+                  <FilterBuilder
+                    symbols={subscribedSymbols}
+                    onResults={handleFilterResults}
+                    onClear={handleClearFilter}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </aside>
+
+        {/* Main table area */}
+        <div className="scanner-main">
+          {/* Header */}
+          <div className="scanner-header">
+            <div>
+              <h1>Live Scanner</h1>
+              <p className="info-text">
+                {filterResults !== null
+                  ? `Showing ${filterResults.length} filtered result${filterResults.length !== 1 ? 's' : ''} — live stream paused.`
+                  : 'Streaming scan results over WebSocket. Updates push as the ingestion service ingests fresh quotes.'}
+              </p>
+            </div>
+            <div className="scanner-header-actions">
+              <span className={`connection-pill ${connectionDot}`} title={`Status: ${connectionLabel}`}>
+                <span className="dot" /> {connectionLabel}
+              </span>
+              <select
+                className="watchlist-select"
+                value={selectedWatchlistId ?? ''}
+                onChange={(e) => setSelectedWatchlistId(Number(e.target.value))}
+              >
+                {watchlists.map((wl) => (
+                  <option key={wl.id} value={wl.id}>{wl.name}</option>
+                ))}
+              </select>
+              <select
+                className="sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'score' | 'symbol')}
+                title="Sort order"
+              >
+                <option value="score">Sort: Score</option>
+                <option value="symbol">Sort: Symbol</option>
+              </select>
+              <button className="btn btn-primary" onClick={refresh}>Refresh</button>
+            </div>
           </div>
-          {/* Virtualized body — react-window only renders visible rows */}
-          <FixedSizeList
-            height={Math.min(rows.length * ROW_HEIGHT, 500)}
-            itemCount={rows.length}
-            itemSize={ROW_HEIGHT}
-            width="100%"
-            itemData={{ rows, errors, onSelectSymbol }}
-          >
-            {VirtualRow}
-          </FixedSizeList>
+
+          {/* Stats bar */}
+          <div className="scanner-stats">
+            <div className="metric">
+              <span className="metric-label">Subscribed</span>
+              <span className="metric-value">{stats.total}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Scanned</span>
+              <span className="metric-value">{stats.scanned}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Bullish</span>
+              <span className="metric-value score-bullish">{stats.bullish}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Bearish</span>
+              <span className="metric-value score-bearish">{stats.bearish}</span>
+            </div>
+            <div className="metric">
+              <span className="metric-label">Neutral</span>
+              <span className="metric-value score-neutral">{stats.neutral}</span>
+            </div>
+            {filterResults !== null && (
+              <div className="metric">
+                <span className="metric-label">Filtered</span>
+                <span className="metric-value">{filterResults.length}</span>
+                <button className="btn btn-ghost btn-sm" onClick={handleClearFilter}>✕ clear</button>
+              </div>
+            )}
+          </div>
+
+          {/* Table */}
+          {loadingSymbols ? (
+            <ScannerTableSkeleton />
+          ) : subscribedSymbols.length === 0 ? (
+            <div className="empty-state">
+              This watchlist has no enabled symbols. Add some on the Watchlist page.
+            </div>
+          ) : (
+            <div className="scanner-table-wrapper">
+              {/* Static header — always visible */}
+              <div className="scanner-vheader">
+                <div className="scanner-vheader-cell">Symbol</div>
+                <div className="scanner-vheader-cell">Price</div>
+                <div className="scanner-vheader-cell">Score</div>
+                <div className="scanner-vheader-cell">Trend</div>
+                <div className="scanner-vheader-cell">Signals</div>
+                <div className="scanner-vheader-cell">Captured</div>
+              </div>
+              {/* Virtualized body — react-window only renders visible rows */}
+              <FixedSizeList
+                height={Math.min(rows.length * ROW_HEIGHT, 500)}
+                itemCount={rows.length}
+                itemSize={ROW_HEIGHT}
+                width="100%"
+                itemData={{ rows, errors, onSelectSymbol: handleSelectSymbol }}
+              >
+                {VirtualRow}
+              </FixedSizeList>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

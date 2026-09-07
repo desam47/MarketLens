@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData } from '../services/api';
 import { RegimeCard } from '../components/RegimeCard';
 import { TrendCard } from '../components/TrendCard';
@@ -38,7 +38,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<string>('day_trading');
 
-  const fetchData = async (refresh = false) => {
+  const fetchData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
@@ -90,19 +90,17 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [symbol, selectedPreset]);
 
   useEffect(() => {
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, selectedPreset]);
+  }, [fetchData]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => fetchData(true), 30000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, symbol, selectedPreset]);
+  }, [autoRefresh, fetchData]);
 
   return (
     <div className="dashboard">
