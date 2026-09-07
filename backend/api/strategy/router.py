@@ -18,6 +18,7 @@ from ..regime.router import get_engine as get_regime_engine
 from ..trend.router import get_engine as get_trend_engine
 from ...engines.timeframe import Timeframe
 from ...strategy.strategy_selector import StrategySelector
+from backend.api.ttl_cache import _strategy_cache, _strategy_history_cache
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,11 @@ def get_strategy_selector(symbol: str) -> StrategySelector:
 
 @router.get("/{symbol}/current")
 async def get_current_strategy(symbol: str):
-    """Get current recommended strategy for symbol"""
+    """Get current recommended strategy for symbol (30s TTL cache)."""
+    key = symbol.upper()
+    cached = _strategy_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         # Get current signals from all engines
         regime_engine = get_regime_engine(symbol.upper())
@@ -63,7 +68,7 @@ async def get_current_strategy(symbol: str):
             confluence_signal=confluence_signal
         )
 
-        return {
+        payload = {
             "symbol": strategy_signal.symbol,
             "strategy_type": strategy_signal.strategy_type.value,
             "confidence": strategy_signal.confidence,
@@ -86,18 +91,24 @@ async def get_current_strategy(symbol: str):
             } if strategy_signal.confluence_signal else None,
             "timestamp": _to_dashboard_tz(strategy_signal.timestamp)
         }
+        _strategy_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting strategy for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get("/{symbol}/history")
 async def get_strategy_history(symbol: str, limit: int | None = 100):
-    """Get strategy selection history for symbol"""
+    """Get strategy selection history for symbol (60s TTL cache)."""
+    key = f"{symbol.upper()}:{limit}"
+    cached = _strategy_history_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         selector = get_strategy_selector(symbol.upper())
         history = selector.get_selection_history(limit=limit)
 
-        return {
+        payload = {
             "symbol": symbol.upper(),
             "history": [
                 {
@@ -110,6 +121,8 @@ async def get_strategy_history(symbol: str, limit: int | None = 100):
             ],
             "count": len(history)
         }
+        _strategy_history_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting strategy history for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

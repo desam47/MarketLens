@@ -140,6 +140,9 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
     trend engine's signal dict shape), so we leave that field as ``Any``
     and let Pydantic pass it through. Everything else is coerced to JSON-
     safe types.
+
+    ``total_score`` is the *signed* weighted average so the dashboard can
+    separate bullish (positive) from bearish (negative) entries.
     """
     return _ScanResultResponse(
         symbol=result.symbol,
@@ -147,7 +150,7 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
         quote=_quote_to_dict(result.quote),
         indicator_values=result.indicator_values or {},
         scores=result.scores or {},
-        total_score=result.calculate_total_score(),
+        total_score=result.calculate_signed_total_score(),
         rank=result.rank,
         signals=list(result.signals or []),
         trend_signals=result.trend_signals or {},

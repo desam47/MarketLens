@@ -89,53 +89,44 @@ def _safe_bar_counts() -> dict | None:
 
     Phase 3.3.17: also returns retention metrics — oldest/newest bar per
     symbol, distinct symbol count, and the configured retention window.
+
+    Phase 3.9.4: 6 sequential count/min/max queries collapsed into one
+    round-trip via a single SELECT with multiple aggregates.
     """
     try:
-        from sqlalchemy import func
         from ...database import SessionLocal
-        from ...models.market_data_sql import BarModel
         db = SessionLocal()
         try:
-            total = db.query(func.count(BarModel.id)).scalar() or 0
-            bars_1m = (
-                db.query(func.count(BarModel.id))
-                .filter(BarModel.timeframe == "1m")
-                .scalar()
-                or 0
-            )
-            bars_resampled = (
-                db.query(func.count(BarModel.id))
-                .filter(BarModel.source == "resampled")
-                .scalar()
-                or 0
-            )
-            # Phase 3.3.17 retention metrics
-            oldest_bar = (
-                db.query(func.min(BarModel.timestamp)).scalar()
-            )
-            newest_bar = (
-                db.query(func.max(BarModel.timestamp)).scalar()
-            )
-            distinct_symbols = (
-                db.query(func.count(func.distinct(BarModel.symbol))).scalar()
-                or 0
-            )
+            # Single round-trip with all 6 aggregates (Phase 3.9.4).
+            row = db.execute(text("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN timeframe = '1m' THEN 1 ELSE 0 END) AS bars_1m,
+                    SUM(CASE WHEN source = 'resampled' THEN 1 ELSE 0 END) AS bars_resampled,
+                    MIN(timestamp) AS oldest_bar,
+                    MAX(timestamp) AS newest_bar,
+                    COUNT(DISTINCT symbol) AS distinct_symbols
+                FROM bars
+            """)).fetchone()
+            if row is None:
+                return None
+            total, bars_1m, bars_resampled, oldest_bar, newest_bar, distinct_symbols = row
             try:
                 from ...config.settings import settings as _s
                 retention_days = _s.market_data.bar_retention_days
             except Exception:
                 retention_days = 1000
             return {
-                "bars_stored": total,
-                "bars_1m_only": bars_1m,
-                "bars_resampled": bars_resampled,
+                "bars_stored": int(total or 0),
+                "bars_1m_only": int(bars_1m or 0),
+                "bars_resampled": int(bars_resampled or 0),
                 "oldest_bar": (
                     oldest_bar.isoformat() if oldest_bar else None
                 ),
                 "newest_bar": (
                     newest_bar.isoformat() if newest_bar else None
                 ),
-                "distinct_symbols": int(distinct_symbols),
+                "distinct_symbols": int(distinct_symbols or 0),
                 "retention_days": int(retention_days),
             }
         finally:

@@ -10,6 +10,7 @@ experiment_id immediately so the front-end can poll ``GET /{id}``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -284,8 +285,9 @@ async def create_experiment(body: ExperimentCreate) -> ExperimentResponse:
     )
 
     # Run synchronously (fast enough for most experiments; <30s for 3 symbols × 3 slices)
+    # Phase 3.9.8: wrap in to_thread so the event loop is not blocked.
     try:
-        experiment_id = run_experiment(config)
+        experiment_id = await asyncio.to_thread(run_experiment, config)
     except Exception as exc:
         logger.exception("Experiment %s raised during run_experiment", body.name)
         raise HTTPException(

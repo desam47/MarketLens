@@ -231,6 +231,14 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     success = repo.delete_watchlist(watchlist_id)
     if not success:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+    # Phase 3.8.6+: notify ingestion service BEFORE purge so it stops fetching
+    # deleted symbols immediately — prevents the race where purge deletes bars
+    # but the next ingestion tick re-ingests them with the stale symbol list.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        ingestion_service.refresh_symbols_from_watchlist()
+    except Exception as e:
+        logger.debug(f"ingestion refresh before watchlist delete failed: {e}")
     # Cascade: for any symbol that no longer appears in any watchlist,
     # purge ALL per-symbol data (bars, signals, quotes, market_status,
     # alerts, alert_triggers, ai_analysis_jobs, backtest_runs, backtest_trades,
@@ -249,14 +257,6 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
                 f"backtest_runs={result['backtest_runs']}, "
                 f"drawings={result['drawing_tools']}"
             )
-
-    # Phase 3.8.6+: notify ingestion service so it stops fetching all
-    # symbols from the deleted watchlist immediately.
-    try:
-        from backend.market_data.services.ingestion_service import ingestion_service
-        ingestion_service.refresh_symbols_from_watchlist()
-    except Exception as e:
-        logger.debug(f"ingestion refresh after watchlist delete failed: {e}")
 
 
 # Watchlist symbol endpoints
@@ -326,6 +326,14 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
         }
     except Exception as e:
         logger.debug(f"signal_recorder cache cleanup skipped: {e}")
+    # Phase 3.8.6+: notify ingestion service BEFORE purge so it stops fetching
+    # deleted symbols immediately — prevents the race where purge deletes bars
+    # but the next ingestion tick re-ingests them with the stale symbol list.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        ingestion_service.refresh_symbols_from_watchlist()
+    except Exception as e:
+        logger.debug(f"ingestion refresh before purge failed: {e}")
     # Phase 3.3.15 / Phase 3.x: purge ALL per-symbol data if the symbol
     # is no longer in any watchlist. Covers bars, signals, quotes,
     # market_status, alerts, alert_triggers, ai_analysis_jobs,
@@ -342,14 +350,6 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
                 f"backtest_runs={result['backtest_runs']}, "
                 f"drawings={result['drawing_tools']}"
             )
-
-    # Phase 3.8.6+: notify ingestion service so it stops fetching deleted
-    # symbols immediately — prevents stale live bars from accumulating.
-    try:
-        from backend.market_data.services.ingestion_service import ingestion_service
-        ingestion_service.refresh_symbols_from_watchlist()
-    except Exception as e:
-        logger.debug(f"ingestion refresh after symbol delete failed: {e}")
 
 
 @router.put("/{watchlist_id}/symbols/{symbol}/enable", response_model=WatchlistSymbolResponse)

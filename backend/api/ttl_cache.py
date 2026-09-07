@@ -70,6 +70,46 @@ _trend_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=30)
 # back-to-back dashboard refreshes.
 _quote_cache: TTLCache[str, Any] = TTLCache(maxsize=500, ttl=5)
 
+# ── Phase 3.6.3: additional named caches for the remaining hot endpoints ──────
+# Each cache covers a single route or small family that previously had no
+# server-side memoisation. The HTTP cache middleware in ``backend.api.cache``
+# still handles 304s on the browser side; these caches short-circuit the
+# Python work entirely.
+
+# Confluence: 30s — multi-timeframe alignment changes slowly and depends
+# on all per-TF engines being warm.
+_confluence_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=30)
+
+# Strategy selector: 30s — strategy is a function of regime/trend/confluence,
+# so once those settle, the chosen strategy only changes on transitions.
+_strategy_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=30)
+
+# Sector classification: 5 min — sector is a static-mapping lookup that
+# never changes intra-session, but we keep a TTL so manual edits to the
+# underlying mapping table are picked up without a restart.
+_sector_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=300)
+
+# Relative strength batch: 60s — RS scores are computed over a rolling
+# window; 60s matches the dashboard refresh cadence and is short enough
+# to stay in sync with active quotes.
+_rs_batch_cache: TTLCache[str, Any] = TTLCache(maxsize=50, ttl=60)
+
+# Market-context aggregate: 10s — context is the most-queried endpoint
+# from the dashboard top bar; 10s is the dashboard's own refresh interval.
+_context_cache: TTLCache[str, Any] = TTLCache(maxsize=20, ttl=10)
+
+# Regime / trend / strategy history: 60s — historical endpoint payloads
+# are immutable for a given (symbol, limit) pair, but a short TTL keeps
+# the in-process size in check and lets a manual ``POST /update`` propagate.
+_regime_history_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=60)
+_trend_history_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=60)
+_strategy_history_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=60)
+_mtf_history_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=60)
+
+# Analysis transitions: 30s — transitions change only when a regime or
+# trend engine fires; matches the trend cache TTL.
+_transitions_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=30)
+
 
 def get_cache_stats() -> dict[str, dict[str, int]]:
     """Return current cache sizes for the health/monitoring endpoint."""
@@ -78,6 +118,16 @@ def get_cache_stats() -> dict[str, dict[str, int]]:
         "regime": {"size": _regime_cache.currsize, "maxsize": _regime_cache.maxsize},
         "trend": {"size": _trend_cache.currsize, "maxsize": _trend_cache.maxsize},
         "quote": {"size": _quote_cache.currsize, "maxsize": _quote_cache.maxsize},
+        "confluence": {"size": _confluence_cache.currsize, "maxsize": _confluence_cache.maxsize},
+        "strategy": {"size": _strategy_cache.currsize, "maxsize": _strategy_cache.maxsize},
+        "sector": {"size": _sector_cache.currsize, "maxsize": _sector_cache.maxsize},
+        "rs_batch": {"size": _rs_batch_cache.currsize, "maxsize": _rs_batch_cache.maxsize},
+        "context": {"size": _context_cache.currsize, "maxsize": _context_cache.maxsize},
+        "regime_history": {"size": _regime_history_cache.currsize, "maxsize": _regime_history_cache.maxsize},
+        "trend_history": {"size": _trend_history_cache.currsize, "maxsize": _trend_history_cache.maxsize},
+        "strategy_history": {"size": _strategy_history_cache.currsize, "maxsize": _strategy_history_cache.maxsize},
+        "mtf_history": {"size": _mtf_history_cache.currsize, "maxsize": _mtf_history_cache.maxsize},
+        "transitions": {"size": _transitions_cache.currsize, "maxsize": _transitions_cache.maxsize},
     }
 
 

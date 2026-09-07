@@ -4,6 +4,7 @@ Finnhub API routes — company data, news, and analyst sentiment (v2.2).
 All endpoints use Cache-Control: max-age=3600 (1 hour) since Finnhub
 free tier is rate-limited and company data changes infrequently.
 """
+import asyncio
 import logging
 from datetime import date, timedelta
 from typing import Annotated
@@ -32,7 +33,7 @@ def _service() -> FinnhubService:
 async def health_check(service: Annotated[FinnhubService, Depends(_service)], response: Response):
     """Verify Finnhub API connectivity using a known symbol (AAPL)."""
     try:
-        service.get_company_profile("AAPL")
+        await asyncio.to_thread(service.get_company_profile, "AAPL")
         return {"status": "ok", "provider": "finnhub"}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Finnhub unavailable: {e}")
@@ -46,7 +47,7 @@ async def get_company_profile(
 ):
     """Company profile: name, country, exchange, industry, logo, web URL."""
     try:
-        profile = service.get_company_profile(symbol.upper())
+        profile = await asyncio.to_thread(service.get_company_profile, symbol.upper())
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return profile
     except ValueError as e:
@@ -63,7 +64,7 @@ async def get_company_metrics(
 ):
     """Key financial metrics: P/E, EPS, beta, 52-week high/low, margins."""
     try:
-        metrics = service.get_company_metrics(symbol.upper())
+        metrics = await asyncio.to_thread(service.get_company_metrics, symbol.upper())
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return metrics
     except ValueError as e:
@@ -80,7 +81,7 @@ async def get_company_financials(
 ):
     """Financials: income statement, balance sheet, cash flow."""
     try:
-        financials = service.get_company_financials(symbol.upper())
+        financials = await asyncio.to_thread(service.get_company_financials, symbol.upper())
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return financials
     except ValueError as e:
@@ -103,7 +104,7 @@ async def get_company_news(
     if to_date is None:
         to_date = date.today()
     try:
-        news = service.get_company_news(symbol.upper(), from_date, to_date)
+        news = await asyncio.to_thread(service.get_company_news, symbol.upper(), from_date, to_date)
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return news
     except ValueError as e:
@@ -120,7 +121,7 @@ async def get_market_news(
 ):
     """General market news articles."""
     try:
-        news = service.get_market_news(category)
+        news = await asyncio.to_thread(service.get_market_news, category)
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return news
     except ValueError as e:
@@ -137,7 +138,7 @@ async def get_analyst_recommendations(
 ):
     """Analyst buy/hold/sell consensus over time."""
     try:
-        recommendations = service.get_analyst_recommendations(symbol.upper())
+        recommendations = await asyncio.to_thread(service.get_analyst_recommendations, symbol.upper())
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return recommendations
     except ValueError as e:
@@ -160,7 +161,7 @@ async def get_insider_sentiment(
     if to_date is None:
         to_date = date.today()
     try:
-        sentiment = service.get_insider_sentiment(symbol.upper(), from_date, to_date)
+        sentiment = await asyncio.to_thread(service.get_insider_sentiment, symbol.upper(), from_date, to_date)
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return sentiment
     except ValueError as e:
@@ -177,7 +178,7 @@ async def get_peers(
 ):
     """Industry peer symbols for a given company."""
     try:
-        peers = service.get_peers(symbol.upper())
+        peers = await asyncio.to_thread(service.get_peers, symbol.upper())
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return {"symbol": symbol.upper(), "peers": peers}
     except ValueError as e:

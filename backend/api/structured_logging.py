@@ -8,6 +8,9 @@ require fragile regex parsing. This module replaces the default
 timestamp, level, logger, message, and any `extra={...}` fields passed
 to the log call.
 
+Phase 3.5.7: LOG_LEVEL env var controls the root logger level.
+Phase 3.5.8: RotatingFileHandler writes to logs/marketlens.log (50 MB / 5 files).
+
 Usage:
     from .structured_logging import get_logger
     log = get_logger(__name__)
@@ -19,8 +22,11 @@ Produces:
 """
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 # Standard LogRecord attributes that we don't want to spill into the JSON
@@ -66,7 +72,7 @@ class JsonFormatter(logging.Formatter):
         # and we degrade gracefully if it's not available.
         if "correlation_id" not in payload:
             try:
-                from backend.observability.correlation_id import (
+                from backend.observability.logging_enhanced import (
                     get_correlation_id,
                 )
 
@@ -84,29 +90,97 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, ensure_ascii=False)
 
 
-def configure_logging(debug: bool = False) -> None:
+def _resolve_log_level(level_hint: str | None) -> int:
+    """Parse a level string (DEBUG/INFO/WARNING/ERROR/CRITICAL) to an int."""
+    if level_hint is None:
+        return logging.INFO
+    upper = level_hint.strip().upper()
+    return getattr(logging, upper, logging.INFO)
+
+
+def _get_log_dir() -> Path:
+    """Return the logs directory, creating it if needed."""
+    # Work from the project root (one level up from the backend package).
+    project_root = Path(__file__).parent.parent.parent
+    log_dir = project_root / "logs"
+    log_dir.mkdir(exist_ok=True)
+    return log_dir
+
+
+def configure_logging(
+    debug: bool = False,
+    log_level: str | None = None,
+    enable_file: bool = True,
+) -> None:
     """Configure root logger with the JSON formatter.
+
+    Phase 3.5.7: log_level is resolved from the LOG_LEVEL env var, falling
+    back to DEBUG if debug=True, else INFO.
+
+    Phase 3.5.8: when enable_file=True (default), a RotatingFileHandler
+    writes to logs/marketlens.log with 50 MB / 5-file rotation.
 
     Idempotent: safe to call multiple times (e.g. from tests). Removes any
     previously installed handlers to avoid duplicate log lines.
     """
-    level = logging.DEBUG if debug else logging.INFO
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
+    # Resolve level: explicit arg > LOG_LEVEL env > debug flag > INFO
+    if log_level is not None:
+        level = _resolve_log_level(log_level)
+    else:
+        env_level = os.environ.get("LOG_LEVEL")
+        level = _resolve_log_level(env_level) if env_level else (
+            logging.DEBUG if debug else logging.INFO
+        )
 
+    json_formatter = JsonFormatter()
     root = logging.getLogger()
-    # Clear existing handlers — `basicConfig` from a previous import would
-    # otherwise produce duplicate lines on every config call.
+
+    # ---- Console handler (always) ----
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(json_formatter)
+
+    # ---- File handler (optional, 50 MB / 5 files) ----
+    file_handler: logging.Handler | None = None
+    if enable_file:
+        log_path = _get_log_dir() / "marketlens.log"
+        file_handler = RotatingFileHandler(
+            filename=str(log_path),
+            maxBytes=50 * 1024 * 1024,  # 50 MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(json_formatter)
+
+    # Clear existing handlers to avoid duplicates on re-configure.
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.addHandler(handler)
+
+    root.addHandler(console_handler)
+    if file_handler:
+        root.addHandler(file_handler)
     root.setLevel(level)
 
-    # Tame uvicorn's own loggers. They emit in plain text by default; route
-    # them through the JSON formatter so log output is uniform.
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    # Phase 3.5.7: Tame noisy third-party loggers so they don't spam the output.
+    # Each is set to WARNING unless already set lower; they propagate to root so
+    # the JSON formatter still applies.
+    for name, min_level in (
+        ("uvicorn", "WARNING"),
+        ("uvicorn.error", "WARNING"),
+        ("uvicorn.access", "WARNING"),
+        ("websockets", "WARNING"),
+        ("asyncio", "WARNING"),
+        ("sqlalchemy.engine", "WARNING"),
+        ("sqlalchemy.pool", "WARNING"),
+        ("httpx", "WARNING"),
+        ("httpcore", "WARNING"),
+        ("finnhub", "INFO"),
+        ("yfinance", "WARNING"),
+        ("alpaca", "INFO"),
+        ("webull", "INFO"),
+    ):
         lg = logging.getLogger(name)
-        lg.handlers = []
+        if lg.level == 0:  # never explicitly set
+            lg.setLevel(getattr(logging, min_level, logging.WARNING))
         lg.propagate = True
 
 

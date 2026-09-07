@@ -5,6 +5,7 @@ These are read-only, symbol-keyed endpoints that run the Phase 9
 detection engines against the most recent stored bars. They require no
 live-tick state and can be served purely from the historical bar cache.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ from ...divergence import DivergenceEngine
 from ...repositories import bar_repository
 from ...support_resistance import SupportResistanceEngine
 from ...transitions import TrendTransitionEngine
+from backend.api.ttl_cache import _transitions_cache
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +120,14 @@ async def get_transitions(
     ``/api/trend/{symbol}/history/{timeframe}`` directly.
     """
     symbol = symbol.upper()
+    cache_key = f"{symbol}:{timeframe}:{window}:{min_delta}:{limit}"
+    cached = _transitions_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
-        bars = _load_bars(symbol, timeframe, limit=limit)
+        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
         if len(bars) < window + 1:
-            return {
+            payload = {
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "transitions": [],
@@ -129,24 +135,37 @@ async def get_transitions(
                 "latest_score": 0.0,
                 "latest_timestamp": None,
             }
+            _transitions_cache[cache_key] = payload
+            return payload
         arrays = _bar_dicts_to_arrays(bars)
         closes = arrays["closes"]
         # Score heuristic: signed % delta vs a window-bar SMA, scaled to
         # -100..+100. Smoothed via simple z-score.
+        # Phase 3.9.11: O(N) running-sum/sum-of-squares using a deque
+        # instead of recomputing the full window slice per bar (was O(N·W)).
+        from collections import deque
         sma_window = 20
+        win = sma_window + 1  # include the current bar in the window
         scores: list[float] = []
-        for i in range(len(closes)):
-            if i < sma_window:
+        sma_deque: deque[float] = deque()
+        sum_w = 0.0
+        sum_sq = 0.0
+        for i, c in enumerate(closes):
+            sma_deque.append(c)
+            sum_w += c
+            sum_sq += c * c
+            if len(sma_deque) > win:
+                evicted = sma_deque.popleft()
+                sum_w -= evicted
+                sum_sq -= evicted * evicted
+            if len(sma_deque) < win:
                 scores.append(0.0)
                 continue
-            window_closes = closes[i - sma_window: i + 1]
-            mean = sum(window_closes) / len(window_closes)
-            std = max(
-                (sum((c - mean) ** 2 for c in window_closes)
-                 / len(window_closes)) ** 0.5,
-                1e-9,
-            )
-            z = (closes[i] - mean) / std
+            mean = sum_w / win
+            # var = E[x²] − E[x]² ; clamp to avoid sqrt of negative due to FP drift
+            var = max(sum_sq / win - mean * mean, 0.0)
+            std = var ** 0.5 or 1e-9
+            z = (c - mean) / std
             # Clamp to ±2 standard deviations → ±100
             clamped = max(-2.0, min(2.0, z))
             scores.append(clamped * 50.0)
@@ -158,14 +177,17 @@ async def get_transitions(
             symbol=symbol,
             timeframe=timeframe,
         )
-        return {
+        payload = {
             "symbol": symbol,
             "timeframe": timeframe,
             "transitions": [t.to_dict() for t in transitions],
             "count": len(transitions),
-            "latest_score": scores[-1],
-            "latest_timestamp": _to_dashboard_tz(arrays["timestamps"][-1]) if arrays["timestamps"] else None,
+            # Bars are returned newest→oldest (desc=True); index [0] = latest.
+            "latest_score": scores[0] if scores else 0.0,
+            "latest_timestamp": _to_dashboard_tz(arrays["timestamps"][0]) if arrays["timestamps"] else None,
         }
+        _transitions_cache[cache_key] = payload
+        return payload
     except HTTPException:
         raise
     except Exception as e:
@@ -178,12 +200,12 @@ async def get_support_resistance(
     symbol: str,
     timeframe: str = "1d",
     limit: int = 500,
-    max_levels: int = 12,
+    max_levels: int = 20,
 ):
     """Detect support and resistance levels for ``symbol`` at ``timeframe``."""
     symbol = symbol.upper()
     try:
-        bars = _load_bars(symbol, timeframe, limit=limit)
+        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
         if len(bars) < 20:
             return {
                 "symbol": symbol,
@@ -193,7 +215,10 @@ async def get_support_resistance(
                 "latest_close": None,
                 "last_index": 0,
             }
-        engine = SupportResistanceEngine(lookback_period=2, lookback_bars=limit)
+        # Engine uses index 0 as "today" / latest and scans toward older bars
+        # for prev-period and swing detection, so it works directly with
+        # _load_bars's desc=True (newest -> oldest) ordering.
+        engine = SupportResistanceEngine(lookback_period=5, lookback_bars=limit)
         result = engine.detect(bars, symbol=symbol, timeframe=timeframe)
         levels = result.levels[:max_levels]
         return {
@@ -228,7 +253,7 @@ async def get_divergences(
     """
     symbol = symbol.upper()
     try:
-        bars = _load_bars(symbol, timeframe, limit=limit)
+        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
         if len(bars) < 30:
             return {
                 "symbol": symbol,
@@ -288,7 +313,7 @@ async def get_recent_bars(
     """
     symbol = symbol.upper()
     try:
-        bars = _load_bars(symbol, timeframe, limit=limit)
+        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
         return {
             "symbol": symbol,
             "timeframe": timeframe,

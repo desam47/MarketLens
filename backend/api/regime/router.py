@@ -11,10 +11,12 @@ from ...market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_bars,
 )
+from backend.api.trend.registry import get_engine as get_shared_trend_engine
 from backend.regime.market_regime_engine import MarketRegimeEngine
 from backend.regime.relative_strength_engine import RelativeStrengthEngine
 from backend.regime.sector_engine import SectorEngine
-from backend.api.ttl_cache import _regime_cache
+from backend.api.ttl_cache import _regime_cache, _sector_cache, _rs_batch_cache, _regime_history_cache
+from backend.api.ttl_cache import _transitions_cache
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,12 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
     """Get or create regime engine for symbol, seeding from DB on first access."""
     symbol = symbol.upper()
     if symbol not in _engines:
-        engine = MarketRegimeEngine(symbol)
+        # Phase 3.9.2: inject the shared TrendEngine so the regime engine
+        # does not build its own private TrendEngine. Both engines now
+        # share warmed-up indicator state; ticks delivered to the trend
+        # engine automatically feed the regime engine via its shared ref.
+        shared_trend = get_shared_trend_engine(symbol)
+        engine = MarketRegimeEngine(symbol, trend_engine=shared_trend)
         _engines[symbol] = engine
         # Seed historical data from DB so we return real signals immediately
         count = seed_engine_from_bars(symbol, "1m", engine.update)
@@ -109,10 +116,13 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
         # high, low, open_price) but engine.update only accepts the latter
         # six — wrap it to drop the two extras.
         def bar_update(**kwargs):
-            logger.debug(
-                f"bar_update callback invoked for {symbol} @ {kwargs.get('timestamp')} "
-                f"(price={kwargs.get('price')})"
-            )
+            # Phase 3.9.9: guard the f-string so it doesn't evaluate on every
+            # tick when DEBUG is off (this fires for every 1m bar × every symbol).
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"bar_update callback invoked for {symbol} @ {kwargs.get('timestamp')} "
+                    f"(price={kwargs.get('price')})"
+                )
             engine.update(
                 price=kwargs["price"],
                 volume=kwargs["volume"],
@@ -125,6 +135,11 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
             # the freshly-updated regime engine state (not the 30s-TTL stale
             # response that would otherwise be returned).
             _regime_cache.pop(symbol, None)
+            # Invalidate the transitions TTL cache so the latest score/timestamp
+            # and transition list reflect the newly-ingested bar.
+            for key in list(_transitions_cache.keys()):
+                if key.startswith(f"{symbol}:"):
+                    _transitions_cache.pop(key, None)
         # NOTE: quote-frequency updates are intentionally NOT fed to the regime
         # engine. Alpaca free tier stops returning fresh quotes after 16:00 ET,
         # causing stale 16:00:05 timestamps to overwrite the correct bar-driven
@@ -186,12 +201,16 @@ async def get_current_regime(symbol: str):
 
 @router.get("/{symbol}/history")
 async def get_regime_history(symbol: str, limit: int | None = 100):
-    """Get regime history for symbol"""
+    """Get regime history for symbol (60s TTL cache)."""
+    key = f"{symbol.upper()}:{limit}"
+    cached = _regime_history_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         engine = get_engine(symbol.upper())
         history = engine.get_regime_history(limit=limit)
 
-        return {
+        payload = {
             "symbol": symbol.upper(),
             "history": [
                 {
@@ -207,6 +226,8 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
             ],
             "count": len(history)
         }
+        _regime_history_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting regime history for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -268,17 +289,67 @@ def _get_sector_engine(symbol: str) -> SectorEngine:
     return _sector_engines[symbol]
 
 
+@router.get("/batch/relative-strength")
+async def get_batch_relative_strength(symbols: str):
+    """Batch relative-strength signals for up to 50 symbols at once.
+
+    Replaces N separate ``/{symbol}/relative-strength`` calls with a single
+    HTTP round-trip, reducing watchlist load time significantly when many
+    symbols are present.
+    """
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="No symbols provided")
+    if len(sym_list) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 symbols per batch")
+
+    cache_key = ",".join(sorted(sym_list))
+    cached = _rs_batch_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        results: dict[str, dict] = {}
+        for sym in sym_list:
+            try:
+                engine = _get_rs_engine(sym)
+                signals = engine.compute()
+                results[sym] = {
+                    "symbol": sym,
+                    "signals": [s.to_dict() for s in signals],
+                    "count": len(signals),
+                }
+            except Exception as e:
+                logger.warning(f"Batch RS failed for {sym}: {e}")
+                results[sym] = {"symbol": sym, "signals": [], "count": 0, "error": str(e)}
+
+        payload = {"results": results, "count": len(results)}
+        _rs_batch_cache[cache_key] = payload
+        return payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch relative-strength error: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get("/{symbol}/relative-strength")
 async def get_relative_strength(symbol: str):
-    """Phase 8: relative-strength signals vs SPY and QQQ benchmarks."""
+    """Phase 8: relative-strength signals vs SPY and QQQ benchmarks (60s TTL cache)."""
+    key = symbol.upper()
+    cached = _rs_batch_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         engine = _get_rs_engine(symbol.upper())
         signals = engine.compute()
-        return {
+        payload = {
             "symbol": symbol.upper(),
             "signals": [s.to_dict() for s in signals],
             "count": len(signals),
         }
+        _rs_batch_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting relative strength for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -286,11 +357,17 @@ async def get_relative_strength(symbol: str):
 
 @router.get("/{symbol}/sector")
 async def get_sector_signal(symbol: str):
-    """Phase 8: sector alignment signal for symbol."""
+    """Phase 8: sector alignment signal for symbol (5-min TTL cache)."""
+    key = symbol.upper()
+    cached = _sector_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         engine = _get_sector_engine(symbol.upper())
         signal = engine.get_current_signal()
-        return signal.to_dict()
+        payload = signal.to_dict()
+        _sector_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting sector signal for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

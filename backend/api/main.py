@@ -44,7 +44,10 @@ from backend.api.ai_templates.router import router as ai_templates_router
 from backend.api.ai.jobs import router as ai_jobs_router
 
 # Configure structured JSON logging
-configure_logging(settings.debug)
+configure_logging(
+    debug=settings.debug,
+    log_level=settings.log_level,
+)
 logger = logging.getLogger(__name__)
 
 # All timestamps in responses → America/New_York (EST/EDT auto-handled).
@@ -82,6 +85,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Alembic migration failed; continuing", exc_info=True)
 
+    # Clear Redis cache on startup to ensure fresh data
+    try:
+        import redis
+        from backend.config.settings import settings as _s
+        redis_url = _s.redis.url
+        r = redis.from_url(redis_url)
+        r.flushall()
+        logger.info("Redis cache cleared on startup")
+    except Exception as e:
+        logger.warning("Redis cache clear failed; continuing", exc_info=True)
+
     alerts_engine.startup()
     start_memory_profiling()
     initialize_tracing()
@@ -111,6 +125,25 @@ async def lifespan(app: FastAPI):
             logger.info(f"Trend engine warmup: {sym} ({count} bars)")
     except Exception as e:
         logger.warning(f"Trend engine warmup failed: {e}")
+
+    # Phase 3.6.2: pre-warm the market-context engine so the first
+    # /api/market-context/current request hits a fully-seeded aggregate
+    # (SPY/QQQ/IWM/VIX sub-regimes warm from 1d history + live-tick
+    # registration), not a cold singleton that has to seed on the request
+    # path. Mirrors the trend warmup pattern above.
+    try:
+        from backend.api.market_context.router import get_engine
+        mc_engine = get_engine()
+        seeded = sum(
+            1 for sym in mc_engine._cfg.indices
+            if mc_engine.sub_engines[sym].get_current_regime() is not None
+        )
+        logger.info(
+            f"Market-context warmup: {seeded}/{len(mc_engine._cfg.indices)} "
+            f"sub-engines warmed"
+        )
+    except Exception as e:
+        logger.warning(f"Market-context warmup failed: {e}")
 
     # Signal hygiene: fill gaps and enforce retention caps on every restart so
     # any ticker added before these fixes get patched automatically.

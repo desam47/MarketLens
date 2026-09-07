@@ -53,33 +53,33 @@ except Exception:
 def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
     """Seed a TrendEngine from historical BarModel rows with full OHLCV.
 
-    Unlike ``seed_engine_from_quotes`` (which only provides price+volume),
-    this replays the real OHLC bars so SuperTrend/EMA/BB indicators have
-    accurate open/high/low data to compute from.  The most impactful
-    difference is for shorter timeframes (15m, 30m) where quote-only
-    seeding causes the indicators to synthesize fake OHLC from close.
-
-    Returns the number of bars seeded.
+    Uses a single ``IN (...)`` query for all timeframes at once — previously
+    made one query per timeframe (10 queries per symbol). Returns the total
+    number of bars seeded across all timeframes.
     """
     db = SessionLocal()
     try:
+        rows = (
+            db.query(BarModel)
+            .filter(
+                BarModel.symbol == symbol.upper(),
+                BarModel.timeframe.in_(_TREND_TIMEFRAMES),
+            )
+            .order_by(BarModel.timestamp.asc())
+            .limit(200 * len(_TREND_TIMEFRAMES))
+            .all()
+        )
         seeded = 0
-        for tf_str in _TREND_TIMEFRAMES:
+        by_tf: dict[str, list] = {}
+        for bar in rows:
+            by_tf.setdefault(bar.timeframe, []).append(bar)
+
+        for tf_str, bars in by_tf.items():
             try:
                 tf = Timeframe(tf_str)
             except ValueError:
                 continue
-            rows = (
-                db.query(BarModel)
-                .filter(
-                    BarModel.symbol == symbol.upper(),
-                    BarModel.timeframe == tf_str,
-                )
-                .order_by(BarModel.timestamp.asc())
-                .limit(200)
-                .all()
-            )
-            for bar in rows:
+            for bar in bars:
                 try:
                     engine.update(
                         price=float(bar.close or 0.0),
@@ -90,14 +90,81 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
                     seeded += 1
                 except Exception:
                     pass  # Warmup errors are non-fatal
-            if rows:
-                logger.info(
-                    f"Seeded {symbol}/{tf_str} with {len(rows)} bars "
+            if bars:
+                logger.debug(
+                    f"Seeded {symbol}/{tf_str} with {len(bars)} bars "
                     "(full OHLCV warmup)"
                 )
         return seeded
     finally:
         db.close()
+
+
+def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
+    """Seed multiple trend engines from a single ``IN (...)`` query.
+
+    Phase 3.9.3: previously each engine was seeded with its own per-symbol
+    query (and before that, 10 per-timeframe queries × N symbols). This
+    helper collapses the entire startup warmup into one round-trip: one
+    query for all (symbol, timeframe) rows, then Python dispatches into
+    each engine's per-timeframe state.
+    """
+    if not symbols:
+        return {}
+
+    db = SessionLocal()
+    try:
+        # Single query for all bars across all symbols and timeframes.
+        rows = (
+            db.query(BarModel)
+            .filter(
+                BarModel.symbol.in_([s.upper() for s in symbols]),
+                BarModel.timeframe.in_(_TREND_TIMEFRAMES),
+            )
+            .order_by(BarModel.timestamp.asc())
+            .limit(200 * len(_TREND_TIMEFRAMES) * len(symbols))
+            .all()
+        )
+    finally:
+        db.close()
+
+    # Group rows by symbol+timeframe so each engine gets its own slices.
+    grouped: dict[str, dict[str, list[BarModel]]] = {}
+    for bar in rows:
+        grouped.setdefault(bar.symbol, {}).setdefault(bar.timeframe, []).append(bar)
+
+    results: dict[str, int] = {}
+    for symbol in symbols:
+        try:
+            engine = get_engine(symbol)
+            seeded = 0
+            tf_buckets = grouped.get(symbol.upper(), {})
+            for tf_str, bars in tf_buckets.items():
+                try:
+                    tf = Timeframe(tf_str)
+                except ValueError:
+                    continue
+                for bar in bars:
+                    try:
+                        engine.update(
+                            price=float(bar.close or 0.0),
+                            volume=int(bar.volume or 0),
+                            timestamp=bar.timestamp,
+                            only_timeframe=tf,
+                        )
+                        seeded += 1
+                    except Exception:
+                        pass  # Warmup errors are non-fatal
+            results[symbol] = seeded
+            if seeded:
+                logger.info(
+                    f"Bulk-seeded trend engine for {symbol} "
+                    f"({seeded} bars from shared BarModel query)"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to bulk-seed trend engine for {symbol}: {e}")
+            results[symbol] = 0
+    return results
 
 
 def warmup_engines() -> dict[str, int]:
@@ -121,19 +188,16 @@ def warmup_engines() -> dict[str, int]:
     except Exception:
         symbols = _WARMUP_SYMBOLS
 
-    results = {}
-    for symbol in symbols:
-        try:
-            engine = get_engine(symbol)
-            bar_count = _seed_from_bar_model(symbol, engine)
-            results[symbol] = bar_count
+    # Phase 3.9.3: single batched query instead of N per-symbol queries.
+    # Engines are still created lazily via get_engine() so the per-symbol
+    # seed loop only adds bars, not extra DB hits.
+    results = _batch_seed_engines(symbols)
+    for sym, count in results.items():
+        if count:
             logger.info(
-                f"Warmed up trend engine for {symbol} "
-                f"({bar_count} bars seeded from BarModel)"
+                f"Warmed up trend engine for {sym} "
+                f"({count} bars seeded from BarModel)"
             )
-        except Exception as e:
-            logger.warning(f"Failed to warm up trend engine for {symbol}: {e}")
-            results[symbol] = 0
     return results
 
 

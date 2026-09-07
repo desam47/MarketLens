@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
-from backend.api.ttl_cache import _trend_cache
+from backend.api.ttl_cache import _trend_cache, _trend_history_cache
 
 from .registry import get_engine
 
@@ -108,7 +108,11 @@ async def clear_trend_cache(symbol: str, timeframe: str):
 
 @router.get("/{symbol}/history/{timeframe}")
 async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100):
-    """Get trend history for symbol and timeframe"""
+    """Get trend history for symbol and timeframe (60s TTL cache)."""
+    key = f"{symbol.upper()}:{timeframe}:{limit}"
+    cached = _trend_history_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         from backend.engines.timeframe import Timeframe
 
@@ -120,7 +124,7 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
         engine = get_engine(symbol.upper())
         history = engine.get_trend_history(tf, limit=limit)
 
-        return {
+        payload = {
             "symbol": symbol.upper(),
             "timeframe": timeframe,
             "history": [
@@ -135,6 +139,8 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
             ],
             "count": len(history),
         }
+        _trend_history_cache[key] = payload
+        return payload
     except HTTPException:
         raise
     except Exception as e:

@@ -26,6 +26,7 @@ from ...multitimeframe.multi_timeframe_engine import (
 
 from ...market_data.services.engine_seeder import engine_registry
 from ..trend.registry import get_engine as get_shared_trend_engine
+from backend.api.ttl_cache import _confluence_cache, _mtf_history_cache
 
 # All timestamps in this response are emitted in America/New_York so the
 # dashboard renders them in EST/EDT without each caller converting.
@@ -159,13 +160,17 @@ async def get_current_confluence(
     symbol: str,
     preset: str = Query(default="day_trading", description="Trading style preset: scalper, day_trading, swing, or all"),
 ):
-    """Get current multi-timeframe confluence for symbol"""
+    """Get current multi-timeframe confluence for symbol (30s TTL cache)."""
+    key = f"{symbol.upper()}:{preset}"
+    cached = _confluence_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         engine = get_engine(symbol.upper(), preset=preset)
         confluence_signal = engine.get_current_confluence()
 
         if confluence_signal is None:
-            return {
+            payload = {
                 "symbol": symbol.upper(),
                 "direction": "neutral",
                 "strength": 0.0,
@@ -180,32 +185,33 @@ async def get_current_confluence(
                 "higher_direction": "no_signal",
                 "preset": engine.preset_name,
             }
-
-        # Convert timeframe signals to serializable format
-        timeframe_signals = {}
-        for tf, signal in confluence_signal.timeframe_signals.items():
-            timeframe_signals[tf.value] = {
-                "direction": signal.direction.value,
-                "strength": signal.strength.value,
-                "confidence": signal.confidence,
-                "timestamp": _to_dashboard_tz(signal.timestamp),
+        else:
+            # Convert timeframe signals to serializable format
+            timeframe_signals = {}
+            for tf, signal in confluence_signal.timeframe_signals.items():
+                timeframe_signals[tf.value] = {
+                    "direction": signal.direction.value,
+                    "strength": signal.strength.value,
+                    "confidence": signal.confidence,
+                    "timestamp": _to_dashboard_tz(signal.timestamp),
+                }
+            payload = {
+                "symbol": confluence_signal.symbol,
+                "direction": confluence_signal.direction.value,
+                "strength": confluence_signal.strength,
+                "alignment_score": confluence_signal.alignment_score,
+                "timeframe_signals": timeframe_signals,
+                "timestamp": _to_dashboard_tz(confluence_signal.timestamp),
+                "bullish_alignment": getattr(confluence_signal, "bullish_alignment", 0.0),
+                "bearish_alignment": getattr(confluence_signal, "bearish_alignment", 0.0),
+                "conflicting": getattr(confluence_signal, "conflicting", 0),
+                "short_term_direction": confluence_signal.short_term_direction.value,
+                "intermediate_direction": confluence_signal.intermediate_direction.value,
+                "higher_direction": confluence_signal.higher_direction.value,
+                "preset": getattr(confluence_signal, "preset", engine.preset_name),
             }
-
-        return {
-            "symbol": confluence_signal.symbol,
-            "direction": confluence_signal.direction.value,
-            "strength": confluence_signal.strength,
-            "alignment_score": confluence_signal.alignment_score,
-            "timeframe_signals": timeframe_signals,
-            "timestamp": _to_dashboard_tz(confluence_signal.timestamp),
-            "bullish_alignment": getattr(confluence_signal, "bullish_alignment", 0.0),
-            "bearish_alignment": getattr(confluence_signal, "bearish_alignment", 0.0),
-            "conflicting": getattr(confluence_signal, "conflicting", 0),
-            "short_term_direction": confluence_signal.short_term_direction.value,
-            "intermediate_direction": confluence_signal.intermediate_direction.value,
-            "higher_direction": confluence_signal.higher_direction.value,
-            "preset": getattr(confluence_signal, "preset", engine.preset_name),
-        }
+        _confluence_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting confluence for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -217,12 +223,16 @@ async def get_mtf_history(
     limit: int | None = 100,
     preset: str = Query(default="day_trading", description="Trading style preset"),
 ):
-    """Get multi-timeframe history for symbol"""
+    """Get multi-timeframe history for symbol (60s TTL cache)."""
+    key = f"{symbol.upper()}:{preset}:{limit}"
+    cached = _mtf_history_cache.get(key)
+    if cached is not None:
+        return cached
     try:
         engine = get_engine(symbol.upper(), preset=preset)
         history = engine.get_confluence_history(limit=limit)
 
-        return {
+        payload = {
             "symbol": symbol.upper(),
             "history": [
                 {
@@ -235,6 +245,8 @@ async def get_mtf_history(
             ],
             "count": len(history),
         }
+        _mtf_history_cache[key] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting MTF history for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

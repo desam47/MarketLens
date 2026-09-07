@@ -5,6 +5,8 @@ Surfaces the aggregate MarketContextSignal that combines SPY/QQQ/IWM/VIX
 sub-regimes. Single global engine (no symbol) — there's just one market
 context at a time.
 """
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -12,11 +14,11 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 
 from backend.utils.timezone import ensure_aware_ny
-from ...market_data.services.engine_seeder import (
-    engine_registry,
-    seed_engine_from_quotes,
-)
+from ...market_data.services.engine_seeder import engine_registry
+from backend.database import SessionLocal
+from backend.models.market_data_sql import BarModel
 from backend.regime.market_context_engine import MarketContextEngine
+from backend.api.ttl_cache import _context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,11 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
 _engine: MarketContextEngine | None = None
 
 
-def _seed_sub_engine(symbol: str, context_engine: MarketContextEngine) -> int:
+def _seed_sub_engine(
+    symbol: str,
+    context_engine: MarketContextEngine,
+    db: SessionLocal | None = None,
+) -> int:
     """Replay a sub-index's stored daily bars through its sub-engine.
 
     Returns the number of bars replayed. Without seeding, sub-engines start
@@ -46,15 +52,18 @@ def _seed_sub_engine(symbol: str, context_engine: MarketContextEngine) -> int:
 
     Seeds from BarModel (OHLC bars) rather than QuoteModel because some
     indices (QQQ, IWM) have daily bars in the DB but no quote rows.
-    """
-    from backend.database import SessionLocal
-    from backend.models.market_data_sql import BarModel
 
+    Phase 3.9.10: accepts an optional shared ``db`` session so the caller
+    can batch all 4 sub-engine seeds into a single SessionLocal open.
+    """
     sub = context_engine.sub_engines.get(symbol.upper())
     if sub is None:
         return 0
 
-    db = SessionLocal()
+    own_session = db is None
+    if own_session:
+        from backend.database import SessionLocal as _SessionLocal
+        db = _SessionLocal()
     try:
         rows = (
             db.query(BarModel)
@@ -79,7 +88,8 @@ def _seed_sub_engine(symbol: str, context_engine: MarketContextEngine) -> int:
             )
         return len(rows)
     finally:
-        db.close()
+        if own_session:
+            db.close()
 
 
 def get_engine() -> MarketContextEngine:
@@ -91,16 +101,21 @@ def get_engine() -> MarketContextEngine:
         # signals immediately after a restart, not just after enough new
         # ticks arrive. (Live ticks continue flowing via the registry
         # registration below — the seed only warms up the indicators.)
-        for sym in _engine._cfg.indices:
-            try:
-                count = _seed_sub_engine(sym, _engine)
-                if count > 0:
-                    logger.info(
-                        f"Seeded market-context sub-engine for {sym} "
-                        f"with {count} historical quotes"
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to seed sub-engine for {sym}: {e}")
+        # Phase 3.9.10: one shared SessionLocal for all 4 sub-engines.
+        db = SessionLocal()
+        try:
+            for sym in _engine._cfg.indices:
+                try:
+                    count = _seed_sub_engine(sym, _engine, db=db)
+                    if count > 0:
+                        logger.info(
+                            f"Seeded market-context sub-engine for {sym} "
+                            f"with {count} historical quotes"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to seed sub-engine for {sym}: {e}")
+        finally:
+            db.close()
         # Register each sub-engine with the live-tick path so it
         # automatically receives any incoming quotes for SPY/QQQ/IWM/VIX.
         # The lambda uses **kwargs because ``dispatch_quote`` invokes callbacks
@@ -118,12 +133,18 @@ def get_engine() -> MarketContextEngine:
 
 @router.get("/current")
 async def get_current_context():
-    """Get the current market-wide context signal."""
+    """Get the current market-wide context signal (10s TTL cache).
+
+    This is the most-frequently-polled endpoint from the dashboard header.
+    """
+    cached = _context_cache.get("market_context")
+    if cached is not None:
+        return cached
     try:
         engine = get_engine()
         signal = engine.get_current_context()
         if signal is None:
-            return {
+            payload = {
                 "regime": "unknown",
                 "confidence": 0.0,
                 "trend_strength": 0.0,
@@ -133,9 +154,11 @@ async def get_current_context():
                 "contributing_factors": {"reason": "no_data"},
                 "timestamp": None,
             }
-        d = signal.to_dict()
-        d["timestamp"] = _to_dashboard_tz(signal.timestamp)
-        return d
+        else:
+            payload = signal.to_dict()
+            payload["timestamp"] = _to_dashboard_tz(signal.timestamp)
+        _context_cache["market_context"] = payload
+        return payload
     except Exception as e:
         logger.error(f"Error getting market context: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
