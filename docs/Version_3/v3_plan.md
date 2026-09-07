@@ -1,9 +1,9 @@
 # Version 3 — Database, Charts, Logging, Dashboard, 1m-Only Storage
 
 **Date:** 2026-09-01
-**Last updated:** 2026-09-04
-**Status:** Active (Phase 3.6 complete; Phases 3.4/3.5 still planned)
-**Scope:** Platform hardening and UX polish across five areas: timeframe resampling, database backup/optimization, chart expansion, structured logging, and dashboard performance.
+**Last updated:** 2026-09-05
+**Status:** Active (Phases 3.6, 3.7, 3.8 complete; Phase 3.9 done — 21/21 items ✅ 2026-09-05)
+**Scope:** Platform hardening and UX polish across five areas: timeframe resampling, database backup/optimization, chart expansion, structured logging, dashboard performance, and post-3.6 bottleneck cleanup.
 
 ---
 
@@ -339,7 +339,10 @@ Phase 3.2 (DB)         ──┤
 Phase 3.3 (Retention)  ──┤
 Phase 3.4 (Charts)     ──┼── can run concurrently in separate worktrees
 Phase 3.5 (Logging)    ──┤
-Phase 3.6 (Perf)       ──┘  (✅ complete)
+Phase 3.6 (Perf)       ──┤  (✅ complete)
+Phase 3.7 (Write-resample) ─┤  (✅ complete)
+Phase 3.8 (Gap-fill)  ─┤  (✅ complete)
+Phase 3.9 (Bottlenecks)──┘  (✅ complete — 21/21 done)
 ```
 
 Recommended order: **3.1 → 3.2 → 3.3 → 3.5 → 3.4 → 3.6**. Phase 3.1 (resampling) changes the ingestion pipeline and DB schema — do it first so everything downstream benefits. Then database (3.2) to back up the new schema. Logging (3.5) observes the new ingestion flow. Charts (3.4) is the largest UI surface. Dashboard performance (3.6) consumes outputs from all the others and is now complete.
@@ -550,6 +553,197 @@ All three providers implement the same `BaseMarketDataProvider` interface and al
 - `SELECT * FROM bars WHERE timeframe='1d' AND timestamp LIKE '%13:30%';` — 0 rows.
 - All 10 timeframes have rows after 1 day: `SELECT timeframe, COUNT(*) FROM bars GROUP BY timeframe;`
 - All resampler tests still pass.
+
+---
+
+## Phase 3.8 — Auto Live Gap-fill Loop
+
+**Why now:** Phase 3.7's resample-at-write ingestion runs every 2 min for intraday TFs and hourly/daily for higher TFs, but mid-session gaps still appear (e.g. Alpaca free-tier 15-min lag, missed Webull bars). Phase 3.8 closes those gaps automatically every 5 minutes during RTH.
+
+### Items
+
+#### 3.8.1 RTH-gated gap-fill loop
+- New: `_gapfill_1m_loop()` + `_gapfill_1m_once()` in `backend/market_data/services/ingestion_service.py`
+- Gated: only fires during NYSE RTH (09:30–16:00 ET, Mon–Fri)
+- Runs every 5 minutes with ±15s jitter to avoid burst alignment
+- For each watched symbol: queries `MAX(timestamp)` for 1m bars in DB → calls `_fetch_tier1_1m_bars(symbol, days=1)` → filters to bars strictly newer than DB's latest → upserts via `_write_bars_in_chunks`
+- Idempotent: never overwrites history; dedupes by timestamp
+
+#### 3.8.2 Cascade purge on watchlist removal
+- When a symbol is removed from its last watchlist, purge all related data:
+  - `bars` (existing)
+  - `historical_signals` (existing)
+  - `quotes` (new: `quote_repository.delete_quotes_for_symbol`)
+  - `market_status` (new: `delete_market_status_for_symbol`)
+- Added to `backend/api/watchlist/router.py`
+
+#### 3.8.3 Startup seed check
+- At ingestion service startup: for each watched symbol, query `MAX(timestamp)` for 1m bars
+- If `MAX(timestamp)` is older than 2 minutes during RTH → run full 1000-day backfill
+- If `MAX(timestamp)` is stale (>1 bar old) during RTH → run gap-fill once immediately
+
+### Verification
+```bash
+# During RTH, trigger a gap: manually delete the latest 1m bar for a symbol
+# Then wait 5 minutes for the loop to fire, or trigger manually via:
+# The gap-fill is also called at server startup if a gap is detected.
+# Verify bars are re-inserted:
+# SELECT timestamp FROM bars WHERE symbol='AAPL' AND timeframe='1m' ORDER BY timestamp DESC LIMIT 3;
+```
+
+---
+
+## Phase 3.9 — Backend + Frontend Bottleneck Cleanup
+
+**Date:** 2026-09-05
+**Status:** 🟡 PLANNED (identified via whole-codebase scan)
+**Why now:** After Phase 3.6 closed the cache/pre-warm work, a fresh end-to-end scan surfaced 12 backend and 12 frontend bottlenecks that, while individually small, are the difference between "fast on the dashboard" and "fast everywhere." Some are event-loop blockers (HIGH), some are CPU/memory multipliers (HIGH), and some are quality-of-life.
+
+**Scan methodology:** Two parallel agents read all route handlers, repositories, engine files, components, and pages. Findings ranked by severity grounded in code, not speculation.
+
+### Backend bottlenecks
+
+#### 3.9.1 Sync DB calls inside async route handlers — **HIGH** ✅ (2026-09-05)
+**File:** `backend/api/analysis/router.py:46-53` (`_load_bars`)
+`_load_bars` opens `SessionLocal()` and calls `bar_repository.get_bars()` synchronously, then is called from 4 `async def` endpoints (`get_transitions`, `get_support_resistance`, `get_divergences`, `get_recent_bars`). Every request to these endpoints blocks the event loop on a SQLite query.
+**Fix:** Wrap in `asyncio.to_thread`:
+```python
+bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit)
+```
+Apply the same pattern to any other async route that touches the DB synchronously.
+
+#### 3.9.2 3x duplicate `TrendEngine` stacks per symbol — **HIGH** ✅ (2026-09-05)
+**File:** `backend/regime/market_regime_engine.py:78-79` + `backend/multitimeframe/multi_timeframe_engine.py:256-257` + `backend/regime/relative_strength_engine.py:70-73` + `backend/regime/sector_engine.py`
+`MarketRegimeEngine` creates `TrendEngine(symbol)` + `MultiTimeframeEngine(symbol)`. `MultiTimeframeEngine` already creates a `TrendEngine` per timeframe. `RelativeStrengthEngine` creates a fresh `TrendEngine` per benchmark per symbol. `SectorEngine` creates 3 more (stock + sector ETF + SPY). For 10 symbols → 30+ `TrendEngine` instances, each with 10 timeframes and multiple indicators — a multiplicative memory/CPU multiplier.
+**Fix:** Constructor-inject a shared `TrendEngine` instance. `MarketRegimeEngine.__init__` now accepts `trend_engine=` + `multitimeframe_engine=`; `RelativeStrengthEngine.__init__` accepts `trend_engines: dict[str, TrendEngine] | None`; `SectorEngine.__init__` accepts `stock_engine=`/`sector_engine=`/`market_engine=`. Router injects shared engines from `backend.api.trend.registry.get_engine(symbol)`. Per-TF engines inside `MultiTimeframeEngine` were left as-is: their `_last_price` duplicate-detection is intentional and a unit test depends on per-TF independence.
+
+#### 3.9.3 80 sequential DB queries at startup (per-TF seeding) — **HIGH** ✅ (2026-09-05)
+**File:** `backend/api/trend/registry.py:53-100` (`_seed_from_bar_model`)
+Loops over 10 timeframes, runs a separate `db.query(BarModel).filter(...).all()` per timeframe per symbol. `warmup_engines()` then iterates every watched symbol serially. With 8 symbols × 10 TFs → 80 sequential queries on every startup.
+**Fix:** Single `IN (...)` query, bucket in Python:
+```python
+rows = db.query(BarModel).filter(
+    BarModel.symbol == sym,
+    BarModel.timeframe.in_(timeframes),
+).all()
+for row in rows:
+    bucket[row.timeframe].append(row)
+```
+
+#### 3.9.4 System health: 6 sequential count/min/max queries — **MED** ✅ (2026-09-05)
+**File:** `backend/api/system/router.py:_safe_bar_counts` (lines 81-144)
+Six separate `db.query(func.count/min/max).scalar()` calls — one per aggregation. Each is a round-trip to SQLite.
+**Fix:** Replaced with single raw SQL `SELECT COUNT(*), SUM(CASE WHEN source='1m' THEN 1 ELSE 0 END), MIN(timestamp), MAX(timestamp), COUNT(DISTINCT symbol) FROM bars` returning one row.
+
+#### 3.9.5 Sync `requests.get` in FinnhubService — **MED** ✅ (2026-09-05)
+**File:** `backend/market_data/services/finnhub_service.py:45`
+`_get` calls `requests.get(url, params=..., timeout=...)` synchronously. Any async endpoint that calls Finnhub blocks the event loop.
+**Fix:** Added `async def _get_async` using `asyncio.to_thread`; all 8 route handlers wrapped. Synchronous `_get` retained for non-async callers.
+
+#### 3.9.6 50 fresh `TrendEngine` instances per scan — **MED** ✅ (2026-09-05)
+**File:** `backend/scanner/scanner.py:98`
+`scan_symbol` calls `TrendEngine(symbol)` inside the scan loop. With 50 watchlist symbols, this creates 50 separate `TrendEngine` instances that are never shared between scans.
+**Fix:** `from backend.api.trend.registry import get_engine as get_trend_engine`; `scan_symbol` now calls `get_trend_engine(symbol)`.
+
+#### 3.9.7 Lazy `__import__` inside scan loop — **MED** ✅ (2026-09-05)
+**File:** `backend/scanner/scanner.py:115-116`
+`__import__('backend.engines.timeframe', fromlist=['Timeframe'])` runs once per symbol per timeframe (6 TFs × N symbols).
+**Fix:** Replaced with direct `getattr(Timeframe, tf_str)` — `Timeframe` is now imported at module top.
+
+#### 3.9.8 Blocking `run_experiment` in strategy_lab — **MED** ✅ (2026-09-05)
+**File:** `backend/api/strategy_lab/router.py:create_experiment` (~line 288)
+`run_experiment(config)` runs synchronously inside an `async def` endpoint. Backtests can run seconds-to-minutes, blocking the event loop.
+**Fix:** `result = await asyncio.to_thread(run_experiment, config)`.
+
+#### 3.9.9 Debug f-string on every 1m bar tick — **LOW** ✅ (2026-09-05)
+**File:** `backend/market_data/services/engine_seeder.py:195-198` + `backend/api/regime/router.py:111-115`
+`logger.debug(f"dispatch_bar: {symbol}/{timeframe} @ {timestamp} — ...")` runs on every 1m bar (60/s/symbol). F-string interpolation runs even with `DEBUG` off.
+**Fix:** Wrapped both call sites in `if logger.isEnabledFor(logging.DEBUG):`.
+
+#### 3.9.10 4 separate `SessionLocal()` opens for market-context sub-engines — **LOW** ✅ (2026-09-05)
+**File:** `backend/api/market_context/router.py:51-83` (`_seed_sub_engine`)
+Opens a new `SessionLocal()` per sub-engine on first request. While properly closed, 4 session opens per first request is avoidable.
+**Fix:** `_seed_sub_engine(symbol, engine, db=None)` accepts an optional shared session; `get_engine()` opens one session and passes it to all 4 sub-engine seeds. Also added `from __future__ import annotations` to fix pre-existing `TypeError` on `SessionLocal | None = None` default.
+
+#### 3.9.11 O(N²) z-score loop in transitions — **LOW** ✅ (2026-09-05)
+**File:** `backend/api/analysis/router.py:144-159`
+Slices `window_closes = closes[i-sma_window:i+1]` inside a loop over all N bars and re-sums the slice. O(N × sma_window) = O(N²) for the inner sum.
+**Fix:** O(N) running-sum/sum-of-squares using a deque — subtract leaving bar, add entering bar, no re-slicing.
+
+### Frontend bottlenecks
+
+#### 3.9.12 N concurrent `/relative-strength` calls in WatchlistTable — **HIGH** ✅ (2026-09-05)
+**File:** `frontend/src/components/WatchlistTable.tsx:185-189`
+```typescript
+const rsResults = await Promise.allSettled(
+  baseRows.map(row => api.getRelativeStrength(row.symbol).catch(() => null))
+);
+```
+A 50-symbol watchlist fires 50 concurrent HTTP requests to `/regime/{symbol}/relative-strength` on every scan refresh — burst + rate-limit risk + delays table render until all settle.
+**Fix:** Add backend batch endpoint `GET /api/regime/batch/relative-strength?symbols=AAPL,MSFT,...` and change frontend to a single call. Alternatively, throttle with a 5-wide semaphore.
+
+#### 3.9.13 `Dashboard.fetchData` not memoized — **HIGH** ✅ (2026-09-05)
+**File:** `frontend/src/pages/Dashboard.tsx:41-93`
+`fetchData` is a plain async function referenced in two `useEffect` deps (lines 95-98, 100-105). Its reference identity changes every render, so both effects re-fire every render. The auto-refresh effect (line 100-105) is particularly at risk of an unbounded re-fetch loop.
+**Fix:** `const fetchData = useCallback(async () => { ... }, [symbol, selectedPreset])`. Move `safeCall` to module level.
+
+#### 3.9.14 `WatchlistPage.fetchWatchlists` not memoized — **MED** ✅ (2026-09-05)
+**File:** `frontend/src/pages/WatchlistPage.tsx:34-67`
+Used as a `useEffect` dep at line 69-72. Without `useCallback`, the effect re-runs every render. `handleAddSymbol` and `handleDeleteWatchlist` re-fire the unbounded fetch too.
+**Fix:** Wrapped `fetchWatchlists` in `useCallback` with `[api]` as deps; `useEffect` dep list updated to `[fetchWatchlists]`.
+
+#### 3.9.15 `SymbolPage` panel functions not memoized — **MED** ✅ (2026-09-05)
+**File:** `frontend/src/pages/SymbolPage.tsx`
+`TransitionsPanel` (line 103), `SRPanel` (line 175), `DivergencesPanel` (line 238), `BarsTable` (line 274) are plain function components. When `SymbolPage` re-renders (timeframe change, chart mode toggle), all four panels re-evaluate.
+**Fix:** Wrapped each in `React.memo`; extracted `recent` slice in `TransitionsPanel` to `useMemo`. Memo compares via `prev.props.X !== next.props.X` shallow equality.
+
+#### 3.9.16 `MultiTimeframeChartGrid.handleChartTypeChange` not memoized — **MED** ✅ (2026-09-05)
+**File:** `frontend/src/components/MultiTimeframeChartGrid.tsx:128`
+Plain function passed as a prop to each `CandlestickChart` (which is `React.memo`-ed). A new function reference on every render causes all chart panels to re-evaluate their memo comparison.
+**Fix:** Wrapped in `useCallback` with `[setChartType]` as deps.
+
+#### 3.9.17 `ScannerRow` memo fails on any single-symbol update — **MED** ✅ (2026-09-05)
+**File:** `frontend/src/pages/ScannerPage.tsx:55` (React.memo)
+`errors` prop is a `Record<string, string>` passed as a new reference from `useScannerStream` state. Any single-symbol update makes the whole `errors` object a fresh reference → all visible rows re-render.
+**Fix:** At the parent level, pass per-row `errors[sym]` (string | undefined) instead of the whole object. `ScannerRow` now accepts `error?: string` prop, defaulting to `undefined`.
+
+#### 3.9.18 Inline style objects in SymbolPage panels — **LOW** ✅ (2026-09-05)
+**File:** `frontend/src/pages/SymbolPage.tsx` (lines 116, 131-133, 136, 150, 152, 194, 247, 300, 307, 309)
+Inline `style={{ ... }}` creates fresh object literals every render. If any parent wrapper is memoized, these new refs break the shallow-equal check.
+**Fix:** Hoisted all repeated `style={{...}}` literals to module-level constants: `PANEL_STYLE`, `PANEL_HEADER_STYLE`, `ERROR_BOX_STYLE`, etc.
+
+#### 3.9.19 `WatchlistPage:74` `watchlists.find(...)` not memoized — **LOW** ✅ (2026-09-05)
+**File:** `frontend/src/pages/WatchlistPage.tsx:74`
+Scans the watchlists array on every render.
+**Fix:** Wrapped in `useMemo(() => watchlists.find(w => w.id === selectedId), [watchlists, selectedId])`.
+
+#### 3.9.20 `chartMath.ts` WeakMap keyed by array identity — **LOW** ✅ (2026-09-05)
+**File:** `frontend/src/components/chartMath.ts:81, 254-260`
+`WeakMap<Bar[], ChartPoint[]>` keyed by array reference. Backend returns a new array on every fetch → cache always misses. WeakMap accumulates entries until GC.
+**Fix:** Replaced identity-keyed `WeakMap` with content-based key: `length + first.timestamp + last.timestamp + middle.timestamp + last.close`. Cache clears when any of those change (new fetch).
+
+#### 3.9.21 `ScannerRow` `Date.now()` per render — **LOW** ✅ (2026-09-05)
+**File:** `frontend/src/pages/ScannerPage.tsx:36-49`
+`freshnessClass` and `freshnessLabel` call `Date.now()` twice per row per WebSocket tick. Cheap individually but wasted work.
+**Fix:** Extracted to module-level `freshnessFromTimestamp(ts: string)` and `freshnessClassFor(ageMs: number)` helpers; row receives `lastUpdatedDisplay` as a prop, so the only `Date.now()` per tick is the single recompute upstream.
+
+### Priority ranking (biggest bang for LOC)
+
+| # | Item | Why | LOC |
+|---|---|---|---|
+| 1 | 3.9.1 async DB calls | 1 wrapper, fixes 4 endpoints; eliminates event-loop blocking | ~10 |
+| 2 | 3.9.12 batch RS endpoint | Turns 50 requests into 1; visible win on large watchlists | ~30 backend + ~10 frontend |
+| 3 | 3.9.13 Dashboard useCallback | One-liner; eliminates potential re-fetch loop | ~5 |
+| 4 | 3.9.3 single-query seeding | Cuts startup by ~80% on warm cache | ~20 |
+| 5 | 3.9.2 engine consolidation | Memory + CPU multiplier; affects all 10-symbol users | ~50 |
+| 6 | 3.9.4-3.9.8 | Various MED wins | ~10-20 each |
+
+### Verification
+- Re-run the Phase 3.6 benchmarks: regime, market-context, trend batch, scanner all still under their baselines
+- New: `GET /api/regime/batch/relative-strength?symbols=AAPL,MSFT` returns the same shape as 50 individual calls, in <1× the latency of one
+- Startup time: `python -c "import time; t=time.perf_counter(); from backend.api.main import app; print(f'{(time.perf_counter()-t)*1000:.0f}ms')"` < 500ms (was ~1.5s with 80 queries)
+- Memory: 10-symbol watchlist should have 30 → 10 `TrendEngine` instances after consolidation
+- No new console warnings or re-render loops in React DevTools profiler
 
 ---
 

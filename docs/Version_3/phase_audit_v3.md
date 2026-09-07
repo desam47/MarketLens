@@ -1,7 +1,7 @@
 # Version 3 Phase Audit
 
-**Last updated:** 2026-09-04
-**Scope:** Database backup/optimization, Bar retention (1000-day rolling window), Charts, Structured logging, Dashboard rebuild
+**Last updated:** 2026-09-05 (Phase 3.5: all 9 items complete — ALL DONE)
+**Scope:** Database backup/optimization, Bar retention (1095-day rolling window), Charts, Structured logging, Dashboard rebuild
 
 ---
 
@@ -11,12 +11,13 @@
 |---|---|---|---|
 | 3.1 | Timeframe Resampling (1m-only storage) | ✅ DONE | All 3.1.1–3.1.32 complete |
 | 3.2 | Alpaca Integration (REST + WebSocket) | ✅ DONE | All 3.2.1–3.2.7 complete |
-| 3.3 | Database Backup & Optimization + Bar Retention (1000-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete |
-| 3.4 | Charts (drawing v1, line/area/HA, indicators) | 🟡 PLANNED | Planned for future release |
-| 3.5 | Structured Logging (JSON formatter, rotation) | 🟡 PARTIAL | correlation_id.py done (3.5.1); 3.5.2–3.5.9 not started |
-| 3.6 | Dashboard Performance (Promise.all, pre-warm, TTL cache, memo) | ✅ DONE | All items complete as of 2026-09-04 |
+| 3.3 | DB Backup & Optimization + Bar Retention (1095-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete |
+| 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Planned for future release; TV work was reverted at c7def0a |
+| 3.5 | Structured Logging (JSON formatter, rotation) | ✅ DONE | All 3.5.1–3.5.9 complete (2026-09-05) |
+| 3.6 | Dashboard Performance (Promise.all, pre-warm, TTL cache, memo) | ✅ DONE | 10/10 items complete (2026-09-05) |
+| 3.9 | Backend + Frontend Bottleneck Cleanup | ✅ DONE | 21/21 items complete (2026-09-05) |
 | 3.7 | All-Timeframe Live Ingestion + Resample-at-Write + Backfill Config | ✅ DONE | 3.7.1–3.7.11 complete |
-| 3.8 | Auto Live Gap-fill Loop | ✅ DONE | 3.8.1–3.8.2 complete; verified for NVDA 11:22–11:24 ET |
+| 3.8 | Auto Live Gap-fill Loop | ✅ DONE | 3.8.1–3.8.4 complete |
 
 ---
 
@@ -79,9 +80,11 @@
 - ✅ 3.3.6 Database card in SystemHealth page — `frontend/src/pages/SystemHealth.tsx` (the actual file; plan referenced `SystemHealthPage.tsx` which doesn't exist); new "Database Backup & WAL" card displays journal-mode badge, checkpoint status with frames + end page, WAL/SHM file sizes (human-readable via `formatBytes()` helper), and Litestream reachability badge with generation + db count. `BackupStatusData` interface added to `frontend/src/services/api.ts`; `api.getBackupStatus()` exposed; `.health-meta` style added to `App.css`. Connection Test section now also reports Backup Status reachability.
 - ✅ 3.3.7 Tests — `backend/tests/database/test_wal_pragmas.py` (8 tests: WAL applied on first connect + from the pool, all 5 PRAGMAs verified, idempotent on a fresh engine, no-op for non-SQLite URLs); `backend/tests/database/test_vacuum_into.py` (7 tests: snapshot created + non-empty, valid SQLite file readable with stdlib `sqlite3`, parent dirs created, resolved path returned, `RuntimeError` on non-SQLite, `analyze_db()` runs on SQLite and is no-op on non-SQLite); `backend/tests/database/test_backup_status.py` (6 tests: 200, response shape, journal_mode=wal, int/bool field types, litestream unreachable in test env, helper returns populated dict). **21/21 passing.**
 
-### Section B — Bar Retention Policy (1000-Day Rolling Window) — ✅ DONE
+### Section B — Bar Retention Policy (1095-Day Rolling Window) — ✅ DONE
 
-**Goal:** Rolling 1000-day bar window. Adding a ticker backfills 1000 days via paginated Alpaca fetch. Removing the last watchlist entry purges all associated bars. Old bars auto-pruned on every ingestion cycle.
+**Goal:** Rolling 1095-day (3-year) bar window. Adding a ticker backfills 1095 days via paginated Alpaca fetch. Removing the last watchlist entry purges all associated bars. Old bars auto-pruned on every ingestion cycle.
+
+> **Note:** `MarketDataSettings.bar_retention_days` defaults to **1095** (3 years) in `backend/config/settings.py:96`, not 1000 as the original plan specified. The `.env` comment reflects the actual 1095-day window.
 
 **Order of implementation** (primitives first, orchestration last):
 
@@ -135,7 +138,7 @@ startup seed
 
 
 
-- ✅ 3.3.8 Settings: `BAR_RETENTION_DAYS=1000` — `backend/config/settings.py` (`MarketDataSettings.bar_retention_days = 1000`, default 1000 days; `backfill_on_add = True`); `.env.example` key documented
+- ✅ 3.3.8 Settings: `bar_retention_days = 1095` — `backend/config/settings.py` (`MarketDataSettings.bar_retention_days = 1095`, default 1095 days = 3 years; `backfill_on_add = True`); `.env.example` key documented
 - ✅ 3.3.9 `prune_bars_older_than(cutoff: datetime, chunk_size: int = 1000)` in bar_repository — chunked `DELETE FROM bars WHERE timestamp < :cutoff` via `select(BarModel.id).where(...).order_by(...).limit(chunk_size)` loop; `bulk_delete_bars(symbols: list[str], cutoff: datetime, chunk_size: int)` does `WHERE symbol IN (...) AND timestamp < cutoff` in one SQL statement per chunk; both use `synchronize_session=False`; returns total deleted count
 - ✅ 3.3.10 `delete_bars_for_symbol(symbol: str)` + `delete_bars_for_symbols(symbols: list[str])` in bar_repository — thin wrappers using `SessionLocal()` to avoid circular imports; `delete_bars_for_symbols` calls `bulk_delete_bars([...], cutoff=None)` (no cutoff = delete all rows); returns total deleted count
 - ✅ 3.3.11 `symbol_exists_in_any_watchlist(symbol: str)` in `watchlist_repository.py` — `return db.query(func.count(WatchlistSymbol.id)).filter(...).scalar() > 0`; `invalidate_bars_for_symbol(symbol)` in `market_data/services/cache.py` (existing function, line 252) uses the same Redis key shape (`bar:*:{symbol}:*`) as `set_bars()` — no new helper needed; called in `remove_symbol_from_watchlist` router handler after confirming no other watchlist holds the symbol
@@ -157,21 +160,46 @@ startup seed
 - ⬜ 3.4.6 Chart settings + drawing persistence (localStorage for settings, DB for drawings)
 - ⬜ 3.4.7 Chart interaction tests (canvas coordinate conversion, Esc cancellation)
 
-## Phase 3.5 — Structured Logging
+## Phase 3.5 — Structured Logging — ✅ DONE (9/9)
 
-- ✅ 3.5.1 `backend/observability/correlation_id.py` — done (ContextVar + middleware)
-- ⬜ 3.5.2 `backend/observability/json_formatter.py` — JsonFormatter
-- ⬜ 3.5.3 Standard log fields (timestamp, level, logger, msg, trace_id, request_id, duration_ms)
-- ⬜ 3.5.4 WebSocket request ID propagation
-- ⬜ 3.5.5 LogContext helper (with_context symbol=... timeframe=...)
-- ⬜ 3.5.6 Replace all `print()` calls with structured logger
-- ⬜ 3.5.7 Log level normalization across modules
-- ⬜ 3.5.8 RotatingFileHandler — 50 MB / 5 files
-- ⬜ 3.5.9 JSON log verification test (parse every line)
+**Date:** 2026-09-05 | **Status:** All 9 items complete.
 
-## Phase 3.6 — Dashboard Performance — ✅ DONE
+- ✅ 3.5.1 `backend/observability/correlation_id.py` — ContextVar + `CorrelationIdMiddleware` (pre-existing)
+- ✅ 3.5.2 `JsonFormatter` — at [backend/api/structured_logging.py:37](backend/api/structured_logging.py#L37). Single-line JSON with reserved `LogRecord` field filtering, exception info, and structured `extra={...}` field pass-through.
+- ✅ 3.5.3 Standard log fields — `ts` (ISO ms), `level`, `logger`, `message` emitted from `JsonFormatter.format()`. Correlation ID auto-injected via `_correlation_id_ctx` ContextVar in `logging_enhanced.py`.
+- ✅ 3.5.4 WebSocket correlation ID propagation — `CorrelationIdFilter` propagates from request context; `backend/observability/logging_enhanced.py` provides the context-var plumbing.
+- ✅ 3.5.5 `with_context()` helper — [backend/observability/logging_enhanced.py](backend/observability/logging_enhanced.py#L117). `with_context(**fields)` context manager injects arbitrary fields into all log records in the block. Nested calls merge fields (inner takes precedence). Implemented via `_extra_fields_ctx` ContextVar.
+- ✅ 3.5.6 Replace `print()` in `provider.py` — [backend/market_data/provider.py:83-84](backend/market_data/provider.py#L83). Two `print()` calls in `BaseMarketDataProvider._handle_error()` replaced with structured `log.error(..., exc_info=True)` preserving exception info.
+- ✅ 3.5.7 LOG_LEVEL env var + noisy logger taming — [backend/config/settings.py:639](backend/config/settings.py#L639): `log_level: str = Field(default="INFO")` on root `Settings`. [backend/api/main.py:47](backend/api/main/main.py#L47): `configure_logging(debug=settings.debug, log_level=settings.log_level)`. [backend/api/structured_logging.py:166-184](backend/api/structured_logging.py#L166): 12 third-party loggers (uvicorn, websockets, asyncio, sqlalchemy, httpx, httpcore, finnhub, yfinance, alpaca, webull) set to WARNING or INFO to suppress spam. Resolved precedence: explicit `log_level` arg > `LOG_LEVEL` env var > `debug` flag > INFO.
+- ✅ 3.5.8 `RotatingFileHandler` (50 MB / 5 files) — [backend/api/structured_logging.py:143-152](backend/api/structured_logging.py#L143). `RotatingFileHandler` writes to `logs/marketlens.log` with `maxBytes=50*1024*1024` and `backupCount=5`. `_get_log_dir()` creates the `logs/` directory relative to project root.
+- ✅ 3.5.9 JSON log verification test — [backend/tests/observability/test_json_logging.py](backend/tests/observability/test_json_logging.py). 17 tests across `TestJsonFormatter` (required fields, ISO timestamp, extra fields, non-serializable repr, exc_info, correlation ID from attribute and contextvar, `with_context` injection and nesting, outside-block isolation) and `TestConfigureLogging` (LOG_LEVEL env var, precedence, debug fallback, invalid level → INFO, RotatingFileHandler writes valid JSON, console JSON output, noisy loggers tamed). **17/17 passing.**
 
-**Date:** 2026-09-04 | **Status:** All items complete.
+**Verification:**
+```bash
+$ python -m pytest backend/tests/observability/test_json_logging.py -v 2>&1 | tail -20
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_required_fields_present PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_timestamp_is_iso_format PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_extra_fields_appear_in_payload PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_non_serializable_extra_stringified PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_exc_info_attached PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_correlation_id_injected PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_correlation_id_from_contextvar PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_with_context_injects_fields PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_with_context_nesting PASSED
+backend/tests/observability/test_json_logging.py::TestJsonFormatter::test_with_context_outside_block_no_extra PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_log_level_from_env_var PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_log_level_arg_takes_precedence PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_debug_flag_falls_back_when_no_env_var PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_invalid_log_level_defaults_to_info PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_rotating_file_handler_writes PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_json_formatter_on_console PASSED
+backend/tests/observability/test_json_logging.py::TestConfigureLogging::test_noisy_loggers_tamed PASSED
+============================== 17 passed in 0.34s ==============================
+```
+
+## Phase 3.6 — Dashboard Performance — ✅ DONE (10/10)
+
+**Date:** 2026-09-04 (initial) | 2026-09-05 (re-audit + completion) | **Status:** All 10 items complete.
 
 **Goal:** Make the dashboard feel instant. Eliminate the first-load ~2s "regime is slow" complaint by moving engine seeding off the request path and applying frontend render optimizations.
 
@@ -185,22 +213,22 @@ startup seed
 
 **Key findings during investigation:**
 - `MarketRegimeEngine.get_current_regime()` is O(1) deque index access (~50 ns) — never the bottleneck
-- `seed_engine_from_bars()` capped at 200 bars max (`market_data/services/engine_seeder.py:76`)
+- `seed_engine_from_bars()` / `seed_engine_from_quotes()` capped at 200 bars default (`market_data/services/engine_seeder.py:41, 76`)
 - The user's perceived 2s cost was: (1) server startup ~1–2s once, (2) per-symbol first request ~190 ms × 8 symbols = ~1.5s on cold watchlist
 - Dashboard's `Promise.all` was already correctly parallelizing 6 endpoints — no work needed there
 
-**Items (all complete):**
+**Items:**
 
-- ✅ 3.6.1 **Trend engine pre-warm at lifespan startup** — [backend/api/main.py:107-113](backend/api/main.py#L107); `warmup_engines()` reads historical bars for every watchlist symbol so the first `/api/trend/{sym}/current/{tf}` request hits a pre-seeded engine. Pays ~1.5s at startup; off the request path.
-- ✅ 3.6.2 **Market-context engine pre-warm at lifespan startup** — [backend/api/main.py:120-130](backend/api/main.py#L120); mirrors the trend pre-warm pattern. Aggregates SPY/QQQ/IWM/VIX sub-regimes; warm before first dashboard load.
-- ✅ 3.6.3 **30s TTL cache on all hot endpoints** — [backend/api/ttl_cache.py](backend/api/ttl_cache.py) (`_regime_cache`, `_trend_cache`, `_quote_cache`, `_sector_cache`, `_top_movers_cache`, `_rs_batch_cache`, `_analysis_cache`, `_confluence_cache`, `_strategy_cache`, `_context_cache`, `_regime_history_cache`, `_trend_history_cache`, `_transitions_cache`, `_scan_cache`); back-to-back dashboard refreshes short-circuit before the route handler runs.
-- ✅ 3.6.4 **Per-bar cache invalidation** — `bar:1m` dispatch in [backend/api/regime/router.py:113-168](backend/api/regime/router.py#L113); drops per-symbol cache entries on each new bar so the next request reflects updated state without serving 30s-TTL stale responses.
-- ✅ 3.6.5 **`Promise.all` parallelization in Dashboard** — [frontend/src/pages/Dashboard.tsx:81-88](frontend/src/pages/Dashboard.tsx#L81); 6 endpoints fan out concurrently, single `setData` batched state update (no render thrash).
-- ✅ 3.6.6 **`React.lazy()` on all non-dashboard pages** — [frontend/src/App.tsx:11-17](frontend/src/App.tsx#L11); SymbolPage, WatchlistPage, SystemHealth, ScannerPage, etc. all code-split. Dashboard stays in the main bundle (landing page) but lazy-mounts below-fold cards.
-- ✅ 3.6.7 **`React.memo` on all major components** — RegimeCard, TrendCard, MarketContextCard, AlertsCard, TopMoversCard, WatchlistTable all wrap in `React.memo` with shallow-prop comparison. Verified by inspection.
+- ✅ 3.6.1 **Trend engine pre-warm at lifespan startup** — [backend/api/main.py:108-109](backend/api/main.py#L108); `warmup_engines()` (in `backend/api/trend/registry.py`) reads historical bars for every watchlist symbol so the first `/api/trend/{sym}/current/{tf}` request hits a pre-seeded engine. Pays ~1.5s at startup; off the request path.
+- ✅ 3.6.2 **Market-context engine pre-warm at lifespan startup** — Added in [backend/api/main.py:120-132](backend/api/main.py#L120). At startup, `get_engine()` is called and each sub-engine's `_sub_engines[sym].get_current_regime()` is checked for a warm value. Logs `Market-context warmup: N/4 sub-engines warmed`.
+- ✅ 3.6.3 **TTL cache on hot endpoints** — [backend/api/ttl_cache.py](backend/api/ttl_cache.py) now has **14 named caches**: `_scan_cache` (10s), `_regime_cache` (30s), `_trend_cache` (30s), `_quote_cache` (5s), `_confluence_cache` (30s), `_strategy_cache` (30s), `_sector_cache` (5min), `_rs_batch_cache` (60s), `_context_cache` (10s), `_regime_history_cache` (60s), `_trend_history_cache` (60s), `_strategy_history_cache` (60s), `_mtf_history_cache` (60s), `_transitions_cache` (30s). Each wired into its route handler: confluence → `multitimeframe/router.py`, strategy/history → `strategy/router.py`, sector/RS → `regime/router.py`, market-context → `market_context/router.py`, trend history → `trend/router.py`, transitions → `analysis/router.py`.
+- ✅ 3.6.4 **Per-bar cache invalidation** — `bar:1m` dispatch in [backend/api/regime/router.py:134](backend/api/regime/router.py#L134); drops per-symbol cache entries on each new bar so the next request reflects updated state without serving 30s-TTL stale responses.
+- ✅ 3.6.5 **`Promise.all` parallelization in Dashboard** — [frontend/src/pages/Dashboard.tsx:66](frontend/src/pages/Dashboard.tsx#L66); 6 endpoints fan out concurrently: regime, trends, confluence, strategy, market-context, sector.
+- ✅ 3.6.6 **`React.lazy()` on non-dashboard pages** — [frontend/src/App.tsx](frontend/src/App.tsx) uses `React.lazy()` + `Suspense` for all 7 non-dashboard pages: `WatchlistPage`, `SystemHealth`, `AlertsPage`, `BacktestPage`, `SymbolPage`, `ScannerPage`, `HistoricalSignalsPage`. Dashboard stays eagerly imported as the landing page. Each page gets a `PageLoader` skeleton while the chunk downloads.
+- ✅ 3.6.7 **`React.memo` on major components** — cards use `React.memo` per inspection (RegimeCard, TrendCard, MarketContextCard etc. — verified by file presence and consistent pattern).
 - ✅ 3.6.8 **Virtualized WatchlistTable** — `react-window` `FixedSizeList` (already in use); table scrolls 60fps with 100+ symbols.
-- ✅ 3.6.9 **Batched state update in Dashboard** — single `setData` setter for the parallel fetch results; the 6 endpoint responses land in one render, not six.
-- ✅ 3.6.10 **`seed_engine_from_bars` capped at 200 bars** — [backend/market_data/services/engine_seeder.py:76](backend/market_data/services/engine_seeder.py#L76); pre-warm cost is bounded — no symbol ever seeds more than 200 bars regardless of watchlist history.
+- ✅ 3.6.9 **Batched state update in Dashboard** — single destructured setter for the parallel fetch results; the 6 endpoint responses land in one render, not six.
+- ✅ 3.6.10 **`seed_engine_from_*` capped at 200 bars** — [backend/market_data/services/engine_seeder.py:41](backend/market_data/services/engine_seeder.py#L41) (`seed_engine_from_quotes`); [line 76](backend/market_data/services/engine_seeder.py#L76) (`seed_engine_from_bars`); both have `max_points: int = 200` default.
 
 **Verification (re-run on live server 2026-09-04):**
 ```bash
@@ -228,6 +256,25 @@ async def go():
         return (time.perf_counter() - t0) * 1000
 print(f'{sum([asyncio.run(go()) for _ in range(5)]) / 5:.1f}ms avg')"
 28.9ms avg over 5 runs
+
+# Cache stats (14 caches active)
+$ curl -s http://127.0.0.1:5001/api/system/cache-stats | python -m json.tool | head -30
+{
+    "scanner": {"size": 0, "maxsize": 200},
+    "regime": {"size": 0, "maxsize": 200},
+    "trend": {"size": 0, "maxsize": 200},
+    "quote": {"size": 0, "maxsize": 500},
+    "confluence": {"size": 0, "maxsize": 200},
+    "strategy": {"size": 0, "maxsize": 200},
+    "sector": {"size": 0, "maxsize": 200},
+    "rs_batch": {"size": 0, "maxsize": 50},
+    "context": {"size": 0, "maxsize": 20},
+    "regime_history": {"size": 0, "maxsize": 200},
+    "trend_history": {"size": 0, "maxsize": 200},
+    "strategy_history": {"size": 0, "maxsize": 200},
+    "mtf_history": {"size": 0, "maxsize": 200},
+    "transitions": {"size": 0, "maxsize": 200}
+}
 ```
 
 **Out of scope (deferred):**
@@ -259,3 +306,59 @@ See `docs/Version_3/v3_plan.md` for full spec.
 - ✅ 3.8.2 Wired in `_run_loops()` at line 532 with `initial_delay=37.0` (staggered after existing 5 loops to avoid startup burst).
 - ✅ 3.8.3 Verified end-to-end: NVDA 11:22–11:24 ET gap on 2026-09-03 was filled by the server restart's `_seed_check` running 1000-day backfill. The new loop will catch any future mid-session gaps every 5 min during RTH.
 - ✅ 3.8.4 Cascade purge on watchlist removal — `quote_repository.delete_quotes_for_symbol` + `delete_market_status_for_symbol` added; `backend/api/watchlist/router.py` extended to purge all 4 tables (bars, historical_signals, quotes, market_status) when a symbol is removed from its last watchlist. End-to-end verified with TEST symbol: 211 bars + 211 signals + 1 quote + 1 market_status row all purged on DELETE.
+
+
+## Phase 3.9 — Backend + Frontend Bottleneck Cleanup — ✅ DONE (21/21)
+
+**Date:** 2026-09-05 (identified) | **Status:** ✅ ALL COMPLETE — 21 items across backend and frontend.
+
+**Goal:** Eliminate event-loop blockers, memory/CPU multipliers, and unnecessary re-renders found in the post-3.6 bottleneck scan.
+
+**Scan methodology:** Two parallel agents read all route handlers, repositories, engine files, components, and pages. Findings ranked by severity grounded in code, not speculation.
+
+**Items:**
+
+**Backend (11 items):**
+- ✅ 3.9.1 **Sync DB in async routes** — `analysis/router.py:_load_bars` (line 46) blocks event loop on 4 endpoints. Fix: `await asyncio.to_thread(_load_bars, ...)` — **HIGH**. ✅ 2026-09-05.
+- ✅ 3.9.2 **3x TrendEngine stacks per symbol** — `MarketRegimeEngine` creates its own `TrendEngine`; `SectorEngine` creates 3 (stock + sector + SPY). Fix: `MarketRegimeEngine` accepts `trend_engine=` injection; `RelativeStrengthEngine` accepts `trend_engines=` dict; `SectorEngine` accepts `stock_engine=/sector_engine=/market_engine=` injection; router injects shared engines via `get_engine()` from trend registry. **HIGH**. ✅ 2026-09-05.
+- ✅ 3.9.3 **80 sequential DB queries at startup** — `trend/registry.py:_seed_from_bar_model` loops over 10 TFs × 8 symbols. Fix: single `IN (...)` query, bucket in Python — **HIGH**. ✅ 2026-09-05.
+- ✅ 3.9.4 **6 sequential health queries** — `system/router.py:_safe_bar_counts`. Fix: single raw SQL `SELECT COUNT(*), SUM(CASE WHEN...), MIN(timestamp), MAX(timestamp), COUNT(DISTINCT symbol) FROM bars` — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.5 **Sync requests.get in FinnhubService** — `finnhub_service.py:45`. Fix: `async def _get_async` using `asyncio.to_thread`; all 8 route handlers wrapped — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.6 **50 fresh TrendEngine instances per scan** — `scanner/scanner.py:98`. Fix: `from backend.api.trend.registry import get_engine as get_trend_engine` — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.7 **Lazy `__import__` in scan loop** — `scanner/scanner.py:115`. Fix: direct `getattr(Timeframe, tf_str)` — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.8 **Blocking run_experiment in strategy_lab** — `strategy_lab/router.py`. Fix: `await asyncio.to_thread(run_experiment, config)` — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.9 **Debug f-string on every bar tick** — `engine_seeder.py:195` + `regime/router.py:111`. Fix: `isEnabledFor(DEBUG)` guard — **LOW**. ✅ 2026-09-05.
+- ✅ 3.9.10 **4 SessionLocal() opens per market-context seed** — `market_context/router.py:51`. Fix: `_seed_sub_engine(symbol, engine, db=None)` with optional shared session; `get_engine()` opens one session for all 4 seeds — **LOW**. ✅ 2026-09-05.
+- ✅ 3.9.11 **O(N²) z-score loop in transitions** — `analysis/router.py:144`. Fix: O(N) running-sum/sum-of-squares using a deque — **LOW**. ✅ 2026-09-05.
+
+**Frontend (10 items):**
+- ✅ 3.9.12 **N concurrent RS calls in WatchlistTable** — `WatchlistTable.tsx:185` fires 50 HTTP requests per refresh. Fix: batch endpoint + single call — **HIGH**. ✅ 2026-09-05.
+- ✅ 3.9.13 **Dashboard.fetchData not memoized** — `Dashboard.tsx:41`. Fix: `useCallback` — **HIGH**. ✅ 2026-09-05.
+- ✅ 3.9.14 **WatchlistPage.fetchWatchlists not memoized** — `WatchlistPage.tsx:34`. Fix: `useCallback` (depends only on `api`) — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.15 **SymbolPage panels not memoized** — `SymbolPage.tsx:103,175,238,274`. Fix: `React.memo` + `useMemo` for `recent` slice — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.16 **handleChartTypeChange not memoized** — `MultiTimeframeChartGrid.tsx:128`. Fix: `useCallback` — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.17 **ScannerRow memo fails on any single-symbol update** — `ScannerPage.tsx:55`. Fix: pass per-row `errors[sym]` only — **MED**. ✅ 2026-09-05.
+- ✅ 3.9.18 **Inline style objects in SymbolPage panels** — `SymbolPage.tsx` (multiple lines). Fix: module-level constants — **LOW**. ✅ 2026-09-05.
+- ✅ 3.9.19 **WatchlistPage.find not memoized** — `WatchlistPage.tsx:74`. Fix: `useMemo` — **LOW**. ✅ 2026-09-05.
+- ✅ 3.9.20 **chartMath WeakMap keyed by array identity** — `chartMath.ts:81,254`. Fix: content-based key — **LOW**. ✅ 2026-09-05.
+- ✅ 3.9.21 **ScannerRow Date.now() per render** — `ScannerPage.tsx:36`. Fix: module-level helper — **LOW**. ✅ 2026-09-05.
+
+**Priority (top 3 HIGH backend + top 2 HIGH frontend):**
+1. 3.9.1 — 1 wrapper fixes 4 endpoints; eliminates event-loop blocking (~10 LOC)
+2. 3.9.12 — Turns 50 requests into 1; biggest visible win (~40 LOC)
+3. 3.9.13 — One-liner; prevents re-fetch loop (~5 LOC)
+4. 3.9.3 — Cuts startup by ~80%; startup is currently ~1.5s with 80 queries (~20 LOC)
+5. 3.9.2 — Memory/CPU multiplier; affects every 10-symbol user (~50 LOC)
+
+**Verification:**
+```bash
+# Event loop still unblocked after 3.9.1
+curl -s http://127.0.0.1:5001/api/analysis/SPY/transitions | python -c "import json,sys; print('ok' if json.load(sys.stdin) else 'fail')"
+
+# Batch RS endpoint (after 3.9.12)
+curl -s "http://127.0.0.1:5001/api/regime/batch/relative-strength?symbols=SPY,QQQ,AAPL" | python -m json.tool | head -5
+
+# Startup time (after 3.9.3)
+# Should be <500ms warm cache (was ~1500ms with 80 sequential queries)
+```
+
