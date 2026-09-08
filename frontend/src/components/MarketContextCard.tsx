@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { MarketContextData } from '../services/api';
 import { parseET } from './chartMath';
 
@@ -23,7 +23,7 @@ interface MarketContextCardProps {
   error?: string | null;
 }
 
-export function MarketContextCard({ context, error }: MarketContextCardProps) {
+export const MarketContextCard = memo(function MarketContextCard({ context, error }: MarketContextCardProps) {
   if (error) {
     return (
       <div className="card market-context-card card-error">
@@ -115,4 +115,4 @@ export function MarketContextCard({ context, error }: MarketContextCardProps) {
       )}
     </div>
   );
-}
+});

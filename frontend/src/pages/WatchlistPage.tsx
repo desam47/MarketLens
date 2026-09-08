@@ -46,18 +46,11 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
       } else {
         setSelectedId(null);
       }
-      // Fetch counts for each watchlist (best-effort, non-blocking)
+      // Symbol counts are now returned directly from the API endpoint
       const counts: Record<number, number> = {};
-      await Promise.all(
-        data.map(async (wl) => {
-          try {
-            const syms = await api.getWatchlistSymbols(wl.id);
-            counts[wl.id] = syms.length;
-          } catch {
-            counts[wl.id] = 0;
-          }
-        })
-      );
+      data.forEach((wl) => {
+        counts[wl.id] = wl.symbol_count ?? 0;
+      });
       setSymbolCounts(counts);
     } catch (err: any) {
       setError(err.message || 'Failed to load watchlists');

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { ConfluenceData } from '../services/api';
 import { parseET } from './chartMath';
 
@@ -35,7 +35,7 @@ const PRESET_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'all', label: 'All Timeframes' },
 ];
 
-export function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
+export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
   if (error) {
     return (
       <div className="card confluence-card card-error">
@@ -163,7 +163,7 @@ export function ConfluenceCard({ confluence, error, selectedPreset, onPresetChan
       )}
     </div>
   );
-}
+});
 
 // ------------------------------------------------------------------ sub-components
 

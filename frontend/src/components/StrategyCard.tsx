@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { StrategyData } from '../services/api';
 import { parseET } from './chartMath';
 
@@ -29,7 +29,7 @@ const strategyColors: Record<string, string> = {
   position: '#84cc16',
 };
 
-export function StrategyCard({ strategy, error }: StrategyCardProps) {
+export const StrategyCard = memo(function StrategyCard({ strategy, error }: StrategyCardProps) {
   if (error) {
     return (
       <div className="card strategy-card card-error">
@@ -93,4 +93,4 @@ export function StrategyCard({ strategy, error }: StrategyCardProps) {
       )}
     </div>
   );
-}
+});

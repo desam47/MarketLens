@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
 import api, {
   Bar,
   Divergence,
@@ -122,7 +122,7 @@ function strPrice(v: number | null | undefined): string {
 }
 
 // --- Transitions panel ---
-function TransitionsPanel({
+const TransitionsPanel = memo(function TransitionsPanel({
   transitions,
   latestScore,
   latestTimestamp,
@@ -191,10 +191,10 @@ function TransitionsPanel({
       )}
     </div>
   );
-}
+});
 
 // --- S/R Levels panel ---
-function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: number | null }) {
+const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: number | null }) {
   // Only show levels on the *correct* side of current price: a "high"-type
   // level is resistance only if it's above current price (if it's below,
   // price has broken through it and it's no longer meaningful resistance).
@@ -203,8 +203,6 @@ function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: numb
   // actually above the current price (e.g. after a gap-down).
   // Consolidation zones are dropped from the per-side list — they are a
   // separate concept (a cluster of swings) and not a directional S/R level.
-  const above = (p: number) => latestClose != null && p > latestClose;
-  const below = (p: number) => latestClose != null && p < latestClose;
   const resistances = levels
     .filter(l =>
       !['consolidation_zone', 'pivot_high', 'pivot_low', 'swing_high', 'swing_low'].includes(l.type) && l.type.includes('high')
@@ -282,10 +280,10 @@ function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: numb
       )}
     </div>
   );
-}
+});
 
 // --- Divergences panel ---
-function DivergencesPanel({ divergences }: { divergences: Divergence[] }) {
+const DivergencesPanel = memo(function DivergencesPanel({ divergences }: { divergences: Divergence[] }) {
   return (
     <div className="card analysis-card">
       <h2>Divergences</h2>
@@ -318,10 +316,10 @@ function DivergencesPanel({ divergences }: { divergences: Divergence[] }) {
       )}
     </div>
   );
-}
+});
 
 // --- Bars table ---
-function BarsTable({ bars }: { bars: Bar[] }) {
+const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
   // Backend returns newest→oldest (desc=True), so index 0 is already latest
   return (
     <div className="card analysis-card">
@@ -376,54 +374,117 @@ function BarsTable({ bars }: { bars: Bar[] }) {
       )}
     </div>
   );
-}
+});
 
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<any>(null);
+
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [latestScore, setLatestScore] = useState(0);
   const [latestTimestamp, setLatestTimestamp] = useState<string | null>(null);
+  const [transitionsLoading, setTransitionsLoading] = useState(true);
+
   const [srLevels, setSrLevels] = useState<SRLevel[]>([]);
   const [latestClose, setLatestClose] = useState<number | null>(null);
+  const [srLoading, setSrLoading] = useState(true);
+
   const [divergences, setDivergences] = useState<Divergence[]>([]);
+  const [divergencesLoading, setDivergencesLoading] = useState(true);
+
   const [bars, setBars] = useState<Bar[]>([]);
+  const [barsLoading, setBarsLoading] = useState(true);
+
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanLoading, setScanLoading] = useState(true);
+
   const [timeframe, setTimeframe] = useState('1d');
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
-  const [loading, setLoading] = useState(true);
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
 
-  const safe = useCallback(async <T,>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> => {
+  const fetchQuote = useCallback(async () => {
     try {
-      return { data: await fn(), error: null };
-    } catch (e: any) {
-      return { data: null, error: e?.message || 'Request failed' };
+      const data = await api.getQuote(symbol);
+      setQuote(data);
+    } catch (err: any) {
+      console.error('Failed to load quote:', err);
     }
-  }, []);
+  }, [symbol]);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    const [q, tr, sr, dv, br, sc] = await Promise.all([
-      safe(() => api.getQuote(symbol)),
-      safe(() => api.getTransitions(symbol, timeframe)),
-      safe(() => api.getSupportResistance(symbol, timeframe)),
-      safe(() => api.getDivergences(symbol, timeframe)),
-      safe(() => api.getAnalysisBars(symbol, timeframe, 10000)),
-      safe(() => api.getScanResult(symbol)),
-    ]);
-    setQuote(q.data);
-    setTransitions(tr.data?.transitions || []);
-    setLatestScore(tr.data?.latest_score ?? 0);
-    setLatestTimestamp(tr.data?.latest_timestamp ?? null);
-    setSrLevels(sr.data?.levels || []);
-    setLatestClose(sr.data?.latest_close ?? null);
-    setDivergences(dv.data?.divergences || []);
-    setBars(br.data?.bars || []);
-    setScanResult(sc.data ?? null);
-    setLoading(false);
-  }, [symbol, timeframe, safe]);
+  const fetchTransitions = useCallback(async () => {
+    setTransitionsLoading(true);
+    try {
+      const data = await api.getTransitions(symbol, timeframe);
+      setTransitions(data?.transitions || []);
+      setLatestScore(data?.latest_score ?? 0);
+      setLatestTimestamp(data?.latest_timestamp ?? null);
+    } catch (err: any) {
+      console.error('Failed to load transitions:', err);
+    } finally {
+      setTransitionsLoading(false);
+    }
+  }, [symbol, timeframe]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const fetchSR = useCallback(async () => {
+    setSrLoading(true);
+    try {
+      const data = await api.getSupportResistance(symbol, timeframe);
+      setSrLevels(data?.levels || []);
+      setLatestClose(data?.latest_close ?? null);
+    } catch (err: any) {
+      console.error('Failed to load S/R levels:', err);
+    } finally {
+      setSrLoading(false);
+    }
+  }, [symbol, timeframe]);
+
+  const fetchDivergences = useCallback(async () => {
+    setDivergencesLoading(true);
+    try {
+      const data = await api.getDivergences(symbol, timeframe);
+      setDivergences(data?.divergences || []);
+    } catch (err: any) {
+      console.error('Failed to load divergences:', err);
+    } finally {
+      setDivergencesLoading(false);
+    }
+  }, [symbol, timeframe]);
+
+  const fetchBars = useCallback(async () => {
+    setBarsLoading(true);
+    try {
+      const data = await api.getAnalysisBars(symbol, timeframe, 10000);
+      setBars(data?.bars || []);
+    } catch (err: any) {
+      console.error('Failed to load bars:', err);
+    } finally {
+      setBarsLoading(false);
+    }
+  }, [symbol, timeframe]);
+
+  const fetchScan = useCallback(async () => {
+    setScanLoading(true);
+    try {
+      const data = await api.getScanResult(symbol);
+      setScanResult(data);
+    } catch (err: any) {
+      console.error('Failed to load scan:', err);
+    } finally {
+      setScanLoading(false);
+    }
+  }, [symbol]);
+
+  const fetchAll = useCallback(() => {
+    fetchQuote();
+    fetchTransitions();
+    fetchSR();
+    fetchDivergences();
+    fetchBars();
+    fetchScan();
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan]);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
 
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
@@ -470,15 +531,13 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
               Multi-TF
             </button>
           </div>
-          <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={() => fetchData()} />
-          <button className="btn" onClick={fetchData}>↻ Refresh</button>
+          <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={fetchAll} />
+          <button className="btn" onClick={fetchAll}>↻ Refresh</button>
         </div>
       </div>
 
-      {loading ? (
-        <div className="loading-state">Loading analysis...</div>
-      ) : (
-        <div className="symbol-grid">
+      <div className="symbol-grid">
+        <div className={transitionsLoading && transitions.length === 0 ? 'card-loading-skeleton' : ''}>
           <TransitionsPanel
             transitions={transitions}
             latestScore={latestScore}
@@ -486,47 +545,53 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
             timeframe={timeframe}
           />
+        </div>
+        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
           <SRPanel levels={srLevels} latestClose={latestClose} />
+        </div>
+        <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />
-          <ScoreDetailPanel
-            totalScore={scanResult?.total_score ?? 0}
-            scores={scanResult?.scores ?? {}}
-            signals={scanResult?.signals}
-            symbol={symbol}
-          />
-          <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
-            <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading news…</div>}>
-            <NewsPanel symbol={symbol} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading fundamentals…</div>}>
-            <FundamentalsPanel symbol={symbol} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading options…</div>}>
-            <OptionsPanel symbol={symbol} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
-            <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading drawings…</div>}>
-            <DrawingToolsPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-          <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
-            <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-          <MTFScoreGrid
-            trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
-            symbol={symbol}
-          />
-          {chartMode === 'single' ? (
-            <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} initialActiveOverlays={['supertrend']} />
-          ) : (
-            <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
-          )}
+        </div>
+        <ScoreDetailPanel
+          totalScore={scanResult?.total_score ?? 0}
+          scores={scanResult?.scores ?? {}}
+          signals={scanResult?.signals}
+          symbol={symbol}
+        />
+        <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
+          <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading news…</div>}>
+          <NewsPanel symbol={symbol} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading fundamentals…</div>}>
+          <FundamentalsPanel symbol={symbol} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading options…</div>}>
+          <OptionsPanel symbol={symbol} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
+          <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading drawings…</div>}>
+          <DrawingToolsPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
+          <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <MTFScoreGrid
+          trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
+          symbol={symbol}
+        />
+        {chartMode === 'single' ? (
+          <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} initialActiveOverlays={['supertrend']} />
+        ) : (
+          <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
+        )}
+        <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
           <BarsTable bars={bars} />
         </div>
-      )}
+      </div>
     </div>
   );
 }

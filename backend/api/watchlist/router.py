@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from backend.config.settings import settings as _settings
 from backend.repositories.watchlist_repository import WatchlistRepository
@@ -114,6 +115,7 @@ class WatchlistResponse(WatchlistBase):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    symbol_count: int = 0
 
     @field_serializer("created_at", "updated_at")
     def _serialize_tz(self, value: datetime | None) -> str | None:
@@ -177,10 +179,38 @@ def get_watchlists(active_only: bool = False, db: Session = Depends(get_db)):
     Defaults to ``active_only=False`` so the user can see and re-enable
     watchlists they previously disabled. Set ``?active_only=true`` to hide
     disabled ones (used by the market-data ingestion service).
+
+    ``symbol_count`` is populated via a single subquery — no N+1 round-trips
+    to count symbols per watchlist.
     """
+    from backend.models.watchlist import WatchlistSymbol
     repo = WatchlistRepository(db)
     watchlists = repo.get_watchlists(active_only=active_only)
-    return watchlists
+
+    # Batch-count enabled symbols for all watchlists in one query.
+    watchlist_ids = [wl.id for wl in watchlists]
+    if watchlist_ids:
+        counts = (
+            db.query(WatchlistSymbol.watchlist_id, func.count(WatchlistSymbol.id))
+            .filter(
+                WatchlistSymbol.watchlist_id.in_(watchlist_ids),
+                WatchlistSymbol.is_enabled.is_(True),
+            )
+            .group_by(WatchlistSymbol.watchlist_id)
+            .all()
+        )
+        count_map = {wl_id: cnt for wl_id, cnt in counts}
+    else:
+        count_map = {}
+
+    # Build response dicts manually so we can inject symbol_count without
+    # modifying the ORM model.
+    result = []
+    for wl in watchlists:
+        data = WatchlistResponse.model_validate(wl)
+        data.symbol_count = count_map.get(wl.id, 0)
+        result.append(data)
+    return result
 
 @router.post("/", response_model=WatchlistResponse, status_code=status.HTTP_201_CREATED)
 def create_watchlist(watchlist: WatchlistCreate, db: Session = Depends(get_db)):

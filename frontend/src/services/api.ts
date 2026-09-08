@@ -175,6 +175,7 @@ export interface Watchlist {
   name: string;
   description: string | null;
   is_active: boolean;
+  symbol_count?: number;
   created_at: string;
   updated_at: string;
   symbols?: WatchlistSymbol[];

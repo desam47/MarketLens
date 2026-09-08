@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { RegimeData, SectorData } from '../services/api';
 import { parseET } from './chartMath';
 
@@ -17,7 +17,7 @@ const regimeColors: Record<string, string> = {
   unknown: '#9ca3af',    // gray — insufficient data
 };
 
-export function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
+export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
   if (error) {
     return (
       <div className="card regime-card card-error">
@@ -106,4 +106,4 @@ export function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
       )}
     </div>
   );
-}
+});

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { TrendData } from '../services/api';
 
 interface TrendCardProps {
@@ -26,7 +26,7 @@ const strengthColors: Record<string, string> = {
   very_strong: '#22c55e',
 };
 
-export function TrendCard({ trend }: TrendCardProps) {
+export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
@@ -74,4 +74,4 @@ export function TrendCard({ trend }: TrendCardProps) {
       </div>
     </div>
   );
-}
+});

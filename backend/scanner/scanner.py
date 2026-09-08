@@ -468,14 +468,49 @@ class Scanner:
         roughly ``ceil(N / workers)`` round-trips of wall time. Useful for batch
         scan endpoints that are already ``async def``.
 
+        Bars and quotes are batch pre-fetched before spawning threads — the same
+        pattern used by the synchronous :meth:`scan_symbols` — so each thread
+        receives its data already in memory instead of opening its own DB session
+        and provider call. This converts N×DB-session + N×provider-call into a
+        single batch DB query + single batch provider call.
+
         The synchronous :meth:`scan_symbols` is preserved for any caller that
         is not in an event loop.
         """
         if not symbols:
             return []
         start = time.monotonic()
-        # asyncio.gather accepts any awaitables; to_thread gives us one per symbol.
-        tasks = [asyncio.to_thread(self.scan_symbol, symbol) for symbol in symbols]
+
+        # Batch pre-fetch bars and quotes on the event-loop thread (both are
+        # DB reads via SQLAlchemy + optional Redis cache; no blocking I/O that
+        # would warrant a to_thread here — the DB session is quick and the cache
+        # hit avoids the provider entirely).
+        from backend.database import SessionLocal
+        batch_bars: dict = {}
+        batch_quotes: dict = {}
+        try:
+            with SessionLocal() as db:
+                batch_bars = market_data_manager.get_batch_historical_bars(
+                    symbols,
+                    timeframe="1d",
+                    range_="3mo",
+                    use_cache=True,
+                    db=db,
+                )
+                batch_quotes = market_data_manager.get_batch_quotes(symbols)
+        except Exception as e:
+            logger.warning(f"Async scan batch pre-fetch failed, falling back to per-symbol: {e}")
+
+        # Each thread receives pre-fetched data — no DB session opened inside the thread.
+        tasks = [
+            asyncio.to_thread(
+                self.scan_symbol,
+                symbol,
+                batch_bars.get(symbol),
+                batch_quotes.get(symbol),
+            )
+            for symbol in symbols
+        ]
         results = await asyncio.gather(*tasks)
         duration_ms = (time.monotonic() - start) * 1000
         record_scan(duration_ms)
