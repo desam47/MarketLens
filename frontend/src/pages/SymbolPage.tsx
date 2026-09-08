@@ -473,7 +473,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     }
   }, [symbol]);
 
-  const fetchAll = useCallback(() => {
+  const handleRefresh = useCallback(() => {
     fetchQuote();
     fetchTransitions();
     fetchSR();
@@ -483,8 +483,28 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan]);
 
   useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+    fetchQuote();
+  }, [fetchQuote]);
+
+  useEffect(() => {
+    fetchTransitions();
+  }, [fetchTransitions]);
+
+  useEffect(() => {
+    fetchSR();
+  }, [fetchSR]);
+
+  useEffect(() => {
+    fetchDivergences();
+  }, [fetchDivergences]);
+
+  useEffect(() => {
+    fetchBars();
+  }, [fetchBars]);
+
+  useEffect(() => {
+    fetchScan();
+  }, [fetchScan]);
 
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
@@ -531,8 +551,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
               Multi-TF
             </button>
           </div>
-          <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={fetchAll} />
-          <button className="btn" onClick={fetchAll}>↻ Refresh</button>
+          <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={handleRefresh} />
+          <button className="btn" onClick={handleRefresh}>↻ Refresh</button>
         </div>
       </div>
 
@@ -552,12 +572,14 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />
         </div>
-        <ScoreDetailPanel
-          totalScore={scanResult?.total_score ?? 0}
-          scores={scanResult?.scores ?? {}}
-          signals={scanResult?.signals}
-          symbol={symbol}
-        />
+        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
+          <ScoreDetailPanel
+            totalScore={scanResult?.total_score ?? 0}
+            scores={scanResult?.scores ?? {}}
+            signals={scanResult?.signals}
+            symbol={symbol}
+          />
+        </div>
         <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
           <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>
@@ -579,10 +601,12 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
           <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>
-        <MTFScoreGrid
-          trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
-          symbol={symbol}
-        />
+        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
+          <MTFScoreGrid
+            trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
+            symbol={symbol}
+          />
+        </div>
         {chartMode === 'single' ? (
           <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} initialActiveOverlays={['supertrend']} />
         ) : (
