@@ -222,5 +222,64 @@ class TestParseQuery(unittest.TestCase):
         self.assertTrue(f.match_all)
 
 
+class TestParseQueryScopeOverride(unittest.TestCase):
+    """The Watchlist/Market dropdown (``base={"scope": ...}``) must win
+    regardless of which parse path produced the filters.
+
+    Regression for a live bug (2026-09-09): selecting "Market" in the
+    dropdown still searched the watchlist. Root cause: ``base``'s scope
+    only ever reached the rule-based path, and even there only via
+    ``setdefault``; the AI path (``parse_query_with_ai``) never received
+    ``base`` at all, and the graceful "no rule fired" default ignored it
+    completely — both silently fell back to NLFilters' own schema
+    default ("watchlist") no matter what the dropdown said.
+    """
+
+    def test_rule_based_path_respects_market_scope(self):
+        # "strongest bullish stocks" fires a rule on its own.
+        f, _, used = parse_query(
+            "strongest bullish stocks", base={"scope": "market"},
+        )
+        self.assertEqual(used, "rules")
+        self.assertEqual(f.scope, "market")
+
+    def test_ai_path_respects_market_scope(self):
+        from backend.nl_search.schema import NLFilters
+
+        # Simulate an AI reply that (correctly, per its own instructions)
+        # didn't set scope at all — it has no way to know about the
+        # dropdown, only the query text.
+        with patch(
+            "backend.nl_search.parser.parse_query_with_ai",
+            return_value=NLFilters(direction="bullish"),
+        ):
+            f, _, used = parse_query(
+                "xyz nonsense that no rule matches",
+                base={"scope": "market"},
+            )
+        self.assertEqual(used, "ai")
+        self.assertEqual(f.scope, "market")
+
+    def test_default_path_respects_market_scope(self):
+        with patch("backend.nl_search.parser.ai_manager") as mock_ai:
+            mock_ai.is_available.return_value = False
+            f, _, used = parse_query("asdfghjkl", base={"scope": "market"})
+        self.assertEqual(used, "default")
+        self.assertEqual(f.scope, "market")
+
+    def test_no_base_leaves_default_scope_alone(self):
+        f, _, _ = parse_query("strongest bullish stocks")
+        self.assertEqual(f.scope, "watchlist")
+
+    def test_watchlist_scope_in_base_is_a_noop(self):
+        """The common case (dropdown left on its own default) shouldn't
+        force an unnecessary model_copy — same object semantics aside,
+        the resulting value must still be correct."""
+        f, _, used = parse_query(
+            "strongest bullish stocks", base={"scope": "watchlist"},
+        )
+        self.assertEqual(f.scope, "watchlist")
+
+
 if __name__ == "__main__":
     unittest.main()

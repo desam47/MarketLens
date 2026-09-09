@@ -323,6 +323,32 @@ def parse_query(
     Never raises. Falls back to a ``match_all=True`` ``NLFilters`` so
     the endpoint always has something to execute.
     """
+    filters, extras, parser_used = _parse_query_inner(query, base=base)
+
+    # ``scope`` (the Watchlist/Market dropdown) is a REQUEST-level
+    # parameter, not something to infer from query text — it must win
+    # regardless of which path produced ``filters``. Found live
+    # 2026-09-09: selecting "Market" in the dropdown still searched the
+    # watchlist. Root cause: `base`'s scope only ever reached the
+    # rule-based path (parse_query_rule_based), and even there only via
+    # `setdefault` when at least one keyword rule fired — any query
+    # that fell through to the AI parser (which never received `base`
+    # at all) or the graceful "no rule fired" default silently reverted
+    # to NLFilters' own schema default ("watchlist"), no matter what
+    # the dropdown said. Applying it once here, unconditionally, after
+    # parsing — rather than threading it through every parse path —
+    # means it can never be dropped again by a future path added here.
+    if base and "scope" in base and filters.scope != base["scope"]:
+        filters = filters.model_copy(update={"scope": base["scope"]})
+
+    return filters, extras, parser_used
+
+
+def _parse_query_inner(
+    query: str,
+    *,
+    base: dict | None = None,
+) -> tuple[NLFilters, dict | None, str]:
     rule_result = parse_query_rule_based(query, base=base)
     if rule_result is not None:
         return rule_result[0], rule_result[1], "rules"
