@@ -201,6 +201,49 @@ class TestParseQueryRuleBased(unittest.TestCase):
         self.assertEqual(f.ranking, "strongest_bullish")
 
 
+class TestBareDirectionFallbackRule(unittest.TestCase):
+    """Optimization: "bullish stocks" / "bearish stocks" (no timeframe,
+    no ranking keyword) used to fall through every rule to the AI
+    round-trip. A bare direction word is now a last-resort rule so
+    these common phrasings resolve instantly without AI."""
+
+    def test_bearish_stocks_matches_without_ai(self):
+        result = parse_query_rule_based("bearish stocks")
+        self.assertIsNotNone(result)
+        f, _ = result
+        self.assertEqual(f.direction, "bearish")
+        # Must rank by bearishness, not the schema's bullish default —
+        # otherwise "bearish stocks" would sort the wrong way.
+        self.assertEqual(f.ranking, "strongest_bearish")
+
+    def test_bullish_stocks_matches_without_ai(self):
+        result = parse_query_rule_based("bullish stocks")
+        self.assertIsNotNone(result)
+        f, _ = result
+        self.assertEqual(f.direction, "bullish")
+        self.assertEqual(f.ranking, "strongest_bullish")
+
+    def test_more_specific_rule_still_wins(self):
+        """"strongest bearish stocks" already fires a more specific
+        rule earlier in the list; the bare fallback must not clobber
+        it (setdefault semantics)."""
+        result = parse_query_rule_based("strongest bearish stocks")
+        self.assertIsNotNone(result)
+        f, _ = result
+        self.assertEqual(f.ranking, "strongest_bearish")
+        self.assertEqual(f.direction, "bearish")
+
+    def test_timeframe_qualified_bearish_unaffected(self):
+        """"bearish 5m" already sets timeframe via its own rule; the
+        bare fallback must not overwrite that with a timeframe-less
+        direction-only match."""
+        result = parse_query_rule_based("bearish 5m")
+        self.assertIsNotNone(result)
+        f, _ = result
+        self.assertEqual(f.timeframe, "5m")
+        self.assertEqual(f.direction, "bearish")
+
+
 class TestParseQuery(unittest.TestCase):
 
     def test_rule_based_used(self):

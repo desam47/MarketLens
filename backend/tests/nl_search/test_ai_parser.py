@@ -124,6 +124,78 @@ class TestParseQueryWithAIFailures(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestParseQueryWithAITranslationCache(unittest.TestCase):
+    """Optimization: a successful translation is cached (keyed on the
+    normalized query text) so a repeated query skips the AI
+    round-trip entirely. Failures must NOT be cached — a transient
+    provider hiccup shouldn't permanently wall off one query string
+    from ever trying AI again within the process lifetime."""
+
+    def setUp(self):
+        # Isolate from any state other tests/live traffic left behind —
+        # this module-level cache persists for the process lifetime.
+        from backend.nl_search import parser as parser_module
+        parser_module._translation_cache.clear()
+
+    @patch("backend.nl_search.parser.ai_manager")
+    def test_second_identical_call_skips_ai(self, mock_ai):
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = _ai_response(
+            _fenced({"ranking": "strongest_momentum"})
+        )
+        first = parse_query_with_ai("optimize cache test query one")
+        self.assertIsNotNone(first)
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
+        second = parse_query_with_ai("optimize cache test query one")
+        self.assertIsNotNone(second)
+        self.assertEqual(second.ranking, "strongest_momentum")
+        # No new call — served from cache.
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
+    @patch("backend.nl_search.parser.ai_manager")
+    def test_cache_key_is_case_and_whitespace_insensitive(self, mock_ai):
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = _ai_response(
+            _fenced({"ranking": "strongest_momentum"})
+        )
+        parse_query_with_ai("optimize cache test query two")
+        parse_query_with_ai("  Optimize Cache Test Query Two  ")
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
+    @patch("backend.nl_search.parser.ai_manager")
+    def test_cached_result_is_independent_copy(self, mock_ai):
+        """Mutating one caller's returned NLFilters must not corrupt
+        what a later cache hit returns."""
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = _ai_response(
+            _fenced({"ranking": "strongest_momentum", "signals": ["HIGH_VOLUME"]})
+        )
+        first = parse_query_with_ai("optimize cache test query three")
+        self.assertIsNotNone(first)
+        first.signals.append("RSI_OVERSOLD")  # mutate the caller's copy
+
+        second = parse_query_with_ai("optimize cache test query three")
+        self.assertEqual(second.signals, ["HIGH_VOLUME"])
+
+    @patch("backend.nl_search.parser.ai_manager")
+    def test_failed_parse_is_not_cached_and_retries_next_call(self, mock_ai):
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = _ai_response("not json at all")
+        first = parse_query_with_ai("optimize cache test query four")
+        self.assertIsNone(first)
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
+        # Provider recovers — the same query text must try AI again,
+        # not be stuck returning None forever.
+        mock_ai.complete.return_value = _ai_response(
+            _fenced({"ranking": "strongest_momentum"})
+        )
+        second = parse_query_with_ai("optimize cache test query four")
+        self.assertIsNotNone(second)
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+
 class TestParseQueryOrchestrator(unittest.TestCase):
 
     @patch("backend.nl_search.parser.ai_manager")

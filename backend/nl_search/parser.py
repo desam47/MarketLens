@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
@@ -120,6 +121,20 @@ _RULES: list[tuple[re.Pattern, dict | Callable[[re.Match[str]], dict]]] = [
     # MTF agreement
     (re.compile(r"\b(?:all|every)\s+timeframes?\s+(?:aligned|agree|bullish)\b"),
      {"mtf_alignment": True, "min_bullish_timeframes": 3}),
+
+    # Bare direction words with no timeframe/ranking qualifier — catches
+    # the very common "bullish stocks" / "bearish stocks" / "show me
+    # bearish" phrasing that no rule above matches, without paying an
+    # AI round-trip (~1-1.5s) for something this simple. Placed LAST so
+    # every more specific rule above (ranking, timeframe+direction,
+    # transition, SPY) wins via setdefault — this is a pure fallback.
+    # Also sets `ranking` to match direction (AI already does this;
+    # otherwise NLFilters' schema default of "strongest_bullish" would
+    # silently rank a bearish query wrong-way).
+    (re.compile(r"\bbullish\b"),
+     {"direction": "bullish", "ranking": "strongest_bullish"}),
+    (re.compile(r"\bbearish\b"),
+     {"direction": "bearish", "ranking": "strongest_bearish"}),
 ]
 
 
@@ -264,6 +279,38 @@ def parse_query_rule_based(
 # --- AI parser ------------------------------------------------------
 
 
+# Translation is a pure function of the query text: the same English
+# sentence always maps to the same NLFilters shape (temperature=0.0
+# below), independent of live market data. So unlike the AI
+# *explanation* call (which depends on the current result set and
+# must not be cached this loosely), successful translations can be
+# cached for the life of the process — a repeated query (re-running
+# the same search, clicking the same example pill twice) skips the
+# ~1-1.5s AI round-trip entirely on a cache hit.
+#
+# Only successful parses are cached. Failures (AI off, bad JSON, a
+# schema-rejected reply) are deliberately NOT cached, so a transient
+# provider hiccup doesn't permanently force one literal query string
+# into the fallback path until the process restarts.
+_MAX_TRANSLATION_CACHE = 256
+_translation_cache: OrderedDict[str, NLFilters] = OrderedDict()
+
+
+def _translation_cache_get(key: str) -> NLFilters | None:
+    cached = _translation_cache.get(key)
+    if cached is not None:
+        _translation_cache.move_to_end(key)
+        return cached.model_copy(deep=True)
+    return None
+
+
+def _translation_cache_put(key: str, value: NLFilters) -> None:
+    _translation_cache[key] = value.model_copy(deep=True)
+    _translation_cache.move_to_end(key)
+    while len(_translation_cache) > _MAX_TRANSLATION_CACHE:
+        _translation_cache.popitem(last=False)
+
+
 def parse_query_with_ai(query: str) -> NLFilters | None:
     """Ask the AI to translate ``query`` → ``NLFilters``.
 
@@ -271,6 +318,11 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
     bad schema, missing JSON). The caller is expected to fall back
     to the rule-based parser or to a ``match_all=True`` default.
     """
+    cache_key = query.strip().lower()
+    cached = _translation_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     if not ai_manager.is_available():
         return None
 
@@ -301,10 +353,13 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
         data.pop("_conflict", None)  # consumed but not propagated in v1
 
     try:
-        return NLFilters.model_validate(data)
+        result = NLFilters.model_validate(data)
     except ValidationError as e:
         logger.info("AI translation reply failed schema validation: %s", e)
         return None
+
+    _translation_cache_put(cache_key, result)
+    return result
 
 
 # --- Orchestrator ---------------------------------------------------

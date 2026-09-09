@@ -12,6 +12,7 @@ mirrors ``POST /api/ai/analyze``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timezone
@@ -145,7 +146,14 @@ async def nl_search(
                 body.query, body.top_n, body.explain)
 
     # --- Step 1: derive the filter schema ---
-    filters, extras, parser_used = parse_query(
+    # parse_query() may call out to the AI provider synchronously
+    # (httpx.Client, not AsyncClient) — run it off the event loop so a
+    # slow/remote provider round-trip (openrouter.ai etc., ~1-1.5s)
+    # doesn't stall every other request this process is serving
+    # (WebSocket price broadcasts included) for the duration. Same
+    # pattern already used for AI calls in backend/api/ai/router.py.
+    filters, extras, parser_used = await asyncio.to_thread(
+        parse_query,
         body.query,
         base={"scope": body.scope, "watchlist_id": body.watchlist_id},
     )
@@ -190,7 +198,10 @@ async def nl_search(
         }
         for item in result.top_n
     ]
-    explanation, _ = _maybe_explain(
+    # Same rationale as Step 1 — this is a second, independent
+    # blocking AI round-trip; keep it off the event loop too.
+    explanation, _ = await asyncio.to_thread(
+        _maybe_explain,
         query=body.query,
         schema=filters,
         filter_description=result.filter_description,
