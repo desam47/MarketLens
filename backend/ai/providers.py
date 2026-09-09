@@ -105,19 +105,30 @@ class OpenAICompatibleProvider(AIProvider):
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
 
-        if r.status_code in (401, 403, 404):
-            # Auth / not-found — treat as recoverable so the manager
-            # can try the next provider (e.g. Ollama is up but the
-            # model name is wrong).
+        if r.status_code in (401, 403, 404, 429):
+            # Auth / not-found / rate-limited — treat as recoverable so
+            # the manager can try the next provider (e.g. Ollama is up
+            # but the model name is wrong; or, found live 2026-09-09,
+            # openrouter's free-tier model returned a bare 429). A 429
+            # means the provider is temporarily saying no, not that our
+            # request is malformed — it belongs with the other
+            # "provider unavailable right now" cases below, not with
+            # genuine 4xx request errors (see the raise_for_status()
+            # branch below, which is deliberately NOT caught: those
+            # mean our own request is broken and should be loud, not
+            # silently degraded). Before this fix, 429 fell into that
+            # uncaught branch and crashed the whole HTTP request with
+            # an unhandled 500 — violating /api/ai/analyze's own
+            # contract of never 500ing for a provider-side failure.
             raise ProviderUnavailable(
-                f"{self.name} auth/routing error {r.status_code}: {r.text[:200]}"
+                f"{self.name} auth/routing/rate-limit error {r.status_code}: {r.text[:200]}"
             )
         if r.status_code >= 500:
             raise ProviderUnavailable(f"{self.name} server error {r.status_code}")
         if r.status_code >= 400:
-            # Other client errors (malformed request, rate limit). The
-            # request is broken — we shouldn't keep retrying. Raise
-            # the original exception so the caller sees it.
+            # Other client errors (malformed request). The request is
+            # broken — we shouldn't keep retrying. Raise the original
+            # exception so the caller sees it.
             r.raise_for_status()
 
         try:
@@ -239,9 +250,13 @@ class AnthropicProvider(AIProvider):
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 
-        if r.status_code in (401, 403, 404):
+        if r.status_code in (401, 403, 404, 429):
+            # See OpenAICompatibleProvider.complete's identical guard —
+            # 429 belongs with the recoverable "provider unavailable
+            # right now" cases, not the uncaught malformed-request
+            # branch below.
             raise ProviderUnavailable(
-                f"anthropic auth/routing error {r.status_code}: {r.text[:200]}"
+                f"anthropic auth/routing/rate-limit error {r.status_code}: {r.text[:200]}"
             )
         if r.status_code >= 500:
             raise ProviderUnavailable(f"anthropic server error {r.status_code}")

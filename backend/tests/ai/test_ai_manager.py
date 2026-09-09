@@ -243,6 +243,26 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
             self.p.complete("hi")
 
     @patch("backend.ai.providers.httpx.Client")
+    def test_complete_raises_unavailable_on_429(self, MockClient):
+        """Regression for a live bug (2026-09-09): openrouter's
+        free-tier model returned a bare 429 (rate limited), which
+        r.raise_for_status() turned into an uncaught
+        httpx.HTTPStatusError that crashed the whole /api/ai/analyze
+        request with an unhandled 500 — despite that endpoint's own
+        docstring promising it never 500s for a provider-side failure.
+        429 means the provider is temporarily unavailable (unlike a
+        genuine 400 malformed request, which should still raise loud —
+        see test_complete_raises_for_status_on_400 above), so it must
+        degrade the same way 401/403/404/5xx already do."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.post.return_value = _MockResponse(429, text="rate limited")
+        MockClient.return_value = client
+        with self.assertRaises(ProviderUnavailable):
+            self.p.complete("hi")
+
+    @patch("backend.ai.providers.httpx.Client")
     def test_complete_handles_unexpected_payload(self, MockClient):
         client = MagicMock()
         client.__enter__ = MagicMock(return_value=client)
@@ -341,6 +361,18 @@ class TestAnthropicProvider(unittest.TestCase):
         client.__enter__ = MagicMock(return_value=client)
         client.__exit__ = MagicMock(return_value=False)
         client.post.return_value = _MockResponse(401, text="bad key")
+        MockClient.return_value = client
+        with self.assertRaises(ProviderUnavailable):
+            self.p.complete("hi")
+
+    @patch("backend.ai.providers.httpx.Client")
+    def test_complete_raises_unavailable_on_429(self, MockClient):
+        """Same regression as OpenAICompatibleProvider's version — see
+        that test's docstring."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.post.return_value = _MockResponse(429, text="rate limited")
         MockClient.return_value = client
         with self.assertRaises(ProviderUnavailable):
             self.p.complete("hi")
