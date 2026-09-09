@@ -1610,7 +1610,11 @@ class ApiService {
     if (options?.max_tokens) params.set('max_tokens', String(options.max_tokens));
     if (options?.temperature != null) params.set('temperature', String(options.temperature));
     if (options?.template_id != null) params.set('template_id', String(options.template_id));
-    return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`);
+    // The endpoint is POST-only (backend/api/ai/router.py) — this.fetch()
+    // defaults to GET when no method is given, which 405s. Found live
+    // 2026-09-09 clicking "Re-run" in AIAnalysisPanel with AI actually
+    // enabled for the first time.
+    return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' });
   }
 
   // Phase 16: AI provider config
