@@ -251,8 +251,12 @@ class FinnhubProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
     ) -> list[Bar]:
         """Fetch a series of OHLCV bars from the Finnhub candle endpoint.
+
+        ``include_extended_hours`` is accepted for interface compatibility
+        with WebullProvider but currently ignored.
 
         Returns bars in oldest → newest order.
         """

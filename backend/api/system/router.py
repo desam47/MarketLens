@@ -88,7 +88,8 @@ def _safe_bar_counts() -> dict | None:
     storage growth.
 
     Phase 3.3.17: also returns retention metrics — oldest/newest bar per
-    symbol, distinct symbol count, and the configured retention window.
+    symbol, distinct symbol count, and each timeframe's configured
+    retention window (per-timeframe as of 2026-09-09, see RetentionSettings).
 
     Phase 3.9.4: 6 sequential count/min/max queries collapsed into one
     round-trip via a single SELECT with multiple aggregates.
@@ -113,9 +114,15 @@ def _safe_bar_counts() -> dict | None:
             total, bars_1m, bars_resampled, oldest_bar, newest_bar, distinct_symbols = row
             try:
                 from ...config.settings import settings as _s
-                retention_days = _s.market_data.bar_retention_days
+                retention_by_tf = {
+                    "1m": _s.retention.tf_1m_days, "2m": _s.retention.tf_2m_days,
+                    "3m": _s.retention.tf_3m_days, "5m": _s.retention.tf_5m_days,
+                    "15m": _s.retention.tf_15m_days, "30m": _s.retention.tf_30m_days,
+                    "1h": _s.retention.tf_1h_days, "4h": _s.retention.tf_4h_days,
+                    "1d": _s.retention.tf_1d_days, "1wk": _s.retention.tf_1wk_days,
+                }
             except Exception:
-                retention_days = 1000
+                retention_by_tf = {}
 
             def _iso(value) -> str | None:
                 # SQLite's DBAPI only applies the DATETIME type converter to
@@ -137,7 +144,7 @@ def _safe_bar_counts() -> dict | None:
                 "oldest_bar": _iso(oldest_bar),
                 "newest_bar": _iso(newest_bar),
                 "distinct_symbols": int(distinct_symbols or 0),
-                "retention_days": int(retention_days),
+                "retention_days_by_timeframe": retention_by_tf,
             }
         finally:
             db.close()

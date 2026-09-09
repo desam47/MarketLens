@@ -83,16 +83,22 @@ class TestAuxDataSettingsEnvBinding(unittest.TestCase):
             self.assertTrue(cfg.fundamentals.enabled)
             self.assertTrue(cfg.options.enabled)
 
-    def test_current_env_file_actually_enables_all_three(self):
-        """This project's real .env has AUX_NEWS_ENABLED=true,
-        AUX_FUNDAMENTALS_ENABLED=true, AUX_OPTIONS_ENABLED=true — assert the
-        module-level `settings` singleton (loaded from that real .env, same
-        as what the running app uses) actually reflects that, not just a
-        freshly-constructed instance under a patched environment."""
-        from backend.config.settings import settings
-        self.assertTrue(settings.aux_data.news.enabled)
-        self.assertTrue(settings.aux_data.fundamentals.enabled)
-        self.assertTrue(settings.aux_data.options.enabled)
+    def test_module_singleton_matches_a_fresh_read_of_the_real_env_file(self):
+        """The module-level `settings` singleton (loaded once at import time)
+        must agree with a brand-new instance constructed right now — both
+        read the same real .env file, so they should never disagree on
+        enabled/disabled regardless of whatever that file's current values
+        happen to be. Comparing against a fresh read (instead of a
+        hardcoded True) avoids the test going stale every time .env's
+        AUX_*_ENABLED values are toggled for local testing — found live
+        2026-09-09: this test originally hardcoded True and went red the
+        moment .env's aux flags were flipped back to false, even though
+        the settings binding itself was working correctly."""
+        from backend.config.settings import settings, AuxDataSettings
+        fresh = AuxDataSettings()
+        self.assertEqual(settings.aux_data.news.enabled, fresh.news.enabled)
+        self.assertEqual(settings.aux_data.fundamentals.enabled, fresh.fundamentals.enabled)
+        self.assertEqual(settings.aux_data.options.enabled, fresh.options.enabled)
 
 
 if __name__ == "__main__":

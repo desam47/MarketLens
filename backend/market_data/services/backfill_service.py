@@ -89,26 +89,17 @@ def _utc_key(b) -> datetime:
 
 
 def _instantiate_provider(name: str):
-    """Resolve a provider name (e.g. 'alpaca', 'webull', 'yahoo_finance') to an instance.
+    """Resolve a provider name (e.g. 'alpaca', 'webull', 'yahoo_finance') to
+    a (cached) instance.
 
-    Reads the global provider registry from ``manager._PROVIDER_CLASSES`` so
-    that any provider registered at startup can be used by the backfill
-    chain without a hardcoded import here. Returns None if the name is
-    unknown or the class cannot be instantiated.
+    Delegates to ``manager.get_cached_provider`` — see that function's
+    docstring for why this must not construct a fresh instance on every
+    call (found live 2026-09-09: doing so was the direct cause of bars
+    landing 1-2+ minutes late, not just wasteful). Returns None if the
+    name is unknown or construction fails.
     """
-    from backend.market_data.services.manager import _PROVIDER_CLASSES
-    provider_cls = _PROVIDER_CLASSES.get(name)
-    if provider_cls is None:
-        logger.warning(
-            f"Unknown backfill provider {name!r} — "
-            f"available: {list(_PROVIDER_CLASSES.keys())}"
-        )
-        return None
-    try:
-        return provider_cls()
-    except Exception as e:
-        logger.warning(f"Failed to instantiate {name}: {e}")
-        return None
+    from backend.market_data.services.manager import get_cached_provider
+    return get_cached_provider(name)
 
 
 # Phase 3.3.12: max 2 concurrent backfills to stay under provider rate limits
@@ -161,6 +152,16 @@ async def _fetch_tier1_1m_bars(
 
     Providers are loaded from BACKFILL_1M_PRIMARY, BACKFILL_1M_FALLBACK,
     and BACKFILL_1M_GAPFILL in .env.
+
+    Every provider call passes ``include_extended_hours=True`` — confirmed
+    live 2026-09-09 that Webull's ``trading_sessions`` param supports
+    PRE/RTH/ATH at 1m resolution. Non-Webull providers accept and ignore
+    the flag (interface-wide no-op — see BaseMarketDataProvider docstring),
+    so this is safe regardless of which provider .env resolves to. Returned
+    bars carry their real ``Bar.session`` classification either way;
+    sub-hour/higher-timeframe resampling filters to session='regular' (see
+    ingestion_service._resample_and_upsert) so this has no effect on any
+    existing chart or indicator.
     """
     tf = "1m"
     merged: dict[datetime, Bar] = {}
@@ -175,7 +176,8 @@ async def _fetch_tier1_1m_bars(
         provider = get_backfill_primary_provider("1m")
         if provider is not None:
             bars = provider.get_historical_bars(
-                symbol=symbol, timeframe=tf, range_=alpaca_range
+                symbol=symbol, timeframe=tf, range_=alpaca_range,
+                include_extended_hours=True,
             )
             for b in bars:
                 merged[b.timestamp] = b
@@ -197,7 +199,8 @@ async def _fetch_tier1_1m_bars(
                 if prov is None:
                     continue
                 bars = prov.get_historical_bars(
-                    symbol=symbol, timeframe=tf, range_=alpaca_range
+                    symbol=symbol, timeframe=tf, range_=alpaca_range,
+                    include_extended_hours=True,
                 )
                 for b in bars:
                     merged[b.timestamp] = b
@@ -220,7 +223,8 @@ async def _fetch_tier1_1m_bars(
                 continue
 
             gap_bars = prov.get_historical_bars(
-                symbol=symbol, timeframe=tf, range_="2d"
+                symbol=symbol, timeframe=tf, range_="2d",
+                include_extended_hours=True,
             )
             added = 0
             for b in gap_bars:
@@ -680,17 +684,32 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
            "gaps_found", "gaps_filled", "gap_detail", "duration_s"}``
     """
     settings = _settings
-    retention_days = days if days is not None else settings.market_data.bar_retention_days
+    # Optional caller override: when given, clamps every tier DOWN (never
+    # up past its own BACKFILL_*_DAYS ceiling) — e.g.
+    # scripts/backfill_1000d.py --days=90 for a smaller/faster reseed.
+    # None (every real production call site) means each tier just uses
+    # its own default, unclamped.
+    #
+    # Removed 2026-09-09 (MARKET_DATA_BAR_RETENTION_DAYS): this used to
+    # default from that setting via `days if days is not None else
+    # settings.market_data.bar_retention_days`, but that setting
+    # (1095) was, by construction, always >= every tier's own days
+    # value (15 / 365 / 1095) — so `min(tier_default, retention_days)`
+    # never actually clamped anything in any real call path. Storage
+    # retention is now handled properly and separately by
+    # settings.retention (see RetentionSettings) — this was purely a
+    # dead fetch-depth cap that happened to never bind.
+    override_days = max(1, days) if days is not None else None
 
-    # Hard floor so we never request zero or negative ranges.
-    retention_days = max(1, retention_days)
+    def _tier_days(tier_default: int) -> int:
+        return min(tier_default, override_days) if override_days is not None else tier_default
 
     symbol = symbol.upper()
     start_time = time.monotonic()
 
     logger.info(
         f"backfill_symbol_history: starting backfill for {symbol} "
-        f"({retention_days}d)"
+        f"({f'override={override_days}d' if override_days is not None else 'tier defaults'})"
     )
 
     db = SessionLocal()
@@ -707,7 +726,7 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
         # internally (4 pages × 1,650 = 6,600 bars max) when range_="15d"
         # is passed to get_historical_bars, so primary providers can now
         # cover the full 15-day window in one call.
-        tier1_days = min(settings.backfill.tf_1m_days, retention_days)
+        tier1_days = _tier_days(settings.backfill.tf_1m_days)
         tier1_bars = await _fetch_tier1_1m_bars(
             symbol, tier1_days, manager, db
         )
@@ -745,7 +764,7 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
 
         # Tier 2: 1h bars — range_="5y" always (hits 1,200-bar cap).
         # Window configurable via BACKFILL_1H_DAYS (default 365).
-        tier2_days = min(settings.backfill.tf_1h_days, retention_days)
+        tier2_days = _tier_days(settings.backfill.tf_1h_days)
         tier2_bars = await _fetch_tier2_1h_bars(symbol, tier2_days)
         if tier2_bars:
             tier2_written = await _write_bars_in_chunks(db, tier2_bars)
@@ -758,8 +777,8 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                 logger.warning(f"backfill {symbol}: 1h gap-check failed: {e}")
 
         # Tier 3: 1d bars. Window configurable via BACKFILL_1D_DAYS
-        # (default 1095 ≈ 3 years), still capped by retention_days.
-        tier3_days = min(settings.backfill.tf_1d_days, retention_days)
+        # (default 1095 ≈ 3 years), still capped by an explicit override.
+        tier3_days = _tier_days(settings.backfill.tf_1d_days)
         if tier3_days > 0:
             tier3_bars = await _fetch_tier2_1d_bars(
                 symbol,

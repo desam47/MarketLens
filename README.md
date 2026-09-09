@@ -711,7 +711,6 @@ All configuration is driven by environment variables via `pydantic-settings`. Th
 MARKET_DATA_PRIMARY_PROVIDER=webull          # webull | alpaca | yahoo_finance | finnhub
 MARKET_DATA_FALLBACK_PROVIDERS=["alpaca","yahoo_finance","finnhub"]
 MARKET_DATA_CACHE_TTL_SECONDS=120
-MARKET_DATA_BAR_RETENTION_DAYS=1095          # ~3 trading years
 MARKET_DATA_BACKFILL_ON_ADD=true             # auto-backfill when ticker added
 
 # ── Backfill Provider Chains ─────────────────────────────────────────────────
@@ -722,6 +721,14 @@ BACKFILL_1H_PRIMARY=webull
 BACKFILL_1H_FALLBACK=alpaca,yahoo_finance    # alpaca fills 16:00 ET close bar
 BACKFILL_1D_PRIMARY=webull
 BACKFILL_1D_FALLBACK=webull
+
+# ── Bar Storage Retention ────────────────────────────────────────────────────
+# Ongoing DB storage cap, per timeframe — enforced automatically by the
+# rolling retention prune (runs on every ~60s ingestion tick). Distinct
+# from BACKFILL_*_DAYS above (how far back a backfill fetches).
+RETENTION_TF_1M_DAYS=16                      # also 2m/3m/5m/15m/30m
+RETENTION_TF_1H_DAYS=366                     # also 4h
+RETENTION_TF_1D_DAYS=1096                    # also 1wk
 
 # ── Webull ───────────────────────────────────────────────────────────────────
 WEBULL_ENABLED=true

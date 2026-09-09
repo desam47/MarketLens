@@ -432,5 +432,155 @@ class TestCredentialsNotLeaked(unittest.TestCase):
         self.assertNotIn("None", msg)
 
 
+# ---------------------------------------------------------------------------
+# Extended-hours (pre-market/after-hours) bars — confirmed live 2026-09-09:
+# Webull's ``trading_sessions`` param supports PRE/RTH/ATH at 1m resolution.
+# ---------------------------------------------------------------------------
+class TestExtendedHoursBars(unittest.TestCase):
+    def _make_provider(self, bars_response: list[dict]) -> WebullProvider:
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = bars_response
+        mock_data.market_data.get_history_bar.return_value = mock_resp
+        return _make_provider(mock_data)
+
+    def test_default_does_not_request_extended_hours(self):
+        """Backward compat: without the flag, trading_sessions stays unset
+        (None) — identical request shape to every call site written before
+        this feature existed."""
+        p = self._make_provider([])
+        p.get_historical_bars("aapl", timeframe="1d", range_="5d")
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertIsNone(kwargs.get("trading_sessions"))
+
+    def test_include_extended_hours_requests_pre_rth_ath(self):
+        p = self._make_provider([])
+        p.get_historical_bars(
+            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+        )
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertEqual(kwargs.get("trading_sessions"), ["PRE", "RTH", "ATH"])
+
+    def test_include_extended_hours_ignored_for_non_1m_timeframe(self):
+        """Extended hours only means anything at 1m resolution in this
+        pipeline — a 1d request with the flag set must not send
+        trading_sessions (matches the docstring: 'Ignored for any other
+        timeframe')."""
+        p = self._make_provider([])
+        p.get_historical_bars(
+            "aapl", timeframe="1d", range_="5d", include_extended_hours=True,
+        )
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertIsNone(kwargs.get("trading_sessions"))
+
+    def test_paginated_path_also_requests_extended_hours(self):
+        """A multi-day 1m range routes through _fetch_1m_paginated — confirm
+        trading_sessions survives that path too, not just the single-page one."""
+        p = self._make_provider([])
+        p.get_historical_bars(
+            "aapl", timeframe="1m", range_="15d", include_extended_hours=True,
+        )
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertEqual(kwargs.get("trading_sessions"), ["PRE", "RTH", "ATH"])
+
+    def test_session_classification_premarket(self):
+        """A bar timestamped 08:45 ET (naive NY, this module's convention)
+        must be classified 'premarket' (04:00-09:30 ET)."""
+        from datetime import datetime as _dt
+        ts_ms = int(_dt(2026, 9, 9, 8, 45, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
+        p = self._make_provider([
+            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+        ])
+        bars = p.get_historical_bars(
+            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+        )
+        self.assertEqual(bars[0].session, "premarket")
+
+    def test_session_classification_regular(self):
+        from datetime import datetime as _dt
+        ts_ms = int(_dt(2026, 9, 9, 10, 0, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
+        p = self._make_provider([
+            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+        ])
+        bars = p.get_historical_bars("aapl", timeframe="1m", range_="1d")
+        self.assertEqual(bars[0].session, "regular")
+
+    def test_session_classification_after_hours(self):
+        from datetime import datetime as _dt
+        ts_ms = int(_dt(2026, 9, 9, 17, 30, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
+        p = self._make_provider([
+            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+        ])
+        bars = p.get_historical_bars(
+            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+        )
+        self.assertEqual(bars[0].session, "after_hours")
+
+    def test_default_1m_fetch_still_classifies_regular_session_correctly(self):
+        """Even without include_extended_hours, a bar that happens to be
+        classified must default correctly — this documents that session
+        tagging is independent of whether extended hours were requested
+        (Webull just wouldn't return a PRE/ATH row in that case)."""
+        from datetime import datetime as _dt
+        ts_ms = int(_dt(2026, 9, 9, 11, 0, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
+        p = self._make_provider([
+            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+        ])
+        bars = p.get_historical_bars("aapl", timeframe="1m", range_="1d")
+        self.assertEqual(bars[0].session, "regular")
+
+
+class TestExtendedHoursQuotes(unittest.TestCase):
+    def _make_snapshot_provider(self, field: dict) -> WebullProvider:
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [field]
+        mock_data.market_data.get_snapshot.return_value = mock_resp
+        return _make_provider(mock_data)
+
+    def test_get_quote_always_requests_extend_hour_required(self):
+        """extend_hour_required=True is safe to always send — confirmed live
+        it needs no special subscription (unlike overnight_required)."""
+        p = self._make_snapshot_provider({"symbol": "AAPL", "price": "100.0"})
+        p.get_quote("aapl")
+        _, kwargs = p._data_client.market_data.get_snapshot.call_args
+        self.assertTrue(kwargs.get("extend_hour_required"))
+
+    def test_get_quote_parses_extended_hours_fields(self):
+        p = self._make_snapshot_provider({
+            "symbol": "AAPL",
+            "price": "150.00",
+            "extend_hour_last_price": "151.25",
+            "extend_hour_change": "1.25",
+            "extend_hour_change_ratio": "0.0084",
+            "extend_hour_high": "151.50",
+            "extend_hour_low": "150.90",
+            "extend_hour_volume": "12345",
+        })
+        quote = p.get_quote("aapl")
+        self.assertEqual(quote.extended_hours_price, 151.25)
+        self.assertEqual(quote.extended_hours_change, 1.25)
+        self.assertEqual(quote.extended_hours_high, 151.50)
+        self.assertEqual(quote.extended_hours_low, 150.90)
+        self.assertEqual(quote.extended_hours_volume, 12345)
+
+    def test_get_quote_extended_hours_fields_none_when_absent(self):
+        """No premarket/after-hours activity → Webull omits the extend_hour_*
+        keys entirely; every extended_hours_* field on Quote must be None,
+        not 0 or an error."""
+        p = self._make_snapshot_provider({"symbol": "AAPL", "price": "150.00"})
+        quote = p.get_quote("aapl")
+        self.assertIsNone(quote.extended_hours_price)
+        self.assertIsNone(quote.extended_hours_volume)
+
+    def test_get_batch_quotes_also_requests_extend_hour_required(self):
+        p = self._make_snapshot_provider({"symbol": "AAPL", "price": "100.0"})
+        p.get_batch_quotes(["aapl"])
+        _, kwargs = p._data_client.market_data.get_snapshot.call_args
+        self.assertTrue(kwargs.get("extend_hour_required"))
+
+
 if __name__ == "__main__":
     unittest.main()

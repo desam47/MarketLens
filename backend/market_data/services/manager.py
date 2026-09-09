@@ -74,8 +74,67 @@ def get_1h_1d_fallback_providers(timeframe: str) -> list[str]:
     return _s.backfill.get_fallback_providers(timeframe)
 
 
+# Phase: 2026-09-09 — process-lifetime provider instance cache.
+#
+# This and backfill_service._instantiate_provider used to call
+# provider_cls() fresh on EVERY invocation — unlike MarketDataManager,
+# which instantiates each provider once in its own __init__ and reuses
+# them for the rest of the process. For WebullProvider specifically,
+# __init__ does a synchronous auth handshake
+# (TradeClient(...).account_v2.get_account_list()) — a real blocking
+# network round-trip on every construction, not just the first.
+#
+# Found live 2026-09-09: this repeated re-instantiation — happening
+# inside _gapfill_1m_loop/_gapfill_1h_loop, which run on the SAME
+# asyncio event loop as the live 1m ingestion tick, both inside
+# MarketDataIngestionService's concurrent loops — was blocking that
+# shared event loop for hundreds of ms to seconds per gap-fill cycle,
+# well beyond _bar_ingestion_loop's own ~60s cadence. Confirmed via
+# _ingest_1m_recent_window() timing 1.67s in isolation, yet the live
+# logs showed ~100s between consecutive "Ingested" lines — the
+# difference was fresh WebullProvider() bootstraps (each with its own
+# "Webull SDK configured..." → token verify/refresh sequence) firing
+# from the concurrently-running gap-fill loop in between. That's the
+# direct cause of bars landing 1-2+ minutes late instead of ~60s.
+# Caching by provider name for the life of the process (matching
+# MarketDataManager's own provider cache lifetime) fixes this:
+# construct once, reuse forever. Only successful constructions are
+# cached — a transient failure is never cached as "permanently
+# unavailable", so the next call retries construction from scratch.
+_provider_instance_cache: dict[str, object] = {}
+
+
+def get_cached_provider(name: str):
+    """Return a cached instance of the named provider, constructing it
+    once and reusing it for the life of the process. Returns ``None``
+    (never raises) if the name is unknown or construction fails —
+    failures are never cached, so the next call retries.
+    """
+    if name in _provider_instance_cache:
+        return _provider_instance_cache[name]
+    provider_cls = _PROVIDER_CLASSES.get(name)
+    if provider_cls is None:
+        logger.warning(
+            f"Unknown provider {name!r} — available: {list(_PROVIDER_CLASSES.keys())}"
+        )
+        return None
+    try:
+        instance = provider_cls()
+    except Exception as e:
+        logger.warning(f"Failed to instantiate {name}: {e}")
+        return None
+    _provider_instance_cache[name] = instance
+    return instance
+
+
+def _clear_provider_cache() -> None:
+    """Test-only: reset the cache so a test's mocked _PROVIDER_CLASSES
+    isn't shadowed by another test's cached instance."""
+    _provider_instance_cache.clear()
+
+
 def get_backfill_primary_provider(timeframe: str) -> MarketDataManager | None:
-    """Instantiate the primary backfill provider for ``timeframe`` from .env.
+    """Return the (cached) primary backfill provider for ``timeframe``, from .env.
 
     The provider name is read from BACKFILL_{TF}_PRIMARY (e.g. BACKFILL_1M_PRIMARY).
     The provider class is resolved from the global registry (``_PROVIDER_CLASSES``)
@@ -85,18 +144,7 @@ def get_backfill_primary_provider(timeframe: str) -> MarketDataManager | None:
     from backend.config.settings import settings as _s
 
     primary_name = _s.backfill.get_primary_provider(timeframe)
-    provider_cls = _PROVIDER_CLASSES.get(primary_name)
-    if provider_cls is None:
-        logger.warning(
-            f"Unknown backfill primary provider {primary_name!r} for {timeframe} — "
-            f"available: {list(_PROVIDER_CLASSES.keys())}"
-        )
-        return None
-    try:
-        return provider_cls()
-    except Exception as e:
-        logger.warning(f"Failed to instantiate backfill primary {primary_name}: {e}")
-        return None
+    return get_cached_provider(primary_name)
 
 
 __all__ = [

@@ -96,9 +96,13 @@ class MarketDataSettings(BaseSettings):
     # Global rate limit (used when no per-provider override is set).
     rate_limit_per_minute: int = Field(default=60)
     cache_ttl_seconds: int = Field(default=300)
-    # Phase 3.3.8: Rolling bar window. Bars older than this are pruned
-    # from the DB on every ingestion cycle. Default 1095 days ≈ 3 calendar years.
-    bar_retention_days: int = Field(default=1095)
+    # Removed 2026-09-09 (MARKET_DATA_BAR_RETENTION_DAYS / bar_retention_days):
+    # was only ever a fetch-depth cap (how far back an initial backfill
+    # could reach), and by construction (1095 >= every BACKFILL_*_DAYS
+    # tier value) it never actually clamped anything in any real call
+    # path — dead weight, not real behavior. Storage retention (the
+    # thing this name suggested it did) is RetentionSettings' job, per
+    # timeframe — see that class's docstring.
     # Phase 3.3.14: When a symbol is freshly added to a watchlist, trigger
     # a background backfill of bar history. Set False to disable backfills.
     backfill_on_add: bool = Field(default=True)
@@ -203,6 +207,59 @@ class BackfillSettings(BaseSettings):
         if timeframe in ("1d", "1wk"):
             return self.tf_1d_primary.strip()
         return "alpaca"  # safe default
+
+
+class RetentionSettings(BaseSettings):
+    """Per-timeframe bar storage retention (2026-09-09).
+
+    Independent from ``BackfillSettings.tf_*_days`` (BACKFILL_*_DAYS) —
+    how much history gets FETCHED on an initial backfill, not enforced
+    as an ongoing DB constraint. (MARKET_DATA_BAR_RETENTION_DAYS /
+    ``MarketDataSettings.bar_retention_days`` — the old single global
+    prune window this superseded — was removed 2026-09-09: it never
+    actually did anything in any real call path, see its removal note
+    in MarketDataSettings.)
+
+    This is the actual storage cap: bars older than the configured
+    window for their own timeframe are deleted automatically by the
+    rolling retention prune, which runs every ~60s ingestion tick (only
+    when new bars were written that tick). 1m/2m/3m/5m/15m/30m are the
+    high-volume timeframes (especially now that extended-hours 1m
+    ingestion roughly doubles their daily row count) so they default to
+    a short window; 1h/4h/1d/1wk are compact regardless of how long
+    they're kept, so they default to much longer windows — this mirrors
+    BACKFILL_1M/1H/1D_DAYS (15/365/1095) at +1 day, so nothing gets
+    pruned right after backfill just fetched it.
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="RETENTION_", extra="ignore")
+
+    tf_1m_days: int = Field(default=16)
+    tf_2m_days: int = Field(default=16)
+    tf_3m_days: int = Field(default=16)
+    tf_5m_days: int = Field(default=16)
+    tf_15m_days: int = Field(default=16)
+    tf_30m_days: int = Field(default=16)
+    tf_1h_days: int = Field(default=366)
+    tf_4h_days: int = Field(default=366)
+    tf_1d_days: int = Field(default=1096)
+    tf_1wk_days: int = Field(default=1096)
+
+    def days_for(self, timeframe: str) -> int:
+        """Retention window in days for ``timeframe``. Unknown timeframes
+        fall back to the longest window (1096d) — safer to under-prune an
+        unrecognized timeframe than silently delete it fast."""
+        return {
+            "1m": self.tf_1m_days,
+            "2m": self.tf_2m_days,
+            "3m": self.tf_3m_days,
+            "5m": self.tf_5m_days,
+            "15m": self.tf_15m_days,
+            "30m": self.tf_30m_days,
+            "1h": self.tf_1h_days,
+            "4h": self.tf_4h_days,
+            "1d": self.tf_1d_days,
+            "1wk": self.tf_1wk_days,
+        }.get(timeframe, self.tf_1wk_days)
 
 
 class AlpacaSettings(BaseSettings):
@@ -691,6 +748,7 @@ class Settings(BaseSettings):
 
     market_data: MarketDataSettings = Field(default_factory=MarketDataSettings)
     backfill: BackfillSettings = Field(default_factory=BackfillSettings)
+    retention: RetentionSettings = Field(default_factory=RetentionSettings)
     finnhub: FinnhubSettings = Field(default_factory=FinnhubSettings)
     webull: WebullSettings = Field(default_factory=WebullSettings)
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)

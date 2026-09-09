@@ -341,5 +341,108 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertTrue(all(b.data_status == DataStatus.LIVE for b in result))
         self.manager.providers["yahoo_finance"].get_historical_bars.assert_not_called()
 
+
+class TestGetCachedProvider(unittest.TestCase):
+    """get_cached_provider must construct each provider at most once per
+    process and reuse it, never re-run its (possibly network-bound)
+    __init__ on every call.
+
+    Regression coverage for a live bug (2026-09-09): get_backfill_primary_
+    provider / backfill_service._instantiate_provider used to call
+    provider_cls() fresh on every invocation. For WebullProvider, __init__
+    does a synchronous network auth handshake — repeating it on every
+    gap-fill cycle (which runs on the same asyncio event loop as the live
+    1m ingestion tick) blocked that loop long enough to make fresh bars
+    land 1-2+ minutes late instead of the intended ~60s.
+    """
+
+    def setUp(self):
+        from backend.market_data.services import manager as manager_mod
+        self.manager_mod = manager_mod
+        manager_mod._clear_provider_cache()
+
+    def tearDown(self):
+        self.manager_mod._clear_provider_cache()
+
+    def test_second_call_reuses_the_same_instance(self):
+        construct_count = {"n": 0}
+
+        class _FakeProvider:
+            def __init__(self):
+                construct_count["n"] += 1
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
+        ):
+            first = self.manager_mod.get_cached_provider("fake")
+            second = self.manager_mod.get_cached_provider("fake")
+
+        self.assertIs(first, second)
+        self.assertEqual(construct_count["n"], 1)
+
+    def test_unknown_provider_returns_none(self):
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {}):
+            self.assertIsNone(self.manager_mod.get_cached_provider("bogus"))
+
+    def test_construction_failure_is_not_cached_and_retries(self):
+        """A transient failure (e.g. a rate-limited auth call) must not
+        be remembered as 'permanently unavailable' — the next call gets
+        a fresh construction attempt."""
+        attempt = {"n": 0}
+
+        class _FlakyProvider:
+            def __init__(self):
+                attempt["n"] += 1
+                if attempt["n"] == 1:
+                    raise RuntimeError("transient failure")
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"flaky": _FlakyProvider}
+        ):
+            first = self.manager_mod.get_cached_provider("flaky")
+            self.assertIsNone(first)
+            second = self.manager_mod.get_cached_provider("flaky")
+
+        self.assertIsNotNone(second)
+        self.assertEqual(attempt["n"], 2)
+
+    def test_get_backfill_primary_provider_uses_the_cache(self):
+        construct_count = {"n": 0}
+
+        class _FakeProvider:
+            def __init__(self):
+                construct_count["n"] += 1
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
+        ), patch(
+            "backend.config.settings.BackfillSettings.get_primary_provider",
+            return_value="fake",
+        ):
+            first = self.manager_mod.get_backfill_primary_provider("1m")
+            second = self.manager_mod.get_backfill_primary_provider("1m")
+
+        self.assertIs(first, second)
+        self.assertEqual(construct_count["n"], 1)
+
+    def test_backfill_service_instantiate_provider_uses_the_cache(self):
+        from backend.market_data.services import backfill_service
+
+        construct_count = {"n": 0}
+
+        class _FakeProvider:
+            def __init__(self):
+                construct_count["n"] += 1
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
+        ):
+            first = backfill_service._instantiate_provider("fake")
+            second = backfill_service._instantiate_provider("fake")
+
+        self.assertIs(first, second)
+        self.assertEqual(construct_count["n"], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

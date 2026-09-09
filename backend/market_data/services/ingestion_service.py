@@ -346,6 +346,7 @@ class MarketDataIngestionService:
             provider=row.provider,
             data_status=status,
             source=getattr(row, "source", None),
+            session=getattr(row, "session", None) or "regular",
         )
 
     # ------------------------------------------------------------------
@@ -406,6 +407,19 @@ class MarketDataIngestionService:
                         )
                     )
                 )
+                # 2026-09-09: sub-hour timeframes (2m/3m/5m/15m/30m — the
+                # only targets this function is ever called with, per
+                # _SUBHOUR_TFS) now include premarket/after_hours 1m bars,
+                # not just regular-session ones — by request, after
+                # confirming Webull's extended-hours 1m data works. No
+                # session filter needed here: sub-hour bucket boundaries
+                # (all divide evenly into the 09:30/16:00/04:00/20:00
+                # session edges) never straddle a session, so each
+                # resulting bar's session is unambiguous — tagged in
+                # upsert_bars, same chokepoint as 1m. 1h/4h/1d/1wk are
+                # never resampled through this function (they're fetched
+                # directly from providers, or derived from 1h/1d by a
+                # different function) and stay regular-session-only.
                 if not full_history:
                     # Only fetch bars within the widening window for this
                     # timeframe to avoid loading all historical 1m bars
@@ -661,7 +675,8 @@ class MarketDataIngestionService:
         return written
 
     async def _resample_write_loop(self, initial_delay: float = 0.0):
-        """Every 2 min: resample 1m → 2m/3m/5m/15m/30m, plus today's live 1d bar."""
+        """Every 2 min: resample 1m -> 2m/3m/5m/15m/30m, plus today's live
+        1d bar and the current hour's live 1h bar."""
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
         while self.is_running:
@@ -669,6 +684,7 @@ class MarketDataIngestionService:
                 for tf in self._SUBHOUR_TFS:
                     await self._resample_and_upsert(tf, source_tf="1m")
                 await self._resample_1d_live_and_upsert()
+                await self._resample_1h_live_and_upsert()
             except Exception as e:
                 logger.error(f"Error in resample write loop: {e}")
             await self._jittered_sleep(120, jitter=10.0)
@@ -767,6 +783,85 @@ class MarketDataIngestionService:
             db.close()
         return written
 
+    async def _resample_1h_live_and_upsert(self) -> int:
+        """Build/refresh the CURRENT hour's 1h bar from this hour's 1m bars.
+
+        Mirrors ``_resample_1d_live_and_upsert``'s proven pattern exactly,
+        one level down: runs every ~2 min (via _resample_write_loop) so
+        the in-progress hour is visible and updating live, instead of 1h
+        only ever showing the last fully-closed hour (found live
+        2026-09-09: at 1:13pm, the most recent 1h bar was 12:00 — correct
+        under "only closed hours" but surprising if you expect a live
+        current-hour candle the way 1m already provides).
+
+        Written with data_status=INCOMPLETE. _1h_write_loop (hourly, :02
+        past the hour) and _gapfill_1h_loop (every 30 min) both write to
+        the SAME (symbol, "1h", hour_start) key once that hour is
+        actually closed and the authoritative provider-sourced bar is
+        available — upsert's ON CONFLICT DO UPDATE means that real bar
+        simply overwrites this synthetic one on the next real fetch, no
+        special-casing needed. By the time the NEXT hour starts, this
+        function has moved on to building THAT hour instead, so there's
+        never a live/authoritative race on the same key in practice.
+
+        Regular-session only, matching every other 1h/4h/1d/1wk source
+        query in this codebase (see BarModel.session's docstring) — 1h
+        has never included extended-hours data, and this live builder
+        must not become the one place that quietly changes that.
+        """
+        from backend.repositories.bar_repository import upsert_bars
+
+        now = datetime.now(_NY_TZ)
+        if now.weekday() >= 5:
+            return 0
+
+        hour_start = now.replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        written = 0
+        db = SessionLocal()
+        try:
+            for symbol in self.symbols:
+                rows = (
+                    db.query(BarModel)
+                    .filter(
+                        and_(
+                            BarModel.symbol == symbol.upper(),
+                            BarModel.timeframe == "1m",
+                            BarModel.timestamp >= hour_start,
+                            BarModel.session == "regular",
+                        )
+                    )
+                    .order_by(BarModel.timestamp.asc())
+                    .all()
+                )
+                if len(rows) < 2:
+                    continue  # not enough of this hour ingested yet
+
+                bars_src = [self._model_to_bar(r) for r in rows]
+                bar = Bar(
+                    symbol=symbol.upper(),
+                    timeframe="1h",
+                    open=bars_src[0].open,
+                    high=max(b.high for b in bars_src),
+                    low=min(b.low for b in bars_src),
+                    close=bars_src[-1].close,
+                    volume=sum(b.volume for b in bars_src),
+                    timestamp=hour_start,
+                    provider="live_from_1m",
+                    data_status=DataStatus.INCOMPLETE,
+                )
+                written += upsert_bars(db, [bar])
+            db.commit()
+            if written:
+                from backend.market_data.services.cache import _redis_cache
+                for symbol in self.symbols:
+                    _redis_cache.invalidate_bars_for_symbol(symbol)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        return written
+
     # ---------------------------------------------------------------------------
     # Multi-bar ingestion helpers (Phase 3.8)
     # ---------------------------------------------------------------------------
@@ -790,8 +885,15 @@ class MarketDataIngestionService:
             # Use batch API — one call for all symbols instead of N separate
             # calls, which avoids burning through the 60/min Webull rate limit.
             try:
+                # range_="15m" (not "5d") — matches this function's own
+                # docstring/intent: a small recent-window fetch, not a
+                # multi-day re-pull every ~60s tick. Restored 2026-09-09;
+                # had drifted to "5d" without the surrounding comments
+                # being updated, which meant every cycle re-fetched and
+                # re-wrote each symbol's full 1200-bar (Webull's hard
+                # cap) window just to catch the latest 1-2 bars.
                 batch_bars = self.manager.get_historical_bars_batch(
-                    self.symbols, "1m", range_="5d", use_cache=False
+                    self.symbols, "1m", range_="15m", use_cache=False
                 )
                 for symbol, bars in batch_bars.items():
                     if bars:
@@ -811,7 +913,7 @@ class MarketDataIngestionService:
                 for symbol in self.symbols:
                     try:
                         bars = self.manager.get_historical_bars(
-                            symbol, "1m", range_="5d", use_cache=False
+                            symbol, "1m", range_="15m", use_cache=False
                         )
                         if bars:
                             for bar in bars:
@@ -857,25 +959,16 @@ class MarketDataIngestionService:
                                 await self._resample_and_upsert(tf, source_tf="1m", _symbol=sym)
                             except Exception as e:
                                 logger.debug(f"immediate resample failed for {sym}/{tf}: {e}")
-                    # Rolling retention prune
-                    from datetime import timedelta as _td
-                    from backend.repositories.bar_repository import prune_bars_older_than
-                    from backend.config.settings import settings as _s
-                    retention_days = _s.market_data.bar_retention_days
-                    cutoff = datetime.now() - _td(days=retention_days + 1)
-                    from backend.models.market_data_sql import BarModel as _BM
-                    stale_count = (
-                        db.query(_BM.id)
-                        .filter(_BM.timestamp < cutoff)
-                        .count()
-                    )
-                    if stale_count > 0:
-                        deleted = prune_bars_older_than(db, cutoff)
-                        if deleted:
-                            logger.info(
-                                f"Rolling retention: pruned {deleted} bars older "
-                                f"than {cutoff.date()} (retention={retention_days}d)"
-                            )
+                    # Rolling retention prune — per-timeframe windows
+                    # (settings.retention), not one global cutoff. See
+                    # RetentionSettings' docstring: 1m/2m/3m/5m/15m/30m
+                    # (high-volume, especially with extended-hours
+                    # ingestion) get a short window; 1h/4h/1d/1wk
+                    # (compact regardless) get a much longer one.
+                    from backend.repositories.bar_repository import prune_bars_by_retention
+                    deleted_by_tf = prune_bars_by_retention(db)
+                    if deleted_by_tf:
+                        logger.info(f"Rolling retention: pruned {deleted_by_tf}")
                 record_bars(len(fresh_bars))
         except Exception as e:
             logger.error(f"Error in 1m recent window ingest: {e}")

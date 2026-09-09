@@ -50,6 +50,16 @@ class BarModel(Base):
     # rows derived from 1m at read time. Higher-TF rows are read-time only
     # and never persisted, so existing rows default to 'raw'.
     source = Column(String(20), nullable=False, server_default="raw")
+    # Equity session classification at ingest time — 'premarket' (04:00-09:30
+    # ET), 'regular' (09:30-16:00 ET), or 'after_hours' (16:00-20:00 ET),
+    # matching backend.engines.market_calendar.SessionType. Only meaningful
+    # for 1m rows fetched with extended-hours enabled (WebullProvider); every
+    # other row defaults to 'regular', which matches actual historical
+    # behavior (all ingestion was RTH-only before extended-hours support was
+    # added). Sub-hour resampling (_resample_and_upsert) filters on this so
+    # 2m/3m/5m/15m/30m/1h/4h/1d/1wk stay regular-session-only even once
+    # premarket/after-hours 1m rows exist in the table.
+    session = Column(String(20), nullable=False, server_default="regular")
 
     # Composite indexes for common queries.
     # ix_bars_symbol_timeframe_timestamp is UNIQUE so concurrent upsert_bars

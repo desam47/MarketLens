@@ -78,6 +78,7 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
+from backend.engines.market_calendar import classify_bar_session as _classify_bar_session
 from backend.utils.timezone import to_ny, NY as _NY_TZ
 
 from ..provider import BaseMarketDataProvider
@@ -197,6 +198,57 @@ def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
     return to_ny(dt.astimezone(timezone.utc))
 
 
+def _extended_hours_quote_fields(field: dict) -> dict:
+    """Extract Webull's ``extend_hour_*`` snapshot fields into Quote kwargs.
+
+    Confirmed live 2026-09-09 via ``get_snapshot(..., extend_hour_required=True)``:
+    field names are ``extend_hour_last_price/high/low/volume/change/
+    change_ratio/last_trade_time``. All are absent (not just null) when
+    there's no premarket/after-hours activity to report — ``.get()``
+    returns None for every key in that case, which is the correct value
+    for Quote's ``extended_hours_*`` fields (all Optional, default None).
+    """
+    last_price = field.get("extend_hour_last_price")
+    return {
+        "extended_hours_price": float(last_price) if last_price not in (None, "") else None,
+        "extended_hours_change": (
+            float(field["extend_hour_change"]) if field.get("extend_hour_change") not in (None, "") else None
+        ),
+        "extended_hours_change_ratio": (
+            float(field["extend_hour_change_ratio"])
+            if field.get("extend_hour_change_ratio") not in (None, "") else None
+        ),
+        "extended_hours_high": (
+            float(field["extend_hour_high"]) if field.get("extend_hour_high") not in (None, "") else None
+        ),
+        "extended_hours_low": (
+            float(field["extend_hour_low"]) if field.get("extend_hour_low") not in (None, "") else None
+        ),
+        "extended_hours_volume": (
+            int(float(field["extend_hour_volume"])) if field.get("extend_hour_volume") not in (None, "") else None
+        ),
+        "extended_hours_timestamp": (
+            _epoch_ms_to_ny(field["extend_hour_last_trade_time"])
+            if field.get("extend_hour_last_trade_time") not in (None, "") else None
+        ),
+    }
+
+
+def _classify_session(ts: datetime) -> str:
+    """Classify a naive-NY bar timestamp — see market_calendar.classify_bar_session.
+
+    Kept as a thin local alias (rather than inlining the import at every
+    call site in this file) since this module already imports
+    ``us_market_calendar``/``SessionType`` for other reasons. NOTE: this
+    is now only a convenience wrapper — bar_repository.upsert_bars
+    unconditionally recomputes session for 1m bars at write time via the
+    same shared function, so what this returns is a best-effort initial
+    value, not the final authority (see upsert_bars' docstring for why:
+    not every provider that can produce a 1m bar tags it correctly).
+    """
+    return _classify_bar_session(ts)
+
+
 # Reverse map: Webull SDK timespan → our canonical timeframe label.
 # Used to detect when Webull returns a coarser resolution than requested
 # (free-tier accounts may downsample 1m → 5m regardless of M1 request).
@@ -292,7 +344,14 @@ class WebullProvider(BaseMarketDataProvider):
     def get_quote(self, symbol: str) -> Quote:
         sym = symbol.upper()
         try:
-            resp = self._data_client.market_data.get_snapshot(sym, "US_STOCK")
+            # extend_hour_required=True is always safe to request — confirmed
+            # live 2026-09-09: no extra permission needed (unlike
+            # overnight_required, which 403s without a separate Webull
+            # subscription). Adds extend_hour_* fields when there's
+            # premarket/after-hours activity; absent otherwise.
+            resp = self._data_client.market_data.get_snapshot(
+                sym, "US_STOCK", extend_hour_required=True
+            )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull snapshot HTTP {resp.status_code}")
             data = resp.json()
@@ -311,6 +370,7 @@ class WebullProvider(BaseMarketDataProvider):
                 bid=float(field["bid"]) if field.get("bid") else None,
                 ask=float(field["ask"]) if field.get("ask") else None,
                 volume=int(field.get("volume") or 0) if field.get("volume") else None,
+                **_extended_hours_quote_fields(field),
             )
             self._reset_error_state()
             return quote
@@ -324,7 +384,9 @@ class WebullProvider(BaseMarketDataProvider):
             return {}
         sym_str = ",".join(s.upper() for s in symbols)
         try:
-            resp = self._data_client.market_data.get_snapshot(sym_str, "US_STOCK")
+            resp = self._data_client.market_data.get_snapshot(
+                sym_str, "US_STOCK", extend_hour_required=True
+            )
             results: dict[str, Quote] = {}
             if resp.status_code == 200:
                 data = resp.json()
@@ -344,6 +406,7 @@ class WebullProvider(BaseMarketDataProvider):
                             ask=float(field["ask"]) if field.get("ask") else None,
                             volume=int(field.get("volume") or 0)
                             if field.get("volume") else None,
+                            **_extended_hours_quote_fields(field),
                         )
             # Return empty entries for any missing symbols.
             for sym in symbols:
@@ -378,6 +441,7 @@ class WebullProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
         _start_ts: datetime | None = None,
         _end_ts: datetime | None = None,
     ) -> list[Bar]:
@@ -391,29 +455,50 @@ class WebullProvider(BaseMarketDataProvider):
         For 1m bars, when the requested range exceeds Webull's 1,200-bar cap
         (~3 trading days), multiple pages are fetched automatically (newest→oldest)
         and merged. For example, ``range_="15d"`` → ~5,850 bars → 5 pages.
+
+        ``include_extended_hours``: when True and ``timeframe == "1m"``, also
+        request pre-market and after-hours bars via the SDK's
+        ``trading_sessions`` param (confirmed live 2026-09-09: without this,
+        Webull's default is regular-trading-hours-only — passing
+        ``trading_sessions=["PRE","RTH","ATH"]`` correctly returns all three
+        sessions merged, chronologically ordered). Ignored for any other
+        timeframe — extended-hours coverage is only meaningful at 1m
+        resolution in this pipeline. Each returned ``Bar.session`` reflects
+        its real classification either way (see ``_parse_bars``).
         """
         sym = symbol.upper()
         try:
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
             # Phase 3.1: for 1m, compute count from _BARS_PER_DAY × days in range.
             # This ensures "1mo" fetches ~22 trading days × 390 bars = ~8580 bars.
+            ext_hours = include_extended_hours and timeframe == "1m"
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
                 count = days_per_range * _BARS_PER_DAY["1m"]
+                if ext_hours:
+                    # PRE (5.5h) + RTH (6.5h) + ATH (4h) = 16h vs RTH-only's
+                    # 6.5h — scale the per-day bar budget accordingly so a
+                    # multi-day range still requests enough bars to cover
+                    # all three sessions instead of being capped mid-day.
+                    count = count * 16 // 7
                 count = min(count, 1200)  # Webull M1 API limit (official cap)
             else:
                 count = _RANGE_TO_COUNT.get(range_, 200)
                 count = min(count, 1200)  # Webull D/H API limit
 
+            trading_sessions = ["PRE", "RTH", "ATH"] if ext_hours else None
+
             # For 1m with date-window or multi-page range, use pagination.
             # 3 trading days × 390 bars/day = 1,170 < 1,200 cap → 4 days triggers paginator.
-            if timeframe == "1m" and (_end_ts is not None or days_per_range > 3):
+            if timeframe == "1m" and (_end_ts is not None or days_per_range > 3 or ext_hours):
                 return self._fetch_1m_paginated(
-                    sym, timespan, count, range_, _start_ts, _end_ts
+                    sym, timespan, count, range_, _start_ts, _end_ts,
+                    trading_sessions=trading_sessions,
                 )
 
             resp = self._data_client.market_data.get_history_bar(
-                sym, "US_STOCK", timespan, count=str(count)
+                sym, "US_STOCK", timespan, count=str(count),
+                trading_sessions=trading_sessions,
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull bars HTTP {resp.status_code}")
@@ -437,6 +522,7 @@ class WebullProvider(BaseMarketDataProvider):
         range_: str,
         _start_ts: datetime | None,
         _end_ts: datetime | None,
+        trading_sessions: list[str] | None = None,
     ) -> list[Bar]:
         """Fetch 1m bars using multiple pages when the window exceeds 1,200 bars.
 
@@ -464,6 +550,11 @@ class WebullProvider(BaseMarketDataProvider):
         # How many total bars do we need?
         days_per_range = _RANGE_DAYS.get(range_, 65)
         target_bars = days_per_range * _BARS_PER_DAY["1m"]
+        if trading_sessions:
+            # PRE+RTH+ATH = 16h/day vs RTH-only's 6.5h — same scaling as
+            # get_historical_bars so pagination requests enough bars to
+            # actually cover all three sessions per day.
+            target_bars = target_bars * 16 // 7
         # Each page returns up to 1,200 bars (≈ 3 trading days).
         BARS_PER_PAGE_CAP = 1200
         bars_per_page = min(target_bars, BARS_PER_PAGE_CAP)
@@ -495,6 +586,7 @@ class WebullProvider(BaseMarketDataProvider):
                 sym, "US_STOCK", timespan,
                 count=str(bars_per_page),
                 end_time=str(page_end_ms),
+                trading_sessions=trading_sessions,
             )
             if resp.status_code != 200:
                 logger.warning(
@@ -546,9 +638,10 @@ class WebullProvider(BaseMarketDataProvider):
         """Parse Webull JSON rows into Bar objects, newest-first → chronological."""
         bars: list[Bar] = []
         for row in data:
+            ts = _epoch_ms_to_ny(row.get("time"))
             bars.append(Bar(
                 symbol=sym,
-                timestamp=_epoch_ms_to_ny(row.get("time")),
+                timestamp=ts,
                 open=float(row.get("open") or 0),
                 high=float(row.get("high") or 0),
                 low=float(row.get("low") or 0),
@@ -557,6 +650,7 @@ class WebullProvider(BaseMarketDataProvider):
                 timeframe=timeframe,
                 provider=self.name,
                 data_status=DataStatus.HISTORICAL,
+                session=_classify_session(ts),
             ))
         # Webull returns bars newest-first; sort chronologically (oldest→newest)
         # so callers (bar_repository, chart display) get predictable ordering.
@@ -588,6 +682,7 @@ class WebullProvider(BaseMarketDataProvider):
         symbols: list[str],
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
     ) -> dict[str, list["Bar"]]:
         """Fetch historical bars for multiple symbols in a single API call.
 
@@ -595,22 +690,32 @@ class WebullProvider(BaseMarketDataProvider):
         rate limit as the single-symbol GET — but batches up to 100 symbols
         per call, making it vastly more efficient for watchlist ingestion.
         Returns a dict mapping symbol → list of bars (oldest→newest).
+
+        ``include_extended_hours``: see ``get_historical_bars`` — same
+        PRE/RTH/ATH ``trading_sessions`` request, only meaningful for 1m.
         """
         if not symbols:
             return {}
 
         try:
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
+            ext_hours = include_extended_hours and timeframe == "1m"
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
+                count = days_per_range * _BARS_PER_DAY["1m"]
+                if ext_hours:
+                    count = count * 16 // 7
                 # Webull M1 API limit (official cap) — matches get_historical_bars.
-                count = min(days_per_range * _BARS_PER_DAY["1m"], 1200)
+                count = min(count, 1200)
             else:
                 count = min(_RANGE_TO_COUNT.get(range_, 200), 1200)
 
+            trading_sessions = ["PRE", "RTH", "ATH"] if ext_hours else None
+
             sym_list = [s.upper() for s in symbols]
             resp = self._data_client.market_data.get_batch_history_bar(
-                sym_list, "US_STOCK", timespan, count=str(count)
+                sym_list, "US_STOCK", timespan, count=str(count),
+                trading_sessions=trading_sessions,
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull batch bars HTTP {resp.status_code}")
@@ -644,9 +749,10 @@ class WebullProvider(BaseMarketDataProvider):
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
+                    row_ts = _epoch_ms_to_ny(row.get("time"))
                     bars.append(Bar(
                         symbol=sym,
-                        timestamp=_epoch_ms_to_ny(row.get("time")),
+                        timestamp=row_ts,
                         open=float(row.get("open") or 0),
                         high=float(row.get("high") or 0),
                         low=float(row.get("low") or 0),
@@ -655,6 +761,7 @@ class WebullProvider(BaseMarketDataProvider):
                         timeframe=timeframe,
                         provider=self.name,
                         data_status=DataStatus.HISTORICAL,
+                        session=_classify_session(row_ts),
                     ))
                 bars.sort(key=lambda b: b.timestamp)
                 if bars and len(bars) >= 2:

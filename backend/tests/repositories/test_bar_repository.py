@@ -730,5 +730,112 @@ class TestFindDuplicateCalendarBars(unittest.TestCase):
         self.assertEqual(dupes[0]["symbol"], "AAPL")
 
 
+class TestUpsertBarsSessionRecompute(unittest.TestCase):
+    """upsert_bars must recompute session from the bar's own timestamp for
+    every 1m bar, never trust the caller/provider's value.
+
+    Regression coverage for a live bug (2026-09-09): WebullProvider tags
+    session correctly on bars it returns, but Alpaca (used as a 1m
+    gap-fill provider) returns genuine premarket ticks from its own IEX
+    feed without tagging them — its Bar objects default to 'regular'
+    (Bar model's default) regardless of the real timestamp. That mistagged
+    bar then passed ingestion_service._resample_and_upsert's
+    session='regular' filter and leaked into a resampled 5m/15m/30m
+    bucket. _make_bar() defaults provider="yahoo_finance" and never sets
+    session — exactly this failure shape.
+    """
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+        )
+        BarModel.__table__.create(self.engine, checkfirst=True)
+        self.Session = sessionmaker(
+            autocommit=False, autoflush=False, bind=self.engine
+        )
+
+    def tearDown(self):
+        self.engine.dispose()
+
+    def test_untagged_premarket_bar_is_corrected_on_write(self):
+        """A bar timestamped 08:16 ET with no explicit session (defaults
+        to 'regular' per the Bar model) must be stored as 'premarket' —
+        upsert_bars must override the untrustworthy default."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 16), timeframe="1m")
+        self.assertEqual(bar.session, "regular")  # the buggy starting state
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "premarket")
+
+    def test_untagged_after_hours_bar_is_corrected_on_write(self):
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 17, 30), timeframe="1m")
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "after_hours")
+
+    def test_untagged_regular_hours_bar_stays_regular(self):
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 10, 0), timeframe="1m")
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "regular")
+
+    def test_incorrectly_tagged_1m_bar_is_overridden_not_trusted(self):
+        """Even a bar that explicitly (wrongly) claims 'regular' must be
+        corrected — upsert_bars never trusts the incoming value for 1m."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 6, 0), timeframe="1m")
+        bar.session = "regular"  # explicitly wrong, simulating the Alpaca bug
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "premarket")
+
+    def test_sub_hour_1m_derived_timeframes_are_also_recomputed(self):
+        """By request 2026-09-09, session recompute extends to the
+        sub-hour timeframes resampled from 1m (2m/3m/5m/15m/30m) — a
+        premarket-timestamped 5m bar must be tagged 'premarket', not
+        left at the Bar model's 'regular' default."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="5m")
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "premarket")
+
+    def test_1h_and_above_are_not_touched(self):
+        """1h/4h/1d/1wk are never fetched or resampled with extended
+        hours, so they keep whatever they arrive with (always 'regular'
+        in practice) regardless of their own timestamp."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="1h")
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        # Unaffected by the 08:00 premarket timestamp — stays at the
+        # Bar model's default.
+        self.assertEqual(row.session, "regular")
+
+    def test_fallback_merge_path_also_recomputes_session(self):
+        """The no-unique-constraint fallback path (existing.session = ...)
+        must apply the same recompute, not just the bulk ON CONFLICT path."""
+        from unittest.mock import patch
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 30), timeframe="1m")
+        with patch.object(bar_repository, "_has_unique_constraint", return_value=False):
+            with self.Session() as db:
+                bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "premarket")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ from datetime import time as _time
 from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
 
-from backend.engines.market_calendar import EASTERN, us_market_calendar
+from backend.engines.market_calendar import EASTERN, classify_bar_session, us_market_calendar
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
 from backend.observability import record_bar, record_bars
@@ -64,6 +64,7 @@ def _bar_to_model(bar: Bar) -> BarModel:
         timestamp=bar.timestamp,
         provider=bar.provider,
         data_status=bar.data_status.value if isinstance(bar.data_status, DataStatus) else str(bar.data_status),
+        session=bar.session,
     )
 
 
@@ -76,6 +77,34 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     """
     if not bars:
         return 0
+
+    # Recompute session from each bar's own timestamp — do not trust
+    # whatever the provider (or resampler) set. Found live 2026-09-09:
+    # WebullProvider correctly self-tags session on bars it returns, but
+    # Alpaca (used as a 1m gap-fill provider) returns genuine premarket
+    # ticks on its own IEX feed without being asked and without tagging
+    # them, so its Bar objects fell back to the model's 'regular' default
+    # — a mistagged bar then slipped past ingestion_service.
+    # _resample_and_upsert's (former) session filter into a resampled
+    # bucket. upsert_bars is the single write chokepoint for every bar
+    # regardless of provider or caller, so this is the one place a
+    # timestamp-derived fact like this can be enforced instead of relying
+    # on N independent sources to each self-report it correctly.
+    #
+    # Covers 1m AND the sub-hour resampled timeframes (2m/3m/5m/15m/30m —
+    # by request 2026-09-09, these now carry premarket/after_hours data
+    # too, same as 1m). resample_ohlcv() doesn't set session on the bars
+    # it builds (it only aggregates OHLCV), so without this every
+    # resampled bar would default to 'regular' regardless of its real
+    # session. Safe to reclassify unconditionally: sub-hour bucket
+    # boundaries all divide evenly into the 09:30/16:00/04:00/20:00
+    # session edges, so a bucket never straddles two sessions.
+    # 1h/4h/1d/1wk are excluded — never fetched/resampled with extended
+    # hours, so they keep whatever they arrive with (always 'regular').
+    _SESSION_TAGGED_TFS = ("1m", "2m", "3m", "5m", "15m", "30m")
+    for b in bars:
+        if b.timeframe in _SESSION_TAGGED_TFS:
+            b.session = classify_bar_session(b.timestamp)
 
     # Count the bars we're about to write for the metrics endpoint.
     # We call record_bar after the commit so the counter reflects rows
@@ -109,6 +138,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                     else str(b.data_status)
                 ),
                 "source": "raw",  # Phase 3.1: ingestion always writes raw 1m.
+                "session": b.session,
             }
             for b in bars
         ])
@@ -122,6 +152,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                 "volume": stmt.excluded.volume,
                 "provider": stmt.excluded.provider,
                 "data_status": stmt.excluded.data_status,
+                "session": stmt.excluded.session,
             },
         )
         result = db.execute(stmt)
@@ -149,6 +180,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                     if isinstance(bar.data_status, DataStatus)
                     else str(bar.data_status)
                 )
+                existing.session = bar.session
             else:
                 db.add(_bar_to_model(bar))
             written += 1
@@ -272,6 +304,7 @@ def _model_to_bar(row: BarModel) -> Bar:
         provider=row.provider,
         data_status=DataStatus(row.data_status),
         source=row.source,
+        session=getattr(row, "session", None) or "regular",
     )
 
 
@@ -392,8 +425,14 @@ def prune_bars_older_than(
     db: Session,
     cutoff: datetime,
     chunk_size: int = 1000,
+    timeframe: str | None = None,
 ) -> int:
     """Delete bars older than ``cutoff`` in chunks of ``chunk_size`` rows.
+
+    ``timeframe``: when given, only that timeframe's bars are considered
+    (used by ``prune_bars_by_retention`` — each timeframe has its own
+    cutoff). ``None`` (default) prunes across every timeframe with the
+    one cutoff, same as before per-timeframe retention existed.
 
     Returns the total number of rows deleted across all chunks. The function
     commits after each chunk so progress is durable if the process is
@@ -412,9 +451,12 @@ def prune_bars_older_than(
     while True:
         # Pick the rows to delete in this chunk: any bar whose timestamp
         # is older than cutoff. We order by id so the LIMIT is stable.
+        conditions = [BarModel.timestamp < cutoff]
+        if timeframe is not None:
+            conditions.append(BarModel.timeframe == timeframe)
         subq = (
             select(BarModel.id)
-            .where(BarModel.timestamp < cutoff)
+            .where(and_(*conditions))
             .order_by(BarModel.id.asc())
             .limit(chunk_size)
         )
@@ -428,6 +470,7 @@ def prune_bars_older_than(
         logger.debug(
             f"prune_bars_older_than: deleted {deleted} rows "
             f"(total {total_deleted}) older than {cutoff.isoformat()}"
+            + (f" (timeframe={timeframe})" if timeframe else "")
         )
         # If a chunk didn't fill up, we've drained everything.
         if deleted < chunk_size:
@@ -436,9 +479,32 @@ def prune_bars_older_than(
     if total_deleted:
         logger.info(
             f"prune_bars_older_than: removed {total_deleted} bars older than "
-            f"{cutoff.isoformat()}"
+            f"{cutoff.isoformat()}" + (f" (timeframe={timeframe})" if timeframe else "")
         )
     return total_deleted
+
+
+def prune_bars_by_retention(db: Session, chunk_size: int = 1000) -> dict[str, int]:
+    """Prune every stored timeframe to its own configured retention window.
+
+    Reads ``settings.retention`` (per-timeframe days — see
+    ``RetentionSettings`` for defaults and rationale) and runs
+    ``prune_bars_older_than`` once per timeframe with that timeframe's own
+    cutoff. Returns ``{timeframe: rows_deleted}`` for timeframes that
+    actually had something pruned (timeframes with 0 deletions are
+    omitted, so callers can log/skip cheaply on the common no-op case).
+    """
+    from backend.config.settings import settings as _settings
+
+    now = datetime.now()
+    deleted_by_tf: dict[str, int] = {}
+    for tf in _TF_MULTIPLIER.keys() | {"1m"}:
+        days = _settings.retention.days_for(tf)
+        cutoff = now - timedelta(days=days)
+        deleted = prune_bars_older_than(db, cutoff, chunk_size=chunk_size, timeframe=tf)
+        if deleted:
+            deleted_by_tf[tf] = deleted
+    return deleted_by_tf
 
 
 def bulk_delete_bars(

@@ -29,11 +29,25 @@ class Quote(BaseModel):
     bid: float | None = None
     ask: float | None = None
     volume: int | None = None
+    # Extended-hours quote fields (WebullProvider, extend_hour_required=True).
+    # None for every other provider, and None on Webull itself outside a
+    # premarket/after-hours session (nothing to report).
+    extended_hours_price: float | None = None
+    extended_hours_change: float | None = None
+    extended_hours_change_ratio: float | None = None
+    extended_hours_high: float | None = None
+    extended_hours_low: float | None = None
+    extended_hours_volume: int | None = None
+    extended_hours_timestamp: datetime | None = None
 
     @field_serializer("timestamp")
     def _ser_ts(self, ts: datetime) -> str:
         # Always emit with explicit EDT/EST offset.
         return format_edt_iso(ts)
+
+    @field_serializer("extended_hours_timestamp")
+    def _ser_ext_ts(self, ts: datetime | None) -> str | None:
+        return format_edt_iso(ts) if ts is not None else None
 
 class Bar(BaseModel):
     symbol: str
@@ -50,6 +64,12 @@ class Bar(BaseModel):
     # Only present when the source is known. Default None for backward compat with
     # callers that don't send this field.
     source: str | None = None
+    # Equity session classification — 'premarket' / 'regular' / 'after_hours',
+    # matching backend.engines.market_calendar.SessionType. Defaults to
+    # 'regular': correct for every provider except WebullProvider fetching
+    # with include_extended_hours=True, which stamps the real value via
+    # us_market_calendar.get_session_type(bar.timestamp).
+    session: str = "regular"
 
     @field_serializer("timestamp")
     def _ser_ts(self, ts: datetime) -> str:

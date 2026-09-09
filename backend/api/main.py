@@ -180,12 +180,10 @@ async def lifespan(app: FastAPI):
     try:
         from backend.api.main_helpers import run_signal_hygiene
         gaps = run_signal_hygiene()
-        for sym, (tfs, pruned) in gaps.items():
+        for sym, tfs in gaps.items():
             for tf, filled in tfs.items():
                 if filled:
                     logger.info(f"Signal hygiene: {sym}/{tf} — filled {filled} missing signals")
-            if pruned:
-                logger.info(f"Signal hygiene: {sym} — pruned {pruned} out-of-cap rows")
     except Exception as e:
         logger.warning(f"Signal hygiene check failed: {e}")
 

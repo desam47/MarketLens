@@ -41,6 +41,7 @@ class MarketDataProvider(ABC):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
     ) -> list[Bar]:
         """Get a series of historical bars for a symbol.
 
@@ -48,6 +49,15 @@ class MarketDataProvider(ABC):
         request as best it can; implementations may map the values to
         whatever the upstream API accepts. An empty list is returned when
         the provider has no data (for example, a delisted symbol).
+
+        ``include_extended_hours``: when True and ``timeframe == "1m"``,
+        also fetch pre-market/after-hours bars (in addition to regular
+        trading hours). Providers that don't support this accept and ignore
+        the flag — RTH-only is always a valid (if incomplete) answer, so
+        this must never raise. Only WebullProvider currently honors it
+        (confirmed live 2026-09-09: Webull's ``trading_sessions`` param
+        supports PRE/RTH/ATH). Returned bars carry their real
+        ``Bar.session`` classification either way.
         """
 
     @abstractmethod

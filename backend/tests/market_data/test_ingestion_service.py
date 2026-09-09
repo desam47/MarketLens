@@ -219,5 +219,280 @@ class TestPhase31LastBarUpdate(unittest.TestCase):
         self.assertEqual(set(service.last_bar_update["TSLA"].keys()), {"1m"})
 
 
+class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
+    """_resample_and_upsert's sub-hour targets (2m/3m/5m/15m/30m) now
+    include premarket/after_hours 1m bars, not just regular-session ones.
+
+    History: the extended-hours feature (2026-09-09) originally kept
+    every derived timeframe regular-session-only, matching
+    pre-extended-hours behavior exactly (a session='regular' filter on
+    the source query). By later request the same day, sub-hour
+    timeframes were extended to carry the full session too — the filter
+    was removed, and upsert_bars now tags each resulting bar's session
+    from its own timestamp (bucket boundaries never straddle a session,
+    so this is always unambiguous). 1h/4h/1d/1wk are untouched — they
+    aren't resampled through this function.
+    """
+
+    SYMBOL = "ZZTESTEXTHRS"
+
+    def _insert_bar(self, db, ts, session, close=100.0):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1m",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session=session,
+        ))
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    async def test_premarket_only_bucket_now_resamples_and_is_tagged(self):
+        from datetime import datetime
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        # Premarket bucket: 2026-09-08 08:00/08:01 ET — 2 bars, session='premarket'.
+        self._insert_bar(self.db, datetime(2026, 9, 8, 8, 0), "premarket")
+        self._insert_bar(self.db, datetime(2026, 9, 8, 8, 1), "premarket")
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_and_upsert(
+            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+        )
+        self.assertGreaterEqual(written, 1)
+
+        from backend.models.market_data_sql import BarModel
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+        ).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.timestamp, datetime(2026, 9, 8, 8, 0))
+        self.assertEqual(row.session, "premarket")
+
+    async def test_after_hours_only_bucket_now_resamples_and_is_tagged(self):
+        from datetime import datetime
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        self._insert_bar(self.db, datetime(2026, 9, 8, 17, 0), "after_hours")
+        self._insert_bar(self.db, datetime(2026, 9, 8, 17, 1), "after_hours")
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        await service._resample_and_upsert(
+            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+        )
+
+        from backend.models.market_data_sql import BarModel
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+        ).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.session, "after_hours")
+
+    async def test_regular_bucket_still_resamples_normally(self):
+        from datetime import datetime
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        # Regular-session bucket: 2026-09-08 10:00/10:01 ET — 2 bars.
+        self._insert_bar(self.db, datetime(2026, 9, 8, 10, 0), "regular", close=100.0)
+        self._insert_bar(self.db, datetime(2026, 9, 8, 10, 1), "regular", close=101.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_and_upsert(
+            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+        )
+        self.assertGreaterEqual(written, 1)
+
+        from backend.models.market_data_sql import BarModel
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+        ).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.timestamp, datetime(2026, 9, 8, 10, 0))
+        self.assertEqual(row.session, "regular")
+
+    async def test_premarket_and_regular_buckets_both_resample_independently(self):
+        """A premarket bucket and a regular bucket for the same symbol/day
+        both produce correctly-tagged 5m bars — proves the two aren't
+        cross-contaminating each other now that neither is filtered out."""
+        from datetime import datetime
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        self._insert_bar(self.db, datetime(2026, 9, 8, 8, 0), "premarket", close=50.0)
+        self._insert_bar(self.db, datetime(2026, 9, 8, 8, 1), "premarket", close=51.0)
+        self._insert_bar(self.db, datetime(2026, 9, 8, 10, 0), "regular", close=100.0)
+        self._insert_bar(self.db, datetime(2026, 9, 8, 10, 1), "regular", close=101.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        await service._resample_and_upsert(
+            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+        )
+
+        from backend.models.market_data_sql import BarModel
+        rows = {
+            r.timestamp: r for r in self.db.query(BarModel).filter(
+                BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+            ).all()
+        }
+        pre = rows[datetime(2026, 9, 8, 8, 0)]
+        reg = rows[datetime(2026, 9, 8, 10, 0)]
+        self.assertEqual(pre.session, "premarket")
+        self.assertEqual(pre.close, 51.0)
+        self.assertEqual(reg.session, "regular")
+        self.assertEqual(reg.close, 101.0)
+
+
+class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
+    """_resample_1h_live_and_upsert — the current, in-progress hour's 1h
+    bar, built live from this hour's 1m bars.
+
+    Added 2026-09-09 by request: 1h previously only ever showed the last
+    FULLY CLOSED hour (correct under that design, but surprising — found
+    live at 1:13pm with no 1:00 bar yet, since that hour hadn't closed).
+    Mirrors the existing, proven ``_resample_1d_live_and_upsert`` pattern
+    one level down.
+    """
+
+    SYMBOL = "ZZTESTLIVE1H"
+
+    def _hour_start(self):
+        from datetime import datetime
+        from backend.utils.timezone import NY as _NY_TZ
+        now = datetime.now(_NY_TZ)
+        return now.replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+
+    def _insert_1m_bar(self, db, ts, close, session="regular"):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1m",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session=session,
+        ))
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    async def test_builds_incomplete_bar_from_this_hours_1m_bars(self):
+        from datetime import timedelta
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0)
+        self._insert_1m_bar(self.db, hour_start + timedelta(minutes=1), close=105.0)
+        self._insert_1m_bar(self.db, hour_start + timedelta(minutes=2), close=102.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_live_and_upsert()
+        self.assertGreaterEqual(written, 1)
+
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
+            BarModel.timestamp == hour_start,
+        ).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.open, 100.0)
+        self.assertEqual(row.high, 105.0)
+        self.assertEqual(row.low, 100.0)
+        self.assertEqual(row.close, 102.0)
+        self.assertEqual(row.data_status, "INCOMPLETE")
+        self.assertEqual(row.provider, "live_from_1m")
+
+    async def test_extended_hours_1m_bars_are_excluded(self):
+        """Regular-session-only, matching every other 1h source query —
+        this must not become the one place extended-hours data leaks
+        into 1h."""
+        from datetime import timedelta
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0, session="premarket")
+        self._insert_1m_bar(self.db, hour_start + timedelta(minutes=1), close=999.0, session="premarket")
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        await service._resample_1h_live_and_upsert()
+
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
+            BarModel.timestamp == hour_start,
+        ).first()
+        # Fewer than 2 *regular*-session rows in the bucket -> nothing written.
+        self.assertIsNone(row)
+
+    async def test_skips_when_fewer_than_two_bars_this_hour(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_live_and_upsert()
+        self.assertEqual(written, 0)
+
+    async def test_authoritative_bar_overwrites_the_live_one(self):
+        """A real, provider-sourced bar written to the same key (as
+        _1h_write_loop/_gapfill_1h_loop would once the hour actually
+        closes) must win — upsert's ON CONFLICT DO UPDATE, no special
+        casing needed."""
+        from datetime import timedelta
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+        from backend.repositories.bar_repository import upsert_bars
+        from backend.models.market_data import Bar, DataStatus
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0)
+        self._insert_1m_bar(self.db, hour_start + timedelta(minutes=1), close=105.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        await service._resample_1h_live_and_upsert()
+
+        real_bar = Bar(
+            symbol=self.SYMBOL, timeframe="1h",
+            open=100.0, high=110.0, low=99.0, close=108.0, volume=50000,
+            timestamp=hour_start, provider="webull",
+            data_status=DataStatus.HISTORICAL,
+        )
+        upsert_bars(self.db, [real_bar])
+
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
+            BarModel.timestamp == hour_start,
+        ).first()
+        self.assertEqual(row.provider, "webull")
+        self.assertEqual(row.data_status, "HISTORICAL")
+        self.assertEqual(row.close, 108.0)
+
+
 if __name__ == "__main__":
     unittest.main()

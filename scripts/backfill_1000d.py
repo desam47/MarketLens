@@ -6,11 +6,11 @@ Usage:
     python scripts/backfill_1000d.py              # backfill all watched symbols
     python scripts/backfill_1000d.py AAPL TSLA    # backfill only AAPL and TSLA
     python scripts/backfill_1000d.py --dry-run    # list what would be backfilled
-    python scripts/backfill_1000d.py --days=500   # override retention window
+    python scripts/backfill_1000d.py --days=500   # smaller/faster reseed window
 
 Phase 3.3.17: CLI tool for seeding a fresh DB or rebuilding history after
-a retention window change. Runs synchronously so it can be used in a
-cron job or deployment script without worrying about asyncio event loops.
+a BACKFILL_1M/1H/1D_DAYS change. Runs synchronously so it can be used in
+a cron job or deployment script without worrying about asyncio event loops.
 """
 from __future__ import annotations
 
@@ -72,7 +72,11 @@ def main() -> None:
         "--days",
         type=int,
         default=None,
-        help="Override the retention window in days. Default: from settings.",
+        help=(
+            "Override how far back to backfill, clamping every tier down "
+            "(never up past its own BACKFILL_1M/1H/1D_DAYS ceiling). "
+            "Default: each tier uses its own .env default, unclamped."
+        ),
     )
     args = parser.parse_args()
 
@@ -88,12 +92,12 @@ def main() -> None:
         sys.exit(0)
 
     from backend.market_data.services.backfill_service import backfill_symbol_history_sync
-    # settings.py exports a module-level ``settings`` instance; there is no
-    # get_settings() factory (this script referenced one that never existed).
-    from backend.config.settings import settings
 
-    days = args.days if args.days is not None else settings.market_data.bar_retention_days
-    logger.info(f"Retention window: {days} days")
+    days = args.days
+    logger.info(
+        f"Window: override={days}d" if days is not None
+        else "Window: each tier's own BACKFILL_1M/1H/1D_DAYS default"
+    )
 
     total_t1 = 0
     total_t2 = 0

@@ -530,8 +530,12 @@ class AlpacaProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
     ) -> list[Bar]:
         """Fetch a series of OHLCV bars via the SDK.
+
+        ``include_extended_hours`` is accepted for interface compatibility
+        with WebullProvider but currently ignored.
 
         v3.6.x fix: pass ``feed=DataFeed.IEX`` (free-tier requirement) and
         ``end=now-15min`` (free-tier recent-data rule). The SDK auto-paginates

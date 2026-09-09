@@ -147,3 +147,41 @@ class USMarketCalendar:
 # Engines default to this so the test seam (``calendar=...`` constructor arg)
 # is purely an override path.
 us_market_calendar = USMarketCalendar()
+
+
+def classify_bar_session(ts: datetime) -> str:
+    """Classify a bar timestamp into 'premarket' / 'regular' / 'after_hours'
+    for storage in ``BarModel.session`` / ``Bar.session``.
+
+    ``ts`` follows this codebase's bar-timestamp convention: naive datetime
+    = NY local (see backend.utils.timezone / any provider's
+    ``_epoch_ms_to_ny``). It must NOT be handed to ``USMarketCalendar``
+    as-is — ``to_et()`` treats naive input as UTC — so NY tzinfo is
+    stamped first, making ``to_et()``'s astimezone() a correct no-op
+    instead of silently shifting the clock by several hours.
+
+    Single source of truth for this classification — call it at the data
+    layer (``bar_repository.upsert_bars``), not per-provider. Found live
+    2026-09-09: WebullProvider correctly self-reports session on bars it
+    returns, but Alpaca (used as a 1m gap-fill provider) returns genuine
+    premarket ticks on its own IEX feed without being asked and without
+    tagging them — its Bar objects fell back to the Bar model's
+    'regular' default, letting a mistagged bar leak into resampled
+    5m/15m/30m timeframes despite ingestion_service._resample_and_upsert's
+    session='regular' filter (the filter was correct; the input session
+    value it trusted wasn't). Trusting N providers to each independently
+    self-report a fact that's cheaply derivable from the timestamp itself
+    is inherently fragile — computing it once, centrally, from ground
+    truth is not.
+
+    ``SessionType.CLOSED`` shouldn't occur for a real trade bar, but
+    falls back to 'regular' defensively rather than raising or inventing
+    a fourth stored value.
+    """
+    ts_aware = ts.replace(tzinfo=EASTERN) if ts.tzinfo is None else ts
+    session_type = us_market_calendar.get_session_type(ts_aware)
+    if session_type == SessionType.PREMARKET:
+        return "premarket"
+    if session_type == SessionType.AFTER_HOURS:
+        return "after_hours"
+    return "regular"

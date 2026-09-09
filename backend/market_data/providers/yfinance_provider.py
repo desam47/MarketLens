@@ -221,8 +221,14 @@ class YFinanceProvider(BaseMarketDataProvider):
         symbol: str,
         timeframe: str = "1d",
         range_: str = "3mo",
+        include_extended_hours: bool = False,
     ) -> list[Bar]:
         """Fetch a full series of bars from the chart endpoint.
+
+        ``include_extended_hours`` is accepted for interface compatibility
+        with WebullProvider but currently ignored — this provider always
+        returns RTH-only (see the docstring note below: intraday bars
+        outside market hours are explicitly filtered out already).
 
         Returns bars in the order Yahoo provides them (oldest → newest).
         Skips any rows where close is None (those are intraday bars
