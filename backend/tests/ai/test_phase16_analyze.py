@@ -128,6 +128,34 @@ class TestParseAIReply(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_ai_reply('{"summary": "x", "trend": "sideways-and-up", "confidence": 0.5}')
 
+    def test_normalizes_engine_vocabulary_synonyms(self):
+        """Regression for a live failure (2026-09-09): llama3.2 (Ollama
+        fallback) echoed the engine's OWN trend_state.direction vocabulary
+        ("downtrend") instead of translating it to the requested output
+        vocabulary ("bearish") — a predictable near-miss, not gibberish.
+        Known synonyms normalize instead of failing validation; truly
+        unrecognized values (test_rejects_trend_outside_vocabulary above)
+        still correctly fail."""
+        cases = {
+            "downtrend": "bearish",
+            "uptrend": "bullish",
+            "sideways": "neutral",
+            "strong_bearish": "bearish",
+            "strong_bullish": "bullish",
+            "weak_bearish": "bearish",
+            "weak_bullish": "bullish",
+            "no_signal": "uncertain",
+            "unknown": "uncertain",
+            "UpTrend": "bullish",  # case-insensitive
+            "STRONG-BULLISH": "bullish",  # hyphen -> underscore normalization
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                result = parse_ai_reply(
+                    json.dumps({"summary": "x" * 15, "trend": raw, "confidence": 0.5})
+                )
+                self.assertEqual(result.trend, expected)
+
     def test_rejects_confidence_out_of_range(self):
         with self.assertRaises(ValueError):
             parse_ai_reply('{"summary": "x", "trend": "bullish", "confidence": 1.5}')

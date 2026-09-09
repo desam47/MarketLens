@@ -40,12 +40,41 @@ TrendLabel = Literal[
 ]
 
 
+# Found live 2026-09-09: llama3.2 (Ollama fallback) correctly followed
+# rule 3 ("your trend should agree with the engine's trend_state.direction
+# unless...") right down to copying the ENGINE'S OWN vocabulary
+# ("downtrend") instead of translating it to the requested output
+# vocabulary ("bearish") — the context dict it's shown uses TrendDirection/
+# TrendClassification values (uptrend/downtrend/sideways/unknown,
+# strong_bullish/weak_bearish/no_signal/...), so a near-miss reply that
+# echoes what it just read is a predictable failure mode, not gibberish.
+# Rejecting a reply we can confidently interpret just to enforce a literal
+# string match would throw away a good answer — normalize known synonyms
+# before validating; anything NOT in this map still hits the strict
+# Literal check unchanged (extract_json_object's parse rejects true
+# gibberish long before this point).
+_TREND_SYNONYMS: dict[str, str] = {
+    "uptrend": "bullish", "up": "bullish", "upward": "bullish",
+    "strong_uptrend": "bullish", "strong_bullish": "bullish",
+    "weak_bullish": "bullish",
+    "downtrend": "bearish", "down": "bearish", "downward": "bearish",
+    "strong_downtrend": "bearish", "strong_bearish": "bearish",
+    "weak_bearish": "bearish",
+    "sideways": "neutral", "flat": "neutral", "range": "neutral",
+    "ranging": "neutral", "choppy": "neutral",
+    "conflicting": "mixed", "conflict": "mixed",
+    "unknown": "uncertain", "unclear": "uncertain", "no_signal": "uncertain",
+    "n/a": "uncertain", "na": "uncertain", "none": "uncertain",
+}
+
+
 class AnalysisResponse(BaseModel):
     """Strict schema for the AI's reply.
 
     The model is intentionally narrow: extra fields from the AI are
     dropped, missing required fields cause a validation error, and
-    the ``trend`` value is restricted to a fixed vocabulary. The
+    the ``trend`` value is restricted to a fixed vocabulary (after
+    ``_TREND_SYNONYMS`` normalization — see its comment). The
     quantitative engine's score is NOT part of this model — the
     spec is explicit that AI must never overwrite quant truth.
     """
@@ -57,6 +86,14 @@ class AnalysisResponse(BaseModel):
     risk_factors: list[str] = Field(default_factory=list, max_length=10)
     timeframe_conflicts: list[str] = Field(default_factory=list, max_length=10)
     key_levels: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("trend", mode="before")
+    @classmethod
+    def _normalize_trend_synonyms(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        key = v.strip().lower().replace(" ", "_").replace("-", "_")
+        return _TREND_SYNONYMS.get(key, v)
 
     @field_validator("supporting_factors", "risk_factors", "timeframe_conflicts", "key_levels")
     @classmethod
@@ -156,7 +193,9 @@ Rules you must follow:
    or missing, say so — do not invent a value.
 2. Your output is a single JSON object with EXACTLY these fields: \
    "summary" (string, 1-3 sentences), "trend" (one of bullish, \
-   bearish, neutral, mixed, uncertain), "confidence" (number 0.0-1.0), \
+   bearish, neutral, mixed, uncertain — NOT the context's own \
+   "uptrend"/"downtrend"/"sideways" labels; translate those to \
+   bullish/bearish/neutral respectively), "confidence" (number 0.0-1.0), \
    "supporting_factors" (array of short strings, max 10), \
    "risk_factors" (array, max 10), "timeframe_conflicts" (array, \
    max 10, list timeframes that disagree with the primary trend), \
