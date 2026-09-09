@@ -405,3 +405,35 @@ async def get_backup_status() -> BackupStatusResponse:
             litestream_dbs=None,
         )
     return BackupStatusResponse(timestamp=_to_dashboard_tz(datetime.now(UTC)), **status)
+
+
+@router.get("/data-quality")
+async def get_data_quality() -> dict:
+    """Audit for duplicate calendar-day bars (1d/1wk).
+
+    2026-09-09: webull stamps 1d bars at 00:00, yahoo_finance at 09:30 —
+    those conventions never collided on the DB's exact-timestamp unique
+    key, so 63% of stored 1d rows ended up duplicated (with close prices
+    differing by up to 2.4% between the two rows for the same day) before
+    anyone noticed. The write-path bug is fixed (see _normalize_1d_bar in
+    ingestion_service.py) and the existing duplicates were cleaned up, but
+    nothing was watching for a regression of this specific failure mode —
+    this endpoint is that watch. A non-empty ``duplicates`` list here
+    means the write path let calendar-day duplicates back in.
+    """
+    from ...database import SessionLocal
+    from ...repositories.bar_repository import find_duplicate_calendar_bars
+
+    db = SessionLocal()
+    try:
+        duplicates: list[dict] = []
+        for tf in ("1d", "1wk"):
+            duplicates.extend(find_duplicate_calendar_bars(db, tf))
+    finally:
+        db.close()
+
+    return {
+        "healthy": len(duplicates) == 0,
+        "duplicate_count": len(duplicates),
+        "duplicates": duplicates,
+    }

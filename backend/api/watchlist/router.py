@@ -1,7 +1,6 @@
 """
 Watchlist API endpoints
 """
-import asyncio
 import logging
 from datetime import datetime
 from io import StringIO
@@ -25,76 +24,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlists", tags=["watchlists"])
 
-# Phase 3.3.14: track pending backfill coroutines keyed by symbol so
-# we can await them before the ingestion loop picks up a freshly added symbol.
-# Values are asyncio.Task | None.
-_backfill_tasks: dict[str, asyncio.Task] = {}
+def _start_symbol_tracking_and_backfill(symbol: str) -> str | None:
+    """Register a freshly-added symbol for live tracking and enqueue its
+    historical backfill. Returns the RQ job id, or None if no job was
+    enqueued (backfill_on_add is off, Redis/RQ unavailable, or a backfill
+    for this symbol is already in flight).
 
+    Two independent, decoupled steps — neither blocks on provider I/O, so
+    the caller (an ``add``/``import`` endpoint) returns immediately no
+    matter how long the actual backfill takes:
 
-def _trigger_backfill_for_symbol(symbol: str) -> None:
-    """Trigger an async backfill for ``symbol`` and register the task.
+      1. ``ingestion_service.register_symbol`` — synchronous, in-process,
+         no I/O. The symbol starts getting quotes/1m bars from the next
+         loop tick regardless of the backfill's outcome.
+      2. ``backfill_queue.enqueue_backfill`` — a Redis/RQ enqueue call
+         (also fast; the actual provider fetching happens later, in a
+         worker process).
 
-    Phase 3.3.14: called by ``add_symbol_to_watchlist`` when a symbol is
-    freshly added. The task is stored in ``_backfill_tasks`` so the remove
-    path (3.3.15) can cancel it before purging bars.
+    Replaces the old ``_trigger_backfill_for_symbol``, which ran
+    ``backfill_symbol_history`` directly on the calling thread — its
+    sync-context fallback did ``future.result(timeout=600)``, blocking a
+    FastAPI worker thread for up to 10 minutes per add. See
+    ``backend/market_data/services/backfill_service.py``'s module
+    docstring for the full rationale behind this split.
     """
+    symbol = symbol.upper()
+    from backend.market_data.services.ingestion_service import ingestion_service
+    ingestion_service.register_symbol(symbol)
+
     if not _settings.market_data.backfill_on_add:
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running event loop (sync context) — run in a thread pool to avoid
-        # re-entering an existing loop. asyncio.run() would fail if called from
-        # within another asyncio.run() context (e.g. from a gap-fill task).
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, _do_backfill(symbol))
-            future.result(timeout=600)
-        return
-    # Running loop: schedule the coroutine.
-    task = loop.create_task(_do_backfill(symbol))
-    _backfill_tasks[symbol.upper()] = task
-    task.add_done_callback(
-        lambda t: _backfill_tasks.pop(symbol.upper(), None)
-    )
-    logger.debug(f"_trigger_backfill_for_symbol: scheduled backfill task for {symbol}")
-
-
-async def _do_backfill(symbol: str) -> None:
-    """Run the backfill coroutine and log outcomes.
-
-    Phase 3.3.14 fix: after bars are written, immediately record signals
-    so the dashboard shows data without waiting for the next 90s loop cycle.
-    """
-    try:
-        from backend.market_data.services.backfill_service import (
-            backfill_symbol_history,
-        )
-        result = await backfill_symbol_history(symbol)
-        if result.get("skipped"):
-            logger.debug(f"backfill for {symbol} skipped (already in progress)")
-        else:
-            logger.info(
-                f"backfill complete for {symbol}: "
-                f"tier1={result['tier1_written']}, tier2={result['tier2_written']}, "
-                f"took {result['duration_s']}s"
-            )
-            # Immediately record signals for ALL the newly backfilled bars so
-            # the dashboard shows data without waiting for the 90s loop cycle.
-            # Use backfill_signals_for_symbol (all bars) for initial backfill;
-            # record_from_recent_bars (latest bar only) is reserved for the
-            # live ingestion loop where we only want new bars.
-            try:
-                from backend.services.signal_recorder import signal_recorder
-                recorded = signal_recorder.backfill_signals_for_symbol(symbol.upper())
-                if recorded:
-                    logger.info(
-                        f"Recorded {recorded} signals for {symbol} after backfill"
-                    )
-            except Exception as sig_e:
-                logger.warning(f"Signal recording after backfill failed for {symbol}: {sig_e}")
-    except Exception as e:
-        logger.error(f"backfill failed for {symbol}: {e}")
+        return None
+    from backend.market_data.services.backfill_queue import enqueue_backfill
+    return enqueue_backfill(symbol)
 
 # Pydantic models for request/response
 class WatchlistBase(BaseModel):
@@ -284,6 +245,7 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
                 f"bars={result['bars']}, signals={result['signals']}, "
                 f"quotes={result['quotes']}, alerts={result['alerts']}, "
                 f"ai_jobs={result['ai_analysis_jobs']}, "
+                f"backfill_jobs={result['backfill_jobs']}, "
                 f"backtest_runs={result['backtest_runs']}, "
                 f"drawings={result['drawing_tools']}"
             )
@@ -305,8 +267,11 @@ def get_watchlist_symbols(watchlist_id: int, enabled_only: bool = True, db: Sess
 def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db: Session = Depends(get_db)):
     """Add a symbol to a watchlist.
 
-    Phase 3.3.14: if the symbol is newly added (not re-enabled), a background
-    backfill of bar history is triggered automatically.
+    If the symbol is newly added (not re-enabled), it starts live-tracking
+    immediately and a background backfill of bar history is enqueued — see
+    ``_start_symbol_tracking_and_backfill``. Neither step does provider
+    I/O on this request thread, so this endpoint returns as soon as the DB
+    row is written.
     """
     repo = WatchlistRepository(db)
     # First check if watchlist exists
@@ -318,16 +283,15 @@ def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db
         symbol=symbol.symbol,
         entity_type=symbol.entity_type or "stock",
     )
-    # Phase 3.3.14: trigger backfill for freshly added symbols.
     if is_new_row:
-        _trigger_backfill_for_symbol(symbol.symbol.upper())
+        _start_symbol_tracking_and_backfill(symbol.symbol.upper())
     return watchlist_symbol
 
 @router.delete("/{watchlist_id}/symbols/{symbol}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
     """Remove a symbol from a watchlist.
 
-    Phase 3.3.15: cancels any pending backfill for the symbol and, if the
+    Cancels any pending/in-flight backfill job for the symbol and, if the
     symbol is no longer present in any other watchlist, purges its bars
     from the database.
     """
@@ -339,12 +303,13 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     success = repo.remove_symbol_from_watchlist(watchlist_id=watchlist_id, symbol=symbol)
     if not success:
         raise HTTPException(status_code=404, detail="Symbol not found in watchlist")
-    # Phase 3.3.15: cancel any pending backfill task for this symbol.
     symbol_upper = symbol.upper()
-    pending_task = _backfill_tasks.pop(symbol_upper, None)
-    if pending_task is not None and not pending_task.done():
-        pending_task.cancel()
-        logger.debug(f"cancelled pending backfill for {symbol_upper}")
+    try:
+        from backend.market_data.services.backfill_queue import cancel_backfill
+        if cancel_backfill(symbol_upper):
+            logger.debug(f"cancelled in-flight backfill job for {symbol_upper}")
+    except Exception as e:
+        logger.debug(f"cancel_backfill failed for {symbol_upper}: {e}")
     # Drop the dedup cache so a re-added symbol isn't suppressed as a
     # "duplicate" of its now-deleted historical signals.
     try:
@@ -377,9 +342,43 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
                 f"bars={result['bars']}, signals={result['signals']}, "
                 f"quotes={result['quotes']}, alerts={result['alerts']}, "
                 f"ai_jobs={result['ai_analysis_jobs']}, "
+                f"backfill_jobs={result['backfill_jobs']}, "
                 f"backtest_runs={result['backtest_runs']}, "
                 f"drawings={result['drawing_tools']}"
             )
+
+
+class BackfillStatusResponse(BaseModel):
+    """Latest backfill job status for a symbol — see
+    ``backend.market_data.services.backfill_queue.get_backfill_job_status``.
+    """
+    symbol: str
+    job_id: str
+    status: str
+    tier1_written: int
+    tier2_written: int
+    tier3_written: int
+    gaps_found: int
+    gaps_filled: int
+    result: dict | None = None
+    error: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+@router.get("/symbols/{symbol}/backfill-status", response_model=BackfillStatusResponse)
+def get_symbol_backfill_status(symbol: str):
+    """Latest backfill job status for ``symbol`` — lets the frontend show
+    backfill progress after an add instead of nothing. 404 if the symbol
+    has never had a backfill job (e.g. added before this endpoint existed,
+    or ``backfill_on_add`` is off).
+    """
+    from backend.market_data.services.backfill_queue import get_backfill_job_status
+    status_dict = get_backfill_job_status(symbol.upper())
+    if status_dict is None:
+        raise HTTPException(status_code=404, detail="No backfill job found for this symbol")
+    return status_dict
 
 
 @router.put("/{watchlist_id}/symbols/{symbol}/enable", response_model=WatchlistSymbolResponse)
@@ -530,7 +529,7 @@ def import_watchlist_symbols(
             continue
         _, is_new_row = repo.add_symbol_to_watchlist(watchlist_id, symbol)
         if is_new_row:
-            _trigger_backfill_for_symbol(symbol)
+            _start_symbol_tracking_and_backfill(symbol)
         imported.append(symbol)
         slots_left -= 1
 
@@ -582,10 +581,13 @@ class BackfillResponse(BaseModel):
 def trigger_watchlist_backfill(watchlist_id: int, db: Session = Depends(get_db)):
     """Manually trigger a full backfill for all symbols in a watchlist.
 
-    Phase 3.3.14 fix: backfill was already wired into the per-symbol add path
-    (``add_symbol_to_watchlist`` and ``import_watchlist_symbols``), but symbols
-    added before that fix existed never got backfilled. This endpoint lets the
-    user retroactively fill historical bars for those symbols.
+    Backfill is already wired into the per-symbol add path
+    (``add_symbol_to_watchlist`` and ``import_watchlist_symbols``), but
+    symbols added before that existed, or whose earlier backfill failed,
+    never got one. This endpoint lets the user retroactively (re-)fill
+    historical bars for every symbol in the watchlist — each gets its own
+    queued RQ job (single-flight still applies: a symbol already mid-backfill
+    is skipped, not duplicated).
     """
     repo = WatchlistRepository(db)
     if repo.get_watchlist(watchlist_id) is None:
@@ -593,6 +595,6 @@ def trigger_watchlist_backfill(watchlist_id: int, db: Session = Depends(get_db))
     symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=False)
     triggered = []
     for ws in symbols:
-        _trigger_backfill_for_symbol(ws.symbol.upper())
+        _start_symbol_tracking_and_backfill(ws.symbol.upper())
         triggered.append(ws.symbol.upper())
     return BackfillResponse(symbols=triggered, status="backfill triggered")

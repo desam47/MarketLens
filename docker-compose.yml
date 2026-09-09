@@ -3,11 +3,18 @@
 # =============================================================================
 # Brings up:
 #   - the API on http://localhost:8000
-#   - Redis (for caching + rate limiting + pub/sub)
+#   - Redis (for caching + rate limiting + pub/sub + the RQ background job queue)
+#   - a background worker (RQ) — processes AI analysis jobs (POST /api/ai/jobs)
+#     and ticker backfill (adding a symbol to a watchlist). Without it, both
+#     of those just enqueue a Redis job that nothing ever consumes (found via
+#     a 2026-09-08 completeness audit — this file previously had no worker
+#     service at all, so `docker compose up` alone left every backfill and AI
+#     job permanently stuck at "queued").
 #   - Jaeger (for distributed tracing; export at 16686)
 #
 # Usage:
 #   docker compose up --build
+#   docker compose up --build --scale worker=2   # more backfill throughput
 #   docker compose down -v   # tear down including volumes
 # =============================================================================
 
@@ -55,6 +62,35 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # No container_name — omitted so `--scale worker=N` can run more than
+    # one instance (compose refuses to scale a service with a fixed name).
+    # --worker-class rq.worker.SimpleWorker: RQ's default Worker forks a
+    # child process per job, and this project's webull provider SDK
+    # reproducibly segfaults the forked child (confirmed live, 2026-09-08:
+    # "Work-horse terminated unexpectedly; waitpid returned 11 (signal 11)"
+    # on the very first real job) — see backend/workers/backfill_worker.py's
+    # module docstring. SimpleWorker runs jobs in-process instead, which
+    # sidesteps it. One process listens to both queues (AI jobs +
+    # backfill); scale the whole service via --scale if you need more
+    # concurrent backfill throughput rather than splitting queues further.
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--worker-class", "rq.worker.SimpleWorker", "marketlens-workers", "marketlens-backfill"]
+    environment:
+      DATABASE_URL: "sqlite:///./data/marketlens.db"
+      REDIS_ENABLED: "true"
+      REDIS_URL: "redis://redis:6379/0"
+      AI_ENABLED: "false"
+      MARKET_DATA_PRIMARY_PROVIDER: "yahoo_finance"
+    volumes:
+      - marketlens-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine

@@ -18,6 +18,19 @@ python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001
 
 The database path is absolute in `.env` (`DATABASE_URL=sqlite:////Users/dips/projects/MarketLens/marketlens.db`). The server must be started from the project root, otherwise Alembic migrations and relative path resolution may behave unexpectedly.
 
+`./start.sh` and `scripts/run.py` start the backend + frontend + RQ background workers together — prefer those over the bare uvicorn command above unless you specifically want the API alone.
+
+## Background Workers (RQ)
+
+Two features depend on a running RQ worker, not just the API process: AI analysis jobs (`POST /api/ai/jobs`) and ticker backfill (adding a symbol to a watchlist). Both just enqueue a Redis job and return immediately — nothing processes that job without a worker running. `./start.sh`/`scripts/run.py` start these automatically (soft-fail if `rq`/Redis aren't available); if you start the backend directly with the bare uvicorn command above, start the workers too:
+
+```bash
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers    # AI analysis jobs
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill   # ticker backfill (run twice for the concurrency-of-2 cap)
+```
+
+Requires `REDIS_ENABLED=true` in `.env` and a running Redis instance. Without a worker running, added tickers get a `BackfillJob` row stuck at `status: "queued"` forever (check via `GET /api/watchlists/symbols/{symbol}/backfill-status`) — the symbol still gets live quotes/1m bars (that's independent of backfill), it just never gets historical bars.
+
 ## Database
 
 - **Location:** `/Users/dips/projects/MarketLens/marketlens.db`

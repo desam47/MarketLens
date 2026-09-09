@@ -1249,23 +1249,47 @@ class ApiService {
   }
 
   async addSymbolToWatchlist(watchlistId: number, symbol: string, entityType: 'stock' | 'etf' = 'stock'): Promise<WatchlistSymbol> {
-    const result = await this.fetch<WatchlistSymbol>(`/watchlists/${watchlistId}/symbols`, {
+    // The backend now registers the symbol for live tracking and enqueues
+    // its backfill synchronously as part of this request (see
+    // backend/api/watchlist/router.py's add_symbol_to_watchlist) — no
+    // follow-up call needed for the ingestion service to pick it up. This
+    // used to be a required (but silently-failable, since its error was
+    // swallowed) second call; it no longer is, so it's gone.
+    return this.fetch<WatchlistSymbol>(`/watchlists/${watchlistId}/symbols`, {
       method: 'POST',
       body: JSON.stringify({ symbol, entity_type: entityType }),
     });
-    // Sync ingestion service so it starts tracking the new symbol.
-    this.refreshIngestionSymbols().catch(() => {/* non-fatal */});
-    return result;
   }
 
   async removeSymbolFromWatchlist(watchlistId: number, symbol: string): Promise<void> {
     await this.del(`/watchlists/${watchlistId}/symbols/${symbol}`);
-    // Sync ingestion service so it stops tracking the removed symbol.
+    // The backend already syncs the ingestion service in-process,
+    // synchronously, as part of this DELETE (unlike add, this path was
+    // always correct without a follow-up call) — kept as a harmless,
+    // redundant nudge rather than reworking a path that wasn't broken.
     this.refreshIngestionSymbols().catch(() => {/* non-fatal */});
   }
 
   async refreshIngestionSymbols(): Promise<{ message: string; symbols: string[] }> {
     return this.fetch('/market-data/ingestion/symbols/refresh', { method: 'POST' });
+  }
+
+  async getBackfillStatus(symbol: string): Promise<{
+    symbol: string;
+    job_id: string;
+    status: 'queued' | 'started' | 'completed' | 'partial' | 'failed';
+    tier1_written: number;
+    tier2_written: number;
+    tier3_written: number;
+    gaps_found: number;
+    gaps_filled: number;
+    result: Record<string, unknown> | null;
+    error: string | null;
+    created_at: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+  }> {
+    return this.fetch(`/watchlists/symbols/${symbol}/backfill-status`);
   }
 
   async reorderSymbols(watchlistId: number, symbols: string[]): Promise<void> {

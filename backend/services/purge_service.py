@@ -10,6 +10,7 @@ per-symbol row from every table in the DB:
   - market_status
   - alerts  (and alert_triggers via cascade)
   - ai_analysis_jobs
+  - backfill_jobs
   - backtest_runs  (and backtest_trades via cascade)
   - drawing_tools
 
@@ -57,6 +58,7 @@ class PurgeResult(TypedDict):
     alerts: int
     alert_triggers: int
     ai_analysis_jobs: int
+    backfill_jobs: int
     backtest_runs: int
     backtest_trades: int
     drawing_tools: int
@@ -139,6 +141,14 @@ def _delete_ai_analysis_jobs(db: Session, symbol: str) -> int:
     return result.rowcount
 
 
+def _delete_backfill_jobs(db: Session, symbol: str) -> int:
+    from backend.models import BackfillJob
+    result = db.execute(
+        delete(BackfillJob).where(BackfillJob.symbol == symbol.upper())
+    )
+    return result.rowcount
+
+
 def _delete_backtest_runs(db: Session, symbol: str) -> tuple[int, int]:
     """Delete backtest_runs for symbol, then orphaned BacktestTrade rows.
 
@@ -195,7 +205,7 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
     if not symbol:
         return PurgeResult(
             symbol="", bars=0, signals=0, quotes=0, market_status=0,
-            alerts=0, alert_triggers=0, ai_analysis_jobs=0,
+            alerts=0, alert_triggers=0, ai_analysis_jobs=0, backfill_jobs=0,
             backtest_runs=0, backtest_trades=0, drawing_tools=0, total=0,
         )
 
@@ -208,6 +218,7 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
         market_status = _delete_market_status(db, symbol)
         alerts, alert_triggers = _delete_alerts_and_triggers(db, symbol)
         ai_analysis_jobs = _delete_ai_analysis_jobs(db, symbol)
+        backfill_jobs = _delete_backfill_jobs(db, symbol)
         backtest_runs, backtest_trades = _delete_backtest_runs(db, symbol)
         drawing_tools = _delete_drawing_tools(db, symbol)
 
@@ -215,7 +226,7 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
 
         total = (
             bars + signals + quotes + market_status
-            + alerts + alert_triggers + ai_analysis_jobs
+            + alerts + alert_triggers + ai_analysis_jobs + backfill_jobs
             + backtest_runs + backtest_trades + drawing_tools
         )
 
@@ -225,6 +236,7 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
                 f"bars={bars}, signals={signals}, quotes={quotes}, "
                 f"market_status={market_status}, alerts={alerts}, "
                 f"alert_triggers={alert_triggers}, ai_jobs={ai_analysis_jobs}, "
+                f"backfill_jobs={backfill_jobs}, "
                 f"backtest_runs={backtest_runs}, backtest_trades={backtest_trades}, "
                 f"drawing_tools={drawing_tools} → total={total}"
             )
@@ -238,6 +250,7 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
             alerts=alerts,
             alert_triggers=alert_triggers,
             ai_analysis_jobs=ai_analysis_jobs,
+            backfill_jobs=backfill_jobs,
             backtest_runs=backtest_runs,
             backtest_trades=backtest_trades,
             drawing_tools=drawing_tools,
@@ -259,7 +272,7 @@ def purge_symbol_from_database_safe(symbol: str) -> PurgeResult:
     if not symbol:
         return PurgeResult(
             symbol="", bars=0, signals=0, quotes=0, market_status=0,
-            alerts=0, alert_triggers=0, ai_analysis_jobs=0,
+            alerts=0, alert_triggers=0, ai_analysis_jobs=0, backfill_jobs=0,
             backtest_runs=0, backtest_trades=0, drawing_tools=0, total=0,
         )
     try:
@@ -272,6 +285,6 @@ def purge_symbol_from_database_safe(symbol: str) -> PurgeResult:
         return PurgeResult(
             symbol=symbol.upper(), bars=0, signals=0, quotes=0,
             market_status=0, alerts=0, alert_triggers=0,
-            ai_analysis_jobs=0, backtest_runs=0, backtest_trades=0,
+            ai_analysis_jobs=0, backfill_jobs=0, backtest_runs=0, backtest_trades=0,
             drawing_tools=0, total=0,
         )

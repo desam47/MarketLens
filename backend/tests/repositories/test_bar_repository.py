@@ -646,5 +646,89 @@ class TestUniqueConstraintCache(unittest.TestCase):
             self.assertEqual(call_counter["n"], 1, "cache hits must not call sqlite_master")
 
 
+class TestFindDuplicateCalendarBars(unittest.TestCase):
+    """Regression coverage for the 2026-09-09 duplicate-1d-bar incident:
+    webull stamps 1d bars at 00:00, yahoo_finance at 09:30 — two rows for
+    the same trading day, neither caught by the exact-timestamp unique
+    constraint. find_duplicate_calendar_bars is the audit that would have
+    caught it."""
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+        )
+        BarModel.__table__.create(self.engine, checkfirst=True)
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+
+    def tearDown(self):
+        self.engine.dispose()
+
+    def test_no_duplicates_on_clean_data(self):
+        bars = [
+            _make_bar("AAPL", datetime(2025, 1, 2, 0, 0), timeframe="1d"),
+            _make_bar("AAPL", datetime(2025, 1, 3, 0, 0), timeframe="1d"),
+        ]
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, bars)
+        with self.Session() as db:
+            dupes = bar_repository.find_duplicate_calendar_bars(db, "1d")
+        self.assertEqual(dupes, [])
+
+    def test_detects_same_day_different_timestamp(self):
+        """Two rows for the same calendar day at different times of day —
+        exactly the webull-00:00 vs yahoo_finance-09:30 pattern — must be
+        flagged even though their exact timestamps differ (so the DB's
+        unique constraint alone never catches this)."""
+        bars = [
+            _make_bar("AAPL", datetime(2025, 1, 2, 0, 0), close=100.0, timeframe="1d"),
+            _make_bar("AAPL", datetime(2025, 1, 2, 9, 30), close=102.5, timeframe="1d"),
+        ]
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, bars)
+        with self.Session() as db:
+            dupes = bar_repository.find_duplicate_calendar_bars(db, "1d")
+        self.assertEqual(len(dupes), 1)
+        self.assertEqual(dupes[0]["symbol"], "AAPL")
+        self.assertEqual(dupes[0]["date"], "2025-01-02")
+        self.assertEqual(dupes[0]["count"], 2)
+        closes = {r["close"] for r in dupes[0]["rows"]}
+        self.assertEqual(closes, {100.0, 102.5})
+
+    def test_does_not_flag_different_symbols_or_days(self):
+        bars = [
+            _make_bar("AAPL", datetime(2025, 1, 2, 0, 0), timeframe="1d"),
+            _make_bar("MSFT", datetime(2025, 1, 2, 9, 30), timeframe="1d"),  # different symbol
+            _make_bar("AAPL", datetime(2025, 1, 3, 9, 30), timeframe="1d"),  # different day
+        ]
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, bars)
+        with self.Session() as db:
+            dupes = bar_repository.find_duplicate_calendar_bars(db, "1d")
+        self.assertEqual(dupes, [])
+
+    def test_rejects_intraday_timeframe(self):
+        """Only calendar-based timeframes (1d/1wk) have this failure mode —
+        an exact-timestamp collision on a fixed-width intraday bucket IS
+        the correct de-dup key, so this check would misfire there."""
+        with self.Session() as db:
+            with self.assertRaises(ValueError):
+                bar_repository.find_duplicate_calendar_bars(db, "1m")
+
+    def test_symbol_filter_scopes_the_search(self):
+        bars = [
+            _make_bar("AAPL", datetime(2025, 1, 2, 0, 0), timeframe="1d"),
+            _make_bar("AAPL", datetime(2025, 1, 2, 9, 30), timeframe="1d"),
+            _make_bar("MSFT", datetime(2025, 1, 2, 0, 0), timeframe="1d"),
+            _make_bar("MSFT", datetime(2025, 1, 2, 9, 30), timeframe="1d"),
+        ]
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, bars)
+        with self.Session() as db:
+            dupes = bar_repository.find_duplicate_calendar_bars(db, "1d", symbol="AAPL")
+        self.assertEqual(len(dupes), 1)
+        self.assertEqual(dupes[0]["symbol"], "AAPL")
+
+
 if __name__ == "__main__":
     unittest.main()

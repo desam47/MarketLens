@@ -138,6 +138,71 @@ class TestYFinanceProvider(unittest.TestCase):
             self.assertIsNotNone(bar.close)
 
     @patch.object(YFinanceProvider, '_fetch_chart')
+    def test_get_historical_bars_drops_boundary_aligned_flat_zero_volume_last_row(self, mock_fetch_chart):
+        """A live-snapshot trailing row that happens to land exactly on a
+        clean interval boundary (seconds == 0) must still be dropped.
+
+        Regression for a variant of the already-handled trailing-snapshot
+        case: the existing guard only caught snapshots stamped at a
+        non-zero second (e.g. 15:15:47). Found live 2026-09-09 via a "why
+        do 4h bars only cover 08:00/12:00" question — a 1h ("60m")
+        snapshot bar for DVLT landed exactly at 16:00:00 with
+        open==high==low==close and volume==0, which the seconds-only check
+        didn't flag, and which then broke the 4h resample built on top of
+        it (a single degenerate 1h bar aggregating into a degenerate 4h
+        "close" candle).
+        """
+        import pandas as pd
+
+        dates = pd.date_range(end=datetime.now(), periods=3, freq='h')
+        # Force the LAST timestamp onto an exact minute boundary (seconds=0)
+        # — the whole point of this test is that the seconds-based check
+        # alone would NOT catch this row.
+        timestamps = [int(d.timestamp()) - (int(d.timestamp()) % 60) for d in dates]
+        mock_fetch_chart.return_value = {
+            "timestamp": timestamps,
+            "indicators": {
+                "quote": [{
+                    "open":   [100.0, 101.0, 5.05],
+                    "high":   [105.0, 106.0, 5.05],
+                    "low":    [95.0, 96.0, 5.05],
+                    "close":  [103.0, 104.0, 5.05],  # last row: flat OHLC
+                    "volume": [1000, 1100, 0],        # last row: zero volume
+                }]
+            }
+        }
+
+        bars = self.provider.get_historical_bars("DVLT", timeframe="1h", range_="1d")
+        # Only the 2 genuine bars should survive; the synthetic 3rd is dropped.
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[-1].close, 104.0)
+
+    def test_get_historical_bars_keeps_genuine_flat_bar_with_real_volume(self):
+        """A real bar that legitimately has open==close (no price movement)
+        must NOT be dropped just for being flat — only flat AND
+        zero-volume together indicate a synthetic snapshot."""
+        import pandas as pd
+
+        dates = pd.date_range(end=datetime.now(), periods=2, freq='h')
+        timestamps = [int(d.timestamp()) - (int(d.timestamp()) % 60) for d in dates]
+        with patch.object(YFinanceProvider, '_fetch_chart') as mock_fetch_chart:
+            mock_fetch_chart.return_value = {
+                "timestamp": timestamps,
+                "indicators": {
+                    "quote": [{
+                        "open":   [100.0, 5.05],
+                        "high":   [105.0, 5.05],
+                        "low":    [95.0, 5.05],
+                        "close":  [103.0, 5.05],   # last row: flat OHLC...
+                        "volume": [1000, 500],      # ...but genuine volume
+                    }]
+                }
+            }
+            bars = self.provider.get_historical_bars("DVLT", timeframe="1h", range_="1d")
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[-1].close, 5.05)
+
+    @patch.object(YFinanceProvider, '_fetch_chart')
     def test_get_historical_bars_unknown_timeframe_raises(self, mock_fetch_chart):
         """An unsupported timeframe string should raise ValueError from _resolve_interval"""
         mock_fetch_chart.return_value = {"timestamp": [], "indicators": {"quote": [{}]}}

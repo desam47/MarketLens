@@ -110,6 +110,52 @@ def _normalize_1h_bar(b: Bar, provider_name: str) -> Bar | None:
     return None
 
 
+def _normalize_1d_bar(b: Bar, provider_name: str) -> Bar | None:
+    """Normalize a 1d bar timestamp to a clean midnight (00:00) boundary.
+
+    Webull and Alpaca stamp daily bars at 00:00 local; yahoo_finance stamps
+    them at 09:30 (RTH open) instead. Without this, the two conventions
+    never collide on the DB's (symbol, timeframe, timestamp) unique key —
+    every trading day a fallback to yahoo_finance touched gets a SECOND,
+    independent 1d row alongside the 00:00 one, with its own (different!)
+    OHLCV. Found live: 1,501 trading days (63% of all stored 1d rows)
+    duplicated this way, with close prices differing by up to 2.4% between
+    the two rows for the same day — which one a query returns is whatever
+    happens to sort first, not a deliberate choice (2026-09-09 fix).
+
+    Mirrors _normalize_1h_bar's approach: floor the known alternate offset
+    to the canonical one; skip (log) anything unrecognized rather than
+    risk silently mis-bucketing it.
+    """
+    ts = b.timestamp
+    hour, minute, second = ts.hour, ts.minute, ts.second
+
+    if hour == 0 and minute == 0 and second == 0:
+        return b  # Clean midnight bar — use as-is (webull, alpaca)
+
+    if hour == 9 and minute == 30 and second == 0:
+        # yfinance-style RTH-open offset — floor to midnight.
+        normalized_ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)
+        return Bar(
+            symbol=b.symbol,
+            timestamp=normalized_ts,
+            open=b.open,
+            high=b.high,
+            low=b.low,
+            close=b.close,
+            volume=b.volume,
+            timeframe=b.timeframe,
+            provider=b.provider,
+            data_status=b.data_status,
+        )
+
+    logger.debug(
+        f"Skipping 1d bar for {b.symbol} with unexpected offset "
+        f"(hour={hour}, minute={minute}, second={second}) from {provider_name}"
+    )
+    return None
+
+
 class MarketDataIngestionService:
     """Service for automatically ingesting and storing market data"""
 
@@ -470,9 +516,19 @@ class MarketDataIngestionService:
                     end = bucket_ts + timedelta(hours=4)
                     if end >= now:
                         continue  # bucket not yet closed
-                    # Only write if bucket has at least 2 bars (prevents fake bars
-                    # from a single sparse 1h bar being incorrectly floored).
-                    if len(member_bars) < 2:
+                    # Only write if the bucket has at least 2 bars (prevents
+                    # fake bars from a single sparse/gappy 1h bar being
+                    # incorrectly floored into a lone "4h bar") — EXCEPT the
+                    # 16:00-19:59 bucket, which structurally can never have
+                    # more than 1 member: this pipeline only ever produces
+                    # 1h bars for regular trading hours (~8:00/9:00-16:00),
+                    # so the single 16:00 close bar IS the bucket's maximum
+                    # possible content, not a sign of unreliable data. The
+                    # flat >=2 guard silently discarded this bucket every
+                    # single day for every symbol until this fix — found
+                    # live via "why do 4h bars only show 08:00/12:00?".
+                    min_required = 1 if bucket_ts.hour == 16 else 2
+                    if len(member_bars) < min_required:
                         continue
                     bar = Bar(
                         symbol=symbol.upper(),
@@ -618,34 +674,58 @@ class MarketDataIngestionService:
             await self._jittered_sleep(120, jitter=10.0)
 
     async def _resample_1d_live_and_upsert(self) -> int:
-        """Build/refresh TODAY's in-progress 1d bar from today's 1m bars.
+        """Build/refresh TODAY's 1d bar from today's 1m bars.
 
-        Runs every ~2 min during market hours (via _resample_write_loop) so
-        "today" is visible in Recent Bars from market open onward instead
-        of being hidden until the close — updating live as new 1m bars
-        arrive. Written with data_status=INCOMPLETE so callers/UI can tell
+        Runs every ~2 min (via _resample_write_loop) so "today" is visible
+        in Recent Bars from market open onward instead of being hidden
+        until the close — updating live as new 1m bars arrive. Before
+        close, written with data_status=INCOMPLETE so callers/UI can tell
         it apart from a settled daily candle.
 
         At 16:02 ET, _write_1d_bars() (via _daily_write_loop) fetches the
         authoritative provider-sourced daily bar and upserts it on the
         SAME (symbol, "1d", timestamp) key — overwriting this row with the
-        final OHLCV and data_status=HISTORICAL. Gated to before 16:00 ET
-        so this loop doesn't run afterward and downgrade that finalized
-        bar back to INCOMPLETE.
+        final OHLCV and data_status=HISTORICAL. So once the market has
+        closed, this method skips any symbol that already has a bar for
+        today (don't downgrade a real provider-sourced close back to our
+        own 1m-derived aggregate).
+
+        The exception: a symbol added to the watchlist AFTER 16:02 ET never
+        got that day's _daily_write_loop pass — it was tracked too late —
+        so without this, it would have no 1d bar for today at all until
+        tomorrow's backfill catches up, even though we already have its
+        full day of 1m bars sitting right here. In that case (market
+        closed, no existing bar), still build one from the day's 1m data,
+        but mark it HISTORICAL rather than INCOMPLETE since the session is
+        genuinely over and no more data is coming for today.
         """
         from backend.repositories.bar_repository import upsert_bars
 
         now = datetime.now(_NY_TZ)
-        # Weekdays only, and only before the close — after 16:00 ET the
-        # authoritative _write_1d_bars() write takes over (see docstring).
-        if now.weekday() >= 5 or now.hour >= 16:
+        if now.weekday() >= 5:
             return 0
+        market_closed = now.hour >= 16
 
         today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
         written = 0
         db = SessionLocal()
         try:
             for symbol in self.symbols:
+                if market_closed:
+                    existing = (
+                        db.query(BarModel.id)
+                        .filter(
+                            and_(
+                                BarModel.symbol == symbol.upper(),
+                                BarModel.timeframe == "1d",
+                                BarModel.timestamp == today_midnight,
+                            )
+                        )
+                        .first()
+                    )
+                    if existing is not None:
+                        continue  # _daily_write_loop already wrote the real close
+
                 rows = (
                     db.query(BarModel)
                     .filter(
@@ -672,7 +752,7 @@ class MarketDataIngestionService:
                     volume=sum(b.volume for b in bars_src),
                     timestamp=today_midnight,
                     provider="live_from_1m",
-                    data_status=DataStatus.INCOMPLETE,
+                    data_status=DataStatus.HISTORICAL if market_closed else DataStatus.INCOMPLETE,
                 )
                 written += upsert_bars(db, [bar])
             db.commit()
@@ -758,6 +838,25 @@ class MarketDataIngestionService:
                     from backend.market_data.services.cache import _redis_cache
                     for sym in upserted_symbols:
                         _redis_cache.invalidate_bars_for_symbol(sym)
+                    # Immediately resample sub-hour timeframes for symbols
+                    # that just got new 1m bars, instead of relying solely
+                    # on the independent ~120s _resample_write_loop tick —
+                    # ties "fetch live bar" and "resample from it" together
+                    # causally rather than leaving them as two
+                    # unsynchronized polling timers. Narrow-window
+                    # (full_history=False, the default) so this stays
+                    # cheap per tick; _resample_write_loop still runs on
+                    # its own cadence as the catch-all for symbols with no
+                    # fresh 1m tick this cycle. Deliberate tradeoff: worst
+                    # case (every symbol gets a new bar every tick) roughly
+                    # doubles sub-hour resample query volume versus the
+                    # write loop alone — acceptable at this app's scale.
+                    for sym in upserted_symbols:
+                        for tf in self._SUBHOUR_TFS:
+                            try:
+                                await self._resample_and_upsert(tf, source_tf="1m", _symbol=sym)
+                            except Exception as e:
+                                logger.debug(f"immediate resample failed for {sym}/{tf}: {e}")
                     # Rolling retention prune
                     from datetime import timedelta as _td
                     from backend.repositories.bar_repository import prune_bars_older_than
@@ -803,73 +902,126 @@ class MarketDataIngestionService:
                 logger.debug(f"dispatch_bar failed for {sym}/{tf}: {e}")
         return len(bars_to_upsert)
 
-    async def _fetch_1h_bars_with_fallback(
-        self, symbol: str, range_: str = "5d"
+    async def _fetch_bars_with_fallback(
+        self,
+        symbol: str,
+        timeframe: str,
+        range_: str,
+        stale_threshold: timedelta,
+        normalize_fn,
     ) -> tuple[list[Bar], object]:
-        """Fetch 1h bars for ``symbol`` via BACKFILL_1H_* chain, with a
-        freshness-aware fallback.
+        """Shared primitive behind ``_fetch_1h_bars_with_fallback`` and
+        ``_fetch_1d_bars_with_fallback``.
 
-        ``range_`` defaults to "5d" (enough lookback for the write/gap-fill
-        loops to catch up on a short gap) — pass a wider window like "1y"
-        when bootstrapping a brand-new symbol that has no history at all.
+        Extracted 2026-09-09: the two were confirmed to be the exact same
+        logic (fetch primary → normalize → check freshness → merge
+        fallback if stale) with only the timeframe string, threshold, and
+        normalizer varying. Before this, a fix applied to one had to be
+        separately rediscovered and reapplied to the other — which is
+        literally what happened: the "non-empty-but-stale primary blocks
+        fallback" bug was fixed for 1h, then found independently, still
+        present, in 1d.
 
         The naive version of this (used by both ``_write_1h_recent_window``
         and ``_gapfill_1h_once`` until 2026-09-08) only tried the fallback
         chain when the primary returned an EMPTY list — ``if not bars:``.
-        That silently starves the current hour's bar whenever the primary
-        is degraded but not fully down: e.g. Webull occasionally downgrades
-        its M60 response to M30 granularity with a short lookback (observed
-        live: 5 bars, none newer than ~2h old) — a non-empty response that
+        That silently starves the bar whenever the primary is degraded but
+        not fully down: e.g. Webull occasionally downgrades its M60
+        response to M30 granularity with a short lookback (observed live:
+        5 bars, none newer than ~2h old) — a non-empty response that
         satisfied ``if not bars`` and permanently blocked Alpaca/yfinance
-        from ever supplying the fresher, current-hour partial bar. Symbols
-        unlucky enough to hit a degraded primary response got stuck without
-        an up-to-date 1h bar indefinitely (every write/gap-fill cycle kept
-        "succeeding" against the same stale primary data).
+        from ever supplying fresher data. Now: the primary's bars are
+        kept, but if the freshest one is older than ``stale_threshold``,
+        the fallback chain also runs and its bars are MERGED in (by
+        timestamp) rather than replacing the primary's — so a partial
+        primary response doesn't lose whatever good data it did have.
 
-        Now: the primary's bars are kept, but if its freshest bar is older
-        than ``_STALE_1H_THRESHOLD``, the fallback chain also runs and its
-        bars are MERGED in (by timestamp) rather than replacing the
-        primary's — so a partial primary response doesn't lose whatever
-        good data it did have.
+        ``normalize_fn`` (``_normalize_1h_bar`` / ``_normalize_1d_bar``)
+        floors each bar's timestamp onto this timeframe's canonical DB
+        anchor so different providers' conflicting conventions (e.g.
+        webull's 1d bars at 00:00 vs yahoo_finance's at 09:30) collide on
+        the same unique key instead of silently duplicating every period
+        a fallback ever touched — see ``_normalize_1d_bar``'s docstring
+        for the 63%-of-all-1d-rows incident this caused.
 
         Returns ``(bars, source)`` where ``source`` is the primary provider
         instance if only the primary was used, else ``None`` (mixed/fallback
-        source — matches the existing ``_normalize_1h_bar`` call convention).
+        source — matches ``normalize_fn``'s call convention).
         """
         from backend.market_data.services.manager import (
             get_backfill_primary_provider,
             get_1h_1d_fallback_providers,
         )
 
-        bars: list[Bar] = []
-        provider = get_backfill_primary_provider("1h")
+        provider = get_backfill_primary_provider(timeframe)
+        raw_bars: list[Bar] = []
         if provider is not None:
-            bars = provider.get_historical_bars(symbol, "1h", range_=range_)
+            raw_bars = provider.get_historical_bars(symbol, timeframe, range_=range_)
+        primary_name = provider.__class__.__name__ if provider else "primary"
+        bars = [
+            n for n in (normalize_fn(b, primary_name) for b in raw_bars)
+            if n is not None
+        ]
 
         latest_ts = max((b.timestamp for b in bars), default=None)
         now_ny = datetime.now(_NY_TZ).replace(tzinfo=None)
-        is_stale = latest_ts is None or (now_ny - latest_ts) > self._STALE_1H_THRESHOLD
+        is_stale = latest_ts is None or (now_ny - latest_ts) > stale_threshold
 
         if is_stale:
-            for fb_name in get_1h_1d_fallback_providers("1h"):
+            for fb_name in get_1h_1d_fallback_providers(timeframe):
                 fb = _instantiate_backfill_provider(fb_name)
                 if fb is None:
                     continue
-                fb_bars = fb.get_historical_bars(symbol, "1h", range_=range_)
+                fb_raw = fb.get_historical_bars(symbol, timeframe, range_=range_)
+                fb_bars = [
+                    n for n in (normalize_fn(b, fb_name) for b in fb_raw)
+                    if n is not None
+                ]
                 if fb_bars:
                     by_ts = {b.timestamp: b for b in bars}
                     by_ts.update({b.timestamp: b for b in fb_bars})
                     bars = list(by_ts.values())
-                    provider = None  # mixed source — _normalize_1h_bar gets "fallback"
+                    provider = None  # mixed source — normalize_fn gets "fallback"
                     break
 
         return bars, provider
+
+    async def _fetch_1h_bars_with_fallback(
+        self, symbol: str, range_: str = "5d"
+    ) -> tuple[list[Bar], object]:
+        """Fetch 1h bars for ``symbol`` via BACKFILL_1H_* chain. See
+        ``_fetch_bars_with_fallback`` for the freshness-aware fallback and
+        normalization rationale.
+
+        ``range_`` defaults to "5d" (enough lookback for the write/gap-fill
+        loops to catch up on a short gap) — pass a wider window like "1y"
+        when bootstrapping a brand-new symbol that has no history at all.
+        """
+        return await self._fetch_bars_with_fallback(
+            symbol, "1h", range_, self._STALE_1H_THRESHOLD, _normalize_1h_bar
+        )
 
     # How stale the primary 1h provider's freshest bar can be before the
     # fallback chain is also consulted. Generous enough to tolerate normal
     # ingestion lag (write loop fires at :02 past the hour, gap-fill every
     # 30 min) while still catching a genuinely degraded/rate-limited primary.
     _STALE_1H_THRESHOLD = timedelta(hours=2)
+
+    async def _fetch_1d_bars_with_fallback(
+        self, symbol: str, range_: str = "30d"
+    ) -> tuple[list[Bar], object]:
+        """Fetch 1d bars for ``symbol`` via BACKFILL_1D_* chain. See
+        ``_fetch_bars_with_fallback`` for the freshness-aware fallback and
+        normalization rationale.
+        """
+        return await self._fetch_bars_with_fallback(
+            symbol, "1d", range_, self._STALE_1D_THRESHOLD, _normalize_1d_bar
+        )
+
+    # Generous vs. 1h's threshold — daily bars only settle once per session
+    # and can lag over a weekend, so "stale" needs more room before it's
+    # actually suspicious.
+    _STALE_1D_THRESHOLD = timedelta(days=3)
 
     async def _write_1h_recent_window(self) -> int:
         """Fetch latest 1h bars via BACKFILL_1H_* chain and write.
@@ -1034,17 +1186,15 @@ class MarketDataIngestionService:
             await self._jittered_sleep(300, jitter=15.0)
 
     async def _write_1d_bars(self) -> int:
-        """Fetch up to 5 years of 1d bars via BACKFILL_1D_* chain and write.
+        """Fetch recent 1d bars via BACKFILL_1D_* chain and write.
 
-        Uses get_historical_bars(range_='5y') to pull the maximum available 1d history
-        (1,200 bars, Webull D/H cap). The ON CONFLICT upsert is idempotent for already-
-        settled historical bars — only today's bar is new. Drop 13:30 noise from
-        Alpaca free tier.
+        See ``_fetch_1d_bars_with_fallback`` for the freshness-aware
+        fallback and provider-timestamp normalization. The ON CONFLICT
+        upsert is idempotent for already-settled historical bars — only
+        today's bar is new. Drop 13:30 noise from Alpaca free tier
+        (normalization already filters this out, but the check is kept as
+        a harmless second line of defense).
         """
-        from backend.market_data.services.manager import (
-            get_backfill_primary_provider,
-            get_1h_1d_fallback_providers,
-        )
         from backend.repositories.bar_repository import upsert_bars
 
         written = 0
@@ -1053,20 +1203,7 @@ class MarketDataIngestionService:
         try:
             for symbol in self.symbols:
                 try:
-                    bars: list[Bar] = []
-                    provider = get_backfill_primary_provider("1d")
-                    if provider is not None:
-                        bars = provider.get_historical_bars(symbol, "1d", range_="30d")
-
-                    if not bars:
-                        for fb_name in get_1h_1d_fallback_providers("1d"):
-                            fb = _instantiate_backfill_provider(fb_name)
-                            if fb is None:
-                                continue
-                            bars = fb.get_historical_bars(symbol, "1d", range_="30d")
-                            if bars:
-                                break
-                        provider = None  # fallback has no single provider
+                    bars, _provider = await self._fetch_1d_bars_with_fallback(symbol, range_="30d")
 
                     for b in bars:
                         # Drop 13:30 ET noise from Alpaca free tier.
@@ -1267,17 +1404,54 @@ class MarketDataIngestionService:
         if self._thread is not None:
             self._thread.join(timeout=5.0)
 
+    def register_symbol(self, symbol: str) -> None:
+        """Start live-tracking ``symbol`` immediately — no backfill triggered.
+
+        This is the ONLY thing that has to happen synchronously for a
+        symbol to start getting quotes/1m bars from the next loop tick:
+        append it to ``self.symbols`` and seed its tracking dicts so the
+        throttle checks (``last_quote_update`` etc.) don't skip it on the
+        very first tick. Idempotent — calling this for an already-tracked
+        symbol is a no-op.
+
+        Historical backfill is a separate, decoupled concern — see
+        ``backend.market_data.services.backfill_queue.enqueue_backfill`` —
+        so a symbol shows up in *live* data within the next ~30-60s
+        regardless of whether/when its backfill job actually runs. This
+        split replaced ``_new_symbol_bootstrap``, which used to bundle
+        "start tracking" together with a second, independent backfill
+        attempt that raced the watchlist router's own trigger for the
+        same symbol on two different event loops (see
+        ``backfill_service.py``'s module docstring for the incident that
+        caused — SOFI backfilling with only 1m+1h data after both
+        attempts crashed on a lock bound to the wrong loop).
+        """
+        symbol = symbol.upper()
+        if symbol in self.symbols:
+            return
+        self.symbols.append(symbol)
+        self.last_quote_update[symbol] = datetime.min
+        self.last_status_update[symbol] = datetime.min
+        self.last_bar_update[symbol] = {"1m": datetime.min}
+        logger.info(f"register_symbol: {symbol} now live-tracked ({len(self.symbols)} total)")
+
     def refresh_symbols_from_watchlist(self) -> list[str]:
         """Reload the symbol list from the active watchlist.
 
-        Adds new symbols and removes symbols that are no longer in any
+        Adds new symbols (via ``register_symbol`` — live tracking only,
+        see that method's docstring for why backfill is NOT triggered
+        from here) and removes symbols that are no longer in any
         watchlist. Called by the watchlist delete/symbol-remove endpoints
-        so the ingestion loops stop fetching deleted symbols immediately.
+        so the ingestion loops stop fetching deleted symbols immediately,
+        and by ``POST /api/market-data/ingestion/symbols/refresh`` for any
+        out-of-band watchlist change.
 
-        Phase 3.8: when new symbols are added, schedules a backfill task
-        and immediately fetches the recent window (last 15 min of 1m + last
-        3h of 1h bars) to fill any mid-session gaps before the gap-fill
-        loop fires 5 min later.
+        Historical backfill for a newly ADDED symbol is triggered
+        separately, by the watchlist router itself at add time
+        (``backend.market_data.services.backfill_queue.enqueue_backfill``)
+        — not from here, and not from this method's removed
+        ``_new_symbol_bootstrap`` call (see ``register_symbol``'s
+        docstring).
 
         Returns the new (full) symbol list. If the service is not running,
         only updates ``self.symbols`` and the tracking dicts.
@@ -1287,113 +1461,10 @@ class MarketDataIngestionService:
         new_set = set(new_symbols)
         added = new_set - old_set
         for symbol in added:
-            self.last_quote_update[symbol] = datetime.min
-            self.last_status_update[symbol] = datetime.min
-            self.last_bar_update[symbol] = {"1m": datetime.min}
-            # Phase 3.8: schedule backfill + immediate recent-window fetch
-            # for each new symbol. _seed_check is a no-op for symbols that
-            # already have history in the DB (checks oldest bar timestamp).
-            #
-            # This method is called from both async routes (with a running
-            # loop) and sync routes (delete_watchlist / remove_symbol_from_
-            # watchlist, which FastAPI runs in a worker thread with no loop).
-            # The sync callers wrap this call in try/except and don't wait
-            # on the result, so blocking the request thread here — the
-            # previous fallback did `future.result(timeout=600)` — could
-            # stall a FastAPI worker for up to 10 minutes. Run the bootstrap
-            # in a detached background thread with its own event loop instead
-            # (mirrors start()'s pattern) so the caller never blocks.
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                threading.Thread(
-                    target=lambda: asyncio.run(self._new_symbol_bootstrap(symbol)),
-                    daemon=True,
-                    name=f"bootstrap-{symbol}",
-                ).start()
-            else:
-                loop.create_task(self._new_symbol_bootstrap(symbol))
+            self.register_symbol(symbol)
         self.symbols = new_symbols
         logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
         return self.symbols
-
-    async def _new_symbol_bootstrap(self, symbol: str):
-        """Phase 3.8 — bootstrap a newly-added symbol.
-
-        Called via create_task from refresh_symbols_from_watchlist.
-        Two-step:
-          1. Backfill: schedule _safe_backfill for retention_days.
-             This runs the tier1 (1m) + tier2 (1h) + tier3 (1d) backfills.
-          2. Immediate fetch: pull the last 15 min of 1m bars and last 3h
-             of 1h bars directly from the provider chain and write them.
-             This catches any bars that arrived after the backfill started,
-             before the gap-fill loop fires 5 min later.
-        """
-        try:
-            from backend.config.settings import settings as _settings
-            retention_days = _settings.market_data.bar_retention_days
-
-            logger.info(f"Bootstrapping new symbol {symbol}: scheduling backfill")
-            # Run the full backfill (tier1 + tier2 + tier3) in background.
-            asyncio.create_task(_safe_backfill(symbol, retention_days))
-
-            # Give backfill a moment to start, then pull recent bars directly
-            # so the user sees data immediately without waiting for the 5-min
-            # gap-fill tick.
-            await asyncio.sleep(3)
-            logger.info(f"Bootstrapping {symbol}: fetching recent 1m window")
-            bars_1m = self.manager.get_historical_bars(
-                symbol, "1m", range_="15d", use_cache=False
-            )
-            if bars_1m:
-                from backend.repositories.bar_repository import upsert_bars
-                db = SessionLocal()
-                try:
-                    for b in bars_1m:
-                        b.timeframe = "1m"
-                    written = upsert_bars(db, bars_1m)
-                    db.commit()
-                    logger.info(
-                        f"Bootstrapped {symbol}: wrote {written} 1m bars "
-                        f"(range=[{bars_1m[0].timestamp}..{bars_1m[-1].timestamp}])"
-                    )
-                finally:
-                    db.close()
-            logger.info(f"Bootstrapping {symbol}: fetching recent 1h window")
-            # NOTE: this used to call get_backfill_primary_provider() /
-            # get_1h_1d_fallback_providers() directly without importing
-            # them — a NameError on every single bootstrap, silently
-            # swallowed by this method's outer except-and-log-warning, so
-            # every newly-added symbol permanently skipped its dedicated
-            # up-to-1-year 1h backfill (2026-09-08 fix). Reuse the shared,
-            # freshness-aware helper (range_="1y" — a fresh symbol has no
-            # existing 1h history, unlike the write/gap-fill loops' "5d").
-            bars_1h, provider = await self._fetch_1h_bars_with_fallback(symbol, range_="1y")
-            if bars_1h:
-                from backend.repositories.bar_repository import upsert_bars
-                db = SessionLocal()
-                try:
-                    bars_1h_clean: list[Bar] = []
-                    for b in bars_1h:
-                        normalized = _normalize_1h_bar(b, provider.__class__.__name__ if provider else "fallback")
-                        if normalized is not None:
-                            bars_1h_clean.append(normalized)
-                    for b in bars_1h_clean:
-                        b.timeframe = "1h"
-                    written = upsert_bars(db, bars_1h_clean)
-                    db.commit()
-                    if bars_1h_clean:
-                        logger.info(
-                            f"Bootstrapped {symbol}: wrote {written} 1h bars "
-                            f"(range=[{bars_1h_clean[0].timestamp}..{bars_1h_clean[-1].timestamp}])"
-                        )
-                finally:
-                    db.close()
-            # Invalidate cache so fresh bars are visible immediately
-            from backend.market_data.services.cache import _redis_cache
-            _redis_cache.invalidate_bars_for_symbol(symbol)
-        except Exception as e:
-            logger.warning(f"Failed to bootstrap {symbol}: {e}")
 
     async def _jittered_sleep(self, base_seconds: float, jitter: float = 1.0) -> None:
         """Sleep for ``base_seconds ± jitter`` to decorrelate loop timing.
@@ -1435,21 +1506,29 @@ class MarketDataIngestionService:
 
         On startup, for each watched symbol, check whether the oldest bar in
         the DB is more than 700 days old (i.e. effectively missing). If so,
-        schedule a backfill. This is the "seed" path: the first run after
+        enqueue a backfill job. This is the "seed" path: the first run after
         a fresh DB, or after switching retention, picks up the missing
         history.
 
-        Symbols already in the backfill queue (single-flight) are skipped.
+        Routes through ``backfill_queue.enqueue_backfill`` — NOT a direct
+        call to ``backfill_symbol_history`` (that was this method's
+        original, Phase-3.3.16-era behavior, via a since-removed
+        ``_safe_backfill`` helper). A direct call bypassed the RQ pipeline's
+        single-flight guard and worker-count concurrency cap entirely,
+        which reopened exactly the "two uncoordinated callers of
+        backfill_symbol_history on two different event loops" class of bug
+        (the 2026-09-09 SOFI incident) the RQ-based redesign eliminated
+        everywhere else — a symbol added right before a restart could get
+        this startup path AND the RQ worker's job racing for it. Found via
+        a 2026-09-08 post-redesign completeness audit. ``enqueue_backfill``
+        already no-ops if a backfill for the symbol is confirmed in flight,
+        so this is safe to call unconditionally.
         """
         from datetime import timedelta as _td
         from sqlalchemy import func as _func
-        from backend.config.settings import settings as _settings
         from backend.models.market_data_sql import BarModel as _BarModel
-        from backend.market_data.services.backfill_service import (
-            backfill_symbol_history,
-        )
+        from backend.market_data.services.backfill_queue import enqueue_backfill
 
-        retention_days = _settings.market_data.bar_retention_days
         threshold = datetime.now() - _td(days=700)
         symbols = list(self.symbols)
         if not symbols:
@@ -1468,14 +1547,14 @@ class MarketDataIngestionService:
                 # No data at all, or data older than the seed threshold.
                 if oldest is None or oldest < threshold:
                     logger.info(
-                        f"_seed_check: scheduling backfill for {symbol} "
+                        f"_seed_check: enqueueing backfill for {symbol} "
                         f"(oldest={oldest})"
                     )
-                    # Run in the background — we don't want to block the
-                    # ingestion loops on a single symbol's backfill.
-                    asyncio.create_task(
-                        _safe_backfill(symbol, retention_days)
-                    )
+                    # enqueue_backfill is sync (Redis + a couple of small
+                    # DB queries, no provider I/O) and already
+                    # single-flight-checked — no asyncio.create_task or
+                    # separate wrapper needed, unlike the old direct call.
+                    enqueue_backfill(symbol)
             except Exception as e:
                 logger.warning(f"_seed_check: failed for {symbol}: {e}")
 
@@ -1827,40 +1906,6 @@ class MarketDataIngestionService:
             return quotes
         finally:
             db.close()
-
-async def _safe_backfill(symbol: str, retention_days: int) -> None:
-    """Run backfill for ``symbol``, logging but not raising on failure.
-
-    After backfill completes, immediately record signals for the newly
-    written bars so they show up in the dashboard without waiting for
-    the 90s signal recording loop.
-    """
-    from backend.market_data.services.backfill_service import (
-        backfill_symbol_history,
-    )
-    try:
-        result = await backfill_symbol_history(symbol, days=retention_days)
-        if result.get("skipped"):
-            return
-        logger.info(
-            f"_seed_check backfill for {symbol}: "
-            f"tier1={result['tier1_written']}, tier2={result['tier2_written']}"
-        )
-        # Record signals for the freshly backfilled bars so they appear
-        # in the dashboard immediately, not on the next 90s cycle.
-        # Use backfill_signals_for_symbol so all backfilled history is
-        # recorded, not just the most recent bar.
-        try:
-            from backend.services.signal_recorder import signal_recorder
-            recorded = signal_recorder.backfill_signals_for_symbol(symbol.upper())
-            if recorded:
-                logger.debug(
-                    f"Recorded {recorded} signals for {symbol} after seed backfill"
-                )
-        except Exception as sig_e:
-            logger.warning(f"Signal recording after seed backfill failed for {symbol}: {sig_e}")
-    except Exception as e:
-        logger.warning(f"_seed_check backfill for {symbol} failed: {e}")
 
 # Global instance for easy access
 ingestion_service = MarketDataIngestionService()

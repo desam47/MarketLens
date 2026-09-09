@@ -172,8 +172,14 @@ class TestWatchlistAPI(unittest.TestCase):
         self.mock_repo.delete_watchlist.assert_called_once_with(1)
 
     def test_add_symbol_to_watchlist(self):
-        """Test adding a symbol to a watchlist"""
-        # Setup mock — Phase 3.3.14 returns (symbol, is_new_row)
+        """Test adding a symbol to a watchlist — and that the request
+        returns without waiting on any provider call: register_symbol and
+        enqueue_backfill (both fast, no provider I/O) are the only things
+        _start_symbol_tracking_and_backfill does, and both are mocked here
+        rather than left to hit the real ingestion_service singleton /
+        real Redis, so this test also pins the "non-blocking" behavior the
+        redesign's plan called for (previously untested — the endpoint's
+        own test predates the redesign and never mocked either)."""
         mock_sym = _mock_symbol(
             id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0
         )
@@ -181,43 +187,151 @@ class TestWatchlistAPI(unittest.TestCase):
         mock_sym.notes = None
         self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True)
 
-        # Test
-        symbol_data = {
-            "symbol": "AAPL",
-            "is_enabled": True
-        }
-        response = self.client.post("/api/watchlists/1/symbols", json=symbol_data)
+        with (
+            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.backfill_queue.enqueue_backfill",
+                return_value="backfill-fakejobid",
+            ) as mock_enqueue,
+        ):
+            symbol_data = {"symbol": "AAPL", "is_enabled": True}
+            response = self.client.post("/api/watchlists/1/symbols", json=symbol_data)
 
-        # Assertions
         self.assertEqual(response.status_code, 201)
         data = response.json()
         self.assertEqual(data["symbol"], "AAPL")
         self.assertEqual(data["watchlist_id"], 1)
         self.assertTrue(data["is_enabled"])
 
-        # Verify mock was called correctly (router passes symbol and entity_type)
         self.mock_repo.add_symbol_to_watchlist.assert_called_once_with(
             watchlist_id=1,
             symbol="AAPL",
             entity_type="stock",
         )
+        mock_ingestion.register_symbol.assert_called_once_with("AAPL")
+        mock_enqueue.assert_called_once_with("AAPL")
+
+    def test_add_symbol_lowercase_input_reaches_register_and_enqueue_uppercased(self):
+        """A lowercase ticker in the request body must land on the
+        uppercase form for every step of the chain — the stored symbol
+        (via the repo call, already covered elsewhere), register_symbol,
+        and enqueue_backfill — not just some of them. Previously untested;
+        every existing add-path test used pre-uppercased fixtures."""
+        mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL")
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True)
+
+        with (
+            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.backfill_queue.enqueue_backfill",
+                return_value="backfill-fakejobid",
+            ) as mock_enqueue,
+        ):
+            response = self.client.post(
+                "/api/watchlists/1/symbols", json={"symbol": "aapl"}
+            )
+
+        self.assertEqual(response.status_code, 201)
+        mock_ingestion.register_symbol.assert_called_once_with("AAPL")
+        mock_enqueue.assert_called_once_with("AAPL")
+
+    def test_add_symbol_skips_backfill_trigger_for_reenabled_symbol(self):
+        """is_new_row=False (a previously-disabled symbol being re-enabled,
+        not a fresh add) must NOT trigger tracking/backfill again."""
+        mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL")
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, False)
+
+        with patch(
+            "backend.market_data.services.ingestion_service.ingestion_service"
+        ) as mock_ingestion:
+            response = self.client.post(
+                "/api/watchlists/1/symbols", json={"symbol": "AAPL"}
+            )
+
+        self.assertEqual(response.status_code, 201)
+        mock_ingestion.register_symbol.assert_not_called()
 
     def test_remove_symbol_from_watchlist(self):
-        """Test removing a symbol from a watchlist"""
-        # Setup mock
+        """Test removing a symbol from a watchlist — and that it cancels
+        any in-flight backfill job for that symbol (previously untested:
+        the endpoint's own test never mocked or asserted on
+        cancel_backfill, so a broken import path there — it's wrapped in a
+        bare except-and-log-debug — would have gone unnoticed)."""
         self.mock_repo.remove_symbol_from_watchlist.return_value = True
 
-        # Test
-        response = self.client.delete("/api/watchlists/1/symbols/AAPL")
+        with patch(
+            "backend.market_data.services.backfill_queue.cancel_backfill",
+            return_value=True,
+        ) as mock_cancel:
+            response = self.client.delete("/api/watchlists/1/symbols/AAPL")
 
-        # Assertions
         self.assertEqual(response.status_code, 204)
-
-        # Verify mock was called correctly
         self.mock_repo.remove_symbol_from_watchlist.assert_called_once_with(
             watchlist_id=1,
             symbol="AAPL"
         )
+        mock_cancel.assert_called_once_with("AAPL")
+
+    def test_get_symbol_backfill_status_returns_job(self):
+        """GET /symbols/{symbol}/backfill-status — 200 with the job dict
+        when one exists (previously zero test coverage for this endpoint
+        or its underlying get_backfill_job_status)."""
+        fake_status = {
+            "symbol": "AAPL", "job_id": "backfill-abc123", "status": "completed",
+            "tier1_written": 10, "tier2_written": 5, "tier3_written": 2,
+            "gaps_found": 0, "gaps_filled": 0, "result": None, "error": None,
+            "created_at": "2026-09-08T00:00:00Z", "started_at": "2026-09-08T00:00:01Z",
+            "completed_at": "2026-09-08T00:00:05Z",
+        }
+        with patch(
+            "backend.market_data.services.backfill_queue.get_backfill_job_status",
+            return_value=fake_status,
+        ) as mock_status:
+            response = self.client.get("/api/watchlists/symbols/AAPL/backfill-status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "completed")
+        mock_status.assert_called_once_with("AAPL")
+
+    def test_get_symbol_backfill_status_404_when_no_job(self):
+        """No BackfillJob for the symbol -> 404, not a 200 with nulls."""
+        with patch(
+            "backend.market_data.services.backfill_queue.get_backfill_job_status",
+            return_value=None,
+        ):
+            response = self.client.get("/api/watchlists/symbols/NEVERADDED/backfill-status")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_trigger_watchlist_backfill(self):
+        """POST /{watchlist_id}/backfill — manually (re-)triggers backfill
+        for every symbol currently in the watchlist (previously zero test
+        coverage for this endpoint)."""
+        self.mock_repo.get_watchlist_symbols.return_value = [
+            _mock_symbol(id=1, symbol="AAPL"),
+            _mock_symbol(id=2, symbol="MSFT"),
+        ]
+
+        with (
+            patch("backend.market_data.services.ingestion_service.ingestion_service"),
+            patch(
+                "backend.market_data.services.backfill_queue.enqueue_backfill",
+                return_value="backfill-fakejobid",
+            ) as mock_enqueue,
+        ):
+            response = self.client.post("/api/watchlists/1/backfill")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(sorted(data["symbols"]), ["AAPL", "MSFT"])
+        self.assertEqual(data["status"], "backfill triggered")
+        self.mock_repo.get_watchlist_symbols.assert_called_once_with(1, enabled_only=False)
+        self.assertEqual(mock_enqueue.call_count, 2)
+
+    def test_trigger_watchlist_backfill_404_for_missing_watchlist(self):
+        self.mock_repo.get_watchlist.return_value = None
+        response = self.client.post("/api/watchlists/999/backfill")
+        self.assertEqual(response.status_code, 404)
 
     def test_enable_symbol_in_watchlist(self):
         """Test enabling a symbol in a watchlist"""

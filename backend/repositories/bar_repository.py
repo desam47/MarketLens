@@ -4,10 +4,12 @@ Bar repository for persisting and retrieving historical OHLCV bars.
 import collections.abc
 import logging
 from datetime import datetime, timedelta, timezone
+from datetime import time as _time
 
 from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
 
+from backend.engines.market_calendar import EASTERN, us_market_calendar
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
 from backend.observability import record_bar, record_bars
@@ -526,3 +528,206 @@ def delete_bars_for_symbols(symbols: collections.abc.Iterable[str]) -> int:
         return bulk_delete_bars(db, sym_list)
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Data-quality audit: duplicate calendar-day bars.
+# ---------------------------------------------------------------------------
+#
+# 2026-09-09 incident: webull stamps 1d bars at 00:00, yahoo_finance at
+# 09:30. The DB's uniqueness is on the *exact* timestamp, so those two
+# conventions never collided — any trading day a yahoo_finance fallback
+# touched got a second, independent row instead of updating the existing
+# one. By the time this was noticed, 63% of all stored 1d rows were
+# duplicated this way, with close prices differing by up to 2.4% between
+# the two rows for the same day. The write-path bug is fixed (both
+# providers now normalize onto the same timestamp — see _normalize_1d_bar
+# in ingestion_service.py), but nothing was watching for this class of
+# bug, which is why it went unnoticed for as long as it did. This audit
+# exists so a regression (a new provider added without normalization, a
+# normalizer that stops firing, etc.) surfaces immediately instead of
+# silently accumulating again.
+#
+# Only meaningful for CALENDAR-based timeframes (1d, 1wk), where distinct
+# providers can legitimately stamp the "same" period at different times
+# of day. Intraday timeframes (1m..4h) don't have this failure mode — an
+# exact-timestamp collision on a fixed-width bucket IS the correct
+# de-dup key for those.
+_CALENDAR_TIMEFRAMES: tuple[str, ...] = ("1d", "1wk")
+
+
+def find_duplicate_calendar_bars(
+    db: Session, timeframe: str, symbol: str | None = None
+) -> list[dict]:
+    """Find (symbol, calendar_date) groups with more than one stored row.
+
+    ``timeframe`` must be one of ``_CALENDAR_TIMEFRAMES`` ("1d"/"1wk") —
+    raises ValueError otherwise, since this check is meaningless (and
+    would misfire) for intraday timeframes.
+
+    Returns a list of dicts, one per duplicated day, each with the
+    symbol, date, row count, and per-row (id, timestamp, provider, close)
+    detail — enough to decide which row to keep without a follow-up query.
+    Empty list means no duplicates found (the healthy state).
+    """
+    if timeframe not in _CALENDAR_TIMEFRAMES:
+        raise ValueError(
+            f"find_duplicate_calendar_bars only applies to {_CALENDAR_TIMEFRAMES}, "
+            f"got {timeframe!r} — intraday timeframes use exact-timestamp "
+            f"buckets, which are already a correct de-dup key."
+        )
+
+    query = db.query(BarModel).filter(BarModel.timeframe == timeframe)
+    if symbol:
+        query = query.filter(BarModel.symbol == symbol.upper())
+    rows = query.order_by(BarModel.symbol, BarModel.timestamp).all()
+
+    by_day: dict[tuple[str, object], list[BarModel]] = {}
+    for r in rows:
+        by_day.setdefault((r.symbol, r.timestamp.date()), []).append(r)
+
+    out: list[dict] = []
+    for (sym, date), group in by_day.items():
+        if len(group) < 2:
+            continue
+        out.append({
+            "symbol": sym,
+            "date": date.isoformat(),
+            "count": len(group),
+            "rows": [
+                {
+                    "id": r.id,
+                    "timestamp": r.timestamp.isoformat(),
+                    "provider": r.provider,
+                    "close": r.close,
+                }
+                for r in group
+            ],
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Gap detection — companion to find_duplicate_calendar_bars above. That
+# finds too MANY rows for a bucket; this finds too FEW (zero).
+#
+# Introduced alongside the RQ-based backfill pipeline
+# (backend/market_data/services/backfill_service.py) so a newly-added
+# symbol's 1m/1h/1d history is verified complete — and any holes patched
+# from the provider fallback chain — before it's resampled into
+# 2m/3m/5m/15m/30m/4h/1wk, instead of resampling whatever a single fetch
+# window happened to return.
+# ---------------------------------------------------------------------------
+
+# Bucket width, in minutes, for the intraday sub-hour timeframes. 1h and 4h
+# are handled separately below since their step is hours, not minutes.
+_INTRADAY_BUCKET_MINUTES: dict[str, int] = {
+    "1m": 1, "2m": 2, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+}
+
+# Regular session bounds (ET). Only the regular session is enumerated as
+# "expected" — pre/post-market coverage is provider-dependent and
+# legitimately sparse, so treating it as expected would manufacture
+# false-positive gaps.
+_SESSION_OPEN = _time(9, 30)
+_SESSION_CLOSE = _time(16, 0)
+
+# Timeframes expected_bar_timestamps/find_gaps know how to enumerate.
+# 1wk is deliberately excluded — a handful of weekly buckets over years is
+# not where the "gaps" problem the backfill pipeline patches actually
+# occurs; it fully derives from an already gap-verified 1d series.
+_GAP_CHECK_TIMEFRAMES: tuple[str, ...] = (
+    "1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d",
+)
+
+
+def expected_bar_timestamps(
+    symbol: str, timeframe: str, start: datetime, end: datetime,
+) -> list[datetime]:
+    """Enumerate the canonical bucket-start timestamps a fully-populated
+    ``timeframe`` series should have between ``start`` and ``end`` (both
+    inclusive).
+
+    Returned timestamps are naive NY-local, matching how bars are stored
+    (see ``backend/utils/timezone.py``'s naive-NY convention). Bucketing
+    mirrors the floor arithmetic used elsewhere for these timeframes —
+    ``TimeframeEngine._get_candle_start_time`` for intraday/1h,
+    ``MarketDataIngestionService._resample_1h_to_4h_and_upsert`` for 4h —
+    duplicated here rather than imported so this stays a light,
+    dependency-free repository-layer utility (the same pattern
+    ``ingestion_service._RESAMPLE_WIDENING_HOURS`` already uses for
+    mirroring, not importing, this module's own ``_WIDENING_HOURS``).
+
+    Raises ``ValueError`` for any timeframe not in ``_GAP_CHECK_TIMEFRAMES``
+    (``symbol`` is currently unused but kept in the signature — a future
+    per-symbol trading-calendar override, e.g. a different listing venue,
+    would need it without changing every call site).
+    """
+    if timeframe not in _GAP_CHECK_TIMEFRAMES:
+        raise ValueError(
+            f"expected_bar_timestamps only covers {_GAP_CHECK_TIMEFRAMES}, "
+            f"got {timeframe!r}"
+        )
+
+    out: list[datetime] = []
+    day = start.date()
+    end_date = end.date()
+    while day <= end_date:
+        # Trading-day check needs a tz-aware probe — USMarketCalendar treats
+        # naive input as UTC (the provider-layer convention elsewhere in the
+        # app), which would misclassify an NY-local naive noon as a
+        # different weekday/date near midnight. Build it explicitly ET-aware.
+        probe = datetime.combine(day, _time(12, 0), tzinfo=EASTERN)
+        if us_market_calendar.is_trading_day(probe):
+            if timeframe == "1d":
+                out.append(datetime.combine(day, _time(0, 0)))
+            else:
+                session_start = datetime.combine(day, _SESSION_OPEN)
+                session_end = datetime.combine(day, _SESSION_CLOSE)
+                if timeframe in _INTRADAY_BUCKET_MINUTES:
+                    bucket_minutes = _INTRADAY_BUCKET_MINUTES[timeframe]
+                    step = timedelta(minutes=bucket_minutes)
+                    minute = session_start.minute - (session_start.minute % bucket_minutes)
+                    t = session_start.replace(minute=minute, second=0, microsecond=0)
+                elif timeframe == "1h":
+                    step = timedelta(hours=1)
+                    t = session_start.replace(minute=0, second=0, microsecond=0)
+                else:  # "4h"
+                    step = timedelta(hours=4)
+                    hour_floor = (session_start.hour // 4) * 4
+                    t = session_start.replace(hour=hour_floor, minute=0, second=0, microsecond=0)
+                while t < session_end:
+                    out.append(t)
+                    t += step
+        day += timedelta(days=1)
+
+    # Trim to the actually-requested range — a day-granularity loop can
+    # overshoot start/end by a few buckets at the edges.
+    return [ts for ts in out if start <= ts <= end]
+
+
+def find_gaps(
+    db: Session, symbol: str, timeframe: str, start: datetime, end: datetime,
+) -> list[datetime]:
+    """Return the expected bucket-start timestamps missing from the DB for
+    ``symbol``/``timeframe`` between ``start`` and ``end`` (inclusive).
+
+    Companion to ``find_duplicate_calendar_bars`` — that finds too MANY
+    rows for a bucket, this finds too FEW (zero). Raises for any timeframe
+    ``expected_bar_timestamps`` doesn't cover.
+    """
+    expected = set(expected_bar_timestamps(symbol, timeframe, start, end))
+    if not expected:
+        return []
+    rows = (
+        db.query(BarModel.timestamp)
+        .filter(
+            BarModel.symbol == symbol.upper(),
+            BarModel.timeframe == timeframe,
+            BarModel.timestamp >= start,
+            BarModel.timestamp <= end,
+        )
+        .all()
+    )
+    actual = {r[0] for r in rows}
+    return sorted(expected - actual)

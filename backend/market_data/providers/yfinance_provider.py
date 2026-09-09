@@ -258,6 +258,21 @@ class YFinanceProvider(BaseMarketDataProvider):
                 # up one 0-volume "duplicate" bar per cycle next to the
                 # real bar for that minute.
                 #
+                # A SECOND variant of the same phenomenon (2026-09-09 fix,
+                # found live via a "why do 4h bars only cover 08:00/12:00"
+                # question): at the very close of a session, Yahoo can
+                # return this same synthetic snapshot already landed
+                # exactly ON the interval boundary (e.g. a "60m" bar
+                # stamped 16:00:00 with open==high==low==close, volume==0)
+                # — the seconds-based check above doesn't catch this since
+                # the timestamp looks clean. The values themselves still
+                # carry the same signature the docstring above already
+                # describes, so check those too: a single-tick snapshot
+                # has zero range AND zero reported volume, which a genuine
+                # settled candle — even a real quiet one — essentially
+                # never does simultaneously (observed live: DVLT's
+                # yfinance-sourced 16:00 1h bar for 2026-09-08).
+                #
                 # Scoped to intraday intervals ("1m".."90m") — daily+
                 # intervals ("1d"/"5d"/"1wk"/"1mo"/"3mo") don't have a
                 # live-candle concept and their epoch timestamps aren't
@@ -265,7 +280,11 @@ class YFinanceProvider(BaseMarketDataProvider):
                 # check would misfire on real daily bars.
                 if interval.endswith("m") and i == len(ts_arr) - 1:
                     ts = datetime.fromtimestamp(int(ts_arr[i]), tz=timezone.utc)
-                    if ts.second != 0:
+                    is_flat_zero_volume = (
+                        opens[i] == highs[i] == lows[i] == closes[i]
+                        and (volumes[i] or 0) == 0
+                    )
+                    if ts.second != 0 or is_flat_zero_volume:
                         continue
                 bars.append(self._bar_from_chart_data(
                     symbol, i, ts_arr, opens, highs, lows, closes, volumes,

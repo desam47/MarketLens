@@ -17,6 +17,7 @@ from backend.models import (
     AIAnalysisJob,
     Alert,
     AlertTrigger,
+    BackfillJob,
     BacktestRun,
     Bar,
     BarModel,
@@ -146,6 +147,21 @@ def _insert_ai_job(db, symbol: str) -> AIAnalysisJob:
         timeframe="1d",
         status="finished",
         result='{"summary": "ok"}',
+    )
+    db.add(job)
+    db.flush()
+    return job
+
+
+def _insert_backfill_job(db, symbol: str) -> BackfillJob:
+    import uuid
+    job = BackfillJob(
+        job_id=f"backfill:{symbol}:{uuid.uuid4().hex[:8]}",
+        symbol=symbol,
+        status="completed",
+        tier1_written=10,
+        tier2_written=5,
+        tier3_written=2,
     )
     db.add(job)
     db.flush()
@@ -301,6 +317,33 @@ def test_purge_removes_ai_jobs(test_symbol):
     assert result["ai_analysis_jobs"] == 2
 
 
+def test_purge_removes_backfill_jobs(test_symbol):
+    """BackfillJob rows are deleted — added when the RQ-based backfill
+    pipeline replaced the old dual-trigger design; previously the wiring
+    (PurgeResult key, _delete_backfill_jobs) existed but nothing actually
+    inserted a row and confirmed it got deleted (found via a 2026-09-08
+    post-redesign completeness audit)."""
+    sym = test_symbol
+    db = SessionLocal()
+    try:
+        _insert_backfill_job(db, sym)
+        _insert_backfill_job(db, sym)
+        db.commit()
+        assert _count_for_symbol(db, BackfillJob, sym) == 2
+    finally:
+        db.close()
+
+    result = purge_symbol_from_database(sym)
+    assert result["backfill_jobs"] == 2
+    assert result["total"] == 2
+
+    db = SessionLocal()
+    try:
+        assert _count_for_symbol(db, BackfillJob, sym) == 0
+    finally:
+        db.close()
+
+
 def test_purge_removes_backtest_runs(test_symbol):
     """Backtest runs are deleted (trades via in_())."""
     sym = test_symbol
@@ -352,6 +395,7 @@ def test_purge_all_tables_at_once(test_symbol):
         a = _insert_alert(db, sym)
         _insert_alert_trigger(db, sym, a)
         _insert_ai_job(db, sym)
+        _insert_backfill_job(db, sym)
         run = _insert_backtest_run(db, sym)
         from backend.models import BacktestTrade
         db.add(BacktestTrade(run_id=run.id, signal="X", entry_date=datetime.utcnow(), entry_price=100.0))
@@ -368,10 +412,11 @@ def test_purge_all_tables_at_once(test_symbol):
     assert result["alerts"] == 1
     assert result["alert_triggers"] == 1
     assert result["ai_analysis_jobs"] == 1
+    assert result["backfill_jobs"] == 1
     assert result["backtest_runs"] == 1
     assert result["backtest_trades"] == 1
     assert result["drawing_tools"] == 1
-    assert result["total"] == 10
+    assert result["total"] == 11
 
 
 def test_purge_is_idempotent(test_symbol):

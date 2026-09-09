@@ -3,7 +3,14 @@ Background AI worker entry point (Phase 2.5).
 
 Run with::
 
-    rq worker --url redis://localhost:6379/0 marketlens-workers
+    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers
+
+``--worker-class rq.worker.SimpleWorker`` is NOT optional — see
+``backend/workers/backfill_worker.py``'s module docstring for why: RQ's
+default ``Worker`` forks a child process per job, and this project's
+webull provider SDK (touched by AI analysis too, via market-data context)
+reproducibly segfaults the forked child. ``SimpleWorker`` runs jobs in the
+worker's own process instead, which sidesteps it.
 
 Or, if you have the venv active and want a one-shot invocation::
 
@@ -45,18 +52,24 @@ def main() -> int:
         )
         return 1
 
+    # SimpleWorker (no fork-per-job) — see the module docstring for why
+    # this is required, not just a style choice, in this repo.
+    from rq import SimpleWorker
+
     if args.once:
-        # Process a single job synchronously.
-        job = queue.dequeue()
-        if job is None:
-            logger.info("No jobs in queue")
-            return 0
-        job.perform()
+        # Process a single job then exit. RQ's Queue has no
+        # dequeue-and-run-one primitive in the installed version (2.x) —
+        # the old `queue.dequeue()` here raised AttributeError on every
+        # call (found 2026-09-08, alongside the identical bug in the
+        # then-new backfill_worker.py, which copied this file as its
+        # starting point). A Worker/SimpleWorker with max_jobs=1 in burst
+        # mode is the real equivalent.
+        worker = SimpleWorker([queue], connection=queue.connection)
+        worker.work(burst=True, max_jobs=1)
         return 0
 
     if args.burst:
-        from rq import Worker
-        worker = Worker([queue], connection=queue.connection)
+        worker = SimpleWorker([queue], connection=queue.connection)
         worker.work(burst=True)
         return 0
 

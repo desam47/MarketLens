@@ -10,7 +10,8 @@ environment configuration, observability, and recommended infrastructure.
 - [Environment Variables](#environment-variables)
 - [Observability](#observability)
 - [Database](#database)
-- [Redis (caching / rate limiting)](#redis-caching--rate-limiting)
+- [Redis (caching / rate limiting / job queue)](#redis-caching--rate-limiting)
+- [Background Workers](#background-workers)
 - [Reverse Proxy / TLS](#reverse-proxy--tls)
 - [Scaling](#scaling)
 - [Health Checks](#health-checks)
@@ -22,6 +23,8 @@ The fastest way to run the full stack locally:
 
 ```bash
 docker compose up --build
+# more backfill throughput:
+docker compose up --build --scale worker=2
 ```
 
 This brings up:
@@ -29,7 +32,8 @@ This brings up:
 | Service    | Port  | Purpose                                          |
 |------------|-------|--------------------------------------------------|
 | API        | 8000  | FastAPI application                              |
-| Redis      | 6379  | Caching, rate limiting, pub/sub                  |
+| Worker     | —     | RQ background worker — AI analysis jobs + ticker backfill (see [Background Workers](#background-workers)) |
+| Redis      | 6379  | Caching, rate limiting, pub/sub, RQ job queue    |
 | Jaeger UI  | 16686 | Distributed tracing UI                           |
 
 Verify:
@@ -137,6 +141,39 @@ spec:
             limits: { cpu: "2", memory: "2Gi" }
 ```
 
+This `api` Deployment alone does NOT run background jobs (see [Background
+Workers](#background-workers)) — add a second `Deployment` for the RQ
+worker, same image, `command` overridden and no HTTP probes/ports needed:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: marketlens-worker
+spec:
+  replicas: 2  # RQ concurrency — scale independently of the api Deployment
+  selector:
+    matchLabels: { app: marketlens-worker }
+  template:
+    metadata:
+      labels: { app: marketlens-worker }
+    spec:
+      containers:
+        - name: worker
+          image: marketlens:latest
+          command: ["rq", "worker", "--url", "$(REDIS_URL)", "--worker-class", "rq.worker.SimpleWorker", "marketlens-workers", "marketlens-backfill"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: marketlens-secrets, key: database-url }
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef: { name: marketlens-secrets, key: redis-url }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+```
+
 ## Environment Variables
 
 All configuration is via environment variables. See `backend/config/settings.py`
@@ -148,9 +185,12 @@ for the full schema. Selected highlights:
 | `DEBUG`                                 | `false`                    | Verbose logging                      |
 | `HOST` / `PORT`                         | `0.0.0.0` / `8000`         | Bind address                         |
 | `DATABASE_URL`                          | `sqlite:///./data/marketlens.db` | SQLAlchemy connection URL     |
-| `REDIS_ENABLED`                         | `false`                    | Toggle Redis caching/rate-limiting   |
+| `REDIS_ENABLED`                         | `false`                    | Toggle Redis caching/rate-limiting/job-queue |
 | `REDIS_URL`                             | `redis://localhost:6379/0` | Redis connection string              |
 | `REDIS_PASSWORD`                        | (none)                     | Optional auth                        |
+| `BACKGROUND_ENABLED`                    | `true`                     | Toggle the RQ job queue itself       |
+| `BACKGROUND_QUEUE_NAME`                 | `marketlens-workers`       | AI analysis job queue name           |
+| `BACKGROUND_BACKFILL_QUEUE_NAME`        | `marketlens-backfill`      | Ticker backfill job queue name — separate from `BACKGROUND_QUEUE_NAME` so a slow backfill can't starve AI jobs |
 | `MARKET_DATA_PRIMARY_PROVIDER`          | `yahoo_finance`            | Primary market data provider         |
 | `MARKET_DATA_FALLBACK_PROVIDERS`        | (empty)                    | Comma-separated fallback chain       |
 | `MARKET_DATA_RATE_LIMIT_PER_MINUTE`     | `60`                       | Provider-side rate cap               |
@@ -252,22 +292,69 @@ When `REDIS_ENABLED=true`, the app uses Redis for:
 - **Rate limiting** — fixed-window counters keyed by client IP.
 - **Pub/sub** — `marketlens:bar_updates:{symbol}:{timeframe}` and
   `marketlens:quote_updates:{symbol}` channels.
+- **RQ job queue** — AI analysis jobs and ticker backfill are both enqueued
+  through Redis (see [Background Workers](#background-workers)). This one
+  is NOT the "safe fallback" case below — it's a real feature dependency.
 
 When Redis is **unavailable**, the app falls back to:
 
 - No caching (always hits the DB).
 - In-memory sliding-window rate limiter (per-process; not distributed).
 - No pub/sub.
+- **AI analysis and ticker backfill silently don't run at all** —
+  `enqueue_backfill`/`enqueue_analyze_job` just return `None` and the
+  caller gets no job to poll. Everything else in the app (live quotes,
+  bars, the dashboard) is unaffected, since ingestion doesn't depend on
+  Redis.
 
-The fallback is **safe by design** — the app keeps working, just slower
-and without cross-instance rate limiting.
+The cache/rate-limit/pub-sub fallback is safe by design — the app keeps
+working, just slower and without cross-instance rate limiting. The job
+queue is not: there's no fallback path for it, by design (running a full
+multi-tier backfill synchronously on the request thread is exactly what
+this architecture replaced — see `backend/market_data/services/backfill_service.py`'s
+module docstring).
 
 ### Recommended Redis settings
 
-- **Persistence:** AOF + RDB for durability.
+- **Persistence:** AOF + RDB for durability. This now matters beyond the
+  cache — losing Redis with jobs still queued loses those jobs (their
+  `BackfillJob`/`AIAnalysisJob` DB rows survive, stuck at `status:
+  "queued"`, but nothing left to process them; re-trigger manually via
+  `POST /api/watchlists/{id}/backfill`).
 - **Memory:** at least 256 MB for moderate workloads; the cache enforces
   `max_bar_keys` / `max_quote_keys` to bound memory.
 - **Replication:** use Sentinel or a managed Redis for HA.
+
+## Background Workers
+
+Two features depend on a running RQ worker process, separate from the API
+process: AI analysis jobs (`POST /api/ai/jobs`) and ticker backfill (adding
+a symbol to a watchlist). Both enqueue a Redis job and return immediately —
+nothing processes that job without a worker.
+
+```bash
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers   # AI analysis jobs
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill   # ticker backfill
+```
+
+`--worker-class rq.worker.SimpleWorker` is required. RQ's default `Worker`
+forks a child process per job; this project's webull provider SDK
+reproducibly segfaults the forked child (confirmed live: `Work-horse
+terminated unexpectedly; waitpid returned 11 (signal 11)` on the very
+first real job). `SimpleWorker` runs jobs in the worker's own process
+instead, which avoids it.
+
+`docker-compose.yml`'s `worker` service already runs both queues from one
+process with the correct worker class — `docker compose up` alone is
+enough in that environment. For anything else (bare-metal, systemd, a PaaS
+without compose), start at least one instance of both commands above
+yourself; nothing else in this repo does it for you outside `./start.sh`
+and `scripts/run.py`.
+
+Check whether a specific backfill actually ran:
+`GET /api/watchlists/symbols/{symbol}/backfill-status` — a `BackfillJob`
+row stuck at `status: "queued"` (never advancing to `started`) means no
+worker picked it up.
 
 ## Reverse Proxy / TLS
 
@@ -316,9 +403,19 @@ docker compose up --scale api=3
 The Redis layer is the coordination point — make sure it's a managed
 service or a Sentinel-backed cluster.
 
+Scale RQ throughput independently of the API — see [Background
+Workers](#background-workers):
+
+```bash
+docker compose up --scale worker=3
+```
+
 ### Vertical
 
-A single uvicorn worker uses one CPU. Run multiple workers per container:
+A single uvicorn *worker process* uses one CPU. Run multiple per container
+— unrelated to the RQ workers above; this is `uvicorn --workers`, plain
+ASGI process concurrency for handling more concurrent HTTP requests, not
+background job processing:
 
 ```bash
 uvicorn backend.api.main:app --workers 4 --host 0.0.0.0 --port 8000
@@ -358,8 +455,12 @@ pg_dump -Fc marketlens > /backups/marketlens-$(date +%F).dump
 
 ### Redis
 
-Redis is a cache — losing it means a slow rebuild, not data loss. Enable
-AOF persistence if you want a tighter recovery point.
+For the cache/rate-limit/pub-sub uses, losing Redis means a slow rebuild,
+not data loss. That's no longer the whole story: Redis also backs the RQ
+job queue (see [Background Workers](#background-workers)), and losing it
+with jobs still queued loses those jobs for real — no fallback, no replay.
+Enable AOF persistence, especially if backfill/AI-job throughput matters
+to you.
 
 ### Configuration
 

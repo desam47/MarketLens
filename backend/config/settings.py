@@ -46,6 +46,11 @@ class BackgroundProcessingSettings(BaseSettings):
     enabled: bool = Field(default=True)
     # RQ queue name. Workers must be started with: rq worker --url redis://... <queue_name>
     queue_name: str = Field(default="marketlens-workers")
+    # Separate queue for the symbol-history backfill pipeline — kept apart
+    # from queue_name (AI analysis jobs) so a slow multi-tier backfill can't
+    # starve AI analysis, and vice versa. Workers:
+    # rq worker --url redis://... <backfill_queue_name>
+    backfill_queue_name: str = Field(default="marketlens-backfill")
     # Result TTL in seconds — how long completed results stay in Redis before expiring.
     result_ttl: int = Field(default=3600)
     # Job TTL in seconds — jobs not started within this window are discarded.
@@ -530,14 +535,28 @@ class _AuxProviderCategorySettings(BaseSettings):
 
 
 class NewsAuxSettings(_AuxProviderCategorySettings):
+    # Explicit env_prefix/env_file — a nested BaseSettings field does NOT
+    # inherit its parent's env_prefix (AuxDataSettings' "AUX_" below); each
+    # nested BaseSettings subclass resolves its own env vars independently,
+    # per its OWN model_config. Without this, NewsAuxSettings() read with
+    # env_prefix="" and env_file=None — no prefix (looking for a bare
+    # ENABLED, not AUX_NEWS_ENABLED) and no .env file at all — so
+    # AUX_NEWS_ENABLED=true in .env silently had zero effect and `enabled`
+    # was permanently stuck at its Python default (False), 503-ing every
+    # request regardless of .env or how many times the backend restarted
+    # (found live 2026-09-09 — the user set AUX_NEWS_ENABLED=true,
+    # restarted, and every /api/aux-data/* endpoint still 503'd).
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_NEWS_", extra="ignore")
     primary_provider: str = "yfinance_news"
 
 
 class FundamentalsAuxSettings(_AuxProviderCategorySettings):
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_FUNDAMENTALS_", extra="ignore")
     primary_provider: str = "yfinance_fundamentals"
 
 
 class OptionsAuxSettings(_AuxProviderCategorySettings):
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_OPTIONS_", extra="ignore")
     primary_provider: str = "yfinance_options"
 
 
@@ -549,6 +568,13 @@ class AuxDataSettings(BaseSettings):
     descriptive message and the rest of the app continues to work.
     Defaults are ``enabled=False`` for all three; the trend engine,
     scanner, and AI pipeline do not require any of them.
+
+    This class's own env_prefix="AUX_" below does NOT propagate to the
+    news/fundamentals/options sub-models — each is independently a
+    BaseSettings subclass with its own model_config (AUX_NEWS_ / AUX_
+    FUNDAMENTALS_ / AUX_OPTIONS_ — see their class comments). This
+    class-level prefix is inert (no scalar fields of its own to bind), kept
+    only for consistency with every other settings class in this file.
     """
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_", extra="ignore")
     news: NewsAuxSettings = Field(default_factory=NewsAuxSettings)

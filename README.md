@@ -202,7 +202,7 @@ MarketLens/
 
 - Python **3.12+**
 - Node.js / npm
-- (Optional) Redis for distributed rate limiting: `brew install redis && redis-server`
+- Redis: `brew install redis && redis-server` — technically optional (the app degrades gracefully without it: in-process rate limiting, no caching), but required for two real features: AI analysis jobs and ticker backfill (adding a symbol to a watchlist) are both queued through it via RQ, and silently never run without a worker consuming them (see step 4a below).
 - (Optional) Ollama for AI: `brew install ollama && ollama serve`
 
 ### 2. Install dependencies
@@ -230,6 +230,19 @@ This creates all tables in `marketlens.db` and seeds the default AI prompt templ
 # OR manually (always from project root):
 python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001 --reload
 ```
+
+`./start.sh` also starts the background workers (step 4a) automatically. If
+you used the manual uvicorn command instead, start them yourself — without
+this, AI analysis and ticker backfill (step 6) will queue but never run:
+
+```bash
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers   # AI analysis jobs
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill  # ticker backfill (run twice for more throughput)
+```
+
+`--worker-class rq.worker.SimpleWorker` is required, not optional — RQ's
+default worker forks a process per job, and this project's webull provider
+SDK reproducibly segfaults the forked child.
 
 Interactive docs: http://localhost:5001/docs
 
@@ -262,6 +275,15 @@ curl -X POST "http://localhost:5001/api/watchlists/1/symbols" \
 
 # Start ingestion (fetches live quotes + bars for all watchlist symbols)
 curl -X POST "http://localhost:5001/api/market-data/ingestion/start"
+```
+
+Adding a symbol returns immediately — live quotes/1m bars start within
+seconds, and a full historical backfill (all 10 timeframes, tiered
+1m/1h/1d fetch + gap-check-and-fill + resample) runs in the background via
+a worker (step 4a). Poll its progress:
+
+```bash
+curl "http://localhost:5001/api/watchlists/symbols/AAPL/backfill-status"
 ```
 
 The dashboard will now load market data for AAPL and TSLA.

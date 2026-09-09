@@ -85,14 +85,44 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Alembic migration failed; continuing", exc_info=True)
 
-    # Clear Redis cache on startup to ensure fresh data
+    # Clear the bar/quote CACHE on startup to ensure fresh data.
+    #
+    # This used to be an unconditional r.flushall() — wiping the ENTIRE
+    # Redis logical DB, not just the cache. That was survivable while
+    # Redis only held ephemeral cache + rate-limit-window data (worst
+    # case: a slightly cold cache, a reset rate-limit window). It stopped
+    # being survivable once Redis also started holding a durable job
+    # queue (backend/market_data/services/backfill_queue.py /
+    # backend/ai/background.py): every backend restart — the single most
+    # common action in this project's own dev workflow — would silently
+    # discard every queued-but-not-yet-processed RQ job (backfill AND AI
+    # analysis), leaving their BackfillJob/AIAnalysisJob DB rows stuck at
+    # status="queued" forever with nothing left in Redis to explain why
+    # (found live, 2026-09-08: repeated FastAPI TestClient startups during
+    # this session's own test runs — TestClient triggers this same
+    # lifespan hook — were observed silently vanishing several just-queued
+    # real BackfillJob rows' underlying RQ jobs within seconds). Scoped to
+    # the cache layer's own key prefix (see
+    # backend/market_data/services/cache.py's _make_bar_key/_make_quote_key/
+    # _make_latest_bar_key) instead — RQ's "rq:*" keys, the rate limiter's
+    # "rate_limit:*" keys, and the backfill enqueue lock's
+    # "backfill:enqueue-lock:*" keys (self-expiring in 10s regardless) are
+    # untouched.
     try:
         import redis
         from backend.config.settings import settings as _s
         redis_url = _s.redis.url
         r = redis.from_url(redis_url)
-        r.flushall()
-        logger.info("Redis cache cleared on startup")
+        cleared = 0
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor=cursor, match="marketlens:*", count=500)
+            if keys:
+                r.delete(*keys)
+                cleared += len(keys)
+            if cursor == 0:
+                break
+        logger.info(f"Redis bar/quote cache cleared on startup ({cleared} keys)")
     except Exception as e:
         logger.warning("Redis cache clear failed; continuing", exc_info=True)
 
@@ -158,6 +188,30 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Signal hygiene: {sym} — pruned {pruned} out-of-cap rows")
     except Exception as e:
         logger.warning(f"Signal hygiene check failed: {e}")
+
+    # Data-quality audit: duplicate calendar-day bars (1d/1wk). See
+    # /api/system/data-quality and find_duplicate_calendar_bars' docstring
+    # for the 2026-09-09 incident this guards against — logged here too so
+    # a regression is visible in the startup log, not just on-demand.
+    try:
+        from backend.database import SessionLocal as _SessionLocal
+        from backend.repositories.bar_repository import find_duplicate_calendar_bars
+        _db = _SessionLocal()
+        try:
+            dupes = []
+            for _tf in ("1d", "1wk"):
+                dupes.extend(find_duplicate_calendar_bars(_db, _tf))
+        finally:
+            _db.close()
+        if dupes:
+            logger.warning(
+                f"Data-quality audit: {len(dupes)} duplicated calendar-day bars "
+                f"found (see /api/system/data-quality for detail)"
+            )
+        else:
+            logger.info("Data-quality audit: no duplicate calendar-day bars found")
+    except Exception as e:
+        logger.warning(f"Data-quality audit failed: {e}")
 
     yield
     shutdown_tracing()

@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
@@ -104,8 +105,22 @@ class TestRelativeStrengthEngine(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_compute_insufficient_history(self):
-        """Not enough price history → UNKNOWN signals."""
-        signals = self.engine.compute()
+        """Not enough price history → UNKNOWN signals.
+
+        _ensure_historical_data lazily seeds from the real DB via
+        _get_db_bars when a symbol has no in-memory ticks yet — so this
+        test's "insufficient history" premise only holds if AAPL/SPY/QQQ
+        genuinely have no stored bars. That's true for a fresh test DB,
+        but not for the shared dev DB this suite also runs against (which
+        accumulates real backfilled history for common symbols like SPY/
+        QQQ over time) — patch it to guarantee the empty-history case
+        regardless of what the real DB currently holds.
+        """
+        with patch(
+            "backend.regime.relative_strength_engine._get_db_bars",
+            return_value=[],
+        ):
+            signals = self.engine.compute()
         for sig in signals:
             self.assertEqual(sig.classification, RelativeStrengthClassification.UNKNOWN)
 

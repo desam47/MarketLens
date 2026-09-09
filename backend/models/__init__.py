@@ -62,3 +62,6 @@ from .ai_template import AITemplate as AITemplate
 
 # Import AI analysis job models (Phase 2.5: background AI processing)
 from .ai_analysis_job import AIAnalysisJob as AIAnalysisJob
+
+# Import backfill job models (RQ-based symbol history backfill pipeline)
+from .backfill_job import BackfillJob as BackfillJob

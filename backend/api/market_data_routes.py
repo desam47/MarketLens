@@ -115,8 +115,15 @@ async def update_symbols(request: SymbolsRequest):
 async def refresh_symbols_from_watchlist():
     """Reload the symbol list from the active watchlist.
 
-    Called automatically when symbols are added/removed from the watchlist,
-    so the ingestion service stays in sync.
+    No longer required for a normal add/remove — the watchlist router
+    itself now registers a newly-added symbol synchronously
+    (``ingestion_service.register_symbol``) and calls this directly,
+    in-process, on remove. This endpoint remains for out-of-band syncing
+    (a watchlist changed by something other than the watchlist API) and
+    manual resync. Note: a symbol found here that's new to the watchlist
+    is registered for live tracking only — it does NOT enqueue a backfill
+    job (that's the watchlist router's job at add time); see
+    ``ingestion_service.register_symbol``'s docstring.
     """
     symbols = ingestion_service.refresh_symbols_from_watchlist()
     return {"message": f"Synced {len(symbols)} symbols from watchlist", "symbols": symbols}

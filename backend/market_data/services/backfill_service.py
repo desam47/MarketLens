@@ -1,36 +1,61 @@
 """
-Symbol history backfill service (Phase 3.7).
+Symbol history backfill service (Phase 3.7; rebuilt onto a single RQ job
+— see module note below).
 
 Provides ``backfill_symbol_history()`` which fills the bars table for a
-symbol by downloading three tiers of data:
+symbol by downloading three tiers of data, gap-checking each, and only
+then resampling:
 
-  **Tier 1 — 1m bars (last 30 days)**
+  **Tier 1 — 1m bars (last BACKFILL_1M_DAYS, default 15 days)**
     Alpaca primary via its native ``get_historical_bars()`` method.
     yfinance gap-fill for the ~15 min lag at the tip where Alpaca free
-    tier is delayed.
+    tier is delayed. Followed by a gap-check-and-fill pass (see
+    ``_check_and_fill_gaps`` below) before 2m/3m/5m/15m/30m are resampled
+    from it — resampling ungapped 1m data is the whole point of checking.
 
-  **Tier 2 — 1h bars (last ~730 days)**
+  **Tier 2 — 1h bars (last BACKFILL_1H_DAYS, default 365 days)**
     Alpaca primary; yfinance/webull fallback from BACKFILL_1H_* in .env.
+    Same gap-check-and-fill pass before 4h is resampled from it.
 
-  **Tier 3 — 1d bars (days 31 → bar_retention_days)**
+  **Tier 3 — 1d bars (last BACKFILL_1D_DAYS, default 1095 days)**
     Alpaca primary; yfinance/webull fallback from BACKFILL_1D_* in .env.
-    13:30 ET noise rows from Alpaca free tier are dropped.
+    13:30 ET noise rows from Alpaca free tier are dropped. Same
+    gap-check-and-fill pass before 1wk is resampled from it.
 
-Concurrency is controlled by a single ``asyncio.Semaphore(2)`` so at most
-two symbols are backfilled concurrently. A per-symbol ``asyncio.Lock`` acts
-as a single-flight guard: concurrent requests for the same symbol are queued
-rather than triggering duplicate work.
+Single-flight + the 2-concurrent-symbols cap used to be enforced by a
+module-level ``asyncio.Lock``/``asyncio.Semaphore`` — bare asyncio
+primitives bind to whichever event loop first uses them, and this
+function used to have two independent, uncoordinated callers (the
+watchlist router's own trigger, plus ingestion_service's bootstrap)
+running on two different event loops in the same process, which crashed
+outright on first contention ("bound to a different event loop") until
+the locks were re-keyed per loop as a stopgap.
 
-The public entry point is ``backfill_symbol_history(symbol, days)``.
-It runs synchronously (via ``asyncio.to_thread``) so it can be called from
-any context including the synchronous FastAPI router layer.
+That root cause — two racing callers — is gone as of the RQ-based
+pipeline in ``backend/market_data/services/backfill_queue.py``: there is
+now exactly ONE call site for this function, the RQ task
+``backfill_symbol_task`` below, running in its own worker process with no
+other event loop to race against. Single-flight is enforced upstream, by
+``enqueue_backfill``'s DB+RQ check, before a job is ever enqueued — so
+this module no longer needs (and no longer has) any lock/semaphore of its
+own. ``settings.background.backfill_queue_name`` workers (run 2 of them
+to reproduce the old concurrency cap) provide the "at most N concurrent"
+property for free, at the process level.
+
+The public entry point is ``backfill_symbol_history(symbol, days)``, an
+async function called from ``backfill_symbol_task`` inside the RQ worker
+process (via ``asyncio.run``) — it is no longer called directly from the
+FastAPI request thread.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func
 
 from backend.config.settings import settings as _settings
 from backend.database import SessionLocal
@@ -63,19 +88,6 @@ def _utc_key(b) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-# Phase 3.3.12: single-flight guard — one concurrent backfill per symbol.
-_backfill_locks: dict[str, asyncio.Lock] = {}
-_lock_guard = asyncio.Lock()  # guards _backfill_locks dict itself
-
-
-async def _get_lock(symbol: str) -> asyncio.Lock:
-    """Return the (possibly newly created) asyncio.Lock for ``symbol``."""
-    async with _lock_guard:
-        if symbol not in _backfill_locks:
-            _backfill_locks[symbol] = asyncio.Lock()
-        return _backfill_locks[symbol]
-
-
 def _instantiate_provider(name: str):
     """Resolve a provider name (e.g. 'alpaca', 'webull', 'yahoo_finance') to an instance.
 
@@ -99,13 +111,35 @@ def _instantiate_provider(name: str):
         return None
 
 
-# Phase 3.3.12: max 2 concurrent backfills to stay under provider rate limits.
-_backfill_semaphore = asyncio.Semaphore(2)
+# Phase 3.3.12: max 2 concurrent backfills to stay under provider rate limits
+# (per event loop — see _get_backfill_semaphore above).
 
 
 # ---------------------------------------------------------------------------
 # Tier 1 — 1m bars: Alpaca primary + yfinance gap-fill
 # ---------------------------------------------------------------------------
+
+def _alpaca_range_for_days(days: int) -> str:
+    """Map a day count to the provider range string used for 1m fetches.
+
+    Shared between the tier-1 fetch and its gap-fill pass so the two use
+    the same window — the gap-fill pass used to hardcode "15d"
+    independent of ``BACKFILL_1M_DAYS``, so a gap older than 15 days but
+    within the configured (larger) window could never be patched even
+    though the initial fetch itself did cover that range (2026-09-08 fix,
+    found via a post-redesign completeness audit).
+    """
+    if days <= 1:
+        return "1d"
+    elif days <= 5:
+        return "5d"
+    elif days <= 15:
+        return "15d"  # Phase 3.9: 15 trading days
+    elif days <= 30:
+        return "1mo"
+    else:
+        return "3mo"  # free-tier cap
+
 
 async def _fetch_tier1_1m_bars(
     symbol: str,
@@ -132,16 +166,7 @@ async def _fetch_tier1_1m_bars(
     merged: dict[datetime, Bar] = {}
 
     # Pick Alpaca range based on requested days.
-    if days <= 1:
-        alpaca_range = "1d"
-    elif days <= 5:
-        alpaca_range = "5d"
-    elif days <= 15:
-        alpaca_range = "15d"  # Phase 3.9: 15 trading days
-    elif days <= 30:
-        alpaca_range = "1mo"
-    else:
-        alpaca_range = "3mo"  # free-tier cap
+    alpaca_range = _alpaca_range_for_days(days)
 
     # 1. Primary from .env (e.g. BACKFILL_1M_PRIMARY=alpaca).
     primary_returned = 0
@@ -375,7 +400,18 @@ async def _fetch_tier2_1d_bars(
     ``days_start`` is the number of calendar days back from today to start fetching.
     Bars from ``days_start`` days ago up to today are returned (the 13:30 ET noise
     rows from Alpaca free tier are dropped).
+
+    Every bar is run through ``_normalize_1d_bar`` — webull/alpaca stamp
+    daily bars at 00:00, yahoo_finance at 09:30. Without normalizing, those
+    conventions never collide on the DB's unique key, so any trading day a
+    fallback touched got a SECOND, independent 1d row instead of updating
+    the existing one. Found live: 1,501 trading days (63% of all stored 1d
+    rows) duplicated this way (2026-09-09 fix). Also fixed: the primary
+    branch used to ``return bars`` unconditionally on ANY non-exception
+    result — including an empty list — which skipped the fallback chain
+    entirely whenever the primary "succeeded" with nothing.
     """
+    from backend.market_data.services.ingestion_service import _normalize_1d_bar
     from backend.market_data.services.manager import get_1h_1d_fallback_providers
 
     # Phase 3.8.6: keep the cutoff as timezone-aware UTC. Providers return
@@ -396,36 +432,49 @@ async def _fetch_tier2_1d_bars(
         from backend.market_data.services.manager import get_backfill_primary_provider
         provider = get_backfill_primary_provider("1d")
         if provider is not None:
-            bars: list[Bar] = provider.get_historical_bars(
+            raw: list[Bar] = provider.get_historical_bars(
                 symbol=symbol, timeframe="1d", range_="5y"
             )
+            primary_name = provider.__class__.__name__
+            bars = [
+                n for n in (_normalize_1d_bar(b, primary_name) for b in raw)
+                if n is not None
+            ]
             # Filter to the requested window.
             bars = [b for b in bars if _after_cutoff(b)]
-            # Drop 13:30 ET noise from Alpaca free tier.
+            # Drop 13:30 ET noise from Alpaca free tier (normalization
+            # already filters this out — kept as a harmless second check).
             bars = [
                 b for b in bars
                 if not (b.timestamp.hour == 13 and b.timestamp.minute == 30)
             ]
             bars.sort(key=_utc_key)
-            logger.debug(f"tier3 1d: {provider.__class__.__name__} returned {len(bars)} bars for {symbol}")
-            return bars
+            logger.debug(f"tier3 1d: {primary_name} returned {len(bars)} bars for {symbol}")
+            if bars:
+                return bars
     except Exception as e:
         logger.warning(f"tier3 1d: primary provider failed for {symbol}: {e}")
 
-    # Try fallback providers (BACKFILL_1D_FALLBACK in .env).
+    # Try fallback providers (BACKFILL_1D_FALLBACK in .env) — reached both
+    # when the primary raised AND when it "succeeded" with zero bars.
     for fb_name in get_1h_1d_fallback_providers("1d"):
         try:
             provider = _instantiate_provider(fb_name)
             if provider is None:
                 continue
 
-            bars = provider.get_historical_bars(
+            raw = provider.get_historical_bars(
                 symbol=symbol, timeframe="1d", range_="2y"
             )
+            bars = [
+                n for n in (_normalize_1d_bar(b, fb_name) for b in raw)
+                if n is not None
+            ]
             bars = [b for b in bars if _after_cutoff(b)]
             bars.sort(key=_utc_key)
             logger.debug(f"tier3 1d: {fb_name} returned {len(bars)} bars for {symbol}")
-            return bars
+            if bars:
+                return bars
         except Exception as e:
             logger.debug(f"tier3 1d: {fb_name} fallback failed for {symbol}: {e}")
             continue
@@ -456,9 +505,155 @@ async def _write_bars_in_chunks(
     return total
 
 
+# Adjacency threshold per timeframe for _count_contiguous_spans — two
+# consecutive missing timestamps (already sorted) count as the SAME outage
+# if they're within this of each other, else as separate outages. Sized to
+# bridge a normal session/weekend boundary (so one multi-day outage isn't
+# reported as dozens of "gaps") without merging genuinely unrelated,
+# far-apart missing bars into one. Purely a reporting concern — the actual
+# gap-fill matching below always operates on individual timestamps.
+_GAP_SPAN_THRESHOLDS: dict[str, timedelta] = {
+    "1m": timedelta(minutes=2), "2m": timedelta(minutes=4), "3m": timedelta(minutes=6),
+    "5m": timedelta(minutes=10), "15m": timedelta(minutes=30), "30m": timedelta(minutes=60),
+    "1h": timedelta(hours=2), "4h": timedelta(hours=8), "1d": timedelta(days=4),
+}
+
+
+def _count_contiguous_spans(gaps: list[datetime], timeframe: str) -> int:
+    """Count how many separate outages ``gaps`` (sorted, from ``find_gaps``)
+    represents, instead of just the raw bar count.
+
+    find_gaps intentionally returns a flat list of individual missing
+    timestamps (see its docstring) — the right shape for "is this specific
+    timestamp missing" lookups, which is all the actual patch loop below
+    needs. But a flat count is misleading for a human/log/status reader: a
+    single 3-day outage (72 missing 1h bars) and 72 scattered single-bar
+    holes are very different situations, and reporting "gaps_found: 72" for
+    both erases that distinction (found via a 2026-09-08 post-redesign
+    completeness audit — the plan had actually specified find_gaps return
+    coalesced ranges for exactly this reason; kept the simpler flat-list
+    return since the patch loop benefits more from it, but fixed the
+    misleading count/log downstream instead).
+    """
+    if not gaps:
+        return 0
+    threshold = _GAP_SPAN_THRESHOLDS.get(timeframe, timedelta(days=1))
+    spans = 1
+    for prev, cur in zip(gaps, gaps[1:]):
+        if cur - prev > threshold:
+            spans += 1
+    return spans
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+async def _check_and_fill_gaps(
+    db,
+    symbol: str,
+    timeframe: str,
+    fallback_provider_names: list[str],
+    range_: str,
+) -> dict:
+    """After a tier's fetch-and-write, verify the DB has no missing expected
+    bars across the range just written, and make one more pass through
+    EVERY configured fallback provider (not just the first one to respond,
+    which is all the tier fetch itself tries) to patch what's missing.
+
+    Providers only expose range-based fetches, not arbitrary start/end
+    windows (checked against every ``get_historical_bars`` signature in
+    this codebase — none take start/end) — so "targeted" here means:
+    re-fetch each fallback provider's normal range, then keep only the
+    bars whose timestamp lands on a detected gap. Cheap relative to the
+    tier fetch itself (bounded to symbols that actually have gaps, at
+    most once per tier per backfill).
+
+    Never raises — a provider failure during the patch pass is logged and
+    skipped, same as the rest of this module. Returns
+    ``{"gaps_found": N, "gaps_filled": M, "remaining_gap_count": N-M}``.
+    """
+    from backend.models.market_data_sql import BarModel
+    from backend.repositories.bar_repository import find_gaps
+    from backend.utils.timezone import to_ny
+
+    row = (
+        db.query(
+            func.min(BarModel.timestamp), func.max(BarModel.timestamp)
+        )
+        .filter(BarModel.symbol == symbol.upper(), BarModel.timeframe == timeframe)
+        .one()
+    )
+    start, end = row
+    if start is None or end is None:
+        return {"gaps_found": 0, "gaps_filled": 0, "remaining_gap_count": 0, "gap_span_count": 0}
+
+    try:
+        gaps = find_gaps(db, symbol, timeframe, start, end)
+    except ValueError:
+        # Timeframe not covered by find_gaps (shouldn't happen for
+        # 1m/1h/1d, the only timeframes this is called with).
+        return {"gaps_found": 0, "gaps_filled": 0, "remaining_gap_count": 0, "gap_span_count": 0}
+    if not gaps:
+        return {"gaps_found": 0, "gaps_filled": 0, "remaining_gap_count": 0, "gap_span_count": 0}
+
+    gap_set = set(gaps)
+    span_count = _count_contiguous_spans(gaps, timeframe)
+    logger.info(
+        f"backfill {symbol}: {len(gaps)} missing {timeframe} bars detected "
+        f"across {span_count} separate gap(s) spanning {gaps[0]}..{gaps[-1]} "
+        f"— patching from fallback chain"
+    )
+
+    normalize_fn = None
+    if timeframe == "1h":
+        from backend.market_data.services.ingestion_service import _normalize_1h_bar as normalize_fn
+    elif timeframe == "1d":
+        from backend.market_data.services.ingestion_service import _normalize_1d_bar as normalize_fn
+
+    patched: list[Bar] = []
+    for fb_name in fallback_provider_names:
+        if not gap_set:
+            break
+        try:
+            provider = _instantiate_provider(fb_name)
+            if provider is None:
+                continue
+            raw = provider.get_historical_bars(symbol=symbol, timeframe=timeframe, range_=range_)
+            for b in raw:
+                if normalize_fn:
+                    b = normalize_fn(b, fb_name)
+                    if b is None:
+                        continue
+                ts = to_ny(b.timestamp)
+                if ts in gap_set:
+                    b.timestamp = ts
+                    b.timeframe = timeframe
+                    patched.append(b)
+                    gap_set.discard(ts)
+        except Exception as e:
+            logger.debug(f"backfill {symbol}: gap-fill pass via {fb_name} failed: {e}")
+            continue
+
+    filled = 0
+    if patched:
+        filled = await _write_bars_in_chunks(db, patched)
+
+    remaining = len(gap_set)
+    if remaining:
+        logger.info(
+            f"backfill {symbol}: {remaining} {timeframe} bars remain missing "
+            f"after the gap-fill pass — no configured provider has them "
+            f"(recorded, not retried further this run)"
+        )
+    elif filled:
+        logger.info(f"backfill {symbol}: gap-fill patched all {len(gaps)} missing {timeframe} bars")
+
+    return {
+        "gaps_found": len(gaps), "gaps_filled": filled, "remaining_gap_count": remaining,
+        "gap_span_count": span_count,
+    }
+
 
 async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
     """Backfill bar history for ``symbol`` covering ``days`` calendar days.
@@ -469,12 +664,20 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
       - Tier 2: 1h bars — BACKFILL_1H_DAYS (default 365d) — primary + fallback
       - Tier 3: 1d bars — BACKFILL_1D_DAYS (default 1095d) — primary + fallback
 
-    Concurrency: at most 2 symbols are backfilled simultaneously. Requests
-    for the same symbol are queued (single-flight pattern).
+    Each tier is followed by a gap-check-and-fill pass (``_check_and_fill_gaps``)
+    BEFORE the timeframes that derive from it are resampled — 2m/3m/5m/15m/30m
+    depend on tier 1 being as complete as the provider chain can make it, 4h
+    on tier 2, 1wk on tier 3.
+
+    Single-flight and the "at most N concurrent" cap are enforced upstream
+    now, by ``backfill_queue.enqueue_backfill`` (DB + RQ check) before a job
+    ever reaches this function, and by running N worker processes — this
+    function itself has no lock/semaphore of its own (see the module
+    docstring for why that used to be here and isn't anymore).
 
     Returns:
         ``{"symbol", "tier1_written", "tier2_written", "tier3_written",
-           "duration_s", "skipped"}``
+           "gaps_found", "gaps_filled", "gap_detail", "duration_s"}``
     """
     settings = _settings
     retention_days = days if days is not None else settings.market_data.bar_retention_days
@@ -485,123 +688,245 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
     symbol = symbol.upper()
     start_time = time.monotonic()
 
-    # Single-flight: wait for any in-progress backfill for this symbol.
-    lock = await _get_lock(symbol)
+    logger.info(
+        f"backfill_symbol_history: starting backfill for {symbol} "
+        f"({retention_days}d)"
+    )
 
-    # Try to acquire without blocking — if the lock is already held, a
-    # concurrent request for the same symbol is already in progress.
-    acquired = lock.locked()
-    if acquired:
+    db = SessionLocal()
+    try:
+        manager = MarketDataManager()
+        tier1_written = 0
+        tier2_written = 0
+        tier3_written = 0
+        gap_detail: dict[str, dict] = {}
+
+        # Tier 1: 1m bars (Alpaca primary + yfinance gap-fill).
+        # Phase 3.9: extend to 15 trading days by default (now
+        # configurable via BACKFILL_1M_DAYS). WebullProvider paginates
+        # internally (4 pages × 1,650 = 6,600 bars max) when range_="15d"
+        # is passed to get_historical_bars, so primary providers can now
+        # cover the full 15-day window in one call.
+        tier1_days = min(settings.backfill.tf_1m_days, retention_days)
+        tier1_bars = await _fetch_tier1_1m_bars(
+            symbol, tier1_days, manager, db
+        )
+        if tier1_bars:
+            tier1_written = await _write_bars_in_chunks(db, tier1_bars)
+            try:
+                from backend.market_data.services.manager import get_1m_fallback_providers
+                gap_detail["1m"] = await _check_and_fill_gaps(
+                    db, symbol, "1m", get_1m_fallback_providers(),
+                    _alpaca_range_for_days(tier1_days),
+                )
+            except Exception as e:
+                logger.warning(f"backfill {symbol}: 1m gap-check failed: {e}")
+
+        # Auto-resample sub-hour timeframes from the now gap-checked 1m
+        # (lazy import to avoid circular dependency). Always resample —
+        # upsert is idempotent so re-running when tier1_written=0
+        # (re-backfill of existing bars) is safe and ensures
+        # 2m/3m/5m/15m/30m bars are populated.
+        from backend.market_data.services.ingestion_service import ingestion_service
+        try:
+            for tf in ingestion_service._SUBHOUR_TFS:
+                # full_history=True: this is a one-time pass right after
+                # backfill wrote (potentially years of) 1m history — resample
+                # all of it, not just the live loop's narrow recent-window
+                # default, so 2m/3m/5m/15m/30m get full historical depth
+                # instead of only whatever accumulates going forward.
+                written_sub = await ingestion_service._resample_and_upsert(
+                    tf, source_tf="1m", _symbol=symbol, full_history=True
+                )
+                if written_sub > 0:
+                    logger.info(f"backfill {symbol}: auto-resampled {written_sub} {tf} bars from 1m")
+        except Exception as e:
+            logger.warning(f"backfill {symbol}: sub-hour resample failed: {e}")
+
+        # Tier 2: 1h bars — range_="5y" always (hits 1,200-bar cap).
+        # Window configurable via BACKFILL_1H_DAYS (default 365).
+        tier2_days = min(settings.backfill.tf_1h_days, retention_days)
+        tier2_bars = await _fetch_tier2_1h_bars(symbol, tier2_days)
+        if tier2_bars:
+            tier2_written = await _write_bars_in_chunks(db, tier2_bars)
+            try:
+                from backend.market_data.services.manager import get_1h_1d_fallback_providers
+                gap_detail["1h"] = await _check_and_fill_gaps(
+                    db, symbol, "1h", get_1h_1d_fallback_providers("1h"), "5y"
+                )
+            except Exception as e:
+                logger.warning(f"backfill {symbol}: 1h gap-check failed: {e}")
+
+        # Tier 3: 1d bars. Window configurable via BACKFILL_1D_DAYS
+        # (default 1095 ≈ 3 years), still capped by retention_days.
+        tier3_days = min(settings.backfill.tf_1d_days, retention_days)
+        if tier3_days > 0:
+            tier3_bars = await _fetch_tier2_1d_bars(
+                symbol,
+                days_start=tier3_days,
+            )
+            if tier3_bars:
+                tier3_written = await _write_bars_in_chunks(db, tier3_bars)
+                try:
+                    from backend.market_data.services.manager import get_1h_1d_fallback_providers
+                    gap_detail["1d"] = await _check_and_fill_gaps(
+                        db, symbol, "1d", get_1h_1d_fallback_providers("1d"), "5y"
+                    )
+                except Exception as e:
+                    logger.warning(f"backfill {symbol}: 1d gap-check failed: {e}")
+
+        # Auto-resample higher timeframes from whatever 1h/1d data
+        # exists — NOT gated on tier2_written/tier3_written > 0.
+        # Those only count rows written by THIS call; a symbol whose
+        # 1h/1d was already fully populated by an earlier, separate fetch
+        # (e.g. ingestion_service.register_symbol's own live-loop pickup,
+        # which can land before this job runs) legitimately writes 0 new
+        # rows here while still having plenty of data to resample from.
+        # Gating on this call's delta skipped 4h/1wk entirely whenever
+        # that race landed the "wrong" way (2026-09-09 fix, found via
+        # SOFI). Both resample functions are cheap, idempotent upserts
+        # that already no-op internally when there isn't enough source
+        # data, so always attempting them is safe.
+        try:
+            written_4h = await ingestion_service._resample_1h_to_4h_and_upsert(_symbol=symbol)
+            if written_4h:
+                logger.info(f"backfill {symbol}: auto-resampled {written_4h} 4h bars from 1h")
+        except Exception as e:
+            logger.warning(f"backfill {symbol}: 4h resample failed: {e}")
+
+        try:
+            written_1wk = await ingestion_service._resample_1d_to_1wk_and_upsert(_symbol=symbol)
+            if written_1wk:
+                logger.info(f"backfill {symbol}: auto-resampled {written_1wk} 1wk bars from 1d")
+        except Exception as e:
+            logger.warning(f"backfill {symbol}: 1wk resample failed: {e}")
+
+        gaps_found = sum(d["gaps_found"] for d in gap_detail.values())
+        gaps_filled = sum(d["gaps_filled"] for d in gap_detail.values())
+
+        duration = time.monotonic() - start_time
         logger.info(
-            f"backfill_symbol_history: {symbol} already being backfilled — skipping"
+            f"backfill_symbol_history: {symbol} done in {duration:.1f}s — "
+            f"tier1(1m)={tier1_written}, tier2(1h)={tier2_written}, "
+            f"tier3(1d)={tier3_written}, gaps={gaps_filled}/{gaps_found} filled"
         )
         return {
             "symbol": symbol,
-            "tier1_written": 0,
-            "tier2_written": 0,
-            "tier3_written": 0,
-            "duration_s": time.monotonic() - start_time,
-            "skipped": True,
+            "tier1_written": tier1_written,
+            "tier2_written": tier2_written,
+            "tier3_written": tier3_written,
+            "gaps_found": gaps_found,
+            "gaps_filled": gaps_filled,
+            "gap_detail": gap_detail,
+            "duration_s": round(duration, 2),
         }
+    finally:
+        db.close()
 
-    async with lock:
-        logger.info(
-            f"backfill_symbol_history: starting backfill for {symbol} "
-            f"({retention_days}d)"
-        )
 
-        # Use the semaphore to limit total concurrent backfills to 2.
-        async with _backfill_semaphore:
+def backfill_symbol_task(symbol: str, job_id: str) -> None:
+    """RQ job body — the ONLY call site for ``backfill_symbol_history`` now.
+
+    Runs in the RQ worker process. Sync (RQ jobs are sync callables) —
+    drives the async pipeline via ``asyncio.run``, which is safe here
+    specifically because the worker process runs no ingestion_service loop
+    of its own to race against (unlike the old dual-trigger design this
+    replaced — see the module docstring).
+
+    Writes status/progress to the ``BackfillJob`` row identified by
+    ``job_id`` at start, and at completion (success, partial, or failure)
+    — see ``backend/market_data/services/backfill_queue.py`` for how that
+    row is created and polled.
+    """
+    asyncio.run(_run_backfill_job(symbol, job_id))
+
+
+async def _run_backfill_job(symbol: str, job_id: str) -> None:
+    from backend.models import BackfillJob
+
+    db = SessionLocal()
+    try:
+        job = db.query(BackfillJob).filter(BackfillJob.job_id == job_id).first()
+        if job is not None:
+            job.status = "started"
+            job.started_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+
+    try:
+        result = await backfill_symbol_history(symbol)
+    except Exception as e:
+        logger.error(f"backfill job {job_id} ({symbol}) failed: {e}")
+        db = SessionLocal()
+        try:
+            job = db.query(BackfillJob).filter(BackfillJob.job_id == job_id).first()
+            if job is not None:
+                job.status = "failed"
+                job.error = str(e)[:2000]
+                job.completed_at = datetime.utcnow()
+                db.commit()
+        finally:
+            db.close()
+        return
+
+    try:
+        db = SessionLocal()
+        try:
+            job = db.query(BackfillJob).filter(BackfillJob.job_id == job_id).first()
+            if job is not None:
+                remaining = result["gaps_found"] - result["gaps_filled"]
+                job.tier1_written = result["tier1_written"]
+                job.tier2_written = result["tier2_written"]
+                job.tier3_written = result["tier3_written"]
+                job.gaps_found = result["gaps_found"]
+                job.gaps_filled = result["gaps_filled"]
+                job.result = json.dumps(result.get("gap_detail", {}))
+                job.status = "completed" if remaining == 0 else "partial"
+                job.completed_at = datetime.utcnow()
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        # backfill_symbol_history already succeeded and wrote real bars —
+        # only this status-row write failed (e.g. a concurrent-writer
+        # SQLite lock timeout with two RQ workers sharing one DB file).
+        # Without this except, that left the BackfillJob row stuck at
+        # status="started" forever: RQ itself doesn't touch our row (a
+        # raise here would just propagate to Worker.perform_job's own
+        # bare except, which marks the RQ job failed but never reconciles
+        # our DB row), and get_backfill_job_status only ever promotes
+        # queued/started -> started from RQ's live status, never notices
+        # a started row whose job has actually finished. Found via a
+        # 2026-09-08 post-redesign completeness audit. Mark it failed
+        # here instead so a poller doesn't see "started" indefinitely for
+        # a backfill that actually completed.
+        logger.error(f"backfill job {job_id} ({symbol}): status-row write failed after a successful backfill: {e}")
+        try:
             db = SessionLocal()
             try:
-                manager = MarketDataManager()
-                tier1_written = 0
-                tier2_written = 0
-                tier3_written = 0
-
-                # Tier 1: 1m bars (Alpaca primary + yfinance gap-fill).
-                # Phase 3.9: extend to 15 trading days by default (now
-                # configurable via BACKFILL_1M_DAYS). WebullProvider paginates
-                # internally (4 pages × 1,650 = 6,600 bars max) when range_="15d"
-                # is passed to get_historical_bars, so primary providers can now
-                # cover the full 15-day window in one call.
-                tier1_days = min(settings.backfill.tf_1m_days, retention_days)
-                tier1_bars = await _fetch_tier1_1m_bars(
-                    symbol, tier1_days, manager, db
-                )
-                if tier1_bars:
-                    tier1_written = await _write_bars_in_chunks(db, tier1_bars)
-
-                # Auto-resample sub-hour timeframes from 1m (lazy import to avoid
-                # circular dependency).
-                # Always resample sub-hour TFs from 1m — upsert is idempotent so
-                # re-running when tier1_written=0 (re-backfill of existing bars) is safe
-                # and ensures 2m/3m/5m/15m/30m bars are populated.
-                from backend.market_data.services.ingestion_service import ingestion_service
-                try:
-                    for tf in ingestion_service._SUBHOUR_TFS:
-                        # full_history=True: this is a one-time pass right after
-                        # backfill wrote (potentially years of) 1m history — resample
-                        # all of it, not just the live loop's narrow recent-window
-                        # default, so 2m/3m/5m/15m/30m get full historical depth
-                        # instead of only whatever accumulates going forward.
-                        written_sub = await ingestion_service._resample_and_upsert(
-                            tf, source_tf="1m", _symbol=symbol, full_history=True
-                        )
-                        if written_sub > 0:
-                            logger.info(f"backfill {symbol}: auto-resampled {written_sub} {tf} bars from 1m")
-                except Exception as e:
-                    logger.warning(f"backfill {symbol}: sub-hour resample failed: {e}")
-
-                # Tier 2: 1h bars — range_="5y" always (hits 1,200-bar cap).
-                # Window configurable via BACKFILL_1H_DAYS (default 365).
-                tier2_days = min(settings.backfill.tf_1h_days, retention_days)
-                tier2_bars = await _fetch_tier2_1h_bars(symbol, tier2_days)
-                if tier2_bars:
-                    tier2_written = await _write_bars_in_chunks(db, tier2_bars)
-
-                # Tier 3: 1d bars. Window configurable via BACKFILL_1D_DAYS
-                # (default 1095 ≈ 3 years), still capped by retention_days.
-                tier3_days = min(settings.backfill.tf_1d_days, retention_days)
-                if tier3_days > 0:
-                    tier3_bars = await _fetch_tier2_1d_bars(
-                        symbol,
-                        days_start=tier3_days,
-                    )
-                    if tier3_bars:
-                        tier3_written = await _write_bars_in_chunks(db, tier3_bars)
-
-                # Auto-resample higher timeframes from what was just written.
-                if tier2_written > 0:
-                    try:
-                        written_4h = await ingestion_service._resample_1h_to_4h_and_upsert(_symbol=symbol)
-                        logger.info(f"backfill {symbol}: auto-resampled {written_4h} 4h bars from 1h")
-                    except Exception as e:
-                        logger.warning(f"backfill {symbol}: 4h resample failed: {e}")
-
-                if tier3_written > 0:
-                    try:
-                        written_1wk = await ingestion_service._resample_1d_to_1wk_and_upsert(_symbol=symbol)
-                        logger.info(f"backfill {symbol}: auto-resampled {written_1wk} 1wk bars from 1d")
-                    except Exception as e:
-                        logger.warning(f"backfill {symbol}: 1wk resample failed: {e}")
-
-                duration = time.monotonic() - start_time
-                logger.info(
-                    f"backfill_symbol_history: {symbol} done in {duration:.1f}s — "
-                    f"tier1(1m)={tier1_written}, tier2(1h)={tier2_written}, "
-                    f"tier3(1d)={tier3_written}"
-                )
-                return {
-                    "symbol": symbol,
-                    "tier1_written": tier1_written,
-                    "tier2_written": tier2_written,
-                    "tier3_written": tier3_written,
-                    "duration_s": round(duration, 2),
-                    "skipped": False,
-                }
+                job = db.query(BackfillJob).filter(BackfillJob.job_id == job_id).first()
+                if job is not None:
+                    job.status = "failed"
+                    job.error = f"backfill succeeded but the status write failed: {e}"[:2000]
+                    job.completed_at = datetime.utcnow()
+                    db.commit()
             finally:
                 db.close()
+        except Exception as e2:
+            logger.error(f"backfill job {job_id} ({symbol}): failed to even mark the status-write failure: {e2}")
+        return
+
+    # Immediately record signals for the newly backfilled bars so the
+    # dashboard shows data without waiting for the next signal-recording
+    # loop tick — mirrors what the old (now-removed) _do_backfill did.
+    try:
+        from backend.services.signal_recorder import signal_recorder
+        recorded = signal_recorder.backfill_signals_for_symbol(symbol.upper())
+        if recorded:
+            logger.info(f"backfill job {job_id}: recorded {recorded} signals for {symbol}")
+    except Exception as e:
+        logger.warning(f"backfill job {job_id}: signal recording failed: {e}")
 
 
 def backfill_symbol_history_sync(symbol: str, days: int | None = None) -> dict:

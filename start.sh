@@ -28,13 +28,50 @@ if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
     cd "$SCRIPT_DIR"
 fi
 
+# RQ workers — AI analysis jobs (marketlens-workers) and symbol-history
+# backfill (marketlens-backfill, run twice for the old concurrency-cap-of-2
+# equivalent). Without these, POST /api/ai/jobs and adding a ticker to a
+# watchlist both silently queue a job that nothing ever consumes — found via
+# a 2026-09-08 completeness audit: this script (and every other documented
+# run path in the repo) started only the API + frontend, never a worker, so
+# background jobs never processed by default under a normal `./start.sh`.
+# Soft-fail if `rq`/Redis isn't set up — the app still runs without workers,
+# it just won't process background jobs (foreground quote/bar/chart data is
+# unaffected either way).
+WORKER_PIDS=()
+if command -v rq >/dev/null 2>&1; then
+    echo "🚀 Starting AI analysis worker (marketlens-workers) ..."
+    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers &
+    WORKER_PIDS+=($!)
+    echo "🚀 Starting backfill workers (marketlens-backfill x2) ..."
+    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill &
+    WORKER_PIDS+=($!)
+    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill &
+    WORKER_PIDS+=($!)
+else
+    echo "⚠️  'rq' CLI not found — skipping background workers."
+    echo "    AI analysis jobs and ticker backfills will queue but not run"
+    echo "    until you install it (pip install rq) and restart."
+fi
+
 echo ""
 echo "✅ MarketLens started!"
 echo "   Backend:  http://127.0.0.1:5001"
 echo "   Frontend: http://localhost:3000"
+if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
+    echo "   Workers:  ${#WORKER_PIDS[@]} running (AI jobs + backfill)"
+fi
 echo ""
 echo "Press Ctrl+C to stop all services."
 
 # Wait for any process to exit
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM
+# "${WORKER_PIDS[@]}" inside an already-double-quoted string still splits
+# into separate words per element (bash's @-array quirk survives nesting),
+# which broke trap's argument parsing — it saw extra "signal name"
+# arguments instead of one command string (confirmed live: "trap: 19282:
+# invalid signal specification" on the very first ./start.sh run after
+# this file added worker processes). "${WORKER_PIDS[*]}" joins into one
+# plain string first, which trap's single command-string argument expects.
+WORKER_PIDS_STR="${WORKER_PIDS[*]}"
+trap "kill $BACKEND_PID $FRONTEND_PID $WORKER_PIDS_STR 2>/dev/null; exit" INT TERM
 wait
