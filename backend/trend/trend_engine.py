@@ -638,7 +638,32 @@ class TrendEngine:
             else:
                 direction = TrendDirection.SIDEWAYS
 
-            confidence = min(abs(avg_signal), 1.0)
+            # Rescale so crossing `threshold` (the same value that just
+            # decided direction, above) maps to confidence == 0.5, and
+            # the maximum possible |avg_signal| (1.0) maps to 1.0 —
+            # instead of confidence == the raw signal magnitude.
+            #
+            # Before this fix, confidence was literally `abs(avg_signal)`,
+            # so a stock at the exact moment its trend was confirmed
+            # (avg_signal == threshold, 0.15-0.35) reported confidence
+            # 0.15-0.35 — permanently below every `min_confidence >= 0.5`
+            # default in the app (NL search, DailyBullish/DailyBearish,
+            # MinTimeframeBullish/Bearish, MTFAlignment, the scanner's
+            # own MULTI_TIMEFRAME_BULLISH/BEARISH signal at scanner.py's
+            # `confidence > 0.6` check). Reaching 0.5 required an
+            # unusually strong single-direction alignment across all 8
+            # components — "confidently trending" and "clears the
+            # app's default confidence filter" were effectively two
+            # different, uncoordinated bars. Found live 2026-09-09:
+            # AI Stock Search's "bearish stocks" returned zero matches
+            # even with a real downtrend (DVLT, confidence 0.365)
+            # sitting in the watchlist.
+            abs_signal = abs(avg_signal)
+            if abs_signal >= threshold:
+                confidence = 0.5 + 0.5 * (abs_signal - threshold) / (1.0 - threshold)
+            else:
+                confidence = 0.5 * (abs_signal / threshold)
+            confidence = min(confidence, 1.0)
             if trend_strength == TrendStrength.STRONG:
                 confidence = min(confidence * 1.2, 1.0)
             elif trend_strength == TrendStrength.WEAK:

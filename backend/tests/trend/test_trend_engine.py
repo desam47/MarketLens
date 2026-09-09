@@ -412,6 +412,49 @@ class TestPhase6Scenarios(unittest.TestCase):
         self.assertFalse(hasattr(snapshot, "buy_signal"))
         self.assertFalse(hasattr(snapshot, "sell_signal"))
 
+    def test_confirmed_uptrend_clears_default_confidence_filter(self):
+        """Calibration fix (2026-09-09): once direction is actually
+        confirmed, confidence must reach >= 0.5 — the default
+        `min_confidence` used everywhere in the app (NL search,
+        DailyBullish/DailyBearish, MinTimeframeBullish/Bearish,
+        MTFAlignment, the scanner's MULTI_TIMEFRAME_* signal). Before
+        the fix, confidence == the raw signal magnitude, so it was
+        pinned at the 0.15-0.35 direction threshold right at the
+        moment of confirmation — permanently below 0.5 for anything
+        but an extreme, near-maximal signal."""
+        self._feed_extra([100 + i * 0.5 for i in range(60)], n_extra=200)
+        signal = self.engine.get_current_trend(Timeframe.ONE_DAY)
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.direction.value, "uptrend")
+        self.assertGreaterEqual(signal.confidence, 0.5)
+
+    def test_confirmed_downtrend_clears_default_confidence_filter(self):
+        """Regression for the live bug: AI Stock Search's 'bearish
+        stocks' returned zero matches even with a genuine downtrend
+        (DVLT, confidence 0.365) sitting in the watchlist."""
+        self._feed_extra([100 - i * 0.5 for i in range(60)], n_extra=200)
+        signal = self.engine.get_current_trend(Timeframe.ONE_DAY)
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.direction.value, "downtrend")
+        self.assertGreaterEqual(signal.confidence, 0.5)
+
+    def test_flat_prices_stay_below_half_confidence(self):
+        """Sideways/no-real-signal data must NOT clear the same bar —
+        confidence is meant to distinguish trending from not, not just
+        report a rescaled constant."""
+        self._feed_extra([100.0] * 60, n_extra=200)
+        signal = self.engine.get_current_trend(Timeframe.ONE_DAY)
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.direction.value, "sideways")
+        self.assertLess(signal.confidence, 0.5)
+
+    def test_confidence_stays_within_unit_range(self):
+        self._feed_extra([100 + i * 0.5 for i in range(60)], n_extra=200)
+        signal = self.engine.get_current_trend(Timeframe.ONE_DAY)
+        self.assertIsNotNone(signal)
+        self.assertGreaterEqual(signal.confidence, 0.0)
+        self.assertLessEqual(signal.confidence, 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()
