@@ -582,5 +582,71 @@ class TestExtendedHoursQuotes(unittest.TestCase):
         self.assertTrue(kwargs.get("extend_hour_required"))
 
 
+# ---------------------------------------------------------------------------
+# set_file_logger dedup guard (2026-09-09 — see module docstring on
+# _file_logger_paths_registered for why this exists)
+# ---------------------------------------------------------------------------
+class TestSetFileLoggerDedup(unittest.TestCase):
+    """Every WebullProvider() construction gets its own fresh ApiClient, so
+    the SDK's own per-instance guard (``ApiClient._file_logger_set``) never
+    stops a second construction from adding a second handler to the
+    process-global 'webull.core' logger. Our patch must dedup across
+    constructions by (logger_name, path) instead."""
+
+    def setUp(self):
+        # Isolate from real construction activity (this session's own
+        # process may have already registered the real log path).
+        self._saved = set(_webull_module._file_logger_paths_registered)
+        _webull_module._file_logger_paths_registered.clear()
+
+    def tearDown(self):
+        _webull_module._file_logger_paths_registered.clear()
+        _webull_module._file_logger_paths_registered.update(self._saved)
+
+    def test_first_call_invokes_the_real_setup(self):
+        fake_self = MagicMock()
+        with patch.object(_webull_module, "_orig_set_file_logger") as orig:
+            _webull_module._patched_set_file_logger(fake_self, "/tmp/some.log")
+        orig.assert_called_once()
+
+    def test_second_call_same_path_skips_the_real_setup(self):
+        """This is the actual leak: a second WebullProvider() construction
+        must not add a second handler for the same logger/path."""
+        fake_self_1 = MagicMock()
+        fake_self_2 = MagicMock()
+        with patch.object(_webull_module, "_orig_set_file_logger") as orig:
+            _webull_module._patched_set_file_logger(fake_self_1, "/tmp/some.log")
+            _webull_module._patched_set_file_logger(fake_self_2, "/tmp/some.log")
+        orig.assert_called_once()
+
+    def test_second_call_still_marks_flag_on_its_own_instance(self):
+        """The SDK checks ``api_client._file_logger_set`` before calling at
+        all — a skipped call must still leave that flag True so a later,
+        unrelated instance-scoped check on THIS instance doesn't loop back
+        and call in a third time."""
+        fake_self_1 = MagicMock()
+        fake_self_2 = MagicMock()
+        with patch.object(_webull_module, "_orig_set_file_logger"):
+            _webull_module._patched_set_file_logger(fake_self_1, "/tmp/some.log")
+            _webull_module._patched_set_file_logger(fake_self_2, "/tmp/some.log")
+        self.assertTrue(fake_self_2._file_logger_set)
+
+    def test_different_path_is_not_deduped(self):
+        fake_self_1 = MagicMock()
+        fake_self_2 = MagicMock()
+        with patch.object(_webull_module, "_orig_set_file_logger") as orig:
+            _webull_module._patched_set_file_logger(fake_self_1, "/tmp/some.log")
+            _webull_module._patched_set_file_logger(fake_self_2, "/tmp/other.log")
+        self.assertEqual(orig.call_count, 2)
+
+    def test_different_logger_name_is_not_deduped(self):
+        fake_self_1 = MagicMock()
+        fake_self_2 = MagicMock()
+        with patch.object(_webull_module, "_orig_set_file_logger") as orig:
+            _webull_module._patched_set_file_logger(fake_self_1, "/tmp/some.log", logger_name="webull.core")
+            _webull_module._patched_set_file_logger(fake_self_2, "/tmp/some.log", logger_name="webull.data")
+        self.assertEqual(orig.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

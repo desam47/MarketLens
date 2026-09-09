@@ -564,5 +564,53 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         ])
 
 
+class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
+    """_instantiate_backfill_provider must delegate to the process-lifetime
+    provider cache, not construct fresh on every call.
+
+    Regression coverage: this was a second, independent copy of the exact
+    bug get_cached_provider (backend/market_data/services/manager.py) was
+    written to fix — its own docstring said "mirrors the helper in
+    backfill_service.py", but only that sibling actually got updated to
+    use the cache. This one still called provider_cls() directly, so the
+    _1h_write_loop / _daily_write_loop fallback path (hit whenever the
+    primary provider's data looks stale) kept re-triggering WebullProvider's
+    blocking synchronous auth handshake on the shared ingestion event loop —
+    found live 2026-09-09.
+    """
+
+    def setUp(self):
+        from backend.market_data.services import manager as manager_mod
+        self.manager_mod = manager_mod
+        manager_mod._clear_provider_cache()
+
+    def tearDown(self):
+        self.manager_mod._clear_provider_cache()
+
+    def test_second_call_reuses_the_same_instance(self):
+        from unittest.mock import patch
+        from backend.market_data.services.ingestion_service import _instantiate_backfill_provider
+
+        construct_count = {"n": 0}
+
+        class _FakeProvider:
+            def __init__(self):
+                construct_count["n"] += 1
+
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}):
+            first = _instantiate_backfill_provider("fake")
+            second = _instantiate_backfill_provider("fake")
+
+        self.assertIs(first, second)
+        self.assertEqual(construct_count["n"], 1)
+
+    def test_unknown_provider_returns_none(self):
+        from unittest.mock import patch
+        from backend.market_data.services.ingestion_service import _instantiate_backfill_provider
+
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {}):
+            self.assertIsNone(_instantiate_backfill_provider("bogus"))
+
+
 if __name__ == "__main__":
     unittest.main()

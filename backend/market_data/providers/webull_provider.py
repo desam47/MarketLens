@@ -45,6 +45,23 @@ import webull.core.client as _wb_client  # noqa: E402
 
 _orig_set_file_logger = _wb_client.ApiClient.set_file_logger
 
+# Track which (logger_name, path) pairs already have a handler attached,
+# process-wide. The SDK's own guard (``ApiClient._file_logger_set``) is
+# scoped to one ApiClient *instance* — it stops TradeClient and DataClient
+# from double-adding a handler to the ApiClient they share, but does
+# nothing across separate WebullProvider() constructions, each of which
+# gets its own fresh ApiClient. ``set_file_logger`` itself unconditionally
+# does ``logging.getLogger(logger_name).addHandler(...)`` with no such
+# check — and that logger is a process-global singleton — so every extra
+# construction (found live 2026-09-09: uncached fallback-provider
+# construction in ingestion_service.py, or simply many pytest runs of
+# test_webull_provider.py importing this module) permanently leaks one
+# more handler for the life of the process. Past a few dozen leaked
+# handlers, a single real log line gets physically written once per
+# handler — confirmed live, up to 100+ duplicate copies of one message —
+# which is what was inflating webull_trade_sdk.log by ~100MB/hour.
+_file_logger_paths_registered: set[tuple[str, str]] = set()
+
 def _patched_set_file_logger(
     self,
     path,
@@ -58,6 +75,11 @@ def _patched_set_file_logger(
     # Replace a bare filename with the project-local absolute path so the
     # log file is always created inside the project, regardless of CWD.
     abs_path = str(_WEBULL_LOG) if Path(path).name == path else path
+    key = (logger_name, abs_path)
+    if key in _file_logger_paths_registered:
+        self._file_logger_set = True
+        return None
+    _file_logger_paths_registered.add(key)
     return _orig_set_file_logger(
         self, abs_path, log_level, logger_name, format_string, when, interval, backup_count
     )

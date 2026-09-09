@@ -39,22 +39,21 @@ _NY_TZ = ZoneInfo("America/New_York")
 
 
 def _instantiate_backfill_provider(name: str):
-    """Instantiate a backfill provider by registry name (e.g. 'alpaca', 'webull', 'yahoo_finance').
+    """Resolve a backfill provider name (e.g. 'alpaca', 'webull', 'yahoo_finance')
+    to a (cached) instance, for the 1h ingestion loops' fallback path.
 
-    Returns the provider instance, or None if the name is unknown / instantiation fails.
-    Mirrors the helper in backfill_service.py so the 1h ingestion loops can resolve
-    BACKFILL_1H_FALLBACK entries without importing from backfill_service.
+    Delegates to ``manager.get_cached_provider`` — see that function's
+    docstring for why this must not construct a fresh instance on every
+    call (found live 2026-09-09: doing so was the direct cause of bars
+    landing 1-2+ minutes late, not just wasteful). This helper used to
+    construct fresh every call itself — a second, independent copy of
+    that same bug that survived the 2026-09-09 fix to its sibling in
+    backfill_service.py because nothing pointed the two at a shared
+    implementation. Returns None if the name is unknown or construction
+    fails.
     """
-    try:
-        from backend.market_data.services.providers import _PROVIDER_CLASSES
-        provider_cls = _PROVIDER_CLASSES.get(name)
-        if provider_cls is None:
-            logger.debug(f"_instantiate_backfill_provider: unknown name {name!r}")
-            return None
-        return provider_cls()
-    except Exception as e:
-        logger.debug(f"_instantiate_backfill_provider: failed to instantiate {name!r}: {e}")
-        return None
+    from backend.market_data.services.manager import get_cached_provider
+    return get_cached_provider(name)
 
 
 def _normalize_1h_bar(b: Bar, provider_name: str) -> Bar | None:
