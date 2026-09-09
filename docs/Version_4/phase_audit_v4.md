@@ -1,8 +1,8 @@
 # Version 4 Phase Audit
 
-**Last updated:** 2026-09-09 (scaffolded — no items complete yet)
-**Status:** Open. Nothing shipped yet — this file fills in the same way `docs/Version_3/phase_audit_v3.md` did, phase by phase, as work actually lands.
-**Scope:** Charts (drawing tools, chart types, indicators), plus whatever else gets scoped into Version 4 as it goes.
+**Last updated:** 2026-09-09 (Phase 4.1: AI integration enabled and validated end-to-end)
+**Status:** Active.
+**Scope:** AI integration (enable + validate the existing subsystem end-to-end), then Charts (deferred within this version, not dropped).
 
 ---
 
@@ -10,14 +10,28 @@
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 4.1 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Carried forward from Version 3's Phase 3.4. Full scope in `docs/Version_4/v4_plan.md`. |
+| 4.1 | Enable and Validate AI Integration End-to-End | ✅ DONE | Enabled `AI_ENABLED=true`; fixed an unregistered-provider-name config error and a real fallback-provider config-isolation bug; ran a live `/api/ai/analyze` call against a real provider. Full detail in `docs/Version_4/v4_plan.md`. |
+| 4.2 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Deferred within v4 to make room for 4.1 — not dropped. Full scope in `docs/Version_4/v4_plan.md`. |
 
 ---
 
-<!--
-Phase sections get appended below this line as each phase actually ships,
-matching phase_audit_v3.md's house style: item-by-item ✅ checkmarks with
-file references, a short root-cause/why-now note where relevant, and a
-Verification block. Don't pre-write phase detail here before the work is
-done — that's what v4_plan.md is for.
--->
+## Phase 4.1 — Enable and Validate AI Integration End-to-End — ✅ DONE (2026-09-09)
+
+**Trigger:** User request — focus v4 on AI integration instead of Charts; "turn on and prove out what's already built" (chosen over building a new AI feature or expanding provider support, at a decision point where the AI subsystem turned out to be fully built but switched off with no evidence it had ever run against a real provider).
+
+**Items:**
+- ✅ 4.1.1 `AI_ENABLED=true` in `.env`. Local Ollama confirmed already running (several models available). A second real provider — an OpenAI-compatible gateway serving a Claude Opus model, with a live API key — was also configured for this test.
+- ✅ 4.1.2 Fixed unregistered provider name: `AI_PROVIDER` was set to a descriptive label not in the registered set (`ollama | lm_studio | openai | openrouter | anthropic | openai_compatible`); `build_provider()` correctly rejected it, silently marking the provider always-unhealthy. Fixed to `AI_PROVIDER=openai_compatible` (the existing generic type for custom OpenAI-dialect endpoints) with `AI_BASE_URL` corrected to include the required `/v1` path. `.env.example`'s AI section comment was also stale (missing `lm_studio`/`openai_compatible`/`openrouter`) — corrected with guidance on `openai_compatible` + the `/v1` requirement.
+- ✅ 4.1.3 **Real bug found and fixed:** `AIManager._get_provider()` (`backend/ai/manager.py`) applied the primary's `base_url`/`model`/`api_key` to *every* provider in the fallback chain — so a fallback (a different service by definition) silently inherited the primary's config instead of using its own. With primary=the paid gateway and fallback=`ollama`, the "ollama" fallback was being pointed at the *primary's* base_url asking for the *primary's* model — carrying the exact same failure as the primary instead of actually falling back. Fixed: only the primary (`name == settings.provider`) gets the configured base_url/model/api_key; every other chain entry gets `None`, letting `build_provider()`'s own per-provider defaults apply. Verified live: `GET /api/ai/status` for `ollama` went from `healthy=false` (silently misconfigured) to `healthy=true` after the fix, with zero new `.env` entries needed.
+- ✅ 4.1.4 Ran a real end-to-end analysis: `POST /api/ai/analyze?symbol=SPY&timeframe=1d` against the live backend/database and the real gateway provider — returned a schema-valid `AnalysisResponse` (trend, confidence, supporting/risk factors, a flagged timeframe conflict) in ~4s. Confirms the full pipeline (`build_context` → `ai_manager.complete` → real HTTP call → `parse_ai_reply` → Pydantic validation) works live, not just under mocks.
+- ✅ 4.1.5 Enabling AI for real broke 3 pre-existing tests in the unrelated NL-search feature (`backend/nl_search/`, `backend/api/nl_search/router.py`), each importing its own `ai_manager` reference independently — mocking one didn't mock the other. `test_parser.py::test_garbage_falls_to_default` didn't mock AI at all and got a confident-but-wrong AI parse of nonsense input instead of the expected rules→AI→default fallthrough; `test_nl_search_router.py::test_rule_based_query_returns_200` / `test_explain_true_includes_explanation` mocked the parser's `ai_manager` (query translation) but not the router's separate one (result explanation, `explain=True` by default) — so a real explanation got generated where both tests expected none. All three fixed by mocking the actual reference each code path uses.
+
+**Known, not fixed:** the primary gateway's health-check endpoint (`GET /v1/models`) is flakier than its actual completion endpoint (`POST /v1/chat/completions`) — `/api/ai/status` sometimes shows the primary as unhealthy even when a real analysis call through it succeeds moments later. Not chased further: the 4.1.3 fix means a false-negative health check just costs one extra hop to a correctly-configured Ollama fallback, not a broken request.
+
+**Tests:** 6 new (`backend/tests/ai/test_ai_manager.py::TestFallbackProviderIsolation` — asserts a fallback's `base_url`/`model` are its own defaults and it never receives the primary's `api_key`); 2 pre-existing tests fixed for now-real environment coupling (`AI_ENABLED=true` is genuine `.env` state as of this phase, not a test fixture default — fixed via `_env_file=None` to test `AISettings`' actual field defaults in isolation, matching the existing house pattern from `test_aux_data_settings.py`); 3 more pre-existing tests fixed per 4.1.5.
+
+**Verification:**
+```bash
+curl -s http://127.0.0.1:5001/api/ai/status | python3 -m json.tool
+curl -s -X POST "http://127.0.0.1:5001/api/ai/analyze?symbol=SPY&timeframe=1d" | python3 -m json.tool
+```

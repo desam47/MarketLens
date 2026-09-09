@@ -37,7 +37,10 @@ from backend.config.settings import AISettings
 class TestAISettings(unittest.TestCase):
 
     def test_defaults_disable_ai(self):
-        s = AISettings()
+        # _env_file=None: test the field default in isolation from this
+        # machine's real .env (which has AI_ENABLED=true as of
+        # 2026-09-09 — see docs/Version_4/phase_audit_v4.md).
+        s = AISettings(_env_file=None)
         self.assertFalse(s.enabled)
         self.assertEqual(s.provider, "ollama")
         self.assertEqual(s.fallback_providers, "")
@@ -461,6 +464,74 @@ class TestAIManager(unittest.TestCase):
         self.assertTrue(m.is_available())
 
 
+# --- Fallback providers get their own defaults, not the primary's --
+
+
+class TestFallbackProviderIsolation(unittest.TestCase):
+    """A fallback provider is a different service by definition — it
+    must not inherit the primary's base_url/model/api_key.
+
+    Regression coverage for a live bug (2026-09-09): with a paid
+    OpenAI-compatible gateway as primary and "ollama" as the fallback,
+    the fallback was built pointed at the *primary's* base_url asking
+    for the *primary's* model — so it silently carried the same
+    unreachable/wrong-model failure as the primary instead of actually
+    falling back to a working local Ollama instance. Found while
+    proving out AI integration end-to-end.
+    """
+
+    def _make_manager(self, **overrides) -> AIManager:
+        defaults = dict(
+            enabled=True,
+            provider="openai_compatible",
+            fallback_providers="ollama",
+            model="claude-opus-4-8",
+            base_url="https://example-gateway.test/v1",
+            api_key="sk-primary-secret",
+            timeout=1.0,
+            health_check_timeout=1.0,
+        )
+        defaults.update(overrides)
+        return AIManager(AISettings(**defaults))
+
+    def test_primary_gets_the_configured_settings(self):
+        m = self._make_manager()
+        primary = m._get_provider("openai_compatible")
+        self.assertEqual(primary._base_url, "https://example-gateway.test/v1")
+        self.assertEqual(primary._model, "claude-opus-4-8")
+        self.assertEqual(primary._api_key, "sk-primary-secret")
+
+    def test_fallback_gets_its_own_defaults_not_the_primarys(self):
+        m = self._make_manager()
+        fallback = m._get_provider("ollama")
+        self.assertEqual(fallback._base_url, "http://localhost:11434/v1")
+        self.assertEqual(fallback._model, "llama3.2")
+        self.assertIsNone(fallback._api_key)
+
+    def test_fallback_never_receives_the_primarys_api_key(self):
+        """However this bug resurfaces, a fallback provider leaking the
+        primary's credential to a different host would be the worst
+        version of it — assert directly, not just via base_url."""
+        m = self._make_manager()
+        fallback = m._get_provider("ollama")
+        self.assertNotEqual(fallback._api_key, "sk-primary-secret")
+
+    def test_a_provider_that_is_both_primary_and_named_gets_settings(self):
+        """Sanity: when the primary itself is 'ollama' (the common,
+        default case), it still gets the configured base_url/model —
+        the fix must not break the single-provider path."""
+        m = self._make_manager(
+            provider="ollama",
+            fallback_providers="",
+            base_url="http://localhost:11434",
+            model="llama3.2",
+            api_key=None,
+        )
+        primary = m._get_provider("ollama")
+        self.assertEqual(primary._base_url, "http://localhost:11434/v1")
+        self.assertEqual(primary._model, "llama3.2")
+
+
 # --- Quant engine independence -------------------------------------
 
 
@@ -477,10 +548,17 @@ class TestQuantEngineIndependence(unittest.TestCase):
         # AI module exposes the expected public names
         self.assertTrue(hasattr(ai, "AIManager"))
         self.assertTrue(hasattr(ai, "ai_manager"))
-        # The manager is disabled by default
-        self.assertFalse(ai.ai_manager.settings.enabled)
-        # The chain is just the primary
-        self.assertEqual(ai.ai_manager.settings.all_providers(), ["ollama"])
+        # The singleton's chain always starts with its own configured
+        # primary — whatever that is. Not asserting a specific
+        # enabled/provider value here: those are real .env config
+        # (AI_ENABLED=true as of 2026-09-09 in this project, see
+        # docs/Version_4/phase_audit_v4.md), not the AI module's own
+        # default — TestAISettings.test_defaults_disable_ai covers the
+        # actual field default in isolation via _env_file=None.
+        self.assertEqual(
+            ai.ai_manager.settings.all_providers()[0],
+            ai.ai_manager.settings.provider,
+        )
 
 
 if __name__ == "__main__":

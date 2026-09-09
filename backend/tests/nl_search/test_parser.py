@@ -1,5 +1,6 @@
 """Tests for the rule-based NL query parser."""
 import unittest
+from unittest.mock import patch
 
 from backend.nl_search.parser import (
     _apply_conflict_rules,
@@ -207,7 +208,16 @@ class TestParseQuery(unittest.TestCase):
         self.assertEqual(used, "rules")
 
     def test_garbage_falls_to_default(self):
-        f, extras, used = parse_query("asdfghjkl")
+        # This test is about the rules-miss -> AI-miss -> default
+        # fallback chain, not about what a live AI backend happens to
+        # do with gibberish input — mock AI unavailable so the result
+        # doesn't depend on whether this machine's .env has AI_ENABLED
+        # on (found live 2026-09-09: with a real Ollama fallback
+        # reachable, "asdfghjkl" got a confident-but-wrong AI parse
+        # instead of falling through to "default").
+        with patch("backend.nl_search.parser.ai_manager") as mock_ai:
+            mock_ai.is_available.return_value = False
+            f, extras, used = parse_query("asdfghjkl")
         self.assertEqual(used, "default")
         self.assertTrue(f.match_all)
 

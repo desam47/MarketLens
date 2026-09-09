@@ -52,10 +52,18 @@ def _make_result(
 
 class TestNLSearchEndpoint(unittest.TestCase):
 
+    @patch("backend.api.nl_search.router.ai_manager")
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.nl_search.parser.ai_manager")
-    def test_rule_based_query_returns_200(self, mock_ai, mock_exec):
+    def test_rule_based_query_returns_200(self, mock_ai, mock_exec, mock_router_ai):
+        # Two separate ai_manager references: the parser's (query
+        # translation) and the router's own (result explanation, see
+        # _maybe_explain — explain defaults to True). Both must be
+        # mocked unavailable, or a real, now-enabled AI backend answers
+        # for real and ai_explanation_used flips true underneath this
+        # test (found live 2026-09-09, when AI_ENABLED became true).
         mock_ai.is_available.return_value = False
+        mock_router_ai.is_available.return_value = False
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem
         mock_exec.return_value = ExecutionResult(
@@ -131,10 +139,15 @@ class TestNLSearchEndpoint(unittest.TestCase):
         self.assertEqual(data["results"], [])
         self.assertIsNotNone(data["reason"])
 
+    @patch("backend.api.nl_search.router.ai_manager")
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.nl_search.parser.ai_manager")
-    def test_explain_true_includes_explanation(self, mock_ai, mock_exec):
+    def test_explain_true_includes_explanation(self, mock_ai, mock_exec, mock_router_ai):
+        # See test_rule_based_query_returns_200's comment: the router's
+        # own ai_manager reference (used for the explanation step) is
+        # separate from the parser's and must be mocked too.
         mock_ai.is_available.return_value = False
+        mock_router_ai.is_available.return_value = False
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem
         mock_exec.return_value = ExecutionResult(

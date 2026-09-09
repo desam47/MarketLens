@@ -69,22 +69,46 @@ class AIManager:
     # --- Provider lookup -----------------------------------------------
 
     def _get_provider(self, name: str) -> AIProvider:
-        """Build (or return cached) provider for ``name``."""
+        """Build (or return cached) provider for ``name``.
+
+        ``settings.base_url`` / ``model`` / ``api_key`` configure the
+        PRIMARY provider (``settings.provider``) only. A fallback-chain
+        entry is, by definition, a different service — applying the
+        primary's base_url/model/key to it doesn't make sense and
+        silently defeats the whole point of a fallback chain.
+
+        Found live 2026-09-09: with primary=a paid OpenAI-compatible
+        gateway and fallback_providers="ollama", the "ollama" fallback
+        was built pointed at the *primary's* base_url asking for the
+        *primary's* model name — so it inherited the exact same
+        unreachable/wrong-model failure as the primary instead of
+        actually falling back to the working local Ollama instance.
+        Non-primary providers now get ``None`` for these three fields,
+        which makes ``build_provider`` fall through to its own
+        ``_DEFAULT_BASE_URLS`` / ``_DEFAULT_MODELS`` (e.g. ollama's
+        ``http://localhost:11434/v1`` + ``llama3.2``) instead — unless
+        this provider happens to also be primary, or is unconfigurable
+        without a base_url (``openai_compatible`` requires one; not a
+        concern for named providers with sensible defaults).
+        """
         with self._lock:
             if name in self._providers:
                 return self._providers[name]
+            is_primary = name == self.settings.provider
+            resolved_base = self.settings.base_url if is_primary else None
+            resolved_model = self.settings.model if is_primary else None
+            resolved_key = self.settings.api_key if is_primary else None
             # OpenAI-compatible providers (ollama, lm_studio) need /v1
             # appended to the base URL; the user-facing settings.base_url
             # omits it so it's discoverable without knowing the path.
-            resolved_base = self.settings.base_url
             if name in ("ollama", "lm_studio") and resolved_base:
                 if not resolved_base.rstrip("/").endswith("/v1"):
                     resolved_base = resolved_base.rstrip("/") + "/v1"
             provider = build_provider(
                 name,
                 base_url=resolved_base,
-                model=self.settings.model,
-                api_key=self.settings.api_key,
+                model=resolved_model,
+                api_key=resolved_key,
                 timeout=self.settings.timeout,
                 health_check_timeout=self.settings.health_check_timeout,
             )
