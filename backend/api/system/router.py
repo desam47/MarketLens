@@ -283,6 +283,37 @@ async def toggle_memory_profiling(payload: MemoryProfileToggle) -> dict:
     return {"memory_profiling_enabled": payload.enabled}
 
 
+@router.post("/restart")
+async def restart_services() -> dict:
+    """Restart the backend and frontend dev servers (System Health page).
+
+    Spawns ``scripts/restart_dev.sh`` as a fully detached process (its own
+    session — ``start_new_session=True`` — so it survives this backend
+    process being killed a moment later) and returns immediately. The
+    script itself sleeps briefly before killing anything, giving this
+    response time to actually reach the client first.
+
+    Local dev tool, matching the rest of this app: no auth gate, same as
+    every other endpoint here.
+    """
+    import subprocess
+    from pathlib import Path as _Path
+
+    project_root = _Path(__file__).resolve().parents[3]
+    script = project_root / "scripts" / "restart_dev.sh"
+    subprocess.Popen(
+        ["/bin/bash", str(script)],
+        cwd=str(project_root),
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return {
+        "status": "restarting",
+        "message": "Backend and frontend are restarting — this page will reconnect automatically.",
+    }
+
+
 @router.get("/metrics", response_class=Response)
 async def prometheus_metrics() -> Response:
     """Prometheus exposition endpoint (text format 0.0.4).

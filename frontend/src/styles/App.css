@@ -1221,6 +1221,12 @@ h4 {
   margin-bottom: 1.5rem;
 }
 
+.health-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .health-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

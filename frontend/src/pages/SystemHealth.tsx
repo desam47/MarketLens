@@ -325,6 +325,7 @@ export function SystemHealth() {
 
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   // Independent fetch callbacks
   const fetchHealth = useCallback(async () => {
@@ -410,16 +411,57 @@ export function SystemHealth() {
     }
   }, [toggling, ingestionStatus]);
 
+  const handleRestart = useCallback(async () => {
+    if (restarting) return;
+    if (!window.confirm('Restart the backend and frontend now? The page will be unresponsive for a few seconds.')) {
+      return;
+    }
+    setRestarting(true);
+    setGlobalError(null);
+    try {
+      // The backend process serving this request kills itself a moment
+      // after responding — a successful response here just confirms the
+      // restart was triggered, not that it finished. Reload after a
+      // fixed delay long enough for uvicorn + craco to come back up
+      // rather than polling a server we just told to go away.
+      await api.restartServices();
+      setTimeout(() => window.location.reload(), 8000);
+    } catch (err: any) {
+      // The trigger request itself normally succeeds (the backend
+      // sleeps briefly before killing anything — see restart_dev.sh) —
+      // but reload regardless of whether this particular fetch errored,
+      // since a network blip here doesn't mean the restart wasn't
+      // triggered.
+      setTimeout(() => window.location.reload(), 8000);
+    }
+  }, [restarting]);
+
   const anyLoading = healthLoading || configLoading || ingestionLoading || backupLoading;
 
   return (
     <div className="system-health">
       <div className="health-header">
         <h1>System Health</h1>
-        <button className="btn" onClick={fetchAll} disabled={anyLoading}>
-          {anyLoading ? '⟳ Refreshing…' : '↻ Refresh'}
-        </button>
+        <div className="health-header-actions">
+          <button className="btn" onClick={fetchAll} disabled={anyLoading || restarting}>
+            {anyLoading ? '⟳ Refreshing…' : '↻ Refresh'}
+          </button>
+          <button
+            className="btn btn-danger"
+            onClick={handleRestart}
+            disabled={restarting}
+            title="Restart the backend and frontend dev servers"
+          >
+            {restarting ? '⟳ Restarting…' : '⟲ Restart'}
+          </button>
+        </div>
       </div>
+
+      {restarting && (
+        <p className="info-text">
+          Restarting backend and frontend — this page will reload automatically in a few seconds…
+        </p>
+      )}
 
       {globalError && <ErrorBanner message={globalError} onDismiss={() => setGlobalError(null)} />}
 

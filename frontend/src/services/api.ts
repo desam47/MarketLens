@@ -1128,6 +1128,14 @@ class ApiService {
     return this.fetch<BackupStatusData>('/system/backup-status');
   }
 
+  /** Restarts the backend + frontend dev servers. The backend process
+   * serving this request dies a moment after responding, so the
+   * response itself is the only confirmation the request landed —
+   * don't expect a follow-up call to succeed until both are back up. */
+  async restartServices(): Promise<{ status: string; message: string }> {
+    return this.fetch('/system/restart', { method: 'POST' });
+  }
+
   // Market Regime
   async getRegime(symbol: string): Promise<RegimeData> {
     return this.fetch<RegimeData>(`/regime/${symbol}/current`);

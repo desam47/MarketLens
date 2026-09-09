@@ -186,5 +186,44 @@ class TestSystemStatusEndpoint(unittest.TestCase):
         self.assertIn("timestamp", data)
 
 
+class TestRestartEndpoint(unittest.TestCase):
+    """POST /api/system/restart — System Health page's Restart button.
+
+    Must never actually spawn the real restart_dev.sh during tests
+    (would kill this test process's own backend if one is running on
+    :5001) — subprocess.Popen is mocked in every test here.
+    """
+
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("subprocess.Popen")
+    def test_restart_spawns_detached_script_and_returns_immediately(self, mock_popen):
+        resp = self.client.post("/api/system/restart")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "restarting")
+
+        mock_popen.assert_called_once()
+        args, kwargs = mock_popen.call_args
+        cmd = args[0]
+        self.assertEqual(cmd[0], "/bin/bash")
+        self.assertTrue(cmd[1].endswith("scripts/restart_dev.sh"))
+        # Must be its own session — killing the backend process a moment
+        # later must not also kill the script that's meant to relaunch it.
+        self.assertTrue(kwargs.get("start_new_session"))
+
+    @patch("subprocess.Popen")
+    def test_restart_script_path_exists_on_disk(self, mock_popen):
+        """The path built by the endpoint must resolve to a real file —
+        a typo in the parents[] depth would silently point at a
+        nonexistent script and no restart would ever actually happen."""
+        self.client.post("/api/system/restart")
+        args, _ = mock_popen.call_args
+        script_path = args[0][1]
+        from pathlib import Path
+        self.assertTrue(Path(script_path).is_file(), f"{script_path} does not exist")
+
+
 if __name__ == "__main__":
     unittest.main()
