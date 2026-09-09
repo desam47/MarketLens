@@ -73,22 +73,122 @@ export const OVERLAYS: OverlayDef[] = [
 /**
  * Normalise a backend ET-offset ISO timestamp to a UTC Date.
  *
- * Backend returns strings like `2026-09-04T15:59:00-04:00`.  Naive
- * `new Date(str)` parses in the browser's LOCAL timezone, so a browser
- * in IST would see 15:59 become 10:29 UTC.  This helper strips the
- * embedded ±HH:MM offset and appends 'Z' so the string is always parsed
- * as UTC, giving the correct wall-clock time regardless of browser locale.
+ * Backend returns strings like `2026-09-04T15:59:00-04:00` — an explicit
+ * ±HH:MM offset already baked in. `new Date(str)` parses that offset
+ * correctly on its own (JS Date handles embedded offsets natively), giving
+ * the right absolute instant regardless of browser locale.
  */
 export function parseET(ts: string | null | undefined): Date {
   if (!ts) return new Date(NaN);
-  // Parse the ISO string with its timezone offset intact — JavaScript Date
-  // handles offsets like -04:00 correctly, so we get the right wall-clock time.
   return new Date(ts);
 }
 
 /** Convert a bar's ISO timestamp to Unix seconds for lightweight-charts. */
 export function toTime(b: Bar): number {
   return Math.floor(parseET(b.timestamp).getTime() / 1000);
+}
+
+/** IANA zone every chart display formatter below renders into. */
+const ET_TIME_ZONE = 'America/New_York';
+
+/**
+ * lightweight-charts' `Time` values are Unix seconds — an absolute instant,
+ * timezone-agnostic. But the library's DEFAULT axis/tooltip formatting
+ * renders that instant using the *viewer's browser/OS* timezone, not ET —
+ * so anyone not physically set to America/New_York sees UTC (or whatever
+ * their system is set to) on the chart instead of market time. These
+ * formatters are passed to `timeScale.tickMarkFormatter` / `localization.
+ * timeFormatter` in chart options to force ET display for every viewer.
+ *
+ * tickMarkType mirrors lightweight-charts' TickMarkType enum (Year=0,
+ * Month=1, DayOfMonth=2, Time=3, TimeWithSeconds=4) — passed as a plain
+ * number rather than importing the enum, since this module is statically
+ * imported while the chart library itself is loaded dynamically (see
+ * CandlestickChart.tsx) to avoid pulling it into the main bundle.
+ */
+export function etTickMarkFormatter(time: number, tickMarkType: number): string {
+  const d = new Date(time * 1000);
+  if (tickMarkType <= 2) {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: ET_TIME_ZONE,
+      year: tickMarkType === 0 ? 'numeric' : undefined,
+      month: 'short',
+      day: tickMarkType === 2 ? 'numeric' : undefined,
+    }).format(d);
+  }
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    second: tickMarkType === 4 ? '2-digit' : undefined,
+    hour12: false,
+  }).format(d);
+}
+
+/** Full date+time ET formatter for the crosshair/tooltip. */
+export function etTimeFormatter(time: number): string {
+  const d = new Date(time * 1000);
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d);
+  return `${formatted} ET`;
+}
+
+/**
+ * String-timestamp counterparts of the formatters above, for the many
+ * "Updated: {time}" / "Scanned {time}" style displays outside the chart
+ * itself (cards, tables). These previously called `parseET(ts).
+ * toLocaleString()` (or `toLocaleDateString`/`toLocaleTimeString`) with no
+ * `timeZone` option — `parseET` correctly resolves the absolute instant,
+ * but `.toLocaleString()` etc. without an explicit zone format it using
+ * the *viewer's browser/OS* timezone, showing UTC (or whatever the
+ * viewer's machine is set to) instead of ET for anyone not physically in
+ * America/New_York. Use these instead of bare `.toLocaleString()` calls
+ * on a `parseET()` result.
+ */
+export function formatETDateTime(ts: string | null | undefined): string {
+  const d = parseET(ts);
+  if (isNaN(d.getTime())) return '—';
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d);
+  return `${formatted} ET`;
+}
+
+/** ET date only (no time) — for transition/divergence/backtest date columns. */
+export function formatETDate(ts: string | null | undefined): string {
+  const d = parseET(ts);
+  if (isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(d);
+}
+
+/** ET time only (no date) — for short "Scanned HH:MM" style displays. */
+export function formatETTime(ts: string | null | undefined): string {
+  const d = parseET(ts);
+  if (isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(d);
 }
 
 /**

@@ -14,12 +14,11 @@ to "actual strategy evaluator". The equity curve is stored as a JSON
 array of `[date, cumulative_return_pct]` pairs so the dashboard can
 plot it without re-iterating bars.
 """
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
+from backend.utils.timezone import now_ny
 
 
 class BacktestRun(Base):
@@ -54,7 +53,7 @@ class BacktestRun(Base):
     avg_return_5d = Column(Float, nullable=True)
     avg_return_20d = Column(Float, nullable=True)
     error = Column(String(500), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=now_ny, index=True)
     completed_at = Column(DateTime, nullable=True)
 
     # --- Phase 14 extended metrics ---

@@ -38,6 +38,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from backend.utils.timezone import now_ny
+
 from backend.config.settings import settings as _settings
 from backend.database import SessionLocal
 from backend.models import BacktestTrade
@@ -298,7 +300,7 @@ class BacktestEngine:
                 signal_frequency=metrics["signal_frequency"],
                 equity_curve_json=metrics["equity_curve_json"],
                 overfitting_warning=metrics["overfitting_warning"],
-                completed_at=datetime.now(UTC).replace(tzinfo=None),
+                completed_at=now_ny(),
             )
             if trades:
                 repo.add_trades(run_id, trades)
@@ -316,7 +318,7 @@ class BacktestEngine:
                 run_id,
                 status="failed",
                 error=error,
-                completed_at=datetime.now(UTC).replace(tzinfo=None),
+                completed_at=now_ny(),
             )
         finally:
             repo.close()

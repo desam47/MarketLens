@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { MarketContextData } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 // Phase 8: color-coded regime names (same map as RegimeCard).
 const regimeColors: Record<string, string> = {
@@ -110,7 +110,7 @@ export const MarketContextCard = memo(function MarketContextCard({ context, erro
 
       {context.timestamp && (
         <div className="timestamp">
-          Updated: {parseET(context.timestamp).toLocaleTimeString()}
+          Updated: {formatETDateTime(context.timestamp)}
         </div>
       )}
     </div>

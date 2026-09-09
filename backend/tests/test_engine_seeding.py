@@ -217,12 +217,54 @@ class TestEngineRegistry(unittest.TestCase):
         self.assertEqual(captured["open_price"], 99.5)
 
 
-class TestRouterSeedingIntegration(_SeededDBMixin, unittest.TestCase):
+class TestRouterSeedingIntegration(unittest.TestCase):
     """End-to-end test: the router's get_regime_engine must seed from the DB.
 
     This is the highest-value regression test — it exercises the exact code path
     that was broken before engine_seeder.py was introduced.
+
+    Note: the router's ``get_engine()`` seeds from BarModel ("1m") rows via
+    ``seed_engine_from_bars``, not from QuoteModel rows — quote-frequency
+    updates are intentionally NOT fed to the regime engine (see the comment
+    in ``backend/api/regime/router.py::get_engine`` re: stale Alpaca
+    free-tier quotes after 16:00 ET). This fixture seeds bars accordingly
+    instead of reusing ``_SeededDBMixin`` (which only inserts quotes).
     """
+
+    def setUp(self):
+        super().setUp()
+        self._seed_aapl_bars()
+
+    @staticmethod
+    def _seed_aapl_bars():
+        from backend.database import Base, engine
+        from backend.models.market_data_sql import BarModel
+
+        Base.metadata.create_all(bind=engine)
+        with SessionLocal() as db:
+            db.query(BarModel).filter(
+                BarModel.symbol == "AAPL", BarModel.timeframe == "1m"
+            ).delete()
+            # 60 synthetic 1m bars with a clear uptrend — enough for regime
+            # classification, mirroring _SeededDBMixin's quote fixture.
+            base_time = datetime.now(UTC) - timedelta(minutes=60)
+            for i in range(60):
+                price = 150.0 + i * 0.10
+                row = BarModel(
+                    symbol="AAPL",
+                    timeframe="1m",
+                    open=price - 0.05,
+                    high=price + 0.05,
+                    low=price - 0.10,
+                    close=price,
+                    volume=1_000_000,
+                    timestamp=base_time + timedelta(minutes=i),
+                    provider="test",
+                    data_status="historical",
+                    source="raw",
+                )
+                db.add(row)
+            db.commit()
 
     def test_regime_engine_returns_non_unknown_on_first_request(self):
         """Simulate the restart scenario: fresh in-process engine, first API request.
@@ -241,8 +283,8 @@ class TestRouterSeedingIntegration(_SeededDBMixin, unittest.TestCase):
         self.assertIsNotNone(
             signal,
             "Regime engine should have a signal after seeding from DB. "
-            "If this fails, either the DB has no QuoteModel rows for AAPL, "
-            "or the router's get_regime_engine() is not calling seed_engine_from_quotes.",
+            "If this fails, either the DB has no BarModel '1m' rows for AAPL, "
+            "or the router's get_regime_engine() is not calling seed_engine_from_bars.",
         )
         self.assertNotEqual(
             signal.regime.value, "unknown",

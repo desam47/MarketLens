@@ -265,10 +265,11 @@ class TestSymbolExistsInAnyWatchlist(unittest.TestCase):
 class TestSettingsFields(unittest.TestCase):
     """Verify the Phase 3.3.8 settings are accessible."""
 
-    def test_bar_retention_days_defaults_to_1000(self):
+    def test_bar_retention_days_defaults_to_1095(self):
+        """Default is 1095 days (~3 calendar years) — see settings.py comment."""
         from backend.config.settings import settings
 
-        self.assertEqual(settings.market_data.bar_retention_days, 1000)
+        self.assertEqual(settings.market_data.bar_retention_days, 1095)
 
     def test_backfill_on_add_defaults_to_true(self):
         from backend.config.settings import settings
@@ -288,7 +289,7 @@ class TestSafeBarCountsRetentionFields(unittest.TestCase):
         self.assertIn("newest_bar", result)
         self.assertIn("distinct_symbols", result)
         self.assertIn("retention_days", result)
-        self.assertEqual(result["retention_days"], 1000)
+        self.assertEqual(result["retention_days"], 1095)
         self.assertIsInstance(result["distinct_symbols"], int)
 
 

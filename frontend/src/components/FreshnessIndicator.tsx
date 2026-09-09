@@ -1,6 +1,6 @@
 import React from 'react';
 import { RegimeData } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 interface FreshnessIndicatorProps {
   regime: RegimeData | null;
@@ -39,7 +39,7 @@ export function FreshnessIndicator({ regime }: FreshnessIndicatorProps) {
       style={{ backgroundColor: color }}
       title={
         regime.timestamp
-          ? `Engine last saw a tick at ${parseET(regime.timestamp).toLocaleString()}`
+          ? `Engine last saw a tick at ${formatETDateTime(regime.timestamp)}`
           : 'Engine has not generated a signal yet'
       }
     >

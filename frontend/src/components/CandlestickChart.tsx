@@ -14,6 +14,8 @@ import {
   getHeikinAshi,
   getOverlayData,
   parseET,
+  etTickMarkFormatter,
+  etTimeFormatter,
   type OverlayKey,
   type OverlayPoint,
 } from './chartMath';
@@ -102,6 +104,13 @@ function CandlestickChartImpl({
             borderColor: '#1f2937',
             timeVisible: true,
             secondsVisible: false,
+            // Force ET display — lightweight-charts otherwise formats axis
+            // labels using the viewer's browser/OS timezone, which shows
+            // UTC (or whatever the machine is set to) instead of market time.
+            tickMarkFormatter: etTickMarkFormatter,
+          },
+          localization: {
+            timeFormatter: etTimeFormatter,
           },
           rightPriceScale: {
             borderColor: '#1f2937',

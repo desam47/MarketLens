@@ -98,13 +98,13 @@ def _bucket_start_1d(dt: datetime) -> datetime:
     Returns a naive datetime if the input is naive; carries the input's tzinfo otherwise.
     """
     # ZoneInfo instance is module-level (``_NY_TZ``) — no per-call constructor.
-    # If ``dt`` is naive, astimezone() treats it as local time, which for
-    # production code is UTC; fall back to a naive date + 09:30 in that case
-    # so the caller still gets a stable bucket boundary.
-    try:
+    # If ``dt`` is naive, project convention says it's NY local. Treat it as such.
+    if dt.tzinfo is None:
+        # Naive = NY local per project convention.
+        et = dt.replace(tzinfo=_NY_TZ)
+    else:
+        # tz-aware: convert to NY.
         et = dt.astimezone(_NY_TZ)
-    except (ValueError, TypeError):
-        return datetime(dt.year, dt.month, dt.day, 9, 30)
 
     bucket = et.replace(hour=9, minute=30, second=0, microsecond=0)
     if dt.tzinfo is None:

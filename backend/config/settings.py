@@ -155,6 +155,22 @@ class BackfillSettings(BaseSettings):
         validation_alias=AliasChoices("BACKFILL_1D_FALLBACK"),
     )
 
+    # Per-tier backfill window (calendar days). Each is capped further by
+    # the caller's requested retention (MARKET_DATA_BAR_RETENTION_DAYS,
+    # or an explicit `days` override) via `min(tf_Xx_days, retention_days)`
+    # in backfill_symbol_history — these settings just make the previously
+    # hardcoded per-tier ceilings (15 / 365 / retention_days) tunable
+    # independently of the overall retention policy.
+    tf_1m_days: int = Field(
+        default=15, validation_alias=AliasChoices("BACKFILL_1M_DAYS")
+    )
+    tf_1h_days: int = Field(
+        default=365, validation_alias=AliasChoices("BACKFILL_1H_DAYS")
+    )
+    tf_1d_days: int = Field(
+        default=1095, validation_alias=AliasChoices("BACKFILL_1D_DAYS")
+    )
+
     def get_1m_gapfill_providers(self) -> list[str]:
         """Comma-separated list of 1m gapfill providers from the .env."""
         return [p.strip() for p in self.tf_1m_gapfill.split(",") if p.strip()]

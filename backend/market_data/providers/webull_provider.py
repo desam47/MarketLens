@@ -78,7 +78,7 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
-from backend.utils.timezone import to_ny
+from backend.utils.timezone import to_ny, NY as _NY_TZ
 
 from ..provider import BaseMarketDataProvider
 
@@ -482,7 +482,12 @@ class WebullProvider(BaseMarketDataProvider):
             if end_ts is None or (start_ts is not None and end_ts <= start_ts):
                 break
 
-            page_end_ms = int(end_ts.timestamp() * 1000)
+            # end_ts is naive NY (from _epoch_ms_to_ny). `.astimezone()` on a
+            # naive datetime assumes the *system* local timezone, not NY — stamp
+            # it NY-aware first (matching ny_to_utc()'s convention) before
+            # converting to UTC.
+            end_ts_aware = end_ts.replace(tzinfo=_NY_TZ) if end_ts.tzinfo is None else end_ts
+            page_end_ms = int(end_ts_aware.astimezone(timezone.utc).timestamp() * 1000)
 
             # NOTE: do NOT set start_time — Webull's M1 endpoint returns 0 bars
             # whenever start_time is present in the query string.
@@ -535,21 +540,6 @@ class WebullProvider(BaseMarketDataProvider):
                 unique_raw.append(row)
 
         bars = self._parse_bars(unique_raw, sym, "1m")
-
-        # Detect free-tier M1→M5 downgrade from the merged bar set.
-        if bars and len(bars) >= 2:
-            actual_tf = _infer_actual_timeframe(
-                timespan,
-                sorted(b.timestamp for b in bars),
-            )
-            if actual_tf != "1m":
-                logger.debug(
-                    f"Webull downgraded {sym} 1m → {actual_tf} "
-                    f"for {len(bars)} bars (free-tier behavior)"
-                )
-                for bar in bars:
-                    bar.timeframe = actual_tf
-
         return bars
 
     def _parse_bars(self, data: list[dict], sym: str, timeframe: str) -> list[Bar]:
@@ -613,7 +603,8 @@ class WebullProvider(BaseMarketDataProvider):
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
-                count = min(days_per_range * _BARS_PER_DAY["1m"], 1650)
+                # Webull M1 API limit (official cap) — matches get_historical_bars.
+                count = min(days_per_range * _BARS_PER_DAY["1m"], 1200)
             else:
                 count = min(_RANGE_TO_COUNT.get(range_, 200), 1200)
 

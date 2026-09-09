@@ -48,13 +48,19 @@ logger = logging.getLogger(__name__)
 def _utc_key(b) -> datetime:
     """Phase 3.8.6 — sortable UTC key for any Bar timestamp.
 
-    Providers return a mix of tz-aware UTC and naive NY datetimes; the
-    sort key normalizes both to tz-aware UTC so mixed lists sort cleanly.
+    Providers return a mix of:
+      - tz-aware UTC (Alpaca),
+      - naive NY (yfinance, Webull, resampled bars),
+      - tz-aware NY (rare).
+    The sort key normalizes all to tz-aware UTC so mixed lists sort cleanly.
     """
-    if b.timestamp.tzinfo is None:
+    ts = b.timestamp
+    if ts.tzinfo is None:
+        # Naive timestamp — project convention is NY local.
         from backend.utils.timezone import ny_to_utc
-        return ny_to_utc(b.timestamp)
-    return b.timestamp.astimezone(timezone.utc)
+        return ny_to_utc(ts)
+    # tz-aware: convert to UTC regardless of original zone.
+    return ts.astimezone(timezone.utc)
 
 
 # Phase 3.3.12: single-flight guard — one concurrent backfill per symbol.
@@ -457,10 +463,11 @@ async def _write_bars_in_chunks(
 async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
     """Backfill bar history for ``symbol`` covering ``days`` calendar days.
 
-    Downloads three tiers:
-      - Tier 1: 1m bars (last 30 days) — Alpaca primary + yfinance gap-fill
-      - Tier 2: 1h bars (last min(730, days) days) — Alpaca primary + fallback
-      - Tier 3: 1d bars (days 31 → ``days``) — Alpaca primary + fallback
+    Downloads three tiers, each window configurable via .env (falls back to
+    the hardcoded default shown, always capped by ``min(tier_days, days)``):
+      - Tier 1: 1m bars — BACKFILL_1M_DAYS (default 15d) — primary + gap-fill
+      - Tier 2: 1h bars — BACKFILL_1H_DAYS (default 365d) — primary + fallback
+      - Tier 3: 1d bars — BACKFILL_1D_DAYS (default 1095d) — primary + fallback
 
     Concurrency: at most 2 symbols are backfilled simultaneously. Requests
     for the same symbol are queued (single-flight pattern).
@@ -513,11 +520,12 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                 tier3_written = 0
 
                 # Tier 1: 1m bars (Alpaca primary + yfinance gap-fill).
-                # Phase 3.9: extend to 15 trading days. WebullProvider paginates
+                # Phase 3.9: extend to 15 trading days by default (now
+                # configurable via BACKFILL_1M_DAYS). WebullProvider paginates
                 # internally (4 pages × 1,650 = 6,600 bars max) when range_="15d"
                 # is passed to get_historical_bars, so primary providers can now
                 # cover the full 15-day window in one call.
-                tier1_days = min(15, retention_days)
+                tier1_days = min(settings.backfill.tf_1m_days, retention_days)
                 tier1_bars = await _fetch_tier1_1m_bars(
                     symbol, tier1_days, manager, db
                 )
@@ -532,8 +540,13 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                 from backend.market_data.services.ingestion_service import ingestion_service
                 try:
                     for tf in ingestion_service._SUBHOUR_TFS:
+                        # full_history=True: this is a one-time pass right after
+                        # backfill wrote (potentially years of) 1m history — resample
+                        # all of it, not just the live loop's narrow recent-window
+                        # default, so 2m/3m/5m/15m/30m get full historical depth
+                        # instead of only whatever accumulates going forward.
                         written_sub = await ingestion_service._resample_and_upsert(
-                            tf, source_tf="1m", _symbol=symbol
+                            tf, source_tf="1m", _symbol=symbol, full_history=True
                         )
                         if written_sub > 0:
                             logger.info(f"backfill {symbol}: auto-resampled {written_sub} {tf} bars from 1m")
@@ -541,17 +554,19 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
                     logger.warning(f"backfill {symbol}: sub-hour resample failed: {e}")
 
                 # Tier 2: 1h bars — range_="5y" always (hits 1,200-bar cap).
-                tier2_days = min(365, retention_days)
+                # Window configurable via BACKFILL_1H_DAYS (default 365).
+                tier2_days = min(settings.backfill.tf_1h_days, retention_days)
                 tier2_bars = await _fetch_tier2_1h_bars(symbol, tier2_days)
                 if tier2_bars:
                     tier2_written = await _write_bars_in_chunks(db, tier2_bars)
 
-                # Tier 3: 1d bars (last retention_days of daily data).
-                # 3-year default covers ~750 trading days of 1d history.
-                if retention_days > 0:
+                # Tier 3: 1d bars. Window configurable via BACKFILL_1D_DAYS
+                # (default 1095 ≈ 3 years), still capped by retention_days.
+                tier3_days = min(settings.backfill.tf_1d_days, retention_days)
+                if tier3_days > 0:
                     tier3_bars = await _fetch_tier2_1d_bars(
                         symbol,
-                        days_start=retention_days,
+                        days_start=tier3_days,
                     )
                     if tier3_bars:
                         tier3_written = await _write_bars_in_chunks(db, tier3_bars)

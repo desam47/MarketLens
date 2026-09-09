@@ -7,7 +7,24 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
+def _clear_context_cache():
+    """Clear the /current endpoint's 10s TTL cache (keyed "market_context").
+
+    Without this, tests run within the same 10s window (unittest runs
+    methods in alphabetical order, so this happens routinely) see a
+    previous test's cached response instead of calling the freshly-mocked
+    engine — e.g. test_engine_initializes_on_first_call ("bearish") runs
+    before test_returns_current_regime ("bullish") alphabetically and
+    poisons its cache read.
+    """
+    from backend.api.ttl_cache import _context_cache
+    _context_cache.pop("market_context", None)
+
+
 class TestMarketContextCurrent(unittest.TestCase):
+
+    def setUp(self):
+        _clear_context_cache()
 
     @patch("backend.api.market_context.router.get_engine")
     def test_returns_current_regime(self, mock_get_engine):
@@ -63,6 +80,9 @@ class TestMarketContextCurrent(unittest.TestCase):
 
 
 class TestMarketContextHistory(unittest.TestCase):
+
+    def setUp(self):
+        _clear_context_cache()
 
     @patch("backend.api.market_context.router.get_engine")
     def test_returns_history(self, mock_get_engine):

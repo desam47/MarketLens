@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { RegimeData, SectorData } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 interface RegimeCardProps {
   regime: RegimeData | null;
@@ -101,7 +101,7 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error }
       )}
       {regime.timestamp && (
         <div className="timestamp">
-          Updated: {parseET(regime.timestamp).toLocaleTimeString()}
+          Updated: {formatETDateTime(regime.timestamp)}
         </div>
       )}
     </div>

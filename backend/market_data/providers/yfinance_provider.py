@@ -243,6 +243,30 @@ class YFinanceProvider(BaseMarketDataProvider):
                 # intraday bar (the in-progress candle) — drop those.
                 if closes[i] is None:
                     continue
+                # Yahoo's LAST row for an INTRADAY interval is often not a
+                # settled candle even when close isn't None — it's a live
+                # snapshot of the still-forming bucket: open == high == low
+                # == close (a single tick, not an aggregate), volume == 0,
+                # and a timestamp at the live-tick's epoch second rather
+                # than the clean interval boundary (e.g. 15:15:47 instead
+                # of 15:15:00). Every settled Yahoo candle — and every
+                # other provider's — lands exactly on the interval
+                # boundary, so a non-zero seconds component reliably
+                # identifies this synthetic row. Without this, gap-fill
+                # ingestion (which re-fetches this same live snapshot on
+                # every cycle, each time with an advancing timestamp) piles
+                # up one 0-volume "duplicate" bar per cycle next to the
+                # real bar for that minute.
+                #
+                # Scoped to intraday intervals ("1m".."90m") — daily+
+                # intervals ("1d"/"5d"/"1wk"/"1mo"/"3mo") don't have a
+                # live-candle concept and their epoch timestamps aren't
+                # meaningfully "boundary-aligned" the same way, so this
+                # check would misfire on real daily bars.
+                if interval.endswith("m") and i == len(ts_arr) - 1:
+                    ts = datetime.fromtimestamp(int(ts_arr[i]), tz=timezone.utc)
+                    if ts.second != 0:
+                        continue
                 bars.append(self._bar_from_chart_data(
                     symbol, i, ts_arr, opens, highs, lows, closes, volumes,
                     timeframe, DataStatus.HISTORICAL, self.name,

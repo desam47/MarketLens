@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { ConfluenceData } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 interface ConfluenceCardProps {
   confluence: ConfluenceData | null;
@@ -158,7 +158,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
       )}
       {confluence.timestamp && (
         <div className="timestamp">
-          Updated: {parseET(confluence.timestamp).toLocaleTimeString()}
+          Updated: {formatETDateTime(confluence.timestamp)}
         </div>
       )}
     </div>

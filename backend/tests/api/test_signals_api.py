@@ -47,7 +47,14 @@ class TestSignalsAPI(unittest.TestCase):
             f"sqlite:///{self._db_file}",
             connect_args={"check_same_thread": False},
         )
-        HistoricalSignal.__table__.create(self.engine, checkfirst=True)
+        # Create the full app schema, not just HistoricalSignal — the
+        # regime-performance/count-by-regime endpoints also query
+        # WatchlistRepository (default include_all=False), which needs the
+        # `watchlists`/`watchlist_symbols` tables to exist even though this
+        # test file never populates them (get_watchlists() just returns []
+        # against an empty-but-present table).
+        from backend.database import Base
+        Base.metadata.create_all(bind=self.engine)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
         # Use FastAPI's dependency_overrides — the supported way to
@@ -122,28 +129,31 @@ class TestSignalsAPI(unittest.TestCase):
     def test_list_signals_returns_rows(self):
         self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 1))
         self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 2))
-        r = self.client.get("/api/signals/")
+        # include_all=true: list_signals defaults to filtering by the active
+        # watchlist, which this test fixture never populates — without it
+        # every seeded signal is filtered out and the endpoint returns [].
+        r = self.client.get("/api/signals/?include_all=true")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.json()), 2)
 
     def test_list_signals_filters_by_symbol(self):
         self._seed(symbol="AAPL")
         self._seed(symbol="MSFT")
-        r = self.client.get("/api/signals/?symbol=AAPL")
+        r = self.client.get("/api/signals/?symbol=AAPL&include_all=true")
         self.assertEqual(len(r.json()), 1)
         self.assertEqual(r.json()[0]["symbol"], "AAPL")
 
     def test_list_signals_filters_by_timeframe(self):
         self._seed(symbol="AAPL", timeframe="1d")
         self._seed(symbol="AAPL", timeframe="1h")
-        r = self.client.get("/api/signals/?timeframe=1h")
+        r = self.client.get("/api/signals/?timeframe=1h&include_all=true")
         self.assertEqual(len(r.json()), 1)
         self.assertEqual(r.json()[0]["timeframe"], "1h")
 
     def test_list_signals_respects_limit(self):
         for i in range(5):
             self._seed(symbol="AAPL", timestamp=datetime(2025, 1, i + 1))
-        r = self.client.get("/api/signals/?limit=3")
+        r = self.client.get("/api/signals/?limit=3&include_all=true")
         self.assertEqual(len(r.json()), 3)
 
     # --- get by id ---
@@ -194,7 +204,7 @@ class TestSignalsAPI(unittest.TestCase):
         self._seed(symbol="AAPL", market_regime="risk_on", return_5b=1.0, return_10b=2.0, return_20b=4.0)
         self._seed(symbol="MSFT", market_regime="risk_on", return_5b=3.0, return_10b=4.0, return_20b=6.0)
         self._seed(symbol="GOOGL", market_regime="risk_off", return_5b=-1.0, return_10b=-2.0, return_20b=-3.0)
-        r = self.client.get("/api/signals/research/regime-performance")
+        r = self.client.get("/api/signals/research/regime-performance?include_all=true")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         rows = {row["regime"]: row for row in body}
@@ -209,7 +219,7 @@ class TestSignalsAPI(unittest.TestCase):
         self._seed(symbol="AAPL", market_regime="risk_on")
         self._seed(symbol="MSFT", market_regime="risk_on")
         self._seed(symbol="GOOGL", market_regime="risk_off")
-        r = self.client.get("/api/signals/research/count-by-regime")
+        r = self.client.get("/api/signals/research/count-by-regime?include_all=true")
         self.assertEqual(r.status_code, 200)
         body = {row["regime"]: row["count"] for row in r.json()}
         self.assertEqual(body["risk_on"], 2)
@@ -262,7 +272,7 @@ class TestSignalsAPI(unittest.TestCase):
         self.assertEqual(body["deleted"], 1)
         self.assertEqual(body["older_than_days"], 180)
         # Verify only the recent one remains
-        r2 = self.client.get("/api/signals/")
+        r2 = self.client.get("/api/signals/?include_all=true")
         remaining = r2.json()
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0]["symbol"], "MSFT")

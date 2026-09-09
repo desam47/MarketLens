@@ -137,7 +137,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     return () => clearInterval(interval);
   }, [autoRefresh, fetchAll]);
 
-  const isRefreshing = regimeLoading && trendsLoading && confluenceLoading;
+  const isRefreshing = regimeLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
 
   return (
     <div className="dashboard">
@@ -172,7 +172,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
 
       {lastUpdated && (
         <div className="last-updated">
-          Last updated: {lastUpdated.toLocaleTimeString()}
+          Last updated: {lastUpdated.toLocaleString()}
         </div>
       )}
 

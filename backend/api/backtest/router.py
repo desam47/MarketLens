@@ -13,7 +13,7 @@ import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 from sqlalchemy.orm import Session
 
 from backend.backtesting.engine import (
@@ -24,6 +24,7 @@ from backend.backtesting.engine import (
     walk_forward_analyze,
 )
 from backend.repositories.backtest_repository import BacktestRepository
+from backend.utils.timezone import format_edt_iso
 
 from ..dependencies import get_db
 from ..rate_limit import _backtest_limiter, check_rate_limit
@@ -118,6 +119,16 @@ class BacktestResponse(BaseModel):
     equity_curve_json: str | None = None
     out_of_sample: bool | None = None
     overfitting_warning: str | None = None
+
+    # created_at/completed_at are naive NY-local (project convention — see
+    # now_ny() in backtesting/engine.py). Without an explicit serializer,
+    # Pydantic emits a naive ISO string with no offset, which the
+    # frontend's parseET()/`new Date()` then misinterprets as the VIEWER'S
+    # OWN BROWSER-LOCAL time instead of ET. start_date/end_date are the
+    # user-supplied backtest range, not auto-timestamps — left as-is.
+    @field_serializer("created_at", "completed_at")
+    def _serialize_et(self, value: datetime | None) -> str | None:
+        return format_edt_iso(value)
 
 
 class BacktestTradeResponse(BaseModel):

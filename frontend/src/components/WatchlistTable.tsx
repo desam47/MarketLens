@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { WatchlistScanResult, WatchlistSymbol, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETTime } from './chartMath';
 import {
   deriveDirection,
   estimateConfidence,
@@ -331,7 +331,7 @@ export function WatchlistTable({
         <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
         {scanTimestamp && (
           <span className="table-timestamp">
-            Scanned {parseET(scanTimestamp).toLocaleTimeString()}
+            Scanned {formatETTime(scanTimestamp)}
           </span>
         )}
         <button

@@ -148,57 +148,56 @@ class TestBarRepository(unittest.TestCase):
         self.assertEqual(stored[2].timestamp, datetime(2025, 1, 1, 9, 32))
 
     def test_get_bars_filters_by_symbol_and_timeframe(self):
-        """1m fast path and resampled 1h path are both filtered correctly."""
-        # 1m bars for AAPL: 60 consecutive bars from 14:00 UTC, all within the
-        # same 1h bucket (14:00 UTC). Jan 2025 = UTC-5 → 09:00-09:59 ET.
+        """get_bars filters strictly by (symbol, timeframe).
+
+        Phase 3.7: all 10 timeframes are stored as direct rows — the
+        ingestion service's resample-write loops populate 1h (and every
+        other higher TF) directly via upsert_bars, so get_bars is a
+        straight indexed query with no read-time resampling. (The older
+        Phase 3.1 behaviour, where only 1m was stored and higher TFs were
+        derived from it at read time, no longer applies.)
+        """
         base = datetime(2025, 1, 2, 14, 0)
-        aapl_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1)
+        aapl_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1, timeframe="1m")
                    for i in range(60)]
+        # A directly-stored 1h bar for AAPL (as the resample-write loop
+        # would write), distinct from the 1m rows above.
+        aapl_1h = [_make_bar("AAPL", base, 999.0, timeframe="1h")]
         # 1m bar for GOOGL
         googl_1m = [_make_bar("GOOGL", base, 200.0)]
 
         with self.Session() as db:
-            bar_repository.upsert_bars(db, aapl_1m + googl_1m)
+            bar_repository.upsert_bars(db, aapl_1m + aapl_1h + googl_1m)
 
         with self.Session() as db:
             aapl_1m_res = bar_repository.get_bars(db, "AAPL", "1m")
-            # 1h path: 60 1m bars → 1 output bar (all in the 14:00 UTC bucket)
-            aapl_1h = bar_repository.get_bars(db, "AAPL", "1h", limit=1)
+            aapl_1h_res = bar_repository.get_bars(db, "AAPL", "1h")
             googl_1m_res = bar_repository.get_bars(db, "GOOGL", "1m")
 
-        # 1m fast path
+        # 1m rows for AAPL only, not GOOGL's or the 1h row.
         self.assertEqual(len(aapl_1m_res), 60)
         self.assertEqual(aapl_1m_res[0].source, "raw")
-        # 1h resampled path: 60 bars → 1 output bar
-        self.assertEqual(len(aapl_1h), 1)
-        self.assertEqual(aapl_1h[0].source, "resampled")
-        # open from first 1m bar (i=0, close=100.0, open=99.0)
-        self.assertEqual(aapl_1h[0].open, 99.0)
-        # close from last 1m bar (i=59, close=105.9, close=105.9)
-        self.assertEqual(aapl_1h[0].close, 105.9)
-        # GOOGL 1m path
+        # The directly-stored 1h row, filtered independently of the 1m rows.
+        self.assertEqual(len(aapl_1h_res), 1)
+        self.assertEqual(aapl_1h_res[0].close, 999.0)
+        # GOOGL 1m path filtered independently of AAPL's rows.
         self.assertEqual(len(googl_1m_res), 1)
 
     def test_upsert_bars_preserves_data_status_string(self):
         """A bar's data_status and source field round-trip correctly.
 
-        Phase 3.1: stored bars are at 1m (source=raw); queried 1d bars
-        are resampled at read time (source=resampled).
+        Phase 3.7: every timeframe (including 1d) is a directly-stored row —
+        upsert_bars always writes source="raw" regardless of timeframe.
         """
-        # 5 consecutive 1m bars (2025-01-02 09:30–09:34 ET) that will
-        # bucket into a single 1d bar.
-        base = datetime(2025, 1, 2, 14, 30)
-        bars = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0)
-                for i in range(5)]
-        for b in bars:
-            b.data_status = DataStatus.HISTORICAL
+        bar = _make_bar("AAPL", datetime(2025, 1, 2, 0, 0), 100.0, timeframe="1d")
+        bar.data_status = DataStatus.HISTORICAL
         with self.Session() as db:
-            bar_repository.upsert_bars(db, bars)
+            bar_repository.upsert_bars(db, [bar])
         with self.Session() as db:
             stored = bar_repository.get_bars(db, "AAPL", "1d", limit=1)
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0].data_status, DataStatus.HISTORICAL)
-        self.assertEqual(stored[0].source, "resampled")
+        self.assertEqual(stored[0].source, "raw")
 
 
     def test_slow_query_logging_threshold(self):
@@ -233,79 +232,23 @@ class TestBarRepository(unittest.TestCase):
         finally:
             bar_repository._SLOW_QUERY_THRESHOLD_MS = original
 
-    def test_get_bars_hybrid_fallback(self):
-        """Phase 3.1.8: when 1m DB rows are insufficient for the requested
-        limit and a ``fallback_provider`` is supplied, the function
-        transparently calls the provider for the target TF.
-
-        Without a fallback, an empty result is returned.
+    def test_get_bars_fallback_provider_param_is_inert(self):
+        """``fallback_provider`` is accepted for API-signature compatibility
+        but no longer used — Phase 3.7 stores every timeframe directly
+        (populated by the ingestion service's resample-write loops), so
+        get_bars never needs to synthesize missing higher-TF bars from a
+        live provider call at read time (that was Phase 3.1's read-time
+        hybrid-fallback path, since removed). An empty DB returns an empty
+        list even when a fallback_provider is supplied.
         """
-        # Empty DB — no 1m rows. Asking for 1d with limit=3 must trigger fallback.
         def fallback_provider(symbol: str, timeframe: str) -> list[Bar]:
-            return [
-                Bar(
-                    symbol=symbol, timeframe=timeframe,
-                    open=100, high=101, low=99, close=100.5,
-                    volume=1000, timestamp=datetime(2025, 1, 1, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL,
-                ),
-                Bar(
-                    symbol=symbol, timeframe=timeframe,
-                    open=101, high=102, low=100, close=101.5,
-                    volume=1500, timestamp=datetime(2025, 1, 2, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL,
-                ),
-                Bar(
-                    symbol=symbol, timeframe=timeframe,
-                    open=102, high=103, low=101, close=102.5,
-                    volume=2000, timestamp=datetime(2025, 1, 3, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL,
-                ),
-            ]
+            raise AssertionError("fallback_provider should never be invoked")
 
         with self.Session() as db:
             bars = bar_repository.get_bars(
                 db, "AAPL", "1d", limit=3, fallback_provider=fallback_provider,
             )
-        self.assertEqual(len(bars), 3)
-        self.assertEqual(bars[0].close, 100.5)
-        self.assertEqual(bars[2].close, 102.5)
-        self.assertEqual(bars[0].provider, "test_provider")
-        # Phase 3.1.8: provider-returned bars get source='raw' so the
-        # API can distinguish them from DB-resampled bars.
-        for b in bars:
-            self.assertEqual(b.source, "raw")
-
-        # Without a fallback, the empty DB returns 0 bars.
-        with self.Session() as db:
-            bars_no_fb = bar_repository.get_bars(db, "AAPL", "1d", limit=3)
-        self.assertEqual(len(bars_no_fb), 0)
-
-    def test_get_bars_hybrid_fallback_not_triggered_when_db_sufficient(self):
-        """Phase 3.1.8: the fallback is only invoked when 1m coverage is
-        insufficient. When the DB has enough 1m rows, the provider is
-        never called.
-        """
-        # 60 consecutive 1m bars in one 1h bucket.
-        base = datetime(2025, 1, 2, 14, 0)
-        bars_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1)
-                   for i in range(60)]
-        with self.Session() as db:
-            bar_repository.upsert_bars(db, bars_1m)
-
-        called = []
-
-        def fallback_provider(symbol: str, timeframe: str) -> list[Bar]:
-            called.append((symbol, timeframe))
-            return []
-
-        with self.Session() as db:
-            res = bar_repository.get_bars(
-                db, "AAPL", "1h", limit=1, fallback_provider=fallback_provider,
-            )
-
-        self.assertEqual(len(res), 1)
-        self.assertEqual(called, [])  # not invoked — DB was sufficient
+        self.assertEqual(bars, [])
 
     def test_get_bars_from_ts_to_ts_filter_1m(self):
         """from_ts/to_ts narrow the 1m fast path by timestamp range."""
@@ -327,72 +270,40 @@ class TestBarRepository(unittest.TestCase):
         self.assertEqual(res[0].timestamp.minute, 35)
         self.assertEqual(res[-1].timestamp.minute, 40)
 
-    def test_get_bars_from_ts_to_ts_filter_resampled(self):
-        """from_ts/to_ts narrow the higher-TF resampled output as well."""
-        # 60 consecutive 1m bars in one 1h bucket.
-        base = datetime(2025, 1, 2, 14, 0)
-        bars_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1)
-                   for i in range(60)]
-        # Another 60 minutes 1h later, second 1h bucket.
-        second = base + timedelta(hours=1)
-        bars_1m += [_make_bar("AAPL", second + timedelta(minutes=i), 200.0 + i * 0.1)
-                    for i in range(60)]
-        with self.Session() as db:
-            bar_repository.upsert_bars(db, bars_1m)
+    def test_get_bars_from_ts_to_ts_filter_higher_tf(self):
+        """from_ts/to_ts narrow directly-stored higher-TF rows too.
 
-        # Window: 14:15 onwards. With from_ts widening, we should still
-        # get both 1h buckets; the second one starts at 15:00, the
-        # first at 14:00 (the 14:00 bucket's open uses 1m bars widened
-        # to 13:00, but those don't exist so the open is the first 1m
-        # in the bucket = 14:00).
+        Phase 3.7: 1h (and every other TF) is a direct row, filtered the
+        same way as 1m — no read-time bucket resampling or lower-bound
+        widening.
+        """
+        base = datetime(2025, 1, 2, 14, 0)
+        bars_1h = [
+            _make_bar("AAPL", base, 100.0, timeframe="1h"),
+            _make_bar("AAPL", base + timedelta(hours=1), 200.0, timeframe="1h"),
+        ]
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, bars_1h)
+
+        # Window: 14:15 onwards excludes the 14:00 bar, keeps the 15:00 bar.
         with self.Session() as db:
             res = bar_repository.get_bars(
                 db, "AAPL", "1h",
                 from_ts=datetime(2025, 1, 2, 14, 15),
             )
-        # Two 1h buckets in range: 14:00 (filtered to >= 14:15) and 15:00.
-        # The 14:00 bucket's timestamp (14:00) is < 14:15, so it is
-        # excluded. Result: only the 15:00 bucket.
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0].timestamp.hour, 15)
 
-    def test_get_bars_hybrid_fallback_filters_window(self):
-        """Hybrid fallback provider bars are filtered to the from_ts/to_ts
-        window and tagged with source='raw'."""
-        def fallback_provider(symbol: str, timeframe: str) -> list[Bar]:
-            return [
-                Bar(symbol=symbol, timeframe=timeframe, open=100, high=101, low=99, close=100.5,
-                    volume=1000, timestamp=datetime(2025, 1, 1, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL),
-                Bar(symbol=symbol, timeframe=timeframe, open=101, high=102, low=100, close=101.5,
-                    volume=1500, timestamp=datetime(2025, 1, 2, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL),
-                Bar(symbol=symbol, timeframe=timeframe, open=102, high=103, low=101, close=102.5,
-                    volume=2000, timestamp=datetime(2025, 1, 3, 14, 30),
-                    provider="test_provider", data_status=DataStatus.HISTORICAL),
-            ]
-
-        with self.Session() as db:
-            bars = bar_repository.get_bars(
-                db, "AAPL", "1d",
-                limit=3,
-                from_ts=datetime(2025, 1, 2, 0, 0),
-                fallback_provider=fallback_provider,
-            )
-        # Jan 1 is before the window — filtered out.
-        self.assertEqual(len(bars), 2)
-        self.assertEqual(bars[0].timestamp, datetime(2025, 1, 2, 14, 30))
-        self.assertEqual(bars[1].timestamp, datetime(2025, 1, 3, 14, 30))
-        # All provider-returned bars get source='raw'.
-        for b in bars:
-            self.assertEqual(b.source, "raw")
-
 
 class TestFromTsToTsCap(unittest.TestCase):
-    """Phase 3.1: when ``from_ts`` is provided but ``to_ts`` is None and
-    ``limit`` is None, the resampled query is bounded at ``now()`` to
-    prevent an unbounded table scan. The 1m fast path is unaffected
-    (it already has ``limit`` or a user-supplied ``to_ts`` in practice)."""
+    """Phase 3.7: get_bars is a straight indexed query — it applies exactly
+    the filters the caller passes (symbol+timeframe, optionally from_ts,
+    optionally to_ts, optionally limit) and nothing more. The Phase 3.1
+    behaviour these tests originally covered — auto-capping an unbounded
+    ``from_ts``-only query at ``now()`` on the read-time-resampled path —
+    no longer exists (there is no read-time resample path to protect from
+    an unbounded table scan); these tests now document that no such
+    implicit filter is added."""
 
     def _spy_now(self):
         """Patch ``datetime.now`` with a fixed time for deterministic testing."""
@@ -431,8 +342,8 @@ class TestFromTsToTsCap(unittest.TestCase):
 
         return db, chain
 
-    def test_resampled_from_ts_no_to_ts_capped_at_now(self):
-        """With from_ts but no to_ts or limit, the to_ts cap is applied."""
+    def test_from_ts_no_to_ts_no_limit_is_unbounded(self):
+        """With from_ts but no to_ts or limit, no implicit to_ts cap is added."""
         from backend.repositories import bar_repository
         from datetime import datetime
 
@@ -444,17 +355,15 @@ class TestFromTsToTsCap(unittest.TestCase):
                 from_ts=datetime(2025, 1, 2, 0, 0),
             )
 
-        # Expected filter chain: symbol+timeframe, to_ts (capped), from_ts.
-        # Plus an order_by and a limit (with the multiplier).
+        # Expected filter chain: symbol+timeframe, from_ts. No to_ts cap.
         self.assertEqual(
-            chain.filter.call_count, 3,
-            "expected 3 filter calls: symbol+tf, to_ts cap, from_ts"
+            chain.filter.call_count, 2,
+            "expected 2 filter calls: symbol+tf, from_ts (no implicit to_ts cap)"
         )
         self.assertEqual(chain.order_by.call_count, 1)
 
     def test_resampled_with_explicit_limit_not_capped(self):
-        """When ``limit`` is supplied, the fetch_limit path is used — no
-        extra to_ts cap is needed."""
+        """When ``limit`` is supplied, no implicit to_ts filter is added."""
         from backend.repositories import bar_repository
         from datetime import datetime
 
@@ -474,7 +383,7 @@ class TestFromTsToTsCap(unittest.TestCase):
         )
 
     def test_resampled_with_to_ts_not_overridden(self):
-        """When ``to_ts`` is provided explicitly, the cap is not applied."""
+        """When ``to_ts`` is provided explicitly, it is used as-is."""
         from backend.repositories import bar_repository
         from datetime import datetime
 
@@ -491,7 +400,7 @@ class TestFromTsToTsCap(unittest.TestCase):
         self.assertEqual(chain.filter.call_count, 3)
 
     def test_1m_fast_path_not_affected(self):
-        """The 1m fast path does not apply the to_ts cap."""
+        """The 1m path does not apply any implicit to_ts filter either."""
         from backend.repositories import bar_repository
         from datetime import datetime
 
@@ -511,28 +420,28 @@ class TestFromTsToTsCap(unittest.TestCase):
 
 
 class TestWideningHours(unittest.TestCase):
-    """Phase 3.1: the ``_WIDENING_HOURS`` table controls how far the lower
-    bound is widened on the resample path. Calendar-period TFs (``1d``,
-    ``1wk``) need widening proportional to the calendar period so the
-    leading bucket is complete. The old behaviour used the minute-based
-    multiplier for both fetch_limit AND widening, which gave ``1wk`` a
-    32.5h lookback instead of the 168h a full calendar week requires.
+    """Phase 3.7: ``_WIDENING_HOURS`` is unused dead code — it was Phase
+    3.1's table controlling how far the lower bound was widened on the
+    (since-removed) read-time resample path. get_bars no longer widens
+    from_ts for any timeframe; every TF is a direct-row query. These tests
+    document that current behaviour (and the dict's literal values, kept
+    around in case a future read-time optimization needs them again).
     """
 
     def test_widening_hours_table_values(self):
         from backend.repositories import bar_repository
-        # Calendar-proportional widening, not minute-based.
+        # Dict values are unchanged, but unused by get_bars/_fetch_bars —
+        # see class docstring.
         self.assertEqual(bar_repository._WIDENING_HOURS["1d"], 24)
         self.assertEqual(bar_repository._WIDENING_HOURS["1wk"], 168)
-        # 1m-aligned TFs need only 0-1h of widening.
         self.assertEqual(bar_repository._WIDENING_HOURS["5m"], 0)
         self.assertEqual(bar_repository._WIDENING_HOURS["1h"], 1)
         self.assertEqual(bar_repository._WIDENING_HOURS["4h"], 4)
 
-    def test_1wk_lookback_is_seven_days(self):
-        """1wk fetch lower bound is widened by 168h = 7 calendar days."""
+    def test_1wk_from_ts_not_widened(self):
+        """1wk fetch uses from_ts as-is — no lower-bound widening."""
         from backend.repositories import bar_repository
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -552,26 +461,19 @@ class TestWideningHours(unittest.TestCase):
         from_ts = datetime(2025, 6, 1, 0, 0)
         bar_repository.get_bars(db, "AAPL", "1wk", from_ts=from_ts)
 
-        # The from_ts filter was applied with the widened value
-        # (from_ts - 168h). Verify the widening was applied by checking
-        # the filter was called with a date ~7 days before from_ts.
         filter_args = [
             call.args[0] for call in chain.filter.call_args_list
             if call.args and hasattr(call.args[0], "right")
         ]
         self.assertTrue(
-            any(
-                getattr(arg.right, "value", None) is not None
-                and abs((arg.right.value - (from_ts - timedelta(hours=168))).total_seconds()) < 1
-                for arg in filter_args
-            ),
-            f"expected a from_ts filter widened by 168h; got {filter_args}"
+            any(getattr(arg.right, "value", None) == from_ts for arg in filter_args),
+            f"1wk path should not widen from_ts; got {filter_args}"
         )
 
-    def test_1d_lookback_is_one_day(self):
-        """1d fetch lower bound is widened by 24h = 1 calendar day."""
+    def test_1d_from_ts_not_widened(self):
+        """1d fetch uses from_ts as-is — no lower-bound widening."""
         from backend.repositories import bar_repository
-        from datetime import datetime, timedelta
+        from datetime import datetime
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -595,12 +497,8 @@ class TestWideningHours(unittest.TestCase):
             if call.args and hasattr(call.args[0], "right")
         ]
         self.assertTrue(
-            any(
-                getattr(arg.right, "value", None) is not None
-                and abs((arg.right.value - (from_ts - timedelta(hours=24))).total_seconds()) < 1
-                for arg in filter_args
-            ),
-            f"expected a from_ts filter widened by 24h; got {filter_args}"
+            any(getattr(arg.right, "value", None) == from_ts for arg in filter_args),
+            f"1d path should not widen from_ts; got {filter_args}"
         )
 
     def test_1m_path_not_widened(self):

@@ -6,7 +6,7 @@ import api, {
   SRLevel,
   Transition,
 } from '../services/api';
-import { parseET } from '../components/chartMath';
+import { parseET, formatETDate, formatETDateTime } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -160,7 +160,7 @@ const TransitionsPanel = memo(function TransitionsPanel({
         </span>
       </div>
       {latestTimestamp && (
-        <div className="timestamp">Updated: {parseET(latestTimestamp).toLocaleString()}</div>
+        <div className="timestamp">Updated: {formatETDateTime(latestTimestamp)}</div>
       )}
       {recent.length === 0 ? (
         <p className="empty-state">No transitions detected</p>
@@ -182,7 +182,7 @@ const TransitionsPanel = memo(function TransitionsPanel({
                   <span>{directionBadge[t.direction] || '—'} {t.direction}</span>
                   <span>Δ {formatDelta(t.delta)}</span>
                   <span>{t.magnitude.toFixed(1)} mag</span>
-                  {t.timestamp && <span>{parseET(t.timestamp).toLocaleDateString()}</span>}
+                  {t.timestamp && <span>{formatETDate(t.timestamp)}</span>}
                 </div>
               </div>
             );
@@ -307,7 +307,7 @@ const DivergencesPanel = memo(function DivergencesPanel({ divergences }: { diver
                   <span>{directionBadge[d.direction] || '—'} {d.direction}</span>
                   <span>price: {str(d.pivot_b_price)}</span>
                   <span>ind: {str(d.pivot_b_indicator)}</span>
-                  {d.timestamp && <span>{parseET(d.timestamp).toLocaleDateString()}</span>}
+                  {d.timestamp && <span>{formatETDate(d.timestamp)}</span>}
                 </div>
               </div>
             );
@@ -346,15 +346,19 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                 const prev = bars[i + 1];
                 // Positive chg = price went UP from older bar to this bar
                 const chg = prev && prev.close > 0
-                  ? ((prev.close - b.close) / b.close * 100)
+                  ? ((b.close - prev.close) / prev.close * 100)
                   : null;
                 const c = barColor(b.close, b.open);
                 return (
                   <tr key={i}>
                     <td>{b.timestamp ? (() => {
+                        // Explicit timeZone — without it these format using
+                        // the viewer's browser/OS zone instead of ET.
                         const d = parseET(b.timestamp);
-                        const date = d.toLocaleDateString();
-                        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                        const date = d.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+                        const time = d.toLocaleTimeString('en-US', {
+                          timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+                        });
                         return `${date} ${time}`;
                     })() : '—'}</td>
                     <td>${strPrice(b.open)}</td>
@@ -452,6 +456,13 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const fetchBars = useCallback(async () => {
     setBarsLoading(true);
     try {
+      // `bars` feeds both CandlestickChart (a canvas-based lightweight-
+      // charts instance — comfortably handles many thousands of points)
+      // and BarsTable (a plain, non-virtualized HTML <table> — must stay
+      // bounded, see the slice passed to it below). Fetch the full
+      // history for the chart; the table takes its own bounded slice
+      // rather than limiting this fetch itself, which previously starved
+      // the chart down to the table's row cap.
       const data = await api.getAnalysisBars(symbol, timeframe, 10000);
       setBars(data?.bars || []);
     } catch (err: any) {
@@ -613,7 +624,10 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
         )}
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
-          <BarsTable bars={bars} />
+          {/* Table stays bounded to the most recent rows (plain HTML
+              table, not virtualized) — the chart above gets the full
+              `bars` fetched by fetchBars. */}
+          <BarsTable bars={bars.slice(0, 500)} />
         </div>
       </div>
     </div>

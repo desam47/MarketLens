@@ -5,12 +5,13 @@ import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
 from backend.alerts.conditions import VALID_CONDITION_TYPES
 from backend.alerts.engine import alerts_engine
 from backend.repositories.alert_repository import AlertRepository
+from backend.utils.timezone import format_edt_iso
 
 from backend.api.dependencies import get_db
 from backend.api.rate_limit import _alerts_limiter, check_rate_limit
@@ -57,6 +58,16 @@ class AlertResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # created_at/updated_at are naive NY-local (project convention — see
+    # now_ny() in models/alert.py). Without an explicit serializer, Pydantic
+    # emits a naive ISO string with no offset (e.g. "2026-09-08T19:59:00"),
+    # which the frontend's parseET()/`new Date()` then misinterprets as the
+    # VIEWER'S OWN BROWSER-LOCAL time instead of ET — every other timestamp
+    # in the API goes through format_edt_iso for exactly this reason.
+    @field_serializer("created_at", "updated_at")
+    def _serialize_et(self, value: datetime) -> str | None:
+        return format_edt_iso(value)
+
 
 class AlertTriggerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -66,6 +77,10 @@ class AlertTriggerResponse(BaseModel):
     observed_value: str | None
     message: str | None
     triggered_at: datetime
+
+    @field_serializer("triggered_at")
+    def _serialize_et(self, value: datetime) -> str | None:
+        return format_edt_iso(value)
 
 
 # --- Endpoints ----------------------------------------------------------

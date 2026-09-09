@@ -1,10 +1,13 @@
 """
-Root conftest — reset shared in-process rate limiter before every test.
+Root conftest — reset shared in-process rate limiters before every test.
 
-The rate limiter in `backend.api.main` is a module-level singleton that
-accumulates hits across the full test suite run. Without a reset hook,
-tests that run late in the suite (e.g. watchlist import tests) can hit
-429s even though they only made one POST request in their own test.
+The rate limiters in `backend.api.main` (`_write_limiter`) and
+`backend.api.rate_limit` (`_ai_limiter`, `_alerts_limiter`,
+`_backtest_limiter`) are module-level singletons that accumulate hits
+across the full test suite run. Without a reset hook, tests that run late
+in the suite (e.g. watchlist import tests, or any test hitting
+/api/ai/analyze) can hit 429s even though they only made one request in
+their own test.
 
 A session-scoped fixture would also work, but function-scoped ensures
 complete isolation when tests run in random order.
@@ -14,23 +17,43 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
-    """Reset the in-process rate limiter before each test."""
+    """Reset every known rate limiter (in-memory fallback + Redis) before each test."""
+    redis_client = None
     try:
         from backend.api.main import _write_limiter
         _write_limiter.reset()
-        # Also flush Redis rate-limit keys for the test client so Redis-backed
-        # limiters don't carry state from previous tests.
-        try:
-            client = _write_limiter._redis_client
-            if client is not None:
-                pattern = "rate_limit:testclient:*"
-                keys = client.keys(pattern)
-                if keys:
-                    client.delete(*keys)
-        except Exception:
-            pass  # Redis not available or keys not found — non-fatal.
+        redis_client = _write_limiter._redis_client
     except ImportError:
         pass  # App hasn't been imported yet; skip.
+
+    # Per-endpoint limiters (AI, alerts, backtest) are separate singleton
+    # instances — namespaced by `name` so they don't share a Redis key with
+    # `_write_limiter`, but that also means resetting `_write_limiter` alone
+    # never touches their in-memory fallback counters either.
+    try:
+        from backend.api.rate_limit import _ai_limiter, _alerts_limiter, _backtest_limiter
+        for limiter in (_ai_limiter, _alerts_limiter, _backtest_limiter):
+            limiter.reset()
+            if redis_client is None:
+                redis_client = limiter._redis_client
+    except ImportError:
+        pass
+
+    # Flush Redis rate-limit keys for the test client so Redis-backed
+    # limiters don't carry state from previous tests. Key format is
+    # `rate_limit:{name}:{client_ip}:{window}` (see RedisRateLimiter.is_allowed)
+    # — `name` sits between the prefix and the client IP, so the pattern
+    # must wildcard that segment too. A prior version of this pattern
+    # (`rate_limit:testclient:*`) never matched any real key and was a
+    # silent no-op for every Redis-backed limiter this whole time.
+    if redis_client is not None:
+        try:
+            pattern = "rate_limit:*:testclient:*"
+            keys = redis_client.keys(pattern)
+            if keys:
+                redis_client.delete(*keys)
+        except Exception:
+            pass  # Redis not available or keys not found — non-fatal.
     yield
 
 

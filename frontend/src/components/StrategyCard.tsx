@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { StrategyData } from '../services/api';
-import { parseET } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 interface StrategyCardProps {
   strategy: StrategyData | null;
@@ -88,7 +88,7 @@ export const StrategyCard = memo(function StrategyCard({ strategy, error }: Stra
       )}
       {strategy.timestamp && (
         <div className="timestamp">
-          Updated: {parseET(strategy.timestamp).toLocaleTimeString()}
+          Updated: {formatETDateTime(strategy.timestamp)}
         </div>
       )}
     </div>

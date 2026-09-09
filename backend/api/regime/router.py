@@ -303,7 +303,10 @@ async def get_batch_relative_strength(symbols: str):
     if len(sym_list) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 symbols per batch")
 
-    cache_key = ",".join(sorted(sym_list))
+    # Prefixed so a single-symbol batch call (e.g. symbols=AAPL) can't
+    # collide with get_relative_strength's cache key below — they share
+    # this TTLCache but return differently-shaped payloads.
+    cache_key = "batch:" + ",".join(sorted(sym_list))
     cached = _rs_batch_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -336,7 +339,9 @@ async def get_batch_relative_strength(symbols: str):
 @router.get("/{symbol}/relative-strength")
 async def get_relative_strength(symbol: str):
     """Phase 8: relative-strength signals vs SPY and QQQ benchmarks (60s TTL cache)."""
-    key = symbol.upper()
+    # Prefixed to avoid colliding with get_batch_relative_strength's
+    # "batch:..." keys in the same shared TTLCache.
+    key = "single:" + symbol.upper()
     cached = _rs_batch_cache.get(key)
     if cached is not None:
         return cached

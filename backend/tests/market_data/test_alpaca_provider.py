@@ -24,7 +24,7 @@ from backend.market_data.providers.alpaca_provider import (
     AlpacaWebSocketClient,
     _resolve_tf,
     _resolve_feed,
-    _ts_to_utc,
+    _ts_to_ny,
 )
 from backend.models.market_data import Bar, DataStatus, Quote
 
@@ -104,11 +104,11 @@ class TestTimeframeResolution(unittest.TestCase):
         assert _resolve_feed("sip") == DataFeed.SIP
         assert _resolve_feed("DELAYED_SIP") == DataFeed.DELAYED_SIP
 
-    def test_ts_to_utc_handles_naive(self):
+    def test_ts_to_ny_handles_naive(self):
         naive = datetime(2024, 1, 1, 12, 0, 0)
-        out = _ts_to_utc(naive)
-        assert out.tzinfo is not None
-        assert out.utcoffset().total_seconds() == 0
+        out = _ts_to_ny(naive)
+        assert out.tzinfo is None
+        # _ts_to_ny returns naive NY time (no timezone info)
 
 
 # ---------------------------------------------------------------------------

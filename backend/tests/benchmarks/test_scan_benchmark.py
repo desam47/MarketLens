@@ -111,7 +111,10 @@ def test_scan_symbols_async_with_simulated_latency(fresh_scanner, benchmark):
     # patch the scanner's scan_symbol to use the slow stub
     original_scan = fresh_scanner.scan_symbol
 
-    def slow_scan(symbol):
+    def slow_scan(symbol, historical_bars=None, quote=None):
+        # scan_symbols_async batch-pre-fetches bars/quotes and passes them
+        # into scan_symbol per-symbol — accept (and ignore) those extra
+        # params so this stub matches the real signature.
         return asyncio.run(_slow_quote(symbol))
 
     fresh_scanner.scan_symbol = slow_scan

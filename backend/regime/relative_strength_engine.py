@@ -144,13 +144,19 @@ class RelativeStrengthEngine:
                 from backend.database import SessionLocal
                 db = SessionLocal()
                 try:
+                    # desc=True: get_bars applies LIMIT to its ordered query,
+                    # so without desc=True this returned the OLDEST rows in
+                    # the table (potentially years stale) instead of the
+                    # recent window RS needs. Fetch newest-first, then
+                    # reverse back to chronological order for price_history.
                     bars = _get_db_bars(
                         db,
                         sym,
                         "1d",
                         limit=self.lookback_days * 2,
+                        desc=True,
                     )
-                    for bar in bars:
+                    for bar in reversed(bars):
                         self._price_history[sym].append((bar.timestamp, bar.close))
                 finally:
                     db.close()

@@ -13,7 +13,11 @@ const unusualColors: Record<string, string> = {
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
   try {
-    return parseET(ts).toLocaleDateString(undefined, {
+    // Explicit timeZone — without it, toLocaleDateString formats using the
+    // viewer's browser/OS zone instead of ET (parseET only resolves the
+    // correct absolute instant; it doesn't affect how it's displayed).
+    return parseET(ts).toLocaleDateString('en-US', {
+      timeZone: 'America/New_York',
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
   } catch {

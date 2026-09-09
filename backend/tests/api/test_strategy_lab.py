@@ -42,6 +42,25 @@ from backend.models import Experiment
 # the module attributes. The strategy-lab router resolves SessionLocal lazily
 # (``from backend.database import SessionLocal`` inside the handler), so
 # rebinding the attribute is picked up on every request.
+#
+# CRITICAL: the actual rebinding (and the ingestion-service patch below) must
+# happen in ``setUpModule()``, NOT at bare module level. pytest collects
+# (imports) every test module for the whole run up front, before running ANY
+# test — so module-level code here would execute during collection and stay
+# in effect for the rest of collection too. Plenty of other test files do
+# ``from backend.database import SessionLocal`` at THEIR OWN module level
+# (e.g. test_purge_service.py, test_engine_seeding.py) — if their import
+# happens during that collection window while this module's rebind was
+# active, they'd permanently capture the temp SessionLocal (later deleted by
+# tearDownModule) with no way for tearDownModule to fix it, since it only
+# restores the *module attribute*, not names other files already imported
+# from it. ``setUpModule()``/``tearDownModule()`` are real unittest run-phase
+# hooks — they fire immediately before/after this module's tests actually
+# execute, well after collection has finished — so confining the rebind to
+# that window means no other file's collection-time import can observe it.
+# (2026-09-08: this was corrupting purge_service, bar_retention, wal_pragmas,
+# vacuum_into, backup_status, signals_api, engine_seeding, scanner_api, and
+# ai_router across full-suite runs.)
 _TMP_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _TMP_DB.close()
 
@@ -51,29 +70,64 @@ engine = create_engine(
 )
 _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-for _mod in (_database_pkg, _database_impl):
-    _mod.engine = engine
-    _mod.SessionLocal = _TestSessionLocal
-
-# ExperimentRepository captures SessionLocal at import time (line 11 of
-# experiment_repository.py: ``from backend.database import SessionLocal``).
-# Rebind there too so any repository instances the router spawns use the
-# isolated test session rather than the production one.
 import backend.repositories.experiment_repository as _exp_repo
-_exp_repo.SessionLocal = _TestSessionLocal
+
+# This module is also the only one in the suite that uses ``with
+# TestClient(app) as client:`` — that context-manager form is what actually
+# triggers FastAPI's lifespan startup (a bare ``TestClient(app)`` does not).
+# The lifespan calls ``ingestion_service.start()``, which spawns a REAL
+# daemon thread that hits real network providers and writes to the real
+# ``marketlens.db`` on a 30-60s cadence — and, being a process-wide
+# singleton with its own captured SessionLocal, keeps doing so for the rest
+# of the pytest process once started, regardless of this module's DB
+# isolation. Patch ``.start()`` to a no-op for the same setUpModule/
+# tearDownModule-scoped reason as above.
+from unittest.mock import patch as _patch
+from backend.market_data.services.ingestion_service import ingestion_service as _ingestion_service
+
+_orig_engine = None
+_orig_session_local = None
+_orig_exp_repo_session_local = None
+_ingestion_start_patch = None
+
+
+def setUpModule():
+    global _orig_engine, _orig_session_local, _orig_exp_repo_session_local
+    global _ingestion_start_patch
+
+    _orig_engine = _database_pkg.engine
+    _orig_session_local = _database_pkg.SessionLocal
+    for _mod in (_database_pkg, _database_impl):
+        _mod.engine = engine
+        _mod.SessionLocal = _TestSessionLocal
+
+    # ExperimentRepository captures SessionLocal at import time (line 11 of
+    # experiment_repository.py: ``from backend.database import
+    # SessionLocal``). Rebind there too so any repository instances the
+    # router spawns use the isolated test session rather than the
+    # production one.
+    _orig_exp_repo_session_local = _exp_repo.SessionLocal
+    _exp_repo.SessionLocal = _TestSessionLocal
+
+    _ingestion_start_patch = _patch.object(_ingestion_service, "start", lambda: None)
+    _ingestion_start_patch.start()
+
+    # Build a fresh schema on the temp DB before any tests run.
+    Base.metadata.create_all(bind=engine)
 
 
 def tearDownModule():
-    """Drop the temp database file once every test in this module has run."""
+    """Drop the temp database file and restore the real engine/SessionLocal."""
     engine.dispose()
     try:
         os.unlink(_TMP_DB.name)
     except OSError:
         pass
-
-
-# Build a fresh schema on the temp DB before any tests run.
-Base.metadata.create_all(bind=engine)
+    for _mod in (_database_pkg, _database_impl):
+        _mod.engine = _orig_engine
+        _mod.SessionLocal = _orig_session_local
+    _exp_repo.SessionLocal = _orig_exp_repo_session_local
+    _ingestion_start_patch.stop()
 
 
 def _client():

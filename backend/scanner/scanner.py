@@ -371,7 +371,7 @@ class Scanner:
                 if rsi < 30:
                     rsi_score = (30 - rsi) * 2    # 0..40, positive (bullish)
                 elif rsi > 70:
-                    rsi_score = (30 - rsi) * 2    # negative (bearish): e.g. 80 → -20
+                    rsi_score = (70 - rsi) * 2    # negative (bearish): e.g. 80 → -20
                 else:
                     rsi_score = 0                  # neutral zone
                 result.add_score("rsi", rsi_score)

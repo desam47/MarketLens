@@ -346,8 +346,12 @@ class TestEdgeCases:
         bars = [make_bar(dt(2026, 9, 1, 10, 0))]
         with pytest.raises(ResampleError, match="unsupported target timeframe"):
             resample_ohlcv(bars, "2h")
+        # "2m" is deliberately NOT tested here — Phase 3.7 added it as a
+        # supported sub-hour target (see resampler._TF_MINUTES) to support
+        # resample-at-write. "7m" isn't in _TF_MINUTES/_CALENDAR_TIMEFRAMES
+        # and has no reason to ever be added, so it's a stable negative case.
         with pytest.raises(ResampleError, match="unsupported target timeframe"):
-            resample_ohlcv(bars, "2m")
+            resample_ohlcv(bars, "7m")
 
     def test_non_1m_input_raises(self):
         bar = make_bar(dt(2026, 9, 1, 10, 0))

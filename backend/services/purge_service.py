@@ -102,33 +102,31 @@ def _delete_market_status(db: Session, symbol: str) -> int:
 
 
 def _delete_alerts_and_triggers(db: Session, symbol: str) -> tuple[int, int]:
-    """Delete alerts for symbol, then orphaned alert_triggers (no FK cascade configured).
+    """Delete alerts for symbol, then their alert_triggers (no FK cascade configured).
 
-    We must fetch alert IDs before deleting them, then use those IDs to
-    clean up triggers — the subquery approach fails because Alert rows
-    are gone by the time the trigger DELETE runs.
+    Both tables carry their own ``symbol`` column, so each is filtered by
+    symbol directly rather than deleting triggers via ``alert_id IN
+    (alert_ids)``. That id-based approach was a real cross-symbol data-loss
+    bug: SQLite reuses low integer primary keys once rows are deleted, so
+    a freshly-inserted alert for THIS symbol could reuse an id that an
+    already-orphaned trigger (from some OTHER, previously-deleted symbol's
+    alert) still referenced — sweeping up and deleting that unrelated
+    symbol's trigger rows, and over-reporting the count of rows actually
+    purged for THIS symbol. Filtering both deletes by symbol avoids the
+    collision entirely and still catches genuinely orphaned triggers
+    (their symbol column survives even after their alert row is gone).
     """
     from backend.models import Alert, AlertTrigger
 
-    # Collect alert IDs first (before DELETE removes them).
-    alert_ids = list(
-        db.execute(
-            select(Alert.id).where(Alert.symbol == symbol.upper())
-        ).scalars()
+    trigger_result = db.execute(
+        delete(AlertTrigger).where(AlertTrigger.symbol == symbol.upper())
     )
-    alert_count = len(alert_ids)
+    orphaned_triggers = trigger_result.rowcount
 
-    # Delete orphaned triggers.
-    orphaned_triggers = 0
-    if alert_ids:
-        trigger_result = db.execute(
-            delete(AlertTrigger).where(AlertTrigger.alert_id.in_(alert_ids))
-        )
-        orphaned_triggers = trigger_result.rowcount
-
-    # Delete the alerts themselves.
-    if alert_ids:
-        db.execute(delete(Alert).where(Alert.id.in_(alert_ids)))
+    alert_result = db.execute(
+        delete(Alert).where(Alert.symbol == symbol.upper())
+    )
+    alert_count = alert_result.rowcount
 
     return alert_count, orphaned_triggers
 

@@ -1,7 +1,7 @@
 """
 Alert repository for data access operations.
 """
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from backend.utils.timezone import now_ny
 
@@ -132,7 +132,12 @@ class AlertRepository:
     def get_recent_triggers(self, since: datetime | None = None) -> list[AlertTrigger]:
         """Triggers fired within the last 24 hours (or since ``since``)."""
         if since is None:
-            since = datetime.now(UTC) - timedelta(hours=24)
+            # AlertTrigger.triggered_at is naive NY-local (project convention —
+            # see now_ny()/models/alert.py), so the cutoff must be too. This
+            # used to compare against datetime.now(UTC), which — being ~4-5h
+            # ahead of NY — silently excluded up to that many hours of
+            # genuinely recent triggers from the "last 24 hours" query.
+            since = now_ny() - timedelta(hours=24)
         return (
             self.db.query(AlertTrigger)
             .filter(AlertTrigger.triggered_at >= since)

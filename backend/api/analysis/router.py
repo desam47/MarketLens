@@ -7,7 +7,7 @@ live-tick state and can be served purely from the historical bar cache.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -39,10 +39,12 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
     Returns dicts with ``open/high/low/close/volume/timestamp`` keys
     that the Phase 9 engines accept. ``source`` is propagated for
     Phase 3.1 so the API can distinguish ``"raw"`` from ``"resampled"``
-    bars.
-
-    1d partial-bar guard: during RTH (before 16:00 ET Mon-Fri), the most
-    recent 1d bar is dropped so the UI never shows today's incomplete bar.
+    bars. ``data_status`` is propagated too — today's 1d bar is written
+    live from market open onward (ingestion_service._resample_1d_live_and_
+    upsert), marked DataStatus.INCOMPLETE, and finalized to HISTORICAL at
+    16:02 ET once the authoritative provider-sourced close is written —
+    callers can use this to distinguish a live/in-progress bar from a
+    settled one instead of the bar being hidden until close.
     """
     db = SessionLocal()
     try:
@@ -51,22 +53,6 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
         bars = bar_repository.get_bars(db, symbol, timeframe, limit=limit, desc=True)
     finally:
         db.close()
-
-    # Drop today's 1d bar until after market close (16:00 ET Mon-Fri).
-    # Bar timestamps are stored in UTC (NY=UTC-4 in Sep).  16:00 ET = 20:00 UTC.
-    # 1d bar timestamps are at 00:00 UTC of the trading day, so we compare
-    # the bar's UTC date against today's ET date — not blindly drop the
-    # newest bar, which would also discard yesterday's completed bar.
-    if timeframe == "1d" and bars:
-        now_utc = datetime.now(timezone.utc)
-        ny = now_utc.astimezone(ZoneInfo("America/New_York"))
-        today_et = ny.date()
-        if ny.weekday() < 5 and ny.hour < 20:
-            newest = bars[0]
-            bar_date_et = newest.timestamp.astimezone(ZoneInfo("America/New_York")).date() \
-                if newest.timestamp.tzinfo else newest.timestamp.date()
-            if bar_date_et == today_et:
-                bars = bars[1:]  # drop today's partial bar
 
     out: list[dict] = []
     for b in bars:
@@ -78,6 +64,7 @@ def _load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
             "volume": b.volume,
             "timestamp": b.timestamp,
             "source": b.source,
+            "data_status": b.data_status.value if hasattr(b.data_status, "value") else b.data_status,
         })
     return out
 
@@ -327,6 +314,7 @@ async def get_recent_bars(
                     "close": b["close"],
                     "volume": b["volume"],
                     "source": b.get("source"),
+                    "data_status": b.get("data_status"),
                 }
                 for b in bars
             ],

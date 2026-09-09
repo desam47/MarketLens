@@ -116,16 +116,26 @@ def _safe_bar_counts() -> dict | None:
                 retention_days = _s.market_data.bar_retention_days
             except Exception:
                 retention_days = 1000
+
+            def _iso(value) -> str | None:
+                # SQLite's DBAPI only applies the DATETIME type converter to
+                # values selected directly from a typed column — MIN()/MAX()
+                # aggregate results come back as plain str, so `.isoformat()`
+                # would raise AttributeError (previously swallowed by the
+                # outer bare except, silently returning None for this whole
+                # endpoint). Handle both shapes.
+                if value is None:
+                    return None
+                if isinstance(value, str):
+                    return value
+                return value.isoformat()
+
             return {
                 "bars_stored": int(total or 0),
                 "bars_1m_only": int(bars_1m or 0),
                 "bars_resampled": int(bars_resampled or 0),
-                "oldest_bar": (
-                    oldest_bar.isoformat() if oldest_bar else None
-                ),
-                "newest_bar": (
-                    newest_bar.isoformat() if newest_bar else None
-                ),
+                "oldest_bar": _iso(oldest_bar),
+                "newest_bar": _iso(newest_bar),
                 "distinct_symbols": int(distinct_symbols or 0),
                 "retention_days": int(retention_days),
             }

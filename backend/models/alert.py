@@ -1,12 +1,11 @@
 """
 Alert and AlertTrigger SQLAlchemy models.
 """
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
+from backend.utils.timezone import now_ny
 
 
 class Alert(Base):
@@ -23,8 +22,8 @@ class Alert(Base):
     condition_type = Column(String(40), nullable=False)
     parameter = Column(String(120), nullable=False)
     is_enabled = Column(Boolean, default=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=now_ny)
+    updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
 
     # Relationship to triggers
     triggers = relationship("AlertTrigger", back_populates="alert", cascade="all, delete-orphan")
@@ -45,7 +44,7 @@ class AlertTrigger(Base):
     id = Column(Integer, primary_key=True, index=True)
     alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=False, index=True)
     symbol = Column(String(20), nullable=False, index=True)
-    triggered_at = Column(DateTime, default=datetime.utcnow, index=True)
+    triggered_at = Column(DateTime, default=now_ny, index=True)
     observed_value = Column(String(120), nullable=True)
     message = Column(String(255), nullable=True)
 

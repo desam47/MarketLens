@@ -164,7 +164,7 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
         <div className="top-movers-header-right">
           {lastUpdated && (
             <span className="last-updated-inline">
-              {lastUpdated.toLocaleTimeString()}
+              {lastUpdated.toLocaleString()}
             </span>
           )}
           <button

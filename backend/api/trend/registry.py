@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import func
+from sqlalchemy.orm import aliased
+
 from backend.database import SessionLocal
 from backend.engines.timeframe import Timeframe
 from backend.market_data.services.engine_seeder import (
@@ -56,17 +59,33 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
     Uses a single ``IN (...)`` query for all timeframes at once — previously
     made one query per timeframe (10 queries per symbol). Returns the total
     number of bars seeded across all timeframes.
+
+    Caps each timeframe at 200 bars via a ROW_NUMBER() window partitioned
+    by timeframe, NOT a flat ``LIMIT 200 * len(timeframes)`` on a single
+    ``ORDER BY timestamp ASC`` — 1d/1wk have much deeper history than
+    15m/30m/1h, so a flat ascending LIMIT was dominated by old daily/weekly
+    rows and could exhaust the cap before reaching any short-timeframe rows,
+    leaving those engines unseeded at startup.
     """
     db = SessionLocal()
     try:
-        rows = (
-            db.query(BarModel)
+        rn = func.row_number().over(
+            partition_by=BarModel.timeframe,
+            order_by=BarModel.timestamp.desc(),
+        ).label("rn")
+        subq = (
+            db.query(BarModel, rn)
             .filter(
                 BarModel.symbol == symbol.upper(),
                 BarModel.timeframe.in_(_TREND_TIMEFRAMES),
             )
-            .order_by(BarModel.timestamp.asc())
-            .limit(200 * len(_TREND_TIMEFRAMES))
+            .subquery()
+        )
+        bm = aliased(BarModel, subq)
+        rows = (
+            db.query(bm)
+            .filter(subq.c.rn <= 200)
+            .order_by(bm.timestamp.asc())
             .all()
         )
         seeded = 0
@@ -114,15 +133,28 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
 
     db = SessionLocal()
     try:
-        # Single query for all bars across all symbols and timeframes.
-        rows = (
-            db.query(BarModel)
+        # Single query for all bars across all symbols and timeframes, capped
+        # at 200 bars per (symbol, timeframe) via a partitioned ROW_NUMBER()
+        # window — see _seed_from_bar_model for why a flat LIMIT on a single
+        # ascending order doesn't work here (deep-history timeframes like
+        # 1d/1wk would starve shorter ones of their share of the cap).
+        rn = func.row_number().over(
+            partition_by=(BarModel.symbol, BarModel.timeframe),
+            order_by=BarModel.timestamp.desc(),
+        ).label("rn")
+        subq = (
+            db.query(BarModel, rn)
             .filter(
                 BarModel.symbol.in_([s.upper() for s in symbols]),
                 BarModel.timeframe.in_(_TREND_TIMEFRAMES),
             )
-            .order_by(BarModel.timestamp.asc())
-            .limit(200 * len(_TREND_TIMEFRAMES) * len(symbols))
+            .subquery()
+        )
+        bm = aliased(BarModel, subq)
+        rows = (
+            db.query(bm)
+            .filter(subq.c.rn <= 200)
+            .order_by(bm.timestamp.asc())
             .all()
         )
     finally:
