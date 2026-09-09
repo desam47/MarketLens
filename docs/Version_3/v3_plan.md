@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-01
 **Last updated:** 2026-09-09
-**Status:** Active (Phases 3.6, 3.7, 3.8 complete; Phase 3.9 done — 21/21 items ✅ 2026-09-05; Phases 3.10–3.13 done ✅ 2026-09-09 — see below and `phase_audit_v3.md` for full as-built detail)
+**Status:** ✅ CLOSED 2026-09-09 (tag `v3.3.0`). Every phase done except 3.4 (Charts), which was never started and is carried forward as the opening item of Version 4 — see `docs/Version_4/` once that plan exists. Everything else in scope — 3.1, 3.2, 3.3, 3.5–3.13 — shipped, tested, and verified live. Full as-built detail in `phase_audit_v3.md`.
 **Scope:** Platform hardening and UX polish across five areas: timeframe resampling, database backup/optimization, chart expansion, structured logging, dashboard performance, and post-3.6 bottleneck cleanup. Extended 2026-09-09 with four reactive phases (not in the original goals list below): tracing-overhead page-load fix + repo cleanup, extended-hours ingestion + per-timeframe retention + live 1h bar, an RQ-based backfill pipeline rebuild, and a 1h-bar anchor mislabeling fix.
 
 ---

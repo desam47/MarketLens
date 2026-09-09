@@ -1,6 +1,7 @@
 # Version 3 Phase Audit
 
 **Last updated:** 2026-09-09 (Phase 3.13: 1h bar anchor mislabeling fix — ALL DONE)
+**Status:** ✅ CLOSED 2026-09-09, tag `v3.3.0`. Every phase shipped except 3.4 (Charts), never started — deferred to Version 4, not dropped.
 **Scope:** Database backup/optimization, Bar retention (per-timeframe rolling windows), Charts, Structured logging, Dashboard rebuild, extended-hours ingestion, RQ backfill pipeline
 
 ---
@@ -12,7 +13,7 @@
 | 3.1 | Timeframe Resampling (1m-only storage) | ✅ DONE | All 3.1.1–3.1.32 complete |
 | 3.2 | Alpaca Integration (REST + WebSocket) | ✅ DONE | All 3.2.1–3.2.7 complete |
 | 3.3 | DB Backup & Optimization + Bar Retention (1095-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete — superseded by per-timeframe retention in 3.11 |
-| 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Planned for future release; TV work was reverted at c7def0a |
+| 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ DEFERRED TO V4 | Never started; TV work was reverted at c7def0a. Not dropped — carried forward as Version 4's opening item. |
 | 3.5 | Structured Logging (JSON formatter, rotation) | ✅ DONE | All 3.5.1–3.5.9 complete (2026-09-05) |
 | 3.6 | Dashboard Performance (Promise.all, pre-warm, TTL cache, memo) | ✅ DONE | 10/10 items complete (2026-09-05) |
 | 3.9 | Backend + Frontend Bottleneck Cleanup | ✅ DONE | 21/21 items complete (2026-09-05) |

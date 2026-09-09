@@ -2,7 +2,7 @@
 
 **Market Intelligence and Quantitative Research Platform** — real-time market regime detection, multi-timeframe trend analysis, confluence scoring, strategy recommendation, scanner rankings, alerts, backtesting, and optional AI-powered analysis.
 
-> Current version: v3.2.0 · Python 3.12 · FastAPI · React 18 · SQLite
+> Current version: v3.3.0 · Python 3.12 · FastAPI · React 18 · SQLite
 
 ## Table of Contents
 
