@@ -47,12 +47,24 @@ function signalChip(sig: string): string {
   return labels[sig] || sig.replace(/_/g, ' ');
 }
 
-function trendLabel(directions: Record<string, string>): string {
+// Matches the app-wide trend-direction convention used everywhere
+// else (TrendCard, MTFScoreGrid, ConfluenceCard, ScannerPage's
+// .cell-trend badges): green = up, red = down, yellow = neutral.
+const DIRECTION_COLOR: Record<string, string> = {
+  uptrend: '#22c55e',
+  downtrend: '#ef4444',
+  sideways: '#eab308',
+};
+
+function trendLabel(directions: Record<string, string>): React.ReactNode {
   const entries = Object.entries(directions);
-  if (entries.length === 0) return '';
-  return entries
-    .map(([tf, dir]) => `${tf}:${dir === 'uptrend' ? '▲' : dir === 'downtrend' ? '▼' : '→'}`)
-    .join(' ');
+  if (entries.length === 0) return null;
+  return entries.map(([tf, dir], i) => (
+    <span key={tf} style={{ color: DIRECTION_COLOR[dir] }}>
+      {i > 0 ? ' ' : ''}
+      {tf}:{dir === 'uptrend' ? '▲' : dir === 'downtrend' ? '▼' : '→'}
+    </span>
+  ));
 }
 
 function ResultRow({
