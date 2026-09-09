@@ -31,6 +31,14 @@ frontend/.env
 .vscode/
 .idea/
 *.swp
+
+# Claude Code worktrees — created for isolated agent runs (Agent tool's
+# isolation: "worktree"), each is its own nested git checkout. Without
+# this, `git add -A` records them as gitlinks (mode 160000) pointing at
+# a commit in a repo nobody else has, which is worse than useless in a
+# clone (found live 2026-09-09: .claude/worktrees/jaeger-start had been
+# committed this way since the project's very first commit).
+.claude/worktrees/
 .DS_Store
 
 # Project data
