@@ -75,3 +75,11 @@ htmlcov/
 .coverage
 coverage.xml
 coverage/
+
+# Webull SDK's own auth token cache — refreshed on every backend start,
+# so tracking it means every restart dirties git status, and it's a live
+# credential that has no business in version control.
+conf/token.txt
+
+# Local mypy cache (not covered by the .pytest_cache/.ruff_cache lines above)
+.mypy_cache/
