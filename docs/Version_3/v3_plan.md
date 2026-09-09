@@ -1,9 +1,9 @@
 # Version 3 — Database, Charts, Logging, Dashboard, 1m-Only Storage
 
 **Date:** 2026-09-01
-**Last updated:** 2026-09-05
-**Status:** Active (Phases 3.6, 3.7, 3.8 complete; Phase 3.9 done — 21/21 items ✅ 2026-09-05)
-**Scope:** Platform hardening and UX polish across five areas: timeframe resampling, database backup/optimization, chart expansion, structured logging, dashboard performance, and post-3.6 bottleneck cleanup.
+**Last updated:** 2026-09-09
+**Status:** Active (Phases 3.6, 3.7, 3.8 complete; Phase 3.9 done — 21/21 items ✅ 2026-09-05; Phases 3.10–3.13 done ✅ 2026-09-09 — see below and `phase_audit_v3.md` for full as-built detail)
+**Scope:** Platform hardening and UX polish across five areas: timeframe resampling, database backup/optimization, chart expansion, structured logging, dashboard performance, and post-3.6 bottleneck cleanup. Extended 2026-09-09 with four reactive phases (not in the original goals list below): tracing-overhead page-load fix + repo cleanup, extended-hours ingestion + per-timeframe retention + live 1h bar, an RQ-based backfill pipeline rebuild, and a 1h-bar anchor mislabeling fix.
 
 ---
 
@@ -744,6 +744,17 @@ Scans the watchlists array on every render.
 - Startup time: `python -c "import time; t=time.perf_counter(); from backend.api.main import app; print(f'{(time.perf_counter()-t)*1000:.0f}ms')"` < 500ms (was ~1.5s with 80 queries)
 - Memory: 10-symbol watchlist should have 30 → 10 `TrendEngine` instances after consolidation
 - No new console warnings or re-render loops in React DevTools profiler
+
+---
+
+## Phases 3.10–3.13 — Reactive fixes (2026-09-09)
+
+Not part of the original v3 goals above — each triggered by a live user report during the same session, worked via direct empirical verification (curl/SQL/live provider calls) rather than speculation. Full item-by-item breakdown, root causes, and verification steps are in `phase_audit_v3.md`; summarized here for the plan's own status tracking:
+
+- **3.10 — Tracing-overhead page-load fix + repo cleanup.** "Every page is loading really slow" traced to `OBSERVABILITY_TRACING_ENABLED` pointing `FastAPIInstrumentor` at Jaeger's legacy UDP agent port (6831) instead of a real OTLP endpoint — every request paid for a doomed export. Fixed via `.env` (disabled; no working OTLP collector configured yet). Same pass: untracked the live-rewritten Webull auth token (`conf/token.txt`) and removed a stale worktree gitlink from git tracking.
+- **3.11 — Extended-hours ingestion + per-timeframe retention + live 1h bar.** Confirmed live that Webull's Open API supports pre/post-market bars via `trading_sessions`; wired extended hours (4:00am–8:00pm ET) into 1m and then all sub-hour timeframes. Replaced the single global `MARKET_DATA_BAR_RETENTION_DAYS` with per-timeframe `RETENTION_TF_*_DAYS` settings (1m–30m: 16 days; 1h/4h: 366 days; 1d/1wk: 1096 days). Added a live/partial current-hour 1h bar (same pattern as the existing live 1d bar) so 1h stops looking "1 bar behind" mid-hour. Also fixed a separate live-ingestion-lag bug: uncached `WebullProvider()` construction inside the gap-fill loops was blocking the shared ingestion event loop for seconds at a time.
+- **3.12 — RQ-based backfill pipeline rebuild.** The add-ticker flow was architecturally unsound (client-owned second call for correctness, 10-minute-blockable request thread, two racing triggers, no gap-check step, no observability). Rebuilt per `/Users/dips/.claude/plans/logical-zooming-dolphin.md`: add-symbol is now sync/instant (`register_symbol`), backfill runs as an RQ job with Redis-backed single-flight locking, a new `backfill_jobs` table tracks per-symbol status end-to-end, and a gap-check-and-targeted-refill step runs before resampling. Found and fixed several unrelated bugs during the audit (aux-data settings env-prefix bug, a Redis `flushall()` wiping queued jobs on every restart, a broken 4h resample bucket).
+- **3.13 — 1h bar anchor mislabeling fix.** User noticed SPY's 1m 11:25 bar and 1h 10:00 bar shared an identical low — impossible unless the 1h bar's hour boundary was wrong. Confirmed live: Webull's 1h endpoint returns `:30`-anchored bars, not `:00` as the code assumed, so every Webull-sourced 1h bar for every symbol had been mislabeled to the wrong canonical hour. Fixed by rebuilding 1h directly from verified 1m data (generalizing the Phase 3.11 live-hour builder to accept explicit past hours) wherever 1m retention still covers that hour, both continuously (today's hours, every ~2 min) and during backfill (the full 1m retention window). Ran a one-time corrective pass against the live DB; verified against the exact bar the user flagged.
 
 ---
 

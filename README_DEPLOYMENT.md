@@ -231,8 +231,18 @@ Set:
 ```bash
 OBSERVABILITY_TRACING_ENABLED=true
 OBSERVABILITY_JAEGER_AGENT_HOST=otel-collector
-OBSERVABILITY_JAEGER_AGENT_PORT=6831
+OBSERVABILITY_JAEGER_AGENT_PORT=4317   # OTLP/gRPC port — NOT 6831
 ```
+
+**Known pitfall (found live 2026-09-09):** `OBSERVABILITY_JAEGER_AGENT_PORT`
+defaults to `6831` in `.env.example`, which is Jaeger's legacy UDP *agent*
+port — not a valid OTLP/gRPC endpoint. `FastAPIInstrumentor` wraps every
+request regardless of route, so a misconfigured endpoint here is a doomed
+export attempt on every single request — a real, noticeable slowdown
+across the whole app, not a silent no-op. If you enable tracing, point it
+at an actual OTLP/gRPC collector on port `4317`, or leave
+`OBSERVABILITY_TRACING_ENABLED=false` until one is running. See
+`docs/Version_3/phase_audit_v3.md`, Phase 3.10.
 
 If the collector is unreachable, tracing is silently disabled — the
 app keeps running.

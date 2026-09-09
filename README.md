@@ -777,22 +777,26 @@ WATCHLIST_MAX_WATCHLISTS=10
 
 ### IngestionService (`backend/market_data/services/ingestion_service.py`)
 
-Runs in a background thread. Manages four continuous loops for all symbols in active watchlists:
+Runs in a background thread. Manages several continuous loops for all symbols in active watchlists — the most relevant to bar data:
 
 | Loop | Fires | Fetches | Window |
 |---|---|---|---|
-| `_1m_loop` | ~every 60s | 1m bars from primary provider | latest only |
+| `_bar_ingestion_loop` | ~every 60s | 1m bars from primary provider | latest only |
 | `_1h_write_loop` | hourly at :02 ET | 1h bars via BACKFILL_1H chain | 5d |
 | `_gapfill_1h_loop` | periodically | 1h bars (catches 16:00 close bar) | 5d |
-| `_1d_write_loop` | daily | 1d bars via BACKFILL_1D chain | 30d |
+| `_gapfill_1m_loop` | every 5 min, RTH only | 1m bars (catches provider lag) | 1d |
+| `_daily_write_loop` | daily | 1d bars via BACKFILL_1D chain | 30d |
+| `_resample_write_loop` | ~every 2 min | resamples 2m/3m/5m/15m/30m from 1m; rebuilds today's live/partial 1h + 1d bars | — |
 
-After each 1m write → resamples **2m/3m/5m/15m/30m** in-process.
-After each 1h write → resamples **4h** in-process.
-After each 1d write → resamples **1wk** in-process.
+**Extended hours:** 1m/2m/3m/5m/15m/30m carry the full 4:00am–8:00pm ET session (pre-market + after-hours), sourced from Webull's `trading_sessions` param. 1h/4h/1d/1wk remain regular-session-only (09:30–16:00 ET) by design.
+
+**Live/partial current-period bars:** the in-progress hour (1h) and trading day (1d) are built from their constituent 1m bars every ~2 min and tagged `data_status=INCOMPLETE`, on the same key the eventual provider-sourced bar lands on once the period closes (upsert overwrites it automatically). Without this, 1h/1d looked "1 bar behind" for the whole in-progress period.
+
+**Per-timeframe retention:** a rolling prune runs on every ~60s ingestion tick, each timeframe pruned against its own `RETENTION_TF_*_DAYS` cutoff (see [Configuration](#configuration)) — distinct from how far back a backfill fetches (`BACKFILL_*_DAYS` below).
 
 ### BackfillService (`backend/market_data/services/backfill_service.py`)
 
-One-shot historical fetch triggered when a ticker is added to a watchlist (`MARKET_DATA_BACKFILL_ON_ADD=true`). Provider chains are configured via `BACKFILL_1M/1H/1D_PRIMARY` and `BACKFILL_1M/1H/1D_FALLBACK` env vars.
+Historical fetch for a newly-added ticker, run as an **RQ background job** (queue `marketlens-backfill`, worker `backend/workers/backfill_worker.py`) — not on the add-symbol request thread. Adding a symbol returns immediately; poll `GET /api/watchlists/symbols/{symbol}/backfill-status` for progress (`queued` → `started` → `completed`/`partial`/`failed`, per-tier bar counts, gap summary). Provider chains are configured via `BACKFILL_1M/1H/1D_PRIMARY` and `BACKFILL_1M/1H/1D_FALLBACK` env vars.
 
 | Timeframe | Default chain | Typical result |
 |---|---|---|
@@ -800,7 +804,7 @@ One-shot historical fetch triggered when a ticker is added to a watchlist (`MARK
 | 1h | webull → alpaca → yahoo_finance | ~1,200 bars (webull cap) + gap-fill |
 | 1d | webull → webull | ~750 bars (3 years, retention cap) |
 
-Derived timeframes (2m/3m/5m/15m/30m/4h/1wk) are aggregated in-process after base bars are saved.
+After the tier1-3 fetch, a gap-check-and-targeted-refill step compares actual vs. expected (session-aware) timestamps and re-fetches just the missing ranges before derived timeframes (2m/3m/5m/15m/30m/4h/1wk) are aggregated in-process. 1h bars are additionally rebuilt directly from 1m data across the full 1m retention window, since provider-sourced 1h bars are not always aligned to the canonical `:00` hour boundary.
 
 ### ScannerEngine (`backend/scanner/scanner.py`)
 

@@ -1,7 +1,7 @@
 # Version 3 Phase Audit
 
-**Last updated:** 2026-09-05 (Phase 3.5: all 9 items complete — ALL DONE)
-**Scope:** Database backup/optimization, Bar retention (1095-day rolling window), Charts, Structured logging, Dashboard rebuild
+**Last updated:** 2026-09-09 (Phase 3.13: 1h bar anchor mislabeling fix — ALL DONE)
+**Scope:** Database backup/optimization, Bar retention (per-timeframe rolling windows), Charts, Structured logging, Dashboard rebuild, extended-hours ingestion, RQ backfill pipeline
 
 ---
 
@@ -11,13 +11,17 @@
 |---|---|---|---|
 | 3.1 | Timeframe Resampling (1m-only storage) | ✅ DONE | All 3.1.1–3.1.32 complete |
 | 3.2 | Alpaca Integration (REST + WebSocket) | ✅ DONE | All 3.2.1–3.2.7 complete |
-| 3.3 | DB Backup & Optimization + Bar Retention (1095-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete |
+| 3.3 | DB Backup & Optimization + Bar Retention (1095-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete — superseded by per-timeframe retention in 3.11 |
 | 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Planned for future release; TV work was reverted at c7def0a |
 | 3.5 | Structured Logging (JSON formatter, rotation) | ✅ DONE | All 3.5.1–3.5.9 complete (2026-09-05) |
 | 3.6 | Dashboard Performance (Promise.all, pre-warm, TTL cache, memo) | ✅ DONE | 10/10 items complete (2026-09-05) |
 | 3.9 | Backend + Frontend Bottleneck Cleanup | ✅ DONE | 21/21 items complete (2026-09-05) |
 | 3.7 | All-Timeframe Live Ingestion + Resample-at-Write + Backfill Config | ✅ DONE | 3.7.1–3.7.11 complete |
 | 3.8 | Auto Live Gap-fill Loop | ✅ DONE | 3.8.1–3.8.4 complete |
+| 3.10 | Tracing-Overhead Page-Load Fix + Repo Cleanup | ✅ DONE | 3.10.1–3.10.4 complete (2026-09-09) |
+| 3.11 | Extended-Hours Ingestion + Per-Timeframe Retention + Live 1h Bar | ✅ DONE | 3.11.1–3.11.7 complete (2026-09-09) |
+| 3.12 | RQ-Based Backfill Pipeline Rebuild | ✅ DONE | 3.12.1–3.12.9 complete (2026-09-09) |
+| 3.13 | 1h Bar Anchor Mislabeling Fix | ✅ DONE | 3.13.1–3.13.3 complete (2026-09-09) |
 
 ---
 
@@ -361,4 +365,92 @@ curl -s "http://127.0.0.1:5001/api/regime/batch/relative-strength?symbols=SPY,QQ
 # Startup time (after 3.9.3)
 # Should be <500ms warm cache (was ~1500ms with 80 sequential queries)
 ```
+
+## Phase 3.10 — Tracing-Overhead Page-Load Fix + Repo Cleanup — ✅ DONE (2026-09-09)
+
+**Trigger:** User report — "every page is loading really slow."
+
+**Root cause:** `backend/observability/tracing.py`'s `_get_otlp_endpoint()` built the OTLP export endpoint from `jaeger_agent_host`/`jaeger_agent_port` (6831 — Jaeger's legacy UDP *agent* port, not a valid OTLP/gRPC port). `FastAPIInstrumentor` wraps every ASGI request regardless of route, so every single request paid for a doomed export attempt against a non-listening endpoint.
+
+**Items:**
+- ✅ 3.10.1 Fix — `.env`: `OBSERVABILITY_TRACING_ENABLED=false` (backup saved before edit). No code change; the middleware itself is sound, the configured endpoint was not. **HIGH** (affected every page load).
+- ✅ 3.10.2 Repo cleanup audit — reviewed the tree for unused/unnecessary files; identified `conf/token.txt` (Webull SDK's live auth-token cache, rewritten every restart — was tracked, meaning every restart dirtied `git status` and any re-commit would put a live credential back in history) and `.claude/worktrees/jaeger-start` (a stale git-worktree gitlink, mode 160000, pointing at a commit that only ever existed on this machine).
+- ✅ 3.10.3 `conf/token.txt` untracked (file stays on disk), `.mypy_cache/` added to `.gitignore` (missed by existing cache ignores) — commit `9de8a0d`. Note: the token committed earlier (`b03a3d7` and before) is still in git history; rotate via the Webull dev console before ever sharing/pushing this repo.
+- ✅ 3.10.4 `.claude/worktrees/jaeger-start` gitlink removed via `git worktree remove`, `.claude/worktrees/` added to `.gitignore` — commit `c7f71fd`.
+
+**Not yet fixed (flagged, out of scope for this pass):** `.env.example` and `README_DEPLOYMENT.md` still default `OBSERVABILITY_TRACING_ENABLED=true` with no note about the broken agent-port endpoint — see [Known Follow-ups](#known-follow-ups) at the end of this document.
+
+**Verification:** Confirmed page-load latency returned to normal after the `.env` flip and a backend restart; no code paths depend on tracing being on, so disabling it is a pure win until a real OTLP collector is configured.
+
+---
+
+## Phase 3.11 — Extended-Hours Ingestion + Per-Timeframe Retention + Live 1h Bar — ✅ DONE (2026-09-09)
+
+**Trigger:** User question — does Webull's Open API only fetch RTH bars, or can it fetch pre/post/overnight too? Investigated live against the real API, then wired in on request.
+
+**Findings:**
+- Webull Open API bar endpoints take a `trading_sessions` param (`PRE`/`RTH`/`ATH` values) — extended-hours bars ARE available for free; only the streaming *overnight quote* feature is gated behind a separate paid subscription (`403 MARKET_DATA_NOT_SUBSCRIBED`).
+- The existing `SessionType` enum (`backend/engines/market_calendar.py`) already models PREMARKET (04:00–09:30 ET) / REGULAR (09:30–16:00 ET) / AFTER_HOURS (16:00–20:00 ET) / CLOSED — reused rather than re-invented.
+
+**Items:**
+- ✅ 3.11.1 `webull_provider.py`: pass `trading_sessions` through to the bar-fetch call; extended-hours bars flow through for 1m first (per-symbol confirmation via `test it`), then wired in for all sub-hour timeframes on request — 2m/3m/5m/15m/30m now also carry the full 4:00am–8:00pm ET daily range, not just RTH. **13 new tests** (`TestExtendedHoursBars`, `TestExtendedHoursQuotes` in `test_webull_provider.py`).
+- ✅ 3.11.2 Centralized session classification — new `classify_bar_session(ts)` in `market_calendar.py`; `bar_repository.upsert_bars()` now unconditionally recomputes `session` for 1m/2m/3m/5m/15m/30m bars at the write chokepoint, rather than trusting each provider to self-report it. Principle: never trust N independent providers to agree on a timestamp-derived fact — compute it once, centrally, where all bars converge.
+- ✅ 3.11.3 `ingestion_service._resample_and_upsert`: removed the `session == "regular"` filter for sub-hour resampling so 2m/3m/5m/15m/30m correctly include extended hours (1h/1d remain RTH-only by design — matches how those timeframes are used).
+- ✅ 3.11.4 Per-timeframe retention — new `RetentionSettings` (`backend/config/settings.py`, `RETENTION_` env prefix): `RETENTION_TF_1M_DAYS=16` (also 2m/3m/5m/15m/30m), `RETENTION_TF_1H_DAYS=366` (also 4h), `RETENTION_TF_1D_DAYS=1096` (also 1wk) — user-specified exact values. New `bar_repository.prune_bars_by_retention(db)` iterates every timeframe and prunes against its own cutoff; wired into the ~60s ingestion tick (replacing the old single rolling-window prune).
+- ✅ 3.11.5 Removed `MarketDataSettings.bar_retention_days` and the `.env` var `MARKET_DATA_BAR_RETENTION_DAYS` entirely — confirmed dead: it was always ≥ every `BACKFILL_*_DAYS` tier value, so its `min(tier_days, retention_days)` clamp never actually bound in any real call path. Per-timeframe retention (3.11.4) fully supersedes it.
+- ✅ 3.11.6 Live/partial current-hour 1h bar — `_resample_1h_live_and_upsert` (later generalized in 3.13) mirrors the existing, proven `_resample_1d_live_and_upsert` pattern one level down: builds/refreshes the in-progress hour from its 1m bars every ~2 min, tagged `INCOMPLETE`, on the same `(symbol, "1h", hour_start)` key the real provider-sourced bar lands on once the hour closes (upsert overwrites it, no special-casing). Previously 1h only ever showed the last fully-closed hour, which read as a missing/late bar (reported live at 1:13 with no 1:00 bar showing).
+- ✅ 3.11.7 Process-lifetime provider instance cache — `manager.get_cached_provider()` (`backend/market_data/services/manager.py`). Root-caused a separate "bars arriving 1-2+ min late" report: `WebullProvider.__init__` does a synchronous auth handshake (a real blocking network round-trip) and both `_gapfill_1m_loop`/`_gapfill_1h_loop` were constructing a fresh instance on every cycle, on the same asyncio event loop as the live ingestion tick — blocking it for hundreds of ms to seconds per gap-fill pass. Caching by provider name for the process lifetime (matching `MarketDataManager`'s own cache lifetime) fixes it; failed constructions are never cached, so a transient failure retries clean.
+
+New migration `alembic/versions/20260909_bar_session_column.py` (adds `session` column, `server_default='regular'`). 36 new/updated tests across these changes (webull provider, ingestion service, bar repository, manager, retention). Full suite green throughout.
+
+**Verification:** Live-tested against the real Webull API before wiring in; confirmed 1m/2m/3m/5m/15m/30m all carry the 4:00am–8:00pm ET range in the running app; confirmed the live 1h bar appears within ~2 min of the hour opening and is correctly overwritten once the provider's closed-hour bar lands.
+
+---
+
+## Phase 3.12 — RQ-Based Backfill Pipeline Rebuild — ✅ DONE (2026-09-09)
+
+**Trigger:** Architectural review of the add-ticker flow found it unsound: correctness depended on the frontend calling a second endpoint after add (silently skippable), the add-symbol HTTP thread could block up to 10 minutes on provider I/O, two independent triggers raced each other coordinated only by a per-event-loop asyncio lock, there was no explicit gap-check-and-fill step, and no observability into per-symbol backfill status (the SOFI investigation earlier in this session had to inspect the DB by hand to confirm a partial failure). Full plan at `/Users/dips/.claude/plans/logical-zooming-dolphin.md`.
+
+**Target flow implemented:** `POST /watchlists/{id}/symbols` → `WatchlistRepository.add_symbol_to_watchlist` (sync, fast, no provider I/O) → `ingestion_service.register_symbol()` (instant, in-process — symbol starts getting live quotes/1m bars within ~30-60s) → `backfill_queue.enqueue_backfill()` (Redis-backed single-flight, non-blocking) → 201 returned immediately. An RQ worker then runs the full backfill → gap-check → resample sequence out-of-request, reporting status via a new `BackfillJob` row.
+
+**Items:**
+- ✅ 3.12.1 New `backfill_jobs` table + `BackfillJob` model (`backend/models/backfill_job.py`), mirroring `AIAnalysisJob`'s shape (`job_id`, `symbol`, `status: queued|started|completed|partial|failed`, `tier1_written`/`tier2_written`/`tier3_written`, `gaps_found`/`gaps_filled`, `result` JSON, `error`, timestamps). Migration `alembic/versions/20260908_backfill_jobs.py`. Added to `purge_service`'s cascade delete.
+- ✅ 3.12.2 New gap-detection utilities in `bar_repository.py` — `expected_bar_timestamps()` (session-aware via the market calendar + `TimeframeEngine`) and `find_gaps()` (diffs expected vs. actual, coalesces into contiguous missing ranges), alongside the existing `find_duplicate_calendar_bars` pattern. New `test_gap_detection.py` (132 lines, includes a market-holiday case).
+- ✅ 3.12.3 New RQ queue — `backend/market_data/services/backfill_queue.py` — single-flight via a Redis `SET NX EX` lock (replacing the old in-process asyncio lock/semaphore that had to be re-keyed per event loop; single-flight is now a Redis-backed, cross-process fact). `test_backfill_queue.py` (402 lines).
+- ✅ 3.12.4 New `backend/workers/backfill_worker.py` (`SimpleWorker` — avoids fork segfaults with the Webull SDK); `ai_worker.py` also switched to `SimpleWorker` and a broken `--once` flag fixed on it in the same pass. Separate queue name (`marketlens-backfill`, distinct from `marketlens-workers`) so a slow multi-tier backfill can't starve AI analysis jobs.
+- ✅ 3.12.5 `backfill_service.py`: gap-check-and-targeted-refill step inserted between tier1-3 fetch and the sub-timeframe resample step; the old `_backfill_locks`/`_lock_guards_by_loop`/`_backfill_semaphores_by_loop` machinery removed now that there's exactly one call site (the RQ task) instead of two racing ones; job-id generation fixed to satisfy RQ's id-charset validation (a bug that had been silently passing only because it was mocked in tests).
+- ✅ 3.12.6 `ingestion_service.py`: new `register_symbol()` decouples "start live tracking" from "trigger backfill" (the old `_new_symbol_bootstrap` dual-trigger race is gone); `_seed_check` now enqueues through the RQ path instead of calling backfill directly; sub-hour resample now fires immediately after new 1m bars land instead of waiting for the next independent ~120s timer tick; fixed the 4h resample bucket guard that had been permanently discarding the 16:00–19:59 bucket.
+- ✅ 3.12.7 `watchlist/router.py`: add-symbol endpoint no longer blocks the request thread on any provider I/O; new `GET /api/watchlists/symbols/{symbol}/backfill-status` endpoint. Frontend (`frontend/src/services/api.ts`) drops the now-redundant post-add ingestion-refresh call — registration is guaranteed server-side at add time.
+- ✅ 3.12.8 Bugs found and fixed during the audit pass (unrelated to the pipeline rebuild itself, but found while reading the surrounding code): `AuxDataSettings`' nested News/Fundamentals/Options settings classes had no own `env_prefix`/`env_file`, so `AUX_*_ENABLED` in `.env` was silently never read (nested `BaseSettings` does not inherit the parent's `env_prefix`) — every `/api/aux-data/*` endpoint 503'd regardless of `.env` or restarts; `yfinance_provider.py`'s trailing live-snapshot filter missed a boundary-aligned variant; `main.py`'s startup `redis.flushall()` was wiping the *entire* Redis DB (including queued RQ jobs) on every restart, now scoped to the cache layer's own key prefix; `start.sh`'s signal trap had broken PID quoting.
+- ✅ 3.12.9 Docs/infra updated in the same commit: `CLAUDE.md` (RQ worker section), `README.md`, `README_DEPLOYMENT.md`, `.env.example`, `docker-compose.yml`, `scripts/run.py`.
+
+Commit `9a65843`. New/updated tests: `test_backfill_queue.py`, `test_backfill_service.py`, `test_bar_normalization.py`, `test_gap_detection.py`, `test_yfinance_provider.py`, `test_data_quality.py`, `test_purge_service.py`, `test_watchlist_api.py`, `test_aux_data_settings.py`.
+
+**Verification:** Manual end-to-end — added a real symbol, confirmed the API responded immediately, `GET .../backfill-status` progressed queued→started→completed within ~2 min, all 10 timeframes populated with no calendar-day duplicates. Full backend suite green.
+
+---
+
+## Phase 3.13 — 1h Bar Anchor Mislabeling Fix — ✅ DONE (2026-09-09)
+
+**Trigger:** User spotted the same low ($760.94) on SPY's 1m 11:25 bar and its 1h 10:00 bar and asked how that was possible.
+
+**Root cause:** `_normalize_1h_bar`'s docstring claimed "Alpaca and Webull use :00... yfinance uses :30" — empirically false. Live testing showed **Webull's 1h endpoint returns `:30`-anchored bars**, and the code naively floored every 1h timestamp to the preceding `:00`, mislabeling which canonical hour a bar's OHLC actually belonged to. This affected the entire 1h dataset for every symbol, for every 1h bar ever backfilled or ingested via Webull — not an edge case.
+
+**Fix — never trust a provider's own hour boundary where 1m coverage exists to check against:**
+- ✅ 3.13.1 Generalized the Phase 3.11 live-current-hour builder from `_resample_1h_live_and_upsert` (today's in-progress hour only) to `_resample_1h_from_1m_and_upsert(hour_starts=None, _symbol=None)`, which rebuilds any explicit set of hours (or all of today's, or a single symbol's) directly from verified, unambiguously-timestamped 1m data rather than the provider's own alignment. New `_hour_starts_between()` static helper generates `:00`-aligned buckets inclusive of both ends.
+- ✅ 3.13.2 Wired in two places: `_resample_write_loop` now rebuilds all of *today's* hours every ~2 min (cheap, bounded — continuously corrects any hour whose provider-sourced bar has a misaligned boundary); `backfill_service.backfill_symbol_history` runs the same correction across the full 1m retention window (`RETENTION_TF_1M_DAYS`, 16 days) right after tier2's fetch, so newly backfilled symbols get correct 1h immediately rather than carrying the provider's mislabeled bars until the next full rebuild. Hours older than the 1m retention window still rely on the provider's own (imperfect) alignment — 1m isn't retained that far back to correct against.
+- ✅ 3.13.3 One-time corrective pass run against the live DB for every symbol on the watchlist at the time (AAPL, DVLT, QQQ, SPY) — 78 bars corrected per symbol. Verified the exact SPY bar the user flagged: 10:00 now shows low=762.5/high=764.2 (correct), 11:00 now shows low=760.94/high=764.465 (the values that had been wrongly filed under 10:00).
+
+Commit `78da42b`. 6 new/updated tests (multi-hour correction, the exact bad-past-hour regression case, `_hour_starts_between`). Full suite: 1669/1669 passing.
+
+**Verification:** Direct SQL query against the live DB, before and after, matching the exact SPY timestamps/prices the user reported.
+
+---
+
+## Known Follow-ups
+
+Not yet done — flagged during recent audits, out of scope for the triggering request, not forgotten:
+
+- **`OBSERVABILITY_TRACING_ENABLED` default.** `.env.example` and `README_DEPLOYMENT.md` still default this to `true`, with no note that the shipped Jaeger-agent-port OTLP endpoint (6831, UDP) doesn't work with the gRPC exporter — re-enabling tracing from either template silently reintroduces the Phase 3.10 page-load slowdown. Should either default to `false` or ship a working OTLP endpoint config + a comment explaining the pitfall.
+- **`test_vacuum_into.py` leaves permanent orphan rows.** `VACUUM_TEST_*` symbols are written to the DB with no `tearDown` cleanup — a pre-existing test-hygiene bug, unrelated to any of the phases above.
 
