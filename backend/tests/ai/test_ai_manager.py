@@ -252,6 +252,26 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
         with self.assertRaises(ProviderUnavailable):
             self.p.complete("hi")
 
+    @patch("backend.ai.providers.httpx.Client")
+    def test_complete_raises_unavailable_on_non_json_200(self, MockClient):
+        """Regression for a live bug (2026-09-09): a misconfigured
+        base_url (missing the /v1 path a custom openai_compatible
+        gateway requires) landed on the gateway's own HTML web UI
+        instead of its API — a 200 response with an HTML body. r.json()
+        raised a raw json.JSONDecodeError that nothing upstream caught,
+        crashing the whole /api/ai/analyze request with an unhandled
+        500 instead of falling through like any other bad-response
+        case. json_data=None makes the mock's .json() raise ValueError,
+        the same as httpx's real JSONDecodeError (a ValueError subclass)
+        on a non-JSON body."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.post.return_value = _MockResponse(200, None, text="<html>...</html>")
+        MockClient.return_value = client
+        with self.assertRaises(ProviderUnavailable):
+            self.p.complete("hi")
+
 
 # --- AnthropicProvider --------------------------------------------
 
@@ -297,6 +317,18 @@ class TestAnthropicProvider(unittest.TestCase):
         resp = self.p.complete("hi", system="be brief")
         self.assertEqual(resp.text, "Hello world.")
         self.assertEqual(resp.provider, "anthropic")
+
+    @patch("backend.ai.providers.httpx.Client")
+    def test_complete_raises_unavailable_on_non_json_200(self, MockClient):
+        """Same regression as OpenAICompatibleProvider's version — see
+        that test's docstring."""
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.post.return_value = _MockResponse(200, None, text="<html>...</html>")
+        MockClient.return_value = client
+        with self.assertRaises(ProviderUnavailable):
+            self.p.complete("hi")
 
     def test_complete_raises_without_api_key(self):
         p2 = AnthropicProvider(api_key=None)

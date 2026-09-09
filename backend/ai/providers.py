@@ -120,7 +120,21 @@ class OpenAICompatibleProvider(AIProvider):
             # the original exception so the caller sees it.
             r.raise_for_status()
 
-        data = r.json()
+        try:
+            data = r.json()
+        except ValueError as e:
+            # A 200 with a non-JSON body — e.g. an HTML page (a
+            # misconfigured base_url missing /v1 can land on a gateway's
+            # own web UI instead of its API; a maintenance page; a proxy
+            # error page) — is exactly as "this provider didn't give us
+            # a usable answer" as a 4xx/5xx, but was raising a raw
+            # json.JSONDecodeError that nothing upstream caught, crashing
+            # the whole request with an unhandled 500 instead of falling
+            # through to the next provider or an UncertaintyResponse.
+            # Found live 2026-09-09 with exactly that base_url mistake.
+            raise ProviderUnavailable(
+                f"{self.name} returned a non-JSON body (HTTP {r.status_code}): {e}"
+            ) from e
         try:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
@@ -234,7 +248,15 @@ class AnthropicProvider(AIProvider):
         if r.status_code >= 400:
             r.raise_for_status()
 
-        data = r.json()
+        try:
+            data = r.json()
+        except ValueError as e:
+            # See OpenAICompatibleProvider.complete's identical guard —
+            # a 200 with a non-JSON body must fall through like any
+            # other bad-response case, not crash with a raw 500.
+            raise ProviderUnavailable(
+                f"anthropic returned a non-JSON body (HTTP {r.status_code}): {e}"
+            ) from e
         try:
             text = "".join(
                 block.get("text", "")
