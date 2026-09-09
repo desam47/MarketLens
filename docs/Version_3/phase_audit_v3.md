@@ -13,7 +13,7 @@
 | 3.1 | Timeframe Resampling (1m-only storage) | ✅ DONE | All 3.1.1–3.1.32 complete |
 | 3.2 | Alpaca Integration (REST + WebSocket) | ✅ DONE | All 3.2.1–3.2.7 complete |
 | 3.3 | DB Backup & Optimization + Bar Retention (1095-day) | ✅ DONE | Section A (3.3.1–3.3.7) + Section B (3.3.8–3.3.18) complete — superseded by per-timeframe retention in 3.11 |
-| 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ DEFERRED TO V4 | Never started; TV work was reverted at c7def0a. Not dropped — carried forward as Version 4's opening item. |
+| 3.4 | Charts (drawing v1, line/area/HA, indicators) | ⬜ DEFERRED TO V4 | Never started. A TradingView Charting Library integration was attempted (commit 9598dae) but is not present in the current tree — `lightweight-charts` + `CandlestickChart.tsx` remains the live implementation. (Earlier notes here citing c7def0a as the revert commit were wrong — that commit only fixes phase-doc numbering, not charts.) Carried forward as Version 4's opening item, see `docs/Version_4/`. |
 | 3.5 | Structured Logging (JSON formatter, rotation) | ✅ DONE | All 3.5.1–3.5.9 complete (2026-09-05) |
 | 3.6 | Dashboard Performance (Promise.all, pre-warm, TTL cache, memo) | ✅ DONE | 10/10 items complete (2026-09-05) |
 | 3.9 | Backend + Frontend Bottleneck Cleanup | ✅ DONE | 21/21 items complete (2026-09-05) |
