@@ -776,6 +776,33 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
             except Exception as e:
                 logger.warning(f"backfill {symbol}: 1h gap-check failed: {e}")
 
+        # Correct 1h using our own 1m data wherever 1m coverage exists
+        # (RETENTION_TF_1M_DAYS). Found live 2026-09-09: Webull's 1h
+        # endpoint (the primary source above) returns bars anchored at
+        # :30, not :00 — _normalize_1h_bar floors those to the preceding
+        # :00, silently mislabeling which hour a bar's high/low actually
+        # belong to (a bar spanning [10:30,11:30) got filed under "10:00"
+        # even though its extremes could easily have occurred after
+        # 11:00). No floor/ceiling choice fixes that — the bar genuinely
+        # straddles two canonical hours. Our own 1m data has none of that
+        # ambiguity, so this overwrites tier2's bars with the verified
+        # aggregate wherever 1m is available. See
+        # ingestion_service._resample_1h_from_1m_and_upsert's docstring.
+        try:
+            from backend.market_data.services.ingestion_service import ingestion_service
+            from backend.config.settings import settings as _settings_1h
+            from backend.utils.timezone import NY as _NY_TZ_local
+            now_ny = datetime.now(_NY_TZ_local).replace(tzinfo=None)
+            window_start = now_ny - timedelta(days=_settings_1h.retention.tf_1m_days)
+            hours = ingestion_service._hour_starts_between(window_start, now_ny)
+            corrected = await ingestion_service._resample_1h_from_1m_and_upsert(
+                hour_starts=hours, _symbol=symbol,
+            )
+            if corrected:
+                logger.info(f"backfill {symbol}: corrected {corrected} 1h bars from 1m")
+        except Exception as e:
+            logger.warning(f"backfill {symbol}: 1h correction-from-1m failed: {e}")
+
         # Tier 3: 1d bars. Window configurable via BACKFILL_1D_DAYS
         # (default 1095 ≈ 3 years), still capped by an explicit override.
         tier3_days = _tier_days(settings.backfill.tf_1d_days)

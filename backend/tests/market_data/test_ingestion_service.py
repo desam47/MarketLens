@@ -357,14 +357,24 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
 
 class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
-    """_resample_1h_live_and_upsert — the current, in-progress hour's 1h
-    bar, built live from this hour's 1m bars.
+    """_resample_1h_from_1m_and_upsert — builds 1h bars from 1m data,
+    either the current in-progress hour (default) or any explicit past
+    hour_starts (used to correct already-closed hours).
 
-    Added 2026-09-09 by request: 1h previously only ever showed the last
-    FULLY CLOSED hour (correct under that design, but surprising — found
-    live at 1:13pm with no 1:00 bar yet, since that hour hadn't closed).
-    Mirrors the existing, proven ``_resample_1d_live_and_upsert`` pattern
-    one level down.
+    Added 2026-09-09, then extended the same day: 1h originally only
+    ever showed the last FULLY CLOSED hour (correct under that design,
+    but surprising — found live at 1:13pm with no 1:00 bar yet, since
+    that hour hadn't closed). Mirrors the existing, proven
+    ``_resample_1d_live_and_upsert`` pattern one level down.
+
+    Extended the same day to also fix a second, more serious bug this
+    surfaced: Webull's 1h endpoint (primary for every symbol) returns
+    :30-anchored bars, and the existing normalization floors those to
+    the preceding :00 — silently mislabeling which hour a bar's
+    high/low actually belong to. See
+    _resample_1h_from_1m_and_upsert's own docstring for the full story;
+    ``test_corrects_an_already_closed_past_hour`` below is the
+    regression test for that specific case.
     """
 
     SYMBOL = "ZZTESTLIVE1H"
@@ -409,7 +419,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
-        written = await service._resample_1h_live_and_upsert()
+        written = await service._resample_1h_from_1m_and_upsert()
         self.assertGreaterEqual(written, 1)
 
         row = self.db.query(BarModel).filter(
@@ -438,7 +448,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
-        await service._resample_1h_live_and_upsert()
+        await service._resample_1h_from_1m_and_upsert()
 
         row = self.db.query(BarModel).filter(
             BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
@@ -455,7 +465,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
-        written = await service._resample_1h_live_and_upsert()
+        written = await service._resample_1h_from_1m_and_upsert()
         self.assertEqual(written, 0)
 
     async def test_authoritative_bar_overwrites_the_live_one(self):
@@ -475,7 +485,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
-        await service._resample_1h_live_and_upsert()
+        await service._resample_1h_from_1m_and_upsert()
 
         real_bar = Bar(
             symbol=self.SYMBOL, timeframe="1h",
@@ -492,6 +502,66 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.provider, "webull")
         self.assertEqual(row.data_status, "HISTORICAL")
         self.assertEqual(row.close, 108.0)
+
+    async def test_corrects_an_already_closed_past_hour(self):
+        """Regression test for the live bug (2026-09-09): a bad
+        provider-sourced bar sits in an EARLIER, already-closed hour's
+        slot (simulating Webull's :30-anchored bar floored onto the
+        wrong :00 hour — its high/low actually belong to the FOLLOWING
+        hour). Passing that hour's start in hour_starts must rebuild it
+        from 1m and overwrite the bad value with HISTORICAL status
+        (the hour is closed, not live)."""
+        from datetime import datetime, timedelta
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+        from backend.repositories.bar_repository import upsert_bars
+        from backend.models.market_data import Bar, DataStatus
+
+        past_hour = self._hour_start() - timedelta(hours=2)
+
+        # The bad, mislabeled provider bar — e.g. it actually reflects
+        # data from the FOLLOWING hour (like the real SPY 10:00 bar
+        # whose low/high matched the 11:00 hour's true values).
+        bad_bar = Bar(
+            symbol=self.SYMBOL, timeframe="1h",
+            open=100.0, high=999.0, low=1.0, close=50.0, volume=1,
+            timestamp=past_hour, provider="webull",
+            data_status=DataStatus.HISTORICAL,
+        )
+        upsert_bars(self.db, [bad_bar])
+
+        # The REAL 1m data for this hour — what it should actually show.
+        self._insert_1m_bar(self.db, past_hour, close=100.0)
+        self._insert_1m_bar(self.db, past_hour + timedelta(minutes=1), close=101.0)
+        self._insert_1m_bar(self.db, past_hour + timedelta(minutes=2), close=99.5)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_from_1m_and_upsert(hour_starts=[past_hour])
+        self.assertGreaterEqual(written, 1)
+
+        row = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
+            BarModel.timestamp == past_hour,
+        ).first()
+        self.assertEqual(row.provider, "live_from_1m")
+        self.assertEqual(row.data_status, "HISTORICAL")  # closed hour, not live
+        self.assertEqual(row.high, 101.0)
+        self.assertEqual(row.low, 99.5)
+        self.assertNotEqual(row.high, 999.0)  # the bad value is gone
+
+    async def test_hour_starts_between_helper(self):
+        from datetime import datetime, timedelta
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        start = datetime(2026, 9, 9, 4, 0)
+        end = datetime(2026, 9, 9, 6, 30)
+        hours = MarketDataIngestionService._hour_starts_between(start, end)
+        self.assertEqual(hours, [
+            datetime(2026, 9, 9, 4, 0),
+            datetime(2026, 9, 9, 5, 0),
+            datetime(2026, 9, 9, 6, 0),
+        ])
 
 
 if __name__ == "__main__":

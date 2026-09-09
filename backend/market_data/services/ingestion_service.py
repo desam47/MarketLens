@@ -676,7 +676,10 @@ class MarketDataIngestionService:
 
     async def _resample_write_loop(self, initial_delay: float = 0.0):
         """Every 2 min: resample 1m -> 2m/3m/5m/15m/30m, plus today's live
-        1d bar and the current hour's live 1h bar."""
+        1d bar and today's 1h bars (rebuilt from 1m each pass — cheap,
+        bounded to today, and continuously corrects any already-closed
+        hour whose provider-sourced bar has a misaligned boundary; see
+        _resample_1h_from_1m_and_upsert)."""
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
         while self.is_running:
@@ -684,7 +687,11 @@ class MarketDataIngestionService:
                 for tf in self._SUBHOUR_TFS:
                     await self._resample_and_upsert(tf, source_tf="1m")
                 await self._resample_1d_live_and_upsert()
-                await self._resample_1h_live_and_upsert()
+                now_naive = datetime.now(_NY_TZ).replace(tzinfo=None)
+                today_start = now_naive.replace(hour=4, minute=0, second=0, microsecond=0)
+                if now_naive >= today_start:
+                    hours = self._hour_starts_between(today_start, now_naive)
+                    await self._resample_1h_from_1m_and_upsert(hour_starts=hours)
             except Exception as e:
                 logger.error(f"Error in resample write loop: {e}")
             await self._jittered_sleep(120, jitter=10.0)
@@ -783,77 +790,127 @@ class MarketDataIngestionService:
             db.close()
         return written
 
-    async def _resample_1h_live_and_upsert(self) -> int:
-        """Build/refresh the CURRENT hour's 1h bar from this hour's 1m bars.
+    @staticmethod
+    def _hour_starts_between(start: datetime, end: datetime) -> list[datetime]:
+        """Every :00-aligned hour bucket from ``start`` through ``end``
+        (both naive NY), inclusive of both boundaries' hours."""
+        h = start.replace(minute=0, second=0, microsecond=0)
+        end_h = end.replace(minute=0, second=0, microsecond=0)
+        hours = []
+        while h <= end_h:
+            hours.append(h)
+            h += timedelta(hours=1)
+        return hours
 
-        Mirrors ``_resample_1d_live_and_upsert``'s proven pattern exactly,
-        one level down: runs every ~2 min (via _resample_write_loop) so
-        the in-progress hour is visible and updating live, instead of 1h
-        only ever showing the last fully-closed hour (found live
-        2026-09-09: at 1:13pm, the most recent 1h bar was 12:00 — correct
-        under "only closed hours" but surprising if you expect a live
-        current-hour candle the way 1m already provides).
+    async def _resample_1h_from_1m_and_upsert(
+        self, hour_starts: list[datetime] | None = None, _symbol: str | None = None,
+    ) -> int:
+        """Build/refresh 1h bars from 1m data for each bucket in
+        ``hour_starts`` (naive NY, each already floored to :00). Defaults
+        to just the current (in-progress) hour.
 
-        Written with data_status=INCOMPLETE. _1h_write_loop (hourly, :02
-        past the hour) and _gapfill_1h_loop (every 30 min) both write to
-        the SAME (symbol, "1h", hour_start) key once that hour is
-        actually closed and the authoritative provider-sourced bar is
-        available — upsert's ON CONFLICT DO UPDATE means that real bar
-        simply overwrites this synthetic one on the next real fetch, no
-        special-casing needed. By the time the NEXT hour starts, this
-        function has moved on to building THAT hour instead, so there's
-        never a live/authoritative race on the same key in practice.
+        Two roles, same mechanism:
+
+        1. Live current-hour bar (hour_starts=None, the default): mirrors
+           ``_resample_1d_live_and_upsert``'s proven pattern one level
+           down — runs every ~2 min (via _resample_write_loop) so the
+           in-progress hour is visible and updating, instead of 1h only
+           ever showing the last fully-closed hour (found live
+           2026-09-09: at 1:13pm the most recent bar was 12:00 —
+           technically correct under "only closed hours", but surprising
+           if you expect a live current-hour candle the way 1m provides).
+
+        2. Correcting already-closed hours (explicit hour_starts, called
+           from _resample_write_loop with today's hours, and from
+           backfill_symbol_history with the full 1m retention window for
+           a newly-backfilled symbol): found live the same day — Webull's
+           1h endpoint (the primary source for every symbol) returns
+           bars anchored at :30 (e.g. a bar timestamped 10:30 spans
+           [10:30,11:30)), not the :00 anchors _normalize_1h_bar assumed
+           only Alpaca/Webull would use. That function's existing
+           "floor :30 bars to the preceding :00" rule — written assuming
+           :30 bars are rare, yfinance-only fallback data — was silently
+           mislabeling every Webull-sourced 1h bar: a bar covering
+           [10:30,11:30) got floored and stored as "10:00", so its
+           high/low (which can easily reflect the LATTER half of that
+           window) end up attributed to the wrong hour entirely. There's
+           no correct floor-or-ceiling fix for that — the bar genuinely
+           straddles two canonical hours. The actual fix: stop trusting
+           any provider's own hourly boundaries and build 1h directly
+           from our own already-verified, unambiguously-timestamped 1m
+           data instead, whenever 1m coverage exists (i.e. within
+           RETENTION_TF_1M_DAYS). Hours older than that still rely on
+           the provider as before — we don't retain 1m that far back.
+
+        Written with data_status=INCOMPLETE if the bucket's hour hasn't
+        closed yet (only ever true for the current-hour case), else
+        HISTORICAL. Either way this upserts onto the SAME
+        (symbol, "1h", hour_start) key _1h_write_loop/_gapfill_1h_loop
+        write to — for the live case, the real bar naturally overwrites
+        this one once the hour closes and a fresh fetch runs; for the
+        correction case, THIS call is the one doing the overwriting, and
+        that's the point.
 
         Regular-session only, matching every other 1h/4h/1d/1wk source
         query in this codebase (see BarModel.session's docstring) — 1h
-        has never included extended-hours data, and this live builder
-        must not become the one place that quietly changes that.
+        has never included extended-hours data, and this must not become
+        the one place that quietly changes that.
         """
         from backend.repositories.bar_repository import upsert_bars
 
         now = datetime.now(_NY_TZ)
         if now.weekday() >= 5:
             return 0
+        now_naive = now.replace(tzinfo=None)
 
-        hour_start = now.replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        if hour_starts is None:
+            hour_starts = [now_naive.replace(minute=0, second=0, microsecond=0)]
+
+        symbols_to_process = [_symbol] if _symbol else self.symbols
         written = 0
         db = SessionLocal()
         try:
-            for symbol in self.symbols:
-                rows = (
-                    db.query(BarModel)
-                    .filter(
-                        and_(
-                            BarModel.symbol == symbol.upper(),
-                            BarModel.timeframe == "1m",
-                            BarModel.timestamp >= hour_start,
-                            BarModel.session == "regular",
+            for symbol in symbols_to_process:
+                for hour_start in hour_starts:
+                    hour_end = hour_start + timedelta(hours=1)
+                    rows = (
+                        db.query(BarModel)
+                        .filter(
+                            and_(
+                                BarModel.symbol == symbol.upper(),
+                                BarModel.timeframe == "1m",
+                                BarModel.timestamp >= hour_start,
+                                BarModel.timestamp < hour_end,
+                                BarModel.session == "regular",
+                            )
                         )
+                        .order_by(BarModel.timestamp.asc())
+                        .all()
                     )
-                    .order_by(BarModel.timestamp.asc())
-                    .all()
-                )
-                if len(rows) < 2:
-                    continue  # not enough of this hour ingested yet
+                    if len(rows) < 2:
+                        continue  # not enough of this hour ingested
 
-                bars_src = [self._model_to_bar(r) for r in rows]
-                bar = Bar(
-                    symbol=symbol.upper(),
-                    timeframe="1h",
-                    open=bars_src[0].open,
-                    high=max(b.high for b in bars_src),
-                    low=min(b.low for b in bars_src),
-                    close=bars_src[-1].close,
-                    volume=sum(b.volume for b in bars_src),
-                    timestamp=hour_start,
-                    provider="live_from_1m",
-                    data_status=DataStatus.INCOMPLETE,
-                )
-                written += upsert_bars(db, [bar])
+                    bars_src = [self._model_to_bar(r) for r in rows]
+                    bar = Bar(
+                        symbol=symbol.upper(),
+                        timeframe="1h",
+                        open=bars_src[0].open,
+                        high=max(b.high for b in bars_src),
+                        low=min(b.low for b in bars_src),
+                        close=bars_src[-1].close,
+                        volume=sum(b.volume for b in bars_src),
+                        timestamp=hour_start,
+                        provider="live_from_1m",
+                        data_status=(
+                            DataStatus.INCOMPLETE if hour_end > now_naive
+                            else DataStatus.HISTORICAL
+                        ),
+                    )
+                    written += upsert_bars(db, [bar])
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
-                for symbol in self.symbols:
+                for symbol in symbols_to_process:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
             db.rollback()
