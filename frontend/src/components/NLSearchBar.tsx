@@ -17,7 +17,6 @@ const strPrice = fmtPrice;
 interface NLSearchBarProps {
   onSelectSymbol?: (symbol: string) => void;
   placeholder?: string;
-  defaultScope?: 'watchlist' | 'market';
 }
 
 const EXAMPLE_QUERIES = [
@@ -92,7 +91,7 @@ function ResultRow({
   );
 }
 
-export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bullish stocks…', defaultScope = 'watchlist' }: NLSearchBarProps) {
+export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bullish stocks…' }: NLSearchBarProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NLSearchResultItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -106,7 +105,6 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
     explanation: string | null;
     reason: string | null;
   } | null>(null);
-  const [scope, setScope] = useState<'watchlist' | 'market'>(defaultScope);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -122,11 +120,17 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
     setMeta(null);
 
     try {
+      // Scope is always "watchlist" — the "Market" option (removed
+      // 2026-09-09) never actually searched a broader market universe.
+      // There's no concept of one anywhere in this app: every scan,
+      // everywhere, only ever touches watchlist symbols, so "Market"
+      // just showed whatever happened to be in the scanner's cache —
+      // indistinguishable from Watchlist in practice. Removed rather
+      // than keep a dropdown option that didn't do anything real.
       const resp = await api.nlSearch({
         query: q.trim(),
         explain: true,
         top_n: 15,
-        scope,
       });
       setResults(resp.results);
       setMeta({
@@ -144,7 +148,7 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
     } finally {
       setLoading(false);
     }
-  }, [scope]);
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -194,15 +198,6 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
             autoComplete="off"
             spellCheck={false}
           />
-          <select
-            className="nl-scope-select"
-            value={scope}
-            onChange={e => setScope(e.target.value as 'watchlist' | 'market')}
-            title="Search scope"
-          >
-            <option value="watchlist">Watchlist</option>
-            <option value="market">Market</option>
-          </select>
           <button
             type="submit"
             className={`btn btn-primary ${loading ? 'btn-loading' : ''}`}
