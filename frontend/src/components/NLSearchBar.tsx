@@ -47,6 +47,19 @@ function signalChip(sig: string): string {
   return labels[sig] || sig.replace(/_/g, ' ');
 }
 
+// Same bullish/bearish classification TopMoversCard.tsx uses for these
+// scanner-emitted signal names. HIGH_VOLUME is direction-agnostic —
+// it says something moved, not which way — so it gets the neutral
+// (yellow) treatment alongside trend's "sideways".
+const BULLISH_SIGNALS = new Set(['RSI_OVERSOLD', 'MACD_BULLISH', 'MULTI_TIMEFRAME_BULLISH']);
+const BEARISH_SIGNALS = new Set(['RSI_OVERBOUGHT', 'MACD_BEARISH', 'MULTI_TIMEFRAME_BEARISH']);
+
+function signalChipClass(sig: string): string {
+  if (BULLISH_SIGNALS.has(sig)) return 'signal-bullish';
+  if (BEARISH_SIGNALS.has(sig)) return 'signal-bearish';
+  return 'signal-neutral';
+}
+
 // Matches the app-wide trend-direction convention used everywhere
 // else (TrendCard, MTFScoreGrid, ConfluenceCard, ScannerPage's
 // .cell-trend badges): green = up, red = down, yellow = neutral.
@@ -88,7 +101,7 @@ function ResultRow({
       <td className="nl-signals">
         {item.signals.length > 0
           ? item.signals.slice(0, 3).map(s => (
-              <span key={s} className="signal-chip">{signalChip(s)}</span>
+              <span key={s} className={`signal-chip ${signalChipClass(s)}`}>{signalChip(s)}</span>
             ))
           : <span className="info-text">—</span>
         }

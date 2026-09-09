@@ -2437,6 +2437,27 @@ h4 {
   white-space: nowrap;
 }
 
+/* AI Stock Search signal chips — same green/red/yellow values as
+   .trend-up/.trend-down/.trend-neutral above, applied as opt-in
+   modifiers so plain .signal-chip usage elsewhere is unaffected. */
+.signal-chip.signal-bullish {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.signal-chip.signal-bearish {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.signal-chip.signal-neutral {
+  background-color: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  border-color: rgba(234, 179, 8, 0.35);
+}
+
 .cell-freshness {
   font-size: 0.85rem;
   color: var(--text-muted);
