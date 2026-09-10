@@ -196,30 +196,59 @@ const TransitionsPanel = memo(function TransitionsPanel({
   );
 });
 
-// --- S/R Levels panel ---
-const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel[]; latestClose: number | null }) {
-  // Only show levels on the *correct* side of current price: a "high"-type
-  // level is resistance only if it's above current price (if it's below,
-  // price has broken through it and it's no longer meaningful resistance).
-  // Similarly a "low"-type level is support only if it's below current
-  // price. This prevents showing a column of "Support" prices that are
-  // actually above the current price (e.g. after a gap-down).
-  // Consolidation zones are dropped from the per-side list — they are a
-  // separate concept (a cluster of swings) and not a directional S/R level.
-  const resistances = levels
-    .filter(l =>
-      !['consolidation_zone', 'pivot_high', 'pivot_low', 'swing_high', 'swing_low'].includes(l.type) && l.type.includes('high')
-    )
-    .sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
-  const supports = levels
-    .filter(l =>
-      !['consolidation_zone', 'pivot_high', 'pivot_low', 'swing_high', 'swing_low'].includes(l.type) && l.type.includes('low')
-    )
-    .sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
+// --- Price-range / Support & Resistance levels panels ---
+// Both render from the same /price-range data (SRLevel[]), differing only
+// in which levels they include and how they're grouped:
+//   'price-range'         — boundary levels only (today / prev-day / this-
+//                           week / prev-week / all-time high & low),
+//                           labelled Top / Bottom, ordered by period.
+//   'support-resistance'  — every detected level, incl. swing highs/lows,
+//                           pivots and consolidation zones, labelled
+//                           Resistance / Support, strongest first, with
+//                           each level placed on a side by price vs the
+//                           current close (a swing high that's now below
+//                           price is support, not resistance).
+type SRPanelVariant = 'price-range' | 'support-resistance';
+
+const SR_TECHNICAL_TYPES = ['pivot_high', 'pivot_low', 'swing_high', 'swing_low', 'consolidation_zone'];
+
+const SRPanel = memo(function SRPanel({
+  levels,
+  latestClose,
+  variant,
+}: {
+  levels: SRLevel[];
+  latestClose: number | null;
+  variant: SRPanelVariant;
+}) {
+  const isFullSR = variant === 'support-resistance';
+  const title = isFullSR ? 'Support & Resistance' : 'Price Range';
+  const highLabel = isFullSR ? 'Resistance' : 'Top';
+  const lowLabel = isFullSR ? 'Support' : 'Bottom';
+
+  const forSide = (wantHigh: boolean): SRLevel[] => {
+    const picked = levels.filter(l => {
+      if (!isFullSR) {
+        // Price Range: boundary types only, keyed by the high/low in the name.
+        if (SR_TECHNICAL_TYPES.includes(l.type)) return false;
+        return l.type.includes(wantHigh ? 'high' : 'low');
+      }
+      // Support & Resistance: everything, placed by price vs current close
+      // (falls back to the type name when there's no close to compare to).
+      const above = latestClose != null ? l.price >= latestClose : l.type.includes('high');
+      return above === wantHigh;
+    });
+    return isFullSR
+      ? [...picked].sort((a, b) => b.strength - a.strength)
+      : [...picked].sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
+  };
+
+  const resistances = forSide(true);
+  const supports = forSide(false);
 
   return (
     <div className="card analysis-card">
-      <h2>Price Range</h2>
+      <h2>{title}</h2>
       {latestClose != null && (
         <div className="current-price">
           <span className="price-label">Last</span>
@@ -230,11 +259,12 @@ const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel
         <p className="empty-state">No levels detected</p>
       ) : (
         <div className="sr-grid">
-          {(['Top', 'Bottom'] as const).map(label => {
-            const items = label === 'Top' ? resistances : supports;
-            const color = label === 'Top' ? '#ef4444' : '#10b981';
+          {(['high', 'low'] as const).map(side => {
+            const label = side === 'high' ? highLabel : lowLabel;
+            const items = side === 'high' ? resistances : supports;
+            const color = side === 'high' ? '#ef4444' : '#10b981';
             return (
-              <div key={label} className="sr-column">
+              <div key={side} className="sr-column">
                 <h3 style={{ color }}>{label}</h3>
                 <table className="sr-table">
                   <thead>
@@ -247,14 +277,14 @@ const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel
                   </thead>
                   <tbody>
                     {items.slice(0, 8).map((l, i) => {
-                      // Resistance distances are positive (above), support
-                      // distances are negative (below) by sign convention.
+                      // Above-price distances are positive, below-price
+                      // negative, by sign convention.
                       const absDist = l.distance_from_price != null
                         ? Math.abs(l.distance_from_price)
                         : null;
                       const dist = absDist == null
                         ? null
-                        : label === 'Bottom' ? -absDist : absDist;
+                        : side === 'low' ? -absDist : absDist;
                       return (
                         <tr key={i}>
                           <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
@@ -581,7 +611,10 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           />
         </div>
         <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
-          <SRPanel levels={srLevels} latestClose={latestClose} />
+          <SRPanel levels={srLevels} latestClose={latestClose} variant="price-range" />
+        </div>
+        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
+          <SRPanel levels={srLevels} latestClose={latestClose} variant="support-resistance" />
         </div>
         <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />
