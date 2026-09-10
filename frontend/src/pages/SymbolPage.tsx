@@ -37,6 +37,9 @@ const DrawingToolsPanel = lazy(() =>
 const AITemplatesPanel = lazy(() =>
   import('../components/AITemplatesPanel').then(m => ({ default: m.AITemplatesPanel })),
 );
+const ChatPanel = lazy(() =>
+  import('../components/ChatPanel').then(m => ({ default: m.ChatPanel })),
+);
 
 interface SymbolPageProps {
   symbol: string;
@@ -611,6 +614,9 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
           <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
+          <ChatPanel symbol={symbol} />
         </Suspense>
         <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
           <MTFScoreGrid

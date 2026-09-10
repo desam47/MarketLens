@@ -364,6 +364,101 @@ def parse_alert_commentary_reply(text: str | None) -> AlertCommentaryResponse:
     return AlertCommentaryResponse.model_validate(data)
 
 
+# --- Chat (Version 4, AI feature 4) ----------------------------------
+
+class ChatReplyResponse(BaseModel):
+    """AI's reply to one chat turn.
+
+    ``grounded`` lets the caller distinguish "I don't have enough
+    data to answer that" from a normal answer without a separate
+    error path — same uncertainty-first spirit as ``UncertaintyResponse``,
+    just folded into one small schema instead of two response shapes,
+    since a chat reply is always some text either way.
+    """
+
+    reply: str = Field(..., min_length=1, max_length=2000)
+    grounded: bool = True
+
+
+CHAT_SYSTEM_PROMPT = """\
+You are MarketLens Analyst, having a back-and-forth conversation with \
+a human trader about one symbol — not issuing trade orders or \
+overriding the engine's own calculations.
+
+Rules you must follow:
+1. Use only the numbers in the JSON context below. NEVER compute \
+   indicators, prices, or percentages yourself. If the context can't \
+   answer the question, say so plainly and set "grounded" to false —
+   do not invent a value to fill the gap.
+2. Prior turns are provided for conversational continuity, but the \
+   <context> block is always the current live truth — if an earlier \
+   turn discussed older data, prefer the context over your own past \
+   replies.
+3. Your output is a single JSON object with EXACTLY these fields: \
+   "reply" (string, 1-4 sentences, conversational) and "grounded" \
+   (boolean — true if you had enough context to answer, false if \
+   you're saying you don't have enough data).
+4. NEVER recommend buying, selling, or holding. NEVER mention target \
+   prices or stop losses. You are discussing, not advising.
+5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
+   the block.
+"""
+
+
+def build_chat_prompt(
+    context_dict: dict[str, Any],
+    transcript: list[tuple[str, str]],
+    new_message: str,
+    alert_context: dict[str, Any] | None = None,
+) -> str:
+    """Render one chat turn into a user message.
+
+    ``transcript`` is a list of ``(role, content)`` pairs for prior
+    turns in this session (oldest first) — rendered as plain text,
+    not re-sent as separate messages, since there's no multi-message
+    conversation API here (one ai_manager.complete() call per turn,
+    same as every other AI call site in this app).
+    ``alert_context``, when present, is the alert/trigger this chat
+    was opened from (see backend.ai.chat.answer_chat_message) — folded
+    in as an extra section so "explain this alert" style questions
+    have something concrete to reference.
+    """
+    context_body = json.dumps(context_dict, indent=2, default=str)
+    parts = [
+        "Here is the current context for this symbol:",
+        f"<context>\n{context_body}\n</context>",
+    ]
+    if alert_context:
+        alert_body = json.dumps(alert_context, indent=2, default=str)
+        parts.append(
+            "This chat was opened from a specific alert trigger:\n"
+            f"<alert_trigger>\n{alert_body}\n</alert_trigger>"
+        )
+    if transcript:
+        lines = [f"{role}: {content}" for role, content in transcript]
+        parts.append("Prior conversation (oldest first):\n" + "\n".join(lines))
+    parts.append(
+        "Respond to the trader's new message with a single JSON object "
+        "as specified.\n\n"
+        f"New message: {new_message}"
+    )
+    return "\n\n".join(parts)
+
+
+def parse_chat_reply(text: str | None) -> ChatReplyResponse:
+    """Extract a structured ``ChatReplyResponse`` from an AI reply.
+
+    Same extract-then-validate strategy as :func:`parse_ai_reply`.
+    Raises ``ValueError`` on an empty/non-JSON/schema-invalid reply —
+    the caller (``backend.ai.chat.answer_chat_message``) stores a
+    plain "I couldn't process that" assistant message in that case,
+    never an HTTP error.
+    """
+    candidate = extract_json_object(text)
+    data = json.loads(candidate)
+    return ChatReplyResponse.model_validate(data)
+
+
 # --- Template rendering (Phase 2.4.5) -----------------------------------
 
 # Matches ``{{variable}}`` tokens where ``variable`` is one-or-more

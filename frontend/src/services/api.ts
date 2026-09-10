@@ -1837,6 +1837,28 @@ class ApiService {
   async generateDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
     return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' });
   }
+
+  // ── Version 4 AI feature 4: conversational chat panel ───────────────
+
+  async createChatSession(symbol: string, alertTriggerId?: number | null): Promise<ChatSession> {
+    return this.fetch<ChatSession>('/ai/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, alert_trigger_id: alertTriggerId ?? null }),
+    });
+  }
+
+  async getChatMessages(sessionId: number, limit: number = 50): Promise<ChatMessage[]> {
+    return this.fetch<ChatMessage[]>(`/ai/chat/sessions/${sessionId}/messages?limit=${limit}`);
+  }
+
+  async sendChatMessage(sessionId: number, content: string): Promise<ChatMessage> {
+    return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
 }
 
 // ── Phase 2.4.5: AI template types ──────────────────────────────────────
@@ -1896,6 +1918,27 @@ export interface AIDigest {
   market_regime: string | null;
   narrative: string | null;
   payload: AIDigestPayload | null;
+}
+
+// ── Version 4 AI feature 4: conversational chat panel ────────────────────
+
+export interface ChatSession {
+  id: number;
+  symbol: string;
+  alert_trigger_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  session_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+  // Only present on the assistant message returned by sendChatMessage —
+  // null for historical rows fetched via getChatMessages.
+  grounded: boolean | null;
 }
 
 export interface AIJobEnqueueResponse {

@@ -42,6 +42,7 @@ from backend.api.watchlist.router import router as watchlist_router
 from backend.api.custom_indicators.router import router as custom_indicators_router
 from backend.api.drawing_tools.router import router as drawing_tools_router
 from backend.api.ai_templates.router import router as ai_templates_router
+from backend.api.ai.chat_router import router as ai_chat_router
 from backend.api.ai.digest_router import router as ai_digest_router
 from backend.api.ai.jobs import router as ai_jobs_router
 
@@ -352,6 +353,7 @@ app.include_router(drawing_tools_router)
 app.include_router(ai_templates_router)
 app.include_router(ai_jobs_router)
 app.include_router(ai_digest_router)
+app.include_router(ai_chat_router)
 app.include_router(system_router)
 
 

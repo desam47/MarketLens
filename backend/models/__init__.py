@@ -68,3 +68,7 @@ from .backfill_job import BackfillJob as BackfillJob
 
 # Import AI digest model (Version 4, AI feature 2: daily/session digest)
 from .ai_digest import AIDigest as AIDigest
+
+# Import chat models (Version 4, AI feature 4: conversational chat panel)
+from .chat import ChatMessage as ChatMessage
+from .chat import ChatSession as ChatSession
