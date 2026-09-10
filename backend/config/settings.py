@@ -636,12 +636,23 @@ class NewsAuxSettings(_AuxProviderCategorySettings):
     # (found live 2026-09-09 — the user set AUX_NEWS_ENABLED=true,
     # restarted, and every /api/aux-data/* endpoint still 503'd).
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_NEWS_", extra="ignore")
-    primary_provider: str = "yfinance_news"
+    # 2026-09-10: Finnhub /company-news is primary (broker-grade, keyed),
+    # yfinance is the fallback. Finnhub raises on failure so the chain
+    # advances; if FINNHUB_API_KEY is absent it raises immediately and
+    # yfinance takes over.
+    primary_provider: str = "finnhub_news"
+    fallback_providers: list[str] = Field(default_factory=lambda: ["yfinance_news"])
 
 
 class FundamentalsAuxSettings(_AuxProviderCategorySettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_FUNDAMENTALS_", extra="ignore")
+    # yfinance stays primary — its .info scrape fills the full
+    # FundamentalsItem. webull_fundamentals is wired as a fallback but
+    # Webull's get_financials_indicators only carries 8 per-share ratios
+    # (see that provider's docstring), so it can't be a full primary
+    # without fanning out to more endpoints.
     primary_provider: str = "yfinance_fundamentals"
+    fallback_providers: list[str] = Field(default_factory=lambda: ["webull_fundamentals"])
 
 
 class OptionsAuxSettings(_AuxProviderCategorySettings):

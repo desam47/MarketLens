@@ -18,11 +18,24 @@ client = TestClient(app)
 class TestAuxDataEndpoints(unittest.TestCase):
 
     def setUp(self):
-        # Reset settings between tests.
+        # Force all three categories off for the duration of each test,
+        # then restore the real values in tearDown so this class can't
+        # leak a mutated global settings singleton into later tests
+        # (e.g. test_aux_data_settings' singleton-vs-fresh comparison).
         from backend.aux_data.services import manager as mgr_module
-        mgr_module._settings.aux_data.news.enabled = False
-        mgr_module._settings.aux_data.fundamentals.enabled = False
-        mgr_module._settings.aux_data.options.enabled = False
+
+        self._mgr_module = mgr_module
+        aux = mgr_module._settings.aux_data
+        self._saved_enabled = (
+            aux.news.enabled, aux.fundamentals.enabled, aux.options.enabled
+        )
+        aux.news.enabled = False
+        aux.fundamentals.enabled = False
+        aux.options.enabled = False
+
+    def tearDown(self):
+        aux = self._mgr_module._settings.aux_data
+        aux.news.enabled, aux.fundamentals.enabled, aux.options.enabled = self._saved_enabled
 
     def test_news_503_when_disabled(self):
         resp = client.get("/api/aux-data/news/AAPL")

@@ -28,6 +28,8 @@ from backend.models.aux_data import (
 
 from ..provider import FundamentalProvider, NewsProvider, OptionsProvider
 from ..providers import (
+    FinnhubNewsProvider,
+    WebullFundamentalsProvider,
     YFinanceFundamentalsProvider,
     YFinanceNewsProvider,
     YFinanceOptionsProvider,
@@ -42,6 +44,8 @@ _PROVIDER_CLASSES: dict[str, type] = {
     "yfinance_news": YFinanceNewsProvider,
     "yfinance_fundamentals": YFinanceFundamentalsProvider,
     "yfinance_options": YFinanceOptionsProvider,
+    "finnhub_news": FinnhubNewsProvider,
+    "webull_fundamentals": WebullFundamentalsProvider,
 }
 
 # ---------------------------------------------------------------------------
