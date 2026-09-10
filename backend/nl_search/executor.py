@@ -20,7 +20,6 @@ from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.scanner.filters import (
     ADXStrong,
     AndFilter,
-    DailyBullish,
     Filter,
     HighVolume,
     MACDBearish,
@@ -32,6 +31,7 @@ from backend.scanner.filters import (
     TimeframeDirection,
     TrendScoreGt,
     TrendScoreLt,
+    TrueFilter,
 )
 from backend.scanner.ranking import RankedEntry, RankingEngine, default_ranking_engine
 from backend.scanner.scanner import ScanResult, market_scanner
@@ -287,7 +287,13 @@ def _build_filter(
 
     # --- match_all fallback ---
     if not parts:
-        add(DailyBullish(min_confidence=-1.0), "(match all)")
+        # Found live earlier this session: DailyBullish(min_confidence=-1.0)
+        # disables the confidence floor but TimeframeDirection.matches()
+        # still hardcodes direction == "uptrend" — so "match all" was
+        # silently excluding every non-uptrending-daily symbol instead of
+        # actually matching everything. TrueFilter has no direction check
+        # at all — a genuine match-all.
+        add(TrueFilter(), "(match all)")
 
     description = " AND ".join(f"({d})" for d in descriptions)
     if not description:

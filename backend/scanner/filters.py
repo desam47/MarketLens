@@ -97,6 +97,31 @@ class NotFilter(Filter):
         return f"NOT ({self.filter.describe()})"
 
 
+class TrueFilter(Filter):
+    """Matches every result, unconditionally.
+
+    A genuine "no filter" — for a caller building a filter expression
+    incrementally (e.g. NL search's ``_build_filter``) who needs a
+    real match-all when no other clause was added, without reaching
+    for an unrelated directional filter and disabling its threshold.
+
+    Found live 2026-09-09: NL search's own match-all fallback used to
+    be ``DailyBullish(min_confidence=-1.0)`` — the confidence floor
+    was disabled, but ``TimeframeDirection.matches()`` still requires
+    ``direction == "uptrend"`` regardless of confidence, so "match
+    all" silently excluded every symbol whose daily trend wasn't
+    literally an uptrend (downtrend/sideways/no-signal symbols all
+    failed to match "everything"). ``TrueFilter`` has no direction
+    check at all — it matches unconditionally, as a match-all should.
+    """
+
+    def matches(self, result: ScanResult) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return "match all"
+
+
 # ---------------------------------------------------------------------------
 # Concrete filters
 # ---------------------------------------------------------------------------
@@ -390,6 +415,7 @@ class ADXStrong(Filter):
 # ---------------------------------------------------------------------------
 
 _FILTER_REGISTRY: dict[str, type[Filter]] = {
+    "true": TrueFilter,
     "trend_score_gt": TrendScoreGt,
     "trend_score_lt": TrendScoreLt,
     "timeframe_direction": TimeframeDirection,

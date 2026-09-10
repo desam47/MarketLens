@@ -87,6 +87,25 @@ class TestBuildFilter(unittest.TestCase):
         filt, desc = _build_filter(f)
         self.assertIn("match all", desc)
 
+    def test_match_all_actually_matches_non_bullish_symbols(self):
+        """Regression: the match-all fallback used to be
+        DailyBullish(min_confidence=-1.0) — the confidence floor was
+        disabled, but TimeframeDirection.matches() still hardcoded
+        direction == "uptrend", so "match all" silently excluded every
+        symbol whose daily trend wasn't literally an uptrend. A real
+        match-all must match everything, direction included."""
+        f = NLFilters(match_all=True)
+        filt, _ = _build_filter(f)
+
+        downtrend = _make_result(
+            "XYZ",
+            trend_signals={"ONE_DAY": {"direction": "downtrend", "confidence": 0.9}},
+        )
+        no_signal = _make_result("ABC", trend_signals={})
+
+        self.assertTrue(filt.matches(downtrend))
+        self.assertTrue(filt.matches(no_signal))
+
     def test_conflict_extra(self):
         f = NLFilters(mtf_conflict=True)
         extras = {"conflict": {"timeframe": "5m", "direction": "bearish"}}

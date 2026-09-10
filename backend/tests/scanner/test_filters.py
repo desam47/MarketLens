@@ -28,6 +28,7 @@ from backend.scanner.filters import (
     TimeframeDirection,
     TrendScoreGt,
     TrendScoreLt,
+    TrueFilter,
     apply_filter,
     default_registry,
 )
@@ -237,6 +238,28 @@ class TestComposition(unittest.TestCase):
         self.assertIn("1d = uptrend", c.describe())
 
 
+class TestTrueFilter(unittest.TestCase):
+    """A genuine match-all — no direction/confidence check at all.
+
+    Regression coverage for a live bug (2026-09-09/10): NL search's own
+    match-all fallback used to be DailyBullish(min_confidence=-1.0),
+    which still hardcoded direction == "uptrend" regardless of the
+    disabled confidence floor — so "match all" silently excluded every
+    non-uptrending-daily symbol. TrueFilter replaces it.
+    """
+
+    def test_matches_regardless_of_trend_signals(self):
+        f = TrueFilter()
+        self.assertTrue(f.matches(_result(trend_signals={
+            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
+        })))
+        self.assertTrue(f.matches(_result(trend_signals={})))
+        self.assertTrue(f.matches(_result()))
+
+    def test_describe(self):
+        self.assertEqual(TrueFilter().describe(), "match all")
+
+
 class TestRegistry(unittest.TestCase):
 
     def test_list_types(self):
@@ -244,6 +267,14 @@ class TestRegistry(unittest.TestCase):
         self.assertIn("trend_score_gt", types)
         self.assertIn("daily_bullish", types)
         self.assertIn("mtf_alignment", types)
+        self.assertIn("true", types)
+
+    def test_build_true_filter(self):
+        f = default_registry.build({"type": "true"})
+        self.assertIsInstance(f, TrueFilter)
+        self.assertTrue(f.matches(_result(trend_signals={
+            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
+        })))
 
     def test_build(self):
         f = default_registry.build({"type": "trend_score_gt", "params": {"threshold": 60.0}})
