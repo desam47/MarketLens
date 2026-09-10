@@ -213,6 +213,14 @@ Rules you must follow:
    prices or stop losses. You are summarizing, not advising.
 6. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block.
+7. The context may include "news", "fundamentals", and "divergence" \
+   sections. Treat these as supporting evidence only — they may \
+   inform "supporting_factors" or "risk_factors" (e.g. a bearish \
+   headline, a stretched valuation, a bullish RSI divergence), but \
+   they must NEVER override the quant-derived "trend" field itself. \
+   If a section is empty or missing, it simply means that data \
+   wasn't available — do not treat its absence as evidence of \
+   anything.
 """
 
 

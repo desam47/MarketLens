@@ -1,6 +1,6 @@
 """Tests for the NL search executor."""
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from backend.models.market_data import DataStatus, Quote
@@ -137,24 +137,41 @@ class TestCustomFilters(unittest.TestCase):
         # No mocked engine — should return False (no history)
         self.assertFalse(f.matches(result))
 
-    @patch("backend.nl_search.executor.trend_transition_engine", create=True)
-    def test_just_transitioned_filter_with_history(self, mock_engine_module):
-        # Simulate the engine having a bullish_reversal on the most recent bar.
-        mock_t = MagicMock()
-        mock_t.direction.value = "bullish"
-        mock_t.type.value = "bullish_reversal"
-        # Patch the import to return a fake engine.
-        with patch.dict(
-            "sys.modules",
-            {"backend.transitions.trend_transition_engine": MagicMock(
-                trend_transition_engine=MagicMock(
-                    get_history=MagicMock(return_value=[mock_t])
-                )
-            )},
-        ):
-            result = _make_result("AAPL")
-            f = JustTransitionedFilter("just_became_bullish")
-            self.assertTrue(f.matches(result))
+    @patch("backend.api.trend.registry.get_engine")
+    def test_just_transitioned_filter_with_history(self, mock_get_engine):
+        """Regression for a live bug (2026-09-09): this filter used to
+        import a `trend_transition_engine` singleton and call
+        `.get_history(symbol=...)` on it — neither exists, so the
+        filter always returned False regardless of real transitions.
+        Fixed to pull the TrendEngine's own score history and run
+        TrendTransitionEngine.latest() on it directly (same fix as
+        backend.ai.context.build_context's identical bug)."""
+        from backend.engines.timeframe import Timeframe
+
+        # A score series that crosses from strongly negative to
+        # strongly positive within the window=5 lookback — a genuine
+        # bullish reversal, not a mocked transition object.
+        scores = [-20, -15, -10, -5, 0, 5, 15]
+        base = datetime(2026, 1, 1)
+        signals = []
+        for i, sc in enumerate(scores):
+            sig = MagicMock()
+            sig.score = sc
+            sig.timestamp = base + timedelta(days=i)
+            signals.append(sig)
+
+        mock_engine = MagicMock()
+        mock_engine.trend_history = {Timeframe.ONE_DAY: signals}
+        mock_get_engine.return_value = mock_engine
+
+        result = _make_result("AAPL")
+        f = JustTransitionedFilter("just_became_bullish")
+        self.assertTrue(f.matches(result))
+
+        # A bearish-expectation filter must NOT match the same bullish
+        # transition.
+        f_bearish = JustTransitionedFilter("just_became_bearish")
+        self.assertFalse(f_bearish.matches(result))
 
 
 class TestExecuteQuery(unittest.TestCase):

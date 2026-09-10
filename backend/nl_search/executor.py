@@ -78,19 +78,32 @@ class JustTransitionedFilter(Filter):
         self.expected = expected
 
     def matches(self, result: ScanResult) -> bool:
+        # Fixed 2026-09-09: this used to import a `trend_transition_engine`
+        # singleton and call `.get_history(symbol=...)` on it — neither
+        # exists (see backend.ai.context.build_context's identical fix,
+        # same root cause). The broad except silently made this filter
+        # always return False. Now uses the engine as designed: pull the
+        # already-warmed TrendEngine's own score history and detect the
+        # latest transition on it directly.
         try:
+            from backend.api.trend.registry import get_engine as get_trend_engine
+            from backend.engines.timeframe import Timeframe
             from backend.transitions.trend_transition_engine import (
-                trend_transition_engine,
+                TrendTransitionEngine,
             )
-        except ImportError:
-            return False
 
-        hist = trend_transition_engine.get_history(
-            symbol=result.symbol, timeframe="1d", limit=1
-        )
-        if not hist:
+            hist = get_trend_engine(result.symbol).trend_history.get(Timeframe.ONE_DAY, [])
+            if len(hist) <= 6:
+                return False
+            scores = [s.score for s in hist]
+            timestamps = [s.timestamp for s in hist]
+            t = TrendTransitionEngine(window=5, min_delta=10.0).latest(
+                scores, timestamps=timestamps, symbol=result.symbol, timeframe="1d"
+            )
+        except Exception:  # noqa: BLE001
             return False
-        t = hist[-1]
+        if t is None:
+            return False
         if self.expected == "just_became_bullish":
             return t.direction.value in ("bullish",) and t.type.value in (
                 "bullish_reversal",

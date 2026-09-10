@@ -53,6 +53,9 @@ class AnalysisContext:
     support_resistance: dict[str, Any] = field(default_factory=dict)
     trend_transition: dict[str, Any] = field(default_factory=dict)
     historical_signal_stats: dict[str, Any] = field(default_factory=dict)
+    news: list[dict[str, Any]] = field(default_factory=list)
+    fundamentals: dict[str, Any] = field(default_factory=dict)
+    divergence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +75,9 @@ class AnalysisContext:
             "support_resistance": self.support_resistance,
             "trend_transition": self.trend_transition,
             "historical_signal_stats": self.historical_signal_stats,
+            "news": self.news,
+            "fundamentals": self.fundamentals,
+            "divergence": self.divergence,
         }
 
 
@@ -109,12 +115,25 @@ def _sig_to_dict(sig) -> dict[str, Any]:
     return result
 
 
-def build_context(symbol: str, timeframe: str = "1d") -> AnalysisContext:
+def build_context(
+    symbol: str,
+    timeframe: str = "1d",
+    *,
+    include_news: bool = True,
+    include_fundamentals: bool = True,
+    include_divergence: bool = True,
+) -> AnalysisContext:
     """Gather a structured context dict for ``symbol``.
 
     ``timeframe`` is the primary analysis window. Cross-timeframe
     scores come from the scanner's MTF result; everything else is
     taken from the most recent engine state.
+
+    ``include_news``/``include_fundamentals``/``include_divergence``
+    default to ``True`` for a single-symbol analysis call, but can be
+    turned off by callers that build context for many symbols at once
+    (e.g. a digest iterating the whole watchlist) to skip the extra
+    aux-data I/O per symbol.
 
     Raises ``InsufficientDataError`` when there's no quote and no
     trend signal — the caller should return an uncertainty response.
@@ -258,25 +277,37 @@ def build_context(symbol: str, timeframe: str = "1d") -> AnalysisContext:
         pass
 
     # --- 8. Most recent trend transition ---
+    # Found live 2026-09-09: this section (and the identical pattern in
+    # nl_search/executor.py's JustTransitionedFilter) imported a
+    # `trend_transition_engine` singleton and called `.get_history(...)`
+    # on it — neither exists. `backend.transitions.trend_transition_engine`
+    # defines only the `TrendTransitionEngine` class (`.detect()`/
+    # `.latest()`, which take a raw scores sequence), no module-level
+    # instance and no `get_history` method. The broad except below
+    # silently swallowed the resulting ImportError/AttributeError, so
+    # `trend_transition` has been an empty dict in every AI analysis
+    # ever produced. Fixed by using the engine the way it's actually
+    # designed to be used: pull the already-warmed TrendEngine's own
+    # score history (no new bar fetch) and detect the latest
+    # transition on it directly.
     transition: dict[str, Any] = {}
     try:
+        from backend.api.trend.registry import get_engine as get_trend_engine
+        from backend.engines.timeframe import Timeframe
         from backend.transitions.trend_transition_engine import (
-            trend_transition_engine,
+            TrendTransitionEngine,
         )
 
-        history = trend_transition_engine.get_history(
-            symbol=sym, timeframe=timeframe, limit=1
-        )
-        if history:
-            t = history[-1]
-            transition = {
-                "type": _regime_value(t.type),
-                "from_score": round(float(t.previous_score), 2),
-                "to_score": round(float(t.current_score), 2),
-                "delta": round(float(t.delta), 2),
-                "direction": _regime_value(t.direction),
-                "timestamp": t.timestamp.isoformat() if t.timestamp else None,
-            }
+        tf_enum = Timeframe(tf.lower())
+        hist = get_trend_engine(sym).trend_history.get(tf_enum, [])
+        if len(hist) > 6:
+            scores = [s.score for s in hist]
+            timestamps = [s.timestamp for s in hist]
+            t = TrendTransitionEngine(window=5, min_delta=10.0).latest(
+                scores, timestamps=timestamps, symbol=sym, timeframe=timeframe
+            )
+            if t is not None:
+                transition = t.to_dict()
     except Exception:  # noqa: BLE001
         pass
 
@@ -295,6 +326,84 @@ def build_context(symbol: str, timeframe: str = "1d") -> AnalysisContext:
             }
     except Exception:  # noqa: BLE001
         pass
+
+    # --- 10. News (Phase 18 aux-data, real provider, previously never
+    # reached the AI) ---
+    news: list[dict[str, Any]] = []
+    if include_news:
+        try:
+            from backend.aux_data.services.manager import aux_data_manager
+
+            news_resp = aux_data_manager.get_news(sym, limit=5)
+            now = datetime.now(news_resp.timestamp.tzinfo) if news_resp.items else None
+            for item in news_resp.items[:5]:
+                age_hours = None
+                if now is not None:
+                    age_hours = round((now - item.timestamp).total_seconds() / 3600.0, 1)
+                news.append({
+                    "headline": item.headline,
+                    "source": item.source,
+                    "relevance": round(float(item.relevance), 2),
+                    "age_hours": age_hours,
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- 11. Fundamentals (Phase 18 aux-data) — a curated subset, not
+    # every field, to keep the prompt focused ---
+    fundamentals: dict[str, Any] = {}
+    if include_fundamentals:
+        try:
+            from backend.aux_data.services.manager import aux_data_manager
+
+            f = aux_data_manager.get_fundamentals(sym).data
+            fundamentals = {
+                k: v
+                for k, v in {
+                    "sector": f.sector,
+                    "industry": f.industry,
+                    "market_cap": f.market_cap,
+                    "pe_ratio": f.pe_ratio,
+                    "eps_growth": f.eps_growth,
+                    "debt_to_equity": f.debt_to_equity,
+                    "analyst_target": f.analyst_target,
+                    "recommendation": f.recommendation,
+                    "beta": f.beta,
+                }.items()
+                if v is not None
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+    # --- 12. Divergence (Phase 9 engine, previously never reached the
+    # AI) — most recent divergence only, mirrors trend_transition's
+    # "latest one" convention ---
+    divergence: dict[str, Any] = {}
+    if include_divergence:
+        try:
+            from backend.analysis.series import (
+                bar_dicts_to_arrays,
+                load_bars,
+                macd_histogram_series,
+                rsi_series,
+            )
+            from backend.divergence import DivergenceEngine
+
+            bars = load_bars(sym, timeframe, limit=200)
+            if len(bars) >= 30:
+                arrays = bar_dicts_to_arrays(bars)
+                closes = arrays["closes"]
+                rsi = rsi_series(closes, period=14)
+                macd = macd_histogram_series(closes, fast=12, slow=26, signal=9)
+                found = DivergenceEngine(pivot_lookback=2, max_pivots_apart=80).detect(
+                    arrays["highs"], arrays["lows"], closes,
+                    volumes=arrays["volumes"], rsi=rsi, macd=macd,
+                    timestamps=arrays["timestamps"], symbol=sym, timeframe=timeframe,
+                )
+                if found:
+                    divergence = found[-1].to_dict()
+        except Exception:  # noqa: BLE001
+            pass
 
     return AnalysisContext(
         symbol=sym,
@@ -317,4 +426,7 @@ def build_context(symbol: str, timeframe: str = "1d") -> AnalysisContext:
         support_resistance=sr,
         trend_transition=transition,
         historical_signal_stats=signal_stats,
+        news=news,
+        fundamentals=fundamentals,
+        divergence=divergence,
     )

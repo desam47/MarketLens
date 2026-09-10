@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 class TestTransitionsEndpoint(unittest.TestCase):
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_returns_transitions(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -37,7 +37,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
         self.assertIn("transitions", data)
         self.assertIn("latest_score", data)
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_insufficient_bars_returns_empty(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -55,7 +55,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
         self.assertEqual(data["transitions"], [])
         self.assertEqual(data["count"], 0)
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_symbol_uppercased(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -69,7 +69,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["symbol"], "AAPL")
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_500_on_repo_error(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -84,7 +84,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
 
 class TestSupportResistanceEndpoint(unittest.TestCase):
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_returns_levels(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -108,7 +108,7 @@ class TestSupportResistanceEndpoint(unittest.TestCase):
         self.assertIn("levels", data)
         self.assertIn("count", data)
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_insufficient_bars_returns_empty(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -129,7 +129,7 @@ class TestSupportResistanceEndpoint(unittest.TestCase):
 
 class TestDivergencesEndpoint(unittest.TestCase):
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_returns_divergences(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -153,7 +153,7 @@ class TestDivergencesEndpoint(unittest.TestCase):
         self.assertIn("divergences", data)
         self.assertIn("count", data)
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_insufficient_bars_returns_empty(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -174,7 +174,7 @@ class TestDivergencesEndpoint(unittest.TestCase):
 
 class TestBarsEndpoint(unittest.TestCase):
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_returns_bars(self, mock_repo):
         from fastapi.testclient import TestClient
 
@@ -205,7 +205,7 @@ class TestBarsEndpoint(unittest.TestCase):
         self.assertIn("close", bar)
         self.assertIn("volume", bar)
 
-    @patch("backend.api.analysis.router.bar_repository")
+    @patch("backend.analysis.series.bar_repository")
     def test_empty_bars(self, mock_repo):
         from fastapi.testclient import TestClient
 
