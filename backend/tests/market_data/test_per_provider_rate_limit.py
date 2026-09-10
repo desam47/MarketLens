@@ -89,10 +89,17 @@ class TestGetPerProviderRateLimit(unittest.TestCase):
 
 
 class TestPerProviderRateLimiter(unittest.TestCase):
-    """_PerProviderRateLimiter enforces per-provider call limits."""
+    """_PerProviderRateLimiter enforces per-provider call limits.
+
+    These exercise the per-process fallback path — Redis is stubbed off
+    so the in-memory sliding window is used. The shared-Redis path is
+    covered separately below.
+    """
 
     def setUp(self):
         self.limiter = _PerProviderRateLimiter()
+        self.limiter._redis_checked = True
+        self.limiter._redis_client = None
 
     def test_first_call_not_throttled(self):
         """Under the limit, acquire() returns immediately without sleeping."""
@@ -210,6 +217,71 @@ class TestRateLimiterThreadSafety(unittest.TestCase):
             t.join()
 
         self.assertEqual(errors, [])
+
+
+class TestRedisSharedBudget(unittest.TestCase):
+    """When Redis is up, acquire() draws from a shared cross-process budget."""
+
+    def _fake_redis(self):
+        """A tiny in-process stand-in for the Redis commands acquire() uses."""
+        store: dict[str, dict[str, float]] = {}
+
+        class FakePipe:
+            def __init__(self): self.ops = []
+            def zremrangebyscore(self, k, lo, hi): self.ops.append(("zrem", k, lo, hi)); return self
+            def zcard(self, k): self.ops.append(("zcard", k)); return self
+            def zadd(self, k, mapping): self.ops.append(("zadd", k, mapping)); return self
+            def expire(self, k, s): self.ops.append(("expire", k, s)); return self
+            def execute(self):
+                out = []
+                for op in self.ops:
+                    if op[0] == "zrem":
+                        _, k, lo, hi = op
+                        store.setdefault(k, {})
+                        for m in [m for m, sc in store[k].items() if lo <= sc <= hi]:
+                            del store[k][m]
+                        out.append(0)
+                    elif op[0] == "zcard":
+                        out.append(len(store.get(op[1], {})))
+                    elif op[0] == "zadd":
+                        store.setdefault(op[1], {}).update(op[2])
+                        out.append(1)
+                    elif op[0] == "expire":
+                        out.append(1)
+                self.ops = []
+                return out
+
+        class FakeRedis:
+            def pipeline(self): return FakePipe()
+            def zrange(self, k, a, b, withscores=False):
+                items = sorted(store.get(k, {}).items(), key=lambda kv: kv[1])
+                return [(m, sc) for m, sc in items[a:b + 1]] if withscores else [m for m, _ in items[a:b + 1]]
+
+        return FakeRedis()
+
+    def test_grants_up_to_limit_then_throttles(self):
+        limiter = _PerProviderRateLimiter()
+        limiter._redis_checked = True
+        limiter._redis_client = self._fake_redis()
+        limiter._MAX_WAIT_SECONDS = 2.0
+
+        for _ in range(3):
+            start = time.monotonic()
+            limiter.acquire("webull", max_per_minute=3)
+            self.assertLess(time.monotonic() - start, 0.1)
+
+        start = time.monotonic()
+        limiter.acquire("webull", max_per_minute=3)  # over budget → wait then proceed at cap
+        self.assertGreaterEqual(time.monotonic() - start, 1.5)
+        self.assertGreater(limiter.stats().get("webull", 0), 0)
+
+    def test_zero_limit_bypasses_redis(self):
+        limiter = _PerProviderRateLimiter()
+        limiter._redis_checked = True
+        limiter._redis_client = self._fake_redis()
+        start = time.monotonic()
+        limiter.acquire("webull", max_per_minute=0)
+        self.assertLess(time.monotonic() - start, 0.05)
 
 
 if __name__ == "__main__":

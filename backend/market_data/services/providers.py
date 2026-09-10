@@ -268,16 +268,71 @@ class _PerProviderRateLimiter:
     so contention is irrelevant.
     """
 
+    # A single provider call never blocks longer than this waiting for a
+    # slot — past it we let the call through and rely on the circuit
+    # breaker / 429 handling. Keeps the ingestion loops from stalling on
+    # a burst (their cadence is 30-60s).
+    _MAX_WAIT_SECONDS = 8.0
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._calls: dict[str, deque[float]] = defaultdict(deque)
         self._throttled_count: dict[str, int] = defaultdict(int)
+        self._redis_client = None
+        self._redis_checked = False
+
+    def _redis(self):
+        """Lazily return a shared Redis client, or None. Cached across calls;
+        a single failed check disables the Redis path for the process."""
+        if self._redis_checked:
+            return self._redis_client
+        self._redis_checked = True
+        try:
+            from backend.market_data.services._providers import _settings
+
+            if not _settings.redis.enabled:
+                return None
+            import redis as _redis_mod
+
+            kw: dict[str, object] = {"decode_responses": True}
+            if _settings.redis.password:
+                kw["password"] = _settings.redis.password
+            client = _redis_mod.Redis.from_url(_settings.redis.url, **kw)
+            client.ping()
+            self._redis_client = client
+            logger.info("Provider rate limiter: using shared Redis budget")
+        except Exception as e:  # noqa: BLE001
+            logger.info("Provider rate limiter: Redis unavailable (%s) — per-process only", e)
+            self._redis_client = None
+        return self._redis_client
 
     def acquire(self, provider_name: str, max_per_minute: int) -> None:
-        """Block until one more call to ``provider_name`` is allowed."""
+        """Block until one more call to ``provider_name`` is allowed.
+
+        Cross-process when Redis is up (the API process + every RQ worker
+        share one sliding-window budget per provider); per-process
+        otherwise.
+        """
         if max_per_minute <= 0:
             return  # disabled
 
+        r = self._redis()
+        if r is not None:
+            deadline = time.monotonic() + self._MAX_WAIT_SECONDS
+            while True:
+                wait = self._redis_acquire(r, provider_name, max_per_minute)
+                if wait <= 0.0:
+                    return
+                self._throttled_count[provider_name] += 1
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "Rate limiter for %s: waited %.0fs, proceeding anyway",
+                        provider_name, self._MAX_WAIT_SECONDS,
+                    )
+                    return
+                time.sleep(min(wait, 1.0))
+
+        # --- per-process fallback (Redis down) ---
         with self._lock:
             now = time.monotonic()
             window_start = now - 60.0
@@ -297,6 +352,36 @@ class _PerProviderRateLimiter:
             )
             time.sleep(wait_seconds)
         self.acquire(provider_name, max_per_minute)
+
+    def _redis_acquire(self, r, provider_name: str, max_per_minute: int) -> float:
+        """One non-blocking attempt against the shared budget.
+
+        Returns 0.0 if a slot was granted, else the seconds until the
+        oldest call in the window ages out. A small over-budget race
+        (two callers both seeing room) is acceptable — same relaxed
+        guarantee the per-process limiter gives across its own sleep.
+        """
+        key = f"marketlens:provrl:{provider_name}"
+        now = time.time()
+        try:
+            pipe = r.pipeline()
+            pipe.zremrangebyscore(key, 0, now - 60.0)
+            pipe.zcard(key)
+            _, count = pipe.execute()
+            if count < max_per_minute:
+                member = f"{now:.4f}:{threading.get_ident()}:{count}"
+                pipe = r.pipeline()
+                pipe.zadd(key, {member: now})
+                pipe.expire(key, 61)
+                pipe.execute()
+                return 0.0
+            oldest = r.zrange(key, 0, 0, withscores=True)
+            if not oldest:
+                return 0.0
+            return max(0.0, oldest[0][1] + 60.0 - now)
+        except Exception as e:  # noqa: BLE001 — Redis blip: fail open for this call
+            logger.debug("Rate limiter Redis error for %s: %s", provider_name, e)
+            return 0.0
 
     def stats(self) -> dict[str, int]:
         """Snapshot of throttled-call counts per provider (for health endpoint)."""
