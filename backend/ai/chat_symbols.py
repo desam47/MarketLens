@@ -226,24 +226,29 @@ def extract_symbols(text: str) -> list[str]:
 
     strong = set(seen)
 
-    # Bare uppercase tokens — skipped when the message is a shouty
-    # all-caps sentence (4+ words), where case carries no signal. A
-    # short all-caps query like "RIVN?" or "SELL AAPL" is still read.
     words = re.findall(r"[A-Za-z]+", masked)
     shouty = len(words) >= 4 and masked.upper() == masked
+
+    # Case-insensitive mentions of a KNOWN ticker ("spy support?",
+    # "how's aapl trending"). Safe even in a shouty all-caps sentence:
+    # the known-set gate keeps ordinary words out and this never hits
+    # live-quote validation. Stopwords ("IT", "ALL", ...) still excluded.
+    for m in re.finditer(r"(?<![A-Za-z0-9$^.])([A-Za-z]{1,5})\b", masked):
+        tok = m.group(1).upper()
+        if tok not in strong and tok not in _CHAT_STOPWORDS and tok in known:
+            add(tok)
+
+    # Bare UPPERCASE tokens not in the known set -> one live-quote probe.
+    # Skipped when the message is a shouty all-caps sentence (4+ words),
+    # where case carries no signal. "RIVN?" / "SELL AAPL" are still read.
     if words and not shouty:
-        weak_known: list[str] = []
         weak_unknown: list[str] = []
         for m in _RE_BARE.finditer(masked):
             tok = m.group(1)
-            if tok in strong or tok in _CHAT_STOPWORDS:
+            if tok in strong or tok in _CHAT_STOPWORDS or tok in known:
                 continue
-            if tok in known:
-                weak_known.append(tok)
-            elif len(tok) >= 2:
+            if len(tok) >= 2:
                 weak_unknown.append(tok)
-        for t in weak_known:
-            add(t)
         validated = _validate_unknown(weak_unknown)
         for t in weak_unknown:  # keep original order
             if t in validated:

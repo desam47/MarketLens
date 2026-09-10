@@ -65,6 +65,25 @@ class TestExtractSymbols(_Base):
     def test_all_caps_message_extracts_nothing(self):
         self.assertEqual(chat_symbols.extract_symbols("WHY IS THE MARKET DOWN SO MUCH"), [])
 
+    def test_lowercase_known_ticker_resolved(self):
+        self.assertEqual(
+            chat_symbols.extract_symbols("what's support and resistance for aapl"), ["AAPL"])
+        self.assertEqual(chat_symbols.extract_symbols("how's spy trending"), ["SPY"])
+
+    def test_lowercase_unknown_word_not_a_ticker(self):
+        # lowercase sweep is gated to the known set -> never probes quotes
+        mgr = self._patch_quotes({"RIVN": _quote(15.0)})
+        self.assertEqual(chat_symbols.extract_symbols("thoughts on rivn here"), [])
+        mgr.get_batch_quotes.assert_not_called()
+
+    def test_lowercase_stopword_collision_still_dropped(self):
+        # "it" -> "IT" is in both the known set and _CHAT_STOPWORDS
+        self.assertEqual(chat_symbols.extract_symbols("what is it doing today"), [])
+
+    def test_lowercase_known_ticker_in_shouty_message(self):
+        self.assertEqual(
+            chat_symbols.extract_symbols("WHAT IS SUPPORT AND RESISTANCE FOR SPY"), ["SPY"])
+
     def test_unknown_ticker_needs_live_quote(self):
         self._patch_quotes({"RIVN": _quote(15.0)})
         self.assertEqual(chat_symbols.extract_symbols("thoughts on RIVN here"), ["RIVN"])

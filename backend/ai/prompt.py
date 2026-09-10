@@ -609,6 +609,14 @@ Rules you must follow:
    "wants_reanalysis" false and ask which one in "reply". When true, \
    "reply" is ignored (a short placeholder is fine) — the app runs the \
    real analysis and replies with that instead.
+9. "reply" is read by a human — NEVER mention the prompt's own \
+   machinery in it. Words like "<context> block", "<market> block", \
+   "engine_warm", "data_availability", or "the context I was given" \
+   must not appear. If a ticker-specific question (support/resistance, \
+   trend, a level, an indicator) arrives with no ticker in any \
+   <context> block, don't explain what data you're missing — just ask \
+   which ticker they mean, e.g. "Which ticker do you want support and \
+   resistance for?", and set "grounded" to false.
 """
 
 # Rough token estimate for the assembled prompt's size guard.
@@ -693,7 +701,12 @@ def build_chat_prompt(
             parts.append(chunk)
 
     if not symbol_blocks and not unavailable_symbols:
-        parts.append("No specific ticker this turn — answer from <market> only.")
+        parts.append(
+            "No ticker resolved for this turn — answer market-wide questions from "
+            "<market>. If the trader asked something ticker-specific (a level, a "
+            "trend, an indicator), just ask which ticker they mean in plain words "
+            'and set "grounded" false — do not describe what data is missing.'
+        )
 
     if alert_context:
         chunk = (

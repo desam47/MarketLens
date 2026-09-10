@@ -33,7 +33,8 @@ class TestBuildChatPrompt(unittest.TestCase):
 
     def test_no_ticker_turn_points_at_market_only(self):
         p = build_chat_prompt([], [], _MARKET, [], "how's the market")
-        self.assertIn("answer from <market> only", p)
+        self.assertIn("No ticker resolved for this turn", p)
+        self.assertIn("ask which ticker they mean", p)
         self.assertNotIn("<context ", p)
 
     def test_alert_and_transcript_blocks_render(self):

@@ -108,7 +108,7 @@ class TestUniversalTurn(_Base):
         prompt = mock_ai.complete.call_args.kwargs["prompt"]
         self.assertIn("<market>", prompt)
         self.assertNotIn("<context ", prompt)
-        self.assertIn("answer from <market> only", prompt)
+        self.assertIn("No ticker resolved for this turn", prompt)
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
