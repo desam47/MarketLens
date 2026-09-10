@@ -44,6 +44,19 @@ class TestVacuumInto(unittest.TestCase):
         self._session.commit()
 
     def tearDown(self):
+        # Remove the marker row we added to the LIVE db. This used to be
+        # left behind — one VACUUM_TEST_<ms> junk symbol accumulated per
+        # run (found 2026-09-10 after ~76 had piled up). The row has to
+        # go in the real DB because vacuum_into() snapshots the real
+        # file, but it must not outlive the test.
+        try:
+            from backend.models.market_data_sql import BarModel
+            self._session.query(BarModel).filter(
+                BarModel.symbol == self.test_symbol
+            ).delete()
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
         self._session.close()
         # Best-effort cleanup; tolerate running files.
         try:

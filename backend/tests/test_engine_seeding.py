@@ -16,39 +16,74 @@ import os
 import sys
 import unittest
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from backend.api.regime.router import get_engine as get_regime_engine_from_router
-from backend.database import SessionLocal
+from backend.database import Base
 from backend.market_data.services.engine_seeder import (
     EngineRegistry,
     seed_engine_from_quotes,
 )
+from backend.models.market_data_sql import BarModel, QuoteModel
 from backend.regime.market_regime_engine import MarketRegimeEngine
 
 
-class _SeededDBMixin:
-    """Insert synthetic QuoteModel rows for AAPL before each test."""
+class _InMemoryDBMixin:
+    """Route the seeding code's DB reads at an ephemeral in-memory SQLite
+    so these tests never touch the real ``marketlens.db``.
+
+    They used to (found 2026-09-10): the fixtures below wrote 60
+    synthetic ``provider="test"`` AAPL rows straight to production via
+    the real ``SessionLocal`` — after deleting the real AAPL rows —
+    so the running backend's ingestion picked the fakes up, resampled
+    them into a bogus live 1d bar (~$155 while AAPL traded ~$318), and
+    poisoned every downstream price/level shown in the UI. One fixture
+    also wrote ``data_status="historical"`` (lowercase — not a valid
+    enum value), which later made ``load_bars`` raise.
+    """
 
     def setUp(self):
         super().setUp()
-        self._seed_aapl_quotes()
+        self._mem_engine = create_engine(
+            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+        )
+        Base.metadata.create_all(bind=self._mem_engine)
+        self.MemSession = sessionmaker(
+            bind=self._mem_engine, autoflush=False, expire_on_commit=False,
+        )
+        # Every DB read in the seeding path goes through
+        # engine_seeder.SessionLocal (seed_engine_from_quotes /
+        # seed_engine_from_bars) — patch it there.
+        self._db_patch = patch(
+            "backend.market_data.services.engine_seeder.SessionLocal", self.MemSession,
+        )
+        self._db_patch.start()
+        # A prior test may have cached a regime engine keyed "AAPL";
+        # clear so seeding actually runs against the patched DB.
+        from backend.api.regime.router import _engines as _regime_engines
+        _regime_engines.pop("AAPL", None)
 
-    @staticmethod
-    def _seed_aapl_quotes():
-        # Import models normally so Base is the shared singleton.
-        from backend.database import Base, engine
-        from backend.models.market_data_sql import QuoteModel
-        # Ensure tables exist.
-        Base.metadata.create_all(bind=engine)
-        # Remove any existing AAPL rows to keep tests deterministic.
-        with SessionLocal() as db:
-            db.query(QuoteModel).filter(QuoteModel.symbol == "AAPL").delete()
+    def tearDown(self):
+        self._db_patch.stop()
+        self._mem_engine.dispose()
+        super().tearDown()
+
+
+class _SeededDBMixin(_InMemoryDBMixin):
+    """Insert synthetic QuoteModel rows for AAPL into the in-memory DB."""
+
+    def setUp(self):
+        super().setUp()
+        base_time = datetime.now(UTC) - timedelta(hours=10)
+        with self.MemSession() as db:
             # 60 synthetic quotes with a clear uptrend — enough for regime classification.
-            base_time = datetime.now(UTC) - timedelta(hours=10)
             for i in range(60):
-                row = QuoteModel(
+                db.add(QuoteModel(
                     symbol="AAPL",
                     price=150.0 + i * 0.10,  # clear uptrend
                     bid=150.0 + i * 0.10 - 0.01,
@@ -57,8 +92,7 @@ class _SeededDBMixin:
                     timestamp=base_time + timedelta(minutes=i * 10),
                     provider="test",
                     data_status="ok",
-                )
-                db.add(row)
+                ))
             db.commit()
 
 
@@ -239,7 +273,7 @@ class TestEngineRegistry(unittest.TestCase):
         self.assertEqual(captured.get("symbol"), "AAPL")
 
 
-class TestRouterSeedingIntegration(unittest.TestCase):
+class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
     """End-to-end test: the router's get_regime_engine must seed from the DB.
 
     This is the highest-value regression test — it exercises the exact code path
@@ -255,24 +289,13 @@ class TestRouterSeedingIntegration(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self._seed_aapl_bars()
-
-    @staticmethod
-    def _seed_aapl_bars():
-        from backend.database import Base, engine
-        from backend.models.market_data_sql import BarModel
-
-        Base.metadata.create_all(bind=engine)
-        with SessionLocal() as db:
-            db.query(BarModel).filter(
-                BarModel.symbol == "AAPL", BarModel.timeframe == "1m"
-            ).delete()
-            # 60 synthetic 1m bars with a clear uptrend — enough for regime
-            # classification, mirroring _SeededDBMixin's quote fixture.
-            base_time = datetime.now(UTC) - timedelta(minutes=60)
+        # 60 synthetic 1m bars with a clear uptrend — enough for regime
+        # classification, mirroring _SeededDBMixin's quote fixture.
+        base_time = datetime.now(UTC) - timedelta(minutes=60)
+        with self.MemSession() as db:
             for i in range(60):
                 price = 150.0 + i * 0.10
-                row = BarModel(
+                db.add(BarModel(
                     symbol="AAPL",
                     timeframe="1m",
                     open=price - 0.05,
@@ -282,10 +305,9 @@ class TestRouterSeedingIntegration(unittest.TestCase):
                     volume=1_000_000,
                     timestamp=base_time + timedelta(minutes=i),
                     provider="test",
-                    data_status="historical",
+                    data_status="HISTORICAL",
                     source="raw",
-                )
-                db.add(row)
+                ))
             db.commit()
 
     def test_regime_engine_returns_non_unknown_on_first_request(self):
