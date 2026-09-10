@@ -27,9 +27,14 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             risk_factors=["RSI overbought"],
             timeframe_conflicts=[],
             key_levels=["$200"],
+            # The endpoint must report whoever actually answered
+            # (analyze_symbol()'s own result), not the configured
+            # primary — regression for a live bug found 2026-09-10
+            # where a fallback-served analysis silently claimed to be
+            # from the primary provider.
+            provider="ollama",
+            model="llama3.2",
         )
-        mock_ai_mgr.settings.provider = "ollama"
-        mock_ai_mgr.settings.model = "llama3.2"
 
         resp = client.post("/api/ai/analyze?symbol=AAPL&timeframe=1d")
         self.assertEqual(resp.status_code, 200)
@@ -43,6 +48,35 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["provider"], "ollama")
         self.assertEqual(data["model"], "llama3.2")
         self.assertFalse(data["is_uncertain"])
+
+    @patch("backend.api.ai.router.analyze_symbol")
+    @patch("backend.api.ai.router.ai_manager")
+    def test_reports_actual_answering_provider_not_configured_primary(
+        self, mock_ai_mgr, mock_analyze
+    ):
+        """Regression for a live bug (2026-09-10): the endpoint used to
+        report ai_manager.settings.provider/model (the configured
+        PRIMARY) regardless of which provider actually answered — so
+        a fallback-served analysis silently claimed to be from the
+        primary. The settings here deliberately say 'openrouter' is
+        primary while the actual result says 'ollama' answered — the
+        response must reflect the real answering provider."""
+        from backend.ai.prompt import AnalysisResponse
+        mock_analyze.return_value = AnalysisResponse(
+            summary="AAPL looks bullish on the local fallback model.",
+            trend="bullish",
+            confidence=0.6,
+            provider="ollama",
+            model="llama3.2",
+        )
+        mock_ai_mgr.settings.provider = "openrouter"
+        mock_ai_mgr.settings.model = "openrouter/free"
+
+        resp = client.post("/api/ai/analyze?symbol=AAPL&timeframe=1d")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["provider"], "ollama")
+        self.assertEqual(data["model"], "llama3.2")
 
     @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")

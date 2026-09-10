@@ -86,6 +86,18 @@ class AnalysisResponse(BaseModel):
     risk_factors: list[str] = Field(default_factory=list, max_length=10)
     timeframe_conflicts: list[str] = Field(default_factory=list, max_length=10)
     key_levels: list[str] = Field(default_factory=list, max_length=10)
+    # Which provider/model actually answered this call — set by
+    # analyze_symbol() AFTER parsing/validation, never trusted from the
+    # AI's own raw JSON (harmless either way since it's always
+    # overwritten before the response is returned, but not documented
+    # in the system prompt as a field the AI should fill in). Found
+    # live 2026-09-10: every caller of analyze_symbol() (the /analyze
+    # endpoint, both background job paths) was reporting
+    # ai_manager.settings.provider/model instead — the configured
+    # PRIMARY, not whoever actually served the request — so a
+    # fallback-served analysis silently claimed to be from the primary.
+    provider: str = "unknown"
+    model: str = "unknown"
 
     @field_validator("trend", mode="before")
     @classmethod
@@ -117,6 +129,12 @@ class UncertaintyResponse(BaseModel):
     risk_factors: list[str] = Field(default_factory=list)
     timeframe_conflicts: list[str] = Field(default_factory=list)
     key_levels: list[str] = Field(default_factory=list)
+    # Same provider/model attribution as AnalysisResponse — see its
+    # comment. Reflects whichever provider was actually tried (e.g.
+    # the one whose malformed reply produced this uncertainty), not
+    # necessarily the configured primary.
+    provider: str = "none"
+    model: str = "unknown"
 
 
 # --- Parsing --------------------------------------------------------

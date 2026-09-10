@@ -40,7 +40,10 @@ function providerLabel(provider: string): string {
   // Translate internal provider ids to user-visible names.
   const map: Record<string, string> = {
     ollama: 'Ollama',
+    lm_studio: 'LM Studio',
     openai: 'OpenAI',
+    openai_compatible: 'Custom gateway',
+    openrouter: 'OpenRouter',
     anthropic: 'Anthropic',
     disabled: 'AI disabled',
     none: 'AI unavailable',
@@ -186,14 +189,37 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
     };
   }, []);
 
+  // The primary provider is unhealthy/rate-limited right now if the
+  // answer actually came from something other than what's configured
+  // as primary (config.provider). Found live 2026-09-10: the backend
+  // used to always report the configured primary regardless of who
+  // really answered — fixed there; this is the visible half, so a
+  // fallback-served analysis doesn't quietly look identical to a
+  // primary-served one.
+  const usingFallback = !!(
+    analysis && config &&
+    analysis.provider !== config.provider &&
+    analysis.provider !== 'disabled' &&
+    analysis.provider !== 'none'
+  );
+
   return (
     <div id="ai-analysis-panel" className="card ai-analysis-card">
       <div className="ai-header-row">
         <h2>
           <span className="ai-icon">🤖</span> AI Analysis
           {analysis && (
-            <span className="ai-provider-tag" title={`model: ${analysis.model}`}>
+            <span
+              className={`ai-provider-tag ${usingFallback ? 'ai-provider-fallback' : ''}`}
+              title={
+                usingFallback
+                  ? `Fallback — primary '${providerLabel(config!.provider)}' was unavailable. `
+                    + `Answered by ${providerLabel(analysis.provider)}, model: ${analysis.model}`
+                  : `model: ${analysis.model}`
+              }
+            >
               {providerLabel(analysis.provider)}
+              {usingFallback && ' ⚠ fallback'}
             </span>
           )}
         </h2>

@@ -3949,6 +3949,16 @@ h4 {
   color: var(--text-muted);
 }
 
+/* The answer came from the fallback provider, not the configured
+   primary (e.g. the primary is rate-limited) — same warning-amber
+   convention as .ai-disabled-info below. */
+.ai-provider-tag.ai-provider-fallback {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: var(--warning);
+  font-weight: 500;
+}
+
 .ai-disabled-info {
   background: rgba(245, 158, 11, 0.06);
   border: 1px solid rgba(245, 158, 11, 0.25);

@@ -65,7 +65,7 @@ def analyze_symbol_task(
         ``timeframe_conflicts``, ``key_levels``, ``provider``, ``model``,
         ``is_uncertain``, ``template_id``, ``template_name``.
     """
-    from backend.ai import UncertaintyResponse, ai_manager
+    from backend.ai import UncertaintyResponse
 
     if not job_id:
         return _run_direct(symbol, timeframe, template_id, template_name)
@@ -112,8 +112,8 @@ def analyze_symbol_task(
         "risk_factors": list(result.risk_factors),
         "timeframe_conflicts": list(result.timeframe_conflicts),
         "key_levels": list(result.key_levels),
-        "provider": ai_manager.settings.provider,
-        "model": ai_manager.settings.model,
+        "provider": result.provider,
+        "model": result.model,
         "is_uncertain": isinstance(result, UncertaintyResponse),
         "template_id": resolved_template_id,
         "template_name": resolved_template_name,
@@ -130,7 +130,7 @@ def _run_direct(
     template_name: str | None,
 ) -> dict:
     """Run the analysis without touching the DB job table (used by tests)."""
-    from backend.ai import UncertaintyResponse, ai_manager
+    from backend.ai import UncertaintyResponse
 
     rendered_system: str | None = None
     if template_id is not None:
@@ -157,8 +157,8 @@ def _run_direct(
         "risk_factors": list(result.risk_factors),
         "timeframe_conflicts": list(result.timeframe_conflicts),
         "key_levels": list(result.key_levels),
-        "provider": ai_manager.settings.provider,
-        "model": ai_manager.settings.model,
+        "provider": result.provider,
+        "model": result.model,
         "is_uncertain": isinstance(result, UncertaintyResponse),
         "template_id": template_id,
         "template_name": template_name,

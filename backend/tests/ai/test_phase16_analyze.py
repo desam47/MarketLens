@@ -348,6 +348,60 @@ class TestAnalyzeSymbol(unittest.TestCase):
         self.assertEqual(result.trend, "bullish")
         self.assertAlmostEqual(result.confidence, 0.85)
         self.assertEqual(result.supporting_factors, ["MTF aligned bullish", "above SMA 50"])
+        self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.model, "llama3.2")
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_reports_the_actual_answering_provider_not_the_configured_primary(
+        self, mock_ctx, mock_ai
+    ):
+        """Regression for a live bug (2026-09-10): analyze_symbol()'s
+        result used to carry no provider/model attribution at all —
+        every caller (the /analyze endpoint, both background job
+        paths) fell back to reporting ai_manager.settings.provider/
+        model (the configured PRIMARY) instead, so a fallback-served
+        analysis silently claimed to be from the primary. Deliberately
+        mocks ai_manager.complete() returning a DIFFERENT provider
+        than whatever settings.provider might say, to prove the
+        result reflects the real answering provider, not settings."""
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.settings.provider = "openrouter"  # the configured primary
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "AAPL is trending up on thin fallback-model reasoning.",
+                    "trend": "bullish",
+                    "confidence": 0.6,
+                    "supporting_factors": [],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                    "key_levels": [],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",  # the actual fallback that answered
+        )
+        result = analyze_symbol("AAPL", "1d")
+        self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.model, "llama3.2")
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_uncertainty_responses_carry_provider_attribution_too(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = AIResponse(
+            text="not json at all", provider="ollama", model="llama3.2",
+        )
+        result = analyze_symbol("AAPL", "1d")
+        self.assertIsInstance(result, UncertaintyResponse)
+        self.assertEqual(result.provider, "ollama")
+        self.assertEqual(result.model, "llama3.2")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")

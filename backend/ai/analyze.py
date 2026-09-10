@@ -100,7 +100,7 @@ def analyze_symbol(
         else:
             msg = f"AI providers unavailable (tried: {ai_resp.provider})"
         logger.info("AI unavailable for %s: %s", symbol, msg)
-        return _uncertainty(msg)
+        return _uncertainty(msg, provider=ai_resp.provider, model=ai_resp.model)
 
     # --- Step 3: parse and validate ---
     try:
@@ -114,7 +114,9 @@ def analyze_symbol(
         )
         return _uncertainty(
             f"AI response could not be parsed: {e}. "
-            f"Provider: {ai_resp.provider}. Model: {ai_resp.model}."
+            f"Provider: {ai_resp.provider}. Model: {ai_resp.model}.",
+            provider=ai_resp.provider,
+            model=ai_resp.model,
         )
 
     # Validate that the trend agrees broadly with the engine's direction.
@@ -127,17 +129,27 @@ def analyze_symbol(
     if ctx_dir and ai_trend not in ("mixed", "uncertain"):
         _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
 
+    # Record which provider/model actually answered — found live
+    # 2026-09-10: every caller previously reported the configured
+    # PRIMARY (ai_manager.settings.provider/model) here instead,
+    # silently misattributing fallback-served analyses to the primary.
+    parsed.provider = ai_resp.provider
+    parsed.model = ai_resp.model
     return parsed
 
 
 # --- Internals -------------------------------------------------------
 
 
-def _uncertainty(reason: str) -> UncertaintyResponse:
+def _uncertainty(
+    reason: str, *, provider: str = "none", model: str = "unknown",
+) -> UncertaintyResponse:
     return UncertaintyResponse(
         summary=reason,
         trend="uncertain",
         confidence=0.0,
+        provider=provider,
+        model=model,
     )
 
 
