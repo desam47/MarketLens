@@ -92,14 +92,37 @@ class AIManager:
         this provider happens to also be primary, or is unconfigurable
         without a base_url (``openai_compatible`` requires one; not a
         concern for named providers with sensible defaults).
+
+        The FIRST fallback entry gets its own independent config too
+        (``settings.fallback_model``/``fallback_base_url``/
+        ``fallback_api_key``, all opt-in via ``AI_FALLBACK_*`` — empty
+        by default, which preserves the exact prior behavior). Found
+        live 2026-09-10: the fallback was permanently stuck on
+        ollama's hardcoded default model (llama3.2) with no way to
+        point it at a stronger locally-installed model (e.g.
+        qwen3:14b) — this is deliberately NOT the same field as
+        ``model``/``base_url`` above (that would reintroduce the
+        2026-09-09 bug this docstring describes), just a second,
+        independently-configured slot for one specific chain entry.
         """
         with self._lock:
             if name in self._providers:
                 return self._providers[name]
             is_primary = name == self.settings.provider
-            resolved_base = self.settings.base_url if is_primary else None
-            resolved_model = self.settings.model if is_primary else None
-            resolved_key = self.settings.api_key if is_primary else None
+            fallback_chain = self.settings.fallback_chain()
+            is_first_fallback = (
+                not is_primary and fallback_chain and name == fallback_chain[0]
+            )
+            if is_primary:
+                resolved_base = self.settings.base_url
+                resolved_model = self.settings.model
+                resolved_key = self.settings.api_key
+            elif is_first_fallback:
+                resolved_base = self.settings.fallback_base_url or None
+                resolved_model = self.settings.fallback_model or None
+                resolved_key = self.settings.fallback_api_key or None
+            else:
+                resolved_base = resolved_model = resolved_key = None
             # OpenAI-compatible providers (ollama, lm_studio) need /v1
             # appended to the base URL; the user-facing settings.base_url
             # omits it so it's discoverable without knowing the path.

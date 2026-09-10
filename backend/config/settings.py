@@ -335,6 +335,19 @@ class AISettings(BaseSettings):
     max_tokens: int = Field(default=1000)
     temperature: float = Field(default=0.3)
 
+    # Independent config for the first fallback provider — so it isn't
+    # stuck on its hardcoded per-type default (e.g. ollama's
+    # "llama3.2") when a better local model is installed. Deliberately
+    # SEPARATE from `model`/`base_url`/`api_key` above, not reused —
+    # those apply to the primary only; a fallback silently inheriting
+    # the primary's config was a real bug (fixed 2026-09-09, see
+    # AIManager._get_provider()'s docstring). Empty string (the
+    # default) means "use the provider type's own built-in default",
+    # matching the behavior before these fields existed.
+    fallback_model: str = Field(default="")
+    fallback_base_url: str = Field(default="")
+    fallback_api_key: str | None = Field(default=None)
+
     def fallback_chain(self) -> list[str]:
         """Return the ordered list of fallback providers (excluding primary)."""
         return [p.strip() for p in self.fallback_providers.split(",") if p.strip()]
