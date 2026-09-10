@@ -333,13 +333,33 @@ def build_context(
     if include_news:
         try:
             from backend.aux_data.services.manager import aux_data_manager
+            from backend.utils.timezone import now_ny, to_ny
 
             news_resp = aux_data_manager.get_news(sym, limit=5)
-            now = datetime.now(news_resp.timestamp.tzinfo) if news_resp.items else None
+            # Found live 2026-09-10: news_resp.timestamp comes from
+            # now_ny(), which is naive-by-convention (this project's
+            # own rule: naive datetimes are always NY local, UTC ones
+            # are always aware — see backend/utils/timezone.py). But
+            # each article's own item.timestamp is UTC-aware (straight
+            # from the provider). Subtracting a naive datetime from an
+            # aware one raises TypeError, silently swallowed by the
+            # except below — so age_hours computation was throwing on
+            # the FIRST article every single call, and since that
+            # happened before anything got appended, `news` came back
+            # [] on every request regardless of how much real news
+            # existed (confirmed live: /api/aux-data/news/AAPL had 10
+            # real headlines while build_context()['news'] was always
+            # empty). Fixed by converting each item's timestamp to
+            # naive NY before comparing, per the project's own
+            # convention, instead of reusing the response wrapper's
+            # already-naive timestamp's (irrelevant) tzinfo.
+            now = now_ny()
             for item in news_resp.items[:5]:
-                age_hours = None
-                if now is not None:
-                    age_hours = round((now - item.timestamp).total_seconds() / 3600.0, 1)
+                item_ny = to_ny(item.timestamp)
+                age_hours = (
+                    round((now - item_ny).total_seconds() / 3600.0, 1)
+                    if item_ny is not None else None
+                )
                 news.append({
                     "headline": item.headline,
                     "source": item.source,

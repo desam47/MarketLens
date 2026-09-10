@@ -64,6 +64,52 @@ class TestBuildContextNews(unittest.TestCase):
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.aux_data.services.manager.aux_data_manager")
     @patch("backend.ai.context.market_scanner")
+    def test_news_populates_when_response_timestamp_is_naive_ny(
+        self, mock_scanner, mock_aux, mock_get_engine
+    ):
+        """Regression for a live bug (2026-09-10): NewsResponse.timestamp
+        is built via now_ny() in real use (backend/aux_data/provider.py)
+        — naive, per this project's own convention (naive = NY local,
+        aware = UTC; see backend/utils/timezone.py). Each NewsItem's own
+        timestamp, straight from the provider, is UTC-aware. Comparing
+        a naive value against an aware one raises TypeError, which the
+        surrounding except swallowed — so news came back [] on every
+        single real chat/analysis call regardless of how much real news
+        existed, even though the earlier test above (which used an
+        aware UTC response timestamp on both sides) never caught it.
+        """
+        mock_scanner.scan_symbol.return_value = _fake_scan_result()
+        mock_get_engine.return_value = MagicMock(trend_history={})
+        from backend.utils.timezone import now_ny
+
+        naive_now = now_ny()  # what the real provider actually produces
+        aware_item_time = datetime.now(UTC) - timedelta(hours=3)
+        mock_aux.get_news.return_value = NewsResponse(
+            symbol="AAPL",
+            items=[
+                NewsItem(
+                    headline="Apple reveals the foldable iPhone Duo",
+                    source="Yahoo Finance Video",
+                    timestamp=aware_item_time,
+                    symbol="AAPL",
+                    relevance=0.5,
+                ),
+            ],
+            provider="yfinance",
+            timestamp=naive_now,
+        )
+
+        ctx = build_context("AAPL", "1d")
+
+        self.assertEqual(len(ctx.news), 1)
+        item = ctx.news[0]
+        self.assertEqual(item["headline"], "Apple reveals the foldable iPhone Duo")
+        self.assertIsNotNone(item["age_hours"])
+        self.assertAlmostEqual(item["age_hours"], 3.0, delta=0.1)
+
+    @patch("backend.api.trend.registry.get_engine")
+    @patch("backend.aux_data.services.manager.aux_data_manager")
+    @patch("backend.ai.context.market_scanner")
     def test_provider_exception_degrades_to_empty_list(
         self, mock_scanner, mock_aux, mock_get_engine
     ):
