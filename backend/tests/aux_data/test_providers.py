@@ -43,6 +43,43 @@ class TestYFinanceNewsProvider(unittest.TestCase):
         self.assertTrue(prov._is_healthy)
 
     @patch("yfinance.Ticker")
+    def test_get_news_handles_nested_content_shape(self, mock_ticker_cls):
+        """Regression for a live bug (2026-09-09): yfinance >= ~0.2.4x
+        restructured ticker.news into a nested {"id", "content": {...}}
+        envelope — the flat title/publisher/providerPublishTime/
+        relatedTickers shape (still covered by test_get_news_returns_items
+        above, via this method's fallback-to-flat-article path) no
+        longer exists. Found live: AAPL/TSLA/NVDA/MSFT all returned
+        zero items after AUX_NEWS_ENABLED was turned on, even though
+        no exception was raised — the parser was silently reading
+        None out of every field on the new shape's top-level dict."""
+        from backend.aux_data.providers.yfinance_news import YFinanceNewsProvider
+
+        mock_ticker = MagicMock()
+        mock_ticker.news = [
+            {
+                "id": "abc123",
+                "content": {
+                    "title": "Apple reveals the foldable iPhone Duo",
+                    "provider": {"displayName": "Yahoo Finance Video"},
+                    "pubDate": "2026-09-09T18:36:45Z",
+                },
+            },
+        ]
+        mock_ticker_cls.return_value = mock_ticker
+
+        prov = YFinanceNewsProvider()
+        resp = prov.get_news("AAPL", limit=5)
+
+        self.assertEqual(len(resp.items), 1)
+        item = resp.items[0]
+        self.assertEqual(item.headline, "Apple reveals the foldable iPhone Duo")
+        self.assertEqual(item.source, "Yahoo Finance Video")
+        self.assertEqual(item.timestamp.year, 2026)
+        self.assertEqual(item.timestamp.month, 9)
+        self.assertEqual(item.relevance, 0.5)
+
+    @patch("yfinance.Ticker")
     def test_get_news_empty_on_exception(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_news import YFinanceNewsProvider
         mock_ticker_cls.side_effect = RuntimeError("network error")

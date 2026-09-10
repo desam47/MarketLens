@@ -1,8 +1,17 @@
 """
 yfinance implementation of NewsProvider.
 
-News is fetched from ``yf.Ticker.news`` which returns a list of articles
-with ``title``, ``publisher``, ``providerPublishTime`` and related symbols.
+News is fetched from ``yf.Ticker.news``. As of yfinance 0.2.66 each
+article is a nested ``{"id": ..., "content": {...}}`` envelope (the
+flat ``title``/``publisher``/``providerPublishTime``/``relatedTickers``
+shape from older yfinance versions is gone — Yahoo restructured this
+endpoint upstream, unrelated to anything in this codebase). The
+article's real fields live under ``content``: ``title``,
+``provider.displayName`` (was ``publisher``), ``pubDate`` as an ISO
+8601 string (was ``providerPublishTime`` as unix-ms). There is no
+``relatedTickers``-equivalent in the new shape, so relevance always
+falls back to the same neutral 0.5 the old code used when that field
+was absent.
 """
 import logging
 from datetime import datetime
@@ -32,27 +41,39 @@ class YFinanceNewsProvider(NewsProvider):
 
             items: list[NewsItem] = []
             for article in raw[:limit]:
+                # Nested shape (yfinance >= ~0.2.4x): the real fields
+                # live under "content". Fall back to the article dict
+                # itself so an older/differently-shaped payload still
+                # degrades gracefully instead of producing all-blank
+                # items.
+                content = article.get("content") or article
+
                 try:
-                    pub_ms = article.get("providerPublishTime", 0)
+                    pub_raw = content.get("pubDate")
                     pub_dt = (
-                        datetime.fromtimestamp(pub_ms, tz=now_ny().astimezone().tzinfo)
-                        if pub_ms
+                        datetime.fromisoformat(pub_raw.replace("Z", "+00:00"))
+                        if pub_raw
                         else now_ny()
                     )
                 except Exception:
                     pub_dt = now_ny()
 
-                # relevance = number of related tickers that match the symbol,
-                # capped at 1.0. If no related-tickers data, use a default of 0.5.
-                related = article.get("relatedTickers") or []
-                rel = min(len([t for t in related if t.upper() == symbol.upper()]) / max(len(related), 1), 1.0)
-                if not related:
-                    rel = 0.5  # unavailable — assign a neutral middle score
+                provider_info = content.get("provider") or {}
+                source = (
+                    provider_info.get("displayName")
+                    if isinstance(provider_info, dict)
+                    else None
+                ) or content.get("publisher") or "Unknown"
+
+                # No related-tickers concept exists in the new payload
+                # shape — always the same neutral score the old code
+                # used whenever that data was unavailable.
+                rel = 0.5
 
                 items.append(
                     NewsItem(
-                        headline=article.get("title", ""),
-                        source=article.get("publisher", "Unknown"),
+                        headline=content.get("title", ""),
+                        source=source,
                         timestamp=pub_dt,
                         symbol=symbol.upper(),
                         relevance=rel,

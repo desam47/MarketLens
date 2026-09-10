@@ -16,7 +16,7 @@ dependencies = [
     "alembic>=1.13,<2.0",
 
     # Market data
-    "yfinance==0.2.36",
+    "yfinance==0.2.66",
     "httpx>=0.25",
     "curl_cffi>=0.7",
     # Alpaca SDK (REST + WebSocket clients for v3.6).
