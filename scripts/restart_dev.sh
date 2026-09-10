@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Restarts the backend (port 5001) and frontend (port 3000) dev servers.
+# Restarts the backend (port 5001), frontend (port 3000), and RQ background
+# workers (marketlens-workers, marketlens-backfill).
 #
 # Invoked by POST /api/system/restart (backend/api/system/router.py) as a
 # fully detached subprocess — it survives the backend process it's about to
 # kill. Can also be run manually: ./scripts/restart_dev.sh
 #
-# Kills by PORT, not by a remembered PID. uvicorn --reload spawns its actual
-# worker via `multiprocessing`, and that child can outlive its parent's PID
-# once the parent is killed (reparented to PID 1, still bound to the port) —
-# found repeatedly during manual restarts this session. Killing "the PID we
-# started" is not reliable; killing whatever is actually bound to the port is.
+# Kills backend/frontend by PORT, not by a remembered PID. uvicorn --reload
+# spawns its actual worker via `multiprocessing`, and that child can outlive
+# its parent's PID once the parent is killed (reparented to PID 1, still
+# bound to the port) — found repeatedly during manual restarts this session.
+# Killing "the PID we started" is not reliable; killing whatever is actually
+# bound to the port is.
+#
+# RQ workers have no fixed port to key off of, so they're matched by their
+# process command line instead (pkill -f) — same "kill what's actually
+# running, not a remembered PID" principle applied to a process that isn't
+# port-bound. Previously this script only restarted backend+frontend, so an
+# RQ worker running stale code (e.g. after a backend code change) had to be
+# killed and relaunched by hand — found and manually worked around during
+# this session's AI-feature work; fixed here so a normal restart covers it.
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 
@@ -36,6 +46,16 @@ for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
     fi
 done
 
+# RQ workers aren't bound to a port — match by command line instead.
+# Matches both queues (marketlens-workers, marketlens-backfill) in one
+# pass since they share this substring.
+worker_pids=$(pgrep -f "rq worker .*marketlens-" 2>/dev/null || true)
+if [ -n "$worker_pids" ]; then
+    echo "$(date): killing RQ worker PIDs: $worker_pids" >> logs/restart_dev.log
+    # shellcheck disable=SC2086
+    kill -9 $worker_pids 2>/dev/null || true
+fi
+
 # Let the OS actually release the ports before rebinding.
 sleep 1
 
@@ -48,4 +68,22 @@ if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
     disown 2>/dev/null || true
 fi
 
-echo "$(date): restart_dev.sh done — backend + frontend relaunched" >> logs/restart_dev.log
+# Same soft-fail as start.sh/scripts/run.py: skip if `rq` isn't installed —
+# the app still runs, background jobs (AI analysis, ticker backfill) just
+# queue without being processed until a worker exists.
+if command -v rq >/dev/null 2>&1; then
+    echo "$(date): relaunching RQ workers (marketlens-workers x1, marketlens-backfill x2)" >> logs/restart_dev.log
+    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers \
+        >> logs/rq_workers.log 2>&1 &
+    disown
+    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill \
+        >> logs/rq_workers.log 2>&1 &
+    disown
+    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill \
+        >> logs/rq_workers.log 2>&1 &
+    disown
+else
+    echo "$(date): 'rq' CLI not found — skipping RQ workers" >> logs/restart_dev.log
+fi
+
+echo "$(date): restart_dev.sh done — backend + frontend + RQ workers relaunched" >> logs/restart_dev.log
