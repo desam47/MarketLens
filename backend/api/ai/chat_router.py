@@ -28,6 +28,14 @@ router = APIRouter(prefix="/api/ai/chat", tags=["ai-chat"])
 class CreateSessionRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
     alert_trigger_id: int | None = None
+    # "Clear conversation" support: force a brand-new session instead
+    # of reusing the most recent one for this symbol. The old session
+    # and its messages are left untouched (not deleted) — same
+    # non-destructive convention as the rest of the app (alert
+    # triggers, digests) — just no longer the one a plain re-open
+    # returns, since get_or_create_open_session always picks the most
+    # recently updated session.
+    force_new: bool = False
 
 
 class SessionResponse(BaseModel):
@@ -80,13 +88,20 @@ async def create_or_get_session(payload: CreateSessionRequest):
     """Open (or reuse) a chat session for ``payload.symbol``.
 
     One open thread per symbol for v1 — see
-    ChatRepository.get_or_create_open_session.
+    ChatRepository.get_or_create_open_session. ``force_new=True``
+    (the "Clear conversation" button) always creates a fresh session
+    instead of reusing the existing one.
     """
     repo = ChatRepository()
     try:
-        session = await asyncio.to_thread(
-            repo.get_or_create_open_session, payload.symbol, payload.alert_trigger_id,
-        )
+        if payload.force_new:
+            session = await asyncio.to_thread(
+                repo.create_session, payload.symbol, payload.alert_trigger_id,
+            )
+        else:
+            session = await asyncio.to_thread(
+                repo.get_or_create_open_session, payload.symbol, payload.alert_trigger_id,
+            )
         return _session_to_response(session)
     finally:
         repo.close()

@@ -1840,11 +1840,19 @@ class ApiService {
 
   // ── Version 4 AI feature 4: conversational chat panel ───────────────
 
-  async createChatSession(symbol: string, alertTriggerId?: number | null): Promise<ChatSession> {
+  async createChatSession(
+    symbol: string,
+    alertTriggerId?: number | null,
+    forceNew: boolean = false,
+  ): Promise<ChatSession> {
     return this.fetch<ChatSession>('/ai/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, alert_trigger_id: alertTriggerId ?? null }),
+      body: JSON.stringify({
+        symbol,
+        alert_trigger_id: alertTriggerId ?? null,
+        force_new: forceNew,
+      }),
     });
   }
 

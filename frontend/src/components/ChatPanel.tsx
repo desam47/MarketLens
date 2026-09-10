@@ -4,10 +4,11 @@
  * Net new UI — no chat/message-list precedent exists anywhere else in
  * this app. Scope (see docs/plan): single-turn-per-message (the
  * backend rebuilds context fresh per message, no server-side
- * "memory" beyond the stored transcript text), no streaming, no
- * tool-calling — the AI can read what already exists (the latest
- * analysis, an alert trigger's own facts) but never triggers new
- * work on the user's behalf.
+ * "memory" beyond the stored transcript text), no streaming. One
+ * narrow AI-triggered action exists (added in Phase 4.2.7): an
+ * explicit "re-run the analysis" style request runs a real
+ * analyze_symbol() call server-side — everything else is read-only,
+ * the AI never triggers new work on the user's behalf otherwise.
  *
  * One open session per symbol (optionally scoped to a specific alert
  * trigger via `alertTriggerId`, if a caller ever opens this from an
@@ -15,6 +16,12 @@
  * for sending a message: append the user's bubble immediately, then
  * replace/append with the real response (or roll back + show an
  * error on failure).
+ *
+ * "Clear" (top-right) opens a brand-new session instead of reusing
+ * the current one — the old conversation isn't deleted, just no
+ * longer what a plain re-open returns, same non-destructive
+ * convention as the rest of this app (alert triggers/digests aren't
+ * deleted either).
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api, { ChatMessage } from '../services/api';
@@ -30,6 +37,7 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +64,25 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
     })();
 
     return () => { cancelled = true; };
+  }, [symbol, alertTriggerId]);
+
+  const handleClear = useCallback(async () => {
+    // force_new=true: a brand-new session, not a reuse of this one —
+    // the old conversation isn't deleted, just no longer the one a
+    // plain re-open returns (same non-destructive convention as the
+    // rest of the app — alert triggers/digests aren't deleted either).
+    setClearing(true);
+    setError(null);
+    try {
+      const session = await api.createChatSession(symbol, alertTriggerId, true);
+      setSessionId(session.id);
+      setMessages([]);
+      setInput('');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to clear chat');
+    } finally {
+      setClearing(false);
+    }
   }, [symbol, alertTriggerId]);
 
   useEffect(() => {
@@ -96,7 +123,18 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
   return (
     <div className="card chat-panel-card">
       <div className="chat-panel-header">
-        <h2>💬 Ask about {symbol}</h2>
+        <div className="chat-panel-header-top">
+          <h2>💬 Ask about {symbol}</h2>
+          <button
+            type="button"
+            className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
+            onClick={handleClear}
+            disabled={loading || clearing || messages.length === 0}
+            title="Start a fresh conversation — the old one isn't deleted, just no longer shown here"
+          >
+            {clearing ? '⟳' : '🗑 Clear'}
+          </button>
+        </div>
         <p className="info-text">Grounded in the current quant context — not a trade advisor.</p>
       </div>
 

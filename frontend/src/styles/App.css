@@ -4094,9 +4094,21 @@ h4 {
   margin-bottom: 0.5rem;
 }
 
+.chat-panel-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .chat-panel-header h2 {
   margin: 0 0 0.15rem;
   font-size: 1.1rem;
+}
+
+.chat-panel-header-top h2 {
+  margin: 0;
 }
 
 .chat-panel-error {

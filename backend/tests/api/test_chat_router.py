@@ -65,6 +65,39 @@ class TestCreateOrGetSession(unittest.TestCase):
         self.assertEqual(resp.json()["alert_trigger_id"], 42)
         mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", 42)
 
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_force_new_calls_create_session_not_get_or_create(self, mock_repo_cls):
+        """The 'Clear conversation' path: force_new=True must always
+        create a fresh session, never reuse the existing one — the old
+        session/messages are left untouched (not deleted), same
+        non-destructive convention as the rest of the app."""
+        mock_repo = MagicMock()
+        mock_repo.create_session.return_value = _mock_session(id=99, symbol="AAPL")
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions", json={"symbol": "AAPL", "force_new": True},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["id"], 99)
+        mock_repo.create_session.assert_called_once_with("AAPL", None)
+        mock_repo.get_or_create_open_session.assert_not_called()
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_force_new_false_by_default(self, mock_repo_cls):
+        """Regression: omitting force_new entirely must keep the
+        existing reuse behavior (it defaults to False)."""
+        mock_repo = MagicMock()
+        mock_repo.get_or_create_open_session.return_value = _mock_session(symbol="AAPL")
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/sessions", json={"symbol": "AAPL"})
+
+        self.assertEqual(resp.status_code, 200)
+        mock_repo.create_session.assert_not_called()
+        mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", None)
+
 
 class TestGetMessages(unittest.TestCase):
 
