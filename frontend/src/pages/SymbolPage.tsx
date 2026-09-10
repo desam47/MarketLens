@@ -197,42 +197,27 @@ const TransitionsPanel = memo(function TransitionsPanel({
   );
 });
 
-// --- Price-range / Support & Resistance levels panels ---
-// Both render from the same /price-range data (SRLevel[]). Rows are
-// paired by base concept: a concept's high sits in the left column and
-// its low in the right column ON THE SAME ROW (Today's High | Today's
-// Low, All Time High | All Time Low, ...). Groups are ordered by
+// --- Support & Resistance levels panel ---
+// Renders /price-range data (SRLevel[]) as concept-paired rows: a
+// concept's high sits in the left (Resistance) column and its low in
+// the right (Support) column ON THE SAME ROW (Today's High | Today's
+// Low, All Time High | All Time Low, ...). Groups ordered by
 // srBaseOrder; within a group the nearest level to the current price
 // comes first. `—` fills a side with no counterpart.
-//   'price-range'         — boundary concepts only (today / prev-day /
-//                           this-week / prev-week / all-time), labelled
-//                           Top / Bottom.
-//   'support-resistance'  — every concept, incl. swings, pivots and
-//                           consolidation zones, labelled
-//                           Resistance / Support.
-type SRPanelVariant = 'price-range' | 'support-resistance';
-
-const SR_TECHNICAL_TYPES = ['pivot_high', 'pivot_low', 'swing_high', 'swing_low', 'consolidation_zone'];
-
 const SRPanel = memo(function SRPanel({
   levels,
   latestClose,
-  variant,
 }: {
   levels: SRLevel[];
   latestClose: number | null;
-  variant: SRPanelVariant;
 }) {
-  const isFullSR = variant === 'support-resistance';
-  const title = isFullSR ? 'Support & Resistance' : 'Price Range';
-  const highLabel = isFullSR ? 'Resistance' : 'Top';
-  const lowLabel = isFullSR ? 'Support' : 'Bottom';
+  const highLabel = 'Resistance';
+  const lowLabel = 'Support';
 
   // Group by base concept, split each into high/low, then zip into
   // paired rows so a concept's high and low line up.
   const groups = new Map<string, { highs: SRLevel[]; lows: SRLevel[] }>();
   for (const l of levels) {
-    if (!isFullSR && SR_TECHNICAL_TYPES.includes(l.type)) continue;
     const base = srBaseKey(l.type);
     if (!groups.has(base)) groups.set(base, { highs: [], lows: [] });
     const g = groups.get(base)!;
@@ -244,7 +229,7 @@ const SRPanel = memo(function SRPanel({
     (isHigh ? g.highs : g.lows).push(l);
   }
 
-  const rows: { high: SRLevel | null; low: SRLevel | null }[] = [];
+  const shownRows: { high: SRLevel | null; low: SRLevel | null }[] = [];
   const orderedBases = Array.from(groups.keys()).sort(
     (a, b) => (srBaseOrder[a] ?? 99) - (srBaseOrder[b] ?? 99),
   );
@@ -253,14 +238,13 @@ const SRPanel = memo(function SRPanel({
     const highs = [...g.highs].sort((a, b) => a.price - b.price); // nearest above first
     const lows = [...g.lows].sort((a, b) => b.price - a.price);   // nearest below first
     for (let i = 0; i < Math.max(highs.length, lows.length); i++) {
-      rows.push({ high: highs[i] ?? null, low: lows[i] ?? null });
+      shownRows.push({ high: highs[i] ?? null, low: lows[i] ?? null });
     }
   }
-  const shownRows = isFullSR ? rows : rows.slice(0, 8);
 
   return (
     <div className="card analysis-card">
-      <h2>{title}</h2>
+      <h2>Support &amp; Resistance</h2>
       {latestClose != null && (
         <div className="current-price">
           <span className="price-label">Last</span>
@@ -622,10 +606,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           />
         </div>
         <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
-          <SRPanel levels={srLevels} latestClose={latestClose} variant="price-range" />
-        </div>
-        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
-          <SRPanel levels={srLevels} latestClose={latestClose} variant="support-resistance" />
+          <SRPanel levels={srLevels} latestClose={latestClose} />
         </div>
         <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />
