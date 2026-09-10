@@ -245,7 +245,7 @@ const SRPanel = memo(function SRPanel({
   }
 
   const rows: { high: SRLevel | null; low: SRLevel | null }[] = [];
-  const orderedBases = [...groups.keys()].sort(
+  const orderedBases = Array.from(groups.keys()).sort(
     (a, b) => (srBaseOrder[a] ?? 99) - (srBaseOrder[b] ?? 99),
   );
   for (const base of orderedBases) {
