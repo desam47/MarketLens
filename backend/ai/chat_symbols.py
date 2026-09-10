@@ -177,6 +177,54 @@ def _validate_unknown(tokens: list[str]) -> set[str]:
     return good
 
 
+def _fuzzy1(a: str, b: str) -> bool:
+    """True if ``a`` is one fat-finger from ``b`` — a single insert / delete /
+    substitute, or one adjacent transposition. False for an exact match."""
+    if a == b:
+        return False
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        diffs = [i for i in range(la) if a[i] != b[i]]
+        if len(diffs) == 1:
+            return True
+        if len(diffs) == 2 and diffs[1] == diffs[0] + 1:
+            i = diffs[0]
+            return a[i] == b[i + 1] and a[i + 1] == b[i]
+        return False
+    short, lng = (a, b) if la < lb else (b, a)
+    i = j = 0
+    edited = False
+    while i < len(short) and j < len(lng):
+        if short[i] == lng[j]:
+            i += 1
+            j += 1
+        elif edited:
+            return False
+        else:
+            edited = True
+            j += 1
+    return True
+
+
+def _nearest_known(token: str) -> str | None:
+    """A single known ticker within one fat-finger of ``token``.
+
+    Only for 4-5 char tokens that failed live-quote validation (a real
+    ticker one edit away, like NVDL vs NVDA, validates first and never
+    reaches here). Returns None unless exactly one known symbol matches,
+    so an ambiguous typo (GOOG/GOOGL) falls back to asking.
+    """
+    if not (4 <= len(token) <= 5):
+        return None
+    cands = [
+        k for k in _known_symbols()
+        if 4 <= len(k) <= 5 and not k.startswith("^") and _fuzzy1(token, k)
+    ]
+    return cands[0] if len(cands) == 1 else None
+
+
 def _mask(text: str) -> tuple[str, list[str]]:
     """Strip group phrases from ``text``; return (masked_text, proxies)."""
     proxies: list[str] = []
@@ -253,6 +301,10 @@ def extract_symbols(text: str) -> list[str]:
         for t in weak_unknown:  # keep original order
             if t in validated:
                 add(t)
+            else:  # fat-finger of a known ticker? ("AAPLE" -> "AAPL")
+                near = _nearest_known(t)
+                if near:
+                    add(near)
 
     return ordered
 

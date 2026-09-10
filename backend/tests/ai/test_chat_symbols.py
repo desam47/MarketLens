@@ -84,6 +84,26 @@ class TestExtractSymbols(_Base):
         self.assertEqual(
             chat_symbols.extract_symbols("WHAT IS SUPPORT AND RESISTANCE FOR SPY"), ["SPY"])
 
+    def test_fat_finger_of_known_ticker_corrected(self):
+        self._patch_quotes({"AAPLE": None})  # not a real ticker
+        self.assertEqual(
+            chat_symbols.extract_symbols("provide a trend and directional call for AAPLE"),
+            ["AAPL"])
+
+    def test_fat_finger_transposition_corrected(self):
+        self._patch_quotes({"MFST": None})
+        self.assertEqual(chat_symbols.extract_symbols("how's MFST doing"), ["MSFT"])
+
+    def test_real_ticker_one_edit_away_not_rewritten(self):
+        # a valid live quote wins — validation runs before the fuzzy pass
+        self._patch_quotes({"NVDL": _quote(25.0)})
+        self.assertEqual(chat_symbols.extract_symbols("thoughts on NVDL"), ["NVDL"])
+
+    def test_ambiguous_typo_not_corrected(self):
+        self.known.update({"GOOG", "GOOGL"})
+        self._patch_quotes({"GOOGG": None})  # within one edit of BOTH
+        self.assertEqual(chat_symbols.extract_symbols("is GOOGG a buy"), [])
+
     def test_unknown_ticker_needs_live_quote(self):
         self._patch_quotes({"RIVN": _quote(15.0)})
         self.assertEqual(chat_symbols.extract_symbols("thoughts on RIVN here"), ["RIVN"])
