@@ -521,6 +521,9 @@ class WebullProvider(BaseMarketDataProvider):
             resp = self._data_client.market_data.get_history_bar(
                 sym, "US_STOCK", timespan, count=str(count),
                 trading_sessions=trading_sessions,
+                # Include the currently-forming minute bar (minute charts
+                # only) so the live feed isn't always ~1 bar behind.
+                real_time_required=(timespan == "M1") or None,
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull bars HTTP {resp.status_code}")
@@ -609,6 +612,7 @@ class WebullProvider(BaseMarketDataProvider):
                 count=str(bars_per_page),
                 end_time=str(page_end_ms),
                 trading_sessions=trading_sessions,
+                real_time_required=(timespan == "M1") or None,
             )
             if resp.status_code != 200:
                 logger.warning(
@@ -738,6 +742,7 @@ class WebullProvider(BaseMarketDataProvider):
             resp = self._data_client.market_data.get_batch_history_bar(
                 sym_list, "US_STOCK", timespan, count=str(count),
                 trading_sessions=trading_sessions,
+                real_time_required=(timespan == "M1") or None,
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull batch bars HTTP {resp.status_code}")

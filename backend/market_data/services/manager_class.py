@@ -210,6 +210,7 @@ class MarketDataManager:
         range_: str = "3mo",
         use_cache: bool = True,
         db: "Session | None" = None,
+        include_extended_hours: bool = False,
     ) -> list[Bar]:
         """Get a series of historical bars for a symbol, with optional caching.
 
@@ -312,6 +313,7 @@ class MarketDataManager:
                 bars = _call_provider(
                     provider, "get_historical_bars", symbol,
                     timeframe=timeframe, range_=range_,
+                    include_extended_hours=include_extended_hours,
                 )
                 logger.debug(
                     f"Got {len(bars)} historical bars for {symbol} "
@@ -354,6 +356,7 @@ class MarketDataManager:
         timeframe: str = "1d",
         range_: str = "3mo",
         use_cache: bool = True,
+        include_extended_hours: bool = False,
     ) -> dict[str, list[Bar]]:
         """Get historical bars for multiple symbols in a single provider call.
 
@@ -378,6 +381,7 @@ class MarketDataManager:
                             bars = _call_provider(
                                 provider, "get_historical_bars", sym,
                                 timeframe=timeframe, range_=range_,
+                                include_extended_hours=include_extended_hours,
                             )
                             if bars:
                                 result[sym] = bars
@@ -392,6 +396,7 @@ class MarketDataManager:
                     result = _call_provider_direct(
                         provider, batch_fn, symbols,
                         timeframe=timeframe, range_=range_,
+                        include_extended_hours=include_extended_hours,
                     )
                     if not isinstance(result, dict):
                         result = {}

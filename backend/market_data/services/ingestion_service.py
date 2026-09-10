@@ -964,7 +964,11 @@ class MarketDataIngestionService:
                 # re-wrote each symbol's full 1200-bar (Webull's hard
                 # cap) window just to catch the latest 1-2 bars.
                 batch_bars = self.manager.get_historical_bars_batch(
-                    self.symbols, "1m", range_="15m", use_cache=False
+                    self.symbols, "1m", range_="15m", use_cache=False,
+                    # Keep the live 1m feed flowing outside RTH (premarket /
+                    # after-hours). Sub-hour resampling still filters on
+                    # session='regular', so 2m+/1h/1d stay RTH-only.
+                    include_extended_hours=True,
                 )
                 for symbol, bars in batch_bars.items():
                     if bars:
@@ -984,7 +988,8 @@ class MarketDataIngestionService:
                 for symbol in self.symbols:
                     try:
                         bars = self.manager.get_historical_bars(
-                            symbol, "1m", range_="15m", use_cache=False
+                            symbol, "1m", range_="15m", use_cache=False,
+                            include_extended_hours=True,
                         )
                         if bars:
                             for bar in bars:
