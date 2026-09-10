@@ -1845,27 +1845,29 @@ class MarketDataIngestionService:
         # in-memory engine state with rows we never persisted.
         fresh_quotes: list[Quote] = []
         try:
-            for symbol in self.symbols:
-                # The Webull MQTT stream, when live for this symbol, already
-                # feeds engines + Redis + throttled DB rows sub-second — the
-                # poll is only a stale-fallback for symbols it isn't covering.
-                if _stream_is_live(symbol):
-                    continue
+            # One batch call for the whole watchlist instead of N per-symbol
+            # calls — the single biggest reducer of Webull REST load. Symbols
+            # the MQTT stream is live for are excluded (it already feeds
+            # engines + Redis + throttled DB rows sub-second); the ~10s
+            # per-symbol throttle still applies.
+            now = datetime.now()
+            wanted = [
+                s for s in self.symbols
+                if not _stream_is_live(s)
+                and now - self.last_quote_update.get(s, datetime.min) >= timedelta(seconds=10)
+            ]
+            if not wanted:
+                return
 
-                # Check if we need to update (respect rate limits)
-                last_update = self.last_quote_update.get(symbol, datetime.min)
-                if datetime.now() - last_update < timedelta(seconds=10):  # Min 10s between updates
-                    continue
+            try:
+                quotes_map = self.manager.get_batch_quotes(wanted)
+            except Exception as e:
+                logger.warning(f"Batch quote fetch failed: {e}")
+                quotes_map = {}
 
+            for quote in quotes_map.values():
                 try:
-                    quote: Quote = self.manager.get_quote(symbol)
-                    # Per-symbol delay to stay under Finnhub's 60 req/sec ceiling.
-                    # 8 symbols × 0.15s = 1.2s per quote cycle — well within budget
-                    # even when the bar loop (8×7×0.2s ≈ 11s) fires alongside it.
-                    await asyncio.sleep(0.15)
-
-                    # Store in database
-                    db_quote = QuoteModel(
+                    db.add(QuoteModel(
                         symbol=quote.symbol,
                         price=quote.price,
                         bid=quote.bid,
@@ -1873,16 +1875,12 @@ class MarketDataIngestionService:
                         volume=quote.volume,
                         timestamp=quote.timestamp,
                         provider=quote.provider,
-                        data_status=quote.data_status.value
-                    )
-                    db.add(db_quote)
-
-                    self.last_quote_update[symbol] = datetime.now()
+                        data_status=quote.data_status.value,
+                    ))
+                    self.last_quote_update[quote.symbol.upper()] = now
                     fresh_quotes.append(quote)
-                    logger.debug(f"Ingested quote for {symbol}: ${quote.price}")
-
                 except Exception as e:
-                    logger.warning(f"Failed to ingest quote for {symbol}: {e}")
+                    logger.warning(f"Failed to store quote for {getattr(quote,'symbol','?')}: {e}")
 
             db.commit()
         except Exception as e:
