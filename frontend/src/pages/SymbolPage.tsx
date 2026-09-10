@@ -204,10 +204,12 @@ const TransitionsPanel = memo(function TransitionsPanel({
 //                           labelled Top / Bottom, ordered by period.
 //   'support-resistance'  — every detected level, incl. swing highs/lows,
 //                           pivots and consolidation zones, labelled
-//                           Resistance / Support, strongest first, with
-//                           each level placed on a side by price vs the
-//                           current close (a swing high that's now below
-//                           price is support, not resistance).
+//                           Resistance / Support, strongest first. Each
+//                           level goes on the side its type name implies
+//                           (*_high → Resistance, *_low → Support), so
+//                           the columns stay predictable; consolidation
+//                           zones (no direction in the name) fall back to
+//                           price vs the current close.
 type SRPanelVariant = 'price-range' | 'support-resistance';
 
 const SR_TECHNICAL_TYPES = ['pivot_high', 'pivot_low', 'swing_high', 'swing_low', 'consolidation_zone'];
@@ -226,17 +228,21 @@ const SRPanel = memo(function SRPanel({
   const highLabel = isFullSR ? 'Resistance' : 'Top';
   const lowLabel = isFullSR ? 'Support' : 'Bottom';
 
+  // Which side of the panel a level belongs on. `*_high` types are
+  // resistance, `*_low` types support — for BOTH variants, so a
+  // "Swing Low" always lands in the Support column, never Resistance.
+  // Consolidation zones carry no direction in the name, so they go by
+  // price vs the current close (above → resistance, below → support).
+  const isHighSide = (l: SRLevel): boolean => {
+    if (l.type.includes('high')) return true;
+    if (l.type.includes('low')) return false;
+    return latestClose != null ? l.price >= latestClose : true;
+  };
+
   const forSide = (wantHigh: boolean): SRLevel[] => {
     const picked = levels.filter(l => {
-      if (!isFullSR) {
-        // Price Range: boundary types only, keyed by the high/low in the name.
-        if (SR_TECHNICAL_TYPES.includes(l.type)) return false;
-        return l.type.includes(wantHigh ? 'high' : 'low');
-      }
-      // Support & Resistance: everything, placed by price vs current close
-      // (falls back to the type name when there's no close to compare to).
-      const above = latestClose != null ? l.price >= latestClose : l.type.includes('high');
-      return above === wantHigh;
+      if (!isFullSR && SR_TECHNICAL_TYPES.includes(l.type)) return false;
+      return isHighSide(l) === wantHigh;
     });
     return isFullSR
       ? [...picked].sort((a, b) => b.strength - a.strength)
