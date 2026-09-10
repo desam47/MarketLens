@@ -73,6 +73,14 @@ class TestFundamentalsItem(unittest.TestCase):
         with self.assertRaises(ValueError):
             FundamentalsItem(symbol="X", institutional_ownership=1.5)
 
+    def test_negative_net_income_allowed(self):
+        """Regression for a live bug (2026-09-10): net income must
+        allow negative values — a company operating at a loss is real,
+        meaningful data, not invalid input. (Unlike market_cap/revenue,
+        which genuinely can't go negative.)"""
+        f = FundamentalsItem(symbol="X", net_income=-173_471_008.0)
+        self.assertEqual(f.net_income, -173_471_008.0)
+
 
 class TestOptionContract(unittest.TestCase):
 

@@ -105,7 +105,8 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
             "marketCap": 3_000_000_000_000.0,
             "trailingEps": 6.42,
             "trailingPE": 30.5,
-            "heldByInstitutions": 0.6,
+            "heldPercentInstitutions": 0.6,
+            "heldPercentInsiders": 0.02,
             "beta": 1.2,
             "fiftyTwoWeekHigh": 200.0,
             "fiftyTwoWeekLow": 150.0,
@@ -122,6 +123,7 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
         self.assertEqual(resp.data.market_cap, 3_000_000_000_000.0)
         self.assertEqual(resp.data.eps, 6.42)
         self.assertEqual(resp.data.institutional_ownership, 0.6)
+        self.assertEqual(resp.data.insider_ownership, 0.02)
         self.assertTrue(prov._is_healthy)
 
     @patch("yfinance.Ticker")
@@ -146,6 +148,67 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
 
         self.assertEqual(resp.data.symbol, "AAPL")
         self.assertFalse(prov._is_healthy)
+
+    @patch("yfinance.Ticker")
+    def test_negative_net_income_does_not_wipe_the_rest_of_the_snapshot(self, mock_ticker_cls):
+        """Regression for a live bug (2026-09-10): a real loss-making
+        company (DVLT, net income -$173.5M) came back with EVERY
+        fundamentals field null, not just net_income. Root cause:
+        FundamentalsItem.net_income wrongly required ge=0 (fixed on
+        the model directly — a loss is real data, not invalid input),
+        and one field failing Pydantic validation crashed construction
+        of the whole 25+-field object. This asserts both: the real
+        negative value survives, and every other valid field survives
+        alongside it.
+        """
+        from backend.aux_data.providers.yfinance_fundamentals import YFinanceFundamentalsProvider
+
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "longName": "Datavault AI Inc.",
+            "sector": "Technology",
+            "marketCap": 176_018_064.0,
+            "totalRevenue": 46_858_000.0,
+            "netIncomeToCommon": -173_471_008.0,
+            "trailingEps": 0.03,
+        }
+        mock_ticker_cls.return_value = mock_ticker
+
+        prov = YFinanceFundamentalsProvider()
+        resp = prov.get_fundamentals("DVLT")
+
+        self.assertEqual(resp.data.net_income, -173_471_008.0)
+        self.assertEqual(resp.data.company_name, "Datavault AI Inc.")
+        self.assertEqual(resp.data.sector, "Technology")
+        self.assertEqual(resp.data.market_cap, 176_018_064.0)
+        self.assertEqual(resp.data.revenue, 46_858_000.0)
+        self.assertEqual(resp.data.eps, 0.03)
+
+    @patch("yfinance.Ticker")
+    def test_an_invalid_field_degrades_alone_not_the_whole_snapshot(self, mock_ticker_cls):
+        """General case of the above: any single field that still
+        fails model validation (e.g. a provider quirk we haven't seen
+        yet) should drop to None on its own, not take every other
+        valid field down with it."""
+        from backend.aux_data.providers.yfinance_fundamentals import YFinanceFundamentalsProvider
+
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "longName": "Example Corp",
+            "sector": "Industrials",
+            # priceToBook can go negative for a company with negative
+            # book equity — still has ge=0 on the model, so exercise
+            # the resilient-degrade path via this field specifically.
+            "priceToBook": -4.5,
+        }
+        mock_ticker_cls.return_value = mock_ticker
+
+        prov = YFinanceFundamentalsProvider()
+        resp = prov.get_fundamentals("EX")
+
+        self.assertIsNone(resp.data.price_to_book)
+        self.assertEqual(resp.data.company_name, "Example Corp")
+        self.assertEqual(resp.data.sector, "Industrials")
 
 
 class TestYFinanceOptionsProvider(unittest.TestCase):

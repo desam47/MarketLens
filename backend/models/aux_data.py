@@ -74,7 +74,14 @@ class FundamentalsItem(BaseModel):
 
     # Income statement
     revenue: float | None = Field(default=None, ge=0, description="USD")
-    net_income: float | None = Field(default=None, ge=0, description="USD")
+    # No ge=0 here, unlike revenue — net income is routinely negative
+    # for a company operating at a loss (found live 2026-09-10: DVLT's
+    # real net income is -$173.5M; the old ge=0 constraint rejected
+    # that value outright, which crashed construction of the whole
+    # FundamentalsItem and silently wiped out every OTHER field too,
+    # not just this one). A loss is real, meaningful data — it should
+    # reach the AI/UI, not be hidden as if it were invalid input.
+    net_income: float | None = Field(default=None, description="USD")
     eps: float | None = Field(default=None, description="Earnings per share (TTM)")
     eps_growth: float | None = Field(
         default=None,
