@@ -197,19 +197,24 @@ const TransitionsPanel = memo(function TransitionsPanel({
 });
 
 // --- Price-range / Support & Resistance levels panels ---
-// Both render from the same /price-range data (SRLevel[]), differing only
-// in which levels they include and how they're grouped:
+// Both render from the same /price-range data (SRLevel[]), differing in
+// which levels they include and — crucially — how a level is assigned to
+// the "up" or "down" column:
 //   'price-range'         — boundary levels only (today / prev-day / this-
-//                           week / prev-week / all-time high & low),
-//                           labelled Top / Bottom, ordered by period.
-//   'support-resistance'  — every detected level, incl. swing highs/lows,
-//                           pivots and consolidation zones, labelled
-//                           Resistance / Support, strongest first. Each
-//                           level goes on the side its type name implies
-//                           (*_high → Resistance, *_low → Support), so
-//                           the columns stay predictable; consolidation
-//                           zones (no direction in the name) fall back to
-//                           price vs the current close.
+//                           week / prev-week / all-time high & low).
+//                           Column = the high/low in the type name
+//                           ("today's high" is the top of today's range
+//                           no matter where price sits now). Labelled
+//                           Top / Bottom, ordered by period.
+//   'support-resistance'  — every detected level (swings, pivots,
+//                           consolidation zones included). Column = price
+//                           vs the CURRENT price: anything above is
+//                           resistance, anything below is support —
+//                           regardless of how the level originally formed
+//                           (a pivot high price has since risen well above
+//                           now acts as support). Each column reads
+//                           nearest-to-price first. Labelled
+//                           Resistance / Support.
 type SRPanelVariant = 'price-range' | 'support-resistance';
 
 const SR_TECHNICAL_TYPES = ['pivot_high', 'pivot_low', 'swing_high', 'swing_low', 'consolidation_zone'];
@@ -228,15 +233,14 @@ const SRPanel = memo(function SRPanel({
   const highLabel = isFullSR ? 'Resistance' : 'Top';
   const lowLabel = isFullSR ? 'Support' : 'Bottom';
 
-  // Which side of the panel a level belongs on. `*_high` types are
-  // resistance, `*_low` types support — for BOTH variants, so a
-  // "Swing Low" always lands in the Support column, never Resistance.
-  // Consolidation zones carry no direction in the name, so they go by
-  // price vs the current close (above → resistance, below → support).
+  // Support & Resistance: a level is resistance if it sits above the
+  // current price, support if below — full stop. Price Range: keyed by
+  // the high/low in the type name instead.
   const isHighSide = (l: SRLevel): boolean => {
-    if (l.type.includes('high')) return true;
-    if (l.type.includes('low')) return false;
-    return latestClose != null ? l.price >= latestClose : true;
+    if (isFullSR) {
+      return latestClose != null ? l.price >= latestClose : l.type.includes('high');
+    }
+    return l.type.includes('high');
   };
 
   const forSide = (wantHigh: boolean): SRLevel[] => {
@@ -244,9 +248,12 @@ const SRPanel = memo(function SRPanel({
       if (!isFullSR && SR_TECHNICAL_TYPES.includes(l.type)) return false;
       return isHighSide(l) === wantHigh;
     });
-    return isFullSR
-      ? [...picked].sort((a, b) => b.strength - a.strength)
-      : [...picked].sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
+    if (isFullSR) {
+      // Nearest level to the current price first.
+      const ref = latestClose ?? 0;
+      return [...picked].sort((a, b) => Math.abs(a.price - ref) - Math.abs(b.price - ref));
+    }
+    return [...picked].sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
   };
 
   const resistances = forSide(true);
@@ -270,9 +277,7 @@ const SRPanel = memo(function SRPanel({
             const allItems = side === 'high' ? resistances : supports;
             // Price Range shows the top 8 boundary levels; Support &
             // Resistance shows all of them — capping at 8 there was
-            // silently dropping the swing / pivot rows (they score
-            // lower than the fixed boundary levels), which is exactly
-            // the data that panel exists to surface. The backend
+            // silently dropping the swing / pivot rows. The backend
             // already caps the total at max_levels=20.
             const items = isFullSR ? allItems : allItems.slice(0, 8);
             const color = side === 'high' ? '#ef4444' : '#10b981';
@@ -290,14 +295,15 @@ const SRPanel = memo(function SRPanel({
                   </thead>
                   <tbody>
                     {items.map((l, i) => {
-                      // Above-price distances are positive, below-price
-                      // negative, by sign convention.
-                      const absDist = l.distance_from_price != null
-                        ? Math.abs(l.distance_from_price)
-                        : null;
-                      const dist = absDist == null
-                        ? null
-                        : side === 'low' ? -absDist : absDist;
+                      // Signed % from current price: + above, − below.
+                      // Computed here rather than from l.distance_from_price
+                      // — the backend field is unreliable for consolidation
+                      // zones (it reports absurd values like 26397%).
+                      const dist = (isFullSR && latestClose)
+                        ? ((l.price - latestClose) / latestClose) * 100
+                        : l.distance_from_price != null
+                          ? (side === 'low' ? -Math.abs(l.distance_from_price) : Math.abs(l.distance_from_price))
+                          : null;
                       return (
                         <tr key={i}>
                           <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
