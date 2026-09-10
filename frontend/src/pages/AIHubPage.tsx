@@ -1,5 +1,5 @@
 /**
- * AIAdvisorPage — the hub for every AI capability in one place.
+ * AIHubPage — the hub for every AI capability in one place.
  *
  * Layout (from the ai-advisor-page-design workflow): a single vertical
  * scroll of always-mounted sections with a sticky section-jump nav.
@@ -34,7 +34,7 @@ const AITemplatesPanel = lazy(() =>
   import('../components/AITemplatesPanel').then(m => ({ default: m.AITemplatesPanel })),
 );
 
-interface AIAdvisorPageProps {
+interface AIHubPageProps {
   symbol: string;
   onSymbolChange: (symbol: string) => void;
 }
@@ -48,7 +48,7 @@ const SECTIONS = [
 ] as const;
 type SectionId = typeof SECTIONS[number]['id'];
 
-export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
+export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   const [timeframe, setTimeframe] = useState('1d');
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
   const [activeSection, setActiveSection] = useState<SectionId>('analysis');
@@ -62,7 +62,7 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
   const handleRefresh = useCallback(() => setTemplatesReloadKey(k => k + 1), []);
 
   const jumpTo = (id: SectionId) =>
-    document.getElementById(`advisor-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById(`hub-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   // Scrollspy — highlight the jump-nav chip for the topmost visible
   // section. Every <section> is always mounted (only the lazy panel
@@ -74,23 +74,23 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
           .filter(e => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
         if (top) {
-          setActiveSection(top.target.id.replace('advisor-', '') as SectionId);
+          setActiveSection(top.target.id.replace('hub-', '') as SectionId);
         }
       },
       { rootMargin: '-70px 0px -55% 0px', threshold: 0 },
     );
     SECTIONS.forEach(s => {
-      const el = document.getElementById(`advisor-${s.id}`);
+      const el = document.getElementById(`hub-${s.id}`);
       if (el) obs.observe(el);
     });
     return () => obs.disconnect();
   }, []);
 
   return (
-    <div className="ai-advisor-page">
+    <div className="ai-hub-page">
       <div className="dashboard-header">
         <div>
-          <h1>AI Advisor</h1>
+          <h1>AI Hub</h1>
           <p className="subtitle">
             Analysis, chat &amp; templates for <b>{symbol}</b> &middot; market digest &amp; AI search
           </p>
@@ -118,7 +118,7 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
         </div>
       </div>
 
-      <nav className="ai-advisor-nav" aria-label="Jump to section">
+      <nav className="ai-hub-nav" aria-label="Jump to section">
         {SECTIONS.map(s => (
           <button
             key={s.id}
@@ -131,7 +131,7 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
         ))}
       </nav>
 
-      <section id="advisor-analysis" className="ai-advisor-section">
+      <section id="hub-analysis" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Analysis">
           <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
             <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
@@ -139,7 +139,7 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
         </PageErrorBoundary>
       </section>
 
-      <section id="advisor-chat" className="ai-advisor-section">
+      <section id="hub-chat" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Chat">
           <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
             <ChatPanel symbol={symbol} />
@@ -147,7 +147,7 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
         </PageErrorBoundary>
       </section>
 
-      <section id="advisor-templates" className="ai-advisor-section">
+      <section id="hub-templates" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Templates">
           <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
             <AITemplatesPanel key={templatesReloadKey} symbol={symbol} timeframe={timeframe} />
@@ -155,15 +155,15 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
         </PageErrorBoundary>
       </section>
 
-      <h4 className="ai-advisor-divider">Market-wide AI</h4>
+      <h4 className="ai-hub-divider">Market-wide AI</h4>
 
-      <section id="advisor-digest" className="ai-advisor-section">
+      <section id="hub-digest" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Digest">
           <DigestCard />
         </PageErrorBoundary>
       </section>
 
-      <section id="advisor-search" className="ai-advisor-section">
+      <section id="hub-search" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Search">
           <NLSearchBar onSelectSymbol={onSymbolChange} />
         </PageErrorBoundary>
@@ -172,4 +172,4 @@ export function AIAdvisorPage({ symbol, onSymbolChange }: AIAdvisorPageProps) {
   );
 }
 
-export default AIAdvisorPage;
+export default AIHubPage;

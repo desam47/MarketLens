@@ -34,7 +34,7 @@ const CustomIndicatorsPanel = lazy(() =>
 const DrawingToolsPanel = lazy(() =>
   import('../components/DrawingToolsPanel').then(m => ({ default: m.DrawingToolsPanel })),
 );
-// AITemplatesPanel and ChatPanel moved to the AI Advisor page (2026-09-10).
+// AITemplatesPanel and ChatPanel moved to the AI Hub page (2026-09-10).
 
 interface SymbolPageProps {
   symbol: string;

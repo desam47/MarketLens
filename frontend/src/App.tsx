@@ -14,7 +14,7 @@ const BacktestPage = lazy(() => import('./pages/BacktestPage').then(m => ({ defa
 const SymbolPage = lazy(() => import('./pages/SymbolPage').then(m => ({ default: m.SymbolPage })));
 const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
 const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage').then(m => ({ default: m.HistoricalSignalsPage })));
-const AIAdvisorPage = lazy(() => import('./pages/AIAdvisorPage').then(m => ({ default: m.AIAdvisorPage })));
+const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -23,7 +23,7 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'scanner' | 'signals' | 'advisor';
+type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'scanner' | 'signals' | 'hub';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -60,8 +60,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Live Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
-      case 'advisor':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="AI Advisor"><AIAdvisorPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
+      case 'hub':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="AI Hub"><AIHubPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'alerts':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':
@@ -103,11 +103,11 @@ export default function App() {
           </li>
           <li>
             <button
-              className={currentPage === 'advisor' ? 'active' : ''}
-              onClick={() => setCurrentPage('advisor')}
+              className={currentPage === 'hub' ? 'active' : ''}
+              onClick={() => setCurrentPage('hub')}
             >
               <span className="nav-icon">🤖</span>
-              AI Advisor
+              AI Hub
             </button>
           </li>
           <li>

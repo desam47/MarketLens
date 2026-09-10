@@ -1928,7 +1928,7 @@ h4 {
 }
 
 .symbol-page .timeframe-select,
-.ai-advisor-page .timeframe-select {
+.ai-hub-page .timeframe-select {
   background: var(--bg-tertiary);
   color: var(--text-primary);
   border: 1px solid var(--border);
@@ -1939,16 +1939,16 @@ h4 {
 }
 
 .symbol-page .timeframe-select:focus,
-.ai-advisor-page .timeframe-select:focus {
+.ai-hub-page .timeframe-select:focus {
   outline: 2px solid var(--accent-primary);
 }
 
-/* ---------- AI Advisor Page ---------- */
-.ai-advisor-page {
+/* ---------- AI Hub Page ---------- */
+.ai-hub-page {
   padding: 24px;
 }
 
-.ai-advisor-divider {
+.ai-hub-divider {
   margin: 1.75rem 0 0.75rem;
   font-size: 0.7rem;
   font-weight: 600;
@@ -1959,7 +1959,7 @@ h4 {
 
 /* Sticky section-jump nav — content-width block with an opaque
    background, so position:sticky needs no full-bleed trick. */
-.ai-advisor-nav {
+.ai-hub-nav {
   position: sticky;
   top: 0;
   z-index: 20;
@@ -1972,7 +1972,7 @@ h4 {
   border-bottom: 1px solid var(--border);
 }
 
-.ai-advisor-nav button {
+.ai-hub-nav button {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   border: 1px solid var(--border);
@@ -1983,18 +1983,18 @@ h4 {
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.ai-advisor-nav button:hover {
+.ai-hub-nav button:hover {
   color: var(--text-primary);
   border-color: var(--accent-primary);
 }
 
-.ai-advisor-nav button.active {
+.ai-hub-nav button.active {
   background: var(--accent-primary);
   border-color: var(--accent-primary);
   color: #fff;
 }
 
-.ai-advisor-section {
+.ai-hub-section {
   scroll-margin-top: 64px;
 }
 
