@@ -7,18 +7,26 @@
  * move the rest of the app, and vice versa.
  *
  * Layout (from the ai-advisor-page-design workflow): a single vertical
- * scroll of always-mounted sections with a sticky section-jump nav.
+ * scroll of section anchors with a sticky section-jump nav.
  *   - Symbol-scoped: Chat, then AI Analysis (incl. the Trade Setup /
  *     advisor block), then Templates — driven by the page's own ticker.
  *   - Market-wide: the premarket/close AI Digest and AI Stock Search
  *     (picking a result repoints the symbol-scoped sections in place,
  *     without leaving the page).
  *
+ * Load-on-reveal: only Chat mounts on open. Every other section's heavy
+ * panel (and its API calls) stays dormant behind a placeholder until it
+ * scrolls near the viewport or you jump to it — then it mounts and stays
+ * mounted, so state is kept. This keeps the first paint to a single
+ * chat-session request instead of a five-panel burst (auto-analyze +
+ * chat + templates + digest + search all at once).
+ *
  * The Analysis section must stay ABOVE Templates: AITemplatesPanel's
  * "⏱ Background" button reaches out of React to
  * document.getElementById('ai-analysis-panel').runBackground(), so it
- * must be mounted first (same implicit contract SymbolPage had before
- * these panels moved here). Chat above Analysis is fine.
+ * must be mounted first. Revealing Templates therefore also reveals
+ * Analysis (same implicit contract SymbolPage had before these panels
+ * moved here). Chat above Analysis is fine.
  */
 import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { PageErrorBoundary } from '../components/PageErrorBoundary';
@@ -57,6 +65,9 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   const [timeframe, setTimeframe] = useState('1d');
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
   const [activeSection, setActiveSection] = useState<SectionId>('chat');
+  // Which sections have been mounted. Chat mounts on open; the rest are
+  // added as they scroll into view or get jumped to, and never removed.
+  const [revealed, setRevealed] = useState<Set<SectionId>>(() => new Set<SectionId>(['chat']));
 
   // The header ↻ and the SymbolInput submit re-key AITemplatesPanel only.
   // Re-mounting AIAnalysisPanel would orphan an in-flight billable
@@ -66,14 +77,33 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   // controls ("Analyze" / "Clear").
   const handleRefresh = useCallback(() => setTemplatesReloadKey(k => k + 1), []);
 
-  const jumpTo = (id: SectionId) =>
-    document.getElementById(`hub-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Mount a section (idempotent). Templates drags in Analysis so the
+  // AITemplatesPanel → getElementById('ai-analysis-panel').runBackground()
+  // bridge always has its target mounted.
+  const reveal = useCallback((id: SectionId) => {
+    setRevealed(prev => {
+      const needsAnalysis = id === 'templates' && !prev.has('analysis');
+      if (prev.has(id) && !needsAnalysis) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      if (id === 'templates') next.add('analysis');
+      return next;
+    });
+  }, []);
 
-  // Scrollspy — highlight the jump-nav chip for the topmost visible
-  // section. Every <section> is always mounted (only the lazy panel
-  // inside is Suspense-gated), so the id nodes exist on first paint.
+  const jumpTo = (id: SectionId) => {
+    reveal(id);
+    // The <section> anchor is always in the DOM (only the panel inside is
+    // gated), so the scroll target exists whether or not it's revealed yet.
+    document.getElementById(`hub-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Two observers over the always-mounted <section> anchors:
+  //   • scrollspy — highlight the jump-nav chip for the topmost visible section.
+  //   • reveal — mount a section's panel ~200px before it enters the
+  //     viewport, then stop watching it.
   useEffect(() => {
-    const obs = new IntersectionObserver(
+    const spy = new IntersectionObserver(
       entries => {
         const top = entries
           .filter(e => e.isIntersecting)
@@ -84,12 +114,27 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
       },
       { rootMargin: '-70px 0px -55% 0px', threshold: 0 },
     );
+    const revealObs = new IntersectionObserver(
+      entries => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          revealObs.unobserve(e.target);
+          reveal(e.target.id.replace('hub-', '') as SectionId);
+        }
+      },
+      { rootMargin: '200px 0px 200px 0px', threshold: 0 },
+    );
     SECTIONS.forEach(s => {
       const el = document.getElementById(`hub-${s.id}`);
-      if (el) obs.observe(el);
+      if (!el) return;
+      spy.observe(el);
+      if (s.id !== 'chat') revealObs.observe(el);
     });
-    return () => obs.disconnect();
-  }, []);
+    return () => {
+      spy.disconnect();
+      revealObs.disconnect();
+    };
+  }, [reveal]);
 
   return (
     <div className="ai-hub-page">
@@ -138,44 +183,64 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
       </nav>
 
       <section id="hub-chat" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Chat">
-          <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
-            <ChatPanel symbol={symbol} />
-          </Suspense>
-        </PageErrorBoundary>
+        {revealed.has('chat') ? (
+          <PageErrorBoundary pageName="AI Chat">
+            <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
+              <ChatPanel symbol={symbol} />
+            </Suspense>
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>Chat</div>
+        )}
       </section>
 
       {/* Analysis stays ABOVE Templates: AITemplatesPanel's "⏱ Background"
           button calls document.getElementById('ai-analysis-panel').runBackground()
           out of React, so the Analysis section must render before it. */}
       <section id="hub-analysis" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Analysis">
-          <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
-            <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-        </PageErrorBoundary>
+        {revealed.has('analysis') ? (
+          <PageErrorBoundary pageName="AI Analysis">
+            <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
+              <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
+            </Suspense>
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>AI analysis</div>
+        )}
       </section>
 
       <section id="hub-templates" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Templates">
-          <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
-            <AITemplatesPanel key={templatesReloadKey} symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-        </PageErrorBoundary>
+        {revealed.has('templates') ? (
+          <PageErrorBoundary pageName="AI Templates">
+            <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
+              <AITemplatesPanel key={templatesReloadKey} symbol={symbol} timeframe={timeframe} />
+            </Suspense>
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>AI templates</div>
+        )}
       </section>
 
       <h4 className="ai-hub-divider">Market-wide AI</h4>
 
       <section id="hub-digest" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Digest">
-          <DigestCard />
-        </PageErrorBoundary>
+        {revealed.has('digest') ? (
+          <PageErrorBoundary pageName="AI Digest">
+            <DigestCard />
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>Market digest</div>
+        )}
       </section>
 
       <section id="hub-search" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Search">
-          <NLSearchBar onSelectSymbol={onSymbolChange} />
-        </PageErrorBoundary>
+        {revealed.has('search') ? (
+          <PageErrorBoundary pageName="AI Search">
+            <NLSearchBar onSelectSymbol={onSymbolChange} />
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>AI search</div>
+        )}
       </section>
     </div>
   );
