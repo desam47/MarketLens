@@ -34,12 +34,7 @@ const CustomIndicatorsPanel = lazy(() =>
 const DrawingToolsPanel = lazy(() =>
   import('../components/DrawingToolsPanel').then(m => ({ default: m.DrawingToolsPanel })),
 );
-const AITemplatesPanel = lazy(() =>
-  import('../components/AITemplatesPanel').then(m => ({ default: m.AITemplatesPanel })),
-);
-const ChatPanel = lazy(() =>
-  import('../components/ChatPanel').then(m => ({ default: m.ChatPanel })),
-);
+// AITemplatesPanel and ChatPanel moved to the AI Advisor page (2026-09-10).
 
 interface SymbolPageProps {
   symbol: string;
@@ -636,12 +631,6 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading drawings…</div>}>
           <DrawingToolsPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
-          <AITemplatesPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
-          <ChatPanel symbol={symbol} />
         </Suspense>
         <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
           <MTFScoreGrid
