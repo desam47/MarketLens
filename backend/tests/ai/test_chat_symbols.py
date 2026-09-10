@@ -175,6 +175,21 @@ class TestResolveTurnSymbols(_Base):
         self.assertEqual(syms, ["RIVN"])
         mock_ai.assert_called_once()
 
+    def test_ai_name_resolution_is_cached(self):
+        chat_symbols._NAME_CACHE.clear()
+        with patch.object(chat_symbols, "_ai_resolve_name_uncached", return_value=["PLTR"]) as raw:
+            a = chat_symbols._ai_resolve_name("thoughts on palantir")
+            b = chat_symbols._ai_resolve_name("Thoughts on  Palantir")  # same after normalize
+        self.assertEqual((a, b), (["PLTR"], ["PLTR"]))
+        raw.assert_called_once()  # 2nd phrasing served from cache
+
+    def test_ai_name_resolution_caches_empty(self):
+        chat_symbols._NAME_CACHE.clear()
+        with patch.object(chat_symbols, "_ai_resolve_name_uncached", return_value=[]) as raw:
+            chat_symbols._ai_resolve_name("how is the weather")
+            chat_symbols._ai_resolve_name("how is the weather")
+        raw.assert_called_once()
+
     @patch.object(chat_symbols, "_ai_resolve_name")
     def test_ai_fallback_not_fired_on_market_wide_question(self, mock_ai):
         with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", True):

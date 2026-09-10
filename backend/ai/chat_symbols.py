@@ -381,8 +381,37 @@ def extract_symbols(text: str) -> list[str]:
     return ordered
 
 
+# name->ticker AI results, keyed on the normalized message. Caches empty
+# results too (a non-company message shouldn't re-hit the model) with a
+# short TTL so a symbol that lists later isn't stuck.
+_NAME_CACHE: OrderedDict[str, tuple[float, list[str]]] = OrderedDict()
+_NAME_CACHE_CAP = 128
+_NAME_CACHE_TTL = 300.0
+
+
 def _ai_resolve_name(text: str) -> list[str]:
-    """One small completion: bare company name -> ticker(s). Validated."""
+    """One small completion: bare company name -> ticker(s). Validated.
+
+    Result is cached (hits and misses) for ``_NAME_CACHE_TTL`` on the
+    normalized message text so a repeated phrasing skips the AI call.
+    """
+    import time
+
+    key = re.sub(r"\s+", " ", (text or "").strip().lower())[:200]
+    now = time.monotonic()
+    cached = _NAME_CACHE.get(key)
+    if cached is not None and now - cached[0] < _NAME_CACHE_TTL:
+        _NAME_CACHE.move_to_end(key)
+        return list(cached[1])
+    result = _ai_resolve_name_uncached(text)
+    _NAME_CACHE[key] = (now, list(result))
+    _NAME_CACHE.move_to_end(key)
+    while len(_NAME_CACHE) > _NAME_CACHE_CAP:
+        _NAME_CACHE.popitem(last=False)
+    return result
+
+
+def _ai_resolve_name_uncached(text: str) -> list[str]:
     try:
         from backend.ai.manager import ai_manager
         from backend.ai.prompt import extract_json_object
