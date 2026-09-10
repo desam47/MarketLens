@@ -169,7 +169,16 @@ class EngineRegistry:
         notified = 0
         for cb in callbacks:
             try:
-                cb(price=price, volume=volume, timestamp=timestamp,
+                # `symbol` must be passed through here — dispatch_bar()
+                # (below) always has, but this method never did. Found
+                # live 2026-09-09: AlertsEngine._on_quote(self, symbol,
+                # price, ...) requires it and every call raised
+                # "missing 1 required positional argument: 'symbol'",
+                # caught by this same except block and silently
+                # logged — meaning every price-based alert
+                # (price_above/price_below/pct_change_above) has never
+                # actually fired from a live quote tick.
+                cb(symbol=symbol, price=price, volume=volume, timestamp=timestamp,
                    high=high, low=low, open_price=open_price)
                 notified += 1
             except Exception as e:

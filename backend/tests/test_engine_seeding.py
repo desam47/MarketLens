@@ -216,6 +216,28 @@ class TestEngineRegistry(unittest.TestCase):
         self.assertEqual(captured["low"], 99)
         self.assertEqual(captured["open_price"], 99.5)
 
+    def test_callback_receives_symbol(self):
+        """Regression for a live bug (2026-09-09): dispatch_quote never
+        passed `symbol` to callbacks — dispatch_bar always has (see
+        test_dispatch_bar_routes_by_timeframe's sibling assertions on
+        the real AlertsEngine._on_quote, which requires it) — so a
+        callback that needs to know which symbol it's being called for
+        (e.g. AlertsEngine._on_quote(self, symbol, price, ...)) crashed
+        on every single quote, silently swallowed by dispatch_quote's
+        own except block. Every callback here uses **kw already, so
+        this only needed the dispatch side fixed, not the tests."""
+        captured = {}
+
+        def capture(**kw):
+            captured.update(kw)
+
+        self.registry.register("quote", "AAPL", capture)
+        self.registry.dispatch_quote(
+            symbol="AAPL", price=100, volume=50, timestamp=datetime.now(UTC),
+        )
+
+        self.assertEqual(captured.get("symbol"), "AAPL")
+
 
 class TestRouterSeedingIntegration(unittest.TestCase):
     """End-to-end test: the router's get_regime_engine must seed from the DB.

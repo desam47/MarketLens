@@ -217,6 +217,25 @@ class TestAlertsEngineRegisterUnregister(unittest.TestCase):
             self.engine.register_for_alert(alert)
             mock_registry.register.assert_not_called()
 
+    def test_register_for_alert_signal_equals_added_to_cache(self):
+        """Regression for a live bug (2026-09-09): signal_equals fell
+        through both PRICE_CONDITIONS and BAR_CONDITIONS (it's in
+        neither) and was silently never added to _alerts_cache here —
+        evaluate_scan_result() iterates that cache directly, so a
+        freshly-created signal_equals alert never actually evaluated
+        until the next full _reload() (a server restart), despite this
+        method's own docstring promising immediate evaluation."""
+        alert = _make_alert(id=1, condition_type="signal_equals", parameter="RSI_OVERSOLD")
+        self.engine.register_for_alert(alert)
+        self.assertIn(1, self.engine._alerts_cache)
+        self.assertIs(self.engine._alerts_cache[1], alert)
+
+    def test_unregister_for_alert_signal_equals_removes_from_cache(self):
+        alert = _make_alert(id=1, condition_type="signal_equals", parameter="RSI_OVERSOLD")
+        self.engine._alerts_cache[1] = alert
+        self.engine.unregister_for_alert(alert)
+        self.assertNotIn(1, self.engine._alerts_cache)
+
     def test_unregister_for_alert_removes_callback(self):
         alert = _make_alert(id=1, condition_type="price_above", parameter="100")
         self.engine._price_alert_ids["AAPL"].append(1)

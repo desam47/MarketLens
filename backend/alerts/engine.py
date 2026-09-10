@@ -182,6 +182,22 @@ class AlertsEngine:
             "volume_expansion", "breakout", "breakdown", "divergence",
             "market_regime_change",
         )
+        if alert.condition_type == "signal_equals":
+            # No engine_registry callback needed — evaluate_scan_result()
+            # iterates _alerts_cache directly against every fresh scan
+            # result; there's no per-symbol subscription for this
+            # condition type. Just needs to be visible in the cache.
+            # Found live 2026-09-09: signal_equals fell straight through
+            # the "not in PRICE_CONDITIONS + BAR_CONDITIONS" check below
+            # (it's in neither tuple) and was silently never added to
+            # _alerts_cache here — a freshly-created signal_equals alert
+            # didn't actually evaluate until the next full _reload()
+            # (i.e. a server restart), despite this method's own
+            # docstring promising "the engine starts evaluating the new
+            # alert immediately."
+            with self._lock:
+                self._alerts_cache[alert.id] = alert
+            return
         if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS:
             return
         sym = alert.symbol.upper()
@@ -213,6 +229,15 @@ class AlertsEngine:
             "volume_expansion", "breakout", "breakdown", "divergence",
             "market_regime_change",
         )
+        if alert.condition_type == "signal_equals":
+            # Mirrors register_for_alert's signal_equals branch — no
+            # engine_registry callback to unregister, just drop it from
+            # the cache so a disabled/deleted alert stops being
+            # evaluated immediately rather than surviving until the
+            # next full reload.
+            with self._lock:
+                self._alerts_cache.pop(alert.id, None)
+            return
         if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS:
             return
         sym = alert.symbol.upper()
