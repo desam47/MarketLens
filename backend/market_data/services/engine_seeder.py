@@ -186,6 +186,30 @@ class EngineRegistry:
                 logger.warning(f"Engine update failed for {symbol} (quote): {e}")
         return notified
 
+    def dispatch_trade(self, symbol: str, price: float, size: float,
+                       timestamp, side: str | None = None) -> int:
+        """Fan out a single trade print to engines registered for TRADE on this symbol.
+
+        Distinct from ``dispatch_quote`` — this is one Time & Sales print
+        (price, size, buy/sell side), not an L1 snapshot. The Webull MQTT
+        stream is the only producer; the tape engine is the consumer.
+        Callbacks are invoked with ``symbol``, ``price``, ``size``,
+        ``timestamp``, ``side`` as kwargs.
+        """
+        key = self._key("trade", symbol)
+        with self._lock:
+            callbacks = list(self._entries.get(key, []))
+        if not callbacks:
+            return 0
+        notified = 0
+        for cb in callbacks:
+            try:
+                cb(symbol=symbol, price=price, size=size, timestamp=timestamp, side=side)
+                notified += 1
+            except Exception as e:  # an engine bug must not break ingestion
+                logger.warning(f"Engine update failed for {symbol} (trade): {e}")
+        return notified
+
     def dispatch_bar(self, symbol: str, timeframe: str, price: float,
                      volume: float, timestamp,
                      high: float | None = None,

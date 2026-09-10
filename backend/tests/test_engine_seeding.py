@@ -272,6 +272,31 @@ class TestEngineRegistry(unittest.TestCase):
 
         self.assertEqual(captured.get("symbol"), "AAPL")
 
+    def test_dispatch_trade_fans_out_with_side(self):
+        """dispatch_trade must notify every 'trade' callback with
+        symbol/price/size/timestamp/side, and only for that symbol."""
+        received = []
+        self.registry.register("trade", "AAPL", lambda **kw: received.append(kw))
+        self.registry.register("trade", "NVDA", lambda **kw: received.append({"other": True}))
+
+        ts = datetime.now(UTC)
+        n = self.registry.dispatch_trade("AAPL", price=191.5, size=300, timestamp=ts, side="sell")
+
+        self.assertEqual(n, 1)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0]["symbol"], "AAPL")
+        self.assertEqual(received[0]["price"], 191.5)
+        self.assertEqual(received[0]["size"], 300)
+        self.assertEqual(received[0]["side"], "sell")
+
+    def test_dispatch_trade_swallows_callback_errors(self):
+        received = []
+        self.registry.register("trade", "AAPL", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
+        self.registry.register("trade", "AAPL", lambda **kw: received.append("ok"))
+        n = self.registry.dispatch_trade("AAPL", price=1, size=1, timestamp=datetime.now(UTC))
+        self.assertEqual(n, 1)
+        self.assertEqual(received, ["ok"])
+
 
 class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
     """End-to-end test: the router's get_regime_engine must seed from the DB.

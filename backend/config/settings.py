@@ -84,6 +84,17 @@ class WebullSettings(BaseSettings):
     use_sandbox: bool = Field(default=True)
     rate_limit_per_minute: int = Field(default=120)
     request_timeout: float = Field(default=15.0)
+    # --- MQTT streaming (2026-09-10) -----------------------------------
+    # Push feed for L1 snapshots + trade ticks via the Webull SDK's
+    # DataStreamingClient. Off by default; needs app_key/app_secret and a
+    # Nasdaq Basic / Time & Sales entitlement.
+    streaming_enabled: bool = Field(default=False)
+    # A symbol whose last stream message is older than this is considered
+    # "not live" — the polled quote loop covers it as a fallback.
+    streaming_stale_seconds: float = Field(default=15.0)
+    # Optional MQTT host override; empty = let the SDK's endpoint resolver
+    # pick it from the region.
+    streaming_mqtt_host: str = Field(default="")
 
 
 class MarketDataSettings(BaseSettings):

@@ -150,6 +150,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Ingestion service startup failed: {e}")
 
+    # Webull MQTT streaming (2026-09-10) — push L1 snapshots + trade ticks.
+    # Off unless WEBULL_STREAMING_ENABLED=true. When live, the polled quote
+    # loop backs off to a stale-fallback for covered symbols.
+    try:
+        if settings.webull.streaming_enabled:
+            from backend.market_data.services.ingestion_service import ingestion_service
+            from backend.market_data.streaming.bridge import (
+                on_stream_snapshot,
+                on_stream_trade,
+            )
+            from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
+            _stream = get_webull_stream_client()
+            if _stream is not None:
+                _stream.on_snapshot = on_stream_snapshot
+                _stream.on_trade = on_stream_trade
+                _stream.subscribe(ingestion_service.symbols)
+                _stream.start()
+                app.state.webull_stream = _stream
+                logger.info(
+                    "Webull stream started for %d symbols", len(ingestion_service.symbols)
+                )
+    except Exception as e:
+        logger.warning(f"Webull stream startup failed: {e}")
+
     # Pre-register trend engines for all ingested symbols so bars dispatched
     # by the ingestion service have listeners from the first tick.
     try:
@@ -216,6 +241,13 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Data-quality audit failed: {e}")
 
     yield
+
+    _stream = getattr(app.state, "webull_stream", None)
+    if _stream is not None:
+        try:
+            _stream.stop()
+        except Exception as e:
+            logger.warning(f"Webull stream shutdown failed: {e}")
     shutdown_tracing()
 
 

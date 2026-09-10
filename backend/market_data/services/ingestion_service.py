@@ -38,6 +38,21 @@ logger = logging.getLogger(__name__)
 _NY_TZ = ZoneInfo("America/New_York")
 
 
+def _stream_is_live(symbol: str) -> bool:
+    """True when the Webull MQTT stream is actively covering ``symbol``.
+
+    Import-safe: returns False if streaming is disabled or the module
+    isn't importable, so the polled quote loop keeps working unchanged.
+    """
+    try:
+        from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
+        client = get_webull_stream_client()
+        return client is not None and client.is_live(symbol)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _instantiate_backfill_provider(name: str):
     """Resolve a backfill provider name (e.g. 'alpaca', 'webull', 'yahoo_finance')
     to a (cached) instance, for the 1h ingestion loops' fallback path.
@@ -1609,9 +1624,22 @@ class MarketDataIngestionService:
         old_set = set(self.symbols)
         new_set = set(new_symbols)
         added = new_set - old_set
+        removed = old_set - new_set
         for symbol in added:
             self.register_symbol(symbol)
         self.symbols = new_symbols
+        # Keep the Webull MQTT subscription set in sync with the watchlist.
+        try:
+            from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
+            _stream = get_webull_stream_client()
+            if _stream is not None:
+                if added:
+                    _stream.subscribe(added)
+                if removed:
+                    _stream.unsubscribe(removed)
+        except Exception:  # noqa: BLE001
+            pass
         logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
         return self.symbols
 
@@ -1813,6 +1841,12 @@ class MarketDataIngestionService:
         fresh_quotes: list[Quote] = []
         try:
             for symbol in self.symbols:
+                # The Webull MQTT stream, when live for this symbol, already
+                # feeds engines + Redis + throttled DB rows sub-second — the
+                # poll is only a stale-fallback for symbols it isn't covering.
+                if _stream_is_live(symbol):
+                    continue
+
                 # Check if we need to update (respect rate limits)
                 last_update = self.last_quote_update.get(symbol, datetime.min)
                 if datetime.now() - last_update < timedelta(seconds=10):  # Min 10s between updates
