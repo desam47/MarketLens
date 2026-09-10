@@ -1,0 +1,330 @@
+"""
+Ticker resolution for the universal AI Hub chat (2026-09-10).
+
+Turns one free-text chat message into an ordered list of tickers to
+build quant context for. Deterministic first — regex + a stopword
+denylist + a known-symbol set — then one batched live-quote lookup to
+validate anything unknown, then (optionally) one small AI call to map a
+bare company name to a ticker.
+
+Nothing here raises: every fallible step degrades to "no symbol", and
+the caller (backend.ai.chat.answer_chat_message) always attaches a
+market-wide baseline regardless, so a 0-symbol turn is still answerable.
+
+Nothing in backend/nl_search/ is reusable — that layer produces
+screening filters, never a ticker list.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from collections import OrderedDict
+
+from backend.config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+_VALID_CACHE: "OrderedDict[str, bool]" = OrderedDict()  # token -> True (hits only)
+_VALID_CACHE_CAP = 256
+
+# Known-symbol set, rebuilt lazily every ~60s so a freshly added
+# watchlist ticker starts being recognised without a restart.
+_known_cache: set[str] = set()
+_known_built_at: float = 0.0
+_KNOWN_TTL = 60.0
+
+# Common English words / finance abbreviations that pass the bare
+# uppercase-token shape but are never what the trader means. Real
+# tickers among these (IT, ALL, ON, F, C, ...) are only accepted via a
+# cashtag or an explicit "(TICKER)" / "ticker:" form, or the known set.
+_CHAT_STOPWORDS = {
+    "A", "I", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS", "IT",
+    "ME", "MY", "NO", "OF", "OK", "ON", "OR", "SO", "TO", "UP", "US", "WE",
+    "ALL", "AND", "ANY", "ARE", "BUT", "CAN", "DAY", "DID", "FOR", "GET", "GOT", "HAS",
+    "HAD", "HER", "HIM", "HIS", "HOW", "ITS", "LET", "LOW", "MAY", "NEW", "NOT", "NOW",
+    "OFF", "OLD", "ONE", "OUR", "OUT", "OWN", "PER", "PUT", "SEE", "SHE", "THE", "TOO",
+    "TOP", "TWO", "USE", "WAS", "WAY", "WHO", "WHY", "YES", "YET", "YOU",
+    "BEEN", "BOTH", "DOES", "DOWN", "EACH", "ELSE", "EVEN", "EVER", "FROM", "HAVE",
+    "HERE", "INTO", "JUST", "LESS", "LIKE", "MORE", "MOST", "MUCH", "ONLY", "OVER",
+    "SOME", "SUCH", "THAN", "THAT", "THEM", "THEN", "THEY", "THIS", "WHAT", "WHEN",
+    "WILL", "WITH", "YOUR",
+    # finance abbreviations / jargon
+    "AI", "AH", "AM", "PM", "ET", "PT", "CT", "EOD", "EOW", "YTD", "YOY", "QOQ", "MOM",
+    "ATH", "ATL", "DCA", "FUD", "IMO", "FYI", "WSB", "DD", "TA", "FA", "PE", "PEG",
+    "EPS", "FCF", "ROE", "ROI", "P/E", "RSI", "MACD", "ADX", "EMA", "SMA", "VWAP",
+    "CPI", "PPI", "GDP", "PCE", "FOMC", "FED", "ECB", "BOJ", "IRA", "IPO", "ETF",
+    "CEO", "CFO", "COO", "CTO", "USD", "EUR", "GBP", "JPY", "USA", "UK", "EU", "OK",
+    "Q1", "Q2", "Q3", "Q4", "FY", "H1", "H2", "TTM", "MRQ",
+    "BUY", "SELL", "HOLD", "LONG", "CALL", "PUT", "BID", "ASK", "GAP", "RUN",
+    "EV", "ESG", "AUM", "NAV", "OTC", "SEC", "IRS", "GAAP", "DIP", "PDT",
+}
+
+# Cashtag / caret / explicit forms are high-confidence and skip shape
+# gating entirely.
+_RE_CASHTAG = re.compile(r"(?<![A-Za-z0-9])\$([A-Za-z]{1,5})(?:[.\-][A-Za-z]{1,2})?\b")
+_RE_CARET = re.compile(r"(?<![A-Za-z0-9])\^([A-Z]{1,6})\b")
+_RE_PAREN = re.compile(r"\(([A-Z]{1,5})\)")
+_RE_TICKER_KW = re.compile(r"\bticker[s]?:?\s+([A-Z][A-Z.\-]{0,6})\b")
+_RE_BARE = re.compile(r"(?<![A-Za-z0-9$^])([A-Z]{2,5})\b")
+
+_RE_PRONOUN = re.compile(
+    r"\b(it|its|it'?s|that|this|the stock|the name|the ticker|they|them|those)\b", re.I)
+_RE_BARE_METRIC = re.compile(
+    r"\b(p\s*/?\s*e|pe|peg|rsi|macd|adx|eps|ebitda|margin|margins|fcf|debt|guidance|"
+    r"target|targets|valuation|multiple|support|resistance|trend|dividend|yield|"
+    r"buyback|earnings|revenue|catalyst)\b", re.I)
+_RE_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}\b")
+
+# Phrases that stand in for a group; matched (and masked) before the
+# bare-token pass. -> [] means "no specific ticker" (the market baseline
+# still answers). -> [TICKER] contributes that proxy.
+_GROUP_PHRASES: list[tuple[re.Pattern, list[str]]] = [
+    (re.compile(r"\bmy (watchlist|names|positions|holdings|portfolio|book)\b", re.I), []),
+    (re.compile(r"\bthe (market|tape|markets|indices|indexes)\b", re.I), []),
+    (re.compile(r"\b(overall|broad market|risk[- ]?on|risk[- ]?off)\b", re.I), []),
+    (re.compile(r"\bthe fed\b|\binterest rates\b|\brate cuts?\b", re.I), []),
+    (re.compile(r"\b(semis|semiconductors?|chips?)\b", re.I), ["SOXX"]),
+    (re.compile(r"\b(big tech|mega[- ]?cap tech|faang|magnificent 7|mag ?7)\b", re.I), ["XLK"]),
+    (re.compile(r"\bsmall[- ]?caps?\b", re.I), ["IWM"]),
+]
+
+
+def _known_symbols() -> set[str]:
+    global _known_cache, _known_built_at
+    import time
+
+    now = time.monotonic()
+    if _known_cache and (now - _known_built_at) < _KNOWN_TTL:
+        return _known_cache
+
+    known: set[str] = set()
+    try:
+        from backend.api.main_helpers import _watched_symbols
+
+        known.update(_watched_symbols())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.regime.sector_engine import SECTOR_ETFS, SECTOR_MAP
+
+        known.update(SECTOR_MAP.keys())
+        known.update(SECTOR_ETFS.values())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        known.update(settings.market_context.indices)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        known.update(settings.relative_strength.benchmark_list())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.scanner.scanner import market_scanner
+
+        known.update(market_scanner.scan_results.keys())
+    except Exception:  # noqa: BLE001
+        pass
+
+    known = {s.upper() for s in known if s}
+    _known_cache, _known_built_at = known, now
+    return known
+
+
+def _cache_get(token: str) -> bool:
+    if token in _VALID_CACHE:
+        _VALID_CACHE.move_to_end(token)
+        return True
+    return False
+
+
+def _cache_put(token: str) -> None:
+    _VALID_CACHE[token] = True
+    _VALID_CACHE.move_to_end(token)
+    while len(_VALID_CACHE) > _VALID_CACHE_CAP:
+        _VALID_CACHE.popitem(last=False)
+
+
+def _validate_unknown(tokens: list[str]) -> set[str]:
+    """Return the subset of ``tokens`` that resolve to a real live quote.
+
+    Cache HITS only (a validated token) — never caches a miss, so a
+    symbol that starts trading later isn't permanently rejected.
+    """
+    if not tokens:
+        return set()
+    good: set[str] = set()
+    pending = []
+    for t in tokens:
+        if _cache_get(t):
+            good.add(t)
+        else:
+            pending.append(t)
+    if not pending:
+        return good
+    try:
+        from backend.market_data.services.manager import market_data_manager
+
+        quotes = market_data_manager.get_batch_quotes(pending)
+    except Exception as e:  # noqa: BLE001
+        logger.info("chat symbol validation failed for %s: %s", pending, e)
+        return good
+    for t in pending:
+        q = quotes.get(t)
+        if q is not None and str(getattr(q, "data_status", "")) != "ERROR" and (q.price or 0) > 0:
+            good.add(t)
+            _cache_put(t)
+    return good
+
+
+def _mask(text: str) -> tuple[str, list[str]]:
+    """Strip group phrases from ``text``; return (masked_text, proxies)."""
+    proxies: list[str] = []
+    for pattern, repl in _GROUP_PHRASES:
+        if pattern.search(text):
+            proxies.extend(repl)
+            text = pattern.sub(" ", text)
+    return text, proxies
+
+
+def extract_symbols(text: str) -> list[str]:
+    """Tickers named in a single message (no carry-forward, no AI).
+
+    Order preserved, de-duped. Runs the one batched live-quote lookup
+    for unknown-but-plausible tokens.
+    """
+    if not text or not text.strip():
+        return []
+
+    masked, proxies = _mask(text)
+    known = _known_symbols()
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(sym: str) -> None:
+        sym = sym.upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            ordered.append(sym)
+
+    for p in proxies:
+        add(p)
+
+    # High-confidence forms — collected across patterns and applied in
+    # the order they appear in the message.
+    hits: list[tuple[int, str]] = []
+    for m in _RE_CASHTAG.finditer(masked):
+        hits.append((m.start(), m.group(1).upper()))
+    for m in _RE_CARET.finditer(masked):
+        hits.append((m.start(), "^" + m.group(1).upper()))
+    for m in _RE_PAREN.finditer(masked):
+        hits.append((m.start(), m.group(1).upper()))
+    for m in _RE_TICKER_KW.finditer(masked):
+        hits.append((m.start(), m.group(1).rstrip(".-").upper()))
+    for _, sym in sorted(hits):
+        add(sym)
+
+    strong = set(seen)
+
+    # Bare uppercase tokens — skipped when the message is a shouty
+    # all-caps sentence (4+ words), where case carries no signal. A
+    # short all-caps query like "RIVN?" or "SELL AAPL" is still read.
+    words = re.findall(r"[A-Za-z]+", masked)
+    shouty = len(words) >= 4 and masked.upper() == masked
+    if words and not shouty:
+        weak_known: list[str] = []
+        weak_unknown: list[str] = []
+        for m in _RE_BARE.finditer(masked):
+            tok = m.group(1)
+            if tok in strong or tok in _CHAT_STOPWORDS:
+                continue
+            if tok in known:
+                weak_known.append(tok)
+            elif len(tok) >= 2:
+                weak_unknown.append(tok)
+        for t in weak_known:
+            add(t)
+        validated = _validate_unknown(weak_unknown)
+        for t in weak_unknown:  # keep original order
+            if t in validated:
+                add(t)
+
+    return ordered
+
+
+def _ai_resolve_name(text: str) -> list[str]:
+    """One small completion: bare company name -> ticker(s). Validated."""
+    try:
+        from backend.ai.manager import ai_manager
+        from backend.ai.prompt import extract_json_object
+
+        if not ai_manager.is_available():
+            return []
+        resp = ai_manager.complete(
+            prompt=(
+                "Extract US stock ticker symbols for any companies named in this "
+                "message. Reply with a JSON object: {\"tickers\": [\"AAPL\", ...]}. "
+                "Empty list if none.\n\nMessage: " + text
+            ),
+            system="You map company names to their US ticker symbols. JSON only.",
+            max_tokens=120,
+        )
+        if resp.text is None:
+            return []
+        import json
+
+        data = json.loads(extract_json_object(resp.text))
+        cand = [str(t).upper().strip() for t in (data.get("tickers") or []) if t]
+    except Exception as e:  # noqa: BLE001
+        logger.info("chat AI name->ticker resolution failed: %s", e)
+        return []
+    cand = [t for t in cand if 1 <= len(t) <= 6]
+    validated = _validate_unknown([t for t in cand if t not in _known_symbols()])
+    return [t for t in cand if t in _known_symbols() or t in validated]
+
+
+def _carry_forward(transcript: list[tuple[str, str]]) -> list[str]:
+    """Inherit tickers from the last 2 user turns (newest first)."""
+    users = [content for role, content in reversed(transcript) if role == "user"]
+    for content in users[:2]:
+        got = extract_symbols(content)
+        if got:
+            return got
+    return []
+
+
+def resolve_turn_symbols(
+    user_content: str,
+    transcript: list[tuple[str, str]],
+    base_symbols: list[str],
+) -> tuple[list[str], bool]:
+    """Resolve the tickers one chat turn should pull context for.
+
+    Returns ``(symbols[:chat_max_tickers], capped)``. ``base_symbols``
+    (a legacy symbol/alert session's own ticker) always comes first.
+    """
+    resolved: list[str] = []
+    seen: set[str] = set()
+
+    def add_all(items: list[str]) -> None:
+        for s in items:
+            s = s.upper()
+            if s and s not in seen:
+                seen.add(s)
+                resolved.append(s)
+
+    add_all(base_symbols)
+
+    named = extract_symbols(user_content)
+    if named:
+        add_all(named)
+    else:
+        # Pronoun / bare-metric follow-up -> inherit the prior topic.
+        if _RE_PRONOUN.search(user_content) or _RE_BARE_METRIC.search(user_content):
+            add_all(_carry_forward(transcript))
+        # Still nothing, but a proper noun is present -> try the AI map.
+        if not resolved and settings.ai.chat_symbol_ai_fallback and _RE_PROPER_NOUN.search(user_content):
+            add_all(_ai_resolve_name(user_content))
+
+    cap = settings.ai.chat_max_tickers
+    return resolved[:cap], len(resolved) > cap

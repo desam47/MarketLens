@@ -348,6 +348,14 @@ class AISettings(BaseSettings):
     fallback_base_url: str = Field(default="")
     fallback_api_key: str | None = Field(default=None)
 
+    # Universal AI Hub chat (2026-09-10). Max tickers one chat turn will
+    # build full quant context for (extra named tickers are dropped with
+    # a note). ``chat_symbol_ai_fallback`` allows one small extra
+    # completion to resolve a company name -> ticker when the regex/
+    # denylist extractor finds nothing.
+    chat_max_tickers: int = Field(default=3)
+    chat_symbol_ai_fallback: bool = Field(default=True)
+
     def fallback_chain(self) -> list[str]:
         """Return the ordered list of fallback providers (excluding primary)."""
         return [p.strip() for p in self.fallback_providers.split(",") if p.strip()]
