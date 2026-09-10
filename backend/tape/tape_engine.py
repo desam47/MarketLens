@@ -94,6 +94,23 @@ class TapeEngine:
         for ts, price, size, side in prints:
             self.update(price=price, size=size, timestamp=ts, side=side)
 
+    def note_price(self, price, timestamp=None) -> None:
+        """Update the last-seen price from an L1 snapshot (no trade).
+
+        Keeps ``last_price`` fresh during a gap between prints and gives
+        the tick rule a reference — but adds NO print, so buy/sell
+        volume, pressure and tape speed are unaffected.
+        """
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            self._last_price = p
+            ts = _to_epoch_s(timestamp)
+            if self._last_trade_ts is None or ts > self._last_trade_ts:
+                self._last_trade_ts = ts
+
     def _tick_rule(self, price: float) -> str:
         if self._last_price is None or price >= self._last_price:
             return "buy"

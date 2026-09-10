@@ -38,21 +38,6 @@ logger = logging.getLogger(__name__)
 _NY_TZ = ZoneInfo("America/New_York")
 
 
-def _stream_is_live(symbol: str) -> bool:
-    """True when the Webull MQTT stream is actively covering ``symbol``.
-
-    Import-safe: returns False if streaming is disabled or the module
-    isn't importable, so the polled quote loop keeps working unchanged.
-    """
-    try:
-        from backend.market_data.streaming.webull_stream import get_webull_stream_client
-
-        client = get_webull_stream_client()
-        return client is not None and client.is_live(symbol)
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _instantiate_backfill_provider(name: str):
     """Resolve a backfill provider name (e.g. 'alpaca', 'webull', 'yahoo_finance')
     to a (cached) instance, for the 1h ingestion loops' fallback path.
@@ -1846,15 +1831,14 @@ class MarketDataIngestionService:
         fresh_quotes: list[Quote] = []
         try:
             # One batch call for the whole watchlist instead of N per-symbol
-            # calls — the single biggest reducer of Webull REST load. Symbols
-            # the MQTT stream is live for are excluded (it already feeds
-            # engines + Redis + throttled DB rows sub-second); the ~10s
-            # per-symbol throttle still applies.
+            # calls — the single biggest reducer of Webull REST load. The
+            # MQTT stream is deliberately scoped to the tape only, so REST
+            # remains the sole quote source for the trend/regime/scanner
+            # engines. The ~10s per-symbol throttle still applies.
             now = datetime.now()
             wanted = [
                 s for s in self.symbols
-                if not _stream_is_live(s)
-                and now - self.last_quote_update.get(s, datetime.min) >= timedelta(seconds=10)
+                if now - self.last_quote_update.get(s, datetime.min) >= timedelta(seconds=10)
             ]
             if not wanted:
                 return

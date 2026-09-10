@@ -98,6 +98,19 @@ class TestTapeEngine(unittest.TestCase):
         e.update(price="notanumber", size=1, timestamp=time.time())
         self.assertEqual(e.get_snapshot()["trade_count"], 0)
 
+    def test_note_price_updates_last_price_without_a_print(self):
+        e = TapeEngine("AAPL")
+        base = time.time() - 10
+        e.update(price=100.0, size=200, timestamp=base, side="buy")
+        e.note_price(101.5, base + 5)          # L1 snapshot, no trade
+        snap = e.get_snapshot(now_s=base + 6)
+        self.assertEqual(snap["last_price"], 101.5)   # reflects the snapshot
+        self.assertEqual(snap["trade_count"], 1)      # still just the one real print
+        self.assertEqual(snap["buy_volume"], 200)
+        self.assertEqual(snap["sell_volume"], 0)
+        e.note_price("bad", base + 6)                  # ignored, no raise
+        self.assertEqual(e.get_snapshot(now_s=base + 7)["last_price"], 101.5)
+
 
 if __name__ == "__main__":
     unittest.main()
