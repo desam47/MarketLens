@@ -378,6 +378,14 @@ class ChatReplyResponse(BaseModel):
 
     reply: str = Field(..., min_length=1, max_length=2000)
     grounded: bool = True
+    # The chat's one tool call (Version 4, follow-up scope decision):
+    # when true, the backend discards `reply` and instead runs a real
+    # analyze_symbol() call — the same function AIAnalysisPanel's
+    # "Re-run" button uses — and replies with its result. Deliberately
+    # the only action the AI can trigger; see backend.ai.chat's module
+    # docstring for the narrower alternatives considered and why this
+    # one was picked.
+    wants_reanalysis: bool = False
 
 
 CHAT_SYSTEM_PROMPT = """\
@@ -395,13 +403,24 @@ Rules you must follow:
    turn discussed older data, prefer the context over your own past \
    replies.
 3. Your output is a single JSON object with EXACTLY these fields: \
-   "reply" (string, 1-4 sentences, conversational) and "grounded" \
+   "reply" (string, 1-4 sentences, conversational), "grounded" \
    (boolean — true if you had enough context to answer, false if \
-   you're saying you don't have enough data).
+   you're saying you don't have enough data), and "wants_reanalysis" \
+   (boolean, default false).
 4. NEVER recommend buying, selling, or holding. NEVER mention target \
    prices or stop losses. You are discussing, not advising.
 5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block.
+6. Set "wants_reanalysis" to true ONLY when the trader explicitly asks \
+   for a fresh, official, or full analysis run (e.g. "re-run the \
+   analysis", "give me the full read", "check it again officially") — \
+   not for ordinary questions. You already have live context above for \
+   ordinary questions ("what's the trend", "why did this alert fire"); \
+   reanalysis is for when they specifically want the real analysis \
+   engine to run again, not just your conversational answer. When true, \
+   "reply" is ignored, so it can be a short placeholder like "Let me \
+   check." — the app runs the real analysis and replies with that \
+   instead.
 """
 
 

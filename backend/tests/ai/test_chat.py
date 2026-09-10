@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.ai.chat import answer_chat_message
 from backend.ai.context import InsufficientDataError
+from backend.ai.prompt import AnalysisResponse, UncertaintyResponse
 from backend.ai.provider import AIResponse
 from backend.models import Alert, AlertTrigger, ChatMessage, ChatSession
 
@@ -166,6 +167,132 @@ class TestAnswerChatMessage(unittest.TestCase):
         call_kwargs = mock_ai.complete.call_args.kwargs
         self.assertIn("AAPL crossed 100", call_kwargs["prompt"])
         self.assertIn("A bullish breakout.", call_kwargs["prompt"])
+
+
+class TestChatReanalysisTool(unittest.TestCase):
+    """The chat's one tool call: wants_reanalysis triggers a real
+    analyze_symbol() run instead of the AI's own free-form reply.
+
+    Same fixture shape as TestAnswerChatMessage — kept as its own
+    class since every test here also patches analyze_symbol.
+    """
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+        )
+        for model in (ChatSession, ChatMessage, Alert, AlertTrigger):
+            model.__table__.create(self.engine, checkfirst=True)
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+
+        self._session_local_patch = patch(
+            "backend.repositories.chat_repository.SessionLocal", self.Session,
+        )
+        self._session_local_patch.start()
+
+        self.db = self.Session()
+        self.session = ChatSession(symbol="AAPL")
+        self.db.add(self.session)
+        self.db.commit()
+        self.db.refresh(self.session)
+
+    def tearDown(self):
+        self._session_local_patch.stop()
+        self.db.close()
+        self.engine.dispose()
+
+    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_wants_reanalysis_runs_analyze_symbol_instead_of_reply(
+        self, mock_build_context, mock_ai, mock_analyze,
+    ):
+        mock_build_context.return_value.to_dict.return_value = {"price": 150.0}
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                '```json\n{"reply": "Let me check.", "grounded": true, '
+                '"wants_reanalysis": true}\n```'
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        mock_analyze.return_value = AnalysisResponse(
+            summary="AAPL is showing strong upward momentum today.",
+            trend="bullish",
+            confidence=0.82,
+        )
+
+        message, grounded = answer_chat_message(self.session.id, "Re-run the analysis")
+
+        mock_analyze.assert_called_once_with("AAPL")
+        self.assertTrue(grounded)
+        # The tool's own description replaces the AI's free-form reply —
+        # "Let me check." must not be what got persisted.
+        self.assertNotEqual(message.content, "Let me check.")
+        self.assertIn("bullish", message.content)
+        self.assertIn("82%", message.content)
+        self.assertIn("strong upward momentum", message.content)
+
+    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_wants_reanalysis_uncertainty_result_is_ungrounded(
+        self, mock_build_context, mock_ai, mock_analyze,
+    ):
+        mock_build_context.return_value.to_dict.return_value = {}
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = AIResponse(
+            text='```json\n{"reply": "ok", "grounded": true, "wants_reanalysis": true}\n```',
+            provider="ollama", model="llama3.2",
+        )
+        mock_analyze.return_value = UncertaintyResponse(
+            summary="AI analysis is disabled (set AI_ENABLED=true to enable)",
+        )
+
+        message, grounded = answer_chat_message(self.session.id, "Re-run the analysis")
+
+        self.assertFalse(grounded)
+        self.assertIn("AAPL", message.content)
+
+    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_wants_reanalysis_exception_degrades_gracefully(
+        self, mock_build_context, mock_ai, mock_analyze,
+    ):
+        mock_build_context.return_value.to_dict.return_value = {}
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = AIResponse(
+            text='```json\n{"reply": "ok", "grounded": true, "wants_reanalysis": true}\n```',
+            provider="ollama", model="llama3.2",
+        )
+        mock_analyze.side_effect = RuntimeError("db down")
+
+        message, grounded = answer_chat_message(self.session.id, "Re-run the analysis")
+
+        self.assertFalse(grounded)
+        self.assertEqual(message.role, "assistant")
+
+    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_ordinary_reply_does_not_invoke_the_tool(
+        self, mock_build_context, mock_ai, mock_analyze,
+    ):
+        """The default (wants_reanalysis omitted, defaults False) must
+        not touch analyze_symbol at all — regression against the tool
+        firing on every turn."""
+        mock_build_context.return_value.to_dict.return_value = {"price": 150.0}
+        mock_ai.is_available.return_value = True
+        mock_ai.complete.return_value = AIResponse(
+            text='```json\n{"reply": "AAPL is trending up.", "grounded": true}\n```',
+            provider="ollama", model="llama3.2",
+        )
+
+        message, grounded = answer_chat_message(self.session.id, "How's it doing?")
+
+        mock_analyze.assert_not_called()
+        self.assertEqual(message.content, "AAPL is trending up.")
 
 
 if __name__ == "__main__":

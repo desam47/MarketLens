@@ -3,22 +3,39 @@ Version 4, AI feature 4 — conversational AI chat panel.
 
 Scope (see docs/plan): single-turn-per-message (build_context() is
 rebuilt fresh per message, not held as server-side "memory"), no
-tool-calling, no streaming. Read-only relationship to features 1-3 —
-this module never triggers a new analysis, digest, or alert
-commentary; it only reads what already exists.
+streaming. Read-only relationship to features 2-3 — this module never
+triggers a new digest or alert commentary; it only reads what already
+exists.
+
+Tool-calling was originally excluded entirely, deliberately deferred
+as "a separate future decision" (see docs/Version_4/v4_plan.md). Later
+resolved to a single, narrow tool: the AI can request a real
+analyze_symbol() run (the same function AIAnalysisPanel's "Re-run"
+button calls) when the trader explicitly asks for a fresh/official
+analysis, via ChatReplyResponse.wants_reanalysis. No open-ended
+function-calling loop — one fixed action, decided in the same
+completion call that would otherwise produce a normal reply, executed
+synchronously before the turn's assistant message is persisted.
 
 Follows analyze_symbol's "never raise for an expected failure mode"
 contract: AI off, InsufficientDataError, or a malformed reply all
 degrade to a stored assistant message explaining that (grounded=False)
-rather than an HTTP error or a crashed request.
+rather than an HTTP error or a crashed request. The reanalysis tool
+call inherits the same contract — it never raises either.
 """
 from __future__ import annotations
 
 import logging
 
+from backend.ai.analyze import analyze_symbol
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
-from backend.ai.prompt import CHAT_SYSTEM_PROMPT, build_chat_prompt, parse_chat_reply
+from backend.ai.prompt import (
+    CHAT_SYSTEM_PROMPT,
+    UncertaintyResponse,
+    build_chat_prompt,
+    parse_chat_reply,
+)
 from backend.models import AlertTrigger, ChatMessage
 from backend.repositories.chat_repository import ChatRepository
 
@@ -95,7 +112,7 @@ def answer_chat_message(session_id: int, user_content: str) -> tuple[ChatMessage
             grounded = False
         else:
             reply_text, grounded = _generate_reply(
-                context_dict, transcript, user_content, alert_context,
+                session.symbol, context_dict, transcript, user_content, alert_context,
             )
 
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
@@ -105,13 +122,19 @@ def answer_chat_message(session_id: int, user_content: str) -> tuple[ChatMessage
 
 
 def _generate_reply(
+    symbol: str,
     context_dict: dict,
     transcript: list[tuple[str, str]],
     user_content: str,
     alert_context: dict | None,
 ) -> tuple[str, bool]:
     """Call the AI and parse its reply. Never raises — degrades to a
-    plain "couldn't process" reply with grounded=False."""
+    plain "couldn't process" reply with grounded=False.
+
+    When the AI's reply asks for ``wants_reanalysis``, runs the chat's
+    one tool (see module docstring) instead of returning that reply
+    verbatim.
+    """
     if not ai_manager.is_available():
         return "AI is currently unavailable, so I can't answer that right now.", False
 
@@ -134,4 +157,36 @@ def _generate_reply(
         logger.info("Chat reply failed to parse: %s", e)
         return "I couldn't process that — could you rephrase?", False
 
+    if parsed.wants_reanalysis:
+        return _run_reanalysis(symbol)
+
     return parsed.reply, parsed.grounded
+
+
+def _run_reanalysis(symbol: str) -> tuple[str, bool]:
+    """Execute the chat's one tool call: a real analyze_symbol() run.
+
+    Reuses analyze_symbol() itself — the same function
+    AIAnalysisPanel's "Re-run" button calls — so a chat-triggered
+    reanalysis carries the exact same safety contract (never raises;
+    degrades to an UncertaintyResponse on AI-off/no-data/malformed
+    reply). That degrade path is rendered here as a normal,
+    grounded=False chat reply rather than surfaced as an error.
+    """
+    try:
+        result = analyze_symbol(symbol)
+    except Exception as e:  # noqa: BLE001 — the tool call must never crash the turn
+        logger.warning("Chat-triggered reanalysis failed for %s: %s", symbol, e)
+        return (
+            "I tried to re-run the analysis but hit an error — please try again.",
+            False,
+        )
+
+    if isinstance(result, UncertaintyResponse):
+        return f"I tried to re-run the analysis for {symbol}, but {result.summary}", False
+
+    return (
+        f"I re-ran the analysis for {symbol}: trend is now {result.trend} "
+        f"({result.confidence:.0%} confidence). {result.summary}",
+        True,
+    )
