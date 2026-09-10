@@ -279,14 +279,16 @@ def parse_query_rule_based(
 # --- AI parser ------------------------------------------------------
 
 
-# Translation is a pure function of the query text: the same English
-# sentence always maps to the same NLFilters shape (temperature=0.0
-# below), independent of live market data. So unlike the AI
-# *explanation* call (which depends on the current result set and
-# must not be cached this loosely), successful translations can be
-# cached for the life of the process — a repeated query (re-running
-# the same search, clicking the same example pill twice) skips the
-# ~1-1.5s AI round-trip entirely on a cache hit.
+# Translation uses the configured AI_TEMPERATURE like every other AI
+# call in the app (no per-call override — see parse_query_with_ai
+# below) and isn't purely deterministic. But unlike the AI
+# *explanation* call (which depends on the current, live result set
+# and must not be cached this loosely), a translation depends only on
+# the query text, not on market data — so caching still trades a
+# little per-call sampling diversity for a real win: a repeated query
+# (re-running the same search, clicking the same example pill twice)
+# gets a consistent interpretation and skips the ~1-1.5s AI
+# round-trip entirely on a cache hit.
 #
 # Only successful parses are cached. Failures (AI off, bad JSON, a
 # schema-rejected reply) are deliberately NOT cached, so a transient
@@ -327,11 +329,14 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
         return None
 
     try:
+        # No per-call temperature override — uses the configured
+        # AI_TEMPERATURE like every other AI call in the app, rather
+        # than special-casing this one as a "must be deterministic"
+        # task.
         resp = ai_manager.complete(
             prompt=build_translation_prompt(query),
             system=NL_TRANSLATION_PROMPT,
             max_tokens=400,
-            temperature=0.0,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("AI translation call raised: %s", e)

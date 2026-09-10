@@ -102,6 +102,8 @@ def _maybe_explain(
         return None, False
 
     try:
+        # No per-call temperature override — uses the configured
+        # AI_TEMPERATURE like every other AI call in the app.
         resp = ai_manager.complete(
             prompt=build_explain_prompt(
                 query=query,
@@ -110,7 +112,6 @@ def _maybe_explain(
             ),
             system=NL_EXPLAIN_PROMPT,
             max_tokens=300,
-            temperature=0.3,
         )
     except Exception as e:
         logger.warning("AI explanation call raised: %s", e)
