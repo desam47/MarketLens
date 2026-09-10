@@ -418,6 +418,23 @@ class AlertsEngine:
             db.commit()
             logger.info(f"Alert fired: id={alert.id} {alert.name} "
                         f"({alert.condition_type} {alert.parameter})")
+
+            # Version 4, AI feature 3: enqueue AI commentary out-of-band.
+            # This method runs inline on two latency-sensitive paths (an
+            # async request handler, and a live-tick callback that gates
+            # every other alert evaluation for that tick) — an AI call
+            # has no safe "cheap" bound (up to AI_TIMEOUT, multi-provider
+            # fallback chain), so commentary generation must never run
+            # here directly. enqueue_alert_commentary_job() is itself a
+            # fast, non-blocking Redis enqueue (or a no-op if Redis is
+            # down) — but wrapped in its own try/except anyway so a
+            # Redis hiccup can never turn a successful trigger-persist
+            # (already committed above) into a logged failure.
+            try:
+                from backend.ai.background import enqueue_alert_commentary_job
+                enqueue_alert_commentary_job(trigger.id)
+            except Exception as e:
+                logger.warning(f"Failed to enqueue alert commentary for trigger {trigger.id}: {e}")
         except Exception as e:
             logger.error(f"Failed to persist alert trigger for alert {alert.id}: {e}")
             db.rollback()

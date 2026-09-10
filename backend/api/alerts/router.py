@@ -77,6 +77,11 @@ class AlertTriggerResponse(BaseModel):
     observed_value: str | None
     message: str | None
     triggered_at: datetime
+    # Version 4, AI feature 3 — populated asynchronously after the
+    # trigger fires; NULL/None means no commentary yet (pending, AI
+    # off, or generation failed — all three collapse to the same
+    # "nothing extra to show" UI treatment).
+    ai_commentary: str | None = None
 
     @field_serializer("triggered_at")
     def _serialize_et(self, value: datetime) -> str | None:

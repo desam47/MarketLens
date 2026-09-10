@@ -159,6 +159,42 @@ def enqueue_analyze_job(
     return rq_job.id
 
 
+def enqueue_alert_commentary_job(trigger_id: int) -> str | None:
+    """Enqueue a ``generate_alert_commentary_task`` and return the RQ job ID.
+
+    Version 4, AI feature 3. Unlike :func:`enqueue_analyze_job`, no new
+    DB row is created here — the ``AlertTrigger`` row already exists
+    (inserted synchronously by ``AlertsEngine._persist_trigger()``
+    just before this is called); the worker task updates that same
+    row's ``ai_commentary`` column in place once it has an answer.
+
+    Reuses the existing ``marketlens-workers`` queue (the same one
+    :func:`enqueue_analyze_job` uses) rather than a dedicated queue —
+    alert-commentary jobs are short (one context build + one small
+    completion, the same cost class as an AI Analysis job) and
+    low-volume (gated by the alerts engine's own 1-hour per-alert
+    dedup window), so they don't have the starvation profile that
+    justified giving ticker backfill its own separate queue.
+
+    Same no-op-if-Redis-down contract as ``enqueue_analyze_job``:
+    returns ``None`` if the queue is unavailable, and the caller
+    (``_persist_trigger()``) treats that as "no commentary this time",
+    never as a reason the trigger itself failed to record.
+    """
+    from backend.ai.tasks import generate_alert_commentary_task
+
+    queue = get_queue()
+    if queue is None:
+        return None
+
+    rq_job = queue.enqueue(
+        generate_alert_commentary_task,
+        kwargs={"trigger_id": trigger_id},
+        result_ttl=settings.background.result_ttl,
+    )
+    return rq_job.id
+
+
 # ── Status helpers ────────────────────────────────────────────────────────
 
 

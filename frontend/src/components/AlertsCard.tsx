@@ -89,6 +89,15 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     refreshTriggers();
   }, [refreshAlerts, refreshTriggers]);
 
+  // Version 4 AI feature 3: ai_commentary is populated asynchronously
+  // (an RQ job runs after the trigger row commits) — there's no
+  // discrete "job" to poll here, just re-fetch the trigger list
+  // periodically so commentary appears without a manual reload.
+  useEffect(() => {
+    const interval = setInterval(refreshTriggers, 30_000);
+    return () => clearInterval(interval);
+  }, [refreshTriggers]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload = {
@@ -204,8 +213,32 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
       )}
 
       {triggers.length > 0 && (
-        <div className="info-text" style={{ marginBottom: 8 }}>
-          {triggers.length} trigger{triggers.length === 1 ? '' : 's'} fired in the last 24h.
+        <div className="alert-triggers-list">
+          <div className="info-text" style={{ marginBottom: 4 }}>
+            {triggers.length} trigger{triggers.length === 1 ? '' : 's'} fired in the last 24h.
+          </div>
+          {triggers.map(t => {
+            const alert = alerts.find(a => a.id === t.alert_id);
+            return (
+              <div key={t.id} className="alert-trigger-row">
+                <div className="alert-trigger-summary">
+                  <strong>{t.symbol}</strong>
+                  {alert && (
+                    <span className="label">
+                      {' '}— {conditionLabel(alert.condition_type, alert.parameter)}
+                    </span>
+                  )}
+                  <span className="label alert-trigger-time"> · {formatTime(t.triggered_at)}</span>
+                </div>
+                {t.message && <div className="alert-trigger-message">{t.message}</div>}
+                {t.ai_commentary && (
+                  <div className="alert-trigger-ai-commentary">
+                    <span className="ai-badge">AI</span> {t.ai_commentary}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

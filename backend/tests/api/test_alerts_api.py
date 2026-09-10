@@ -36,6 +36,10 @@ def _mock_trigger(**kwargs):
         observed_value="['RSI_OVERSOLD']",
         message="AAPL: RSI_OVERSOLD signal detected",
         triggered_at=datetime(2025, 1, 1, 12, 0, 0),
+        # Version 4 AI feature 3 — must default to a real None, not an
+        # auto-generated MagicMock attribute (which fails
+        # AlertTriggerResponse's `str | None` validation).
+        ai_commentary=None,
     )
     defaults.update(kwargs)
     m = MagicMock()
@@ -123,6 +127,28 @@ class TestAlertsAPI(unittest.TestCase):
         data = response.json()
         self.assertEqual(len(data), 2)
         self.assertEqual(data[0]["symbol"], "AAPL")
+
+    def test_active_triggers_serializes_ai_commentary(self):
+        """Version 4, AI feature 3: ai_commentary rides along on the
+        existing trigger response — None when not yet generated,
+        the real string once the async job has written it."""
+        now = datetime.now(UTC)
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.get_recent_triggers.return_value = [
+                _mock_trigger(id=1, symbol="AAPL", triggered_at=now, ai_commentary=None),
+                _mock_trigger(
+                    id=2, symbol="TSLA", triggered_at=now,
+                    ai_commentary="TSLA crossed above its 50-day average on rising volume.",
+                ),
+            ]
+            response = self.client.get("/api/alerts/active")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIsNone(data[0]["ai_commentary"])
+        self.assertEqual(
+            data[1]["ai_commentary"],
+            "TSLA crossed above its 50-day average on rising volume.",
+        )
 
     # --- GET /api/alerts/{id} -------------------------------------------
 

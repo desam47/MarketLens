@@ -211,6 +211,9 @@ export interface AlertTrigger {
   observed_value: string | null;
   message: string | null;
   triggered_at: string;
+  // Version 4 AI feature 3 — populated asynchronously; null means no
+  // commentary yet (pending, AI off, or generation failed).
+  ai_commentary?: string | null;
 }
 
 // Backtest

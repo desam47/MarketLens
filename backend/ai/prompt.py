@@ -306,6 +306,64 @@ def parse_digest_reply(text: str | None) -> DigestNarrative:
     return DigestNarrative.model_validate(data)
 
 
+# --- Alert commentary (Version 4, AI feature 3) ---------------------
+
+class AlertCommentaryResponse(BaseModel):
+    """AI's short note explaining why a specific alert fired.
+
+    Deliberately minimal — one bounded free-text field. This is an
+    enrichment on an already-fired, already-recorded event (the
+    AlertTrigger row exists and is meaningful with or without this),
+    not a decision the app acts on, so it doesn't need
+    AnalysisResponse's closed-vocabulary/confidence machinery.
+    """
+
+    commentary: str = Field(..., min_length=1, max_length=500)
+
+
+ALERT_COMMENTARY_SYSTEM_PROMPT = """\
+You are MarketLens Analyst, briefly explaining why one alert just \
+fired for a human trader — not issuing trade orders or overriding \
+the engine's own calculations.
+
+Rules you must follow:
+1. Use only the facts in the JSON payload below (the alert's own \
+   condition/parameter, what triggered it, and the symbol's current \
+   quant context). NEVER invent a number or fact that isn't there.
+2. Your output is a single JSON object with EXACTLY one field: \
+   "commentary" (string, 1-2 sentences explaining why this condition \
+   fired right now, in plain language a trader would find useful).
+3. NEVER recommend buying, selling, or holding. NEVER mention target \
+   prices or stop losses. You are explaining an event, not advising.
+4. Wrap the JSON in a single ```json ... ``` block. No prose outside \
+   the block.
+"""
+
+
+def build_alert_commentary_prompt(payload: dict[str, Any]) -> str:
+    """Render an alert-trigger payload into a user message, same
+    fenced-JSON convention as :func:`build_user_prompt`."""
+    body = json.dumps(payload, indent=2, default=str)
+    return (
+        "Explain the following MarketLens alert trigger. "
+        "Respond with a single JSON object as specified.\n\n"
+        f"<alert_trigger>\n{body}\n</alert_trigger>"
+    )
+
+
+def parse_alert_commentary_reply(text: str | None) -> AlertCommentaryResponse:
+    """Extract a structured ``AlertCommentaryResponse`` from an AI reply.
+
+    Same extract-then-validate strategy as :func:`parse_ai_reply`.
+    Raises ``ValueError`` on an empty/non-JSON/schema-invalid reply —
+    the caller (``backend.ai.alert_commentary.generate_commentary``)
+    leaves the trigger's ``ai_commentary`` as ``None`` in that case.
+    """
+    candidate = extract_json_object(text)
+    data = json.loads(candidate)
+    return AlertCommentaryResponse.model_validate(data)
+
+
 # --- Template rendering (Phase 2.4.5) -----------------------------------
 
 # Matches ``{{variable}}`` tokens where ``variable`` is one-or-more

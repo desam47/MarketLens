@@ -361,5 +361,54 @@ class TestEvaluateScanResult(unittest.TestCase):
             mock_fire.assert_not_called()
 
 
+class TestPersistTriggerAICommentary(unittest.TestCase):
+    """Version 4, AI feature 3: _persist_trigger() enqueues AI
+    commentary generation right after the trigger row commits.
+
+    Mocks SessionLocal entirely (no real DB write) — same avoidance
+    every other test of this class already uses by mocking
+    _persist_trigger out wholesale; here it's the thing under test,
+    so only the DB session itself is mocked."""
+
+    def setUp(self):
+        self.engine = AlertsEngine()
+
+    @patch("backend.ai.background.enqueue_alert_commentary_job")
+    @patch("backend.alerts.engine.SessionLocal")
+    def test_enqueues_commentary_job_with_new_trigger_id(self, mock_session_cls, mock_enqueue):
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+
+        def _fake_commit():
+            # Simulate the DB assigning a PK on commit, same as a real
+            # autoincrement insert would.
+            trigger = mock_db.add.call_args[0][0]
+            trigger.id = 42
+        mock_db.commit.side_effect = _fake_commit
+
+        alert = _make_alert()
+        self.engine._persist_trigger(alert, price=150.0, extra_value=None)
+
+        mock_enqueue.assert_called_once_with(42)
+
+    @patch("backend.ai.background.enqueue_alert_commentary_job")
+    @patch("backend.alerts.engine.SessionLocal")
+    def test_enqueue_failure_does_not_prevent_trigger_commit(self, mock_session_cls, mock_enqueue):
+        """A Redis hiccup enqueuing commentary must never turn an
+        already-successful trigger-persist into a logged failure —
+        it's caught by its own inner try/except, not the outer one
+        that rolls back the trigger insert."""
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        mock_enqueue.side_effect = RuntimeError("redis down")
+
+        alert = _make_alert()
+        self.engine._persist_trigger(alert, price=150.0, extra_value=None)  # must not raise
+
+        mock_db.commit.assert_called_once()
+        mock_db.rollback.assert_not_called()
+        mock_db.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

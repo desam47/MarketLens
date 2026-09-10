@@ -1,7 +1,7 @@
 """
 Alert and AlertTrigger SQLAlchemy models.
 """
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
@@ -47,6 +47,14 @@ class AlertTrigger(Base):
     triggered_at = Column(DateTime, default=now_ny, index=True)
     observed_value = Column(String(120), nullable=True)
     message = Column(String(255), nullable=True)
+    # Version 4, AI feature 3: a short AI-generated note explaining why
+    # this condition fired, populated asynchronously (RQ job enqueued
+    # from AlertsEngine._persist_trigger() after this row commits — see
+    # backend/ai/alert_commentary.py) — never blocks the trigger-persist
+    # path, which runs inline in a live-tick callback and must stay fast.
+    # NULL means "no commentary yet" (pending, AI off, or failed) — all
+    # three collapse to the same UI treatment (nothing shown extra).
+    ai_commentary = Column(Text, nullable=True)
 
     # Relationship back to the alert
     alert = relationship("Alert", back_populates="triggers")

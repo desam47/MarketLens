@@ -165,6 +165,25 @@ def _run_direct(
     }
 
 
+# ── Alert commentary task (Version 4, AI feature 3) ───────────────────────
+
+
+def generate_alert_commentary_task(trigger_id: int) -> None:
+    """Worker entry point: generate + persist AI commentary for an
+    AlertTrigger row.
+
+    Thin wrapper — all the real logic (context building, prompting,
+    parsing, writing the row) lives in
+    ``backend.ai.alert_commentary.generate_commentary``, which never
+    raises. Unlike ``analyze_symbol_task``, there's no separate
+    job-status row to update: the AlertTrigger row IS the state, and
+    it's already committed by the time this task runs.
+    """
+    from backend.ai.alert_commentary import generate_commentary
+
+    generate_commentary(trigger_id)
+
+
 # ── DB update helper ──────────────────────────────────────────────────────
 
 

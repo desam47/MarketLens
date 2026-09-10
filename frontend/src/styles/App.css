@@ -1642,6 +1642,53 @@ h4 {
   cursor: pointer;
 }
 
+/* Version 4 AI feature 3 — per-trigger list on AlertsCard */
+.alert-triggers-list {
+  margin-bottom: 0.75rem;
+}
+
+.alert-trigger-row {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.alert-trigger-row:last-child {
+  border-bottom: none;
+}
+
+.alert-trigger-summary {
+  color: var(--text-primary);
+}
+
+.alert-trigger-time {
+  color: var(--text-muted);
+}
+
+.alert-trigger-message {
+  margin-top: 0.15rem;
+  color: var(--text-secondary);
+}
+
+.alert-trigger-ai-commentary {
+  margin-top: 0.25rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.ai-badge {
+  display: inline-block;
+  background: var(--accent-primary);
+  color: #fff;
+  font-style: normal;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.2rem;
+  margin-right: 0.3rem;
+  letter-spacing: 0.03em;
+}
+
 /* Ingestion toggle */
 .toggle-row {
   display: flex;
@@ -3585,7 +3632,7 @@ h4 {
 
 .nl-search-input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
@@ -3611,8 +3658,8 @@ h4 {
 }
 
 .nl-example-pill:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
   background: rgba(99, 102, 241, 0.05);
 }
 
@@ -3710,7 +3757,7 @@ h4 {
 
 .nl-symbol {
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-primary);
 }
 
 .nl-score {
@@ -4017,7 +4064,7 @@ h4 {
 .ai-bullish h3 { color: var(--success); }
 .ai-bearish h3 { color: var(--danger); }
 .ai-conflict h3 { color: #f59e0b; }
-.ai-levels h3 { color: var(--accent); }
+.ai-levels h3 { color: var(--accent-primary); }
 
 .ai-footer {
   border-top: 1px solid var(--border);
