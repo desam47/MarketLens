@@ -3733,6 +3733,140 @@ h4 {
 }
 
 /* ------------------------------------------------------------
+   Version 4 AI feature 2: Digest Card
+   ------------------------------------------------------------ */
+.digest-card {
+  grid-column: 1 / -1;
+}
+
+.digest-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.digest-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.digest-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.digest-session-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--bg-secondary);
+  border-radius: 0.375rem;
+  padding: 0.15rem;
+}
+
+.digest-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.3rem 0.7rem;
+  border-radius: 0.3rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.digest-tab.active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.digest-error {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.digest-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.digest-regime-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.3rem;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.digest-timestamp {
+  font-size: 0.8rem;
+}
+
+.digest-narrative {
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+.digest-movers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.digest-movers-col h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+}
+
+.digest-mover-row {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.digest-mover-row:last-child {
+  border-bottom: none;
+}
+
+.digest-mover-symbol {
+  font-weight: 700;
+  margin-right: 0.5rem;
+}
+
+.digest-mover-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.digest-mover-blurb {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.digest-footer-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------
    Phase 16: AI Analysis Panel
    ------------------------------------------------------------ */
 .ai-analysis-card {

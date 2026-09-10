@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend.ai.digest_service import digest_service
 from backend.alerts.engine import alerts_engine
 from backend.config.settings import settings
 from backend.observability.correlation_id import CorrelationIdMiddleware
@@ -41,6 +42,7 @@ from backend.api.watchlist.router import router as watchlist_router
 from backend.api.custom_indicators.router import router as custom_indicators_router
 from backend.api.drawing_tools.router import router as drawing_tools_router
 from backend.api.ai_templates.router import router as ai_templates_router
+from backend.api.ai.digest_router import router as ai_digest_router
 from backend.api.ai.jobs import router as ai_jobs_router
 
 # Configure structured JSON logging
@@ -127,6 +129,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Redis cache clear failed; continuing", exc_info=True)
 
     alerts_engine.startup()
+    digest_service.start()
     start_memory_profiling()
     initialize_tracing()
 
@@ -348,6 +351,7 @@ app.include_router(custom_indicators_router)
 app.include_router(drawing_tools_router)
 app.include_router(ai_templates_router)
 app.include_router(ai_jobs_router)
+app.include_router(ai_digest_router)
 app.include_router(system_router)
 
 

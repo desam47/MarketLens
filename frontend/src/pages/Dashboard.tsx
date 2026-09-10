@@ -8,6 +8,7 @@ import { MarketContextCard } from '../components/MarketContextCard';
 import { TopMoversCard } from '../components/TopMoversCard';
 import { TransitionsMiniCard } from '../components/TransitionsMiniCard';
 import { SymbolInput } from '../components/SymbolInput';
+import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
@@ -233,6 +234,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
 
         <TopMoversCard onSelectSymbol={onSymbolChange} />
         <NLSearchBar onSelectSymbol={onSymbolChange} />
+        <DigestCard />
         <TransitionsMiniCard symbol={symbol} onSelectSymbol={onSymbolChange} />
       </div>
     </div>

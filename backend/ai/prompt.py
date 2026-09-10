@@ -239,6 +239,73 @@ def build_user_prompt(context_dict: dict[str, Any]) -> str:
     )
 
 
+# --- Digest (Version 4, AI feature 2) -------------------------------
+
+class DigestNarrative(BaseModel):
+    """AI's short natural-language summary of a digest payload.
+
+    Deliberately not the same schema as AnalysisResponse — a digest
+    is a market-wide summary, not a per-symbol trend call, so there's
+    no "trend"/"confidence" field to protect here. The closed-vocabulary
+    strictness that matters for AnalysisResponse doesn't apply the same
+    way; this is just a bounded free-text field.
+    """
+
+    narrative: str = Field(..., min_length=1, max_length=1000)
+    headline_movers: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("headline_movers", mode="before")
+    @classmethod
+    def _strip_empties(cls, v: Any) -> Any:
+        if isinstance(v, list):
+            return [s for s in v if isinstance(s, str) and s.strip()]
+        return v
+
+
+DIGEST_SYSTEM_PROMPT = """\
+You are MarketLens Analyst, summarizing a watchlist-wide digest for \
+a human trader — not issuing trade orders or overriding the engine's \
+own calculations.
+
+Rules you must follow:
+1. Use only the numbers and symbols in the JSON payload below. NEVER \
+   invent a symbol, price, or statistic that isn't there.
+2. Your output is a single JSON object with EXACTLY these fields: \
+   "narrative" (string, 2-4 sentences covering the overall market \
+   regime and the most notable movers) and "headline_movers" (array \
+   of up to 5 ticker symbols worth calling out, drawn only from the \
+   payload's movers lists).
+3. NEVER recommend buying, selling, or holding. NEVER mention target \
+   prices or stop losses. You are summarizing, not advising.
+4. Wrap the JSON in a single ```json ... ``` block. No prose outside \
+   the block.
+"""
+
+
+def build_digest_user_prompt(payload: dict[str, Any]) -> str:
+    """Render a digest payload into a user message, same fenced-JSON
+    convention as :func:`build_user_prompt`."""
+    body = json.dumps(payload, indent=2, default=str)
+    return (
+        "Summarize the following MarketLens watchlist digest. "
+        "Respond with a single JSON object as specified.\n\n"
+        f"<digest>\n{body}\n</digest>"
+    )
+
+
+def parse_digest_reply(text: str | None) -> DigestNarrative:
+    """Extract a structured ``DigestNarrative`` from an AI reply.
+
+    Same extract-then-validate strategy as :func:`parse_ai_reply`.
+    Raises ``ValueError`` on an empty/non-JSON/schema-invalid reply —
+    the caller (``backend.ai.digest.narrate_digest``) falls back to a
+    plain, non-AI narrative in that case.
+    """
+    candidate = extract_json_object(text)
+    data = json.loads(candidate)
+    return DigestNarrative.model_validate(data)
+
+
 # --- Template rendering (Phase 2.4.5) -----------------------------------
 
 # Matches ``{{variable}}`` tokens where ``variable`` is one-or-more

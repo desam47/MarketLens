@@ -65,3 +65,6 @@ from .ai_analysis_job import AIAnalysisJob as AIAnalysisJob
 
 # Import backfill job models (RQ-based symbol history backfill pipeline)
 from .backfill_job import BackfillJob as BackfillJob
+
+# Import AI digest model (Version 4, AI feature 2: daily/session digest)
+from .ai_digest import AIDigest as AIDigest

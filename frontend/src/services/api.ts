@@ -1815,6 +1815,25 @@ class ApiService {
   async getAIJob(jobId: string): Promise<AIJobStatusResponse> {
     return this.fetch<AIJobStatusResponse>(`/ai/jobs/${encodeURIComponent(jobId)}`);
   }
+
+  // ── Version 4 AI feature 2: daily/session digest ────────────────────
+
+  async getLatestDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
+    return this.fetch<AIDigest>(`/ai/digest/latest?session=${session}`);
+  }
+
+  async getDigestHistory(
+    session?: 'premarket' | 'close',
+    limit: number = 10,
+  ): Promise<AIDigest[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (session) params.set('session', session);
+    return this.fetch<AIDigest[]>(`/ai/digest/history?${params}`);
+  }
+
+  async generateDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
+    return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' });
+  }
 }
 
 // ── Phase 2.4.5: AI template types ──────────────────────────────────────
@@ -1841,6 +1860,40 @@ export interface AITemplatePreview {
 }
 
 // ── Phase 2.5: background AI job types ────────────────────────────────────
+
+// ── Version 4 AI feature 2: daily/session digest ─────────────────────────
+
+export interface AIDigestMover {
+  symbol: string;
+  score: number;
+  blurb?: string;
+}
+
+export interface AIDigestRsiExtreme {
+  symbol: string;
+  rsi: number;
+  signal: 'oversold' | 'overbought';
+}
+
+export interface AIDigestPayload {
+  watchlist_size: number;
+  market_regime: Record<string, unknown>;
+  movers: {
+    top_bullish: AIDigestMover[];
+    top_bearish: AIDigestMover[];
+  };
+  rsi_extremes: AIDigestRsiExtreme[];
+  mtf_alignment_counts: { bullish: number; bearish: number };
+}
+
+export interface AIDigest {
+  id: number;
+  session: 'premarket' | 'close';
+  generated_at: string;
+  market_regime: string | null;
+  narrative: string | null;
+  payload: AIDigestPayload | null;
+}
 
 export interface AIJobEnqueueResponse {
   job_id: string;

@@ -732,6 +732,22 @@ def _version_factory() -> str:
         return "dev"
 
 
+class DigestSettings(BaseSettings):
+    """Version 4, AI feature 2 — daily/session AI digest scheduling."""
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_DIGEST_", extra="ignore")
+    enabled: bool = Field(default=True)
+    # Two fixed daily slots (ET), matching the "premarket"/"close" session
+    # names used throughout backend.ai.digest / the /api/ai/digest/* routes.
+    premarket_hour: int = Field(default=8, ge=0, le=23)
+    premarket_minute: int = Field(default=30, ge=0, le=59)
+    close_hour: int = Field(default=16, ge=0, le=23)
+    close_minute: int = Field(default=15, ge=0, le=59)
+    # How many top bullish/bearish movers get an AI blurb per digest —
+    # bounds AI call volume/latency; everything else in the payload
+    # (regime, RSI extremes, MTF counts) is pure quant, no AI cost.
+    top_movers_count: int = Field(default=5, ge=1, le=20)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
@@ -765,6 +781,7 @@ class Settings(BaseSettings):
     aux_data: AuxDataSettings = Field(default_factory=AuxDataSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     background: BackgroundProcessingSettings = Field(default_factory=BackgroundProcessingSettings)
+    ai_digest: DigestSettings = Field(default_factory=DigestSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
