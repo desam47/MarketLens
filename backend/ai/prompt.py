@@ -544,86 +544,173 @@ class ChatReplyResponse(BaseModel):
     # docstring for the narrower alternatives considered and why this
     # one was picked.
     wants_reanalysis: bool = False
+    # Which ticker to re-run when wants_reanalysis is true. REQUIRED
+    # when more than one ticker is in context; ignored with 0 or 1.
+    # If the target is ambiguous, keep wants_reanalysis false and ask
+    # which ticker in `reply` instead.
+    reanalysis_symbol: str | None = Field(default=None, max_length=20)
 
 
 CHAT_SYSTEM_PROMPT = """\
 You are MarketLens Analyst & Advisor, having a back-and-forth \
-conversation with a human trader about one symbol. The engine's own \
-calculations (trend, score, indicator values) are ground truth — \
-never override them.
+conversation with a human trader about the market and any tickers they \
+bring up. A turn may be about one stock, several, or the market as a \
+whole with no specific ticker. The engine's own calculations (trend, \
+score, indicator values) are ground truth — never override them.
 
 Rules you must follow:
-1. Use only the numbers in the JSON context below. NEVER compute \
-   indicators, prices, or percentages yourself. If the context can't \
-   answer the question, say so plainly and set "grounded" to false —
-   do not invent a value to fill the gap.
-2. Prior turns are provided for conversational continuity, but the \
-   <context> block is always the current live truth — if an earlier \
-   turn discussed older data, prefer the context over your own past \
-   replies.
-3. Your output is a single JSON object with EXACTLY these fields: \
+1. Use only the numbers in the <context> blocks and the <market> block \
+   below. Each <context> block is ONE ticker — its symbol is in the \
+   tag. NEVER compute indicators, prices, or percentages yourself, and \
+   NEVER carry a number from one ticker's block into another's. If a \
+   block can't answer the question, say so and set "grounded" to false \
+   — do not invent a value to fill the gap.
+2. A <context> block with engine_warm="false", or any ticker listed in \
+   <unavailable_symbols>, has NO live quant-engine read. You may repeat \
+   a raw price / RSI / support-resistance value that is present in the \
+   block, but you must NOT state a trend, a confidence, or a \
+   directional call for that ticker, and you must say the engine isn't \
+   tracking that name. Set "grounded" to false when that was the \
+   question.
+3. For market-wide questions ("what's the market doing", "which of my \
+   names look weak") answer from the <market> block — regime_live is \
+   current; the digest is from its generated_at timestamp, so hedge if \
+   it looks stale. Name only symbols that actually appear in the \
+   block. If <market> is empty, say the market read isn't available \
+   and set "grounded" to false.
+4. Prior turns are provided for conversational continuity, but the \
+   <context>/<market> blocks are always the current live truth — if an \
+   earlier turn discussed older data, prefer the blocks over your own \
+   past replies.
+5. Your output is a single JSON object with EXACTLY these fields: \
    "reply" (string, 1-4 sentences, conversational), "grounded" \
    (boolean — true if you had enough context to answer, false if \
-   you're saying you don't have enough data), and "wants_reanalysis" \
-   (boolean, default false).
-4. You MAY give trade guidance when asked — a directional call, \
+   you're saying you don't have enough data), "wants_reanalysis" \
+   (boolean, default false), and "reanalysis_symbol" (string or null).
+6. You MAY give trade guidance when asked — a directional call, \
    entry / stop / target ideas, position-sizing thoughts — as long \
-   as it's grounded in the context above. Always state what would \
+   as it's grounded in the blocks above. Always state what would \
    invalidate the idea, and be explicit when conviction is low or \
    the data is thin. It's research to inform the trader's own \
    decision, not a directive.
-5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
+7. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block.
-6. Set "wants_reanalysis" to true ONLY when the trader explicitly asks \
+8. Set "wants_reanalysis" to true ONLY when the trader explicitly asks \
    for a fresh, official, or full analysis run (e.g. "re-run the \
-   analysis", "give me the full read", "check it again officially") — \
-   not for ordinary questions. You already have live context above for \
-   ordinary questions ("what's the trend", "why did this alert fire"); \
-   reanalysis is for when they specifically want the real analysis \
-   engine to run again, not just your conversational answer. When true, \
-   "reply" is ignored, so it can be a short placeholder like "Let me \
-   check." — the app runs the real analysis and replies with that \
-   instead.
+   analysis", "give me the full read") — not for ordinary questions, \
+   which the blocks above already answer. When true, also set \
+   "reanalysis_symbol" to the exact ticker to run — it must have a \
+   <context> block. If which ticker is ambiguous, keep \
+   "wants_reanalysis" false and ask which one in "reply". When true, \
+   "reply" is ignored (a short placeholder is fine) — the app runs the \
+   real analysis and replies with that instead.
 """
+
+# Rough token estimate for the assembled prompt's size guard.
+def _approx_tokens(s: str) -> int:
+    return len(s) // 4
 
 
 def build_chat_prompt(
-    context_dict: dict[str, Any],
+    symbol_blocks: list[dict[str, Any]],
+    unavailable_symbols: list[str],
+    market_baseline: dict[str, Any] | None,
     transcript: list[tuple[str, str]],
     new_message: str,
     alert_context: dict[str, Any] | None = None,
+    capped_note: str | None = None,
+    token_budget: int | None = None,
 ) -> str:
-    """Render one chat turn into a user message.
+    """Render one universal-chat turn into a single user message.
 
-    ``transcript`` is a list of ``(role, content)`` pairs for prior
-    turns in this session (oldest first) — rendered as plain text,
-    not re-sent as separate messages, since there's no multi-message
-    conversation API here (one ai_manager.complete() call per turn,
-    same as every other AI call site in this app).
-    ``alert_context``, when present, is the alert/trigger this chat
-    was opened from (see backend.ai.chat.answer_chat_message) — folded
-    in as an extra section so "explain this alert" style questions
-    have something concrete to reference.
+    ``symbol_blocks`` is a list of ``{"symbol", "context", "availability"}``
+    dicts, one per ticker this turn resolved (already pruned).
+    ``unavailable_symbols`` are tickers that were named but have no
+    usable data. ``market_baseline`` is the always-attached market-wide
+    block (see backend.ai.market_baseline). ``transcript`` is prior
+    ``(role, content)`` turns, oldest first, rendered as plain text.
+
+    Sections are added in priority order; once the running estimate
+    exceeds ``token_budget`` the lowest-priority not-yet-added section
+    is dropped (transcript sheds its oldest pairs first) with an
+    in-prompt marker. The trailing "New message:" line is always kept.
     """
-    context_body = json.dumps(context_dict, indent=2, default=str)
-    parts = [
-        "Here is the current context for this symbol:",
-        f"<context>\n{context_body}\n</context>",
-    ]
-    if alert_context:
-        alert_body = json.dumps(alert_context, indent=2, default=str)
-        parts.append(
-            "This chat was opened from a specific alert trigger:\n"
-            f"<alert_trigger>\n{alert_body}\n</alert_trigger>"
-        )
-    if transcript:
-        lines = [f"{role}: {content}" for role, content in transcript]
-        parts.append("Prior conversation (oldest first):\n" + "\n".join(lines))
-    parts.append(
+    trailing = (
         "Respond to the trader's new message with a single JSON object "
         "as specified.\n\n"
         f"New message: {new_message}"
     )
+    budget = token_budget if token_budget is not None else 100_000
+    used = _approx_tokens(trailing) + _approx_tokens(CHAT_SYSTEM_PROMPT)
+    parts: list[str] = []
+
+    def fits(chunk: str) -> bool:
+        nonlocal used
+        cost = _approx_tokens(chunk)
+        if used + cost > budget:
+            return False
+        used += cost
+        return True
+
+    if capped_note:
+        parts.append(capped_note)  # tiny, always kept
+
+    if market_baseline:
+        mb = json.dumps(market_baseline, indent=2, default=str)
+        chunk = (
+            "Market-wide backdrop — regime_live is current; the digest is "
+            "from its generated_at, treat as possibly stale:\n"
+            f"<market>\n{mb}\n</market>"
+        )
+        if fits(chunk):
+            parts.append(chunk)
+
+    for block in symbol_blocks:
+        sym = block["symbol"]
+        warm = bool(block.get("availability", {}).get("engine_warm"))
+        body = json.dumps(
+            {**block["context"], "data_availability": block.get("availability", {})},
+            indent=2, default=str,
+        )
+        chunk = (
+            f'Quant context for {sym}:\n'
+            f'<context symbol="{sym}" engine_warm="{str(warm).lower()}">\n{body}\n</context>'
+        )
+        if fits(chunk):
+            parts.append(chunk)
+
+    if unavailable_symbols:
+        chunk = (
+            "No live quant engine for these tickers — estimate nothing about "
+            f"them:\n<unavailable_symbols>{', '.join(unavailable_symbols)}</unavailable_symbols>"
+        )
+        if fits(chunk):
+            parts.append(chunk)
+
+    if not symbol_blocks and not unavailable_symbols:
+        parts.append("No specific ticker this turn — answer from <market> only.")
+
+    if alert_context:
+        chunk = (
+            "This chat was opened from a specific alert trigger:\n"
+            f"<alert_trigger>\n{json.dumps(alert_context, indent=2, default=str)}\n</alert_trigger>"
+        )
+        if fits(chunk):
+            parts.append(chunk)
+
+    if transcript:
+        lines = [f"{role}: {content}" for role, content in transcript]
+        dropped = 0
+        while lines and used + _approx_tokens("\n".join(lines)) > budget:
+            lines.pop(0)
+            dropped += 1
+        if lines:
+            prefix = "[earlier conversation truncated]\n" if dropped else ""
+            chunk = "Prior conversation (oldest first):\n" + prefix + "\n".join(lines)
+            used += _approx_tokens(chunk)
+            parts.append(chunk)
+
+    parts.append(trailing)
     return "\n\n".join(parts)
 
 

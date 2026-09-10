@@ -214,10 +214,12 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     finally:
         repo.close()
 
-    message, grounded = await asyncio.to_thread(
+    message, grounded, focus, unavailable = await asyncio.to_thread(
         answer_chat_message, session_id, payload.content,
     )
-    return _message_to_response(message, grounded=grounded)
+    return _message_to_response(
+        message, grounded=grounded, focus=focus, unavailable=unavailable,
+    )
 
 
 __all__ = ["router"]

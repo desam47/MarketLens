@@ -28,8 +28,10 @@ from __future__ import annotations
 import logging
 
 from backend.ai.analyze import analyze_symbol
+from backend.ai.chat_symbols import resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
+from backend.ai.market_baseline import build_market_baseline
 from backend.ai.prompt import (
     CHAT_SYSTEM_PROMPT,
     UncertaintyResponse,
@@ -37,6 +39,7 @@ from backend.ai.prompt import (
     parse_chat_reply,
 )
 from backend.models import AlertTrigger, ChatMessage
+from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository
 
 logger = logging.getLogger(__name__)
@@ -67,22 +70,25 @@ def _build_alert_context(db, alert_trigger_id: int | None) -> dict | None:
     }
 
 
-def answer_chat_message(session_id: int, user_content: str) -> tuple[ChatMessage, bool]:
-    """Persist ``user_content`` as a user message, generate a reply,
-    persist the assistant ChatMessage, and return ``(message,
-    grounded)``.
+def answer_chat_message(
+    session_id: int, user_content: str
+) -> tuple[ChatMessage, bool, list[str], list[str]]:
+    """Persist ``user_content``, generate a reply, persist the assistant
+    ChatMessage, and return ``(message, grounded, focus, unavailable)``.
 
-    ``grounded`` isn't a persisted column (the stored transcript only
-    has role/content, kept simple) — it's a per-turn hint for the
-    immediate caller (the router's response), not part of chat
-    history a later turn would need to see again.
+    Universal chat (2026-09-10): the turn resolves its own tickers from
+    the message text (0..N, capped), always attaches a cheap
+    market-wide baseline, and builds per-ticker quant context for each
+    resolved symbol. ``focus`` is the tickers that got a usable context
+    block; ``unavailable`` the ones that were named but had no data.
 
-    Never raises for an expected failure mode — AI-off, a
-    context-building failure, or a malformed AI reply all produce a
-    stored assistant message (grounded=False) explaining that, not an
-    exception. An unexpected failure (e.g. the session doesn't exist)
-    still raises — that's a caller bug, not a "the AI couldn't answer"
-    case.
+    ``grounded`` / ``focus`` / ``unavailable`` aren't persisted columns
+    — they're per-turn hints for the router's response.
+
+    Never raises for an expected failure mode — AI-off, a per-symbol
+    context failure, or a malformed AI reply all produce a stored
+    assistant message explaining that, not an exception. An unexpected
+    failure (e.g. the session doesn't exist) still raises.
     """
     repo = ChatRepository()
     try:
@@ -99,50 +105,144 @@ def answer_chat_message(session_id: int, user_content: str) -> tuple[ChatMessage
 
         alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
 
-        reply_text: str
-        grounded: bool
-        try:
-            context = build_context(session.symbol)
-            context_dict = context.to_dict()
-        except InsufficientDataError as e:
-            logger.info("answer_chat_message: insufficient data for %s: %s", session.symbol, e)
-            reply_text = (
-                f"I don't have enough data on {session.symbol} yet to answer that."
-            )
-            grounded = False
-        else:
-            reply_text, grounded = _generate_reply(
-                session.symbol, context_dict, transcript, user_content, alert_context,
+        base = (
+            [session.symbol]
+            if session.scope in ("symbol", "alert")
+            and session.symbol
+            and session.symbol != UNIVERSAL_SYMBOL
+            else []
+        )
+        symbols, capped = resolve_turn_symbols(user_content, transcript, base)
+        market_baseline = build_market_baseline()  # always; never raises
+
+        symbol_blocks: list[dict] = []
+        unavailable: list[str] = []
+        single = len(symbols) == 1
+        for sym in symbols:
+            try:
+                ctx = build_context(
+                    sym,
+                    include_news=single,
+                    include_fundamentals=single,
+                    include_divergence=single,
+                ).to_dict()
+            except InsufficientDataError:
+                unavailable.append(sym)
+                continue
+            except Exception as e:  # noqa: BLE001 — per-symbol, never abort the turn
+                logger.warning("chat build_context(%s) failed: %s", sym, e)
+                unavailable.append(sym)
+                continue
+            avail = _availability(ctx)
+            symbol_blocks.append(
+                {"symbol": sym, "context": _prune_context(ctx, avail), "availability": avail}
             )
 
+        reply_text, grounded = _generate_reply(
+            symbol_blocks, unavailable, market_baseline, transcript,
+            user_content, alert_context, capped, base,
+        )
+        grounded = grounded and not unavailable  # deterministic fail-safe
+
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
-        return assistant_message, grounded
+        return (
+            assistant_message,
+            grounded,
+            [b["symbol"] for b in symbol_blocks],
+            unavailable,
+        )
     finally:
         repo.close()
 
 
+def _availability(ctx: dict) -> dict:
+    """Classify how much live quant data a context dict actually carries.
+
+    ``engine_warm`` is the key signal: a ticker not in a watchlist gets
+    a live price + best-effort indicators from ``build_context`` but its
+    trend engine was never fed, so its multi-timeframe scores are all
+    'unknown'/0.
+    """
+    tf_scores = ctx.get("timeframe_scores") or {}
+    warm = bool(ctx.get("trend_state")) or any(
+        (s or {}).get("direction") not in (None, "unknown", "neutral")
+        and (s or {}).get("confidence", 0) > 0
+        for s in tf_scores.values()
+    )
+    momentum = ctx.get("momentum") or {}
+    return {
+        "engine_warm": warm,
+        "has_price": ctx.get("price") is not None,
+        "has_rsi": momentum.get("rsi") is not None,
+        "has_support_resistance": bool(ctx.get("support_resistance")),
+        "note": "" if warm else (
+            "not in your watchlist — live price / indicators only, "
+            "no multi-timeframe trend or confidence"
+        ),
+    }
+
+
+def _prune_context(ctx: dict, avail: dict) -> dict:
+    """Drop empty sections, and — for a cold engine — the composite
+    scores (market_structure / trend_transition) that read like a
+    confidence number the model must not quote for an untracked name.
+    """
+    cold_only = {"market_structure", "trend_transition"}
+    out: dict = {}
+    for k, v in ctx.items():
+        if v is None or v == {} or v == []:
+            continue
+        if not avail["engine_warm"] and k in cold_only:
+            continue
+        out[k] = v
+    return out
+
+
 def _generate_reply(
-    symbol: str,
-    context_dict: dict,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
     transcript: list[tuple[str, str]],
     user_content: str,
     alert_context: dict | None,
+    capped: bool,
+    base_symbols: list[str],
 ) -> tuple[str, bool]:
     """Call the AI and parse its reply. Never raises — degrades to a
-    plain "couldn't process" reply with grounded=False.
+    plain reply with grounded=False.
 
     When the AI's reply asks for ``wants_reanalysis``, runs the chat's
-    one tool (see module docstring) instead of returning that reply
-    verbatim.
+    one tool (see module docstring) for the named ticker instead.
     """
+    # Friendly degrade for a legacy single-symbol session whose only
+    # ticker has no data (keeps the pre-universal wording).
+    if (
+        not symbol_blocks
+        and unavailable
+        and base_symbols
+        and set(unavailable) == {s.upper() for s in base_symbols}
+    ):
+        return f"I don't have enough data on {unavailable[0]} yet to answer that.", False
+
     if not ai_manager.is_available():
         return "AI is currently unavailable, so I can't answer that right now.", False
 
+    capped_note = None
+    if capped:
+        shown = ", ".join(b["symbol"] for b in symbol_blocks) or "the first few"
+        capped_note = (
+            f"(You named more tickers than I can dig into at once — I looked at {shown}.)"
+        )
+
+    budget = max(2000, ai_manager.settings.max_tokens - 500)
     try:
         resp = ai_manager.complete(
-            prompt=build_chat_prompt(context_dict, transcript, user_content, alert_context),
+            prompt=build_chat_prompt(
+                symbol_blocks, unavailable, market_baseline, transcript,
+                user_content, alert_context, capped_note=capped_note, token_budget=budget,
+            ),
             system=CHAT_SYSTEM_PROMPT,
-            max_tokens=300,
+            max_tokens=500,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning("Chat AI call raised: %s", e)
@@ -158,7 +258,15 @@ def _generate_reply(
         return "I couldn't process that — could you rephrase?", False
 
     if parsed.wants_reanalysis:
-        return _run_reanalysis(symbol)
+        known = [b["symbol"] for b in symbol_blocks]
+        target = (parsed.reanalysis_symbol or "").upper().strip()
+        if not target and len(known) == 1:
+            target = known[0]
+        if target and target in known:
+            return _run_reanalysis(target)
+        if known:
+            return "Which ticker should I run the full analysis for?", True
+        return "Tell me which ticker you'd like me to run the full analysis for.", False
 
     return parsed.reply, parsed.grounded
 

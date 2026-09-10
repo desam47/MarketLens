@@ -171,7 +171,7 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
-            True,
+            True, ["AAPL"], [],
         )
 
         resp = self.client.post(
@@ -183,6 +183,7 @@ class TestSendMessage(unittest.TestCase):
         self.assertEqual(data["role"], "assistant")
         self.assertEqual(data["content"], "AAPL looks bullish.")
         self.assertTrue(data["grounded"])
+        self.assertEqual(data["focus"], ["AAPL"])
         mock_answer.assert_called_once_with(1, "How's AAPL?")
 
     @patch("backend.api.ai.chat_router.ChatRepository")
@@ -214,7 +215,7 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="I don't have enough data."),
-            False,
+            False, [], ["RIVN"],
         )
 
         resp = self.client.post(
@@ -223,6 +224,7 @@ class TestSendMessage(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(resp.json()["grounded"])
+        self.assertEqual(resp.json()["unavailable"], ["RIVN"])
 
 
 if __name__ == "__main__":
