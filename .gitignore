@@ -88,6 +88,7 @@ coverage/
 # so tracking it means every restart dirties git status, and it's a live
 # credential that has no business in version control.
 conf/token.txt
+conf/token_stream/
 
 # Local mypy cache (not covered by the .pytest_cache/.ruff_cache lines above)
 .mypy_cache/

@@ -123,6 +123,38 @@ class TestHealthAndSubscription(unittest.TestCase):
         self.assertEqual(self.client._subscribed, {"MSFT"})
 
 
+class TestSupervisor(unittest.TestCase):
+    def test_start_spawns_supervisor_and_stop_joins_it(self):
+        c = WebullStreamClient("k", "s")
+        # _build_client raises every time -> supervisor must keep looping,
+        # not die. Make the retry backoff instant.
+        with patch.object(c, "_build_client", side_effect=RuntimeError("429")):
+            c.start()
+            self.assertIsNotNone(c._supervisor)
+            self.assertTrue(c._supervisor.is_alive())
+            time.sleep(0.2)  # let it fail-and-retry a couple times
+            self.assertTrue(c._supervisor.is_alive())  # still alive, still retrying
+            c.stop()
+        self.assertFalse(c._supervisor.is_alive())
+        self.assertFalse(c._connected)
+
+    def test_supervisor_marks_connected_when_sdk_connects(self):
+        c = WebullStreamClient("k", "s")
+        fake_sdk = MagicMock()
+        fake_sdk._thread = MagicMock(is_alive=MagicMock(return_value=True))
+
+        def _build():
+            # simulate the SDK firing on_connect shortly after start
+            c._on_connect(fake_sdk, MagicMock(), "sess")
+            return fake_sdk
+
+        with patch.object(c, "_build_client", side_effect=_build):
+            c.start()
+            time.sleep(0.3)
+            self.assertTrue(c._connected)
+            c.stop()
+
+
 class TestFactory(unittest.TestCase):
     @patch("backend.market_data.streaming.webull_stream._client", None)
     def test_returns_none_when_disabled(self):

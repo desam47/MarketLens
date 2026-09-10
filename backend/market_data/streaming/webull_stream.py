@@ -96,9 +96,14 @@ class WebullStreamClient:
         self._lock = threading.Lock()
         self._subscribed: set[str] = set()
         self._last_msg_at: dict[str, float] = {}
-        self._client = None  # DataStreamingClient, built in start()
+        self._client = None  # DataStreamingClient, built by the supervisor
         self._connected = False
         self._started = False
+        self._stop = threading.Event()
+        self._supervisor: threading.Thread | None = None
+        # Dedicated token dir so the streaming client's auth handshake
+        # doesn't race the REST provider over conf/token.txt.
+        self._token_dir = str(_PROJECT_ROOT / "conf" / "token_stream")
 
     # -- lifecycle ----------------------------------------------------
 
@@ -110,6 +115,11 @@ class WebullStreamClient:
             self._app_key, self._app_secret, self._region, session_id,
             http_host=self._http_host, mqtt_host=self._mqtt_host,
         )
+        try:
+            Path(self._token_dir).mkdir(parents=True, exist_ok=True)
+            client.set_token_dir(self._token_dir)
+        except Exception:  # noqa: BLE001
+            pass
         client.on_connect_success = self._on_connect
         client.on_quotes_message = self._on_message
         client.on_subscribe_success = self._on_subscribe_success
@@ -120,29 +130,73 @@ class WebullStreamClient:
             if self._started:
                 return
             self._started = True
-        try:
-            self._client = self._build_client()
-            # async mode → daemon background thread; custom logger keeps the
-            # SDK from writing its log file into the CWD.
-            self._client.connect_and_loop_start(customer_logger=_stream_logger())
-            logger.info("Webull stream: connecting (%d symbols queued)", len(self._subscribed))
-        except Exception as e:  # noqa: BLE001 — never take the app down
-            logger.error("Webull stream failed to start: %s", e)
-            self._started = False
+        self._stop.clear()
+        self._supervisor = threading.Thread(
+            target=self._supervise, name="webull-stream-supervisor", daemon=True)
+        self._supervisor.start()
+
+    def _sdk_alive(self) -> bool:
+        c = self._client
+        t = getattr(c, "_thread", None) if c is not None else None
+        return bool(t and t.is_alive())
+
+    def _teardown_client(self) -> None:
+        c, self._client = self._client, None
+        self._connected = False
+        if c is None:
+            return
+        for call in (lambda: c.unsubscribe(unsubscribe_all=True), c.loop_stop, c.disconnect):
+            try:
+                call()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _supervise(self) -> None:
+        """Keep an MQTT connection alive: (re)build the SDK client, wait for
+        connect, and rebuild with exponential backoff if it dies or never
+        connects. Survives a transient 429 during the token handshake
+        instead of dying on it (the bare connect_and_loop_start did)."""
+        backoff = 5
+        while not self._stop.is_set():
+            try:
+                self._client = self._build_client()
+                self._client.connect_and_loop_start(customer_logger=_stream_logger())
+                logger.info("Webull stream: connecting (%d symbols queued)",
+                            len(self._subscribed))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Webull stream: connect attempt failed: %s", e)
+                self._client = None
+
+            waited = 0
+            while not self._stop.is_set() and not self._connected and waited < 25:
+                self._stop.wait(1)
+                waited += 1
+
+            if self._connected:
+                backoff = 5
+                while not self._stop.is_set() and self._connected and self._sdk_alive():
+                    self._stop.wait(5)
+                if not self._stop.is_set():
+                    logger.warning("Webull stream: connection lost — rebuilding")
+            else:
+                logger.warning("Webull stream: not connected after 25s — retrying in %ds", backoff)
+
+            self._teardown_client()
+            if self._stop.is_set():
+                break
+            self._stop.wait(backoff)
+            backoff = min(backoff * 2, 300)
+
+        self._teardown_client()
+        logger.info("Webull stream: supervisor exited")
 
     def stop(self) -> None:
-        client = self._client
-        if client is None:
-            return
-        try:
-            client.unsubscribe(unsubscribe_all=True)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            client.loop_stop()
-        except Exception:  # noqa: BLE001
-            pass
-        self._connected = False
+        self._stop.set()
+        self._teardown_client()
+        sup = self._supervisor
+        if sup is not None and sup.is_alive():
+            sup.join(timeout=6)
+        self._started = False
         logger.info("Webull stream: stopped")
 
     # -- subscription ----------------------------------------------------
