@@ -30,6 +30,11 @@ export default function App() {
   // Default to the first symbol from the first populated watchlist.
   // Falls back to 'SPY' only if no watchlist has symbols (e.g. first run).
   const [symbol, setSymbol] = useState<string>('SPY');
+  // The AI Hub carries its OWN ticker, independent of the Dashboard /
+  // Symbol page — you go there to do AI work on whatever symbol you
+  // want without disturbing (or being disturbed by) the rest of the app.
+  // Lifted to App (not page-local) so it survives nav-tab switches.
+  const [hubSymbol, setHubSymbol] = useState<string>('SPY');
 
   useEffect(() => {
     // Fetch the first populated watchlist and set its first symbol as default.
@@ -40,7 +45,10 @@ export default function App() {
         if (cancelled) break;
         const symbols = await api.getWatchlistSymbols(wl.id);
         if (symbols.length > 0) {
-          if (!cancelled) setSymbol(symbols[0].symbol);
+          if (!cancelled) {
+            setSymbol(symbols[0].symbol);
+            setHubSymbol(symbols[0].symbol); // seed only; diverges freely after
+          }
           break;
         }
       }
@@ -61,7 +69,7 @@ export default function App() {
       case 'symbol':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'hub':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="AI Hub"><AIHubPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} /></PageErrorBoundary></Suspense>;
       case 'alerts':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':

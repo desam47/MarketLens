@@ -1,10 +1,15 @@
 /**
  * AIHubPage — the hub for every AI capability in one place.
  *
+ * The Hub carries its OWN ticker (App's `hubSymbol`, separate from the
+ * app-wide `symbol` that drives the Dashboard / Symbol page). Changing
+ * the ticker here — via the picker or an AI Search result — does not
+ * move the rest of the app, and vice versa.
+ *
  * Layout (from the ai-advisor-page-design workflow): a single vertical
  * scroll of always-mounted sections with a sticky section-jump nav.
  *   - Symbol-scoped: Chat, then AI Analysis (incl. the Trade Setup /
- *     advisor block), then Templates — driven by the page's symbol picker.
+ *     advisor block), then Templates — driven by the page's own ticker.
  *   - Market-wide: the premarket/close AI Digest and AI Stock Search
  *     (picking a result repoints the symbol-scoped sections in place,
  *     without leaving the page).
@@ -92,7 +97,8 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         <div>
           <h1>AI Hub</h1>
           <p className="subtitle">
-            Analysis, chat &amp; templates for <b>{symbol}</b> &middot; market digest &amp; AI search
+            Chat, analysis &amp; templates for <b>{symbol}</b> (independent of the rest of the app)
+            &middot; market digest &amp; AI search
           </p>
         </div>
         <div className="header-actions">
