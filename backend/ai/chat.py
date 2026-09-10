@@ -26,6 +26,10 @@ call inherits the same contract — it never raises either.
 from __future__ import annotations
 
 import logging
+import re
+import threading
+import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from backend.ai.analyze import analyze_symbol
@@ -48,6 +52,67 @@ logger = logging.getLogger(__name__)
 # How many prior turns (user + assistant messages combined) to include
 # as transcript text in the prompt.
 _TRANSCRIPT_TURNS = 6
+_TRANSCRIPT_MSG_CHARS = 600  # per-message clip inside the transcript
+
+# Per-turn intent — keeps aux-data HTTP and prompt tokens off turns that
+# don't ask for that material. Each pattern is deliberately generous:
+# a false positive just adds a section, a false negative omits one the
+# trader can ask for again.
+_NEWS_INTENT = re.compile(
+    r"\b(news|headline|catalyst|announc\w+|report\w*|filing|earnings|upgrade|"
+    r"downgrade|analyst|rating|price target|what happened|sell[- ]?off|selloff|"
+    r"rall\w+|spik\w+|plung\w+|surg\w+|why (is|did|are|has|s|'s)\b|"
+    r"mov\w+ (on|because|after|due))\b", re.I)
+_FUNDA_INTENT = re.compile(
+    r"\b(fundamental\w*|valuation|p/?e\b|pe ratio|peg\b|eps\b|revenue|sales|"
+    r"profit\w*|margin\w*|balance sheet|debt|cash ?flow|fcf\b|dividend|yield|"
+    r"market ?cap|book value|financ\w+|forward pe|multiple|buyback)\b", re.I)
+_MARKET_INTENT = re.compile(
+    r"\b(market|markets|s&p|spx|spy\b|nasdaq|dow\b|russell|indices|index|"
+    r"regime|risk[- ]?on|risk[- ]?off|breadth|rotation|macro|the fed|rates|"
+    r"vix\b|sentiment|overall|broad(er)?|environment|backdrop|my (watchlist|"
+    r"names|book|portfolio))\b", re.I)
+_STATS_INTENT = re.compile(
+    r"\b(win[- ]?rate|hit[- ]?rate|historical\w*|backtest|track record|"
+    r"how often|batting average|expectancy|sample size|base rate)\b", re.I)
+
+# Short-lived per-symbol context cache — a burst of follow-ups about one
+# name rebuilt the whole scan + aux-data each turn.
+_CTX_TTL = 12.0
+_CTX_CAP = 64
+_ctx_lock = threading.Lock()
+_ctx_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
+
+
+def _clip(text: str) -> str:
+    text = text or ""
+    if len(text) <= _TRANSCRIPT_MSG_CHARS:
+        return text
+    return text[:_TRANSCRIPT_MSG_CHARS] + " …[truncated]"
+
+
+def _build_context_cached(sym: str, *, news: bool, funda: bool, diverg: bool) -> dict:
+    """``build_context(...).to_dict()`` behind a 12s TTL cache.
+
+    A failed build (InsufficientDataError etc.) is NOT cached — it
+    propagates so a transient miss retries on the next turn.
+    """
+    key = (sym, news, funda, diverg)
+    now = time.monotonic()
+    with _ctx_lock:
+        hit = _ctx_cache.get(key)
+        if hit is not None and now - hit[0] < _CTX_TTL:
+            _ctx_cache.move_to_end(key)
+            return hit[1]
+    ctx = build_context(
+        sym, include_news=news, include_fundamentals=funda, include_divergence=diverg,
+    ).to_dict()
+    with _ctx_lock:
+        _ctx_cache[key] = (now, ctx)
+        _ctx_cache.move_to_end(key)
+        while len(_ctx_cache) > _CTX_CAP:
+            _ctx_cache.popitem(last=False)
+    return ctx
 
 
 def _build_alert_context(db, alert_trigger_id: int | None) -> dict | None:
@@ -104,8 +169,9 @@ def answer_chat_message(
 
         history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
         # Exclude the message we just added — it's passed separately
-        # as `new_message`, not duplicated into the transcript.
-        transcript = [(m.role, m.content) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
+        # as `new_message`, not duplicated into the transcript. Long
+        # prior replies are clipped so the transcript can't dominate.
+        transcript = [(m.role, _clip(m.content)) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
 
         alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
 
@@ -119,26 +185,30 @@ def answer_chat_message(
         symbols, capped = resolve_turn_symbols(user_content, transcript, base)
         single = len(symbols) == 1
 
+        # What this turn actually asks for — skip the rest.
+        want_news = single and bool(_NEWS_INTENT.search(user_content))
+        want_funda = single and bool(_FUNDA_INTENT.search(user_content))
+        want_stats = bool(_STATS_INTENT.search(user_content))
+        want_baseline = (not symbols) or bool(_MARKET_INTENT.search(user_content))
+
         def _ctx(sym: str) -> dict:
-            return build_context(
-                sym,
-                include_news=single,
-                include_fundamentals=single,
-                include_divergence=single,
-            ).to_dict()
+            return _build_context_cached(
+                sym, news=want_news, funda=want_funda, diverg=single,
+            )
 
         # The market baseline and each per-symbol context are independent
         # blocking calls (DB reads, a scan, aux-data HTTP) — fan them out.
         symbol_blocks: list[dict] = []
         unavailable: list[str] = []
+        market_baseline: dict | None = None
         with ThreadPoolExecutor(max_workers=4) as ex:
-            baseline_fut = ex.submit(build_market_baseline)
+            baseline_fut = ex.submit(build_market_baseline) if want_baseline else None
             ctx_futs = {sym: ex.submit(_ctx, sym) for sym in symbols}
-            try:
-                market_baseline = baseline_fut.result()
-            except Exception as e:  # noqa: BLE001 — baseline never blocks the turn
-                logger.warning("chat market baseline failed: %s", e)
-                market_baseline = None
+            if baseline_fut is not None:
+                try:
+                    market_baseline = baseline_fut.result()
+                except Exception as e:  # noqa: BLE001 — baseline never blocks the turn
+                    logger.warning("chat market baseline failed: %s", e)
             for sym in symbols:  # preserve the resolved order
                 try:
                     ctx = ctx_futs[sym].result()
@@ -151,7 +221,11 @@ def answer_chat_message(
                     continue
                 avail = _availability(ctx)
                 symbol_blocks.append(
-                    {"symbol": sym, "context": _prune_context(ctx, avail), "availability": avail}
+                    {
+                        "symbol": sym,
+                        "context": _prune_context(ctx, avail, keep_stats=want_stats),
+                        "availability": avail,
+                    }
                 )
 
         reply_text, grounded = _generate_reply(
@@ -196,10 +270,16 @@ def _availability(ctx: dict) -> dict:
     }
 
 
-def _prune_context(ctx: dict, avail: dict) -> dict:
-    """Drop empty sections, and — for a cold engine — the composite
-    scores (market_structure / trend_transition) that read like a
-    confidence number the model must not quote for an untracked name.
+def _prune_context(ctx: dict, avail: dict, *, keep_stats: bool = False) -> dict:
+    """Trim ``build_context``'s dict down to what a chat turn needs:
+
+    - drop empty sections,
+    - for a cold engine, drop the composite scores (market_structure /
+      trend_transition) that read like a confidence number the model
+      must not quote for an untracked name,
+    - drop the verbose ``historical_signal_stats`` table unless the turn
+      asked about win rates / base rates,
+    - cap ``news`` to the 4 most recent items.
     """
     cold_only = {"market_structure", "trend_transition"}
     out: dict = {}
@@ -208,6 +288,10 @@ def _prune_context(ctx: dict, avail: dict) -> dict:
             continue
         if not avail["engine_warm"] and k in cold_only:
             continue
+        if k == "historical_signal_stats" and not keep_stats:
+            continue
+        if k == "news" and isinstance(v, list):
+            v = v[:4]
         out[k] = v
     return out
 

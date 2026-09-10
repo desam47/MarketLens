@@ -34,6 +34,11 @@ def _reply(text='{"reply": "ok", "grounded": true}'):
 
 class _Base(unittest.TestCase):
     def setUp(self):
+        # chat.py now keeps a 12s per-symbol context cache — reset it so
+        # a patched build_context isn't shadowed by an earlier test's result
+        from backend.ai import chat as _chat_mod
+        _chat_mod._ctx_cache.clear()
+
         self.engine = create_engine(
             "sqlite:///:memory:", connect_args={"check_same_thread": False},
         )
@@ -358,6 +363,92 @@ class TestReanalysisTool(_Base):
         msg, *_ = answer_chat_message(self.session.id, "how's it doing?")
         mock_analyze.assert_not_called()
         self.assertEqual(msg.content, "up.")
+
+
+class TestTurnIntent(_Base):
+    """News / fundamentals / baseline are pulled only when the turn asks."""
+
+    def _wire(self, mock_ctx, mock_ai, symbols=("AAPL",)):
+        self.mock_resolve.return_value = (list(symbols), False)
+        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete.return_value = _reply()
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_plain_ticker_question_skips_news_and_fundamentals(self, mock_ctx, mock_ai):
+        self._wire(mock_ctx, mock_ai)
+        answer_chat_message(self.session.id, "how's AAPL trending")
+        kw = mock_ctx.call_args.kwargs
+        self.assertFalse(kw["include_news"])
+        self.assertFalse(kw["include_fundamentals"])
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_news_question_pulls_news(self, mock_ctx, mock_ai):
+        self._wire(mock_ctx, mock_ai)
+        answer_chat_message(self.session.id, "any news on AAPL? why is it up")
+        self.assertTrue(mock_ctx.call_args.kwargs["include_news"])
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_valuation_question_pulls_fundamentals(self, mock_ctx, mock_ai):
+        self._wire(mock_ctx, mock_ai)
+        answer_chat_message(self.session.id, "what's AAPL's P/E and revenue growth")
+        self.assertTrue(mock_ctx.call_args.kwargs["include_fundamentals"])
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_focused_ticker_turn_omits_market_baseline(self, mock_ctx, mock_ai):
+        self._wire(mock_ctx, mock_ai)
+        answer_chat_message(self.session.id, "where is AAPL support")
+        self.mock_baseline.assert_not_called()
+        self.assertNotIn("<market>", mock_ai.complete.call_args.kwargs["prompt"])
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_market_intent_attaches_baseline(self, mock_ctx, mock_ai):
+        self._wire(mock_ctx, mock_ai)
+        answer_chat_message(self.session.id, "how does AAPL look vs the broader market")
+        self.mock_baseline.assert_called()
+        self.assertIn("<market>", mock_ai.complete.call_args.kwargs["prompt"])
+
+
+class TestContextCache(_Base):
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_second_turn_same_symbol_served_from_cache(self, mock_ctx, mock_ai):
+        self.mock_resolve.return_value = (["AAPL"], False)
+        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete.return_value = _reply()
+
+        answer_chat_message(self.session.id, "how's AAPL")
+        answer_chat_message(self.session.id, "and the trend on AAPL")
+        self.assertEqual(mock_ctx.call_count, 1)  # 2nd turn hit the cache
+
+
+class TestTranscriptClip(_Base):
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_long_prior_message_is_clipped(self, mock_ctx, mock_ai):
+        self.mock_resolve.return_value = ([], False)
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete.return_value = _reply()
+        from backend.repositories.chat_repository import ChatRepository
+        repo = ChatRepository()
+        try:
+            repo.add_message(self.session.id, "user", "X" * 5000)
+        finally:
+            repo.close()
+
+        answer_chat_message(self.session.id, "and now")
+        prompt = mock_ai.complete.call_args.kwargs["prompt"]
+        self.assertIn("…[truncated]", prompt)
+        self.assertNotIn("X" * 1000, prompt)
 
 
 if __name__ == "__main__":
