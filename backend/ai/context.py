@@ -233,11 +233,33 @@ def build_context(
         primary_rs = rs_list[0]
 
     # --- 5. Sector alignment ---
+    # Found live 2026-09-10: SectorEngine(sym) with no injected engines
+    # builds three brand-new, never-fed TrendEngine instances (stock,
+    # sector ETF, SPY) from scratch — zero seed data, zero ticks — so
+    # get_overall_trend() is always None and every alignment came back
+    # "unknown"/"insufficient_data" regardless of how much real trend
+    # data actually existed. SectorEngine's own docstring says exactly
+    # this: "accept injected engines to share with other callers ...
+    # looked up via the shared registry so any other component that
+    # also needs SPY or XLK gets the same instance" — but neither real
+    # call site in the app (this one, and backend/api/regime/router.py)
+    # was actually doing that injection. Fixed by pulling the same
+    # shared, DB-seeded TrendEngine singletons every other feature
+    # already uses (backend.api.trend.registry.get_engine — the exact
+    # registry the trend_transition section above already imports).
     sector_alignment: dict[str, Any] = {}
     try:
-        from backend.regime.sector_engine import SectorEngine
+        from backend.api.trend.registry import get_engine as get_trend_engine_for_sector
+        from backend.regime.sector_engine import SECTOR_ETFS, SECTOR_MAP, SectorEngine
 
-        sector_engine = SectorEngine(sym)
+        sector_name = SECTOR_MAP.get(sym, "Unknown")
+        sector_etf = SECTOR_ETFS.get(sector_name)
+        sector_engine = SectorEngine(
+            sym,
+            stock_engine=get_trend_engine_for_sector(sym),
+            sector_engine=get_trend_engine_for_sector(sector_etf) if sector_etf else None,
+            market_engine=get_trend_engine_for_sector("SPY"),
+        )
         sector_sig = sector_engine.get_current_signal()
         if sector_sig is not None:
             sector_alignment = _sig_to_dict(sector_sig)
@@ -256,23 +278,49 @@ def build_context(
     }
 
     # --- 7. Support / resistance ---
+    # Found live 2026-09-10: this imported a `support_resistance_engine`
+    # singleton from a module that doesn't exist
+    # (backend.support_resistance.support_resistance_engine) and called
+    # a `.detect_levels(sym, timeframe)` method that doesn't exist
+    # either — the real module is backend.support_resistance.sr_engine
+    # (re-exported as backend.support_resistance.SupportResistanceEngine),
+    # a class with a `.detect(bars, symbol, timeframe)` method that
+    # returns a flat `.levels` list, not separate `.supports`/
+    # `.resistances` attributes. Same failure class as the
+    # trend_transition bug fixed elsewhere in this file: a broad except
+    # silently swallowed the AttributeError/ImportError every time, so
+    # `support_resistance` had been an empty dict in every AI context
+    # ever built. Fixed by calling the engine the way the existing,
+    # working `/api/analysis/{symbol}/support-resistance` endpoint
+    # does (backend/api/analysis/router.py) — same bar source, same
+    # engine construction — then bucketing the flat level list into
+    # supports/resistances by price relative to the latest close
+    # (a level below current price is support, above is resistance;
+    # `.levels` is pre-sorted strongest-first so each bucket keeps
+    # that relative order).
     sr: dict[str, Any] = {}
     try:
-        from backend.support_resistance.support_resistance_engine import (
-            support_resistance_engine,
-        )
+        from backend.analysis.series import load_bars as _load_bars_for_sr
+        from backend.support_resistance import SupportResistanceEngine
 
-        levels = support_resistance_engine.detect_levels(sym, timeframe)
-        sr = {
-            "supports": [
-                {"price": round(level.price, 2), "strength": round(float(level.strength), 2)}
-                for level in (levels.supports or [])[:3]
-            ],
-            "resistances": [
-                {"price": round(level.price, 2), "strength": round(float(level.strength), 2)}
-                for level in (levels.resistances or [])[:3]
-            ],
-        }
+        sr_bars = _load_bars_for_sr(sym, timeframe, limit=200)
+        if len(sr_bars) >= 20:
+            sr_engine = SupportResistanceEngine(lookback_period=5, lookback_bars=200)
+            sr_result = sr_engine.detect(sr_bars, symbol=sym, timeframe=timeframe)
+            latest_close = sr_result.latest_close
+            if latest_close is not None:
+                supports: list[dict[str, Any]] = []
+                resistances: list[dict[str, Any]] = []
+                for level in sr_result.levels:
+                    entry = {
+                        "price": round(level.price, 2),
+                        "strength": round(float(level.strength), 2),
+                    }
+                    (supports if level.price <= latest_close else resistances).append(entry)
+                sr = {
+                    "supports": supports[:3],
+                    "resistances": resistances[:3],
+                }
     except Exception:  # noqa: BLE001
         pass
 

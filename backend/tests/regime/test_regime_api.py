@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -85,6 +86,52 @@ class TestRegimeAPI(unittest.TestCase):
         resp = self.client.get("/api/regime/AAPL/current")
         # 500 = DB not seeded (test environment); 200 = seeded (dev environment)
         self.assertIn(resp.status_code, (200, 500))
+
+
+class TestGetSectorEngineInjection(unittest.TestCase):
+    """Regression for a live bug (2026-09-10): _get_sector_engine built
+    SectorEngine(symbol) with no injected engines, so the three inner
+    TrendEngines (stock/sector/market) were always brand-new and never
+    fed a single tick or bar — get_current_signal() was always
+    'unknown'/'insufficient_data' regardless of real trend data
+    elsewhere in the app. Fixed to inject the shared, DB-seeded
+    TrendEngine singletons via backend.api.trend.registry.get_engine —
+    same fix as backend.ai.context.build_context()'s sector_alignment
+    section (see test_context_sector_alignment.py).
+
+    Uses a symbol not exercised by TestRegimeAPI above, since
+    _get_sector_engine caches by symbol at module scope.
+    """
+
+    def test_injects_shared_registry_engines_not_bare_ones(self):
+        # backend/api/regime/__init__.py does `from .router import router`,
+        # which shadows the `router` attribute on the package with the
+        # APIRouter instance — `import backend.api.regime.router as x`
+        # would bind x to that instance, not the submodule. Go via
+        # sys.modules (populated correctly by importing the submodule
+        # directly) to get the real module and its _sector_engines/
+        # get_shared_trend_engine.
+        import sys
+
+        import backend.api.regime.router  # noqa: F401 — ensure it's imported
+        regime_router = sys.modules["backend.api.regime.router"]
+
+        regime_router._sector_engines.pop("NVDA", None)
+        with patch.object(regime_router, "get_shared_trend_engine") as mock_get_engine:
+            mock_get_engine.return_value = MagicMock()
+            engine = regime_router._get_sector_engine("NVDA")
+
+        # Called once per role (stock, sector ETF, market) — proves the
+        # injection actually happens instead of falling through to
+        # SectorEngine's own bare TrendEngine(...) construction.
+        called_with = [c.args[0] for c in mock_get_engine.call_args_list]
+        self.assertIn("NVDA", called_with)
+        self.assertIn("SPY", called_with)
+        # NVDA's sector ETF (Technology -> XLK) must also be requested.
+        self.assertIn("XLK", called_with)
+        # The injected mocks must actually be the ones wired into the engine.
+        self.assertIs(engine._stock_eng, mock_get_engine.return_value)
+        self.assertIs(engine._market_eng, mock_get_engine.return_value)
 
 
 class TestMarketContextAPI(unittest.TestCase):

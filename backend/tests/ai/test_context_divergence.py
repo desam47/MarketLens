@@ -113,15 +113,27 @@ class TestBuildContextDivergence(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_include_divergence_false_skips_bar_load_entirely(
+    def test_include_divergence_false_skips_the_extra_bar_load(
         self, mock_scanner, mock_get_engine
     ):
+        """include_divergence=False must skip divergence's own
+        load_bars call. Support/resistance (section 7, unconditional)
+        also calls load_bars with the same (symbol, timeframe) args
+        now, so the right assertion is "one fewer call than with
+        divergence on", not "zero calls total" — this test used to
+        assert the latter, back when load_bars had only one caller."""
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
 
-        with patch("backend.analysis.series.load_bars") as mock_load_bars:
+        with patch("backend.analysis.series.load_bars", return_value=_fake_bars()) as mock_lb:
+            build_context("AAPL", "1d", include_divergence=True)
+            with_divergence_calls = mock_lb.call_count
+
+        with patch("backend.analysis.series.load_bars", return_value=_fake_bars()) as mock_lb:
             ctx = build_context("AAPL", "1d", include_divergence=False)
-            mock_load_bars.assert_not_called()
+            without_divergence_calls = mock_lb.call_count
+
+        self.assertEqual(without_divergence_calls, with_divergence_calls - 1)
         self.assertEqual(ctx.divergence, {})
 
 

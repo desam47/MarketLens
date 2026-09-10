@@ -281,10 +281,33 @@ def _get_rs_engine(symbol: str) -> RelativeStrengthEngine:
 
 
 def _get_sector_engine(symbol: str) -> SectorEngine:
-    """Get or create a sector engine for symbol."""
+    """Get or create a sector engine for symbol.
+
+    Found live 2026-09-10: SectorEngine(symbol) with no injected engines
+    builds three brand-new, never-fed TrendEngine instances (stock,
+    sector ETF, SPY) from scratch — caching the SectorEngine itself
+    here didn't help, since the inner engines never receive a single
+    tick or bar either way. get_current_signal() was always
+    "unknown"/"insufficient_data" regardless of how much real trend
+    data actually existed. SectorEngine's own docstring says exactly
+    what should happen instead: "accept injected engines to share with
+    other callers ... looked up via the shared registry so any other
+    component that also needs SPY or XLK gets the same instance" — so
+    inject the same shared, DB-seeded TrendEngine singletons every
+    other trend-consuming feature in the app already uses.
+    """
+    from backend.regime.sector_engine import SECTOR_ETFS, SECTOR_MAP
+
     symbol = symbol.upper()
     if symbol not in _sector_engines:
-        engine = SectorEngine(symbol)
+        sector_name = SECTOR_MAP.get(symbol, "Unknown")
+        sector_etf = SECTOR_ETFS.get(sector_name)
+        engine = SectorEngine(
+            symbol,
+            stock_engine=get_shared_trend_engine(symbol),
+            sector_engine=get_shared_trend_engine(sector_etf) if sector_etf else None,
+            market_engine=get_shared_trend_engine("SPY"),
+        )
         _sector_engines[symbol] = engine
     return _sector_engines[symbol]
 
