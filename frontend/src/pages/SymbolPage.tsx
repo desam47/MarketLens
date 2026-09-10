@@ -219,7 +219,7 @@ const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel
 
   return (
     <div className="card analysis-card">
-      <h2>Support &amp; Resistance</h2>
+      <h2>Price Range</h2>
       {latestClose != null && (
         <div className="current-price">
           <span className="price-label">Last</span>
