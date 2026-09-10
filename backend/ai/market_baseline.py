@@ -18,11 +18,22 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
+
+# Short in-process cache — the baseline is assembled from the latest
+# digest, the live-regime singleton and the scanner's cached scores,
+# none of which move meaningfully within a few seconds, but chat rebuilt
+# it on every single message.
+_CACHE_TTL = 20.0
+_cache_lock = threading.Lock()
+_cached: dict[str, Any] | None = None
+_cached_at = 0.0
 
 
 def _safe(fn, default):
@@ -86,11 +97,25 @@ def _watchlist_snapshot() -> dict[str, Any]:
     return {"scored": scored, "all_symbols": known}
 
 
-def build_market_baseline() -> dict[str, Any]:
-    """Assemble the market-wide baseline block. Never raises."""
-    return {
+def build_market_baseline(*, use_cache: bool = True) -> dict[str, Any]:
+    """Assemble the market-wide baseline block. Never raises.
+
+    Cached for ``_CACHE_TTL`` seconds — pass ``use_cache=False`` to force
+    a rebuild. ``as_of`` reflects when the cached snapshot was taken, so
+    a consumer can see its age.
+    """
+    global _cached, _cached_at
+    if use_cache:
+        with _cache_lock:
+            if _cached is not None and (time.monotonic() - _cached_at) < _CACHE_TTL:
+                return _cached
+
+    result = {
         "as_of": now_ny().isoformat(),
         "regime_live": _safe(_live_regime, {}),
         "digest": _safe(_latest_digest, {}),
         "watchlist_snapshot": _safe(_watchlist_snapshot, {"scored": [], "all_symbols": []}),
     }
+    with _cache_lock:
+        _cached, _cached_at = result, time.monotonic()
+    return result

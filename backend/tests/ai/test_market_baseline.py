@@ -12,6 +12,23 @@ from backend.ai import market_baseline
 
 
 class TestBuildMarketBaseline(unittest.TestCase):
+    def setUp(self):
+        # the module now caches for 20s — clear it between tests
+        market_baseline._cached = None
+        market_baseline._cached_at = 0.0
+
+    def test_cache_returns_same_object_within_ttl(self):
+        with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
+             patch("backend.api.market_context.router.get_engine") as get_engine, \
+             patch("backend.api.main_helpers._watched_symbols", return_value=[]):
+            repo_cls.return_value.get_latest.return_value = None
+            get_engine.return_value.get_current_context.return_value = None
+            a = market_baseline.build_market_baseline()
+            b = market_baseline.build_market_baseline()
+        self.assertIs(a, b)  # 2nd call served from cache
+        c = market_baseline.build_market_baseline(use_cache=False)
+        self.assertIsNot(a, c)  # forced rebuild
+
     def test_degrades_to_empty_sections_when_sources_missing(self):
         repo = MagicMock()
         repo.get_latest.return_value = None

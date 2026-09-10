@@ -669,7 +669,7 @@ def build_chat_prompt(
         parts.append(capped_note)  # tiny, always kept
 
     if market_baseline:
-        mb = json.dumps(market_baseline, indent=2, default=str)
+        mb = json.dumps(market_baseline, separators=(",", ":"), default=str)
         chunk = (
             "Market-wide backdrop — regime_live is current; the digest is "
             "from its generated_at, treat as possibly stale:\n"
@@ -683,7 +683,7 @@ def build_chat_prompt(
         warm = bool(block.get("availability", {}).get("engine_warm"))
         body = json.dumps(
             {**block["context"], "data_availability": block.get("availability", {})},
-            indent=2, default=str,
+            separators=(",", ":"), default=str,
         )
         chunk = (
             f'Quant context for {sym}:\n'
@@ -711,7 +711,7 @@ def build_chat_prompt(
     if alert_context:
         chunk = (
             "This chat was opened from a specific alert trigger:\n"
-            f"<alert_trigger>\n{json.dumps(alert_context, indent=2, default=str)}\n</alert_trigger>"
+            f"<alert_trigger>\n{json.dumps(alert_context, separators=(',', ':'), default=str)}\n</alert_trigger>"
         )
         if fits(chunk):
             parts.append(chunk)

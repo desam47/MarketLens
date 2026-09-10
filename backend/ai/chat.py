@@ -26,6 +26,7 @@ call inherits the same contract — it never raises either.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.chat_symbols import resolve_turn_symbols
@@ -116,30 +117,42 @@ def answer_chat_message(
             else []
         )
         symbols, capped = resolve_turn_symbols(user_content, transcript, base)
-        market_baseline = build_market_baseline()  # always; never raises
+        single = len(symbols) == 1
 
+        def _ctx(sym: str) -> dict:
+            return build_context(
+                sym,
+                include_news=single,
+                include_fundamentals=single,
+                include_divergence=single,
+            ).to_dict()
+
+        # The market baseline and each per-symbol context are independent
+        # blocking calls (DB reads, a scan, aux-data HTTP) — fan them out.
         symbol_blocks: list[dict] = []
         unavailable: list[str] = []
-        single = len(symbols) == 1
-        for sym in symbols:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            baseline_fut = ex.submit(build_market_baseline)
+            ctx_futs = {sym: ex.submit(_ctx, sym) for sym in symbols}
             try:
-                ctx = build_context(
-                    sym,
-                    include_news=single,
-                    include_fundamentals=single,
-                    include_divergence=single,
-                ).to_dict()
-            except InsufficientDataError:
-                unavailable.append(sym)
-                continue
-            except Exception as e:  # noqa: BLE001 — per-symbol, never abort the turn
-                logger.warning("chat build_context(%s) failed: %s", sym, e)
-                unavailable.append(sym)
-                continue
-            avail = _availability(ctx)
-            symbol_blocks.append(
-                {"symbol": sym, "context": _prune_context(ctx, avail), "availability": avail}
-            )
+                market_baseline = baseline_fut.result()
+            except Exception as e:  # noqa: BLE001 — baseline never blocks the turn
+                logger.warning("chat market baseline failed: %s", e)
+                market_baseline = None
+            for sym in symbols:  # preserve the resolved order
+                try:
+                    ctx = ctx_futs[sym].result()
+                except InsufficientDataError:
+                    unavailable.append(sym)
+                    continue
+                except Exception as e:  # noqa: BLE001 — per-symbol, never abort the turn
+                    logger.warning("chat build_context(%s) failed: %s", sym, e)
+                    unavailable.append(sym)
+                    continue
+                avail = _availability(ctx)
+                symbol_blocks.append(
+                    {"symbol": sym, "context": _prune_context(ctx, avail), "availability": avail}
+                )
 
         reply_text, grounded = _generate_reply(
             symbol_blocks, unavailable, market_baseline, transcript,

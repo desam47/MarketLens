@@ -161,7 +161,7 @@ class TestUniversalTurn(_Base):
         self.assertIn('engine_warm="false"', prompt)
         self.assertNotIn("market_structure", prompt)
         self.assertNotIn("trend_transition", prompt)
-        self.assertIn('"price": 12.0', prompt)  # raw price still there
+        self.assertIn('"price":12.0', prompt)  # raw price still there
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
