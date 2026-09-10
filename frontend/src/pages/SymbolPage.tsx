@@ -267,7 +267,14 @@ const SRPanel = memo(function SRPanel({
         <div className="sr-grid">
           {(['high', 'low'] as const).map(side => {
             const label = side === 'high' ? highLabel : lowLabel;
-            const items = side === 'high' ? resistances : supports;
+            const allItems = side === 'high' ? resistances : supports;
+            // Price Range shows the top 8 boundary levels; Support &
+            // Resistance shows all of them — capping at 8 there was
+            // silently dropping the swing / pivot rows (they score
+            // lower than the fixed boundary levels), which is exactly
+            // the data that panel exists to surface. The backend
+            // already caps the total at max_levels=20.
+            const items = isFullSR ? allItems : allItems.slice(0, 8);
             const color = side === 'high' ? '#ef4444' : '#10b981';
             return (
               <div key={side} className="sr-column">
@@ -282,7 +289,7 @@ const SRPanel = memo(function SRPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {items.slice(0, 8).map((l, i) => {
+                    {items.map((l, i) => {
                       // Above-price distances are positive, below-price
                       // negative, by sign convention.
                       const absDist = l.distance_from_price != null
