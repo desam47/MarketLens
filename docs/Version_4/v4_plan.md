@@ -1,8 +1,8 @@
 # Version 4 — AI Integration
 
 **Date:** 2026-09-09
-**Last updated:** 2026-09-09 (Phase 4.2: four new AI-powered features shipped — news/fundamentals-aware analysis, daily digest, alert commentary, chat panel — plus two pre-existing alert-firing bugs found and fixed)
-**Status:** Active. Phase 4.1 done (4.1.1-4.1.16). Phase 4.2 done (4.2.1-4.2.6). Charts moved to Version 5 — v4's remaining scope is AI integration only.
+**Last updated:** 2026-09-10 (Phase 4.2 addendum: chat tool-calling, the NL search match-all bug, AI health-check retry, and restart_dev.sh's RQ-worker gap — all four deferred open questions cleared)
+**Status:** Active, no open questions remain. Phase 4.1 done (4.1.1-4.1.16). Phase 4.2 done (4.2.1-4.2.10). Charts moved to Version 5 — v4's remaining scope is AI integration only.
 **Scope:** Turn on and prove out the existing AI subsystem (providers, background jobs, prompt templates, `/api/ai/*` endpoints) end-to-end with a real provider, fixing whatever breaks (Phase 4.1), then build new AI-powered functionality on top (Phase 4.2). Charts was originally meant to open v4, then deferred to a secondary phase within it — moved out entirely to open Version 5 instead; full scope now lives at `docs/Version_5/v5_plan.md`.
 
 ---
@@ -39,7 +39,7 @@
 
 ### Known, not fixed (flagged, not blocking)
 
-- **Health-check flakiness on the agentrouter gateway.** `/api/ai/status` sometimes reports the primary as `healthy: false` (its health check hits `GET /v1/models`) even though the actual `POST /v1/chat/completions` call that matters succeeds — confirmed both ways within the same few seconds during 4.1.4's live test. Root cause not confirmed (rate-limiting on the models-list endpoint specifically? something else on the gateway's side?) — not chased further since the fallback chain (now correctly fixed in 4.1.3) means an occasional false-negative health check just costs one extra hop to Ollama, not a broken request. Revisit if it causes visibly wrong behavior (e.g. `/api/ai/status` UI badge flickering) rather than just an internal fallback hop.
+- ~~**Health-check flakiness on the agentrouter gateway.**~~ `/api/ai/status` sometimes reports the primary as `healthy: false` (its health check hits `GET /v1/models`) even though the actual `POST /v1/chat/completions` call that matters succeeds — confirmed both ways within the same few seconds during 4.1.4's live test. Root cause not confirmed (rate-limiting on the models-list endpoint specifically? something else on the gateway's side?) — at the time, not chased further since the fallback chain (fixed in 4.1.3) meant an occasional false-negative health check just cost one extra hop to Ollama, not a broken request. **Resolved in 4.2.9**: `AIManager._healthy()` now retries once before reporting unhealthy.
 
 ### Verification
 - `GET /api/ai/status` — primary provider name matches the configured type (not an unregistered label); each provider's `healthy` reflects *its own* endpoint, not a copy of the primary's.
@@ -108,12 +108,39 @@ the AI_* settings do) kept surfacing independent, real issues. Same
 - Create an alert, wait a few seconds, `GET /api/alerts/active` — `ai_commentary` populated on the fired trigger.
 - `POST /api/ai/chat/sessions` + `POST /api/ai/chat/sessions/{id}/messages` — a grounded reply citing real context.
 
+### Addendum — Items 4.2.7-4.2.10: clearing the deferred open questions
+
+4.2.1-4.2.6 shipped four features but deliberately deferred three items
+as open questions, plus left one operational gap noted only in-session
+(not in this doc) — a running RQ worker on stale code needing a manual
+kill+relaunch during 4.2.4's verification. Per explicit user request,
+all four cleared in one follow-up pass.
+
+- ✅ 4.2.7 **Gave the chat panel one narrow tool: re-run analysis on request.** `ChatReplyResponse` gained `wants_reanalysis: bool = False`; the system prompt instructs the AI to set it only when the trader explicitly asks for a fresh/official/full analysis run, not for ordinary questions (chat already has live context every turn regardless — that's not what this buys). When set, `answer_chat_message()` discards the AI's own `reply` text and calls `analyze_symbol()` directly — the same function `AIAnalysisPanel`'s "Re-run" button calls — replying with its real result instead. Inherits `analyze_symbol`'s full safety contract (never raises; an `UncertaintyResponse` degrade renders as a normal `grounded=False` chat reply, not an error). Deliberately the only action the AI can trigger — chosen over a UI-button-only approach (no AI agency) and a broader multi-tool set (re-analysis + alert-commentary regen) after being asked directly which scope to build. Verified live: "re-run the full official AI analysis" correctly triggered a real `analyze_symbol()` call and replied with actual trend/confidence/summary; an ordinary follow-up question ("what's the current RSI?") in the same session did not trigger the tool.
+- ✅ 4.2.8 **Fixed the match-all fallback that was silently excluding non-uptrend symbols.** `_build_filter()`'s match-all fallback was `DailyBullish(min_confidence=-1.0)` — the confidence floor was disabled, but `TimeframeDirection.matches()` still hardcoded `direction == "uptrend"` regardless, so "match all" silently excluded every symbol whose daily trend wasn't literally an uptrend. Added `TrueFilter` (`backend/scanner/filters.py`) — a genuine match-all with no direction check at all — and registered it in `FilterRegistry` as `"true"` so it's reusable outside NL search too. Verified live: a "show me all stocks" query now includes NVDA/DVLT/SPY/QQQ (all real `ONE_DAY=downtrend` on the live watchlist that day), which the old fallback would have silently dropped.
+- ✅ 4.2.9 **Retry a failed AI health check once before reporting unhealthy.** Resolves the "known, not fixed" item from Phase 4.1 (the primary gateway's `GET /v1/models` health check was flakier than its actual completion endpoint). `AIManager._healthy()` now retries once after a short pause before reporting a provider unhealthy — scoped deliberately to the status-facing check only (`is_available()`/`status()`, the UI badge); `complete()`'s own per-attempt gate is untouched, since it already has a real fallback chain to fall through to on a miss and a retry there would only add latency without changing what the caller sees. A genuinely-down provider still reports unhealthy, just ~0.25s slower; the common healthy case pays nothing extra.
+- ✅ 4.2.10 **`scripts/restart_dev.sh` now restarts RQ workers, not just backend+frontend.** The script previously only restarted the ports it could `lsof`-kill; an RQ worker running stale code (found during 4.2.4's live verification, worked around by hand at the time) survived every restart untouched. RQ workers aren't port-bound, so they're matched by command line instead (`pgrep -f "rq worker .*marketlens-"`, catching both `marketlens-workers` and `marketlens-backfill` in one pass) — same "kill what's actually running" principle the script already applied to backend/frontend, adapted for a non-port-bound process. Relaunches with the same invocation and soft-fail-if-`rq`-missing behavior as `start.sh`/`scripts/run.py`.
+
+**Tests (4.2.7-4.2.10):** 4 new for 4.2.7 (tool fires on explicit request, uncertainty-degrade path, exception-degrade path, ordinary questions don't trigger it); 3 new for 4.2.8 (`TrueFilter` unit tests, the registry entry, an executor-level regression matching non-uptrend symbols); 4 new for 4.2.9 (retry-then-succeed and retry-also-fails for both `is_available()`/`status()`, plus a no-retry-when-healthy check). 4.2.10 has no pytest coverage (`bash -n` syntax check, and the `pgrep` pattern verified live against real running worker processes without executing the script destructively against the live dev session).
+
+**Verification (4.2.7-4.2.10):**
+```bash
+# 4.2.7 — chat tool-calling
+curl -s -X POST http://127.0.0.1:5001/api/ai/chat/sessions -H 'Content-Type: application/json' -d '{"symbol":"AAPL"}'
+curl -s -X POST http://127.0.0.1:5001/api/ai/chat/sessions/1/messages -H 'Content-Type: application/json' \
+  -d '{"content":"Please re-run the full official AI analysis on this symbol right now."}'
+
+# 4.2.8 — match-all now includes non-uptrend symbols
+curl -s -X POST http://127.0.0.1:5001/api/nl-search -H 'Content-Type: application/json' \
+  -d '{"query":"show me all stocks","explain":false,"top_n":50}'
+```
+
 ---
 
 ## Open questions
 
 1. ~~Now that 4.1 is done and hardened, what's the first real AI-powered *feature* to build on top~~ — **Resolved in Phase 4.2**: built all four floated candidates (news/fundamentals-aware analysis, daily digest, alert commentary, chat panel), not just the first one.
-2. Phase 4.2's chat panel deliberately excludes tool-calling (the AI reading data is in scope; the AI *triggering* new analysis/digest/commentary runs is not). Revisit as its own deliberate decision if there's a real need — not resolved, not urgent.
-3. `backend/nl_search/executor.py`'s `_build_filter()` match-all fallback is actually `DailyBullish(min_confidence=-1.0)`, which still hardcodes daily-uptrend direction regardless of the confidence floor — flagged live earlier this session, deliberately not fixed (out of scope at the time). Still open.
+2. ~~Phase 4.2's chat panel deliberately excludes tool-calling~~ — **Resolved in 4.2.7**: one narrow tool (re-run analysis on explicit request), not open-ended function-calling.
+3. ~~`_build_filter()`'s match-all fallback hardcodes daily-uptrend direction regardless of the confidence floor~~ — **Resolved in 4.2.8**: replaced with a genuine match-all (`TrueFilter`).
 
-Charts-specific open questions (TradingView re-attempt, Renko/Kagi/P&F demand) moved to `docs/Version_5/v5_plan.md` along with the rest of that scope.
+No open questions remain for Phase 4.1/4.2. Charts-specific open questions (TradingView re-attempt, Renko/Kagi/P&F demand) live at `docs/Version_5/v5_plan.md` along with the rest of that scope.

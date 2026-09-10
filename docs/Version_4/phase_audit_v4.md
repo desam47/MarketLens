@@ -1,7 +1,7 @@
 # Version 4 Phase Audit
 
-**Last updated:** 2026-09-09 (Phase 4.2: four new AI-powered features shipped, plus two pre-existing alert-firing bugs found and fixed along the way)
-**Status:** Active. Phase 4.1 and Phase 4.2 both done.
+**Last updated:** 2026-09-10 (Phase 4.2 addendum: all four deferred open questions cleared — chat tool-calling, NL search match-all bug, AI health-check retry, restart_dev.sh's RQ-worker gap)
+**Status:** Active, no open questions remain. Phase 4.1 and Phase 4.2 both done.
 **Scope:** AI integration — enable + validate the existing subsystem end-to-end (4.1), then build new AI-powered functionality on top of it (4.2, the "separate decision" 4.1's own open questions deferred). Charts was considered for this version (deferred from Version 3, never started under v4) and has moved on to Version 5 instead — see `docs/Version_5/`.
 
 ---
@@ -11,7 +11,7 @@
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 4.1 | Enable and Validate AI Integration End-to-End | ✅ DONE | Enabled `AI_ENABLED=true`; fixed an unregistered-provider-name config error and a real fallback-provider config-isolation bug; ran a live `/api/ai/analyze` call against a real provider. A follow-on hardening pass (4.1.9-4.1.16) then found and fixed 8 more live bugs across AI Stock Search and AI Analysis, purely from continuing to use the now-live feature. Full detail in `docs/Version_4/v4_plan.md`. |
-| 4.2 | AI-Powered Features (news/fundamentals analysis, daily digest, alert commentary, chat panel) | ✅ DONE | Four new features planned via a research + design workflow (3 Explore agents, 1 Plan agent, approved plan), shipped one at a time with a live check-in after each. Also fixed two pre-existing alert-firing bugs found while verifying feature 3 live. Full detail in `docs/Version_4/v4_plan.md`. |
+| 4.2 | AI-Powered Features (news/fundamentals analysis, daily digest, alert commentary, chat panel) | ✅ DONE | Four new features planned via a research + design workflow (3 Explore agents, 1 Plan agent, approved plan), shipped one at a time with a live check-in after each. Also fixed two pre-existing alert-firing bugs found while verifying feature 3 live. A follow-up addendum (4.2.7-4.2.10) then cleared all three open questions this phase left behind, plus one gap noted in-session — chat tool-calling, the NL search match-all bug, AI health-check retry, `restart_dev.sh`'s missing RQ-worker restart. Full detail in `docs/Version_4/v4_plan.md`. |
 
 ---
 
@@ -30,7 +30,7 @@
 
 - ✅ 4.1.8 **Real bug found live, third time:** after the user changed `.env` to try a different model and dropped the `/v1` path `openai_compatible` requires (flagged to the user, not silently fixed — their config to decide on), `POST /api/ai/analyze` returned a bare `{"detail": "Internal server error"}` instead of the graceful `UncertaintyResponse` the module promises for every bad-AI-response case. Root cause: `OpenAICompatibleProvider.complete()` (`backend/ai/providers.py`) got HTTP 200 with an HTML body (the gateway's own web UI, reached because the missing `/v1` resolved to the wrong route) — `r.json()` raised a raw `json.JSONDecodeError` that nothing caught, unlike every other bad-response shape (4xx/5xx/malformed payload), which are deliberately converted to `ProviderUnavailable`. Fixed by wrapping `r.json()` the same way; found and fixed the identical gap in `AnthropicProvider.complete()` in the same file. Verified: the same request now correctly returns `UncertaintyResponse` instead of a 500 (the `/v1` config mistake itself is unfixed — that's the user's call).
 
-**Known, not fixed:** the primary gateway's health-check endpoint (`GET /v1/models`) is flakier than its actual completion endpoint (`POST /v1/chat/completions`) — `/api/ai/status` sometimes shows the primary as unhealthy even when a real analysis call through it succeeds moments later. Not chased further: the 4.1.3 fix means a false-negative health check just costs one extra hop to a correctly-configured Ollama fallback, not a broken request — which is exactly the path that surfaced 4.1.7.
+**Known, not fixed (at the time):** the primary gateway's health-check endpoint (`GET /v1/models`) is flakier than its actual completion endpoint (`POST /v1/chat/completions`) — `/api/ai/status` sometimes shows the primary as unhealthy even when a real analysis call through it succeeds moments later. Not chased further then: the 4.1.3 fix means a false-negative health check just costs one extra hop to a correctly-configured Ollama fallback, not a broken request — which is exactly the path that surfaced 4.1.7. **Resolved in 4.2.9** (see Phase 4.2 below): a single retry before reporting unhealthy.
 
 **Tests:** 6 new (`backend/tests/ai/test_ai_manager.py::TestFallbackProviderIsolation` — asserts a fallback's `base_url`/`model` are its own defaults and it never receives the primary's `api_key`); 2 pre-existing tests fixed for now-real environment coupling (`AI_ENABLED=true` is genuine `.env` state as of this phase, not a test fixture default — fixed via `_env_file=None` to test `AISettings`' actual field defaults in isolation, matching the existing house pattern from `test_aux_data_settings.py`); 3 more pre-existing tests fixed per 4.1.6; 1 new subtest-parametrized test per 4.1.7 (`test_phase16_analyze.py::test_normalizes_engine_vocabulary_synonyms`, 11 cases); 2 new tests per 4.1.8 (one per provider class, non-JSON-200 body).
 
@@ -104,3 +104,14 @@ curl -s "http://127.0.0.1:5001/api/alerts/active" | python3 -m json.tool
 curl -s -X POST http://127.0.0.1:5001/api/ai/chat/sessions -H 'Content-Type: application/json' -d '{"symbol":"AAPL"}'
 curl -s -X POST http://127.0.0.1:5001/api/ai/chat/sessions/1/messages -H 'Content-Type: application/json' -d '{"content":"How is it trending?"}'
 ```
+
+### Addendum (2026-09-10) — Items 4.2.7-4.2.10: clearing the deferred open questions
+
+Per explicit user request, all three open questions Phase 4.2 left behind (plus one gap noted only in-session, not in this doc) were cleared in one follow-up pass:
+
+- ✅ 4.2.7 **Gave the chat panel one narrow tool: re-run analysis on request.** `ChatReplyResponse.wants_reanalysis` (set by the AI only when the trader explicitly asks for a fresh/official run) makes `answer_chat_message()` call `analyze_symbol()` directly instead of returning a free-form reply — same function/safety contract as the "Re-run" button. Scope chosen explicitly by the user over a UI-button-only approach and a broader multi-tool set. Verified live: an explicit reanalysis request triggered a real `analyze_symbol()` call with real results; an ordinary question in the same session did not trigger it.
+- ✅ 4.2.8 **Fixed the NL search match-all bug.** `_build_filter()`'s match-all fallback (`DailyBullish(min_confidence=-1.0)`) still hardcoded `direction == "uptrend"` despite the disabled confidence floor, silently excluding every non-uptrend symbol from "match all". Added a genuine `TrueFilter` (registered in `FilterRegistry` as `"true"`). Verified live: a "show me all stocks" query now includes real downtrending symbols (NVDA/DVLT/SPY/QQQ) it previously dropped.
+- ✅ 4.2.9 **AI health-check retry.** `AIManager._healthy()` retries once before reporting a provider unhealthy — resolves Phase 4.1's flagged `/api/ai/status` flakiness. Scoped to the status-facing check only; `complete()`'s own fallback-chain gate is untouched.
+- ✅ 4.2.10 **`scripts/restart_dev.sh` now restarts RQ workers.** Previously only restarted backend/frontend by port; RQ workers (not port-bound) are now matched and killed by command line (`pgrep -f "rq worker .*marketlens-"`) and relaunched with the same invocation `start.sh`/`scripts/run.py` use.
+
+**Tests:** 4 new for 4.2.7 (tool fires on request, uncertainty/exception degrade paths, ordinary questions don't trigger it); 3 new for 4.2.8 (`TrueFilter` unit + registry + executor regression); 4 new for 4.2.9 (retry-then-succeed / retry-also-fails on both `is_available()` and `status()`, no-retry-when-healthy). 4.2.10: `bash -n` syntax check + the `pgrep` pattern verified live against real running workers, not executed destructively.
