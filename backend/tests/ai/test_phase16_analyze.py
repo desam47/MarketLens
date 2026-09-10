@@ -199,6 +199,90 @@ class TestUncertaintyResponse(unittest.TestCase):
         self.assertEqual(u.trend, "uncertain")
         self.assertEqual(u.confidence, 0.0)
         self.assertEqual(u.supporting_factors, [])
+        self.assertIsNone(u.trade_plan)
+
+
+# --- TradePlan (advisory layer, 2026-09-10) ------------------------
+
+
+class TestTradePlan(unittest.TestCase):
+
+    def _base(self, **over):
+        from backend.ai.prompt import TradePlan
+        kw = dict(
+            recommendation="buy", conviction="medium", time_horizon="swing",
+            entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=96.0,
+            targets=[108.0, 115.0], risk_reward=99.0,
+            thesis="Buy the pullback into support with the daily trend up.",
+            invalidation="A daily close below 96 breaks the structure.",
+        )
+        kw.update(over)
+        return TradePlan(**kw)
+
+    def test_valid_buy_plan_recomputes_risk_reward(self):
+        tp = self._base()
+        # entry mid 101, stop 96 -> risk 5; first target 108 -> reward 7
+        self.assertAlmostEqual(tp.risk_reward, 1.4, places=2)
+        self.assertEqual(tp.targets, [108.0, 115.0])  # sorted ascending
+
+    def test_buy_rejects_stop_above_entry(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            self._base(stop_loss=101.0)
+
+    def test_buy_rejects_target_below_entry(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            self._base(targets=[99.0])
+
+    def test_sell_plan_orientation(self):
+        tp = self._base(
+            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
+            stop_loss=106.0, targets=[95.0, 90.0],
+        )
+        self.assertEqual(tp.targets, [95.0, 90.0])  # sorted descending
+        self.assertGreater(tp.stop_loss, 101.0)
+
+    def test_sell_rejects_stop_below_entry(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            self._base(recommendation="sell", stop_loss=95.0, targets=[90.0])
+
+    def test_hold_clears_actionable_levels(self):
+        tp = self._base(recommendation="hold")
+        self.assertIsNone(tp.entry_zone_low)
+        self.assertIsNone(tp.stop_loss)
+        self.assertEqual(tp.targets, [])
+        self.assertIsNone(tp.risk_reward)
+
+    def test_entry_zone_low_high_swapped_is_normalized(self):
+        tp = self._base(entry_zone_low=102.0, entry_zone_high=100.0)
+        self.assertEqual(tp.entry_zone_low, 100.0)
+        self.assertEqual(tp.entry_zone_high, 102.0)
+
+    def test_parsed_from_analysis_reply(self):
+        raw = (
+            "```json\n" + json.dumps({
+                "summary": "AAPL is in a clean uptrend with MTF alignment.",
+                "trend": "bullish", "confidence": 0.78,
+                "supporting_factors": [], "risk_factors": [],
+                "timeframe_conflicts": [], "key_levels": [],
+                "trade_plan": {
+                    "recommendation": "buy", "conviction": "high",
+                    "time_horizon": "position",
+                    "entry_zone_low": 314, "entry_zone_high": 316,
+                    "stop_loss": 309, "targets": [322, 330],
+                    "risk_reward": 5.0,
+                    "thesis": "Daily uptrend, buy the dip to support.",
+                    "invalidation": "Loss of the 309 shelf on a closing basis.",
+                },
+            }) + "\n```"
+        )
+        r = parse_ai_reply(raw)
+        self.assertIsNotNone(r.trade_plan)
+        self.assertEqual(r.trade_plan.recommendation, "buy")
+        # AI's claimed risk_reward (5.0) is overridden by the recompute.
+        self.assertNotEqual(r.trade_plan.risk_reward, 5.0)
 
 
 # --- build_user_prompt ----------------------------------------------
@@ -485,9 +569,27 @@ class TestNoIndicatorRecalculation(unittest.TestCase):
     def test_prompt_uses_phrase_never_invent(self):
         self.assertIn("do not invent", SYSTEM_PROMPT.lower())
 
-    def test_prompt_never_recommends_trade_orders(self):
-        # Per spec: "Do not make AI issue trade orders."
-        self.assertIn("trade order", SYSTEM_PROMPT.lower())
+    def test_advisory_prompt_produces_a_trade_plan(self):
+        # 2026-09-10: MarketLens moved from analyst-only to analyst +
+        # advisor. The default SYSTEM_PROMPT now asks for a trade_plan;
+        # SYSTEM_PROMPT_ANALYST_ONLY (used by the digest) still doesn't.
+        from backend.ai.prompt import SYSTEM_PROMPT_ANALYST_ONLY
+
+        self.assertIn("trade_plan", SYSTEM_PROMPT.lower())
+        self.assertIn("recommendation", SYSTEM_PROMPT.lower())
+        self.assertNotIn("trade_plan", SYSTEM_PROMPT_ANALYST_ONLY.lower())
+        self.assertIn("do not issue a trade plan", SYSTEM_PROMPT_ANALYST_ONLY.lower())
+
+    def test_both_prompts_still_forbid_overriding_engine_numbers(self):
+        # The advisory shift did NOT relax the "engine's quant numbers
+        # are ground truth" rule — the AI proposes entry/stop/target
+        # PRICES, never recomputes trend/confidence/indicators.
+        from backend.ai.prompt import SYSTEM_PROMPT_ANALYST_ONLY
+
+        for p in (SYSTEM_PROMPT, SYSTEM_PROMPT_ANALYST_ONLY):
+            lower = p.lower()
+            self.assertIn("never compute", lower)
+            self.assertIn("never override", lower)
 
 
 if __name__ == "__main__":

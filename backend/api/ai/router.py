@@ -33,6 +33,7 @@ from ...ai import (
     ai_manager,
 )
 from ...ai.analyze import analyze_symbol
+from ...ai.prompt import TradePlan
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
 from ..rate_limit import _ai_limiter, check_rate_limit
@@ -89,6 +90,9 @@ class AnalyzeResponse(BaseModel):
     risk_factors: list[str]
     timeframe_conflicts: list[str]
     key_levels: list[str]
+    # The advisory layer — present when analysis ran in advisor mode
+    # (the default) and the AI produced a plan; null otherwise.
+    trade_plan: TradePlan | None = None
     provider: str = "unknown"
     model: str = "unknown"
     is_uncertain: bool = False
@@ -199,6 +203,7 @@ async def analyze(
         risk_factors=result.risk_factors,
         timeframe_conflicts=result.timeframe_conflicts,
         key_levels=result.key_levels,
+        trade_plan=result.trade_plan,
         provider=result.provider,
         model=result.model,
         is_uncertain=isinstance(result, UncertaintyResponse),

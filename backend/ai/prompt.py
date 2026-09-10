@@ -26,7 +26,7 @@ import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # --- Response model -------------------------------------------------
 
@@ -38,6 +38,85 @@ TrendLabel = Literal[
     "mixed",
     "uncertain",
 ]
+
+TradeAction = Literal["buy", "sell", "hold", "avoid"]
+Conviction = Literal["low", "medium", "high"]
+TimeHorizon = Literal["scalp", "swing", "position"]
+
+
+class TradePlan(BaseModel):
+    """The advisory layer: an explicit trade recommendation with entry
+    / stop / target levels. New 2026-09-10 — MarketLens moved from
+    analyst-only to analyst + advisor.
+
+    The AI proposes the entry / stop / target PRICES from its own
+    judgement (they are not restricted to engine-computed levels).
+    But the model_validator still enforces internal consistency — the
+    stop on the correct side of entry, targets in the right direction
+    and order, ``risk_reward`` recomputed from the actual numbers —
+    so a self-contradictory plan can't reach the UI. Fabricating the
+    ENGINE's quant numbers (trend / confidence / indicator values) is
+    still forbidden; that rule is unchanged.
+    """
+
+    recommendation: TradeAction
+    conviction: Conviction
+    time_horizon: TimeHorizon
+    entry_zone_low: float | None = Field(default=None, gt=0)
+    entry_zone_high: float | None = Field(default=None, gt=0)
+    stop_loss: float | None = Field(default=None, gt=0)
+    targets: list[float] = Field(default_factory=list, max_length=3)
+    risk_reward: float | None = Field(default=None, ge=0)
+    thesis: str = Field(..., min_length=10, max_length=1000)
+    invalidation: str = Field(..., min_length=5, max_length=500)
+
+    @field_validator("targets")
+    @classmethod
+    def _targets_positive(cls, v: list[float]) -> list[float]:
+        return [float(t) for t in v if t and t > 0]
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> "TradePlan":
+        if self.recommendation in ("hold", "avoid"):
+            # No actionable levels for a non-entry call — drop any the
+            # AI attached so the UI never renders a stop/target on a "hold".
+            self.entry_zone_low = self.entry_zone_high = self.stop_loss = None
+            self.targets = []
+            self.risk_reward = None
+            return self
+
+        lo, hi = self.entry_zone_low, self.entry_zone_high
+        if lo is not None and hi is not None and lo > hi:
+            self.entry_zone_low, self.entry_zone_high = hi, lo
+            lo, hi = hi, lo
+        entry_mid: float | None = None
+        if lo is not None and hi is not None:
+            entry_mid = (lo + hi) / 2
+        elif lo is not None:
+            entry_mid = lo
+        elif hi is not None:
+            entry_mid = hi
+
+        if self.recommendation == "buy":
+            if self.stop_loss is not None and entry_mid is not None and self.stop_loss >= entry_mid:
+                raise ValueError("buy plan: stop_loss must be below the entry zone")
+            if self.targets and entry_mid is not None and any(t <= entry_mid for t in self.targets):
+                raise ValueError("buy plan: targets must be above the entry zone")
+            self.targets = sorted(self.targets)
+        else:  # sell (short)
+            if self.stop_loss is not None and entry_mid is not None and self.stop_loss <= entry_mid:
+                raise ValueError("sell plan: stop_loss must be above the entry zone")
+            if self.targets and entry_mid is not None and any(t >= entry_mid for t in self.targets):
+                raise ValueError("sell plan: targets must be below the entry zone")
+            self.targets = sorted(self.targets, reverse=True)
+
+        # Recompute risk:reward (to the first target) from the actual
+        # numbers rather than trusting the AI's arithmetic.
+        if entry_mid is not None and self.stop_loss is not None and self.targets:
+            risk = abs(entry_mid - self.stop_loss)
+            reward = abs(self.targets[0] - entry_mid)
+            self.risk_reward = round(reward / risk, 2) if risk > 0 else None
+        return self
 
 
 # Found live 2026-09-09: llama3.2 (Ollama fallback) correctly followed
@@ -86,6 +165,10 @@ class AnalysisResponse(BaseModel):
     risk_factors: list[str] = Field(default_factory=list, max_length=10)
     timeframe_conflicts: list[str] = Field(default_factory=list, max_length=10)
     key_levels: list[str] = Field(default_factory=list, max_length=10)
+    # The advisory layer. Present when analyze_symbol() ran with
+    # advisory=True (the default); None for analyst-only calls (the
+    # digest) and for any reply where the AI omitted it. See TradePlan.
+    trade_plan: TradePlan | None = None
     # Which provider/model actually answered this call — set by
     # analyze_symbol() AFTER parsing/validation, never trusted from the
     # AI's own raw JSON (harmless either way since it's always
@@ -107,10 +190,24 @@ class AnalysisResponse(BaseModel):
         key = v.strip().lower().replace(" ", "_").replace("-", "_")
         return _TREND_SYNONYMS.get(key, v)
 
-    @field_validator("supporting_factors", "risk_factors", "timeframe_conflicts", "key_levels")
+    @field_validator(
+        "supporting_factors", "risk_factors", "timeframe_conflicts", "key_levels",
+        mode="before",
+    )
     @classmethod
-    def _strip_strings(cls, v: list[str]) -> list[str]:
-        return [s.strip() for s in v if s and s.strip()]
+    def _coerce_and_strip_strings(cls, v: Any) -> Any:
+        # Models sometimes return key_levels as raw numbers (242.76)
+        # rather than strings ("242.76 support") — coerce so a
+        # near-miss reply isn't thrown away over a type. Non-list
+        # input is left for the strict check to reject.
+        if not isinstance(v, list):
+            return v
+        out: list[str] = []
+        for item in v:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
 
 
 class UncertaintyResponse(BaseModel):
@@ -129,6 +226,8 @@ class UncertaintyResponse(BaseModel):
     risk_factors: list[str] = Field(default_factory=list)
     timeframe_conflicts: list[str] = Field(default_factory=list)
     key_levels: list[str] = Field(default_factory=list)
+    # An "I don't know" response never carries a trade plan.
+    trade_plan: TradePlan | None = None
     # Same provider/model attribution as AnalysisResponse — see its
     # comment. Reflects whichever provider was actually tried (e.g.
     # the one whose malformed reply produced this uncertainty), not
@@ -199,46 +298,87 @@ def parse_ai_reply(text: str | None) -> AnalysisResponse:
 # --- Prompt template ------------------------------------------------
 
 
-SYSTEM_PROMPT = """\
-You are MarketLens Analyst, a quant-augmented research assistant. \
-Your job is to summarize the structured quantitative context below \
-for a human trader, not to issue trade orders or override the \
-engine's own calculations.
-
-Rules you must follow:
+_ANALYST_RULES = """\
 1. Use only the numbers in the JSON context below. NEVER compute \
    indicators, prices, or percentages yourself. If a field is null \
    or missing, say so — do not invent a value.
-2. Your output is a single JSON object with EXACTLY these fields: \
-   "summary" (string, 1-3 sentences), "trend" (one of bullish, \
-   bearish, neutral, mixed, uncertain — NOT the context's own \
-   "uptrend"/"downtrend"/"sideways" labels; translate those to \
-   bullish/bearish/neutral respectively), "confidence" (number 0.0-1.0), \
-   "supporting_factors" (array of short strings, max 10), \
-   "risk_factors" (array, max 10), "timeframe_conflicts" (array, \
-   max 10, list timeframes that disagree with the primary trend), \
-   "key_levels" (array, max 10, key support/resistance prices as \
-   short strings).
-3. The quantitative engine has already computed trend, score, \
+2. The quantitative engine has already computed trend, score, \
    regime, and relative strength. Your "trend" field should agree \
    with the engine's "trend_state.direction" unless the cross-\
    timeframe evidence clearly contradicts it. If so, set trend to \
-   "mixed" and explain in timeframe_conflicts.
-4. "confidence" is YOUR estimate (0.0-1.0) of how much weight a \
+   "mixed" and explain in timeframe_conflicts. Translate the \
+   context's own "uptrend"/"downtrend"/"sideways" labels to \
+   bullish/bearish/neutral for the "trend" field.
+3. "confidence" is YOUR estimate (0.0-1.0) of how much weight a \
    trader should give this analysis. High values require multiple \
    confirming signals; low values indicate conflicting or sparse data.
-5. NEVER recommend buying, selling, or holding. NEVER mention target \
-   prices or stop losses. You are summarizing, not advising.
-6. Wrap the JSON in a single ```json ... ``` block. No prose outside \
-   the block.
-7. The context may include "news", "fundamentals", and "divergence" \
+4. The context may include "news", "fundamentals", and "divergence" \
    sections. Treat these as supporting evidence only — they may \
-   inform "supporting_factors" or "risk_factors" (e.g. a bearish \
-   headline, a stretched valuation, a bullish RSI divergence), but \
-   they must NEVER override the quant-derived "trend" field itself. \
-   If a section is empty or missing, it simply means that data \
-   wasn't available — do not treat its absence as evidence of \
-   anything.
+   inform "supporting_factors" or "risk_factors", but they must \
+   NEVER override the quant-derived "trend" field. An empty or \
+   missing section just means that data wasn't available — its \
+   absence is not evidence of anything.
+5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
+   the block."""
+
+
+# Analyst-only: no trade_plan. Used for batch callers (the digest) and
+# whenever analyze_symbol(advisory=False) is requested.
+SYSTEM_PROMPT_ANALYST_ONLY = f"""\
+You are MarketLens Analyst, a quant-augmented research assistant. \
+Summarize the structured quantitative context below for a human \
+trader. Do not issue a trade plan.
+
+Rules you must follow:
+{_ANALYST_RULES}
+6. Your output is a single JSON object with EXACTLY these fields: \
+   "summary" (string, 1-3 sentences), "trend" (bullish/bearish/\
+   neutral/mixed/uncertain), "confidence" (0.0-1.0), \
+   "supporting_factors" (array, max 10), "risk_factors" (array, \
+   max 10), "timeframe_conflicts" (array, max 10), "key_levels" \
+   (array, max 10, key support/resistance prices as short strings).
+"""
+
+
+# Analyst + advisor (the default). Adds the "trade_plan" object.
+SYSTEM_PROMPT = f"""\
+You are MarketLens Analyst & Advisor, a quant-augmented assistant for \
+a human trader. You summarize the structured quantitative context \
+below AND give an actionable trade plan. The engine's own \
+calculations (trend, score, regime, indicator values) are ground \
+truth — never override them — but the entry / stop / target prices \
+in your plan are your own reasoned proposal.
+
+Rules you must follow:
+{_ANALYST_RULES}
+6. Your output is a single JSON object with EXACTLY these fields: \
+   "summary" (string, 1-3 sentences), "trend" (bullish/bearish/\
+   neutral/mixed/uncertain), "confidence" (0.0-1.0), \
+   "supporting_factors" (array, max 10), "risk_factors" (array, \
+   max 10), "timeframe_conflicts" (array, max 10), "key_levels" \
+   (array, max 10), and "trade_plan" (object, see rule 7).
+7. "trade_plan" is an object with these fields:
+   - "recommendation": "buy" | "sell" | "hold" | "avoid"
+   - "conviction": "low" | "medium" | "high"
+   - "time_horizon": "scalp" | "swing" | "position"
+   - "entry_zone_low", "entry_zone_high": the price range to enter \
+     (numbers). Omit / null for "hold" and "avoid".
+   - "stop_loss": the price that invalidates the setup (number). For \
+     "buy" it MUST be below the entry zone; for "sell" above it. \
+     Omit for "hold"/"avoid".
+   - "targets": 1-3 price targets (numbers), in the trade's \
+     direction — above entry for "buy", below for "sell". Omit for \
+     "hold"/"avoid".
+   - "risk_reward": your reward-to-risk ratio to the first target \
+     (number). It will be recomputed from your own entry/stop/target \
+     numbers, so keep them consistent.
+   - "thesis": 1-3 sentences on why this trade.
+   - "invalidation": one plain sentence — what would tell the trader \
+     the idea is wrong (beyond just the stop being hit).
+   Base the plan on the quant context. If the picture is genuinely \
+   unclear, use "hold" or "avoid" with low conviction rather than \
+   forcing a setup. This is research to inform a trader's own \
+   decision, not a directive.
 """
 
 
@@ -407,9 +547,10 @@ class ChatReplyResponse(BaseModel):
 
 
 CHAT_SYSTEM_PROMPT = """\
-You are MarketLens Analyst, having a back-and-forth conversation with \
-a human trader about one symbol — not issuing trade orders or \
-overriding the engine's own calculations.
+You are MarketLens Analyst & Advisor, having a back-and-forth \
+conversation with a human trader about one symbol. The engine's own \
+calculations (trend, score, indicator values) are ground truth — \
+never override them.
 
 Rules you must follow:
 1. Use only the numbers in the JSON context below. NEVER compute \
@@ -425,8 +566,12 @@ Rules you must follow:
    (boolean — true if you had enough context to answer, false if \
    you're saying you don't have enough data), and "wants_reanalysis" \
    (boolean, default false).
-4. NEVER recommend buying, selling, or holding. NEVER mention target \
-   prices or stop losses. You are discussing, not advising.
+4. You MAY give trade guidance when asked — a directional call, \
+   entry / stop / target ideas, position-sizing thoughts — as long \
+   as it's grounded in the context above. Always state what would \
+   invalidate the idea, and be explicit when conviction is low or \
+   the data is thin. It's research to inform the trader's own \
+   decision, not a directive.
 5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block.
 6. Set "wants_reanalysis" to true ONLY when the trader explicitly asks \

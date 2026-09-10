@@ -31,6 +31,7 @@ from backend.ai.context import AnalysisContext, InsufficientDataError, build_con
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import (
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_ANALYST_ONLY,
     AnalysisResponse,
     UncertaintyResponse,
     build_user_prompt,
@@ -47,6 +48,7 @@ def analyze_symbol(
     max_tokens: int | None = None,
     temperature: float | None = None,
     system_prompt_override: str | None = None,
+    advisory: bool = True,
 ) -> AnalysisResponse | UncertaintyResponse:
     """Run a full AI analysis for ``symbol``.
 
@@ -72,6 +74,11 @@ def analyze_symbol(
         system_prompt_override: If provided, use this rendered system prompt
             instead of the built-in ``SYSTEM_PROMPT``. Used when a saved
             user template is selected for the request.
+        advisory: When True (default) the AI also produces a
+            ``trade_plan`` (recommendation + entry/stop/targets). When
+            False it stays analyst-only — used by batch callers like the
+            digest that only want the read. Ignored if
+            ``system_prompt_override`` is set.
     """
     # --- Step 1: gather structured quant context ---
     ctx: AnalysisContext | None = None
@@ -86,7 +93,10 @@ def analyze_symbol(
         raise
 
     # --- Step 2: ask the AI ---
-    system_prompt = system_prompt_override if system_prompt_override else SYSTEM_PROMPT
+    if system_prompt_override:
+        system_prompt = system_prompt_override
+    else:
+        system_prompt = SYSTEM_PROMPT if advisory else SYSTEM_PROMPT_ANALYST_ONLY
     ai_resp = ai_manager.complete(
         prompt=build_user_prompt(ctx.to_dict()),
         system=system_prompt,

@@ -4076,6 +4076,83 @@ h4 {
 .ai-conflict h3 { color: #f59e0b; }
 .ai-levels h3 { color: var(--accent-primary); }
 
+/* --- Trade Setup (advisory) --- */
+.ai-trade-plan {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.ai-trade-plan h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  color: var(--text-primary);
+}
+
+.ai-trade-plan .tp-rec {
+  color: #fff;
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.03em;
+}
+
+.ai-trade-plan .tp-meta {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.tp-levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.35rem 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.tp-level {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+}
+
+.tp-level span {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.tp-level b {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-thesis {
+  margin: 0.4rem 0 0.3rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.tp-invalidation {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.tp-disclaimer {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .ai-footer {
   border-top: 1px solid var(--border);
   padding-top: 0.5rem;

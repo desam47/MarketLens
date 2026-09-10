@@ -36,6 +36,15 @@ function confidenceLabel(c: number): string {
   return `${Math.round(c * 100)}%`;
 }
 
+function recColor(rec: string): string {
+  if (rec === 'buy') return '#10b981';
+  if (rec === 'sell') return '#ef4444';
+  return '#9ca3af'; // hold / avoid
+}
+
+const money = (n: number): string =>
+  '$' + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
 function providerLabel(provider: string): string {
   // Translate internal provider ids to user-visible names.
   const map: Record<string, string> = {
@@ -330,6 +339,64 @@ export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelPro
           <div className="ai-summary">
             <p>{analysis.summary}</p>
           </div>
+
+          {analysis.trade_plan && (
+            <div className="ai-section ai-trade-plan">
+              <h3>
+                📋 Trade Setup
+                <span
+                  className="tp-rec"
+                  style={{ backgroundColor: recColor(analysis.trade_plan.recommendation) }}
+                >
+                  {analysis.trade_plan.recommendation.toUpperCase()}
+                </span>
+                <span className="tp-meta">
+                  {analysis.trade_plan.conviction} conviction · {analysis.trade_plan.time_horizon}
+                </span>
+              </h3>
+
+              {(analysis.trade_plan.recommendation === 'buy'
+                || analysis.trade_plan.recommendation === 'sell') && (
+                <div className="tp-levels">
+                  {analysis.trade_plan.entry_zone_low != null && (
+                    <div className="tp-level">
+                      <span>Entry</span>
+                      <b>
+                        {money(analysis.trade_plan.entry_zone_low)}
+                        {analysis.trade_plan.entry_zone_high != null
+                          && analysis.trade_plan.entry_zone_high !== analysis.trade_plan.entry_zone_low
+                          && ` – ${money(analysis.trade_plan.entry_zone_high)}`}
+                      </b>
+                    </div>
+                  )}
+                  {analysis.trade_plan.stop_loss != null && (
+                    <div className="tp-level">
+                      <span>Stop</span><b>{money(analysis.trade_plan.stop_loss)}</b>
+                    </div>
+                  )}
+                  {analysis.trade_plan.targets.length > 0 && (
+                    <div className="tp-level">
+                      <span>Targets</span>
+                      <b>{analysis.trade_plan.targets.map(money).join('  ·  ')}</b>
+                    </div>
+                  )}
+                  {analysis.trade_plan.risk_reward != null && (
+                    <div className="tp-level">
+                      <span>R : R</span><b>{analysis.trade_plan.risk_reward.toFixed(2)}</b>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <p className="tp-thesis">{analysis.trade_plan.thesis}</p>
+              <p className="tp-invalidation">
+                <b>Invalidation:</b> {analysis.trade_plan.invalidation}
+              </p>
+              <p className="tp-disclaimer">
+                Research to inform your own decision — not personalized financial advice.
+              </p>
+            </div>
+          )}
 
           {analysis.supporting_factors.length > 0 && (
             <div className="ai-section ai-bullish">

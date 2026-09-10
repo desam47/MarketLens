@@ -135,7 +135,7 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
             {clearing ? '⟳' : '🗑 Clear'}
           </button>
         </div>
-        <p className="info-text">Grounded in the current quant context — not a trade advisor.</p>
+        <p className="info-text">Grounded in the current quant context. Research to inform your own decision, not financial advice.</p>
       </div>
 
       {error && (

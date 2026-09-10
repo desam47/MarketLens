@@ -485,6 +485,21 @@ export interface NLSearchResponse {
 }
 
 // Phase 16: AI analysis types
+
+// The advisory layer (2026-09-10 — analyst → analyst + advisor).
+export interface TradePlan {
+  recommendation: 'buy' | 'sell' | 'hold' | 'avoid';
+  conviction: 'low' | 'medium' | 'high';
+  time_horizon: 'scalp' | 'swing' | 'position';
+  entry_zone_low: number | null;
+  entry_zone_high: number | null;
+  stop_loss: number | null;
+  targets: number[];
+  risk_reward: number | null;
+  thesis: string;
+  invalidation: string;
+}
+
 export interface AIAnalysisResult {
   summary: string;
   trend: string;
@@ -493,6 +508,7 @@ export interface AIAnalysisResult {
   risk_factors: string[];
   timeframe_conflicts: string[];
   key_levels: string[];
+  trade_plan?: TradePlan | null;
   provider: string;
   model: string;
   is_uncertain: boolean;

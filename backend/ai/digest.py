@@ -122,7 +122,9 @@ def build_digest_payload(watchlist_id: int | None = None, db=None) -> dict[str, 
             "symbol": r.symbol,
             "score": round(_safe_call(r.calculate_signed_total_score, default=0.0), 2),
         }
-        analysis = _safe_call(analyze_symbol, r.symbol, default=None)
+        # advisory=False: the digest is a descriptive read, not a place
+        # for per-mover trade plans.
+        analysis = _safe_call(analyze_symbol, r.symbol, advisory=False, default=None)
         if analysis is not None and not getattr(analysis, "is_uncertain", True):
             entry["blurb"] = analysis.summary
         return entry
