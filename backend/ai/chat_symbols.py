@@ -57,6 +57,13 @@ _CHAT_STOPWORDS = {
     "Q1", "Q2", "Q3", "Q4", "FY", "H1", "H2", "TTM", "MRQ",
     "BUY", "SELL", "HOLD", "LONG", "CALL", "PUT", "BID", "ASK", "GAP", "RUN",
     "EV", "ESG", "AUM", "NAV", "OTC", "SEC", "IRS", "GAAP", "DIP", "PDT",
+    # conversational filler — blocks a needless AI name->ticker lookup on
+    # a message that names no company (still forced through by a cashtag).
+    "ABOUT", "DOING", "GOING", "LOOKS", "LOOKING", "THINK", "THINKS", "TODAY",
+    "TONIGHT", "MAYBE", "REALLY", "BETTER", "WORSE", "SHOULD", "WOULD", "COULD",
+    "AGAIN", "STILL", "BEING", "GONNA", "WANNA", "PLEASE", "THANKS", "GUESS",
+    "PRETTY", "QUITE", "THING", "STUFF", "OKAY", "SURE", "WELL", "KNOW", "WANT",
+    "NEED", "MAKE", "TAKE", "LOOK", "FEEL", "SEEM", "SEEMS", "VERY", "MOVING",
 }
 
 # Cashtag / caret / explicit forms are high-confidence and skip shape
@@ -74,6 +81,39 @@ _RE_BARE_METRIC = re.compile(
     r"target|targets|valuation|multiple|support|resistance|trend|dividend|yield|"
     r"buyback|earnings|revenue|catalyst)\b", re.I)
 _RE_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}\b")
+_RE_ALPHA_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z.'&-]{3,}\b")
+
+# Common company / index names -> ticker. Deterministic, case-insensitive;
+# checked before the AI name->ticker fallback. Values not already in the
+# known set are still live-quote validated.
+_NAME_TO_TICKER: dict[str, str] = {
+    "alphabet": "GOOGL", "google": "GOOGL",
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "amazon": "AMZN",
+    "tesla": "TSLA",
+    "nvidia": "NVDA",
+    "meta platforms": "META", "meta": "META", "facebook": "META",
+    "netflix": "NFLX",
+    "broadcom": "AVGO",
+    "palantir": "PLTR",
+    "advanced micro devices": "AMD",
+    "intel": "INTC",
+    "coinbase": "COIN",
+    "robinhood": "HOOD",
+    "berkshire hathaway": "BRK.B", "berkshire": "BRK.B",
+    "walmart": "WMT",
+    "disney": "DIS",
+    "the s&p": "SPY", "s&p 500": "SPY", "s&p500": "SPY", "sp500": "SPY", "spx": "SPY",
+    "the nasdaq": "QQQ", "nasdaq 100": "QQQ", "ndx": "QQQ",
+    "the dow": "DIA", "dow jones": "DIA",
+    "russell 2000": "IWM",
+}
+_RE_NAME = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_NAME_TO_TICKER, key=len, reverse=True))
+    + r")\b",
+    re.I,
+)
 
 # Phrases that stand in for a group; matched (and masked) before the
 # bare-token pass. -> [] means "no specific ticker" (the market baseline
@@ -235,6 +275,24 @@ def _mask(text: str) -> tuple[str, list[str]]:
     return text, proxies
 
 
+def _looks_like_name(text: str) -> bool:
+    """Worth one AI name->ticker lookup? True for a capitalized proper
+    noun, or any 4+ char word left after group-phrase masking that isn't
+    a stopword, a metric term, or conversational filler."""
+    if _RE_PROPER_NOUN.search(text):
+        return True
+    masked, _ = _mask(text)
+    for m in _RE_ALPHA_TOKEN.finditer(masked):
+        w = m.group(0).strip(".'&-")
+        if (
+            w
+            and w.upper() not in _CHAT_STOPWORDS
+            and not _RE_BARE_METRIC.fullmatch(w.lower())
+        ):
+            return True
+    return False
+
+
 def extract_symbols(text: str) -> list[str]:
     """Tickers named in a single message (no carry-forward, no AI).
 
@@ -271,6 +329,20 @@ def extract_symbols(text: str) -> list[str]:
         hits.append((m.start(), m.group(1).rstrip(".-").upper()))
     for _, sym in sorted(hits):
         add(sym)
+
+    # Company / index names -> ticker ("what about google" -> GOOGL).
+    # Case-insensitive; targets not in the known set are live-quote
+    # validated so a name never injects an untradeable symbol.
+    name_targets = [
+        (m.start(), _NAME_TO_TICKER[re.sub(r"\s+", " ", m.group(1).lower())])
+        for m in _RE_NAME.finditer(masked)
+    ]
+    if name_targets:
+        need = [tk for _, tk in name_targets if tk not in known]
+        ok = _validate_unknown(need) if need else set()
+        for _, tk in sorted(name_targets):
+            if tk in known or tk in ok:
+                add(tk)
 
     strong = set(seen)
 
@@ -379,8 +451,8 @@ def resolve_turn_symbols(
         # Pronoun / bare-metric follow-up -> inherit the prior topic.
         if _RE_PRONOUN.search(user_content) or _RE_BARE_METRIC.search(user_content):
             add_all(_carry_forward(transcript))
-        # Still nothing, but a proper noun is present -> try the AI map.
-        if not resolved and settings.ai.chat_symbol_ai_fallback and _RE_PROPER_NOUN.search(user_content):
+        # Still nothing, but the message names something -> try the AI map.
+        if not resolved and settings.ai.chat_symbol_ai_fallback and _looks_like_name(user_content):
             add_all(_ai_resolve_name(user_content))
 
     cap = settings.ai.chat_max_tickers

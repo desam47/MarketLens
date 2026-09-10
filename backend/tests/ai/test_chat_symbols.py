@@ -164,16 +164,33 @@ class TestResolveTurnSymbols(_Base):
     @patch.object(chat_symbols, "_ai_resolve_name")
     def test_ai_fallback_off(self, mock_ai):
         with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", False):
-            syms, _ = chat_symbols.resolve_turn_symbols("how is Nvidia doing", [], [])
+            syms, _ = chat_symbols.resolve_turn_symbols("how is Rivian doing", [], [])
         self.assertEqual(syms, [])
         mock_ai.assert_not_called()
 
-    @patch.object(chat_symbols, "_ai_resolve_name", return_value=["NVDA"])
+    @patch.object(chat_symbols, "_ai_resolve_name", return_value=["RIVN"])
     def test_ai_fallback_on_resolves_name(self, mock_ai):
         with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", True):
-            syms, _ = chat_symbols.resolve_turn_symbols("how is Nvidia doing", [], [])
-        self.assertEqual(syms, ["NVDA"])
+            syms, _ = chat_symbols.resolve_turn_symbols("how is Rivian doing", [], [])
+        self.assertEqual(syms, ["RIVN"])
         mock_ai.assert_called_once()
+
+    @patch.object(chat_symbols, "_ai_resolve_name")
+    def test_ai_fallback_not_fired_on_market_wide_question(self, mock_ai):
+        with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", True):
+            syms, _ = chat_symbols.resolve_turn_symbols("how is the market doing today", [], [])
+        self.assertEqual(syms, [])
+        mock_ai.assert_not_called()
+
+    def test_company_name_resolves_without_ai(self):
+        self._patch_quotes({"GOOGL": _quote(160.0)})
+        with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", False):
+            syms, _ = chat_symbols.resolve_turn_symbols("what about google", [], [])
+        self.assertEqual(syms, ["GOOGL"])
+
+    def test_index_alias_resolves(self):
+        syms, _ = chat_symbols.resolve_turn_symbols("how's the nasdaq looking", [], [])
+        self.assertEqual(syms, ["QQQ"])
 
 
 if __name__ == "__main__":
