@@ -80,20 +80,21 @@ const srTypeLabel: Record<string, string> = {
   consolidation_zone: 'Zone',
 };
 
-// Display order for the S/R panel — today, prev day, this week, prev week, all time.
-// Lower number = higher in the list. Levels not in this map are appended at the end.
-const srTypeOrder: Record<string, number> = {
-  today_high: 0,
-  prev_day_high: 1,
-  this_week_high: 2,
-  prev_week_high: 3,
-  all_time_high: 4,
-  today_low: 0,
-  prev_day_low: 1,
-  this_week_low: 2,
-  prev_week_low: 3,
-  all_time_low: 4,
+// The S/R panels pair a level with its counterpart on the same row —
+// Today's High next to Today's Low, All Time High next to All Time Low,
+// etc. Grouping key = the type minus its _high/_low suffix; this map
+// orders those groups (period recency first, then swings/pivots/zones).
+const srBaseOrder: Record<string, number> = {
+  today: 0,
+  prev_day: 1,
+  this_week: 2,
+  prev_week: 3,
+  all_time: 4,
+  swing: 5,
+  pivot: 6,
+  consolidation_zone: 7,
 };
+const srBaseKey = (type: string): string => type.replace(/_(high|low)$/, '');
 
 function formatDelta(delta: number): string {
   return (delta > 0 ? '+' : '') + delta.toFixed(1);
@@ -197,23 +198,17 @@ const TransitionsPanel = memo(function TransitionsPanel({
 });
 
 // --- Price-range / Support & Resistance levels panels ---
-// Both render from the same /price-range data (SRLevel[]), differing in
-// which levels they include and — crucially — how a level is assigned to
-// the "up" or "down" column:
-//   'price-range'         — boundary levels only (today / prev-day / this-
-//                           week / prev-week / all-time high & low).
-//                           Column = the high/low in the type name
-//                           ("today's high" is the top of today's range
-//                           no matter where price sits now). Labelled
-//                           Top / Bottom, ordered by period.
-//   'support-resistance'  — every detected level (swings, pivots,
-//                           consolidation zones included). Column = price
-//                           vs the CURRENT price: anything above is
-//                           resistance, anything below is support —
-//                           regardless of how the level originally formed
-//                           (a pivot high price has since risen well above
-//                           now acts as support). Each column reads
-//                           nearest-to-price first. Labelled
+// Both render from the same /price-range data (SRLevel[]). Rows are
+// paired by base concept: a concept's high sits in the left column and
+// its low in the right column ON THE SAME ROW (Today's High | Today's
+// Low, All Time High | All Time Low, ...). Groups are ordered by
+// srBaseOrder; within a group the nearest level to the current price
+// comes first. `—` fills a side with no counterpart.
+//   'price-range'         — boundary concepts only (today / prev-day /
+//                           this-week / prev-week / all-time), labelled
+//                           Top / Bottom.
+//   'support-resistance'  — every concept, incl. swings, pivots and
+//                           consolidation zones, labelled
 //                           Resistance / Support.
 type SRPanelVariant = 'price-range' | 'support-resistance';
 
@@ -233,31 +228,35 @@ const SRPanel = memo(function SRPanel({
   const highLabel = isFullSR ? 'Resistance' : 'Top';
   const lowLabel = isFullSR ? 'Support' : 'Bottom';
 
-  // Support & Resistance: a level is resistance if it sits above the
-  // current price, support if below — full stop. Price Range: keyed by
-  // the high/low in the type name instead.
-  const isHighSide = (l: SRLevel): boolean => {
-    if (isFullSR) {
-      return latestClose != null ? l.price >= latestClose : l.type.includes('high');
-    }
-    return l.type.includes('high');
-  };
+  // Group by base concept, split each into high/low, then zip into
+  // paired rows so a concept's high and low line up.
+  const groups = new Map<string, { highs: SRLevel[]; lows: SRLevel[] }>();
+  for (const l of levels) {
+    if (!isFullSR && SR_TECHNICAL_TYPES.includes(l.type)) continue;
+    const base = srBaseKey(l.type);
+    if (!groups.has(base)) groups.set(base, { highs: [], lows: [] });
+    const g = groups.get(base)!;
+    const isHigh = l.type.endsWith('_high')
+      ? true
+      : l.type.endsWith('_low')
+        ? false
+        : latestClose != null ? l.price >= latestClose : true; // zone → by price
+    (isHigh ? g.highs : g.lows).push(l);
+  }
 
-  const forSide = (wantHigh: boolean): SRLevel[] => {
-    const picked = levels.filter(l => {
-      if (!isFullSR && SR_TECHNICAL_TYPES.includes(l.type)) return false;
-      return isHighSide(l) === wantHigh;
-    });
-    if (isFullSR) {
-      // Nearest level to the current price first.
-      const ref = latestClose ?? 0;
-      return [...picked].sort((a, b) => Math.abs(a.price - ref) - Math.abs(b.price - ref));
+  const rows: { high: SRLevel | null; low: SRLevel | null }[] = [];
+  const orderedBases = [...groups.keys()].sort(
+    (a, b) => (srBaseOrder[a] ?? 99) - (srBaseOrder[b] ?? 99),
+  );
+  for (const base of orderedBases) {
+    const g = groups.get(base)!;
+    const highs = [...g.highs].sort((a, b) => a.price - b.price); // nearest above first
+    const lows = [...g.lows].sort((a, b) => b.price - a.price);   // nearest below first
+    for (let i = 0; i < Math.max(highs.length, lows.length); i++) {
+      rows.push({ high: highs[i] ?? null, low: lows[i] ?? null });
     }
-    return [...picked].sort((a, b) => (srTypeOrder[a.type] ?? 99) - (srTypeOrder[b.type] ?? 99));
-  };
-
-  const resistances = forSide(true);
-  const supports = forSide(false);
+  }
+  const shownRows = isFullSR ? rows : rows.slice(0, 8);
 
   return (
     <div className="card analysis-card">
@@ -268,18 +267,12 @@ const SRPanel = memo(function SRPanel({
           <span className="price-value">${strPrice(latestClose)}</span>
         </div>
       )}
-      {levels.length === 0 ? (
+      {shownRows.length === 0 ? (
         <p className="empty-state">No levels detected</p>
       ) : (
         <div className="sr-grid">
           {(['high', 'low'] as const).map(side => {
             const label = side === 'high' ? highLabel : lowLabel;
-            const allItems = side === 'high' ? resistances : supports;
-            // Price Range shows the top 8 boundary levels; Support &
-            // Resistance shows all of them — capping at 8 there was
-            // silently dropping the swing / pivot rows. The backend
-            // already caps the total at max_levels=20.
-            const items = isFullSR ? allItems : allItems.slice(0, 8);
             const color = side === 'high' ? '#ef4444' : '#10b981';
             return (
               <div key={side} className="sr-column">
@@ -294,16 +287,18 @@ const SRPanel = memo(function SRPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((l, i) => {
+                    {shownRows.map((r, i) => {
+                      const l = side === 'high' ? r.high : r.low;
+                      if (!l) {
+                        return <tr key={i}><td colSpan={4} className="empty-cell">—</td></tr>;
+                      }
                       // Signed % from current price: + above, − below.
-                      // Computed here rather than from l.distance_from_price
-                      // — the backend field is unreliable for consolidation
-                      // zones (it reports absurd values like 26397%).
-                      const dist = (isFullSR && latestClose)
+                      // Computed here, not from l.distance_from_price —
+                      // that backend field is unreliable for consolidation
+                      // zones (reports absurd values like 26397%).
+                      const dist = latestClose
                         ? ((l.price - latestClose) / latestClose) * 100
-                        : l.distance_from_price != null
-                          ? (side === 'low' ? -Math.abs(l.distance_from_price) : Math.abs(l.distance_from_price))
-                          : null;
+                        : null;
                       return (
                         <tr key={i}>
                           <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
@@ -320,9 +315,6 @@ const SRPanel = memo(function SRPanel({
                         </tr>
                       );
                     })}
-                    {items.length === 0 && (
-                      <tr><td colSpan={4} className="empty-cell">—</td></tr>
-                    )}
                   </tbody>
                 </table>
               </div>
