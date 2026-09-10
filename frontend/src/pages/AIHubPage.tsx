@@ -3,17 +3,17 @@
  *
  * Layout (from the ai-advisor-page-design workflow): a single vertical
  * scroll of always-mounted sections with a sticky section-jump nav.
- *   - Symbol-scoped: AI Analysis (incl. the Trade Setup / advisor
- *     block), Chat, Templates — driven by the page's symbol picker.
+ *   - Symbol-scoped: Chat, then AI Analysis (incl. the Trade Setup /
+ *     advisor block), then Templates — driven by the page's symbol picker.
  *   - Market-wide: the premarket/close AI Digest and AI Stock Search
  *     (picking a result repoints the symbol-scoped sections in place,
  *     without leaving the page).
  *
- * AIAnalysisPanel renders FIRST and stays mounted: AITemplatesPanel's
+ * The Analysis section must stay ABOVE Templates: AITemplatesPanel's
  * "⏱ Background" button reaches out of React to
- * document.getElementById('ai-analysis-panel').runBackground(), so the
- * Analysis section must precede the Templates section (same implicit
- * contract SymbolPage had before these panels moved here).
+ * document.getElementById('ai-analysis-panel').runBackground(), so it
+ * must be mounted first (same implicit contract SymbolPage had before
+ * these panels moved here). Chat above Analysis is fine.
  */
 import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { PageErrorBoundary } from '../components/PageErrorBoundary';
@@ -40,8 +40,8 @@ interface AIHubPageProps {
 }
 
 const SECTIONS = [
-  { id: 'analysis', label: 'Analysis' },
   { id: 'chat', label: 'Chat' },
+  { id: 'analysis', label: 'Analysis' },
   { id: 'templates', label: 'Templates' },
   { id: 'digest', label: 'Digest' },
   { id: 'search', label: 'Search' },
@@ -51,7 +51,7 @@ type SectionId = typeof SECTIONS[number]['id'];
 export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   const [timeframe, setTimeframe] = useState('1d');
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
-  const [activeSection, setActiveSection] = useState<SectionId>('analysis');
+  const [activeSection, setActiveSection] = useState<SectionId>('chat');
 
   // The header ↻ and the SymbolInput submit re-key AITemplatesPanel only.
   // Re-mounting AIAnalysisPanel would orphan an in-flight billable
@@ -131,18 +131,21 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         ))}
       </nav>
 
-      <section id="hub-analysis" className="ai-hub-section">
-        <PageErrorBoundary pageName="AI Analysis">
-          <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
-            <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-          </Suspense>
-        </PageErrorBoundary>
-      </section>
-
       <section id="hub-chat" className="ai-hub-section">
         <PageErrorBoundary pageName="AI Chat">
           <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
             <ChatPanel symbol={symbol} />
+          </Suspense>
+        </PageErrorBoundary>
+      </section>
+
+      {/* Analysis stays ABOVE Templates: AITemplatesPanel's "⏱ Background"
+          button calls document.getElementById('ai-analysis-panel').runBackground()
+          out of React, so the Analysis section must render before it. */}
+      <section id="hub-analysis" className="ai-hub-section">
+        <PageErrorBoundary pageName="AI Analysis">
+          <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
+            <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
           </Suspense>
         </PageErrorBoundary>
       </section>
