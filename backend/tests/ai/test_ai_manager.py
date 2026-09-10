@@ -527,6 +527,44 @@ class TestAIManager(unittest.TestCase):
         m = self._make_manager(provider="ollama", fallback_providers="openai")
         self.assertTrue(m.is_available())
 
+    # --- Health-check retry (found live 2026-09-09: GET /v1/models is ---
+    # --- flakier than the actual completion endpoint) -------------------
+
+    @patch("backend.ai.manager.time.sleep")
+    @patch.object(OpenAICompatibleProvider, "health_check")
+    def test_is_available_retries_transient_health_check_failure(self, mock_hc, mock_sleep):
+        # First check fails, retry succeeds — is_available() must not
+        # report the provider unhealthy over one transient blip.
+        mock_hc.side_effect = [False, True]
+        m = self._make_manager(provider="ollama")
+        self.assertTrue(m.is_available())
+        self.assertEqual(mock_hc.call_count, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("backend.ai.manager.time.sleep")
+    @patch.object(OpenAICompatibleProvider, "health_check", return_value=False)
+    def test_is_available_false_when_retry_also_fails(self, mock_hc, mock_sleep):
+        # A genuinely-down provider still reports unhealthy — the retry
+        # absorbs transient flakiness, it doesn't mask a real outage.
+        m = self._make_manager(provider="ollama")
+        self.assertFalse(m.is_available())
+        self.assertEqual(mock_hc.call_count, 2)
+
+    @patch("backend.ai.manager.time.sleep")
+    @patch.object(OpenAICompatibleProvider, "health_check")
+    def test_status_retries_transient_health_check_failure(self, mock_hc, mock_sleep):
+        mock_hc.side_effect = [False, True]
+        m = self._make_manager(provider="ollama")
+        s = m.status()
+        self.assertTrue(s[0].healthy)
+
+    @patch.object(OpenAICompatibleProvider, "health_check", return_value=True)
+    def test_is_available_no_retry_when_first_check_succeeds(self, mock_hc):
+        # The common healthy case shouldn't pay for a retry it doesn't need.
+        m = self._make_manager(provider="ollama")
+        self.assertTrue(m.is_available())
+        self.assertEqual(mock_hc.call_count, 1)
+
 
 # --- Fallback providers get their own defaults, not the primary's --
 

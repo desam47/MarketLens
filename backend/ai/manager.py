@@ -12,7 +12,8 @@ It exposes three primitives:
   is unreachable — never raises for these "expected" unavailability
   modes so callers can treat "no AI answer" as a normal outcome.
 - ``is_available()``: True if at least one provider in the chain
-  passes a health check. Useful for UI badges.
+  passes a health check (retried once on failure — see
+  ``_healthy()``). Useful for UI badges.
 - ``status()``: per-provider health snapshot for dashboards.
 
 API keys are read from settings and never appear in any ``status()``
@@ -22,6 +23,7 @@ when surfacing the manager to a UI.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -233,11 +235,32 @@ class AIManager:
 
     # --- Internals -----------------------------------------------------
 
+    # A health check that fails is retried once, after a short pause,
+    # before the provider is actually reported unhealthy. Scoped to
+    # this status-facing check only (is_available()/status(), i.e. the
+    # UI badge) — deliberately NOT applied to complete()'s own
+    # per-attempt gate, which calls provider.health_check() directly:
+    # that gate already has a real fallback chain to fall through to
+    # on a miss, so retrying there would only add latency without
+    # changing what the caller sees.
+    #
+    # Found live 2026-09-09: the primary gateway's health-check
+    # endpoint (GET /v1/models) was flakier than its actual completion
+    # endpoint (POST /v1/chat/completions) — /api/ai/status sometimes
+    # reported the primary unhealthy even though a real analysis call
+    # through it succeeded moments later. A single retry absorbs that
+    # kind of transient blip; a genuinely-down provider still reports
+    # unhealthy (just ~_HEALTH_RETRY_DELAY seconds slower).
+    _HEALTH_RETRY_DELAY = 0.25
+
     def _healthy(self, name: str) -> bool:
         try:
             provider = self._get_provider(name)
         except ValueError:
             return False
+        if provider.health_check():
+            return True
+        time.sleep(self._HEALTH_RETRY_DELAY)
         return provider.health_check()
 
 
