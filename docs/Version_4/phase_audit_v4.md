@@ -1,8 +1,8 @@
 # Version 4 Phase Audit
 
-**Last updated:** 2026-09-09 (Phase 4.1 addendum: AI Stock Search hardened — correctness, latency, and config fixes found by actually using it live)
-**Status:** Active.
-**Scope:** AI integration (enable + validate the existing subsystem end-to-end), then Charts (deferred within this version, not dropped).
+**Last updated:** 2026-09-09 (Charts moved out to Version 5 — v4's scope is now AI integration only)
+**Status:** Active. Phase 4.1 (the only remaining phase in v4's scope) is done.
+**Scope:** AI integration — enable + validate the existing subsystem end-to-end. Charts was carried here from Version 3 (deferred, never started) and has now moved on to Version 5 instead of staying a secondary phase — see `docs/Version_5/`.
 
 ---
 
@@ -10,8 +10,8 @@
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 4.1 | Enable and Validate AI Integration End-to-End | ✅ DONE | Enabled `AI_ENABLED=true`; fixed an unregistered-provider-name config error and a real fallback-provider config-isolation bug; ran a live `/api/ai/analyze` call against a real provider. A follow-on hardening pass (4.1.9-4.1.16) then found and fixed 6 more live bugs across AI Stock Search and AI Analysis, purely from continuing to use the now-live feature. Full detail in `docs/Version_4/v4_plan.md`. |
-| 4.2 | Charts (drawing v1, line/area/HA, indicators) | ⬜ NOT STARTED | Deferred within v4 to make room for 4.1 — not dropped. Full scope in `docs/Version_4/v4_plan.md`. |
+| 4.1 | Enable and Validate AI Integration End-to-End | ✅ DONE | Enabled `AI_ENABLED=true`; fixed an unregistered-provider-name config error and a real fallback-provider config-isolation bug; ran a live `/api/ai/analyze` call against a real provider. A follow-on hardening pass (4.1.9-4.1.16) then found and fixed 8 more live bugs across AI Stock Search and AI Analysis, purely from continuing to use the now-live feature. Full detail in `docs/Version_4/v4_plan.md`. |
+| 4.2 | Charts (drawing v1, line/area/HA, indicators) | ⬜ MOVED TO V5 | Never started under v4. Moved out to open Version 5 as its own phase (5.1) instead of staying a secondary item here — full scope in `docs/Version_5/v5_plan.md`. Historical content (as planned while it lived in v4) kept in `docs/Version_4/v4_plan.md` for the record. |
 
 ---
 

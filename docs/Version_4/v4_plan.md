@@ -1,9 +1,9 @@
 # Version 4 — AI Integration
 
 **Date:** 2026-09-09
-**Last updated:** 2026-09-09 (Phase 4.1 addendum: hardening pass from continued live use — 8 more real bugs/issues found and fixed)
-**Status:** Active. Phase 4.1 in progress.
-**Scope:** Turn on and prove out the existing AI subsystem (providers, background jobs, prompt templates, `/api/ai/*` endpoints) end-to-end with a real provider, fixing whatever breaks. Charts (originally meant to open v4) is deferred within this version — see Phase 4.2 — not dropped.
+**Last updated:** 2026-09-09 (Charts moved out to Version 5 — see `docs/Version_5/`)
+**Status:** Active. Phase 4.1 done (4.1.1-4.1.16). Charts (was Phase 4.2) moved to Version 5 — v4's remaining scope is AI integration only.
+**Scope:** Turn on and prove out the existing AI subsystem (providers, background jobs, prompt templates, `/api/ai/*` endpoints) end-to-end with a real provider, fixing whatever breaks. Charts was originally meant to open v4, then deferred to Phase 4.2 within it — now moved out entirely to open Version 5 instead (`docs/Version_5/v5_plan.md`); historical content kept below for the record.
 
 ---
 
@@ -69,9 +69,18 @@ the AI_* settings do) kept surfacing independent, real issues. Same
 
 ---
 
-## Phase 4.2 — Charts (deferred within v4, not dropped)
+## Phase 4.2 — Charts — MOVED TO VERSION 5 (2026-09-09)
 
-Originally meant to open Version 4 (carried forward from Version 3's never-started Phase 3.4); bumped to make room for Phase 4.1. Full scope preserved below exactly as planned — nothing here has changed, only its position in the roadmap.
+**This phase no longer lives in Version 4.** Originally meant to open
+Version 4 (carried forward from Version 3's never-started Phase 3.4);
+bumped to make room for Phase 4.1, then — once 4.1 was done and
+hardened through several rounds of live-use fixes (see
+`phase_audit_v4.md` items 4.1.9-4.1.16) — moved out of v4 entirely to
+open Version 5 as its own phase (5.1) instead of staying a secondary
+item here. Canonical, going-forward copy: `docs/Version_5/v5_plan.md`.
+The content below is left in place as the historical as-planned
+record for when this scope still lived in v4 — nothing in it has
+changed, only where it's tracked going forward.
 
 **Why now (whenever this phase actually starts):** Charts are the most-visited surface. Drawing tools require manual timestamp entry (broken UX). Only one chart type (candlestick). Limited indicator set.
 
@@ -150,6 +159,6 @@ Originally meant to open Version 4 (carried forward from Version 3's never-start
 
 ## Open questions
 
-1. Once 4.1 is solid, what's the first real AI-powered *feature* to build on top (chat panel? scanner commentary? automated daily summary?) — separate decision, not part of this phase.
-2. Charts (4.2): re-attempt TradingView at some point, now that lightweight-charts has more mileage on it? Revisit only if lightweight-charts hits a real ceiling — no evidence of that yet.
-3. Charts (4.2): Renko/Kagi/P&F — gauge demand after v1 ships before scoping the data-transformation work.
+1. Now that 4.1 is done and hardened, what's the first real AI-powered *feature* to build on top (chat panel? scanner commentary? automated daily summary?) — separate decision, not resolved yet.
+
+Charts-specific open questions (TradingView re-attempt, Renko/Kagi/P&F demand) moved to `docs/Version_5/v5_plan.md` along with the rest of that scope.
