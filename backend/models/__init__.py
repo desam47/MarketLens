@@ -43,6 +43,9 @@ from .market_data_sql import (
 from .market_data_sql import (
     QuoteModel as QuoteModel,
 )
+from .market_data_sql import (
+    TapeBarModel as TapeBarModel,
+)
 
 # Import signal models
 from .signal import HistoricalSignal as HistoricalSignal

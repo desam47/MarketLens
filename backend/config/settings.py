@@ -780,6 +780,28 @@ class DigestSettings(BaseSettings):
     top_movers_count: int = Field(default=5, ge=1, le=20)
 
 
+class TapeSettings(BaseSettings):
+    """Time & Sales tape analytics (2026-09-10).
+
+    A rolling per-symbol engine over the Webull trade-tick stream:
+    signed volume / buy-sell pressure, tape speed, block detection. Off
+    unless ``TAPE_ENABLED=true`` (and the Webull MQTT stream running).
+    """
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="TAPE_", extra="ignore")
+    enabled: bool = Field(default=False)
+    window_seconds: int = Field(default=60, ge=5)
+    long_window_seconds: int = Field(default=300, ge=30)
+    fast_window_seconds: int = Field(default=15, ge=1)
+    bucket_seconds: int = Field(default=1, ge=1)
+    # A print is a "block" if its notional (price*size) OR raw size
+    # clears either threshold.
+    block_notional: float = Field(default=250_000.0, gt=0)
+    block_size: int = Field(default=10_000, gt=0)
+    # signed-volume z-score above which pressure is "heavy_buy"/"heavy_sell".
+    heavy_pressure_z: float = Field(default=2.0, gt=0)
+    retention_days: int = Field(default=2, ge=1)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
@@ -814,6 +836,7 @@ class Settings(BaseSettings):
     redis: RedisSettings = Field(default_factory=RedisSettings)
     background: BackgroundProcessingSettings = Field(default_factory=BackgroundProcessingSettings)
     ai_digest: DigestSettings = Field(default_factory=DigestSettings)
+    tape: TapeSettings = Field(default_factory=TapeSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 

@@ -80,6 +80,41 @@ class BarModel(Base):
         return f"<BarModel(symbol='{self.symbol}', timeframe='{self.timeframe}', open={self.open}, close={self.close}, timestamp='{self.timestamp}')>"
 
 
+class TapeBarModel(Base):
+    """1-second Time & Sales aggregate (2026-09-10).
+
+    Written by ``TapeEngine`` as each 1-second bucket closes — raw prints
+    stay in memory, only these aggregates are persisted (short retention,
+    ``TAPE_RETENTION_DAYS``). ``signed_volume`` = ``buy_volume`` -
+    ``sell_volume``; ``block_count`` = prints over the block threshold.
+    """
+    __tablename__ = "tape_bars"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), index=True, nullable=False)
+    timestamp = Column(DateTime, nullable=False, index=True)  # 1s bucket start, naive NY
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Integer, nullable=False, server_default="0")
+    buy_volume = Column(Integer, nullable=False, server_default="0")
+    sell_volume = Column(Integer, nullable=False, server_default="0")
+    signed_volume = Column(Integer, nullable=False, server_default="0")
+    trade_count = Column(Integer, nullable=False, server_default="0")
+    block_count = Column(Integer, nullable=False, server_default="0")
+    vwap = Column(Float, nullable=True)
+    provider = Column(String(50), nullable=False, server_default="webull_stream")
+
+    __table_args__ = (
+        Index('ix_tape_bars_symbol_timestamp', 'symbol', 'timestamp', unique=True),
+    )
+
+    def __repr__(self):
+        return (f"<TapeBarModel(symbol='{self.symbol}', timestamp='{self.timestamp}', "
+                f"signed_volume={self.signed_volume}, trades={self.trade_count})>")
+
+
 class MarketStatusModel(Base):
     """SQLAlchemy model for storing market status information"""
     __tablename__ = "market_status"

@@ -423,6 +423,24 @@ class Scanner:
             if volume > 1000000:  # Arbitrary threshold
                 signals.append("HIGH_VOLUME")
 
+            # Tape (Time & Sales) order-flow signals — only when the tape
+            # subsystem is enabled and streaming (best-effort; a cold
+            # engine just returns neutral / zero counts).
+            from backend.config.settings import settings as _settings
+            if _settings.tape.enabled:
+                try:
+                    from backend.api.tape.registry import get_tape_engine
+
+                    snap = get_tape_engine(result.symbol).get_snapshot()
+                    if snap["pressure"] == "heavy_buy":
+                        signals.append("HEAVY_BUY_PRESSURE")
+                    elif snap["pressure"] == "heavy_sell":
+                        signals.append("HEAVY_SELL_PRESSURE")
+                    if snap["block_count_5m"] > 0:
+                        signals.append("BLOCK_ACTIVITY")
+                except Exception:  # noqa: BLE001
+                    pass
+
             result.signals = signals
 
         except Exception as e:

@@ -33,6 +33,7 @@ from backend.version import get_version
 from backend.api.security_headers import SecurityHeadersMiddleware
 from backend.api.scanner.router import router as scanner_router
 from backend.api.scanner.ws_router import router as scanner_ws_router
+from backend.api.tape.router import router as tape_router
 from backend.api.signals.router import router as signals_router
 from backend.api.strategy_lab.router import router as strategy_lab_router
 from backend.api.structured_logging import configure_logging
@@ -185,6 +186,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Trend engine warmup failed: {e}")
 
+    # Tape (Time & Sales) analytics — pre-warm per-symbol engines + start
+    # the 1-second-bar persistence flusher. Off unless TAPE_ENABLED=true.
+    try:
+        if settings.tape.enabled:
+            from backend.api.tape.registry import warmup_tape_engines
+            warmed_tape = warmup_tape_engines()
+            logger.info("Tape engine warmup: %d symbols", len(warmed_tape))
+    except Exception as e:
+        logger.warning(f"Tape engine warmup failed: {e}")
+
     # Phase 3.6.2: pre-warm the market-context engine so the first
     # /api/market-context/current request hits a fully-seeded aggregate
     # (SPY/QQQ/IWM/VIX sub-regimes warm from 1d history + live-tick
@@ -248,6 +259,12 @@ async def lifespan(app: FastAPI):
             _stream.stop()
         except Exception as e:
             logger.warning(f"Webull stream shutdown failed: {e}")
+    if settings.tape.enabled:
+        try:
+            from backend.api.tape.registry import stop_tape_flusher
+            stop_tape_flusher()
+        except Exception as e:
+            logger.warning(f"Tape flusher shutdown failed: {e}")
     shutdown_tracing()
 
 
@@ -372,6 +389,7 @@ app.include_router(backtest_router)
 app.include_router(finnhub_router)
 app.include_router(scanner_router)
 app.include_router(scanner_ws_router)
+app.include_router(tape_router)
 app.include_router(realtime_router)
 app.include_router(analysis.router)
 app.include_router(market_context.router)

@@ -4,6 +4,7 @@ import api, {
   Divergence,
   ScanResult,
   SRLevel,
+  TapeSnapshot,
   Transition,
 } from '../services/api';
 import { parseET, formatETDate, formatETDateTime } from '../components/chartMath';
@@ -11,6 +12,7 @@ import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
+import { TapePressureCard } from '../components/TapePressureCard';
 import { SymbolInput } from '../components/SymbolInput';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -425,6 +427,9 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(true);
 
+  const [tape, setTape] = useState<TapeSnapshot | null>(null);
+  const [tapeDisabled, setTapeDisabled] = useState(false);
+
   const [timeframe, setTimeframe] = useState('1d');
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
 
@@ -495,6 +500,22 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     }
   }, [symbol, timeframe]);
 
+  const fetchTape = useCallback(async () => {
+    try {
+      const data = await api.getTape(symbol);
+      setTape(data.snapshot);
+      setTapeDisabled(false);
+    } catch (err: any) {
+      // 503 = tape streaming off; anything else is a real error.
+      if (String(err?.message || '').includes('503')) {
+        setTapeDisabled(true);
+      } else {
+        console.error('Failed to load tape:', err);
+      }
+      setTape(null);
+    }
+  }, [symbol]);
+
   const fetchScan = useCallback(async () => {
     setScanLoading(true);
     try {
@@ -514,7 +535,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     fetchDivergences();
     fetchBars();
     fetchScan();
-  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan]);
+    fetchTape();
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape]);
 
   useEffect(() => {
     fetchQuote();
@@ -539,6 +561,12 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   useEffect(() => {
     fetchScan();
   }, [fetchScan]);
+
+  useEffect(() => {
+    fetchTape();
+    const id = setInterval(fetchTape, 15000);
+    return () => clearInterval(id);
+  }, [fetchTape]);
 
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
@@ -614,6 +642,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
           />
         </div>
+        <TapePressureCard tape={tape} disabled={tapeDisabled} />
         <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
           <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>

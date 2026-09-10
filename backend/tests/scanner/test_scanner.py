@@ -301,6 +301,28 @@ class TestScanner(unittest.TestCase):
         self.assertIn("MULTI_TIMEFRAME_BULLISH", result.signals)
         self.assertIn("HIGH_VOLUME", result.signals)
 
+    def test_generate_signals_no_tape_signals_when_disabled(self):
+        result = ScanResult("AAPL", datetime.now())
+        result.indicator_values = {"rsi": 50}
+        result.trend_signals = {}
+        self.scanner._generate_signals(result)
+        self.assertNotIn("HEAVY_BUY_PRESSURE", result.signals)
+        self.assertNotIn("BLOCK_ACTIVITY", result.signals)
+
+    @patch("backend.config.settings.settings.tape")
+    @patch("backend.api.tape.registry.get_tape_engine")
+    def test_generate_signals_includes_tape_pressure_and_blocks(self, mock_get_engine, mock_tape_cfg):
+        mock_tape_cfg.enabled = True
+        mock_get_engine.return_value.get_snapshot.return_value = {
+            "pressure": "heavy_buy", "block_count_5m": 3,
+        }
+        result = ScanResult("AAPL", datetime.now())
+        result.indicator_values = {"rsi": 50}
+        result.trend_signals = {}
+        self.scanner._generate_signals(result)
+        self.assertIn("HEAVY_BUY_PRESSURE", result.signals)
+        self.assertIn("BLOCK_ACTIVITY", result.signals)
+
     @patch('backend.scanner.scanner.market_data_manager')
     def test_scan_symbols(self, mock_market_data_manager):
         """Test scanning multiple symbols.

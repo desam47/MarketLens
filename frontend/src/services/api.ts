@@ -1608,6 +1608,11 @@ class ApiService {
     return this.fetch<ScanResult>(`/scanner/${encodeURIComponent(symbol)}`);
   }
 
+  // Tape (Time & Sales) analytics — 2026-09-10. 503 when TAPE_ENABLED is off.
+  async getTape(symbol: string): Promise<TapeResponse> {
+    return this.fetch<TapeResponse>(`/tape/${encodeURIComponent(symbol)}`);
+  }
+
   // Phase 17: Natural-language search
   async nlSearch(payload: {
     query: string;
@@ -1946,6 +1951,30 @@ export interface AIDigest {
 }
 
 // ── Version 4 AI feature 4: conversational chat panel ────────────────────
+
+export interface TapeSnapshot {
+  symbol: string;
+  last_price: number | null;
+  pressure: 'heavy_buy' | 'buy' | 'neutral' | 'sell' | 'heavy_sell';
+  window_s: number;
+  buy_volume: number;
+  sell_volume: number;
+  signed_volume: number;
+  buy_ratio: number | null;
+  trade_count: number;
+  vwap: number | null;
+  largest_print: number;
+  tape_speed: number;
+  tape_accel: number | null;
+  block_count_5m: number;
+  last_block: { price: number; size: number; side: string; notional: number; age_s: number } | null;
+}
+
+export interface TapeResponse {
+  symbol: string;
+  snapshot: TapeSnapshot;
+  as_of: string;
+}
 
 export interface ChatSession {
   id: number;

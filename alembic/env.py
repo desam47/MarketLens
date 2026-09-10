@@ -48,7 +48,7 @@ from backend.models.alert import Alert, AlertTrigger                            
 from backend.models.backtest import BacktestRun, BacktestTrade                             # noqa: F401
 from backend.models.experiment import Experiment                                           # noqa: F401
 from backend.models.market_data_sql import (                                               # noqa: F401
-    BarModel, MarketStatusModel, ProviderStatusModel, QuoteModel                            # noqa: F401
+    BarModel, MarketStatusModel, ProviderStatusModel, QuoteModel, TapeBarModel              # noqa: F401
 )
 from backend.models.signal import HistoricalSignal                                         # noqa: F401
 from backend.models.watchlist import Watchlist, WatchlistSymbol                            # noqa: F401

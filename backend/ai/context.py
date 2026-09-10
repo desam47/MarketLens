@@ -56,6 +56,7 @@ class AnalysisContext:
     news: list[dict[str, Any]] = field(default_factory=list)
     fundamentals: dict[str, Any] = field(default_factory=dict)
     divergence: dict[str, Any] = field(default_factory=dict)
+    tape: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +79,7 @@ class AnalysisContext:
             "news": self.news,
             "fundamentals": self.fundamentals,
             "divergence": self.divergence,
+            "tape": self.tape,
         }
 
 
@@ -473,6 +475,29 @@ def build_context(
         except Exception:  # noqa: BLE001
             pass
 
+    # --- 13. Tape / order flow (2026-09-10) — a compact view of the
+    # recent trade tape. Raw aggregation, not an engine-derived quant
+    # number, so the AI may cite it directly (framed as "recent tape").
+    tape: dict[str, Any] = {}
+    try:
+        from backend.config.settings import settings as _settings
+
+        if _settings.tape.enabled:
+            from backend.api.tape.registry import get_tape_engine
+
+            s = get_tape_engine(sym).get_snapshot()
+            if s.get("trade_count"):
+                tape = {
+                    "pressure": s["pressure"],
+                    "signed_volume_1m": s["signed_volume"],
+                    "buy_ratio_1m": s["buy_ratio"],
+                    "tape_speed_per_s": s["tape_speed"],
+                    "tape_accel": s["tape_accel"],
+                    "block_count_5m": s["block_count_5m"],
+                }
+    except Exception:  # noqa: BLE001
+        pass
+
     return AnalysisContext(
         symbol=sym,
         timeframe=timeframe,
@@ -497,4 +522,5 @@ def build_context(
         news=news,
         fundamentals=fundamentals,
         divergence=divergence,
+        tape=tape,
     )

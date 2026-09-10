@@ -359,6 +359,37 @@ h4 {
   border-top: 3px solid var(--accent-primary);
 }
 
+/* Tape Pressure card (Time & Sales order-flow) */
+.tape-card { border-top: 3px solid #10b981; }
+.tape-window { font-size: 0.72rem; font-weight: 400; color: var(--text-muted); }
+.tape-pressure-row {
+  display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0 0.5rem;
+}
+.tape-pressure-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.tape-pressure-label { font-weight: 700; font-size: 0.95rem; }
+.tape-signed { margin-left: auto; font-size: 0.8rem; font-weight: 600; }
+.tape-ratio-bar {
+  display: flex; height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--bg-secondary);
+}
+.tape-ratio-buy { background: #10b981; }
+.tape-ratio-sell { background: #ef4444; }
+.tape-ratio-legend {
+  display: flex; justify-content: space-between; font-size: 0.68rem;
+  color: var(--text-muted); margin-top: 0.2rem;
+}
+.tape-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem; margin-top: 0.7rem;
+}
+.tape-stats > div { display: flex; justify-content: space-between; font-size: 0.8rem; }
+.tape-stat-k { color: var(--text-muted); }
+.tape-stat-v { font-weight: 600; }
+.tape-block-badge {
+  background: rgba(245, 158, 11, 0.18); color: #b45309; border-radius: 999px;
+  padding: 0 0.4rem; font-size: 0.72rem; font-weight: 700;
+}
+.tape-last-block { margin: 0.6rem 0 0; font-size: 0.72rem; color: var(--text-muted); }
+
 .regime-main {
   margin: 1rem 0;
   text-align: center;
