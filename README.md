@@ -414,7 +414,7 @@ All endpoints are under `/api/`. Base URL: `http://localhost:5001/api`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/analysis/{symbol}/transitions` | Regime transition history |
-| GET | `/analysis/{symbol}/support-resistance` | S/R levels |
+| GET | `/analysis/{symbol}/price-range` | Price-range (support/resistance) levels |
 | GET | `/analysis/{symbol}/divergences` | Bullish/bearish divergences |
 | GET | `/analysis/{symbol}/bars` | OHLCV bars for charting |
 

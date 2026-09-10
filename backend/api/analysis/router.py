@@ -1,5 +1,6 @@
 """
-Analysis endpoints: trend transitions, divergences, and S/R levels.
+Analysis endpoints: trend transitions, divergences, and price-range
+(support/resistance) levels.
 
 These are read-only, symbol-keyed endpoints that run the Phase 9
 detection engines against the most recent stored bars. They require no
@@ -131,14 +132,20 @@ async def get_transitions(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/{symbol}/support-resistance")
-async def get_support_resistance(
+@router.get("/{symbol}/price-range")
+async def get_price_range(
     symbol: str,
     timeframe: str = "1d",
     limit: int = 500,
     max_levels: int = 20,
 ):
-    """Detect support and resistance levels for ``symbol`` at ``timeframe``."""
+    """Detect the price-range levels (support/resistance) for ``symbol``
+    at ``timeframe``.
+
+    Renamed from ``/support-resistance`` (2026-09-10); the detection is
+    unchanged, only the user-facing framing (the Symbol page calls this
+    panel "Price Range").
+    """
     symbol = symbol.upper()
     try:
         bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)

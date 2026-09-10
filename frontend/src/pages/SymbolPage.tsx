@@ -230,9 +230,9 @@ const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel
         <p className="empty-state">No levels detected</p>
       ) : (
         <div className="sr-grid">
-          {(['Resistance', 'Support'] as const).map(label => {
-            const items = label === 'Resistance' ? resistances : supports;
-            const color = label === 'Resistance' ? '#ef4444' : '#10b981';
+          {(['Top', 'Bottom'] as const).map(label => {
+            const items = label === 'Top' ? resistances : supports;
+            const color = label === 'Top' ? '#ef4444' : '#10b981';
             return (
               <div key={label} className="sr-column">
                 <h3 style={{ color }}>{label}</h3>
@@ -254,7 +254,7 @@ const SRPanel = memo(function SRPanel({ levels, latestClose }: { levels: SRLevel
                         : null;
                       const dist = absDist == null
                         ? null
-                        : label === 'Support' ? -absDist : absDist;
+                        : label === 'Bottom' ? -absDist : absDist;
                       return (
                         <tr key={i}>
                           <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
@@ -434,11 +434,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const fetchSR = useCallback(async () => {
     setSrLoading(true);
     try {
-      const data = await api.getSupportResistance(symbol, timeframe);
+      const data = await api.getPriceRange(symbol, timeframe);
       setSrLevels(data?.levels || []);
       setLatestClose(data?.latest_close ?? null);
     } catch (err: any) {
-      console.error('Failed to load S/R levels:', err);
+      console.error('Failed to load price-range levels:', err);
     } finally {
       setSrLoading(false);
     }

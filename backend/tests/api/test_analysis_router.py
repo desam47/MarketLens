@@ -1,7 +1,7 @@
 """
 Phase 22 — Tests for /api/analysis/* endpoints:
   - GET /api/analysis/{symbol}/transitions
-  - GET /api/analysis/{symbol}/support-resistance
+  - GET /api/analysis/{symbol}/price-range
   - GET /api/analysis/{symbol}/divergences
   - GET /api/analysis/{symbol}/bars
 """
@@ -82,7 +82,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
         self.assertEqual(resp.status_code, 500)
 
 
-class TestSupportResistanceEndpoint(unittest.TestCase):
+class TestPriceRangeEndpoint(unittest.TestCase):
 
     @patch("backend.analysis.series.bar_repository")
     def test_returns_levels(self, mock_repo):
@@ -101,7 +101,7 @@ class TestSupportResistanceEndpoint(unittest.TestCase):
         mock_repo.get_bars.return_value = mock_bars
 
         client = TestClient(app)
-        resp = client.get("/api/analysis/AAPL/support-resistance?timeframe=1d")
+        resp = client.get("/api/analysis/AAPL/price-range?timeframe=1d")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["symbol"], "AAPL")
@@ -120,7 +120,7 @@ class TestSupportResistanceEndpoint(unittest.TestCase):
         )]
 
         client = TestClient(app)
-        resp = client.get("/api/analysis/AAPL/support-resistance")
+        resp = client.get("/api/analysis/AAPL/price-range")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["levels"], [])

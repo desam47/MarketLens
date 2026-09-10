@@ -1451,9 +1451,9 @@ class ApiService {
     );
   }
 
-  async getSupportResistance(symbol: string, timeframe = '1d', limit = 500): Promise<SRResult> {
+  async getPriceRange(symbol: string, timeframe = '1d', limit = 500): Promise<SRResult> {
     return this.fetch<SRResult>(
-      `/analysis/${symbol}/support-resistance?timeframe=${timeframe}&limit=${limit}`
+      `/analysis/${symbol}/price-range?timeframe=${timeframe}&limit=${limit}`
     );
   }
 

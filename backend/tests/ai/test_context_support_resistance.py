@@ -13,7 +13,7 @@ ImportError/AttributeError every time, so `support_resistance` had been
 an empty dict in every AI context ever built.
 
 Fixed by calling the engine the way the existing, working
-`/api/analysis/{symbol}/support-resistance` endpoint does
+`/api/analysis/{symbol}/price-range` endpoint does
 (backend/api/analysis/router.py) — same bar source, same engine
 construction — then bucketing the flat level list into supports/
 resistances by price relative to the latest close.
