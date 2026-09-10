@@ -71,10 +71,8 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
 
   // The header ↻ and the SymbolInput submit re-key AITemplatesPanel only.
   // Re-mounting AIAnalysisPanel would orphan an in-flight billable
-  // background job and re-fire analyzeSymbol; re-mounting ChatPanel would
-  // tear down the open session + transcript. Both of those already refetch
-  // from their own symbol/timeframe effects and have their own refresh
-  // controls ("Analyze" / "Clear").
+  // background job and re-fire analyzeSymbol. ChatPanel isn't tied to
+  // this ticker at all (universal chat), so the picker never touches it.
   const handleRefresh = useCallback(() => setTemplatesReloadKey(k => k + 1), []);
 
   // Mount a section (idempotent). Templates drags in Analysis so the
@@ -142,30 +140,37 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         <div>
           <h1>AI Hub</h1>
           <p className="subtitle">
-            Chat, analysis &amp; templates for <b>{symbol}</b> (independent of the rest of the app)
-            &middot; market digest &amp; AI search
+            Chat about any ticker or the whole market &middot; Analysis &amp; Templates for{' '}
+            <b>{symbol}</b> &middot; market digest &amp; AI search
           </p>
         </div>
         <div className="header-actions">
-          <select
-            className="timeframe-select"
-            value={timeframe}
-            onChange={e => setTimeframe(e.target.value)}
-            aria-label="Timeframe — applies to Analysis and Templates"
-          >
-            {TIMEFRAMES.map(tf => (
-              <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
-            ))}
-          </select>
-          <SymbolInput
-            key={symbol}
-            symbol={symbol}
-            onChange={onSymbolChange}
-            onSubmit={handleRefresh}
-          />
-          <button className="btn btn-secondary" type="button" onClick={handleRefresh}>
-            ↻ Refresh
-          </button>
+          <div className="ai-hub-picker">
+            <div className="ai-hub-picker-row">
+              <select
+                className="timeframe-select"
+                value={timeframe}
+                onChange={e => setTimeframe(e.target.value)}
+                aria-label="Timeframe — applies to Analysis and Templates"
+              >
+                {TIMEFRAMES.map(tf => (
+                  <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
+                ))}
+              </select>
+              <SymbolInput
+                key={symbol}
+                symbol={symbol}
+                onChange={onSymbolChange}
+                onSubmit={handleRefresh}
+              />
+              <button className="btn btn-secondary" type="button" onClick={handleRefresh}>
+                ↻ Refresh
+              </button>
+            </div>
+            <p className="ai-hub-picker-note">
+              Drives Analysis &amp; Templates below — Chat isn&apos;t tied to this.
+            </p>
+          </div>
         </div>
       </div>
 
@@ -186,7 +191,7 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         {revealed.has('chat') ? (
           <PageErrorBoundary pageName="AI Chat">
             <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
-              <ChatPanel symbol={symbol} />
+              <ChatPanel />
             </Suspense>
           </PageErrorBoundary>
         ) : (

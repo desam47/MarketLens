@@ -1,45 +1,46 @@
 /**
- * ChatPanel — Version 4 AI feature 4: conversational AI chat panel.
+ * ChatPanel — the universal AI Hub chat (2026-09-10).
  *
- * Net new UI — no chat/message-list precedent exists anywhere else in
- * this app. Scope (see docs/plan): single-turn-per-message (the
- * backend rebuilds context fresh per message, no server-side
- * "memory" beyond the stored transcript text), no streaming. One
- * narrow AI-triggered action exists (added in Phase 4.2.7): an
- * explicit "re-run the analysis" style request runs a real
- * analyze_symbol() call server-side — everything else is read-only,
- * the AI never triggers new work on the user's behalf otherwise.
+ * Not tied to a ticker: ask about any stock (in your watchlist or not),
+ * several at once, or the market as a whole with no ticker named. The
+ * backend resolves the relevant tickers from each message, always
+ * attaches a market-wide baseline, and answers from live quant data
+ * where it has it. Single open universal thread (optionally scoped to a
+ * specific alert trigger via `alertTriggerId` if opened from an alert
+ * row).
  *
- * One open session per symbol (optionally scoped to a specific alert
- * trigger via `alertTriggerId`, if a caller ever opens this from an
- * alert row) — mirrors AlertsCard's optimistic-then-reconcile shape
- * for sending a message: append the user's bubble immediately, then
- * replace/append with the real response (or roll back + show an
- * error on failure).
+ * Sending a message is optimistic-then-reconcile (mirrors AlertsCard):
+ * append the user's bubble immediately, then append the real assistant
+ * reply (or roll back + show an error on failure).
  *
- * "Clear" (top-right) opens a brand-new session instead of reusing
- * the current one — the old conversation isn't deleted, just no
- * longer what a plain re-open returns, same non-destructive
- * convention as the rest of this app (alert triggers/digests aren't
- * deleted either).
+ * "Clear" (top-right) opens a brand-new session — the old conversation
+ * isn't deleted, just no longer what a plain re-open returns.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api, { ChatMessage } from '../services/api';
 
 interface ChatPanelProps {
-  symbol: string;
   alertTriggerId?: number | null;
 }
 
-export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
+const EXAMPLES = [
+  "How's NVDA looking?",
+  "What's the market doing today?",
+  'Which of my names look weak?',
+  'Compare AAPL and MSFT',
+];
+
+export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +51,7 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
 
     (async () => {
       try {
-        const session = await api.createChatSession(symbol, alertTriggerId);
+        const session = await api.createChatSession(undefined, alertTriggerId);
         if (cancelled) return;
         setSessionId(session.id);
         const history = await api.getChatMessages(session.id);
@@ -64,17 +65,13 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
     })();
 
     return () => { cancelled = true; };
-  }, [symbol, alertTriggerId]);
+  }, [alertTriggerId]);
 
   const handleClear = useCallback(async () => {
-    // force_new=true: a brand-new session, not a reuse of this one —
-    // the old conversation isn't deleted, just no longer the one a
-    // plain re-open returns (same non-destructive convention as the
-    // rest of the app — alert triggers/digests aren't deleted either).
     setClearing(true);
     setError(null);
     try {
-      const session = await api.createChatSession(symbol, alertTriggerId, true);
+      const session = await api.createChatSession(undefined, alertTriggerId, true);
       setSessionId(session.id);
       setMessages([]);
       setInput('');
@@ -83,21 +80,26 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
     } finally {
       setClearing(false);
     }
-  }, [symbol, alertTriggerId]);
+  }, [alertTriggerId]);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+    // scrollTo is missing in jsdom — guard so tests don't throw.
+    listRef.current?.scrollTo?.({ top: listRef.current.scrollHeight });
+  }, [messages, sending]);
 
-  const handleSend = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    const content = input.trim();
+  // "Still working…" only if the turn is taking a while.
+  useEffect(() => {
+    if (!sending) { setSlow(false); return; }
+    const t = setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(t);
+  }, [sending]);
+
+  const submit = useCallback(async (content: string) => {
     if (!content || !sessionId || sending) return;
-
     setSending(true);
     setError(null);
     const optimisticUser: ChatMessage = {
-      id: -Date.now(), // negative placeholder id, replaced on reconcile
+      id: -Date.now(),
       session_id: sessionId,
       role: 'user',
       content,
@@ -112,19 +114,28 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
       setMessages(prev => [...prev, assistantReply]);
     } catch (e: any) {
       setError(e?.message || 'Failed to send message');
-      // Roll back the optimistic bubble — the message never made it.
       setMessages(prev => prev.filter(m => m.id !== optimisticUser.id));
       setInput(content);
     } finally {
       setSending(false);
     }
-  }, [input, sessionId, sending]);
+  }, [sessionId, sending]);
+
+  const handleSend = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    submit(input.trim());
+  }, [input, submit]);
+
+  const fillExample = (q: string) => {
+    setInput(q);
+    inputRef.current?.focus();
+  };
 
   return (
     <div className="card chat-panel-card">
       <div className="chat-panel-header">
         <div className="chat-panel-header-top">
-          <h2>💬 Ask about {symbol}</h2>
+          <h2>💬 Chat</h2>
           <button
             type="button"
             className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
@@ -135,41 +146,53 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
             {clearing ? '⟳' : '🗑 Clear'}
           </button>
         </div>
-        <p className="info-text">Grounded in the current quant context. Research to inform your own decision, not financial advice.</p>
+        <p className="info-text">
+          Uses live quant data where available — full coverage for your watchlist,
+          price&nbsp;+&nbsp;indicators only for other tickers. Research to inform your
+          own decision, not financial advice.
+        </p>
       </div>
 
-      {error && (
-        <div className="chat-panel-error">⚠️ {error}</div>
-      )}
+      {error && <div className="chat-panel-error">⚠️ {error}</div>}
 
       <div className="chat-message-list" ref={listRef}>
         {loading && <p className="info-text">Opening chat…</p>}
         {!loading && messages.length === 0 && (
-          <p className="empty-state">Ask a question about {symbol} to get started.</p>
+          <div className="chat-empty-state">
+            <p>Ask about any stock — in your watchlist or not — or the market as a whole.</p>
+            <div className="chat-example-chips">
+              {EXAMPLES.map(q => (
+                <button key={q} type="button" className="chat-example-chip" onClick={() => fillExample(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {messages.map(m => (
           <div key={m.id} className={`chat-bubble-row ${m.role}`}>
             <div className={`chat-bubble ${m.role}`}>
               {m.content}
-              {m.role === 'assistant' && m.grounded === false && (
-                <span className="chat-ungrounded-tag">not fully grounded</span>
-              )}
+              {m.role === 'assistant' && <ProvenanceRow message={m} />}
             </div>
           </div>
         ))}
         {sending && (
           <div className="chat-bubble-row assistant">
-            <div className="chat-bubble assistant chat-bubble-pending">…</div>
+            <div className="chat-bubble assistant chat-bubble-pending">
+              {slow ? 'Still working — pulling data for the tickers you mentioned…' : '…'}
+            </div>
           </div>
         )}
       </div>
 
       <form className="chat-input-row" onSubmit={handleSend}>
         <input
+          ref={inputRef}
           type="text"
           value={input}
           onChange={e => setInput(e.target.value)}
-          placeholder={`Ask about ${symbol}…`}
+          placeholder="Ask about any stock, your watchlist, or the market…"
           maxLength={2000}
           disabled={loading || sending || !sessionId}
         />
@@ -182,6 +205,55 @@ export function ChatPanel({ symbol, alertTriggerId = null }: ChatPanelProps) {
         </button>
       </form>
     </div>
+  );
+}
+
+/** Per-message row showing which tickers the answer was grounded in. */
+function ProvenanceRow({ message }: { message: ChatMessage }) {
+  const focus = message.focus ?? [];
+  const partial = message.partial ?? [];
+  const unavailable = message.unavailable ?? [];
+  const grounded = message.grounded;
+  const total = focus.length + partial.length + unavailable.length;
+
+  // Clean single-ticker fully-grounded answer — a quiet check, or nothing.
+  if (total <= 1 && !partial.length && !unavailable.length && grounded !== false) {
+    return focus.length === 1 ? (
+      <span className="chat-provenance">
+        <span className="chat-pill ok" title={`Grounded in live quant data for ${focus[0]}`}>
+          {focus[0]} ✓
+        </span>
+      </span>
+    ) : null;
+  }
+
+  // No ticket resolved at all, but the model flagged it couldn't answer.
+  if (total === 0 && grounded === false) {
+    return <span className="chat-ungrounded-tag">not fully grounded</span>;
+  }
+
+  return (
+    <span className="chat-provenance">
+      {focus.map(s => (
+        <span key={s} className="chat-pill ok" title={`Grounded in live quant data for ${s}`}>
+          {s} ✓
+        </span>
+      ))}
+      {partial.map(s => (
+        <span
+          key={s}
+          className="chat-pill partial"
+          title={`Partial data for ${s}: live price / RSI / support-resistance only — not in your watchlist, so no multi-timeframe trend or confidence`}
+        >
+          {s} ◐ partial
+        </span>
+      ))}
+      {unavailable.map(s => (
+        <span key={s} className="chat-pill none" title={`No quant data for ${s}`}>
+          {s} ✗ no data
+        </span>
+      ))}
+    </span>
   );
 }
 

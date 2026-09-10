@@ -1,7 +1,7 @@
 """
 Tests for backend.ai.chat.answer_chat_message — universal AI Hub chat.
 
-answer_chat_message() returns (message, grounded, focus, unavailable)
+answer_chat_message() returns (message, grounded, focus, partial, unavailable)
 and must never raise for an expected failure mode: AI off, a per-symbol
 context-building failure, or a malformed AI reply all produce a stored
 assistant message rather than an exception.
@@ -85,7 +85,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete.return_value = _reply('{"reply": "AAPL up.", "grounded": true}')
 
-        msg, grounded, focus, unavailable = answer_chat_message(self.session.id, "how's AAPL")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "how's AAPL")
 
         self.assertTrue(grounded)
         self.assertEqual(focus, ["AAPL"])
@@ -101,7 +101,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete.return_value = _reply('{"reply": "Risk-on tape.", "grounded": true}')
 
-        msg, grounded, focus, unavailable = answer_chat_message(self.session.id, "how's the market")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "how's the market")
 
         mock_ctx.assert_not_called()
         self.assertEqual(focus, [])
@@ -138,7 +138,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete.return_value = _reply('{"reply": "No engine for RIVN.", "grounded": false}')
 
-        msg, grounded, focus, unavailable = answer_chat_message(self.session.id, "what about RIVN")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "what about RIVN")
 
         self.assertEqual(unavailable, ["RIVN"])
         self.assertEqual(focus, [])
@@ -175,7 +175,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete.return_value = _reply()
 
-        msg, grounded, focus, unavailable = answer_chat_message(self.session.id, "AAPL vs RIVN")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "AAPL vs RIVN")
 
         self.assertEqual(focus, ["AAPL"])
         self.assertEqual(unavailable, ["RIVN"])
@@ -244,7 +244,7 @@ class TestDegradeContract(_Base):
         mock_ai.is_available.return_value = True
         mock_ai.settings.max_tokens = 20000
 
-        msg, grounded, focus, unavailable = answer_chat_message(s.id, "what's the RSI?")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(s.id, "what's the RSI?")
 
         self.assertFalse(grounded)
         self.assertIn("don't have enough data on AAPL", msg.content)

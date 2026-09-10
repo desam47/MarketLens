@@ -74,10 +74,12 @@ class MessageResponse(BaseModel):
     # /messages — None for user messages and for GET /messages'
     # historical rows (not persisted, see backend.ai.chat's docstring).
     grounded: bool | None = None
-    # Tickers this turn actually pulled quant context for / could not
-    # (universal chat) — drives the frontend provenance row. Empty on
-    # historical rows and user messages.
+    # Universal chat — drives the frontend provenance row. Empty on
+    # historical rows and user messages. focus = full (warm-engine)
+    # coverage; partial = live price / indicators only (not watchlisted);
+    # unavailable = named but no data.
     focus: list[str] = []
+    partial: list[str] = []
     unavailable: list[str] = []
 
 
@@ -101,6 +103,7 @@ def _message_to_response(
     m,
     grounded: bool | None = None,
     focus: list[str] | None = None,
+    partial: list[str] | None = None,
     unavailable: list[str] | None = None,
 ) -> MessageResponse:
     return MessageResponse(
@@ -111,6 +114,7 @@ def _message_to_response(
         created_at=m.created_at.isoformat() if m.created_at else "",
         grounded=grounded,
         focus=focus or [],
+        partial=partial or [],
         unavailable=unavailable or [],
     )
 
@@ -214,11 +218,11 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     finally:
         repo.close()
 
-    message, grounded, focus, unavailable = await asyncio.to_thread(
+    message, grounded, focus, partial, unavailable = await asyncio.to_thread(
         answer_chat_message, session_id, payload.content,
     )
     return _message_to_response(
-        message, grounded=grounded, focus=focus, unavailable=unavailable,
+        message, grounded=grounded, focus=focus, partial=partial, unavailable=unavailable,
     )
 
 

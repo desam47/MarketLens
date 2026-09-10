@@ -1957,6 +1957,26 @@ h4 {
   color: var(--text-muted);
 }
 
+/* Header picker — drives Analysis & Templates only; Chat is universal. */
+.ai-hub-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+}
+
+.ai-hub-picker-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.ai-hub-picker-note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
 /* Sticky section-jump nav — content-width block with an opaque
    background, so position:sticky needs no full-bleed trick. */
 .ai-hub-nav {
@@ -4320,6 +4340,80 @@ h4 {
   font-size: 0.68rem;
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* Universal-chat empty state — clickable example prompts. */
+.chat-empty-state {
+  padding: 0.5rem 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.chat-example-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.chat-example-chip {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.chat-example-chip:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+/* Per-message provenance row — which tickers the answer was grounded in. */
+.chat-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.chat-pill {
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.chat-pill.ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.chat-pill.partial {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.chat-pill.none {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+:root[data-theme="dark"] .chat-pill.ok,
+:root:not([data-theme="light"]) .chat-pill.ok {
+  color: #4ade80;
+}
+
+:root[data-theme="dark"] .chat-pill.partial,
+:root:not([data-theme="light"]) .chat-pill.partial {
+  color: #fbbf24;
 }
 
 .chat-input-row {

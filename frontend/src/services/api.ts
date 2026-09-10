@@ -1857,15 +1857,16 @@ class ApiService {
   // ── Version 4 AI feature 4: conversational chat panel ───────────────
 
   async createChatSession(
-    symbol: string,
+    symbol?: string | null,
     alertTriggerId?: number | null,
     forceNew: boolean = false,
   ): Promise<ChatSession> {
+    // No symbol -> the universal AI Hub chat (resolves tickers per message).
     return this.fetch<ChatSession>('/ai/chat/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        symbol,
+        symbol: symbol ?? null,
         alert_trigger_id: alertTriggerId ?? null,
         force_new: forceNew,
       }),
@@ -1948,7 +1949,9 @@ export interface AIDigest {
 
 export interface ChatSession {
   id: number;
-  symbol: string;
+  // null for a universal session (not tied to a ticker).
+  symbol: string | null;
+  scope: 'universal' | 'symbol' | 'alert' | string;
   alert_trigger_id: number | null;
   created_at: string;
   updated_at: string;
@@ -1963,6 +1966,13 @@ export interface ChatMessage {
   // Only present on the assistant message returned by sendChatMessage —
   // null for historical rows fetched via getChatMessages.
   grounded: boolean | null;
+  // Universal chat provenance (empty on historical rows / user messages):
+  //   focus       — full, warm-engine quant coverage
+  //   partial     — live price / indicators only (ticker not in a watchlist)
+  //   unavailable — named but no data at all
+  focus?: string[];
+  partial?: string[];
+  unavailable?: string[];
 }
 
 export interface AIJobEnqueueResponse {

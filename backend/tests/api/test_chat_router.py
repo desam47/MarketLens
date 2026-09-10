@@ -171,7 +171,7 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
-            True, ["AAPL"], [],
+            True, ["AAPL"], [], [],
         )
 
         resp = self.client.post(
@@ -215,7 +215,7 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="I don't have enough data."),
-            False, [], ["RIVN"],
+            False, [], [], ["RIVN"],
         )
 
         resp = self.client.post(

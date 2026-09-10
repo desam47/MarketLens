@@ -72,15 +72,18 @@ def _build_alert_context(db, alert_trigger_id: int | None) -> dict | None:
 
 def answer_chat_message(
     session_id: int, user_content: str
-) -> tuple[ChatMessage, bool, list[str], list[str]]:
+) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
-    ChatMessage, and return ``(message, grounded, focus, unavailable)``.
+    ChatMessage, and return
+    ``(message, grounded, focus, partial, unavailable)``.
 
     Universal chat (2026-09-10): the turn resolves its own tickers from
     the message text (0..N, capped), always attaches a cheap
     market-wide baseline, and builds per-ticker quant context for each
-    resolved symbol. ``focus`` is the tickers that got a usable context
-    block; ``unavailable`` the ones that were named but had no data.
+    resolved symbol. ``focus`` is the tickers that got a full
+    (warm-engine) context block; ``partial`` the ones with only live
+    price / indicators (not in a watchlist); ``unavailable`` the ones
+    that were named but had no data at all.
 
     ``grounded`` / ``focus`` / ``unavailable`` aren't persisted columns
     — they're per-turn hints for the router's response.
@@ -144,13 +147,11 @@ def answer_chat_message(
         )
         grounded = grounded and not unavailable  # deterministic fail-safe
 
+        focus = [b["symbol"] for b in symbol_blocks if b["availability"]["engine_warm"]]
+        partial = [b["symbol"] for b in symbol_blocks if not b["availability"]["engine_warm"]]
+
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
-        return (
-            assistant_message,
-            grounded,
-            [b["symbol"] for b in symbol_blocks],
-            unavailable,
-        )
+        return assistant_message, grounded, focus, partial, unavailable
     finally:
         repo.close()
 
