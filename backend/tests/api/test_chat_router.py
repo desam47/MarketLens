@@ -11,10 +11,13 @@ from fastapi.testclient import TestClient
 from backend.api.main import app
 
 
-def _mock_session(id=1, symbol="AAPL", alert_trigger_id=None):
+def _mock_session(id=1, symbol="AAPL", alert_trigger_id=None, scope=None):
     s = MagicMock()
     s.id = id
     s.symbol = symbol
+    if scope is None:
+        scope = "alert" if alert_trigger_id is not None else ("symbol" if symbol else "universal")
+    s.scope = scope
     s.alert_trigger_id = alert_trigger_id
     s.created_at = datetime(2026, 1, 1, tzinfo=UTC)
     s.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
@@ -47,7 +50,25 @@ class TestCreateOrGetSession(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["symbol"], "AAPL")
-        mock_repo.get_or_create_open_session.assert_called_once_with("aapl", None)
+        self.assertEqual(data["scope"], "symbol")
+        mock_repo.get_or_create_open_session.assert_called_once_with("aapl", None, None)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_creates_universal_session_when_symbol_omitted(self, mock_repo_cls):
+        """No symbol in the body -> the single universal chat thread."""
+        mock_repo = MagicMock()
+        mock_repo.get_or_create_open_session.return_value = _mock_session(
+            id=7, symbol="*", scope="universal",
+        )
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/sessions", json={})
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsNone(data["symbol"])
+        self.assertEqual(data["scope"], "universal")
+        mock_repo.get_or_create_open_session.assert_called_once_with(None, None, None)
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_creates_session_scoped_to_alert_trigger(self, mock_repo_cls):
@@ -63,7 +84,8 @@ class TestCreateOrGetSession(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["alert_trigger_id"], 42)
-        mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", 42)
+        self.assertEqual(resp.json()["scope"], "alert")
+        mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", 42, None)
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_force_new_calls_create_session_not_get_or_create(self, mock_repo_cls):
@@ -81,7 +103,7 @@ class TestCreateOrGetSession(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], 99)
-        mock_repo.create_session.assert_called_once_with("AAPL", None)
+        mock_repo.create_session.assert_called_once_with("AAPL", None, None)
         mock_repo.get_or_create_open_session.assert_not_called()
 
     @patch("backend.api.ai.chat_router.ChatRepository")
@@ -96,7 +118,7 @@ class TestCreateOrGetSession(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         mock_repo.create_session.assert_not_called()
-        mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", None)
+        mock_repo.get_or_create_open_session.assert_called_once_with("AAPL", None, None)
 
 
 class TestGetMessages(unittest.TestCase):

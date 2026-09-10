@@ -4,8 +4,18 @@ AI chat panel).
 
 Mirrors the Alert/AlertTrigger parent/child pattern already in this
 codebase (backend/models/alert.py) rather than inventing a new shape.
-Symbol-scoped, not user-scoped — this is a single-tenant app with no
-auth system, so one open chat thread per symbol is enough for v1.
+
+A session has a ``scope`` (Universal AI Hub chat, 2026-09-10):
+  - ``"universal"`` — not tied to any ticker; ``symbol`` holds the
+    ``UNIVERSAL_SYMBOL`` sentinel (``symbol`` stays NOT NULL so no
+    table rebuild was needed). Each turn resolves its own tickers
+    from the message text.
+  - ``"symbol"`` — one open thread for a specific ticker (the legacy
+    default; still used by any symbol-scoped entry point).
+  - ``"alert"`` — opened from a specific alert trigger row
+    (``alert_trigger_id`` set).
+Invariants are enforced in ChatRepository, not the DB (this codebase
+declares no CHECK constraints anywhere).
 """
 from datetime import datetime
 
@@ -14,6 +24,11 @@ from sqlalchemy.orm import relationship
 
 from backend.database import Base
 from backend.utils.timezone import now_ny
+
+# Sentinel stored in ChatSession.symbol for a universal (no-ticker)
+# session — keeps the column NOT NULL. Not a valid ticker, so it can
+# never collide with a real symbol lookup.
+UNIVERSAL_SYMBOL = "*"
 
 
 class ChatSession(Base):
@@ -31,6 +46,9 @@ class ChatSession(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
+    # "universal" | "symbol" | "alert" — see module docstring. Legacy
+    # rows (pre-2026-09-10) are back-filled to "symbol"/"alert".
+    scope = Column(String(16), nullable=False, server_default="symbol", index=True)
     alert_trigger_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=now_ny)
     updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
@@ -41,7 +59,7 @@ class ChatSession(Base):
     )
 
     def __repr__(self):
-        return f"<ChatSession(id={self.id}, symbol={self.symbol})>"
+        return f"<ChatSession(id={self.id}, scope={self.scope}, symbol={self.symbol})>"
 
 
 class ChatMessage(Base):

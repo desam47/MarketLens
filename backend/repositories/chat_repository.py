@@ -6,7 +6,17 @@ Same thin-repository convention as AlertRepository/AIDigestRepository
 """
 from backend.database import SessionLocal
 from backend.models import ChatMessage, ChatSession
+from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.utils.timezone import now_ny
+
+
+def _derive_scope(symbol: str | None, alert_trigger_id: int | None) -> str:
+    """Classify a session from its inputs (see backend/models/chat.py)."""
+    if alert_trigger_id is not None:
+        return "alert"
+    if symbol and symbol != UNIVERSAL_SYMBOL:
+        return "symbol"
+    return "universal"
 
 
 class ChatRepository:
@@ -22,37 +32,70 @@ class ChatRepository:
 
     # --- Sessions ---------------------------------------------------
 
-    def create_session(self, symbol: str, alert_trigger_id: int | None = None) -> ChatSession:
-        session = ChatSession(symbol=symbol.upper(), alert_trigger_id=alert_trigger_id)
+    def create_session(
+        self,
+        symbol: str | None = None,
+        alert_trigger_id: int | None = None,
+        scope: str | None = None,
+    ) -> ChatSession:
+        """Create a chat session.
+
+        ``symbol=None`` (or ``"*"``) creates a *universal* session —
+        not tied to any ticker; each turn resolves its own symbols from
+        the message text. ``scope`` is derived from the inputs when not
+        given (see :func:`_derive_scope`). ``symbol`` stays NOT NULL in
+        the DB, so a universal session stores the ``UNIVERSAL_SYMBOL``
+        sentinel.
+        """
+        scope = scope or _derive_scope(symbol, alert_trigger_id)
+        sym = (symbol or UNIVERSAL_SYMBOL).upper()
+        session = ChatSession(symbol=sym, alert_trigger_id=alert_trigger_id, scope=scope)
         self.db.add(session)
         self.db.commit()
         self.db.refresh(session)
         return session
 
     def get_or_create_open_session(
-        self, symbol: str, alert_trigger_id: int | None = None
+        self,
+        symbol: str | None = None,
+        alert_trigger_id: int | None = None,
+        scope: str | None = None,
     ) -> ChatSession:
-        """Return the most recent session for ``symbol``, or create one.
+        """Return the most recent open session for this scope, or create one.
 
-        One open chat thread per symbol is enough for v1 (no
-        multi-session-per-symbol UI, no "New chat" button) — see the
-        Version 4 plan's Feature 4 scope. If ``alert_trigger_id`` is
-        given and no existing session for this symbol already has it
-        set, a NEW session is created rather than reusing an unrelated
-        one — a chat opened from a specific alert should see that
-        alert's context from the first message.
+        - ``scope="universal"`` (``symbol`` omitted / ``"*"``): one open
+          universal thread, reused across every no-ticker / multi-ticker
+          turn.
+        - ``scope="symbol"``: one open thread per ticker (the legacy
+          shape). The ``scope`` filter means a symbol lookup can never
+          return the universal thread.
+        - ``alert_trigger_id`` given and no existing session for this
+          symbol already carries it: a NEW session is created rather
+          than reusing an unrelated one — a chat opened from a specific
+          alert should see that alert's context from the first message.
         """
-        sym = symbol.upper()
+        scope = scope or _derive_scope(symbol, alert_trigger_id)
+
+        if scope == "universal":
+            existing = (
+                self.db.query(ChatSession)
+                .filter(ChatSession.scope == "universal")
+                .order_by(ChatSession.updated_at.desc())
+                .first()
+            )
+            return existing or self.create_session(scope="universal")
+
+        sym = (symbol or "").upper()
         existing = (
             self.db.query(ChatSession)
-            .filter(ChatSession.symbol == sym)
+            .filter(ChatSession.symbol == sym, ChatSession.scope == scope)
             .order_by(ChatSession.updated_at.desc())
             .first()
         )
         if existing is not None:
             if alert_trigger_id is None or existing.alert_trigger_id == alert_trigger_id:
                 return existing
-        return self.create_session(sym, alert_trigger_id=alert_trigger_id)
+        return self.create_session(sym, alert_trigger_id=alert_trigger_id, scope=scope)
 
     def get_session(self, session_id: int) -> ChatSession | None:
         return self.db.query(ChatSession).filter(ChatSession.id == session_id).first()

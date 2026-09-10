@@ -70,6 +70,37 @@ class TestChatRepository(unittest.TestCase):
         second = repo.get_or_create_open_session("AAPL", alert_trigger_id=7)
         self.assertEqual(first.id, second.id)
 
+    # --- scope (Universal AI Hub chat, 2026-09-10) --------------------
+
+    def test_create_session_derives_scope(self):
+        repo = self._repo()
+        self.assertEqual(repo.create_session("AAPL").scope, "symbol")
+        self.assertEqual(repo.create_session("AAPL", alert_trigger_id=1).scope, "alert")
+        self.assertEqual(repo.create_session().scope, "universal")
+
+    def test_create_universal_session_stores_sentinel_symbol(self):
+        repo = self._repo()
+        s = repo.create_session()
+        self.assertEqual(s.scope, "universal")
+        self.assertEqual(s.symbol, "*")  # UNIVERSAL_SYMBOL — column stays NOT NULL
+
+    def test_get_or_create_universal_creates_then_reuses(self):
+        repo = self._repo()
+        first = repo.get_or_create_open_session()
+        second = repo.get_or_create_open_session()
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.scope, "universal")
+
+    def test_universal_and_symbol_sessions_are_disjoint(self):
+        """A symbol lookup must never return the universal thread, and
+        vice versa — the scope filter guarantees it."""
+        repo = self._repo()
+        universal = repo.get_or_create_open_session()
+        aapl = repo.get_or_create_open_session("AAPL")
+        self.assertNotEqual(universal.id, aapl.id)
+        self.assertEqual(repo.get_or_create_open_session().id, universal.id)
+        self.assertEqual(repo.get_or_create_open_session("AAPL").id, aapl.id)
+
     def test_get_session_found_and_not_found(self):
         repo = self._repo()
         session = repo.create_session("AAPL")
