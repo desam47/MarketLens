@@ -11,7 +11,7 @@
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 4.1 | Enable and Validate AI Integration End-to-End | ✅ DONE | Enabled `AI_ENABLED=true`; fixed an unregistered-provider-name config error and a real fallback-provider config-isolation bug; ran a live `/api/ai/analyze` call against a real provider. A follow-on hardening pass (4.1.9-4.1.16) then found and fixed 8 more live bugs across AI Stock Search and AI Analysis, purely from continuing to use the now-live feature. Full detail in `docs/Version_4/v4_plan.md`. |
-| 4.2 | Charts (drawing v1, line/area/HA, indicators) | ⬜ MOVED TO V5 | Never started under v4. Moved out to open Version 5 as its own phase (5.1) instead of staying a secondary item here — full scope in `docs/Version_5/v5_plan.md`. Historical content (as planned while it lived in v4) kept in `docs/Version_4/v4_plan.md` for the record. |
+| 4.2 | Charts (drawing v1, line/area/HA, indicators) | ⬜ MOVED TO V5 | Never started under v4. Moved out to open Version 5 as its own phase (5.1) instead of staying a secondary item here — full scope in `docs/Version_5/v5_plan.md`. |
 | 4.3 | AI-Powered Features (news/fundamentals analysis, daily digest, alert commentary, chat panel) | ✅ DONE | Four new features planned via a research + design workflow (3 Explore agents, 1 Plan agent, approved plan), shipped one at a time with a live check-in after each. Also fixed two pre-existing alert-firing bugs found while verifying feature 3 live. Full detail in `docs/Version_4/v4_plan.md`. |
 
 ---

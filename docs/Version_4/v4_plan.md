@@ -3,7 +3,7 @@
 **Date:** 2026-09-09
 **Last updated:** 2026-09-09 (Phase 4.3: four new AI-powered features shipped — news/fundamentals-aware analysis, daily digest, alert commentary, chat panel — plus two pre-existing alert-firing bugs found and fixed)
 **Status:** Active. Phase 4.1 done (4.1.1-4.1.16). Phase 4.3 done (4.3.1-4.3.6). Charts (was Phase 4.2) moved to Version 5 — v4's remaining scope is AI integration only.
-**Scope:** Turn on and prove out the existing AI subsystem (providers, background jobs, prompt templates, `/api/ai/*` endpoints) end-to-end with a real provider, fixing whatever breaks. Charts was originally meant to open v4, then deferred to Phase 4.2 within it — now moved out entirely to open Version 5 instead (`docs/Version_5/v5_plan.md`); historical content kept below for the record.
+**Scope:** Turn on and prove out the existing AI subsystem (providers, background jobs, prompt templates, `/api/ai/*` endpoints) end-to-end with a real provider, fixing whatever breaks (Phase 4.1), then build new AI-powered functionality on top (Phase 4.3). Charts was originally meant to open v4, then deferred to Phase 4.2 within it — moved out entirely to open Version 5 instead; full scope now lives at `docs/Version_5/v5_plan.md`.
 
 ---
 
@@ -112,89 +112,12 @@ the AI_* settings do) kept surfacing independent, real issues. Same
 
 ## Phase 4.2 — Charts — MOVED TO VERSION 5 (2026-09-09)
 
-**This phase no longer lives in Version 4.** Originally meant to open
-Version 4 (carried forward from Version 3's never-started Phase 3.4);
-bumped to make room for Phase 4.1, then — once 4.1 was done and
-hardened through several rounds of live-use fixes (see
-`phase_audit_v4.md` items 4.1.9-4.1.16) — moved out of v4 entirely to
-open Version 5 as its own phase (5.1) instead of staying a secondary
-item here. Canonical, going-forward copy: `docs/Version_5/v5_plan.md`.
-The content below is left in place as the historical as-planned
-record for when this scope still lived in v4 — nothing in it has
-changed, only where it's tracked going forward.
-
-**Why now (whenever this phase actually starts):** Charts are the most-visited surface. Drawing tools require manual timestamp entry (broken UX). Only one chart type (candlestick). Limited indicator set.
-
-**Drawing decisions confirmed (from the original v3 scoping — re-confirm still current before building):**
-- Types v1: **Trend line** (2-point) + **Horizontal line** (1-point, price-level) — scope kept to these two
-- Activation: **Floating toolbar** inside the chart card (top-left strip of buttons)
-- Interaction: **Click → click** to place. **Esc** cancels mid-draw. One click for horizontal line, two for trend line.
-- Storage: **DB-backed** (existing CRUD API, unchanged) — drawing saves to server immediately after second click
-- Lock toggle: small icon button in the toolbar; when locked, chart ignores drawing clicks
-
-### Items
-
-#### 4.2.1 Drawing tools: click-to-place (trend line + horizontal line)
-- **Current state:** `DrawingToolsPanel.tsx` form requires typing start/end timestamps and prices. Clunky.
-- **New behavior (v1):**
-  1. Floating toolbar inside `CandlestickChart` card (top-left): `[T↗] [—] 🔓`
-  2. Click a tool button → enter "draw mode" for that tool (button highlights active)
-  3. Click on the chart → place point 1 (shows a marker dot)
-  4. Click again → place point 2, drawing commits → POST to API → added to the sidebar list
-  5. Press Esc → cancel draw mode, remove marker, no API call
-  6. Drawing lock (🔓→🔒): when locked, clicks are ignored (prevent accidental edits)
-- **Implementation:**
-  - New file: `frontend/src/components/chartInteractions.ts` — pure `pixelToCoord(chart, x, y) -> {time: number, price: number}` using `chart.timeScale().coordinateToTime()` and `chart.priceScale().coordinateToPrice()`
-  - Add `onChartClick(time, price)` callback prop to `CandlestickChart`; when a drawing tool is active and chart is unlocked, emit this
-  - `CandlestickChart` state machine: `idle | placing-start | placing-end | drawing-locked`
-  - On `placing-start` click: show a temporary marker div; transition to `placing-end`
-  - On `placing-end` click: call `api.createDrawingTool(...)`, reset to `idle`
-  - On Esc keydown: if in `placing-*`, remove marker, transition to `idle`
-  - After save: refresh `DrawingToolsPanel` list (existing `fetchDrawings` refetch)
-- Drawing types supported in v1: `trend_line` (needs 2nd click), `horizontal_line` (needs 1 click — price level only, no time)
-
-#### 4.2.2 Chart toolbar: drawing lock toggle + tool activation
-- Add lock state to `CandlestickChart`: `const [drawLock, setDrawLock] = useState(false)`
-- Toolbar buttons: `Trend Line`, `Horizontal`, lock icon
-- Active tool indicator (one at a time, cleared on Esc or on drawing save)
-- Keyboard handler: listen for `Escape` key globally when in draw mode
-
-#### 4.2.3 Additional chart types
-- **Line chart:** `frontend/src/components/LineChart.tsx` — close-only line, no candles, no wicks. Useful for long timeframes.
-- **Area chart:** `LineChart.tsx` with a filled area under the line.
-- **Heikin Ashi:** variant of `CandlestickChart.tsx` that takes `chartType="heikin_ashi"` and pre-computes HA candles from the raw data.
-- **Renko / Kagi / P&F:** out of scope (see Non-goals) — only if all other items land first and there's demand.
-- Add `chart_type` to the `SymbolPage` toolbar with a dropdown
-
-#### 4.2.4 More indicators
-- Currently supported: SMA, EMA, MACD, Bollinger (per `CustomIndicatorsPanel.tsx`).
-- Add: RSI, VWAP, Ichimoku Cloud, ATR, Stochastic, ADX, OBV, Williams %R, CCI
-- File: `frontend/src/components/CustomIndicatorsPanel.tsx` — add the new entries to the dropdown
-- For built-in indicators, add a "Built-in" section in the panel that doesn't require the user to configure anything (just toggle on/off)
-- For VWAP: needs both price and volume; the bars data already has `volume` populated (per `market_data_sql.py`)
-
-#### 4.2.5 Indicator overlay vs separate pane
-- **Overlay (price chart):** SMA, EMA, Bollinger, VWAP, Ichimoku
-- **Separate pane below price:** RSI, MACD, Stochastic, ADX, ATR, Williams %R, CCI, OBV
-- Add a `pane_height` config to custom indicators; UI shows a small thumbnail of where it renders
-
-#### 4.2.6 Chart settings + drawing persistence
-- Chart settings (timeframe, indicator set, chart type): persist per-user via `localStorage` keyed by symbol
-- Drawings: already persisted to DB via existing `DrawingTool` API
-- Verify the click-to-place flow doesn't break the persistence model — the API should still receive `start_timestamp` / `start_price` from the click handler
-- Drawing lock (introduced in 4.2.2) prevents accidental edits
-
-### Before starting — re-verify against current code
-- `DrawingToolsPanel.tsx`, `CustomIndicatorsPanel.tsx`, `CandlestickChart.tsx` still exist with roughly this shape
-- The `DrawingTool` CRUD API (`backend/api/...`) is unchanged
-- `lightweight-charts` is still the pinned charting library (`frontend/package.json`)
-- A TradingView Charting Library integration was attempted once (commit `9598dae`) but isn't present in the current tree — don't reach for it without a specific reason; `lightweight-charts` is the live implementation this plan builds on.
-
-### Verification
-- Click-to-place: open chart, click two points, see trendline appear at correct (timestamp, price)
-- Switch to line chart via toolbar dropdown — renders without errors, no wicks
-- Toggle RSI on — separate pane appears below price chart
-- All chart tests pass; add a new `frontend/src/components/__tests__/chartInteractions.test.ts`
+Originally meant to open Version 4 (carried forward from Version 3's
+never-started Phase 3.4); bumped to make room for Phase 4.1, then —
+once 4.1 was done and hardened — moved out of v4 entirely to open
+Version 5 as its own phase (5.1) instead of staying a secondary item
+here. Never started under v4. Full scope (drawing decisions, items
+5.1.1-5.1.6, verification plan): `docs/Version_5/v5_plan.md`.
 
 ---
 
