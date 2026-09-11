@@ -9,12 +9,15 @@
  * read (no provider I/O), unlike GET /api/ai/status which makes real
  * health-check HTTP calls, so this is cheap enough to poll that often.
  *
- * Deliberately does NOT reflect "which provider actually answered the
- * last request" (that can differ from config.provider when the primary
- * is down and a fallback served it instead) — that per-call attribution
- * already lives in AIAnalysisPanel's own badge, next to the specific
- * analysis it belongs to. This one is page-level: "what's configured to
- * run," not "what just ran."
+ * Shows config.last_provider/last_model when available — the actual
+ * provider/model that answered the most recent successful call
+ * anywhere in the app (analysis, digest, templates), same value
+ * AIAnalysisPanel's own per-call badge shows. config.model can be a
+ * gateway-side alias ("static-best-free") that only resolves to a real
+ * name ("openai/gpt-oss-120b") once a request is actually made, so
+ * last_model is preferred whenever it's known; falls back to the raw
+ * configured provider/model before the first successful call since
+ * server start (last_provider/last_model are both null then).
  */
 import React, { useEffect, useState } from 'react';
 import api, { AIConfig } from '../services/api';
@@ -66,10 +69,16 @@ export function AIProviderBadge() {
   const fallbackNote = config.fallback_providers.length > 0
     ? ` (fallback: ${config.fallback_providers.map(providerLabel).join(', ')})`
     : '';
+  const resolved = config.last_provider !== null && config.last_model !== null;
+  const provider = resolved ? config.last_provider! : config.provider;
+  const model = resolved ? config.last_model! : config.model;
+  const title = resolved
+    ? `Actually answered by ${providerLabel(provider)}, model: ${model}`
+    : `Configured provider chain${fallbackNote} — not yet resolved (no successful call since server start)`;
 
   return (
-    <span className="ai-provider-tag" title={`Configured provider chain${fallbackNote}`}>
-      🤖 {providerLabel(config.provider)} · {config.model}
+    <span className="ai-provider-tag" title={title}>
+      🤖 {providerLabel(provider)} · {model}
     </span>
   );
 }

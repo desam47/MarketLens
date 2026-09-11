@@ -431,6 +431,50 @@ class TestAIManager(unittest.TestCase):
         cfg = m.safe_config()
         self.assertFalse(cfg["api_key_set"])
 
+    def test_safe_config_last_provider_and_model_are_none_before_any_call(self):
+        m = self._make_manager()
+        cfg = m.safe_config()
+        self.assertIsNone(cfg["last_provider"])
+        self.assertIsNone(cfg["last_model"])
+
+    @patch.object(OpenAICompatibleProvider, "health_check", return_value=True)
+    @patch.object(OpenAICompatibleProvider, "complete")
+    def test_safe_config_reflects_the_resolved_model_after_a_successful_call(
+        self, mock_complete, _hc,
+    ):
+        # settings.model can be a gateway-side alias ("static-best-free")
+        # that only resolves to a real model name once a request is
+        # actually made — safe_config() should surface that resolution,
+        # not just echo the configured alias back.
+        m = self._make_manager(provider="ollama", model="static-best-free")
+        mock_complete.return_value = AIResponse(
+            text="ok", provider="ollama", model="openai/gpt-oss-120b",
+        )
+        m.complete("hi")
+        cfg = m.safe_config()
+        self.assertEqual(cfg["model"], "static-best-free")  # unchanged — still the configured alias
+        self.assertEqual(cfg["last_provider"], "ollama")
+        self.assertEqual(cfg["last_model"], "openai/gpt-oss-120b")
+
+    @patch.object(OpenAICompatibleProvider, "health_check", return_value=True)
+    @patch.object(OpenAICompatibleProvider, "complete")
+    def test_last_success_survives_a_later_disabled_call(self, mock_complete, _hc):
+        # A disabled/unavailable response must never clobber the last
+        # known-good resolution — a badge showing "last answered by X"
+        # shouldn't blank out just because AI got toggled off a moment
+        # later.
+        m = self._make_manager(provider="ollama")
+        mock_complete.return_value = AIResponse(
+            text="ok", provider="ollama", model="llama3.2",
+        )
+        m.complete("hi")
+        m._enabled_override = False
+        resp = m.complete("hi again")
+        self.assertIsNone(resp.text)
+        cfg = m.safe_config()
+        self.assertEqual(cfg["last_provider"], "ollama")
+        self.assertEqual(cfg["last_model"], "llama3.2")
+
     def test_status_lists_chain_in_order(self):
         m = self._make_manager(
             enabled=False,  # so health checks are skipped

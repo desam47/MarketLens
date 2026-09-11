@@ -184,6 +184,38 @@ class TestAIConfigEndpoint(unittest.TestCase):
         # api_key must not appear in the response
         self.assertNotIn("api_key", data)
 
+    @patch("backend.api.ai.router.ai_manager")
+    def test_last_provider_and_model_default_to_null_when_absent(self, mock_ai_mgr):
+        # safe_config() omitted these two keys entirely (e.g. an older
+        # cached mock/fixture) — ConfigResponse must still validate,
+        # defaulting both to null rather than 422ing.
+        mock_ai_mgr.safe_config.return_value = {
+            "enabled": True, "provider": "ollama", "fallback_providers": [],
+            "model": "llama3.2", "base_url": "http://localhost:11434",
+            "timeout": 30.0, "max_tokens": 1000, "temperature": 0.3,
+            "api_key_set": False,
+        }
+        resp = client.get("/api/ai/config")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIsNone(data["last_provider"])
+        self.assertIsNone(data["last_model"])
+
+    @patch("backend.api.ai.router.ai_manager")
+    def test_returns_the_resolved_last_provider_and_model(self, mock_ai_mgr):
+        mock_ai_mgr.safe_config.return_value = {
+            "enabled": True, "provider": "ollama", "fallback_providers": [],
+            "model": "static-best-free", "last_provider": "ollama",
+            "last_model": "openai/gpt-oss-120b",
+            "base_url": "http://localhost:11434", "timeout": 30.0,
+            "max_tokens": 1000, "temperature": 0.3, "api_key_set": False,
+        }
+        resp = client.get("/api/ai/config")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["model"], "static-best-free")
+        self.assertEqual(data["last_model"], "openai/gpt-oss-120b")
+
 
 class TestAIConfigPatchEndpoint(unittest.TestCase):
     """Phase 17+: PATCH /api/ai/config flips the enabled flag at runtime."""

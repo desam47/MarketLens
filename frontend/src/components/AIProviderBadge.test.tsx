@@ -11,6 +11,7 @@ const mockApi = api as jest.Mocked<typeof api>;
 
 const config = (over: Partial<any> = {}) => ({
   enabled: true, provider: 'openrouter', fallback_providers: [], model: 'gpt-4o-mini',
+  last_provider: null, last_model: null,
   base_url: '', timeout: 30, max_tokens: 1024, temperature: 0.3, api_key_set: true,
   ...over,
 });
@@ -42,6 +43,31 @@ describe('AIProviderBadge', () => {
     render(<AIProviderBadge />);
     expect(await screen.findByText(/AI disabled/)).toBeInTheDocument();
     expect(screen.queryByText(/openrouter/i)).toBeNull();
+  });
+
+  it('prefers the resolved last_provider/last_model over the raw configured alias', async () => {
+    mockApi.getAIConfig.mockResolvedValue(config({
+      provider: 'ollama', model: 'static-best-free',
+      last_provider: 'ollama', last_model: 'openai/gpt-oss-120b',
+    }));
+    render(<AIProviderBadge />);
+    expect(await screen.findByText(/openai\/gpt-oss-120b/)).toBeInTheDocument();
+    expect(screen.queryByText(/static-best-free/)).toBeNull();
+  });
+
+  it('titles the resolved badge as "actually answered by", not "configured"', async () => {
+    mockApi.getAIConfig.mockResolvedValue(config({
+      last_provider: 'ollama', last_model: 'openai/gpt-oss-120b',
+    }));
+    render(<AIProviderBadge />);
+    const badge = await screen.findByText(/openai\/gpt-oss-120b/);
+    expect(badge.title).toContain('Actually answered by');
+  });
+
+  it('falls back to the raw configured model before any call has resolved it', async () => {
+    mockApi.getAIConfig.mockResolvedValue(config({ model: 'static-best-free' }));
+    render(<AIProviderBadge />);
+    expect(await screen.findByText(/static-best-free/)).toBeInTheDocument();
   });
 
   it('names the fallback chain in the title when one is configured', async () => {

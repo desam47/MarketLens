@@ -57,6 +57,14 @@ class AIManager:
         # Runtime override — None means "use settings.enabled"; set True/False
         # to shadow it without needing to rebuild the manager.
         self._enabled_override: bool | None = None
+        # Which provider/model actually answered the most recent successful
+        # complete() call — e.g. settings.model may be a gateway-side alias
+        # ("static-best-free") that resolves to a real model name
+        # ("openai/gpt-oss-120b") only once a request is actually made; this
+        # is that resolved value, for UI badges that want "what's actually
+        # running" rather than "what's configured" (safe_config() alone).
+        # None until the first successful call since process start.
+        self._last_success: dict[str, str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -190,12 +198,21 @@ class AIManager:
         Strips ``api_key`` and any other secret-looking fields. The
         UI uses this to render provider badges without ever learning
         the credentials.
+
+        ``last_provider``/``last_model`` are None until the first
+        successful ``complete()`` since process start — before that,
+        the UI has nothing better than the configured (possibly an
+        unresolved alias) ``provider``/``model`` to show.
         """
+        with self._lock:
+            last = dict(self._last_success) if self._last_success else None
         return {
             "enabled": self.enabled,
             "provider": self.settings.provider,
             "fallback_providers": self.settings.fallback_chain(),
             "model": self.settings.model,
+            "last_provider": last["provider"] if last else None,
+            "last_model": last["model"] if last else None,
             "base_url": self.settings.base_url,
             "timeout": self.settings.timeout,
             "max_tokens": self.settings.max_tokens,
@@ -240,7 +257,7 @@ class AIManager:
                 continue
 
             try:
-                return provider.complete(
+                resp = provider.complete(
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
@@ -250,6 +267,9 @@ class AIManager:
                 logger.info("AI provider %r unavailable: %s", name, e)
                 last_error = str(e)
                 continue
+            with self._lock:
+                self._last_success = {"provider": resp.provider, "model": resp.model}
+            return resp
 
         logger.warning(
             "All AI providers unavailable (last error: %s). Returning empty response.",

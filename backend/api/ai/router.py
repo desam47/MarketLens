@@ -67,6 +67,12 @@ class ConfigResponse(BaseModel):
     provider: str
     fallback_providers: list[str]
     model: str
+    # Which provider/model actually answered the most recent successful
+    # call — model may be a gateway-side alias ("static-best-free") that
+    # only resolves to a real name ("openai/gpt-oss-120b") once a request
+    # is made. None until the first successful call since process start.
+    last_provider: str | None = None
+    last_model: str | None = None
     base_url: str
     timeout: float
     max_tokens: float

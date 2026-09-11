@@ -521,6 +521,12 @@ export interface AIConfig {
   provider: string;
   fallback_providers: string[];
   model: string;
+  // Which provider/model actually answered the most recent successful
+  // call — model may be a gateway-side alias ("static-best-free") that
+  // only resolves to a real name ("openai/gpt-oss-120b") once a request
+  // is made. Null until the first successful call since server start.
+  last_provider: string | null;
+  last_model: string | null;
   base_url: string;
   timeout: number;
   max_tokens: number;
