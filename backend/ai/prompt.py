@@ -70,6 +70,18 @@ class TradePlan(BaseModel):
     thesis: str = Field(..., min_length=10, max_length=1000)
     invalidation: str = Field(..., min_length=5, max_length=500)
 
+    @field_validator("targets", mode="before")
+    @classmethod
+    def _targets_none_is_empty(cls, v: Any) -> Any:
+        # Weak models sometimes emit "targets": null (and the same for
+        # the other list fields) instead of omitting the key — treat it
+        # as "no targets" rather than failing the whole analysis.
+        if v is None:
+            return []
+        if isinstance(v, (int, float, str)):
+            return [v]
+        return v
+
     @field_validator("targets")
     @classmethod
     def _targets_positive(cls, v: list[float]) -> list[float]:
@@ -198,8 +210,10 @@ class AnalysisResponse(BaseModel):
     def _coerce_and_strip_strings(cls, v: Any) -> Any:
         # Models sometimes return key_levels as raw numbers (242.76)
         # rather than strings ("242.76 support") — coerce so a
-        # near-miss reply isn't thrown away over a type. Non-list
-        # input is left for the strict check to reject.
+        # near-miss reply isn't thrown away over a type. ``null`` becomes
+        # an empty list; any other non-list is left for the strict check.
+        if v is None:
+            return []
         if not isinstance(v, list):
             return v
         out: list[str] = []
@@ -418,6 +432,8 @@ class DigestNarrative(BaseModel):
     @field_validator("headline_movers", mode="before")
     @classmethod
     def _strip_empties(cls, v: Any) -> Any:
+        if v is None:
+            return []
         if isinstance(v, list):
             return [s for s in v if isinstance(s, str) and s.strip()]
         return v

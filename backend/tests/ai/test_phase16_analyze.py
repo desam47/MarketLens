@@ -95,6 +95,24 @@ class TestParseAIReply(unittest.TestCase):
         result = parse_ai_reply(text)
         self.assertEqual(result.trend, "bearish")
 
+    def test_null_list_fields_coerced_to_empty(self):
+        # gemma-class models sometimes send "key_levels": null etc.
+        text = json.dumps({
+            "summary": "Weak model, null lists.", "trend": "neutral", "confidence": 0.5,
+            "supporting_factors": None, "risk_factors": None,
+            "timeframe_conflicts": None, "key_levels": None,
+            "trade_plan": {
+                "recommendation": "hold", "conviction": "low", "time_horizon": "swing",
+                "targets": None,
+                "thesis": "Nothing actionable right now, staying flat.",
+                "invalidation": "A decisive break either way.",
+            },
+        })
+        result = parse_ai_reply(text)
+        self.assertEqual(result.key_levels, [])
+        self.assertEqual(result.supporting_factors, [])
+        self.assertEqual(result.trade_plan.targets, [])
+
     def test_parses_balanced_json_with_prose(self):
         # First balanced {...} wins
         text = 'Here is the analysis: {"summary": "Mixed signals.", "trend": "mixed", "confidence": 0.5, "supporting_factors": ["a", "b"], "risk_factors": [], "timeframe_conflicts": ["1d vs 1h"], "key_levels": ["$100"]}. That is all.'
@@ -259,6 +277,15 @@ class TestTradePlan(unittest.TestCase):
         tp = self._base(entry_zone_low=102.0, entry_zone_high=100.0)
         self.assertEqual(tp.entry_zone_low, 100.0)
         self.assertEqual(tp.entry_zone_high, 102.0)
+
+    def test_targets_null_is_treated_as_empty(self):
+        # a weak model emitting "targets": null must not fail the whole plan
+        tp = self._base(targets=None, risk_reward=None)
+        self.assertEqual(tp.targets, [])
+
+    def test_targets_scalar_is_wrapped(self):
+        tp = self._base(targets=108.0)
+        self.assertEqual(tp.targets, [108.0])
 
     def test_parsed_from_analysis_reply(self):
         raw = (
