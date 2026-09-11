@@ -57,6 +57,7 @@ class AnalysisContext:
     fundamentals: dict[str, Any] = field(default_factory=dict)
     divergence: dict[str, Any] = field(default_factory=dict)
     tape: dict[str, Any] = field(default_factory=dict)
+    track_record: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class AnalysisContext:
             "fundamentals": self.fundamentals,
             "divergence": self.divergence,
             "tape": self.tape,
+            "track_record": self.track_record,
         }
 
 
@@ -498,6 +500,22 @@ def build_context(
     except Exception:  # noqa: BLE001
         pass
 
+    # --- 14. Track record (2026-09-11) — the AI's OWN past buy/sell
+    # calls on this ticker, graded against what happened. Not an
+    # engine-derived quant number either, but it must be framed
+    # honestly (small samples early on) — see CHAT_SYSTEM_PROMPT /
+    # SYSTEM_PROMPT for the exact wording rule.
+    track_record: dict[str, Any] = {}
+    try:
+        from backend.config.settings import settings as _settings
+
+        if _settings.ai_trade_plan_tracking.enabled:
+            from backend.ai.trade_plan_tracker import get_track_record
+
+            track_record = get_track_record(sym)
+    except Exception:  # noqa: BLE001
+        pass
+
     return AnalysisContext(
         symbol=sym,
         timeframe=timeframe,
@@ -523,4 +541,5 @@ def build_context(
         fundamentals=fundamentals,
         divergence=divergence,
         tape=tape,
+        track_record=track_record,
     )

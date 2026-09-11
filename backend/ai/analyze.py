@@ -145,6 +145,18 @@ def analyze_symbol(
     # silently misattributing fallback-served analyses to the primary.
     parsed.provider = ai_resp.provider
     parsed.model = ai_resp.model
+
+    # Single choke point (2026-09-11): every caller of analyze_symbol()
+    # funnels through here, so this is the one place that needs to know
+    # about trade-plan outcome tracking. Best-effort — a capture failure
+    # must never surface as an analysis failure.
+    try:
+        from backend.ai.trade_plan_tracker import record_trade_plan
+
+        record_trade_plan(symbol, parsed)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("trade plan capture failed for %s: %s", symbol, e)
+
     return parsed
 
 

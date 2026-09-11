@@ -196,6 +196,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Tape engine warmup failed: {e}")
 
+    # AI trade-plan outcome tracking — background grading thread. Off
+    # unless AI_TRADE_PLAN_TRACKING_ENABLED=true; capture itself
+    # (analyze_symbol's choke point) is gated independently and doesn't
+    # need anything started here.
+    try:
+        if settings.ai_trade_plan_tracking.enabled:
+            from backend.ai.trade_plan_tracker import start_trade_plan_tracker
+            start_trade_plan_tracker()
+            logger.info("Trade plan grading thread started")
+    except Exception as e:
+        logger.warning(f"Trade plan tracker startup failed: {e}")
+
     # Phase 3.6.2: pre-warm the market-context engine so the first
     # /api/market-context/current request hits a fully-seeded aggregate
     # (SPY/QQQ/IWM/VIX sub-regimes warm from 1d history + live-tick
@@ -265,6 +277,12 @@ async def lifespan(app: FastAPI):
             stop_tape_flusher()
         except Exception as e:
             logger.warning(f"Tape flusher shutdown failed: {e}")
+    if settings.ai_trade_plan_tracking.enabled:
+        try:
+            from backend.ai.trade_plan_tracker import stop_trade_plan_tracker
+            stop_trade_plan_tracker()
+        except Exception as e:
+            logger.warning(f"Trade plan tracker shutdown failed: {e}")
     shutdown_tracing()
 
 

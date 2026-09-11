@@ -606,6 +606,88 @@ class TestAnalyzeSymbol(unittest.TestCase):
         # (Logging assertion would need caplog; out of scope for this test)
 
 
+class TestTradePlanCapture(unittest.TestCase):
+    """analyze_symbol()'s single choke point for trade-plan outcome
+    tracking (2026-09-11) — see backend.ai.trade_plan_tracker."""
+
+    def _buy_reply(self):
+        return AIResponse(
+            text="```json\n" + json.dumps({
+                "summary": "Clean uptrend, buying the dip to support.",
+                "trend": "bullish", "confidence": 0.75,
+                "supporting_factors": [], "risk_factors": [],
+                "timeframe_conflicts": [], "key_levels": [],
+                "trade_plan": {
+                    "recommendation": "buy", "conviction": "high", "time_horizon": "swing",
+                    "entry_zone_low": 100, "entry_zone_high": 102, "stop_loss": 96,
+                    "targets": [108, 115], "risk_reward": 1.4,
+                    "thesis": "Daily uptrend, buying the pullback to support.",
+                    "invalidation": "A daily close below 96 breaks the structure.",
+                },
+            }) + "\n```",
+            provider="ollama", model="llama3.2",
+        )
+
+    def _hold_reply(self):
+        return AIResponse(
+            text="```json\n" + json.dumps({
+                "summary": "Range-bound, nothing actionable right now.",
+                "trend": "neutral", "confidence": 0.4,
+                "supporting_factors": [], "risk_factors": [],
+                "timeframe_conflicts": [], "key_levels": [],
+                "trade_plan": {
+                    "recommendation": "hold", "conviction": "low", "time_horizon": "swing",
+                    "thesis": "No clean setup — staying flat until it breaks the range.",
+                    "invalidation": "A decisive break either way.",
+                },
+            }) + "\n```",
+            provider="ollama", model="llama3.2",
+        )
+
+    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_buy_plan_is_captured(self, mock_ctx, mock_ai, mock_record):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = self._buy_reply()
+        result = analyze_symbol("AAPL", "1d")
+        mock_record.assert_called_once()
+        args, _ = mock_record.call_args
+        self.assertEqual(args[0], "AAPL")
+        self.assertIs(args[1], result)
+
+    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_hold_plan_is_not_specially_skipped_here(self, mock_ctx, mock_ai, mock_record):
+        # analyze_symbol always calls record_trade_plan when there's a
+        # trade_plan at all — record_trade_plan itself is what filters
+        # hold/avoid (see TestRecordTradePlan in test_trade_plan_tracker.py).
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = self._hold_reply()
+        analyze_symbol("AAPL", "1d")
+        mock_record.assert_called_once()
+
+    @patch("backend.ai.trade_plan_tracker.record_trade_plan")
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_capture_failure_never_surfaces_as_an_analysis_failure(
+        self, mock_ctx, mock_ai, mock_record,
+    ):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = self._buy_reply()
+        mock_record.side_effect = RuntimeError("db is down")
+        result = analyze_symbol("AAPL", "1d")  # must not raise
+        self.assertEqual(result.trend, "bullish")
+        self.assertIsNotNone(result.trade_plan)
+
+
 # --- Spec compliance: no AI-side indicator calc ----------------------
 
 

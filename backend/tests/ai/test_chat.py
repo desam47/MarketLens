@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.ai.chat import answer_chat_message
+from backend.ai.chat import _prune_context, answer_chat_message
 from backend.ai.context import InsufficientDataError
 from backend.ai.prompt import AnalysisResponse, UncertaintyResponse
 from backend.ai.provider import AIResponse
@@ -537,6 +537,33 @@ class TestTranscriptClip(_Base):
         prompt = mock_ai.complete.call_args.kwargs["prompt"]
         self.assertIn("…[truncated]", prompt)
         self.assertNotIn("X" * 1000, prompt)
+
+
+class TestPruneContextStatsGating(unittest.TestCase):
+    """historical_signal_stats and track_record are both verbose
+    'stats' sections — dropped unless the turn asked about them
+    (keep_stats), same as the rest of _prune_context's trimming."""
+
+    def _ctx(self, **extra):
+        base = {"price": 150.0, "historical_signal_stats": {"total": 10},
+                "track_record": {"sample_size": 3, "win_rate": 0.67}}
+        base.update(extra)
+        return base
+
+    def test_both_dropped_by_default(self):
+        out = _prune_context(self._ctx(), {"engine_warm": True}, keep_stats=False)
+        self.assertNotIn("historical_signal_stats", out)
+        self.assertNotIn("track_record", out)
+        self.assertIn("price", out)
+
+    def test_both_kept_when_turn_asked(self):
+        out = _prune_context(self._ctx(), {"engine_warm": True}, keep_stats=True)
+        self.assertEqual(out["historical_signal_stats"], {"total": 10})
+        self.assertEqual(out["track_record"], {"sample_size": 3, "win_rate": 0.67})
+
+    def test_empty_track_record_dropped_either_way(self):
+        out = _prune_context(self._ctx(track_record={}), {"engine_warm": True}, keep_stats=True)
+        self.assertNotIn("track_record", out)  # empty-section rule applies first
 
 
 if __name__ == "__main__":

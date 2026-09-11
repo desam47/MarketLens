@@ -44,6 +44,7 @@ from backend.database import Base
 
 # Now import every model so they register with ``Base.metadata``.
 # Whitespace/comma splitting is intentional to keep the list scannable.
+from backend.models.ai_trade_plan_outcome import AITradePlanOutcome                        # noqa: F401
 from backend.models.alert import Alert, AlertTrigger                                       # noqa: F401
 from backend.models.backtest import BacktestRun, BacktestTrade                             # noqa: F401
 from backend.models.experiment import Experiment                                           # noqa: F401

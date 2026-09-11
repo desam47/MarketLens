@@ -75,3 +75,6 @@ from .ai_digest import AIDigest as AIDigest
 # Import chat models (Version 4, AI feature 4: conversational chat panel)
 from .chat import ChatMessage as ChatMessage
 from .chat import ChatSession as ChatSession
+
+# Import AI trade-plan outcome tracking (2026-09-11)
+from .ai_trade_plan_outcome import AITradePlanOutcome as AITradePlanOutcome

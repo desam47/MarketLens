@@ -821,6 +821,22 @@ class TapeSettings(BaseSettings):
     retention_days: int = Field(default=2, ge=1)
 
 
+class AITradePlanTrackingSettings(BaseSettings):
+    """Outcome tracking for the AI's own buy/sell trade_plan calls
+    (2026-09-11). Off unless ``AI_TRADE_PLAN_TRACKING_ENABLED=true`` —
+    when off, analyze_symbol() captures nothing, no background grading
+    thread runs, and context.py's track_record section stays empty.
+    """
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="AI_TRADE_PLAN_TRACKING_", extra="ignore",
+    )
+    enabled: bool = Field(default=False)
+    # How often the background grading pass re-checks open plans against
+    # fresh daily bars. Grading only matters once a day closes, so this
+    # is deliberately generous, not tight.
+    grading_interval_seconds: float = Field(default=1800.0, ge=60.0)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
@@ -856,6 +872,9 @@ class Settings(BaseSettings):
     background: BackgroundProcessingSettings = Field(default_factory=BackgroundProcessingSettings)
     ai_digest: DigestSettings = Field(default_factory=DigestSettings)
     tape: TapeSettings = Field(default_factory=TapeSettings)
+    ai_trade_plan_tracking: AITradePlanTrackingSettings = Field(
+        default_factory=AITradePlanTrackingSettings,
+    )
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 

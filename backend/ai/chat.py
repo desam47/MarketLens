@@ -390,18 +390,19 @@ def _prune_context(ctx: dict, avail: dict, *, keep_stats: bool = False) -> dict:
     - for a cold engine, drop the composite scores (market_structure /
       trend_transition) that read like a confidence number the model
       must not quote for an untracked name,
-    - drop the verbose ``historical_signal_stats`` table unless the turn
-      asked about win rates / base rates,
+    - drop the verbose ``historical_signal_stats`` / ``track_record``
+      sections unless the turn asked about win rates / track record,
     - cap ``news`` to the 4 most recent items.
     """
     cold_only = {"market_structure", "trend_transition"}
+    stats_only = {"historical_signal_stats", "track_record"}
     out: dict = {}
     for k, v in ctx.items():
         if v is None or v == {} or v == []:
             continue
         if not avail["engine_warm"] and k in cold_only:
             continue
-        if k == "historical_signal_stats" and not keep_stats:
+        if k in stats_only and not keep_stats:
             continue
         if k == "news" and isinstance(v, list):
             v = v[:4]

@@ -360,15 +360,19 @@ _ANALYST_RULES = """\
 3. "confidence" is YOUR estimate (0.0-1.0) of how much weight a \
    trader should give this analysis. High values require multiple \
    confirming signals; low values indicate conflicting or sparse data.
-4. The context may include "news", "fundamentals", "divergence", and \
-   "tape" sections. Treat these as supporting evidence only — they may \
-   inform "supporting_factors" or "risk_factors", but they must \
-   NEVER override the quant-derived "trend" field. An empty or \
-   missing section just means that data wasn't available — its \
-   absence is not evidence of anything. The "tape" section is raw \
-   recent order-flow aggregation (buy vs sell pressure, block prints, \
-   tape speed) — you MAY quote its values directly, framed as "recent \
-   tape".
+4. The context may include "news", "fundamentals", "divergence", \
+   "tape", and "track_record" sections. Treat these as supporting \
+   evidence only — they may inform "supporting_factors" or \
+   "risk_factors", but they must NEVER override the quant-derived \
+   "trend" field. An empty or missing section just means that data \
+   wasn't available — its absence is not evidence of anything. The \
+   "tape" section is raw recent order-flow aggregation (buy vs sell \
+   pressure, block prints, tape speed) — you MAY quote its values \
+   directly, framed as "recent tape". The "track_record" section, \
+   when present, is YOUR OWN past buy/sell calls on this ticker \
+   graded against what happened (win_rate, sample_size, ...) — frame \
+   it honestly, never as a guarantee, and say so explicitly when \
+   sample_size is small (under ~5).
 5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block."""
 
@@ -671,7 +675,11 @@ Rules you must follow:
    earlier turn discussed older data, prefer the blocks over your own \
    past replies. A "tape" section, when present, is raw recent \
    order-flow aggregation (buy/sell pressure, block prints, tape \
-   speed); you may quote it directly as "recent tape".
+   speed); you may quote it directly as "recent tape". A \
+   "track_record" section, when present, is YOUR OWN past buy/sell \
+   calls on that ticker graded against what happened — frame it \
+   honestly, never as a guarantee, and flag it when sample_size is \
+   small (under ~5).
 5. Your output is a single JSON object with EXACTLY these fields: \
    "reply" (string, 1-4 sentences, conversational), "grounded" \
    (boolean — true if you had enough context to answer, false if \
