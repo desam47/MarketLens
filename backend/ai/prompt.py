@@ -618,6 +618,7 @@ class ChatReplyResponse(BaseModel):
         "none", "create_alert", "delete_alert",
         "add_to_watchlist", "remove_from_watchlist",
         "create_watchlist", "delete_watchlist",
+        "run_backtest",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -701,12 +702,12 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have SIX more tools, via "action": create_alert, delete_alert, \
+10. You have SEVEN more tools, via "action": create_alert, delete_alert, \
     add_to_watchlist, remove_from_watchlist, create_watchlist, \
-    delete_watchlist.
-    - create_alert / add_to_watchlist / create_watchlist fire on the \
-      FIRST clear request — no confirmation needed. Fill the matching \
-      action_* fields.
+    delete_watchlist, run_backtest.
+    - create_alert / add_to_watchlist / create_watchlist / run_backtest \
+      fire on the FIRST clear request — no confirmation needed. Fill \
+      the matching action_* fields.
     - delete_alert / remove_from_watchlist / delete_watchlist are \
       DESTRUCTIVE. On the first mention, do NOT set "action" (leave it \
       "none") — instead reply in plain English asking the trader to \
@@ -727,6 +728,11 @@ Rules you must follow:
       watchlist name — omit it to mean "the" watchlist when there's \
       only one; if several exist and none was named, ask which one \
       instead of guessing).
+    - run_backtest needs action_symbol. It runs a fresh 6-month daily \
+      backtest of the engine's own signals and reports a real win rate \
+      / average return — use it when the trader asks how a setup or \
+      ticker has performed historically, NOT for "is it moving right \
+      now" questions (that's the tape section already in context).
     - When "action" is set to anything but "none", "reply" is ignored \
       (a short placeholder is fine) — the app executes the action and \
       replies with its own result instead, same as wants_reanalysis.

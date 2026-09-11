@@ -16,8 +16,9 @@ analysis, via ChatReplyResponse.wants_reanalysis.
 
 2026-09-11: extended to a small closed set of further tools, via
 ChatReplyResponse.action — create/delete an alert, add/remove a
-watchlist ticker, create/delete a watchlist (see _run_action and its
-handlers below). Still no open-ended function-calling loop: exactly
+watchlist ticker, create/delete a watchlist, and run a fresh on-demand
+backtest (see _run_action and its handlers below). Still no open-ended
+function-calling loop: exactly
 one action, decided in the same completion call that would otherwise
 produce a normal reply, executed synchronously before the turn's
 assistant message is persisted. Destructive actions (delete_alert,
@@ -45,6 +46,7 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import timedelta
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.chat_symbols import resolve_turn_symbols
@@ -61,6 +63,7 @@ from backend.ai.reply_stream import ReplyExtractor
 from backend.models import AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository
+from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
 
@@ -809,6 +812,47 @@ def _delete_watchlist(db, parsed) -> tuple[str, bool]:
     return f'Done — deleted "{name}".', True
 
 
+def _run_backtest(db, parsed) -> tuple[str, bool]:
+    """Fresh 6-month daily backtest of the engine's own signals — a
+    real, non-destructive read (no confirm gate). The window is fixed,
+    not AI-chosen: a date range is a bad thing to trust a weak model to
+    fill in, and 6 months / DEFAULT_SIGNALS mirrors what a trader would
+    reach for on the Backtest page for a quick check.
+    """
+    symbol = (parsed.action_symbol or "").upper().strip()
+    if not symbol:
+        return "Which ticker should I backtest?", False
+    if not ai_manager.settings.backtest_tool_enabled:
+        return "Backtesting from chat isn't enabled right now.", False
+
+    from backend.api.rate_limit import _backtest_limiter
+
+    # Chat gets its own budget under a fixed key — separate from the
+    # REST endpoint's per-IP buckets, same limiter/window.
+    allowed, retry_after = _backtest_limiter.is_allowed("chat-tool")
+    if not allowed:
+        return f"Backtests are rate-limited — try again in {retry_after}s.", False
+
+    from backend.backtesting.engine import DEFAULT_SIGNALS, BacktestConfig, backtest_engine
+    from backend.repositories.backtest_repository import BacktestRepository
+
+    end = now_ny()
+    config = BacktestConfig(
+        symbol=symbol, start_date=end - timedelta(days=180), end_date=end,
+        signals=list(DEFAULT_SIGNALS), timeframe="1d",
+    )
+    run_id = backtest_engine.run(config)
+    run = BacktestRepository(db).get_run(run_id)
+    if run is None or run.status != "completed" or not run.total_signals:
+        return f"Not enough historical data to backtest {symbol} over the last 6 months.", False
+    return (
+        f"Over the last 6 months, {symbol}'s signals ({run.signals_requested}) fired "
+        f"{run.total_signals} times — {run.win_rate_1d:.0%} win rate, avg 1-day return "
+        f"{run.avg_return_1d:+.1%} (5-day {run.avg_return_5d:+.1%}).",
+        True,
+    )
+
+
 _ACTION_HANDLERS = {
     "create_alert": _create_alert,
     "delete_alert": _delete_alert,
@@ -816,6 +860,7 @@ _ACTION_HANDLERS = {
     "remove_from_watchlist": _remove_from_watchlist,
     "create_watchlist": _create_watchlist,
     "delete_watchlist": _delete_watchlist,
+    "run_backtest": _run_backtest,
 }
 
 

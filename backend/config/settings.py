@@ -370,6 +370,10 @@ class AISettings(BaseSettings):
     # Off => the streaming endpoint still exists but emits the whole
     # reply in one chunk, so the frontend path is unchanged.
     chat_streaming: bool = Field(default=True)
+    # The chat's run_backtest action tool (2026-09-11) — a fresh 6-month
+    # backtest of the engine's own signals, on demand. Off by default:
+    # a chat-triggered backtest is a real, rate-limited compute cost.
+    backtest_tool_enabled: bool = Field(default=False)
 
     def fallback_chain(self) -> list[str]:
         """Return the ordered list of fallback providers (excluding primary)."""

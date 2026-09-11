@@ -29,8 +29,10 @@ from backend.ai.chat import (
     _remove_from_watchlist,
     _resolve_watchlist,
     _run_action,
+    _run_backtest,
     answer_chat_message,
 )
+from backend.ai.manager import ai_manager
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.provider import AIResponse
 from backend.models import (
@@ -396,6 +398,91 @@ class TestResolveWatchlist(_DBBase):
         self.assertIsNone(found)
         self.assertFalse(ambiguous)
         self.assertEqual(candidates, [])
+
+
+class TestRunBacktest(_DBBase):
+    """run_backtest — a real, non-destructive read: fixed 6-month/daily
+    window, its own rate-limit bucket, gated on its own settings flag."""
+
+    def _enabled(self):
+        return patch.object(ai_manager.settings, "backtest_tool_enabled", True)
+
+    def test_no_symbol(self):
+        with self._enabled():
+            text, grounded = _run_backtest(self.db, _parsed())
+        self.assertFalse(grounded)
+        self.assertIn("which ticker", text.lower())
+
+    def test_disabled_flag_degrades_without_running(self):
+        with patch.object(ai_manager.settings, "backtest_tool_enabled", False), \
+             patch("backend.backtesting.engine.backtest_engine") as engine:
+            text, grounded = _run_backtest(self.db, _parsed(action_symbol="AAPL"))
+        self.assertFalse(grounded)
+        self.assertIn("isn't enabled", text)
+        engine.run.assert_not_called()
+
+    def test_rate_limited_degrades(self):
+        with self._enabled(), \
+             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
+             patch("backend.backtesting.engine.backtest_engine") as engine:
+            limiter.is_allowed.return_value = (False, 42)
+            text, grounded = _run_backtest(self.db, _parsed(action_symbol="AAPL"))
+        self.assertFalse(grounded)
+        self.assertIn("rate-limited", text)
+        self.assertIn("42", text)
+        engine.run.assert_not_called()
+
+    def test_insufficient_data_degrades(self):
+        run = MagicMock(status="completed", total_signals=0)
+        with self._enabled(), \
+             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
+             patch("backend.backtesting.engine.backtest_engine") as engine, \
+             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+            limiter.is_allowed.return_value = (True, 0)
+            engine.run.return_value = 1
+            repo_cls.return_value.get_run.return_value = run
+            text, grounded = _run_backtest(self.db, _parsed(action_symbol="ZZZZ"))
+        self.assertFalse(grounded)
+        self.assertIn("Not enough historical data", text)
+
+    def test_happy_path_reports_real_numbers(self):
+        run = MagicMock(
+            status="completed", total_signals=42, signals_requested="RSI_OVERSOLD,MACD_BULLISH",
+            win_rate_1d=0.62, avg_return_1d=0.012, avg_return_5d=0.034,
+        )
+        with self._enabled(), \
+             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
+             patch("backend.backtesting.engine.backtest_engine") as engine, \
+             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+            limiter.is_allowed.return_value = (True, 0)
+            engine.run.return_value = 7
+            repo_cls.return_value.get_run.return_value = run
+            text, grounded = _run_backtest(self.db, _parsed(action_symbol="AAPL"))
+        self.assertTrue(grounded)
+        self.assertIn("42 times", text)
+        self.assertIn("62% win rate", text)
+        engine.run.assert_called_once()
+        repo_cls.return_value.get_run.assert_called_once_with(7)
+
+    def test_finalize_parsed_never_asks_for_confirmation(self):
+        # run_backtest is not in _DESTRUCTIVE_ACTIONS — it fires on the
+        # first mention, like create_alert.
+        run = MagicMock(
+            status="completed", total_signals=5, signals_requested="RSI_OVERSOLD",
+            win_rate_1d=0.4, avg_return_1d=-0.01, avg_return_5d=0.0,
+        )
+        with self._enabled(), \
+             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
+             patch("backend.backtesting.engine.backtest_engine") as engine, \
+             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+            limiter.is_allowed.return_value = (True, 0)
+            engine.run.return_value = 3
+            repo_cls.return_value.get_run.return_value = run
+            text, grounded = _finalize_parsed(
+                self.db, _parsed(action="run_backtest", action_symbol="AAPL"), [],
+            )
+        self.assertNotIn("confirm", text.lower())
+        engine.run.assert_called_once()
 
 
 class TestRunActionNeverRaises(_DBBase):
