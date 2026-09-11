@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../"))
 
-from backend.alerts.engine import DEDUP_WINDOW_SECONDS, AlertsEngine
+from backend.alerts.engine import (
+    BAR_CONDITIONS,
+    DEDUP_WINDOW_SECONDS,
+    PRICE_CONDITIONS,
+    AlertsEngine,
+)
 
 
 def _make_alert(
@@ -36,6 +41,24 @@ def _make_result(symbol: str = "AAPL", signals: list[str] | None = None, price: 
     result.signals = signals or []
     result.price = price
     return result
+
+
+class TestConditionGroupConstants(unittest.TestCase):
+    """PRICE_CONDITIONS / BAR_CONDITIONS were hoisted to module level
+    2026-09-11 after a bug where the same tuples, redefined locally in
+    three methods, could (and once did — see register_for_alert's
+    signal_equals comment) silently drift out of sync. Guard that every
+    VALID_CONDITION_TYPES entry other than signal_equals lands in
+    exactly one of these two groups."""
+
+    def test_price_and_bar_conditions_are_disjoint(self):
+        self.assertEqual(set(PRICE_CONDITIONS) & set(BAR_CONDITIONS), set())
+
+    def test_every_non_signal_condition_type_is_covered(self):
+        from backend.alerts.conditions import VALID_CONDITION_TYPES
+
+        covered = set(PRICE_CONDITIONS) | set(BAR_CONDITIONS) | {"signal_equals"}
+        self.assertEqual(set(VALID_CONDITION_TYPES), covered)
 
 
 class TestAlertsEngineConditions(unittest.TestCase):
@@ -334,6 +357,52 @@ class TestAlertsEngineBarConditions(unittest.TestCase):
             self.assertTrue(mock_fire.called)
             self.assertEqual(mock_fire.call_args[1]["extra_value"],
                              {"price_change_pct": 2.5, "rsi_like": 45.0})
+
+    def test_on_bar_builds_only_the_payload_the_registered_alert_needs(self):
+        """2026-09-11 perf fix: a symbol with only a breakout alert must
+        not pay for trend/alignment/volume/breakdown's DB round trips
+        (alignment alone is 7 queries) on every bar tick."""
+        alert = _make_alert(id=1, condition_type="breakout", parameter="20")
+        self._add_bar_alert(alert)
+        with patch.object(self.engine, "_try_fire", return_value=True), \
+             patch("backend.alerts.engine.build_breakout_payload",
+                   return_value={"current_price": 155.0, "highest_high": 150.0}) as m_breakout, \
+             patch("backend.alerts.engine.build_trend_payload") as m_trend, \
+             patch("backend.alerts.engine.build_alignment_payload") as m_alignment, \
+             patch("backend.alerts.engine.build_volume_payload") as m_volume, \
+             patch("backend.alerts.engine.build_breakdown_payload") as m_breakdown:
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+
+        m_breakout.assert_called_once()
+        m_trend.assert_not_called()
+        m_alignment.assert_not_called()
+        m_volume.assert_not_called()
+        m_breakdown.assert_not_called()
+
+    def test_on_bar_builds_payloads_for_every_registered_condition_group(self):
+        """Two alerts on the same symbol, two different condition
+        groups -> both needed payloads are built, the other three
+        (unused) groups are still skipped."""
+        breakout_alert = _make_alert(id=1, condition_type="breakout", parameter="20")
+        trend_alert = _make_alert(id=2, condition_type="trend_strengthens", parameter="")
+        self._add_bar_alert(breakout_alert)
+        self._add_bar_alert(trend_alert)
+        with patch.object(self.engine, "_try_fire", return_value=True), \
+             patch("backend.alerts.engine.build_breakout_payload",
+                   return_value={"current_price": 155.0, "highest_high": 150.0}) as m_breakout, \
+             patch("backend.alerts.engine.build_trend_payload",
+                   return_value={"current": 75.0, "previous": 60.0,
+                                 "current_direction": "bullish", "previous_direction": "bullish"}) as m_trend, \
+             patch("backend.alerts.engine.build_alignment_payload") as m_alignment, \
+             patch("backend.alerts.engine.build_volume_payload") as m_volume, \
+             patch("backend.alerts.engine.build_breakdown_payload") as m_breakdown:
+            self.engine._on_bar("AAPL", "1d", 155.0, volume=0, timestamp=None)
+
+        m_breakout.assert_called_once()
+        m_trend.assert_called_once()
+        m_alignment.assert_not_called()
+        m_volume.assert_not_called()
+        m_breakdown.assert_not_called()
 
 
 class TestEvaluateScanResult(unittest.TestCase):

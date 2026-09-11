@@ -41,6 +41,40 @@ logger = logging.getLogger(__name__)
 # same symbol. 3600 = 1 hour. A value of 0 disables dedup.
 DEDUP_WINDOW_SECONDS = 3600
 
+# Condition-type groupings (2026-09-11: hoisted to module level — these
+# used to be redefined as identical local tuples in three separate
+# methods below, which is exactly how "signal_equals" once fell through
+# every one of them and silently stopped evaluating until the next
+# restart; one copy can't drift out of sync with itself).
+#
+# Price-based: fire on every quote tick (_on_quote).
+PRICE_CONDITIONS: tuple[str, ...] = ("price_above", "price_below", "pct_change_above")
+
+# Bar-based: fire on every completed bar (_on_bar). Grouped by which
+# payload builder they need — _on_bar uses these groups to build only
+# the payload(s) actually required for the alerts registered on a
+# symbol, instead of building all of them (11 DB queries, 7 of those
+# just for alignment) on every single bar tick regardless of which
+# condition types are actually in use.
+TREND_CONDITIONS: tuple[str, ...] = (
+    "trend_crosses_above_70", "trend_crosses_below_70",
+    "trend_direction_changes", "trend_strengthens", "trend_weakens",
+)
+ALIGNMENT_CONDITIONS: tuple[str, ...] = ("full_timeframe_alignment", "timeframe_conflict")
+VOLUME_CONDITIONS: tuple[str, ...] = ("volume_expansion",)
+BREAKOUT_CONDITIONS: tuple[str, ...] = ("breakout",)
+BREAKDOWN_CONDITIONS: tuple[str, ...] = ("breakdown",)
+# divergence / market_regime_change are already computed lazily, one
+# builder call per matching alert — not part of the eager-build groups.
+DIVERGENCE_CONDITIONS: tuple[str, ...] = ("divergence",)
+REGIME_CONDITIONS: tuple[str, ...] = ("market_regime_change",)
+
+BAR_CONDITIONS: tuple[str, ...] = (
+    TREND_CONDITIONS + ALIGNMENT_CONDITIONS + VOLUME_CONDITIONS
+    + BREAKOUT_CONDITIONS + BREAKDOWN_CONDITIONS
+    + DIVERGENCE_CONDITIONS + REGIME_CONDITIONS
+)
+
 
 class AlertsEngine:
     """Process-wide alert evaluation engine.
@@ -89,17 +123,6 @@ class AlertsEngine:
 
         # Rebuild the alerts cache.
         self._alerts_cache = {a.id: a for a in alerts}
-
-        # Price-based conditions: fire on every quote tick.
-        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
-        # Bar-based conditions: fire on every bar (trend, alignment, volume, etc.).
-        BAR_CONDITIONS = (
-            "trend_crosses_above_70", "trend_crosses_below_70",
-            "trend_direction_changes", "trend_strengthens", "trend_weakens",
-            "full_timeframe_alignment", "timeframe_conflict",
-            "volume_expansion", "breakout", "breakdown", "divergence",
-            "market_regime_change",
-        )
 
         current_price_symbols = set(self._price_alert_ids.keys())
         current_bar_symbols = set(self._bar_alert_ids.keys()) if hasattr(self, "_bar_alert_ids") else set()
@@ -174,14 +197,6 @@ class AlertsEngine:
         evaluating the new alert immediately, without waiting for the
         next startup reload.
         """
-        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
-        BAR_CONDITIONS = (
-            "trend_crosses_above_70", "trend_crosses_below_70",
-            "trend_direction_changes", "trend_strengthens", "trend_weakens",
-            "full_timeframe_alignment", "timeframe_conflict",
-            "volume_expansion", "breakout", "breakdown", "divergence",
-            "market_regime_change",
-        )
         if alert.condition_type == "signal_equals":
             # No engine_registry callback needed — evaluate_scan_result()
             # iterates _alerts_cache directly against every fresh scan
@@ -221,14 +236,6 @@ class AlertsEngine:
 
         Called from the alerts router's DELETE / PUT (is_enabled=False) handlers.
         """
-        PRICE_CONDITIONS = ("price_above", "price_below", "pct_change_above")
-        BAR_CONDITIONS = (
-            "trend_crosses_above_70", "trend_crosses_below_70",
-            "trend_direction_changes", "trend_strengthens", "trend_weakens",
-            "full_timeframe_alignment", "timeframe_conflict",
-            "volume_expansion", "breakout", "breakdown", "divergence",
-            "market_regime_change",
-        )
         if alert.condition_type == "signal_equals":
             # Mirrors register_for_alert's signal_equals branch — no
             # engine_registry callback to unregister, just drop it from
@@ -310,31 +317,46 @@ class AlertsEngine:
         if not alerts:
             return
 
-        # Pre-compute payloads for each condition group.
-        trend_payload = build_trend_payload(sym, tf)
-        alignment_payload = build_alignment_payload(sym)
-        volume_payload = build_volume_payload(sym, tf)
-        breakout_payload = build_breakout_payload(sym, tf)
-        breakdown_payload = build_breakdown_payload(sym, tf)
+        # Build only the payload(s) actually needed for the condition
+        # types registered on this symbol (2026-09-11) — each builder is
+        # its own DB round trip (alignment alone is 7 queries, one per
+        # timeframe), so unconditionally building all five on every bar
+        # tick meant up to 11 queries even for a symbol with a single
+        # breakout alert and nothing else.
+        condition_types = {a.condition_type for a in alerts.values()}
+        trend_payload = (
+            build_trend_payload(sym, tf) if condition_types & set(TREND_CONDITIONS) else None
+        )
+        alignment_payload = (
+            build_alignment_payload(sym) if condition_types & set(ALIGNMENT_CONDITIONS) else None
+        )
+        volume_payload = (
+            build_volume_payload(sym, tf) if condition_types & set(VOLUME_CONDITIONS) else None
+        )
+        breakout_payload = (
+            build_breakout_payload(sym, tf) if condition_types & set(BREAKOUT_CONDITIONS) else None
+        )
+        breakdown_payload = (
+            build_breakdown_payload(sym, tf) if condition_types & set(BREAKDOWN_CONDITIONS) else None
+        )
 
         for alert in alerts.values():
             ct = alert.condition_type
-            if ct in ("trend_crosses_above_70", "trend_crosses_below_70",
-                      "trend_direction_changes", "trend_strengthens", "trend_weakens"):
+            if ct in TREND_CONDITIONS:
                 self._try_fire(alert, price, extra_value=trend_payload)
-            elif ct in ("full_timeframe_alignment", "timeframe_conflict"):
+            elif ct in ALIGNMENT_CONDITIONS:
                 self._try_fire(alert, price, extra_value=alignment_payload)
-            elif ct == "volume_expansion":
+            elif ct in VOLUME_CONDITIONS:
                 self._try_fire(alert, price, extra_value=volume_payload)
-            elif ct == "breakout":
+            elif ct in BREAKOUT_CONDITIONS:
                 self._try_fire(alert, price, extra_value=breakout_payload)
-            elif ct == "breakdown":
+            elif ct in BREAKDOWN_CONDITIONS:
                 self._try_fire(alert, price, extra_value=breakdown_payload)
-            elif ct == "divergence":
+            elif ct in DIVERGENCE_CONDITIONS:
                 from .conditions import build_divergence_payload
                 div_payload = build_divergence_payload(sym, tf)
                 self._try_fire(alert, price, extra_value=div_payload)
-            elif ct == "market_regime_change":
+            elif ct in REGIME_CONDITIONS:
                 from .conditions import build_regime_change_payload
                 regime_payload = build_regime_change_payload(sym)
                 self._try_fire(alert, price, extra_value=regime_payload)
