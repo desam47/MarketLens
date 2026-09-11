@@ -26,6 +26,7 @@ Per spec:
 from __future__ import annotations
 
 import logging
+import re
 
 from backend.ai.context import AnalysisContext, InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
@@ -146,6 +147,14 @@ def analyze_symbol(
     parsed.provider = ai_resp.provider
     parsed.model = ai_resp.model
 
+    # Found live 2026-09-11: the prompt didn't actually ask for
+    # key_levels to be labeled (a gap now closed in SYSTEM_PROMPT), so
+    # weaker/older-cached-prompt replies can still come back as bare
+    # numbers ("756.64") with nothing saying support or resistance.
+    # Defense in depth for whatever slips through despite the prompt
+    # fix — label anything still bare, relative to the live price.
+    parsed.key_levels = _label_bare_key_levels(parsed.key_levels, ctx.price)
+
     # Single choke point (2026-09-11): every caller of analyze_symbol()
     # funnels through here, so this is the one place that needs to know
     # about trade-plan outcome tracking. Best-effort — a capture failure
@@ -161,6 +170,33 @@ def analyze_symbol(
 
 
 # --- Internals -------------------------------------------------------
+
+_BARE_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _label_bare_key_levels(levels: list[str], price: float | None) -> list[str]:
+    """Label any key_levels entry that's just a bare number ("756.64")
+    with support/resistance relative to the live price, instead of
+    showing an unexplained number in the UI. A level at or below price
+    is support, above is resistance — the same convention
+    build_context() itself uses for support_resistance (see
+    context.py, "level.price <= latest_close").
+
+    No-ops (returns levels unchanged) when price is unknown, or for
+    any entry that isn't a bare number (already labeled, or some other
+    free-text shape the AI produced).
+    """
+    if price is None:
+        return levels
+    out: list[str] = []
+    for lvl in levels:
+        stripped = lvl.strip()
+        if not _BARE_NUMBER_RE.match(stripped):
+            out.append(lvl)
+            continue
+        label = "support" if float(stripped) <= price else "resistance"
+        out.append(f"{stripped} {label}")
+    return out
 
 
 def _uncertainty(

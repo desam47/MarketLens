@@ -606,6 +606,96 @@ class TestAnalyzeSymbol(unittest.TestCase):
         # (Logging assertion would need caplog; out of scope for this test)
 
 
+class TestBareKeyLevelsLabeling(unittest.TestCase):
+    """Regression for a live bug (2026-09-11): SYSTEM_PROMPT never told
+    the AI key_levels needed a support/resistance label (unlike
+    SYSTEM_PROMPT_ANALYST_ONLY, which always has), so replies came back
+    as bare numbers ("756.64") with nothing saying which side of price
+    they're on. The prompt gap is fixed, but analyze_symbol() also
+    labels anything that still slips through as a defense in depth."""
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_bare_numbers_get_labeled_relative_to_price(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=760.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "AAPL holding above key support into resistance overhead.",
+                    "trend": "bullish",
+                    "confidence": 0.7,
+                    "supporting_factors": [],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                    "key_levels": ["756.64", "760.11", "769.7", "779.37", "629.28"],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        result = analyze_symbol("AAPL", "1d")
+        self.assertEqual(result.key_levels, [
+            "756.64 support",   # <= 760.0
+            "760.11 resistance",
+            "769.7 resistance",
+            "779.37 resistance",
+            "629.28 support",
+        ])
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_already_labeled_levels_are_left_alone(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=760.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "AAPL holding above key support into resistance overhead.",
+                    "trend": "bullish",
+                    "confidence": 0.7,
+                    "supporting_factors": [],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                    "key_levels": ["$756.64 support", "769.7 resistance"],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        result = analyze_symbol("AAPL", "1d")
+        self.assertEqual(result.key_levels, ["$756.64 support", "769.7 resistance"])
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_no_op_when_price_is_unknown(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=None, timestamp="t", data_status="unknown",
+        )
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "Cold-start read with no live price available yet.",
+                    "trend": "uncertain",
+                    "confidence": 0.2,
+                    "supporting_factors": [],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                    "key_levels": ["756.64"],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        result = analyze_symbol("AAPL", "1d")
+        self.assertEqual(result.key_levels, ["756.64"])
+
+
 class TestTradePlanCapture(unittest.TestCase):
     """analyze_symbol()'s single choke point for trade-plan outcome
     tracking (2026-09-11) — see backend.ai.trade_plan_tracker."""

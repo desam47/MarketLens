@@ -411,7 +411,9 @@ Rules you must follow:
    neutral/mixed/uncertain), "confidence" (0.0-1.0), \
    "supporting_factors" (array, max 10), "risk_factors" (array, \
    max 10), "timeframe_conflicts" (array, max 10), "key_levels" \
-   (array, max 10), and "trade_plan" (object, see rule 7).
+   (array, max 10, key support/resistance prices as short strings, \
+   e.g. "756.64 resistance" — always name which one, never a bare \
+   number), and "trade_plan" (object, see rule 7).
 7. "trade_plan" is an object with these fields:
    - "recommendation": "buy" | "sell" | "hold" | "avoid"
    - "conviction": "low" | "medium" | "high"
