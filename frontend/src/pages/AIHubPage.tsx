@@ -75,6 +75,20 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   // this ticker at all (universal chat), so the picker never touches it.
   const handleRefresh = useCallback(() => setTemplatesReloadKey(k => k + 1), []);
 
+  // Chat is universal, but when a turn resolves to a ticker we point the
+  // Hub's own symbol-scoped sections (Analysis, Templates) at it — same
+  // effect as picking it in the SymbolInput. Ignored when it's already
+  // the current ticker.
+  const adoptSymbolFromChat = useCallback(
+    (s: string) => {
+      if (s && s.toUpperCase() !== symbol.toUpperCase()) {
+        onSymbolChange(s.toUpperCase());
+        handleRefresh();
+      }
+    },
+    [symbol, onSymbolChange, handleRefresh],
+  );
+
   // Mount a section (idempotent). Templates drags in Analysis so the
   // AITemplatesPanel → getElementById('ai-analysis-panel').runBackground()
   // bridge always has its target mounted.
@@ -168,7 +182,7 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
               </button>
             </div>
             <p className="ai-hub-picker-note">
-              Drives Analysis &amp; Templates below — Chat isn&apos;t tied to this.
+              Drives Analysis &amp; Templates below — also follows the ticker you ask Chat about.
             </p>
           </div>
         </div>
@@ -191,7 +205,7 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         {revealed.has('chat') ? (
           <PageErrorBoundary pageName="AI Chat">
             <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
-              <ChatPanel />
+              <ChatPanel onSymbolResolved={adoptSymbolFromChat} />
             </Suspense>
           </PageErrorBoundary>
         ) : (

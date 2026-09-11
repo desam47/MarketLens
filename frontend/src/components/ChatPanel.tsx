@@ -21,6 +21,14 @@ import api, { ChatMessage } from '../services/api';
 
 interface ChatPanelProps {
   alertTriggerId?: number | null;
+  /**
+   * Called with the primary ticker a chat turn resolved to (the first
+   * `focus`, else the first `partial`). The AI Hub uses this to point
+   * its Analysis / Templates sections at whatever the trader just asked
+   * about. Not called for market-wide turns or when only `unavailable`
+   * tickers were named. Fires at most once per turn.
+   */
+  onSymbolResolved?: (symbol: string) => void;
 }
 
 // A message in local state may be a not-yet-finalized streaming bubble.
@@ -33,7 +41,7 @@ const EXAMPLES = [
   'Compare AAPL and MSFT',
 ];
 
-export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
+export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState('');
@@ -126,10 +134,25 @@ export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
     const patchPlaceholder = (patch: Partial<LocalMessage>) =>
       setMessages(prev => prev.map(m => (m.id === placeholderId ? { ...m, ...patch } : m)));
 
+    // Point the Hub's Analysis/Templates at the ticker this turn is
+    // about — first `focus`, else first `partial`. Once per turn.
+    let adopted = false;
+    const adoptSymbol = (focus?: string[], partial?: string[]) => {
+      if (adopted || !onSymbolResolved) return;
+      const sym = (focus && focus[0]) || (partial && partial[0]);
+      if (sym && !sym.startsWith('^')) {
+        adopted = true;
+        onSymbolResolved(sym);
+      }
+    };
+
     let sawDelta = false;
     try {
       const finalMsg = await api.streamChatMessage(sessionId, content, {
-        onMeta: m => patchPlaceholder({ focus: m.focus, partial: m.partial, unavailable: m.unavailable }),
+        onMeta: m => {
+          patchPlaceholder({ focus: m.focus, partial: m.partial, unavailable: m.unavailable });
+          adoptSymbol(m.focus, m.partial);
+        },
         onDelta: t => {
           sawDelta = true;
           setMessages(prev =>
@@ -138,12 +161,14 @@ export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
         },
       });
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
+      adoptSymbol(finalMsg.focus, finalMsg.partial);
     } catch (e: any) {
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
           const finalMsg = await api.sendChatMessage(sessionId, content);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
+          adoptSymbol(finalMsg.focus, finalMsg.partial);
           return;
         } catch (e2: any) {
           setError(e2?.message || 'Failed to send message');
@@ -156,7 +181,7 @@ export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
     } finally {
       setSending(false);
     }
-  }, [sessionId, sending]);
+  }, [sessionId, sending, onSymbolResolved]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();

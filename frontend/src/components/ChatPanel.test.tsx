@@ -77,6 +77,44 @@ describe('ChatPanel (universal)', () => {
     expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
   });
 
+  it('reports the resolved ticker via onSymbolResolved', async () => {
+    const onSymbolResolved = jest.fn();
+    mockApi.streamChatMessage.mockImplementation(async (_i: number, _c: string, opts: any) => {
+      opts.onMeta?.({ focus: ['NVDA'], partial: [], unavailable: [] });
+      opts.onDelta?.('NVDA is strong.');
+      return {
+        id: 9, session_id: 1, role: 'assistant', content: 'NVDA is strong.',
+        created_at: '', grounded: true, focus: ['NVDA'], partial: [], unavailable: [],
+      } as any;
+    });
+    render(<ChatPanel onSymbolResolved={onSymbolResolved} />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: "how's nvda" } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(onSymbolResolved).toHaveBeenCalledWith('NVDA'));
+    expect(onSymbolResolved).toHaveBeenCalledTimes(1); // once per turn
+  });
+
+  it('does not call onSymbolResolved for a market-wide turn', async () => {
+    const onSymbolResolved = jest.fn();
+    mockApi.streamChatMessage.mockImplementation(async (_i: number, _c: string, opts: any) => {
+      opts.onMeta?.({ focus: [], partial: [], unavailable: [] });
+      opts.onDelta?.('Risk-on.');
+      return {
+        id: 9, session_id: 1, role: 'assistant', content: 'Risk-on.',
+        created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+      } as any;
+    });
+    render(<ChatPanel onSymbolResolved={onSymbolResolved} />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'how is the market' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => expect(screen.getByText('Risk-on.')).toBeInTheDocument());
+    expect(onSymbolResolved).not.toHaveBeenCalled();
+  });
+
   it('falls back to the blocking endpoint when the stream never starts', async () => {
     mockApi.streamChatMessage.mockRejectedValue(
       Object.assign(new Error('502'), { beforeFirstDelta: true }),
