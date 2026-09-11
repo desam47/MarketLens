@@ -33,7 +33,7 @@ import { PageErrorBoundary } from '../components/PageErrorBoundary';
 import { SymbolInput } from '../components/SymbolInput';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
-import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy, self-fetching panels — same lazy pattern + same chunks
 // SymbolPage used for these.
@@ -62,7 +62,7 @@ const SECTIONS = [
 type SectionId = typeof SECTIONS[number]['id'];
 
 export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
-  const [timeframe, setTimeframe] = useState('1d');
+  const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
   const [activeSection, setActiveSection] = useState<SectionId>('chat');
   // Which sections have been mounted. Chat mounts on open; the rest are

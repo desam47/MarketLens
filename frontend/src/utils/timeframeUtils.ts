@@ -4,6 +4,10 @@ export const TIMEFRAMES = [
 ] as const;
 export type Timeframe = typeof TIMEFRAMES[number];
 
+/** Default timeframe for every timeframe selector (chart interval the
+ * symbol-scoped AI + analysis views open on). */
+export const DEFAULT_TIMEFRAME: Timeframe = '1m';
+
 /** Human-readable labels for timeframe selectors. */
 export const TIMEFRAME_LABELS: Record<string, string> = {
   '1m':  '1 Min',

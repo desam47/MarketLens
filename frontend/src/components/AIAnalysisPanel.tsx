@@ -13,6 +13,7 @@
  */
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import api, { AIAnalysisResult, AIConfig, AIJobStatusResponse } from '../services/api';
+import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
 
 interface AIAnalysisPanelProps {
   symbol: string;
@@ -61,7 +62,7 @@ function providerLabel(provider: string): string {
   return map[provider] || provider;
 }
 
-export function AIAnalysisPanel({ symbol, timeframe = '1d' }: AIAnalysisPanelProps) {
+export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
   const [config, setConfig] = useState<AIConfig | null>(null);
   const [loading, setLoading] = useState(false);

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { HistoricalSignal, RegimeCount, RegimePerformance } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
-import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 const strPrice = fmtPrice;
 
@@ -52,7 +52,7 @@ function regimeBadgeClass(regime: string | null | undefined): string {
 
 export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCardProps) {
   const [symbol, setSymbol] = useState(defaultSymbol);
-  const [timeframe, setTimeframe] = useState('1d');
+  const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [completedOnly, setCompletedOnly] = useState(true);
   const [signals, setSignals] = useState<HistoricalSignal[]>([]);
   const [regimePerformance, setRegimePerformance] = useState<RegimePerformance[]>([]);

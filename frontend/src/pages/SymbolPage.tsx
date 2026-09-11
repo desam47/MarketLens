@@ -14,7 +14,7 @@ import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
 import { SymbolInput } from '../components/SymbolInput';
-import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
 // Each panel makes its own API calls and isn't needed for the first paint.
@@ -430,7 +430,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [tape, setTape] = useState<TapeSnapshot | null>(null);
   const [tapeDisabled, setTapeDisabled] = useState(false);
 
-  const [timeframe, setTimeframe] = useState('1d');
+  const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
 
   const fetchQuote = useCallback(async () => {
