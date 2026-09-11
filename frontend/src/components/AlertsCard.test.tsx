@@ -90,7 +90,9 @@ describe('AlertsCard editing an alert', () => {
     fireEvent.click(screen.getByTitle('Edit alert'));
 
     expect(screen.getByDisplayValue('AAPL RSI Oversold')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('RSI_OVERSOLD')).toBeInTheDocument();
+    // Parameter is a <select> for signal_equals — getByDisplayValue
+    // matches the selected option's visible label text, not its value.
+    expect(screen.getByDisplayValue('RSI Oversold')).toBeInTheDocument();
     const symbolInput = screen.getByDisplayValue('AAPL') as HTMLInputElement;
     expect(symbolInput).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save Changes' })).toBeInTheDocument();
@@ -144,5 +146,50 @@ describe('AlertsCard editing an alert', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Add Alert' })).toBeInTheDocument();
     });
+  });
+});
+
+describe('AlertsCard signal parameter picker', () => {
+  it('shows all 10 known signals as a picker for the default (signal_equals) condition', async () => {
+    render(<AlertsCard />);
+    await screen.findByText('No alerts configured.');
+
+    // signal_equals is CONDITIONS[0] — selected by default on a fresh form.
+    const paramSelect = screen.getByDisplayValue('Select a signal…') as HTMLSelectElement;
+    const optionValues = Array.from(paramSelect.options).map(o => o.value);
+    expect(optionValues).toEqual([
+      '', 'RSI_OVERSOLD', 'RSI_OVERBOUGHT', 'MACD_BULLISH', 'MACD_BEARISH',
+      'MULTI_TIMEFRAME_BULLISH', 'MULTI_TIMEFRAME_BEARISH', 'HIGH_VOLUME',
+      'HEAVY_BUY_PRESSURE', 'HEAVY_SELL_PRESSURE', 'BLOCK_ACTIVITY',
+    ]);
+  });
+
+  it('switches Parameter back to free text (and clears it) when the condition changes away from signal_equals', async () => {
+    render(<AlertsCard />);
+    await screen.findByText('No alerts configured.');
+    screen.getByDisplayValue('Select a signal…');
+
+    fireEvent.change(screen.getByDisplayValue('Signal equals'), { target: { value: 'price_above' } });
+
+    expect(screen.queryByDisplayValue('Select a signal…')).toBeNull();
+    const paramInput = screen.getByPlaceholderText('price threshold (e.g. 150.00)') as HTMLInputElement;
+    expect(paramInput.value).toBe('');
+  });
+
+  it('submits create_alert with the picked signal name', async () => {
+    mockApi.createAlert.mockResolvedValue(alert() as any);
+    render(<AlertsCard />);
+    await screen.findByText('No alerts configured.');
+
+    fireEvent.change(screen.getByLabelText('Alert Name'), { target: { value: 'AAPL RSI' } });
+    fireEvent.change(screen.getByPlaceholderText('AAPL'), { target: { value: 'AAPL' } });
+    fireEvent.change(screen.getByDisplayValue('Select a signal…'), {
+      target: { value: 'MACD_BULLISH' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alert' }));
+
+    await waitFor(() => expect(mockApi.createAlert).toHaveBeenCalledWith({
+      name: 'AAPL RSI', symbol: 'AAPL', condition_type: 'signal_equals', parameter: 'MACD_BULLISH',
+    }));
   });
 });

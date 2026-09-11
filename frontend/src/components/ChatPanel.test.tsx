@@ -157,7 +157,7 @@ describe('ChatPanel (universal)', () => {
       });
     });
 
-    it('offers signal_equals alongside the 3 threshold conditions, with a text input for it', async () => {
+    it('offers signal_equals alongside the 3 threshold conditions, with a signal picker for it', async () => {
       mockApi.createAlert.mockResolvedValue({} as any);
       render(<ChatPanel />);
 
@@ -169,10 +169,16 @@ describe('ChatPanel (universal)', () => {
       ]);
 
       fireEvent.change(select, { target: { value: 'signal_equals' } });
-      const input = screen.getByLabelText('Alert threshold for AAPL') as HTMLInputElement;
-      expect(input.type).toBe('text');
+      // The threshold field for signal_equals is a picker over every
+      // signal the scanner can emit, not free text.
+      const paramSelect = screen.getByLabelText('Alert threshold for AAPL') as HTMLSelectElement;
+      expect(Array.from(paramSelect.options).map(o => o.value)).toEqual([
+        '', 'RSI_OVERSOLD', 'RSI_OVERBOUGHT', 'MACD_BULLISH', 'MACD_BEARISH',
+        'MULTI_TIMEFRAME_BULLISH', 'MULTI_TIMEFRAME_BEARISH', 'HIGH_VOLUME',
+        'HEAVY_BUY_PRESSURE', 'HEAVY_SELL_PRESSURE', 'BLOCK_ACTIVITY',
+      ]);
 
-      fireEvent.change(input, { target: { value: 'rsi_oversold' } });
+      fireEvent.change(paramSelect, { target: { value: 'RSI_OVERSOLD' } });
       fireEvent.click(screen.getByText('Set'));
 
       await waitFor(() => expect(screen.getByText('✓ Alert set')).toBeInTheDocument());
@@ -180,6 +186,22 @@ describe('ChatPanel (universal)', () => {
         name: 'AAPL signal equals', symbol: 'AAPL',
         condition_type: 'signal_equals', parameter: 'RSI_OVERSOLD',
       });
+    });
+
+    it('clears the threshold value when switching condition away from signal_equals', async () => {
+      render(<ChatPanel />);
+      fireEvent.click(await screen.findByTitle('Set an alert on AAPL'));
+
+      const select = screen.getByLabelText('Alert condition for AAPL') as HTMLSelectElement;
+      fireEvent.change(select, { target: { value: 'signal_equals' } });
+      fireEvent.change(screen.getByLabelText('Alert threshold for AAPL'), {
+        target: { value: 'HIGH_VOLUME' },
+      });
+
+      fireEvent.change(select, { target: { value: 'price_above' } });
+      const numberInput = screen.getByLabelText('Alert threshold for AAPL') as HTMLInputElement;
+      expect(numberInput.type).toBe('number');
+      expect(numberInput.value).toBe('');
     });
   });
 

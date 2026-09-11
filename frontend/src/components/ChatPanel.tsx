@@ -412,6 +412,23 @@ function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistC
 
 type QuickActionState = 'idle' | 'busy' | 'done' | 'error';
 
+// Every signal name the scanner can emit — mirrors
+// backend/scanner/scanner.py::_generate_signals. A signal_equals alert's
+// parameter must match one of these exactly (the engine checks
+// membership in ScanResult.signals), so this is a picker, not free text.
+const SIGNAL_PARAMETERS: { value: string; label: string }[] = [
+  { value: 'RSI_OVERSOLD', label: 'RSI Oversold' },
+  { value: 'RSI_OVERBOUGHT', label: 'RSI Overbought' },
+  { value: 'MACD_BULLISH', label: 'MACD Bullish' },
+  { value: 'MACD_BEARISH', label: 'MACD Bearish' },
+  { value: 'MULTI_TIMEFRAME_BULLISH', label: 'Multi-Timeframe Bullish' },
+  { value: 'MULTI_TIMEFRAME_BEARISH', label: 'Multi-Timeframe Bearish' },
+  { value: 'HIGH_VOLUME', label: 'High Volume' },
+  { value: 'HEAVY_BUY_PRESSURE', label: 'Heavy Buy Pressure (tape)' },
+  { value: 'HEAVY_SELL_PRESSURE', label: 'Heavy Sell Pressure (tape)' },
+  { value: 'BLOCK_ACTIVITY', label: 'Block Activity (tape)' },
+];
+
 function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlistCreated }: {
   symbol: string;
   watchlistIndex: WatchlistIndex | null;
@@ -546,7 +563,13 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
         <form className="chat-quick-alert-form" onSubmit={handleCreateAlert}>
           <select
             value={alertCondition}
-            onChange={e => setAlertCondition(e.target.value)}
+            onChange={e => {
+              // The parameter's meaning changes with the condition (a
+              // signal name vs. a number) — a leftover value from the
+              // other shape would silently submit as garbage.
+              setAlertCondition(e.target.value);
+              setAlertValue('');
+            }}
             aria-label={`Alert condition for ${symbol}`}
           >
             <option value="signal_equals">Signal equals</option>
@@ -554,19 +577,29 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
             <option value="price_below">Price below</option>
             <option value="pct_change_above">% change above</option>
           </select>
-          <input
-            // signal_equals takes a signal name (e.g. RSI_OVERSOLD), not a
-            // number — mirrors AlertsCard's per-condition hint/type split.
-            type={alertCondition === 'signal_equals' ? 'text' : 'number'}
-            step={alertCondition === 'signal_equals' ? undefined : 'any'}
-            placeholder={alertCondition === 'signal_equals' ? 'RSI_OVERSOLD' : 'value'}
-            value={alertValue}
-            onChange={e => setAlertValue(
-              alertCondition === 'signal_equals' ? e.target.value.toUpperCase() : e.target.value,
-            )}
-            className="chat-quick-alert-input"
-            aria-label={`Alert threshold for ${symbol}`}
-          />
+          {alertCondition === 'signal_equals' ? (
+            <select
+              value={alertValue}
+              onChange={e => setAlertValue(e.target.value)}
+              className="chat-quick-alert-input"
+              aria-label={`Alert threshold for ${symbol}`}
+            >
+              <option value="" disabled>signal…</option>
+              {SIGNAL_PARAMETERS.map(s => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type="number"
+              step="any"
+              placeholder="value"
+              value={alertValue}
+              onChange={e => setAlertValue(e.target.value)}
+              className="chat-quick-alert-input"
+              aria-label={`Alert threshold for ${symbol}`}
+            />
+          )}
           <button
             type="submit"
             className="chat-quick-action-btn"
