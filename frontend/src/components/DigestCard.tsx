@@ -13,6 +13,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { AIDigest } from '../services/api';
+import { formatETDateTime } from './chartMath';
 
 type Session = 'premarket' | 'close';
 
@@ -140,7 +141,7 @@ export function DigestCard() {
               </span>
             )}
             <span className="info-text digest-timestamp">
-              {new Date(digest.generated_at).toLocaleString()}
+              {formatETDateTime(digest.generated_at)}
             </span>
           </div>
 

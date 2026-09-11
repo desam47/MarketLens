@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { TopMoverResult } from '../services/api';
 import { ErrorBanner } from './ErrorBanner';
+import { formatETDateTime } from './chartMath';
 
 interface TopMoversCardProps {
   onSelectSymbol?: (symbol: string) => void;
@@ -164,7 +165,7 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
         <div className="top-movers-header-right">
           {lastUpdated && (
             <span className="last-updated-inline">
-              {lastUpdated.toLocaleString()}
+              {formatETDateTime(lastUpdated.toISOString())}
             </span>
           )}
           <button

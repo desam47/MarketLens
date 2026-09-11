@@ -12,6 +12,7 @@ import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
+import { formatETDateTime } from '../components/chartMath';
 
 interface DashboardProps {
   symbol: string;
@@ -173,7 +174,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
 
       {lastUpdated && (
         <div className="last-updated">
-          Last updated: {lastUpdated.toLocaleString()}
+          Last updated: {formatETDateTime(lastUpdated.toISOString())}
         </div>
       )}
 
