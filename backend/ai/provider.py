@@ -16,6 +16,7 @@ adapters in addition to (or in place of) the HTTP ones.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,6 +73,28 @@ class AIProvider(ABC):
         or the request is structurally invalid (bad API key, missing
         model, etc.) so the manager can try the next fallback.
         """
+
+    def stream(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        """Yield the completion for ``prompt`` in incremental text chunks.
+
+        Same ``ProviderUnavailable`` contract as :meth:`complete` — a
+        provider that can't start the stream raises so the manager can
+        fall through. The default implementation is non-streaming: it
+        runs :meth:`complete` and yields the whole reply once, so a
+        provider that hasn't implemented real streaming still works.
+        """
+        resp = self.complete(
+            prompt, system=system, max_tokens=max_tokens, temperature=temperature
+        )
+        if resp.text:
+            yield resp.text
 
 
 class ProviderUnavailable(RuntimeError):

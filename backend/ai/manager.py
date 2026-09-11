@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -255,6 +256,65 @@ class AIManager:
             last_error,
         )
         return AIResponse(text=None, provider="none", model=self.settings.model)
+
+    def stream(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        """Stream a completion, walking the fallback chain.
+
+        Yields incremental text chunks. Yields nothing when AI is
+        disabled or every provider is unavailable — the caller treats an
+        empty stream the same way it treats ``complete()`` returning
+        ``text=None``.
+
+        Fallthrough to the next provider only happens *before the first
+        chunk*: once a provider has emitted text, a mid-stream failure is
+        logged and the stream ends (no silent restart with a different
+        provider, which would duplicate or contradict what's already
+        been shown).
+        """
+        if not self.enabled:
+            return
+
+        last_error: str | None = None
+        for name in self._all_providers():
+            try:
+                provider = self._get_provider(name)
+            except ValueError as e:
+                logger.warning("Skipping unknown AI provider %r: %s", name, e)
+                last_error = str(e)
+                continue
+
+            if not provider.health_check():
+                logger.info("AI provider %r unhealthy, falling through", name)
+                last_error = f"{name} health check failed"
+                continue
+
+            started = False
+            try:
+                for piece in provider.stream(
+                    prompt,
+                    system=system,
+                    max_tokens=max_tokens or self.settings.max_tokens,
+                    temperature=temperature if temperature is not None else self.settings.temperature,
+                ):
+                    started = True
+                    yield piece
+                return
+            except ProviderUnavailable as e:
+                if started:
+                    logger.warning("AI provider %r failed mid-stream: %s", name, e)
+                    return
+                logger.info("AI provider %r unavailable: %s", name, e)
+                last_error = str(e)
+                continue
+
+        logger.warning("All AI providers unavailable for stream (last error: %s).", last_error)
 
     # --- Internals -----------------------------------------------------
 

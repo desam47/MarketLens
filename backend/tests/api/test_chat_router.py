@@ -227,5 +227,70 @@ class TestSendMessage(unittest.TestCase):
         self.assertEqual(resp.json()["unavailable"], ["RIVN"])
 
 
+class TestSendMessageStream(unittest.TestCase):
+
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @staticmethod
+    def _frames(text):
+        """Parse an SSE body into [(event, data_str), ...]."""
+        out = []
+        for block in text.strip().split("\n\n"):
+            ev = dat = None
+            for line in block.splitlines():
+                if line.startswith("event:"):
+                    ev = line[6:].strip()
+                elif line.startswith("data:"):
+                    dat = line[5:].strip()
+            if ev:
+                out.append((ev, dat))
+        return out
+
+    @patch("backend.ai.chat.stream_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_streams_meta_delta_final(self, mock_repo_cls, mock_stream):
+        import json as _json
+
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_stream.return_value = iter([
+            ("meta", {"focus": ["AAPL"], "partial": [], "unavailable": []}),
+            ("delta", "AAPL looks "),
+            ("delta", "bullish."),
+            ("final", (
+                _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
+                True, ["AAPL"], [], [],
+            )),
+        ])
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages/stream", json={"content": "How's AAPL?"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/event-stream", resp.headers["content-type"])
+
+        frames = self._frames(resp.text)
+        kinds = [e for e, _ in frames]
+        self.assertEqual(kinds, ["meta", "delta", "delta", "final"])
+        self.assertEqual(_json.loads(frames[1][1])["text"], "AAPL looks ")
+        final = _json.loads(frames[-1][1])
+        self.assertEqual(final["content"], "AAPL looks bullish.")
+        self.assertTrue(final["grounded"])
+        self.assertEqual(final["focus"], ["AAPL"])
+        mock_stream.assert_called_once_with(1, "How's AAPL?")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_stream_404_when_session_missing(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = None
+        mock_repo_cls.return_value = mock_repo
+        resp = self.client.post(
+            "/api/ai/chat/sessions/999/messages/stream", json={"content": "hi"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

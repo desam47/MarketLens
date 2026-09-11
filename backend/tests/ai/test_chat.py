@@ -430,6 +430,94 @@ class TestContextCache(_Base):
         self.assertEqual(mock_ctx.call_count, 1)  # 2nd turn hit the cache
 
 
+class TestStreamChatMessage(_Base):
+    """stream_chat_message yields ('meta', ...) then N ('delta', ...) then
+    one ('final', (msg, grounded, focus, partial, unavailable))."""
+
+    def _drain(self, session_id, content):
+        from backend.ai.chat import stream_chat_message
+        return list(stream_chat_message(session_id, content))
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_streams_deltas_then_final(self, mock_ai):
+        self.mock_resolve.return_value = ([], False)
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_streaming = True
+        mock_ai.stream.return_value = iter([
+            '```json\n{"reply": "The market ', 'looks calm', '.", "grounded": true}\n```',
+        ])
+
+        events = self._drain(self.session.id, "how's the market")
+        kinds = [e[0] for e in events]
+        self.assertEqual(kinds[0], "meta")
+        self.assertIn("delta", kinds)
+        self.assertEqual(kinds[-1], "final")
+
+        deltas = "".join(p for k, p in events if k == "delta")
+        self.assertEqual(deltas, "The market looks calm.")
+        msg, grounded, focus, partial, unavailable = events[-1][1]
+        self.assertEqual(msg.role, "assistant")
+        self.assertEqual(msg.content, "The market looks calm.")
+        self.assertTrue(grounded)
+        # persisted exactly once
+        from backend.repositories.chat_repository import ChatRepository
+        repo = ChatRepository()
+        try:
+            rows = repo.get_messages(self.session.id, 50)
+        finally:
+            repo.close()
+        self.assertEqual([r.content for r in rows][-1], "The market looks calm.")
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_non_streaming_mode_emits_one_delta(self, mock_ai):
+        self.mock_resolve.return_value = ([], False)
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_streaming = False
+        mock_ai.complete.return_value = _reply('{"reply": "one shot", "grounded": true}')
+
+        events = self._drain(self.session.id, "how's the market")
+        mock_ai.stream.assert_not_called()
+        self.assertEqual([p for k, p in events if k == "delta"], ["one shot"])
+        self.assertEqual(events[-1][1][0].content, "one shot")
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_ai_off_still_produces_final(self, mock_ai):
+        self.mock_resolve.return_value = ([], False)
+        mock_ai.is_available.return_value = False
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_streaming = True
+
+        events = self._drain(self.session.id, "how's the market")
+        self.assertEqual(events[-1][0], "final")
+        msg, grounded, *_ = events[-1][1]
+        self.assertFalse(grounded)
+        self.assertIn("unavailable", msg.content.lower())
+
+    @patch("backend.ai.chat.analyze_symbol")
+    @patch("backend.ai.chat.build_context")
+    @patch("backend.ai.chat.ai_manager")
+    def test_reanalysis_final_overrides_streamed_text(self, mock_ai, mock_ctx, mock_analyze):
+        self.mock_resolve.return_value = (["AAPL"], False)
+        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_streaming = True
+        mock_ai.stream.return_value = iter([
+            '{"reply": "hold on", "grounded": false, ',
+            '"wants_reanalysis": true, "reanalysis_symbol": "AAPL"}',
+        ])
+        mock_analyze.return_value = AnalysisResponse(
+            symbol="AAPL", trend="bullish", confidence=0.8, summary="Fresh run done.",
+        )
+
+        events = self._drain(self.session.id, "re-run the full analysis on AAPL")
+        final_msg = events[-1][1][0]
+        self.assertIn("re-ran the analysis for AAPL", final_msg.content)
+        self.assertNotEqual(final_msg.content, "hold on")
+
+
 class TestTranscriptClip(_Base):
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")

@@ -30,7 +30,9 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.chat_symbols import resolve_turn_symbols
@@ -43,6 +45,7 @@ from backend.ai.prompt import (
     build_chat_prompt,
     parse_chat_reply,
 )
+from backend.ai.reply_stream import ReplyExtractor
 from backend.models import AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository
@@ -136,6 +139,114 @@ def _build_alert_context(db, alert_trigger_id: int | None) -> dict | None:
     }
 
 
+@dataclass
+class _Turn:
+    """Everything a chat turn needs after context assembly — shared by
+    the blocking (:func:`answer_chat_message`) and streaming
+    (:func:`stream_chat_message`) paths."""
+
+    symbol_blocks: list[dict]
+    unavailable: list[str]
+    market_baseline: dict | None
+    transcript: list[tuple[str, str]]
+    user_content: str
+    alert_context: dict | None
+    capped: bool
+    base: list[str]
+
+    @property
+    def focus(self) -> list[str]:
+        return [b["symbol"] for b in self.symbol_blocks if b["availability"]["engine_warm"]]
+
+    @property
+    def partial(self) -> list[str]:
+        return [b["symbol"] for b in self.symbol_blocks if not b["availability"]["engine_warm"]]
+
+
+def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _Turn:
+    """Persist the user message and assemble the turn's quant context.
+
+    Resolves the turn's tickers from the text (0..N, capped), attaches a
+    cheap market-wide baseline when relevant, and fans the per-symbol
+    context builds out over a thread pool.
+    """
+    session = repo.get_session(session_id)
+    if session is None:
+        raise ValueError(f"chat session {session_id} not found")
+
+    repo.add_message(session_id, "user", user_content)
+
+    history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
+    # Exclude the message we just added — it's passed separately as
+    # `new_message`, not duplicated into the transcript. Long prior
+    # replies are clipped so the transcript can't dominate.
+    transcript = [(m.role, _clip(m.content)) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
+
+    alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
+
+    base = (
+        [session.symbol]
+        if session.scope in ("symbol", "alert")
+        and session.symbol
+        and session.symbol != UNIVERSAL_SYMBOL
+        else []
+    )
+    symbols, capped = resolve_turn_symbols(user_content, transcript, base)
+    single = len(symbols) == 1
+
+    # What this turn actually asks for — skip the rest.
+    want_news = single and bool(_NEWS_INTENT.search(user_content))
+    want_funda = single and bool(_FUNDA_INTENT.search(user_content))
+    want_stats = bool(_STATS_INTENT.search(user_content))
+    want_baseline = (not symbols) or bool(_MARKET_INTENT.search(user_content))
+
+    def _ctx(sym: str) -> dict:
+        return _build_context_cached(sym, news=want_news, funda=want_funda, diverg=single)
+
+    # The market baseline and each per-symbol context are independent
+    # blocking calls (DB reads, a scan, aux-data HTTP) — fan them out.
+    symbol_blocks: list[dict] = []
+    unavailable: list[str] = []
+    market_baseline: dict | None = None
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        baseline_fut = ex.submit(build_market_baseline) if want_baseline else None
+        ctx_futs = {sym: ex.submit(_ctx, sym) for sym in symbols}
+        if baseline_fut is not None:
+            try:
+                market_baseline = baseline_fut.result()
+            except Exception as e:  # noqa: BLE001 — baseline never blocks the turn
+                logger.warning("chat market baseline failed: %s", e)
+        for sym in symbols:  # preserve the resolved order
+            try:
+                ctx = ctx_futs[sym].result()
+            except InsufficientDataError:
+                unavailable.append(sym)
+                continue
+            except Exception as e:  # noqa: BLE001 — per-symbol, never abort the turn
+                logger.warning("chat build_context(%s) failed: %s", sym, e)
+                unavailable.append(sym)
+                continue
+            avail = _availability(ctx)
+            symbol_blocks.append(
+                {
+                    "symbol": sym,
+                    "context": _prune_context(ctx, avail, keep_stats=want_stats),
+                    "availability": avail,
+                }
+            )
+
+    return _Turn(
+        symbol_blocks=symbol_blocks,
+        unavailable=unavailable,
+        market_baseline=market_baseline,
+        transcript=transcript,
+        user_content=user_content,
+        alert_context=alert_context,
+        capped=capped,
+        base=base,
+    )
+
+
 def answer_chat_message(
     session_id: int, user_content: str
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
@@ -161,84 +272,61 @@ def answer_chat_message(
     """
     repo = ChatRepository()
     try:
-        session = repo.get_session(session_id)
-        if session is None:
-            raise ValueError(f"chat session {session_id} not found")
-
-        repo.add_message(session_id, "user", user_content)
-
-        history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
-        # Exclude the message we just added — it's passed separately
-        # as `new_message`, not duplicated into the transcript. Long
-        # prior replies are clipped so the transcript can't dominate.
-        transcript = [(m.role, _clip(m.content)) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
-
-        alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
-
-        base = (
-            [session.symbol]
-            if session.scope in ("symbol", "alert")
-            and session.symbol
-            and session.symbol != UNIVERSAL_SYMBOL
-            else []
+        turn = _prepare_turn(repo, session_id, user_content)
+        reply_text, grounded = _generate_reply(
+            turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
+            turn.user_content, turn.alert_context, turn.capped, turn.base,
         )
-        symbols, capped = resolve_turn_symbols(user_content, transcript, base)
-        single = len(symbols) == 1
+        grounded = grounded and not turn.unavailable  # deterministic fail-safe
+        assistant_message = repo.add_message(session_id, "assistant", reply_text)
+        return assistant_message, grounded, turn.focus, turn.partial, turn.unavailable
+    finally:
+        repo.close()
 
-        # What this turn actually asks for — skip the rest.
-        want_news = single and bool(_NEWS_INTENT.search(user_content))
-        want_funda = single and bool(_FUNDA_INTENT.search(user_content))
-        want_stats = bool(_STATS_INTENT.search(user_content))
-        want_baseline = (not symbols) or bool(_MARKET_INTENT.search(user_content))
 
-        def _ctx(sym: str) -> dict:
-            return _build_context_cached(
-                sym, news=want_news, funda=want_funda, diverg=single,
+def stream_chat_message(
+    session_id: int, user_content: str
+) -> Iterator[tuple]:
+    """Streaming sibling of :func:`answer_chat_message`.
+
+    Yields, in order:
+      ``("meta", {"focus", "partial", "unavailable"})``  — once, after prep
+      ``("delta", text)``                                — 0..N incremental reply chunks
+      ``("final", (message, grounded, focus, partial, unavailable))``  — once
+
+    Same never-raise-for-an-expected-failure contract: AI-off / a
+    malformed reply / a provider error all still end in a persisted
+    assistant row and a ``final`` event. An unexpected failure before
+    prep completes (e.g. bad session id) propagates on first iteration.
+    """
+    repo = ChatRepository()
+    try:
+        turn = _prepare_turn(repo, session_id, user_content)
+        yield ("meta", {
+            "focus": turn.focus, "partial": turn.partial, "unavailable": turn.unavailable,
+        })
+
+        final_text: str | None = None
+        grounded = False
+        try:
+            for kind, payload in _generate_reply_streaming(turn):
+                if kind == "delta":
+                    yield ("delta", payload)
+                else:  # "result"
+                    final_text, grounded = payload
+        except Exception as e:  # noqa: BLE001 — mirror _generate_reply's contract
+            logger.warning("Chat stream generation raised: %s", e)
+            final_text, grounded = (
+                "Something went wrong reaching the AI provider — please try again.", False,
             )
 
-        # The market baseline and each per-symbol context are independent
-        # blocking calls (DB reads, a scan, aux-data HTTP) — fan them out.
-        symbol_blocks: list[dict] = []
-        unavailable: list[str] = []
-        market_baseline: dict | None = None
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            baseline_fut = ex.submit(build_market_baseline) if want_baseline else None
-            ctx_futs = {sym: ex.submit(_ctx, sym) for sym in symbols}
-            if baseline_fut is not None:
-                try:
-                    market_baseline = baseline_fut.result()
-                except Exception as e:  # noqa: BLE001 — baseline never blocks the turn
-                    logger.warning("chat market baseline failed: %s", e)
-            for sym in symbols:  # preserve the resolved order
-                try:
-                    ctx = ctx_futs[sym].result()
-                except InsufficientDataError:
-                    unavailable.append(sym)
-                    continue
-                except Exception as e:  # noqa: BLE001 — per-symbol, never abort the turn
-                    logger.warning("chat build_context(%s) failed: %s", sym, e)
-                    unavailable.append(sym)
-                    continue
-                avail = _availability(ctx)
-                symbol_blocks.append(
-                    {
-                        "symbol": sym,
-                        "context": _prune_context(ctx, avail, keep_stats=want_stats),
-                        "availability": avail,
-                    }
-                )
-
-        reply_text, grounded = _generate_reply(
-            symbol_blocks, unavailable, market_baseline, transcript,
-            user_content, alert_context, capped, base,
-        )
-        grounded = grounded and not unavailable  # deterministic fail-safe
-
-        focus = [b["symbol"] for b in symbol_blocks if b["availability"]["engine_warm"]]
-        partial = [b["symbol"] for b in symbol_blocks if not b["availability"]["engine_warm"]]
-
-        assistant_message = repo.add_message(session_id, "assistant", reply_text)
-        return assistant_message, grounded, focus, partial, unavailable
+        if final_text is None:
+            final_text, grounded = (
+                "AI is currently unavailable, so I can't answer that right now.", False,
+            )
+        grounded = grounded and not turn.unavailable
+        msg = repo.add_message(session_id, "assistant", final_text)
+        yield ("final", (msg, grounded, turn.focus, turn.partial, turn.unavailable))
     finally:
         repo.close()
 
@@ -325,19 +413,13 @@ def _generate_reply(
     if not ai_manager.is_available():
         return "AI is currently unavailable, so I can't answer that right now.", False
 
-    capped_note = None
-    if capped:
-        shown = ", ".join(b["symbol"] for b in symbol_blocks) or "the first few"
-        capped_note = (
-            f"(You named more tickers than I can dig into at once — I looked at {shown}.)"
-        )
-
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     try:
         resp = ai_manager.complete(
             prompt=build_chat_prompt(
                 symbol_blocks, unavailable, market_baseline, transcript,
-                user_content, alert_context, capped_note=capped_note, token_budget=budget,
+                user_content, alert_context,
+                capped_note=_capped_note(capped, symbol_blocks), token_budget=budget,
             ),
             system=CHAT_SYSTEM_PROMPT,
             max_tokens=500,
@@ -355,6 +437,20 @@ def _generate_reply(
         logger.info("Chat reply failed to parse: %s", e)
         return "I couldn't process that — could you rephrase?", False
 
+    return _finalize_parsed(parsed, symbol_blocks)
+
+
+def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
+    if not capped:
+        return None
+    shown = ", ".join(b["symbol"] for b in symbol_blocks) or "the first few"
+    return f"(You named more tickers than I can dig into at once — I looked at {shown}.)"
+
+
+def _finalize_parsed(parsed, symbol_blocks: list[dict]) -> tuple[str, bool]:
+    """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded)``,
+    running the chat's one tool (a real ``analyze_symbol`` run) when the
+    model set ``wants_reanalysis``."""
     if parsed.wants_reanalysis:
         known = [b["symbol"] for b in symbol_blocks]
         target = (parsed.reanalysis_symbol or "").upper().strip()
@@ -365,8 +461,82 @@ def _generate_reply(
         if known:
             return "Which ticker should I run the full analysis for?", True
         return "Tell me which ticker you'd like me to run the full analysis for.", False
-
     return parsed.reply, parsed.grounded
+
+
+def _generate_reply_streaming(turn: _Turn) -> Iterator[tuple]:
+    """Streaming variant of :func:`_generate_reply`.
+
+    Yields ``("delta", text)`` for each incremental piece of the reply,
+    then exactly one ``("result", (final_text, grounded))``. Never raises
+    — every failure mode ends in a ``("result", ...)``.
+
+    The streamed deltas are the model's ``reply`` field decoded live from
+    the partial JSON. The trailing ``result`` is authoritative: on the
+    reanalysis-tool path it differs from what was streamed, and the
+    caller overwrites the bubble with it.
+    """
+    if (
+        not turn.symbol_blocks
+        and turn.unavailable
+        and turn.base
+        and set(turn.unavailable) == {s.upper() for s in turn.base}
+    ):
+        yield ("result", (
+            f"I don't have enough data on {turn.unavailable[0]} yet to answer that.", False,
+        ))
+        return
+
+    if not ai_manager.is_available():
+        yield ("result", (
+            "AI is currently unavailable, so I can't answer that right now.", False,
+        ))
+        return
+
+    budget = max(2000, ai_manager.settings.max_tokens - 500)
+    prompt = build_chat_prompt(
+        turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
+        turn.user_content, turn.alert_context,
+        capped_note=_capped_note(turn.capped, turn.symbol_blocks), token_budget=budget,
+    )
+
+    raw = ""
+    extractor = ReplyExtractor()
+    try:
+        if ai_manager.settings.chat_streaming:
+            for chunk in ai_manager.stream(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500):
+                raw += chunk
+                delta = extractor.feed(raw)
+                if delta:
+                    yield ("delta", delta)
+        else:
+            resp = ai_manager.complete(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
+            raw = resp.text or ""
+            delta = extractor.feed(raw)
+            if delta:
+                yield ("delta", delta)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Chat streaming AI call raised: %s", e)
+        yield ("result", (
+            "Something went wrong reaching the AI provider — please try again.", False,
+        ))
+        return
+
+    if not raw.strip():
+        yield ("result", (
+            "AI is currently unavailable, so I can't answer that right now.", False,
+        ))
+        return
+
+    try:
+        parsed = parse_chat_reply(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.info("Chat reply failed to parse: %s", e)
+        streamed = extractor.text.strip()
+        yield ("result", (streamed or "I couldn't process that — could you rephrase?", False))
+        return
+
+    yield ("result", _finalize_parsed(parsed, turn.symbol_blocks))
 
 
 def _run_reanalysis(symbol: str) -> tuple[str, bool]:

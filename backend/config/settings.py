@@ -366,6 +366,10 @@ class AISettings(BaseSettings):
     # denylist extractor finds nothing.
     chat_max_tickers: int = Field(default=3)
     chat_symbol_ai_fallback: bool = Field(default=True)
+    # Stream the chat reply token-by-token over SSE (perceived latency).
+    # Off => the streaming endpoint still exists but emits the whole
+    # reply in one chunk, so the frontend path is unchanged.
+    chat_streaming: bool = Field(default=True)
 
     def fallback_chain(self) -> list[str]:
         """Return the ordered list of fallback providers (excluding primary)."""

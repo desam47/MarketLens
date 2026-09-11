@@ -10,7 +10,9 @@ so the manager can fall through to the next chain entry.
 """
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -18,6 +20,21 @@ import httpx
 from backend.ai.provider import AIProvider, AIResponse, ProviderUnavailable
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_if_unavailable(status_code: int, name: str, body_preview: str = "") -> None:
+    """Shared response-status classification for ``complete`` / ``stream``.
+
+    401/403/404/429 and 5xx are recoverable — raise ``ProviderUnavailable``
+    so the manager tries the next provider. Other 4xx mean our own request
+    is malformed and should be loud; the caller handles those.
+    """
+    if status_code in (401, 403, 404, 429):
+        raise ProviderUnavailable(
+            f"{name} auth/routing/rate-limit error {status_code}: {body_preview[:200]}"
+        )
+    if status_code >= 500:
+        raise ProviderUnavailable(f"{name} server error {status_code}")
 
 
 class OpenAICompatibleProvider(AIProvider):
@@ -160,6 +177,50 @@ class OpenAICompatibleProvider(AIProvider):
             raw=data,
         )
 
+    def stream(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        url = f"{self._base_url}/chat/completions"
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        body: dict[str, Any] = {"model": self._model, "messages": messages, "stream": True}
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if temperature is not None:
+            body["temperature"] = temperature
+
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST", url, json=body, headers=self._headers()
+                ) as r:
+                    if r.status_code >= 400:
+                        r.read()
+                        _raise_if_unavailable(r.status_code, self.name, r.text)
+                        r.raise_for_status()
+                    for line in r.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload)
+                            piece = chunk["choices"][0].get("delta", {}).get("content")
+                        except (ValueError, KeyError, IndexError, TypeError):
+                            continue
+                        if piece:
+                            yield piece
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+            raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
+
 
 class AnthropicProvider(AIProvider):
     """Anthropic Messages API (https://api.anthropic.com/v1/messages).
@@ -289,6 +350,54 @@ class AnthropicProvider(AIProvider):
             model=data.get("model", self._model),
             raw=data,
         )
+
+    def stream(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        if not self._api_key:
+            raise ProviderUnavailable("anthropic: api_key not set")
+        body: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_tokens or 1000,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        if system:
+            body["system"] = system
+        if temperature is not None:
+            body["temperature"] = temperature
+
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                with client.stream(
+                    "POST", f"{self._base_url}/v1/messages",
+                    json=body, headers=self._headers(),
+                ) as r:
+                    if r.status_code >= 400:
+                        r.read()
+                        _raise_if_unavailable(r.status_code, "anthropic", r.text)
+                        r.raise_for_status()
+                    for line in r.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        try:
+                            evt = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        etype = evt.get("type")
+                        if etype == "content_block_delta":
+                            piece = (evt.get("delta") or {}).get("text")
+                            if piece:
+                                yield piece
+                        elif etype in ("message_stop", "error"):
+                            break
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+            raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 
 
 # --- Factory --------------------------------------------------------

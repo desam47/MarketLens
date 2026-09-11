@@ -23,6 +23,9 @@ interface ChatPanelProps {
   alertTriggerId?: number | null;
 }
 
+// A message in local state may be a not-yet-finalized streaming bubble.
+type LocalMessage = ChatMessage & { streaming?: boolean };
+
 const EXAMPLES = [
   "How's NVDA looking?",
   "What's the market doing today?",
@@ -32,7 +35,7 @@ const EXAMPLES = [
 
 export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -98,23 +101,57 @@ export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
     if (!content || !sessionId || sending) return;
     setSending(true);
     setError(null);
-    const optimisticUser: ChatMessage = {
-      id: -Date.now(),
+    const now = Date.now();
+    const optimisticUser: LocalMessage = {
+      id: -now,
       session_id: sessionId,
       role: 'user',
       content,
       created_at: new Date().toISOString(),
       grounded: null,
     };
-    setMessages(prev => [...prev, optimisticUser]);
+    const placeholderId = -now - 1;
+    const placeholder: LocalMessage = {
+      id: placeholderId,
+      session_id: sessionId,
+      role: 'assistant',
+      content: '',
+      created_at: new Date().toISOString(),
+      grounded: null,
+      streaming: true,
+    };
+    setMessages(prev => [...prev, optimisticUser, placeholder]);
     setInput('');
 
+    const patchPlaceholder = (patch: Partial<LocalMessage>) =>
+      setMessages(prev => prev.map(m => (m.id === placeholderId ? { ...m, ...patch } : m)));
+
+    let sawDelta = false;
     try {
-      const assistantReply = await api.sendChatMessage(sessionId, content);
-      setMessages(prev => [...prev, assistantReply]);
+      const finalMsg = await api.streamChatMessage(sessionId, content, {
+        onMeta: m => patchPlaceholder({ focus: m.focus, partial: m.partial, unavailable: m.unavailable }),
+        onDelta: t => {
+          sawDelta = true;
+          setMessages(prev =>
+            prev.map(m => (m.id === placeholderId ? { ...m, content: m.content + t } : m)),
+          );
+        },
+      });
+      setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
     } catch (e: any) {
-      setError(e?.message || 'Failed to send message');
-      setMessages(prev => prev.filter(m => m.id !== optimisticUser.id));
+      if (e?.beforeFirstDelta && !sawDelta) {
+        // Stream never started — fall back to the plain blocking endpoint.
+        try {
+          const finalMsg = await api.sendChatMessage(sessionId, content);
+          setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
+          return;
+        } catch (e2: any) {
+          setError(e2?.message || 'Failed to send message');
+        }
+      } else {
+        setError(e?.message || 'Failed to send message');
+      }
+      setMessages(prev => prev.filter(m => m.id !== optimisticUser.id && m.id !== placeholderId));
       setInput(content);
     } finally {
       setSending(false);
@@ -169,21 +206,19 @@ export function ChatPanel({ alertTriggerId = null }: ChatPanelProps) {
             </div>
           </div>
         )}
-        {messages.map(m => (
-          <div key={m.id} className={`chat-bubble-row ${m.role}`}>
-            <div className={`chat-bubble ${m.role}`}>
-              {m.content}
-              {m.role === 'assistant' && <ProvenanceRow message={m} />}
+        {messages.map(m => {
+          const pending = m.streaming && !m.content;
+          return (
+            <div key={m.id} className={`chat-bubble-row ${m.role}`}>
+              <div className={`chat-bubble ${m.role}${pending ? ' chat-bubble-pending' : ''}`}>
+                {pending
+                  ? (slow ? 'Still working — pulling data for the tickers you mentioned…' : '…')
+                  : m.content}
+                {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
+              </div>
             </div>
-          </div>
-        ))}
-        {sending && (
-          <div className="chat-bubble-row assistant">
-            <div className="chat-bubble assistant chat-bubble-pending">
-              {slow ? 'Still working — pulling data for the tickers you mentioned…' : '…'}
-            </div>
-          </div>
-        )}
+          );
+        })}
       </div>
 
       <form className="chat-input-row" onSubmit={handleSend}>

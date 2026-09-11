@@ -1889,6 +1889,88 @@ class ApiService {
       body: JSON.stringify({ content }),
     });
   }
+
+  /**
+   * Streaming variant of ``sendChatMessage`` (SSE). Calls ``onDelta`` with
+   * each incremental piece of the reply and ``onMeta`` once with the
+   * provenance lists, then resolves with the final ``ChatMessage`` (same
+   * shape ``sendChatMessage`` returns — authoritative; overwrite any
+   * accumulated delta text with ``.content``).
+   *
+   * Rejects with ``{ beforeFirstDelta }`` context so the caller can fall
+   * back to the plain endpoint when the stream never started.
+   */
+  async streamChatMessage(
+    sessionId: number,
+    content: string,
+    opts: {
+      onDelta?: (text: string) => void;
+      onMeta?: (m: { focus: string[]; partial: string[]; unavailable: string[] }) => void;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<ChatMessage> {
+    const response = await fetch(
+      `${this.baseUrl}/ai/chat/sessions/${sessionId}/messages/stream`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+        signal: opts.signal,
+      },
+    );
+    if (!response.ok || !response.body) {
+      const err: any = new Error(`API Error: ${response.status} ${response.statusText}`);
+      err.beforeFirstDelta = true;
+      throw err;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let sawDelta = false;
+    let final: ChatMessage | null = null;
+    let streamError: string | null = null;
+
+    const handleFrame = (frame: string) => {
+      let event = 'message';
+      let dataStr = '';
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+      }
+      if (!dataStr) return;
+      let data: any;
+      try { data = JSON.parse(dataStr); } catch { return; }
+      if (event === 'meta') opts.onMeta?.(data);
+      else if (event === 'delta') { sawDelta = true; opts.onDelta?.(data.text ?? ''); }
+      else if (event === 'final') final = data as ChatMessage;
+      else if (event === 'error') streamError = data.message || 'Stream error';
+    };
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        handleFrame(buffer.slice(0, sep));
+        buffer = buffer.slice(sep + 2);
+      }
+    }
+    if (buffer.trim()) handleFrame(buffer);
+
+    if (streamError && !final) {
+      const err: any = new Error(streamError);
+      err.beforeFirstDelta = !sawDelta;
+      throw err;
+    }
+    if (!final) {
+      const err: any = new Error('Chat stream ended without a final message');
+      err.beforeFirstDelta = !sawDelta;
+      throw err;
+    }
+    return final;
+  }
 }
 
 // ── Phase 2.4.5: AI template types ──────────────────────────────────────

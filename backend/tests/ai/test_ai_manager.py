@@ -765,5 +765,138 @@ class TestQuantEngineIndependence(unittest.TestCase):
         )
 
 
+class _MockStreamCtx:
+    """Stand-in for ``httpx.Client.stream(...)``'s context manager."""
+
+    def __init__(self, status_code: int, lines: list[str] | None = None, text: str = ""):
+        self.status_code = status_code
+        self._lines = lines or []
+        self.text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return b""
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "boom", request=MagicMock(), response=MagicMock(status_code=self.status_code),
+            )
+
+
+def _stream_client(ctx):
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.stream = MagicMock(return_value=ctx)
+    return client
+
+
+class TestProviderStreaming(unittest.TestCase):
+    def setUp(self):
+        self.p = OpenAICompatibleProvider(
+            provider_name="ollama", base_url="http://localhost:11434/v1",
+            model="llama3.2", api_key=None, timeout=1.0, health_check_timeout=1.0,
+        )
+
+    @patch("backend.ai.providers.httpx.Client")
+    def test_openai_stream_concatenates_deltas_and_stops_on_done(self, MockClient):
+        lines = [
+            'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+            "",
+            'data: {"choices":[{"delta":{"content":"lo"}}]}',
+            "data: [DONE]",
+            'data: {"choices":[{"delta":{"content":"IGNORED"}}]}',
+        ]
+        MockClient.return_value = _stream_client(_MockStreamCtx(200, lines))
+        self.assertEqual("".join(self.p.stream("hi")), "Hello")
+
+    @patch("backend.ai.providers.httpx.Client")
+    def test_openai_stream_raises_unavailable_on_429(self, MockClient):
+        MockClient.return_value = _stream_client(_MockStreamCtx(429, text="slow down"))
+        with self.assertRaises(ProviderUnavailable):
+            list(self.p.stream("hi"))
+
+    @patch("backend.ai.providers.httpx.Client")
+    def test_anthropic_stream_reads_content_block_delta(self, MockClient):
+        p = AnthropicProvider(model="claude-x", api_key="sk-test", timeout=1.0)
+        lines = [
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"A"}}',
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"B"}}',
+            'data: {"type":"message_stop"}',
+        ]
+        MockClient.return_value = _stream_client(_MockStreamCtx(200, lines))
+        self.assertEqual("".join(p.stream("hi")), "AB")
+
+    def test_default_stream_falls_back_to_complete(self):
+        from backend.ai.provider import AIProvider
+
+        class _P(AIProvider):
+            name = "x"
+            def health_check(self):
+                return True
+            def complete(self, *a, **k):
+                return AIResponse(text="whole thing", provider="x", model="m")
+
+        # _P doesn't override stream() -> the base yields complete().text once
+        self.assertEqual("".join(_P().stream("hi")), "whole thing")
+
+
+class TestManagerStreaming(unittest.TestCase):
+    def _mgr(self, **ov):
+        d = dict(enabled=True, provider="ollama", fallback_providers="",
+                 model="llama3.2", base_url="http://localhost:11434/v1", api_key=None,
+                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3,
+                 fallback_model="", fallback_base_url="", fallback_api_key=None)
+        d.update(ov)
+        return AIManager(AISettings(**d))
+
+    def test_disabled_yields_nothing(self):
+        self.assertEqual(list(self._mgr(enabled=False).stream("hi")), [])
+
+    def test_streams_from_healthy_provider(self):
+        m = self._mgr()
+        prov = MagicMock()
+        prov.health_check.return_value = True
+        prov.stream.return_value = iter(["a", "b", "c"])
+        with patch.object(m, "_get_provider", return_value=prov):
+            self.assertEqual(list(m.stream("hi")), ["a", "b", "c"])
+
+    def test_falls_through_when_first_provider_raises_before_any_chunk(self):
+        m = self._mgr(fallback_providers="openai")
+        bad = MagicMock()
+        bad.health_check.return_value = True
+        bad.stream.side_effect = ProviderUnavailable("down")
+        good = MagicMock()
+        good.health_check.return_value = True
+        good.stream.return_value = iter(["ok"])
+        with patch.object(m, "_get_provider", side_effect=[bad, good]):
+            self.assertEqual(list(m.stream("hi")), ["ok"])
+
+    def test_stops_on_mid_stream_failure_no_restart(self):
+        m = self._mgr(fallback_providers="openai")
+
+        def _boom():
+            yield "part"
+            raise ProviderUnavailable("died mid-stream")
+
+        p1 = MagicMock()
+        p1.health_check.return_value = True
+        p1.stream.return_value = _boom()
+        p2 = MagicMock()
+        p2.health_check.return_value = True
+        p2.stream.return_value = iter(["SHOULD-NOT-APPEAR"])
+        with patch.object(m, "_get_provider", side_effect=[p1, p2]):
+            self.assertEqual(list(m.stream("hi")), ["part"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,14 +16,18 @@ it here).
 from __future__ import annotations
 
 import asyncio
-
+import json
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ...models.chat import UNIVERSAL_SYMBOL
 from ...repositories.chat_repository import ChatRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai/chat", tags=["ai-chat"])
 
@@ -223,6 +227,86 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     )
     return _message_to_response(
         message, grounded=grounded, focus=focus, partial=partial, unavailable=unavailable,
+    )
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+@router.post("/sessions/{session_id}/messages/stream")
+async def send_message_stream(session_id: int, payload: SendMessageRequest):
+    """Send a message and stream the assistant's reply over SSE.
+
+    Frames (``text/event-stream``):
+      ``event: meta``  — ``{focus, partial, unavailable}``, once, up front
+      ``event: delta`` — ``{text}``, the reply as it's generated
+      ``event: final`` — the full ``MessageResponse`` (identical shape to
+                         ``POST /messages``), once, after persistence
+      ``event: error`` — ``{message}`` if the turn couldn't even start
+
+    The reply row is still persisted exactly once (at the end); the
+    ``final`` frame is authoritative — for the reanalysis-tool path it
+    differs from the streamed deltas and the client should overwrite.
+    """
+    from ...ai.chat import stream_chat_message
+
+    repo = ChatRepository()
+    try:
+        session = await asyncio.to_thread(repo.get_session, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+    finally:
+        repo.close()
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        _DONE = object()
+
+        def drain():
+            try:
+                for ev in stream_chat_message(session_id, payload.content):
+                    loop.call_soon_threadsafe(queue.put_nowait, ev)
+            except Exception as e:  # noqa: BLE001 — surface as an error frame
+                logger.warning("chat stream drain failed: %s", e)
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, ("error", "The chat turn could not be started."),
+                )
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+
+        loop.run_in_executor(None, drain)
+
+        while True:
+            ev = await queue.get()
+            if ev is _DONE:
+                break
+            kind, payload_ = ev
+            if kind == "meta":
+                yield _sse("meta", payload_)
+            elif kind == "delta":
+                yield _sse("delta", {"text": payload_})
+            elif kind == "final":
+                message, grounded, focus, partial, unavailable = payload_
+                yield _sse(
+                    "final",
+                    _message_to_response(
+                        message, grounded=grounded, focus=focus,
+                        partial=partial, unavailable=unavailable,
+                    ).model_dump(),
+                )
+            elif kind == "error":
+                yield _sse("error", {"message": payload_})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

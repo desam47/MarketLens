@@ -8,6 +8,7 @@ jest.mock('../services/api', () => ({
     createChatSession: jest.fn(),
     getChatMessages: jest.fn(),
     sendChatMessage: jest.fn(),
+    streamChatMessage: jest.fn(),
   },
 }));
 
@@ -50,16 +51,46 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByText('ZZZZ ✗ no data')).toBeInTheDocument();
   });
 
-  it('appends the assistant reply after sending a message', async () => {
+  it('streams the assistant reply incrementally then finalizes it', async () => {
+    mockApi.streamChatMessage.mockImplementation(async (_id: number, _content: string, opts: any) => {
+      opts.onMeta?.({ focus: ['SPY'], partial: [], unavailable: [] });
+      opts.onDelta?.('Risk-');
+      opts.onDelta?.('on.');
+      return {
+        id: 9, session_id: 1, role: 'assistant', content: 'Risk-on.',
+        created_at: '', grounded: true, focus: ['SPY'], partial: [], unavailable: [],
+      } as any;
+    });
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'how is the market' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Risk-on.')).toBeInTheDocument();
+    });
+    expect(mockApi.streamChatMessage).toHaveBeenCalledWith(
+      1, 'how is the market', expect.objectContaining({ onDelta: expect.any(Function) }),
+    );
+    // provenance row from the finalized message
+    expect(screen.getByText('SPY ✓')).toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the blocking endpoint when the stream never starts', async () => {
+    mockApi.streamChatMessage.mockRejectedValue(
+      Object.assign(new Error('502'), { beforeFirstDelta: true }),
+    );
     mockApi.sendChatMessage.mockResolvedValue({
-      id: 9, session_id: 1, role: 'assistant', content: 'Risk-on.',
+      id: 9, session_id: 1, role: 'assistant', content: 'Fallback reply.',
       created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
     } as any);
     render(<ChatPanel />);
     await screen.findByPlaceholderText(/Ask about any stock/i);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'how is the market' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
-    expect(await screen.findByText('Risk-on.')).toBeInTheDocument();
+
+    expect(await screen.findByText('Fallback reply.')).toBeInTheDocument();
     expect(mockApi.sendChatMessage).toHaveBeenCalledWith(1, 'how is the market');
   });
 });
