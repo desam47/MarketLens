@@ -194,6 +194,38 @@ class TestParseAIReply(unittest.TestCase):
         self.assertEqual(result.supporting_factors, ["valid"])
         self.assertEqual(result.risk_factors, ["another"])
 
+    def test_key_levels_dict_items_rendered_readably(self):
+        # A model sometimes sends key_levels as objects instead of
+        # strings — must not leak Python's dict repr ("{'price': ...}")
+        # into what the UI renders.
+        text = json.dumps({
+            "summary": "ok summary text",
+            "trend": "bullish",
+            "confidence": 0.5,
+            "key_levels": [
+                {"price": 0.2, "type": "support"},
+                {"price": 0.21, "type": "resistance"},
+                {"level": 5.5, "label": "pivot"},
+                {"value": 12},
+                {"weird_key": "unrecognized shape"},
+                "$100 support",
+                242.76,
+            ],
+        })
+        result = parse_ai_reply(text)
+        self.assertEqual(result.key_levels, [
+            "0.2 support",
+            "0.21 resistance",
+            "5.5 pivot",
+            "12",
+            "weird_key: unrecognized shape",
+            "$100 support",
+            "242.76",
+        ])
+        for level in result.key_levels:
+            self.assertNotIn("{", level)
+            self.assertNotIn("'", level)
+
     def test_caps_list_size(self):
         # The validator's max_length=10 is enforced by Pydantic
         factors = [f"factor {i}" for i in range(20)]

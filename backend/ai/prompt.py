@@ -158,6 +158,33 @@ _TREND_SYNONYMS: dict[str, str] = {
     "n/a": "uncertain", "na": "uncertain", "none": "uncertain",
 }
 
+# Common key names a model uses for a level's price/number and its
+# label, across whatever shape it picks for a "key level" object.
+_LEVEL_VALUE_KEYS = ("price", "level", "value")
+_LEVEL_LABEL_KEYS = ("type", "label", "side", "kind")
+
+
+def _stringify_list_item(item: Any) -> str:
+    """A free-text list item ("supporting_factors", "key_levels", ...)
+    coerced to a readable string.
+
+    A bare string/number passes through. A dict — a model sometimes
+    sends key_levels as ``{"price": 242.76, "type": "support"}`` instead
+    of a string — is rendered as "242.76 support" rather than Python's
+    ``str(dict)`` repr (``"{'price': 242.76, 'type': 'support'}"``),
+    which is exactly what the UI would otherwise print verbatim.
+    """
+    if isinstance(item, dict):
+        value = next((item[k] for k in _LEVEL_VALUE_KEYS if item.get(k) is not None), None)
+        label = next((item[k] for k in _LEVEL_LABEL_KEYS if item.get(k) is not None), None)
+        if value is not None and label is not None:
+            return f"{value} {label}".strip()
+        if value is not None or label is not None:
+            return str(value if value is not None else label).strip()
+        # Unrecognized shape — still avoid Python's dict repr.
+        return ", ".join(f"{k}: {v}" for k, v in item.items()).strip()
+    return str(item).strip()
+
 
 class AnalysisResponse(BaseModel):
     """Strict schema for the AI's reply.
@@ -209,16 +236,19 @@ class AnalysisResponse(BaseModel):
     @classmethod
     def _coerce_and_strip_strings(cls, v: Any) -> Any:
         # Models sometimes return key_levels as raw numbers (242.76)
-        # rather than strings ("242.76 support") — coerce so a
-        # near-miss reply isn't thrown away over a type. ``null`` becomes
-        # an empty list; any other non-list is left for the strict check.
+        # rather than strings ("242.76 support"), or as an object
+        # ({"price": 242.76, "type": "support"}) — coerce so a near-miss
+        # reply isn't thrown away over a type, and so an object doesn't
+        # render as a raw Python repr ("{'price': ...}") in the UI.
+        # ``null`` becomes an empty list; any other non-list is left for
+        # the strict check.
         if v is None:
             return []
         if not isinstance(v, list):
             return v
         out: list[str] = []
         for item in v:
-            s = str(item).strip()
+            s = _stringify_list_item(item)
             if s:
                 out.append(s)
         return out
