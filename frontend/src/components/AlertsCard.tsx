@@ -49,6 +49,10 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
   const [symbol, setSymbol] = useState(defaultSymbol);
   const [conditionType, setConditionType] = useState(CONDITIONS[0].value);
   const [parameter, setParameter] = useState('');
+  // Non-null while editing an existing alert instead of creating a new
+  // one — the form is reused for both. The backend's PUT doesn't accept
+  // a symbol change, so the symbol field locks while this is set.
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   // List state
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -98,6 +102,23 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     return () => clearInterval(interval);
   }, [refreshTriggers]);
 
+  const resetForm = () => {
+    setEditingId(null);
+    setName('');
+    setSymbol(defaultSymbol);
+    setConditionType(CONDITIONS[0].value);
+    setParameter('');
+  };
+
+  const handleEditClick = (a: Alert) => {
+    setEditingId(a.id);
+    setName(a.name);
+    setSymbol(a.symbol);
+    setConditionType(a.condition_type);
+    setParameter(a.parameter);
+    setStatus(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const payload = {
@@ -112,13 +133,26 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     }
     setSubmitting(true);
     try {
-      await api.createAlert(payload);
-      setStatus({ msg: `Alert "${payload.name}" created.`, isError: false });
-      setName('');
-      setParameter('');
+      if (editingId !== null) {
+        // Symbol isn't part of the update payload — the backend's PUT
+        // doesn't support changing it (the field stays locked in the UI).
+        await api.updateAlert(editingId, {
+          name: payload.name,
+          condition_type: payload.condition_type,
+          parameter: payload.parameter,
+        });
+        setStatus({ msg: `Alert "${payload.name}" updated.`, isError: false });
+      } else {
+        await api.createAlert(payload);
+        setStatus({ msg: `Alert "${payload.name}" created.`, isError: false });
+      }
+      resetForm();
       await refreshAlerts();
     } catch (err: any) {
-      setStatus({ msg: err?.message || 'Failed to create alert', isError: true });
+      setStatus({
+        msg: err?.message || `Failed to ${editingId !== null ? 'update' : 'create'} alert`,
+        isError: true,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -129,6 +163,7 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     try {
       await api.deleteAlert(id);
       setStatus({ msg: 'Alert deleted.', isError: false });
+      if (editingId === id) resetForm(); // was mid-edit on the alert just deleted
       await refreshAlerts();
     } catch (err: any) {
       setStatus({ msg: err?.message || 'Failed to delete alert', isError: true });
@@ -164,7 +199,9 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     <div className="card alerts-card">
       <h2>Alerts</h2>
       <p className="label" style={{ marginTop: 0 }}>
-        Create price and signal alerts that fire during the next scan.
+        {editingId !== null
+          ? 'Editing an existing alert — the symbol can\'t be changed here; delete and recreate for that.'
+          : 'Create price and signal alerts that fire during the next scan.'}
       </p>
 
       <form className="alerts-form" onSubmit={handleSubmit}>
@@ -187,7 +224,8 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
             onChange={e => setSymbol(e.target.value.toUpperCase())}
             placeholder="AAPL"
             maxLength={5}
-            disabled={submitting}
+            disabled={submitting || editingId !== null}
+            title={editingId !== null ? "Can't change the symbol of an existing alert" : undefined}
           />
         </label>
         <label>
@@ -213,8 +251,20 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
           />
         </label>
         <button type="submit" className="btn btn-primary" disabled={submitting}>
-          {submitting ? 'Adding…' : 'Add Alert'}
+          {submitting
+            ? (editingId !== null ? 'Saving…' : 'Adding…')
+            : (editingId !== null ? 'Save Changes' : 'Add Alert')}
         </button>
+        {editingId !== null && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={resetForm}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+        )}
       </form>
 
       {status && (
@@ -303,7 +353,14 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
                     </label>
                   </td>
                   <td className="label">{formatTime(a.updated_at)}</td>
-                  <td>
+                  <td className="alerts-row-actions">
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => handleEditClick(a)}
+                      title="Edit alert"
+                    >
+                      ✎
+                    </button>
                     <button
                       className="btn btn-danger btn-remove"
                       onClick={() => handleDelete(a.id)}

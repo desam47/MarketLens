@@ -1107,6 +1107,11 @@ h4 {
   font-size: 0.9rem;
 }
 
+.alerts-row-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
 .btn-remove {
   width: 1.75rem;
   height: 1.75rem;
