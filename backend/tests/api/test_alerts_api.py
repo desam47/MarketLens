@@ -221,6 +221,22 @@ class TestAlertsAPI(unittest.TestCase):
             response = self.client.delete("/api/alerts/999")
         self.assertEqual(response.status_code, 404)
 
+    # --- DELETE /api/alerts/triggers --------------------------------------
+
+    def test_clear_triggers(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.delete_all_triggers.return_value = 3
+            response = self.client.delete("/api/alerts/triggers")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"deleted": 3})
+
+    def test_clear_triggers_when_none_exist(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.delete_all_triggers.return_value = 0
+            response = self.client.delete("/api/alerts/triggers")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"deleted": 0})
+
     # --- GET /api/alerts/{id}/triggers -----------------------------------
 
     def test_get_alert_triggers(self):

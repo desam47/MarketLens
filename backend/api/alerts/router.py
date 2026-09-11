@@ -69,6 +69,10 @@ class AlertResponse(BaseModel):
         return format_edt_iso(value)
 
 
+class ClearTriggersResponse(BaseModel):
+    deleted: int
+
+
 class AlertTriggerResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -126,6 +130,16 @@ async def list_active_triggers(db: Session = Depends(get_db)):
     """Triggers fired in the last 24 hours."""
     repo = AlertRepository(db)
     return await asyncio.to_thread(repo.get_recent_triggers)
+
+
+@router.delete("/triggers", response_model=ClearTriggersResponse)
+async def clear_triggers(db: Session = Depends(get_db)):
+    """Permanently clear the fired-alert trigger history (not the
+    alerts themselves) — including any row orphaned by an alert
+    deleted before this cascade-delete relationship existed."""
+    repo = AlertRepository(db)
+    deleted = await asyncio.to_thread(repo.delete_all_triggers)
+    return ClearTriggersResponse(deleted=deleted)
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)

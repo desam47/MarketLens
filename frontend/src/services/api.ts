@@ -1413,6 +1413,15 @@ class ApiService {
     return this.fetch<AlertTrigger[]>('/alerts/active');
   }
 
+  /**
+   * Permanently clear the fired-alert trigger history (not the alerts
+   * themselves) — including any row orphaned by an alert deleted
+   * before delete_alert's cascade-delete relationship existed.
+   */
+  async clearAlertTriggers(): Promise<{ deleted: number }> {
+    return this.fetch<{ deleted: number }>('/alerts/triggers', { method: 'DELETE' });
+  }
+
   // Backtest
   async getBacktestRuns(limit = 20): Promise<BacktestRun[]> {
     return this.fetch<BacktestRun[]>(`/backtest/?limit=${limit}`);

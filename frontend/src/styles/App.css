@@ -1678,6 +1678,19 @@ h4 {
   margin-bottom: 0.75rem;
 }
 
+.alert-triggers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 4px;
+}
+
+.btn-small {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+}
+
 .alert-trigger-row {
   padding: 0.4rem 0;
   border-bottom: 1px solid var(--border);

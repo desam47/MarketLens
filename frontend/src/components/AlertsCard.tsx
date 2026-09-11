@@ -135,6 +135,17 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
     }
   };
 
+  const handleClearTriggers = async () => {
+    if (!window.confirm('Clear all trigger history? This does not delete your alerts.')) return;
+    try {
+      const { deleted } = await api.clearAlertTriggers();
+      setStatus({ msg: `Cleared ${deleted} trigger${deleted === 1 ? '' : 's'}.`, isError: false });
+      await refreshTriggers();
+    } catch (err: any) {
+      setStatus({ msg: err?.message || 'Failed to clear trigger history', isError: true });
+    }
+  };
+
   const handleToggle = async (id: number, enabled: boolean) => {
     try {
       await api.updateAlert(id, { is_enabled: enabled });
@@ -214,8 +225,18 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
 
       {triggers.length > 0 && (
         <div className="alert-triggers-list">
-          <div className="info-text" style={{ marginBottom: 4 }}>
-            {triggers.length} trigger{triggers.length === 1 ? '' : 's'} fired in the last 24h.
+          <div className="alert-triggers-header">
+            <span className="info-text">
+              {triggers.length} trigger{triggers.length === 1 ? '' : 's'} fired in the last 24h.
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={handleClearTriggers}
+              title="Permanently clear this history — does not delete your alerts"
+            >
+              🗑 Clear
+            </button>
           </div>
           {triggers.map(t => {
             const alert = alerts.find(a => a.id === t.alert_id);

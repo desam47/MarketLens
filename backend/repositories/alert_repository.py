@@ -129,6 +129,17 @@ class AlertRepository:
             .all()
         )
 
+    def delete_all_triggers(self) -> int:
+        """Clear every trigger row — the fired-alert history log, not
+        the alerts themselves. Also sweeps up any trigger orphaned by
+        an alert that's since been deleted (delete_alert() cascades
+        correctly today via the ORM relationship, but rows created
+        before that could still be dangling). Returns the count
+        removed."""
+        n = self.db.query(AlertTrigger).delete(synchronize_session=False)
+        self.db.commit()
+        return n
+
     def get_recent_triggers(self, since: datetime | None = None) -> list[AlertTrigger]:
         """Triggers fired within the last 24 hours (or since ``since``)."""
         if since is None:
