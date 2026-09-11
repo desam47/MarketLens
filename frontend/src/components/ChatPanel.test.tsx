@@ -156,6 +156,31 @@ describe('ChatPanel (universal)', () => {
         condition_type: 'price_above', parameter: '220',
       });
     });
+
+    it('offers signal_equals alongside the 3 threshold conditions, with a text input for it', async () => {
+      mockApi.createAlert.mockResolvedValue({} as any);
+      render(<ChatPanel />);
+
+      fireEvent.click(await screen.findByTitle('Set an alert on AAPL'));
+      const select = screen.getByLabelText('Alert condition for AAPL') as HTMLSelectElement;
+      const optionValues = Array.from(select.options).map(o => o.value);
+      expect(optionValues).toEqual([
+        'signal_equals', 'price_above', 'price_below', 'pct_change_above',
+      ]);
+
+      fireEvent.change(select, { target: { value: 'signal_equals' } });
+      const input = screen.getByLabelText('Alert threshold for AAPL') as HTMLInputElement;
+      expect(input.type).toBe('text');
+
+      fireEvent.change(input, { target: { value: 'rsi_oversold' } });
+      fireEvent.click(screen.getByText('Set'));
+
+      await waitFor(() => expect(screen.getByText('✓ Alert set')).toBeInTheDocument());
+      expect(mockApi.createAlert).toHaveBeenCalledWith({
+        name: 'AAPL signal equals', symbol: 'AAPL',
+        condition_type: 'signal_equals', parameter: 'RSI_OVERSOLD',
+      });
+    });
   });
 
   it('streams the assistant reply incrementally then finalizes it', async () => {

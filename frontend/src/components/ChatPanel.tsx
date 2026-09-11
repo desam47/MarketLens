@@ -549,16 +549,21 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
             onChange={e => setAlertCondition(e.target.value)}
             aria-label={`Alert condition for ${symbol}`}
           >
+            <option value="signal_equals">Signal equals</option>
             <option value="price_above">Price above</option>
             <option value="price_below">Price below</option>
             <option value="pct_change_above">% change above</option>
           </select>
           <input
-            type="number"
-            step="any"
-            placeholder="value"
+            // signal_equals takes a signal name (e.g. RSI_OVERSOLD), not a
+            // number — mirrors AlertsCard's per-condition hint/type split.
+            type={alertCondition === 'signal_equals' ? 'text' : 'number'}
+            step={alertCondition === 'signal_equals' ? undefined : 'any'}
+            placeholder={alertCondition === 'signal_equals' ? 'RSI_OVERSOLD' : 'value'}
             value={alertValue}
-            onChange={e => setAlertValue(e.target.value)}
+            onChange={e => setAlertValue(
+              alertCondition === 'signal_equals' ? e.target.value.toUpperCase() : e.target.value,
+            )}
             className="chat-quick-alert-input"
             aria-label={`Alert threshold for ${symbol}`}
           />
