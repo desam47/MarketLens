@@ -170,7 +170,20 @@ async def _fetch_tier1_1m_bars(
     alpaca_range = _alpaca_range_for_days(days)
 
     # 1. Primary from .env (e.g. BACKFILL_1M_PRIMARY=alpaca).
-    primary_returned = 0
+    #
+    # ``primary_1m_returned`` (not just "did it return anything") gates
+    # the fallback below. Found live 2026-09-11: Webull's free tier
+    # silently downgrades M1 to M5 for thin symbols — the provider
+    # correctly detects and re-stamps those bars as "5m" (see
+    # WebullProvider._parse_bars), so they're never lost, but a batch
+    # that's ENTIRELY downgraded still left the old `primary_returned =
+    # len(bars)` count positive, which skipped the fallback below even
+    # though zero bars actually satisfied the 1m request. A thin
+    # ticker's real 1m coverage (e.g. Alpaca's, sparse but genuine)
+    # never got a chance to contribute. Symbols Webull serves honestly
+    # at 1m (the common case) are unaffected — primary_1m_returned ==
+    # len(bars) there, same as before.
+    primary_1m_returned = 0
     try:
         from backend.market_data.services.manager import get_backfill_primary_provider
         provider = get_backfill_primary_provider("1m")
@@ -181,17 +194,24 @@ async def _fetch_tier1_1m_bars(
             )
             for b in bars:
                 merged[b.timestamp] = b
-            primary_returned = len(bars)
-            logger.info(f"tier1 1m: {provider.__class__.__name__} returned {len(bars)} bars for {symbol} (range_={alpaca_range})")
+            primary_1m_returned = sum(1 for b in bars if b.timeframe == "1m")
+            logger.info(f"tier1 1m: {provider.__class__.__name__} returned {len(bars)} bars for {symbol} (range_={alpaca_range}, actually_1m={primary_1m_returned})")
+            if bars and primary_1m_returned == 0:
+                logger.info(
+                    f"tier1 1m: {provider.__class__.__name__} downgraded {symbol} to a "
+                    f"coarser resolution ({bars[0].timeframe}) — trying fallback for genuine 1m coverage"
+                )
     except Exception as e:
         logger.warning(f"tier1 1m: primary provider failed for {symbol}: {e}")
 
-    # 2. Fallback chain — only runs if primary returned zero bars.
+    # 2. Fallback chain — runs if primary returned zero bars, OR its
+    # response didn't actually contain any 1m-resolution bars (see the
+    # primary_1m_returned comment above).
     # Providers are loaded from BACKFILL_1M_FALLBACK in .env
     # (default: webull, yahoo_finance). First to return wins.
     # Phase 3.9: use the same window as the primary so Webull's paginator
     # can produce up to ~5,850 bars across 4 pages.
-    if primary_returned == 0:
+    if primary_1m_returned == 0:
         from backend.market_data.services.manager import get_1m_fallback_providers
         for fb_name in get_1m_fallback_providers():
             try:

@@ -194,6 +194,121 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["remaining_gap_count"], 1)
 
 
+class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
+    """_fetch_tier1_1m_bars: the fallback chain must trigger on a silent
+    Webull M1→M5 downgrade, not just a hard failure (found live
+    2026-09-11 — CTNT's fetch "succeeded" with 12000 bars, all of them
+    re-stamped "5m" by WebullProvider's own downgrade detection, so the
+    old `primary_returned = len(bars)` gate never gave Alpaca a chance
+    to contribute genuine 1m coverage)."""
+
+    def _bar(self, minute: int, timeframe: str, provider: str):
+        from backend.models import Bar, DataStatus
+        return Bar(
+            symbol="CTNT", timestamp=datetime(2026, 9, 10, 10, minute), open=1, high=1,
+            low=1, close=1, volume=100, timeframe=timeframe, provider=provider,
+            data_status=DataStatus.HISTORICAL,
+        )
+
+    async def test_fallback_not_tried_when_primary_returns_genuine_1m_bars(self):
+        """The common case (e.g. NOK) — unchanged from before this fix."""
+        primary = MagicMock()
+        primary.get_historical_bars.return_value = [
+            self._bar(0, "1m", "webull"), self._bar(1, "1m", "webull"),
+        ]
+        get_fallback = MagicMock(return_value=["alpaca"])
+
+        with (
+            patch(
+                "backend.market_data.services.manager.get_backfill_primary_provider",
+                return_value=primary,
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_fallback_providers",
+                get_fallback,
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_gapfill_providers",
+                return_value=[],
+            ),
+        ):
+            result = await backfill_service._fetch_tier1_1m_bars(
+                "CTNT", 15, MagicMock(), MagicMock(),
+            )
+
+        get_fallback.assert_not_called()
+        self.assertEqual(len(result), 2)
+        self.assertTrue(all(b.timeframe == "1m" for b in result))
+
+    async def test_fallback_tried_when_primary_is_entirely_downgraded(self):
+        """CTNT's actual case — primary "succeeds" but every bar came
+        back re-tagged 5m (Webull's own silent downgrade), so the
+        fallback must still run."""
+        primary = MagicMock()
+        primary.get_historical_bars.return_value = [
+            self._bar(0, "5m", "webull"), self._bar(5, "5m", "webull"),
+        ]
+        fallback = MagicMock()
+        fallback.get_historical_bars.return_value = [self._bar(1, "1m", "alpaca")]
+
+        with (
+            patch(
+                "backend.market_data.services.manager.get_backfill_primary_provider",
+                return_value=primary,
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_fallback_providers",
+                return_value=["alpaca"],
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_gapfill_providers",
+                return_value=[],
+            ),
+            patch.object(backfill_service, "_instantiate_provider", return_value=fallback),
+        ):
+            result = await backfill_service._fetch_tier1_1m_bars(
+                "CTNT", 15, MagicMock(), MagicMock(),
+            )
+
+        fallback.get_historical_bars.assert_called_once()
+        # The downgraded 5m bars are NOT discarded — they're real data,
+        # just not what tier1 was asked for — and the fallback's genuine
+        # 1m bar is merged in alongside them.
+        self.assertEqual(len(result), 3)
+        timeframes = sorted(b.timeframe for b in result)
+        self.assertEqual(timeframes, ["1m", "5m", "5m"])
+
+    async def test_fallback_tried_when_primary_returns_nothing(self):
+        """Unchanged regression case — a hard failure (empty response)
+        already triggered the fallback before this fix; must still."""
+        primary = MagicMock()
+        primary.get_historical_bars.return_value = []
+        fallback = MagicMock()
+        fallback.get_historical_bars.return_value = [self._bar(0, "1m", "alpaca")]
+
+        with (
+            patch(
+                "backend.market_data.services.manager.get_backfill_primary_provider",
+                return_value=primary,
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_fallback_providers",
+                return_value=["alpaca"],
+            ),
+            patch(
+                "backend.market_data.services.manager.get_1m_gapfill_providers",
+                return_value=[],
+            ),
+            patch.object(backfill_service, "_instantiate_provider", return_value=fallback),
+        ):
+            result = await backfill_service._fetch_tier1_1m_bars(
+                "CTNT", 15, MagicMock(), MagicMock(),
+            )
+
+        fallback.get_historical_bars.assert_called_once()
+        self.assertEqual(len(result), 1)
+
+
 class TestBackfillSymbolTask(unittest.TestCase):
     """backfill_symbol_task: the RQ job body — status-row bookkeeping."""
 
