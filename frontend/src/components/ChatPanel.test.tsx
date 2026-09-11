@@ -11,6 +11,7 @@ jest.mock('../services/api', () => ({
     streamChatMessage: jest.fn(),
     clearChatHistory: jest.fn(),
     getWatchlists: jest.fn(),
+    getWatchlistSymbols: jest.fn(),
     createWatchlist: jest.fn(),
     addSymbolToWatchlist: jest.fn(),
     createAlert: jest.fn(),
@@ -82,16 +83,49 @@ describe('ChatPanel (universal)', () => {
       expect(screen.queryByText('^VIX', { selector: '.chat-quick-action-symbol' })).toBeNull();
     });
 
-    it('adds the ticker to the first existing watchlist on click', async () => {
+    it('adds the ticker to the single existing watchlist on click', async () => {
       mockApi.getWatchlists.mockResolvedValue([{ id: 3, name: 'Watch1' } as any]);
+      mockApi.getWatchlistSymbols.mockResolvedValue([]);
       mockApi.addSymbolToWatchlist.mockResolvedValue({} as any);
       render(<ChatPanel />);
 
       fireEvent.click(await screen.findByTitle('Add AAPL to your watchlist'));
 
-      await waitFor(() => expect(screen.getByText('✓ Watchlist')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText('✓ Watchlisted')).toBeInTheDocument());
       expect(mockApi.addSymbolToWatchlist).toHaveBeenCalledWith(3, 'AAPL');
       expect(mockApi.createWatchlist).not.toHaveBeenCalled();
+    });
+
+    it('does not show the add button for a ticker already on a watchlist', async () => {
+      mockApi.getWatchlists.mockResolvedValue([{ id: 3, name: 'Watch1' } as any]);
+      mockApi.getWatchlistSymbols.mockResolvedValue([{ symbol: 'AAPL' } as any]);
+      render(<ChatPanel />);
+
+      expect(await screen.findByText('✓ Watchlisted')).toBeInTheDocument();
+      expect(screen.queryByTitle('Add AAPL to your watchlist')).toBeNull();
+      expect(mockApi.addSymbolToWatchlist).not.toHaveBeenCalled();
+    });
+
+    it('asks which watchlist when more than one exists', async () => {
+      mockApi.getWatchlists.mockResolvedValue([
+        { id: 3, name: 'Watch1' } as any, { id: 4, name: 'Swing Setups' } as any,
+      ]);
+      mockApi.getWatchlistSymbols.mockResolvedValue([]);
+      mockApi.addSymbolToWatchlist.mockResolvedValue({} as any);
+      render(<ChatPanel />);
+
+      fireEvent.click(await screen.findByTitle('Add AAPL to one of your 2 watchlists'));
+      // no call yet — a picker should appear instead of guessing
+      expect(mockApi.addSymbolToWatchlist).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Which watchlist to add AAPL to')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Which watchlist to add AAPL to'), {
+        target: { value: '4' },
+      });
+      fireEvent.click(screen.getByText('Add'));
+
+      await waitFor(() => expect(screen.getByText('✓ Watchlisted')).toBeInTheDocument());
+      expect(mockApi.addSymbolToWatchlist).toHaveBeenCalledWith(4, 'AAPL');
     });
 
     it('creates a default watchlist when none exists yet', async () => {

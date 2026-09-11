@@ -4468,6 +4468,14 @@ h4 {
   min-width: 2.5rem;
 }
 
+.chat-quick-action-tag {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .chat-quick-action-btn {
   font-size: 0.7rem;
   padding: 0.15rem 0.5rem;

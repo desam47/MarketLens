@@ -34,6 +34,19 @@ interface ChatPanelProps {
 // A message in local state may be a not-yet-finalized streaming bubble.
 type LocalMessage = ChatMessage & { streaming?: boolean };
 
+// What the quick-action buttons need to know to be smart instead of
+// dumb: every watchlist that exists, and which one (if any) already
+// holds a given ticker. Loaded once per ChatPanel mount and kept
+// current locally as the buttons themselves add things — it does NOT
+// pick up a watchlist change made through the chat's own AI tools in
+// the same session (no push signal for that), only what happened
+// through these buttons.
+interface WatchlistOption { id: number; name: string; }
+interface WatchlistIndex {
+  lists: WatchlistOption[];
+  memberOf: Record<string, number>;  // ticker -> the watchlist id already holding it
+}
+
 const EXAMPLES = [
   "How's NVDA looking?",
   "What's the market doing today?",
@@ -50,8 +63,45 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
   const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Loaded once on mount so the very first quick-action button already
+  // knows whether a ticker is watchlisted and how many lists exist —
+  // fetched via the same endpoints the Watchlist page uses, not a new
+  // backend route.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const lists = await api.getWatchlists();
+        const memberOf: Record<string, number> = {};
+        await Promise.all(lists.map(async wl => {
+          try {
+            const syms = await api.getWatchlistSymbols(wl.id);
+            for (const s of syms) {
+              if (!(s.symbol in memberOf)) memberOf[s.symbol] = wl.id;
+            }
+          } catch { /* best-effort — this list's membership just stays unknown */ }
+        }));
+        if (!cancelled) {
+          setWatchlistIndex({ lists: lists.map(wl => ({ id: wl.id, name: wl.name })), memberOf });
+        }
+      } catch { /* best-effort — quick actions fall back to dumb/one-click behavior */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const markSymbolWatchlisted = useCallback((symbol: string, watchlistId: number) => {
+    setWatchlistIndex(prev =>
+      prev ? { ...prev, memberOf: { ...prev.memberOf, [symbol]: watchlistId } } : prev);
+  }, []);
+
+  const addWatchlistToIndex = useCallback((wl: WatchlistOption) => {
+    setWatchlistIndex(prev =>
+      prev ? { ...prev, lists: [...prev.lists, wl] } : { lists: [wl], memberOf: {} });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +297,9 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
                   <ChatQuickActions
                     symbols={Array.from(new Set([...(m.focus ?? []), ...(m.partial ?? [])]))
                       .filter(s => !s.startsWith('^'))}
+                    watchlistIndex={watchlistIndex}
+                    onWatchlisted={markSymbolWatchlisted}
+                    onWatchlistCreated={addWatchlistToIndex}
                   />
                 )}
               </div>
@@ -331,38 +384,91 @@ function ProvenanceRow({ message }: { message: ChatMessage }) {
  * "🔔 Alert") — UI shortcuts that call the same REST endpoints the
  * Watchlist/Alerts pages use directly, independent of the chat's own
  * add_to_watchlist / create_alert AI tools (either path works alone).
- * Deliberately dumb: no disambiguation prompt if several watchlists
- * exist — just uses the first one, since one click should stay one click.
+ * Aware of watchlistIndex: already-watchlisted tickers show a plain
+ * tag instead of the add button, and adding with 2+ lists asks which
+ * one instead of guessing.
  */
-function ChatQuickActions({ symbols }: { symbols: string[] }) {
+function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistCreated }: {
+  symbols: string[];
+  watchlistIndex: WatchlistIndex | null;
+  onWatchlisted: (symbol: string, watchlistId: number) => void;
+  onWatchlistCreated: (wl: WatchlistOption) => void;
+}) {
   if (symbols.length === 0) return null;
   return (
     <div className="chat-quick-actions">
-      {symbols.map(sym => <TickerQuickActions key={sym} symbol={sym} />)}
+      {symbols.map(sym => (
+        <TickerQuickActions
+          key={sym}
+          symbol={sym}
+          watchlistIndex={watchlistIndex}
+          onWatchlisted={onWatchlisted}
+          onWatchlistCreated={onWatchlistCreated}
+        />
+      ))}
     </div>
   );
 }
 
 type QuickActionState = 'idle' | 'busy' | 'done' | 'error';
 
-function TickerQuickActions({ symbol }: { symbol: string }) {
+function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlistCreated }: {
+  symbol: string;
+  watchlistIndex: WatchlistIndex | null;
+  onWatchlisted: (symbol: string, watchlistId: number) => void;
+  onWatchlistCreated: (wl: WatchlistOption) => void;
+}) {
   const [watchlistState, setWatchlistState] = useState<QuickActionState>('idle');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickedWatchlistId, setPickedWatchlistId] = useState<number | ''>('');
   const [alertOpen, setAlertOpen] = useState(false);
   const [alertCondition, setAlertCondition] = useState('price_above');
   const [alertValue, setAlertValue] = useState('');
   const [alertState, setAlertState] = useState<QuickActionState>('idle');
 
-  const handleAddToWatchlist = useCallback(async () => {
+  const existingWatchlistId = watchlistIndex?.memberOf[symbol];
+  const alreadyWatchlisted = watchlistState === 'done' || existingWatchlistId !== undefined;
+  const lists = watchlistIndex?.lists ?? [];
+
+  const addToList = useCallback(async (watchlistId: number) => {
     setWatchlistState('busy');
     try {
-      const lists = await api.getWatchlists();
-      const target = lists[0] ?? await api.createWatchlist('Watchlist');
-      await api.addSymbolToWatchlist(target.id, symbol);
+      await api.addSymbolToWatchlist(watchlistId, symbol);
       setWatchlistState('done');
+      setPickerOpen(false);
+      onWatchlisted(symbol, watchlistId);
     } catch {
       setWatchlistState('error');
     }
-  }, [symbol]);
+  }, [symbol, onWatchlisted]);
+
+  const handleAddToWatchlist = useCallback(async () => {
+    // 2+ lists and the trader hasn't said which — ask instead of
+    // guessing, same rule the chat's own add_to_watchlist tool follows.
+    if (lists.length > 1) {
+      setPickedWatchlistId(lists[0].id);
+      setPickerOpen(true);
+      return;
+    }
+    if (lists.length === 1) {
+      addToList(lists[0].id);
+      return;
+    }
+    // No watchlist exists yet — create a default one, same as the AI tool.
+    setWatchlistState('busy');
+    try {
+      const created = await api.createWatchlist('Watchlist');
+      onWatchlistCreated({ id: created.id, name: created.name });
+      await addToList(created.id);
+    } catch {
+      setWatchlistState('error');
+    }
+  }, [lists, addToList, onWatchlistCreated]);
+
+  const handlePickWatchlist = useCallback((e: React.FormEvent) => {
+    e.preventDefault();
+    if (pickedWatchlistId !== '') addToList(pickedWatchlistId);
+  }, [pickedWatchlistId, addToList]);
 
   const handleCreateAlert = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -385,18 +491,46 @@ function TickerQuickActions({ symbol }: { symbol: string }) {
   return (
     <div className="chat-quick-action">
       <span className="chat-quick-action-symbol">{symbol}</span>
-      <button
-        type="button"
-        className="chat-quick-action-btn"
-        onClick={handleAddToWatchlist}
-        disabled={watchlistState === 'busy' || watchlistState === 'done'}
-        title={`Add ${symbol} to your watchlist`}
-      >
-        {watchlistState === 'done' ? '✓ Watchlist'
-          : watchlistState === 'busy' ? '⟳'
-          : watchlistState === 'error' ? '⚠ retry'
-          : '➕ Watchlist'}
-      </button>
+
+      {alreadyWatchlisted ? (
+        <span className="chat-quick-action-tag" title={`${symbol} is already on a watchlist`}>
+          ✓ Watchlisted
+        </span>
+      ) : !pickerOpen ? (
+        <button
+          type="button"
+          className="chat-quick-action-btn"
+          onClick={handleAddToWatchlist}
+          disabled={watchlistState === 'busy'}
+          title={
+            lists.length > 1
+              ? `Add ${symbol} to one of your ${lists.length} watchlists`
+              : `Add ${symbol} to your watchlist`
+          }
+        >
+          {watchlistState === 'busy' ? '⟳' : watchlistState === 'error' ? '⚠ retry' : '➕ Watchlist'}
+        </button>
+      ) : (
+        <form className="chat-quick-alert-form" onSubmit={handlePickWatchlist}>
+          <select
+            value={pickedWatchlistId}
+            onChange={e => setPickedWatchlistId(Number(e.target.value))}
+            aria-label={`Which watchlist to add ${symbol} to`}
+          >
+            {lists.map(wl => <option key={wl.id} value={wl.id}>{wl.name}</option>)}
+          </select>
+          <button
+            type="submit"
+            className="chat-quick-action-btn"
+            disabled={watchlistState === 'busy'}
+          >
+            {watchlistState === 'busy' ? '⟳' : 'Add'}
+          </button>
+          <button type="button" className="chat-quick-action-btn" onClick={() => setPickerOpen(false)}>
+            ✕
+          </button>
+        </form>
+      )}
 
       {!alertOpen ? (
         <button
