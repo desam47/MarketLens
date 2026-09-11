@@ -4447,6 +4447,73 @@ h4 {
   color: #fbbf24;
 }
 
+.chat-quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.chat-quick-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.chat-quick-action-symbol {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 2.5rem;
+}
+
+.chat-quick-action-btn {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-quick-action-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.chat-quick-action-btn:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.chat-quick-alert-form {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.chat-quick-alert-form select {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.chat-quick-alert-input {
+  width: 4.5rem;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 .chat-input-row {
   display: flex;
   gap: 0.5rem;

@@ -10,6 +10,10 @@ jest.mock('../services/api', () => ({
     sendChatMessage: jest.fn(),
     streamChatMessage: jest.fn(),
     clearChatHistory: jest.fn(),
+    getWatchlists: jest.fn(),
+    createWatchlist: jest.fn(),
+    addSymbolToWatchlist: jest.fn(),
+    createAlert: jest.fn(),
   },
 }));
 
@@ -51,6 +55,73 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText('AAPL ✓')).toBeInTheDocument();
     expect(screen.getByText('RIVN ◐ partial')).toBeInTheDocument();
     expect(screen.getByText('ZZZZ ✗ no data')).toBeInTheDocument();
+  });
+
+  describe('quick actions', () => {
+    beforeEach(() => {
+      mockApi.getChatMessages.mockResolvedValue([
+        {
+          id: 5, session_id: 1, role: 'assistant', content: 'AAPL looks strong.',
+          created_at: '', grounded: true,
+          focus: ['AAPL'], partial: [], unavailable: [],
+        } as any,
+      ]);
+    });
+
+    it('renders one quick-action row per resolved ticker, skipping index symbols', async () => {
+      mockApi.getChatMessages.mockResolvedValue([
+        {
+          id: 5, session_id: 1, role: 'assistant', content: 'x',
+          created_at: '', grounded: true,
+          focus: ['AAPL', '^VIX'], partial: [], unavailable: [],
+        } as any,
+      ]);
+      render(<ChatPanel />);
+      expect(await screen.findByText('AAPL', { selector: '.chat-quick-action-symbol' }))
+        .toBeInTheDocument();
+      expect(screen.queryByText('^VIX', { selector: '.chat-quick-action-symbol' })).toBeNull();
+    });
+
+    it('adds the ticker to the first existing watchlist on click', async () => {
+      mockApi.getWatchlists.mockResolvedValue([{ id: 3, name: 'Watch1' } as any]);
+      mockApi.addSymbolToWatchlist.mockResolvedValue({} as any);
+      render(<ChatPanel />);
+
+      fireEvent.click(await screen.findByTitle('Add AAPL to your watchlist'));
+
+      await waitFor(() => expect(screen.getByText('✓ Watchlist')).toBeInTheDocument());
+      expect(mockApi.addSymbolToWatchlist).toHaveBeenCalledWith(3, 'AAPL');
+      expect(mockApi.createWatchlist).not.toHaveBeenCalled();
+    });
+
+    it('creates a default watchlist when none exists yet', async () => {
+      mockApi.getWatchlists.mockResolvedValue([]);
+      mockApi.createWatchlist.mockResolvedValue({ id: 9, name: 'Watchlist' } as any);
+      mockApi.addSymbolToWatchlist.mockResolvedValue({} as any);
+      render(<ChatPanel />);
+
+      fireEvent.click(await screen.findByTitle('Add AAPL to your watchlist'));
+
+      await waitFor(() => expect(mockApi.addSymbolToWatchlist).toHaveBeenCalledWith(9, 'AAPL'));
+      expect(mockApi.createWatchlist).toHaveBeenCalledWith('Watchlist');
+    });
+
+    it('opens the alert form and creates an alert on submit', async () => {
+      mockApi.createAlert.mockResolvedValue({} as any);
+      render(<ChatPanel />);
+
+      fireEvent.click(await screen.findByTitle('Set an alert on AAPL'));
+      fireEvent.change(screen.getByLabelText('Alert threshold for AAPL'), {
+        target: { value: '220' },
+      });
+      fireEvent.click(screen.getByText('Set'));
+
+      await waitFor(() => expect(screen.getByText('✓ Alert set')).toBeInTheDocument());
+      expect(mockApi.createAlert).toHaveBeenCalledWith({
+        name: 'AAPL price above', symbol: 'AAPL',
+        condition_type: 'price_above', parameter: '220',
+      });
+    });
   });
 
   it('streams the assistant reply incrementally then finalizes it', async () => {

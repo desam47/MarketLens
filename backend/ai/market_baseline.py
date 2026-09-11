@@ -78,6 +78,25 @@ def _live_regime() -> dict[str, Any]:
     return sig.to_dict() if sig is not None else {}
 
 
+def _active_alerts() -> list[dict[str, Any]]:
+    """Every enabled alert, for the chat's delete_alert tool to match
+    against ("delete my NVDA alert" -> find it here, never invent an
+    id). Pure in-process DB read — no HTTP, no AI."""
+    from backend.repositories.alert_repository import AlertRepository
+
+    repo = AlertRepository()
+    try:
+        return [
+            {
+                "id": a.id, "symbol": a.symbol, "name": a.name,
+                "condition_type": a.condition_type, "parameter": a.parameter,
+            }
+            for a in repo.get_all_enabled()
+        ]
+    finally:
+        repo.close()
+
+
 def _watchlist_snapshot() -> dict[str, Any]:
     from backend.api.main_helpers import _watched_symbols
     from backend.scanner.scanner import market_scanner
@@ -115,6 +134,7 @@ def build_market_baseline(*, use_cache: bool = True) -> dict[str, Any]:
         "regime_live": _safe(_live_regime, {}),
         "digest": _safe(_latest_digest, {}),
         "watchlist_snapshot": _safe(_watchlist_snapshot, {"scored": [], "all_symbols": []}),
+        "active_alerts": _safe(_active_alerts, []),
     }
     with _cache_lock:
         _cached, _cached_at = result, time.monotonic()

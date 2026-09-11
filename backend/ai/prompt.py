@@ -28,6 +28,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.alerts.conditions.evaluators import (
+    VALID_CONDITION_TYPES as _VALID_ALERT_CONDITION_TYPES,
+)
+
 # --- Response model -------------------------------------------------
 
 
@@ -599,6 +603,40 @@ class ChatReplyResponse(BaseModel):
     # which ticker in `reply` instead.
     reanalysis_symbol: str | None = Field(default=None, max_length=20)
 
+    # Six more tools (2026-09-11): the chat can create/delete an alert
+    # and add/remove a watchlist ticker or watchlist itself. Flat
+    # fields, not a nested object — this codebase's chat schema stays
+    # flat deliberately; a weak local model mangles nested JSON far more
+    # often than it mangles an extra top-level key (see the null-list
+    # and dict-repr fixes this session). "none" (the default) means no
+    # action this turn. The *_delete_* / remove_* / delete_* actions are
+    # destructive: backend.ai.chat._finalize_parsed refuses to execute
+    # them without action_confirmed=True regardless of what the prompt
+    # says — see CHAT_SYSTEM_PROMPT rule 10 for when the model may set
+    # them.
+    action: Literal[
+        "none", "create_alert", "delete_alert",
+        "add_to_watchlist", "remove_from_watchlist",
+        "create_watchlist", "delete_watchlist",
+    ] = "none"
+    action_symbol: str | None = Field(default=None, max_length=20)
+    action_watchlist: str | None = Field(default=None, max_length=120)
+    action_condition_type: str | None = Field(default=None, max_length=40)
+    action_parameter: str | None = Field(default=None, max_length=120)
+    action_label: str | None = Field(default=None, max_length=120)
+    action_target_id: int | None = None
+    action_confirmed: bool = False
+
+    @field_validator("action_condition_type")
+    @classmethod
+    def _validate_condition_type(cls, v: str | None) -> str | None:
+        # An invalid condition type degrades to "couldn't set that" in
+        # _run_action rather than failing the whole reply's parse — same
+        # tolerance policy as the other near-miss coercions in this file.
+        if v is not None and v not in _VALID_ALERT_CONDITION_TYPES:
+            return None
+        return v
+
 
 CHAT_SYSTEM_PROMPT = """\
 You are MarketLens Analyst & Advisor, having a back-and-forth \
@@ -663,6 +701,35 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
+10. You have SIX more tools, via "action": create_alert, delete_alert, \
+    add_to_watchlist, remove_from_watchlist, create_watchlist, \
+    delete_watchlist.
+    - create_alert / add_to_watchlist / create_watchlist fire on the \
+      FIRST clear request — no confirmation needed. Fill the matching \
+      action_* fields.
+    - delete_alert / remove_from_watchlist / delete_watchlist are \
+      DESTRUCTIVE. On the first mention, do NOT set "action" (leave it \
+      "none") — instead reply in plain English asking the trader to \
+      confirm exactly what you would remove. Only set the action, with \
+      action_confirmed=true, on a LATER turn where the trader's own \
+      message clearly confirms (yes / confirm / do it / go ahead) — \
+      check the prior conversation for what you asked.
+    - delete_alert needs action_target_id, the numeric "id" from \
+      active_alerts in the <market> block. If you can't find a \
+      matching alert there, say so in "reply" instead of guessing an \
+      id.
+    - create_alert needs action_symbol, action_condition_type (one of: \
+      """ + ", ".join(_VALID_ALERT_CONDITION_TYPES) + """), and \
+      action_parameter (the threshold, e.g. "220" for a price level or \
+      "5" for a percent). action_label is an optional short name.
+    - add_to_watchlist / remove_from_watchlist / create_watchlist / \
+      delete_watchlist use action_symbol and/or action_watchlist (the \
+      watchlist name — omit it to mean "the" watchlist when there's \
+      only one; if several exist and none was named, ask which one \
+      instead of guessing).
+    - When "action" is set to anything but "none", "reply" is ignored \
+      (a short placeholder is fine) — the app executes the action and \
+      replies with its own result instead, same as wants_reanalysis.
 """
 
 # Rough token estimate for the assembled prompt's size guard.

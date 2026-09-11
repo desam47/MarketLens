@@ -243,6 +243,12 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
                   ? (slow ? 'Still working — pulling data for the tickers you mentioned…' : '…')
                   : m.content}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
+                {m.role === 'assistant' && !m.streaming && (
+                  <ChatQuickActions
+                    symbols={Array.from(new Set([...(m.focus ?? []), ...(m.partial ?? [])]))
+                      .filter(s => !s.startsWith('^'))}
+                  />
+                )}
               </div>
             </div>
           );
@@ -317,6 +323,124 @@ function ProvenanceRow({ message }: { message: ChatMessage }) {
         </span>
       ))}
     </span>
+  );
+}
+
+/**
+ * Per-ticker quick-action buttons on an assistant bubble ("➕ Watchlist",
+ * "🔔 Alert") — UI shortcuts that call the same REST endpoints the
+ * Watchlist/Alerts pages use directly, independent of the chat's own
+ * add_to_watchlist / create_alert AI tools (either path works alone).
+ * Deliberately dumb: no disambiguation prompt if several watchlists
+ * exist — just uses the first one, since one click should stay one click.
+ */
+function ChatQuickActions({ symbols }: { symbols: string[] }) {
+  if (symbols.length === 0) return null;
+  return (
+    <div className="chat-quick-actions">
+      {symbols.map(sym => <TickerQuickActions key={sym} symbol={sym} />)}
+    </div>
+  );
+}
+
+type QuickActionState = 'idle' | 'busy' | 'done' | 'error';
+
+function TickerQuickActions({ symbol }: { symbol: string }) {
+  const [watchlistState, setWatchlistState] = useState<QuickActionState>('idle');
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertCondition, setAlertCondition] = useState('price_above');
+  const [alertValue, setAlertValue] = useState('');
+  const [alertState, setAlertState] = useState<QuickActionState>('idle');
+
+  const handleAddToWatchlist = useCallback(async () => {
+    setWatchlistState('busy');
+    try {
+      const lists = await api.getWatchlists();
+      const target = lists[0] ?? await api.createWatchlist('Watchlist');
+      await api.addSymbolToWatchlist(target.id, symbol);
+      setWatchlistState('done');
+    } catch {
+      setWatchlistState('error');
+    }
+  }, [symbol]);
+
+  const handleCreateAlert = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!alertValue.trim()) return;
+    setAlertState('busy');
+    try {
+      await api.createAlert({
+        name: `${symbol} ${alertCondition.replace(/_/g, ' ')}`,
+        symbol,
+        condition_type: alertCondition,
+        parameter: alertValue.trim(),
+      });
+      setAlertState('done');
+      setAlertOpen(false);  // collapse back to the button row so "✓ Alert set" shows
+    } catch {
+      setAlertState('error');
+    }
+  }, [symbol, alertCondition, alertValue]);
+
+  return (
+    <div className="chat-quick-action">
+      <span className="chat-quick-action-symbol">{symbol}</span>
+      <button
+        type="button"
+        className="chat-quick-action-btn"
+        onClick={handleAddToWatchlist}
+        disabled={watchlistState === 'busy' || watchlistState === 'done'}
+        title={`Add ${symbol} to your watchlist`}
+      >
+        {watchlistState === 'done' ? '✓ Watchlist'
+          : watchlistState === 'busy' ? '⟳'
+          : watchlistState === 'error' ? '⚠ retry'
+          : '➕ Watchlist'}
+      </button>
+
+      {!alertOpen ? (
+        <button
+          type="button"
+          className="chat-quick-action-btn"
+          onClick={() => setAlertOpen(true)}
+          disabled={alertState === 'done'}
+          title={`Set an alert on ${symbol}`}
+        >
+          {alertState === 'done' ? '✓ Alert set' : '🔔 Alert'}
+        </button>
+      ) : (
+        <form className="chat-quick-alert-form" onSubmit={handleCreateAlert}>
+          <select
+            value={alertCondition}
+            onChange={e => setAlertCondition(e.target.value)}
+            aria-label={`Alert condition for ${symbol}`}
+          >
+            <option value="price_above">Price above</option>
+            <option value="price_below">Price below</option>
+            <option value="pct_change_above">% change above</option>
+          </select>
+          <input
+            type="number"
+            step="any"
+            placeholder="value"
+            value={alertValue}
+            onChange={e => setAlertValue(e.target.value)}
+            className="chat-quick-alert-input"
+            aria-label={`Alert threshold for ${symbol}`}
+          />
+          <button
+            type="submit"
+            className="chat-quick-action-btn"
+            disabled={alertState === 'busy' || !alertValue.trim()}
+          >
+            {alertState === 'busy' ? '⟳' : 'Set'}
+          </button>
+          <button type="button" className="chat-quick-action-btn" onClick={() => setAlertOpen(false)}>
+            ✕
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
