@@ -567,6 +567,14 @@ h4 {
   font-size: 1rem;
 }
 
+/* AIProviderBadge sitting inline next to the "AI Hub" <h1> — the tag's
+   own font-size (0.7rem) reads fine next to 2rem type as long as it's
+   vertically centered rather than baseline-aligned to the huge text. */
+.dashboard-header h1 .ai-provider-tag {
+  vertical-align: middle;
+  margin-left: 0.5rem;
+}
+
 .regime-metrics {
   margin: 1rem 0;
 }

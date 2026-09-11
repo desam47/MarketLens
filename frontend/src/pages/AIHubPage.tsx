@@ -31,6 +31,7 @@
 import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { PageErrorBoundary } from '../components/PageErrorBoundary';
 import { SymbolInput } from '../components/SymbolInput';
+import { AIProviderBadge } from '../components/AIProviderBadge';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
@@ -152,7 +153,9 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
     <div className="ai-hub-page">
       <div className="dashboard-header">
         <div>
-          <h1>AI Hub</h1>
+          <h1>
+            AI Hub <AIProviderBadge />
+          </h1>
           <p className="subtitle">
             Chat about any ticker or the whole market &middot; Analysis &amp; Templates for{' '}
             <b>{symbol}</b> &middot; market digest &amp; AI search
