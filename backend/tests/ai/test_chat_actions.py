@@ -237,11 +237,74 @@ class TestActionHandlers(_DBBase):
         _add_to_watchlist(self.db, _parsed(action_symbol="AAPL"))
         self.mock_backfill.assert_not_called()
 
-    def test_remove_from_watchlist_not_present(self):
+    def test_remove_from_watchlist_not_present_anywhere(self):
         WatchlistRepository(self.db).create_watchlist("Watch1")
         text, grounded = _remove_from_watchlist(self.db, _parsed(action_symbol="ZZZZ"))
         self.assertFalse(grounded)
+        self.assertIn("isn't on any of your watchlists", text)
+
+    def test_remove_from_watchlist_named_but_not_present_there(self):
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("Watch1")
+        text, grounded = _remove_from_watchlist(
+            self.db, _parsed(action_symbol="ZZZZ", action_watchlist="Watch1"),
+        )
+        self.assertFalse(grounded)
         self.assertIn("wasn't in", text)
+
+    def test_remove_from_watchlist_unnamed_but_named_list_missing(self):
+        text, grounded = _remove_from_watchlist(
+            self.db, _parsed(action_symbol="AAPL", action_watchlist="Nope"),
+        )
+        self.assertFalse(grounded)
+        self.assertIn("couldn't find", text.lower())
+
+    def test_remove_from_watchlist_resolves_the_one_list_that_has_it(self):
+        # RIVN is only on Tech, even though a 2nd unrelated list exists —
+        # this must NOT ask "which watchlist", it's unambiguous by
+        # membership.
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "RIVN")
+
+        text, grounded = _remove_from_watchlist(self.db, _parsed(action_symbol="RIVN"))
+
+        self.assertTrue(grounded)
+        self.assertIn("removed RIVN from Tech", text)
+        self.assertIsNone(repo.get_watchlist_symbol(tech.id, "RIVN"))
+
+    def test_remove_from_watchlist_on_two_lists_asks_which_one(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        swing = repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "RIVN")
+        repo.add_symbol_to_watchlist(swing.id, "RIVN")
+
+        text, grounded = _remove_from_watchlist(self.db, _parsed(action_symbol="RIVN"))
+
+        self.assertTrue(grounded)
+        self.assertIn("Tech", text)
+        self.assertIn("Swing Setups", text)
+        # neither list touched — it asked instead of guessing
+        self.assertIsNotNone(repo.get_watchlist_symbol(tech.id, "RIVN"))
+        self.assertIsNotNone(repo.get_watchlist_symbol(swing.id, "RIVN"))
+
+    def test_remove_from_watchlist_on_two_lists_named_one_resolves_it(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        swing = repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "RIVN")
+        repo.add_symbol_to_watchlist(swing.id, "RIVN")
+
+        text, grounded = _remove_from_watchlist(
+            self.db, _parsed(action_symbol="RIVN", action_watchlist="Swing Setups"),
+        )
+
+        self.assertTrue(grounded)
+        self.assertIn("removed RIVN from Swing Setups", text)
+        self.assertIsNotNone(repo.get_watchlist_symbol(tech.id, "RIVN"))  # untouched
+        self.assertIsNone(repo.get_watchlist_symbol(swing.id, "RIVN"))
 
     def test_create_watchlist_with_initial_symbol(self):
         text, grounded = _create_watchlist(self.db, _parsed(
@@ -273,27 +336,66 @@ class TestActionHandlers(_DBBase):
 class TestResolveWatchlist(_DBBase):
     def test_by_name(self):
         wl = WatchlistRepository(self.db).create_watchlist("Swing Setups")
-        found, ambiguous = _resolve_watchlist(self.db, "Swing Setups")
+        found, ambiguous, candidates = _resolve_watchlist(self.db, "Swing Setups")
         self.assertEqual(found.id, wl.id)
         self.assertFalse(ambiguous)
+        self.assertEqual(candidates, [])
 
     def test_none_given_single_list(self):
         wl = WatchlistRepository(self.db).create_watchlist("Watch1")
-        found, ambiguous = _resolve_watchlist(self.db, None)
+        found, ambiguous, _ = _resolve_watchlist(self.db, None)
         self.assertEqual(found.id, wl.id)
         self.assertFalse(ambiguous)
 
     def test_none_given_no_lists(self):
-        found, ambiguous = _resolve_watchlist(self.db, None)
+        found, ambiguous, candidates = _resolve_watchlist(self.db, None)
         self.assertIsNone(found)
         self.assertFalse(ambiguous)
+        self.assertEqual(candidates, [])
 
     def test_none_given_multiple_lists_is_ambiguous(self):
         WatchlistRepository(self.db).create_watchlist("Watch1")
         WatchlistRepository(self.db).create_watchlist("Swing Setups")
-        found, ambiguous = _resolve_watchlist(self.db, None)
+        found, ambiguous, candidates = _resolve_watchlist(self.db, None)
         self.assertIsNone(found)
         self.assertTrue(ambiguous)
+        self.assertEqual({c.name for c in candidates}, {"Watch1", "Swing Setups"})
+
+    def test_containing_symbol_resolves_the_one_list_that_has_it(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        repo.create_watchlist("Swing Setups")  # a 2nd list that does NOT have RIVN
+        repo.add_symbol_to_watchlist(tech.id, "RIVN")
+
+        found, ambiguous, candidates = _resolve_watchlist(self.db, None, containing_symbol="RIVN")
+
+        self.assertEqual(found.id, tech.id)
+        self.assertFalse(ambiguous)
+        self.assertEqual(candidates, [])
+
+    def test_containing_symbol_on_two_lists_is_ambiguous(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        swing = repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "RIVN")
+        repo.add_symbol_to_watchlist(swing.id, "RIVN")
+
+        found, ambiguous, candidates = _resolve_watchlist(self.db, None, containing_symbol="RIVN")
+
+        self.assertIsNone(found)
+        self.assertTrue(ambiguous)
+        self.assertEqual({c.name for c in candidates}, {"Tech", "Swing Setups"})
+
+    def test_containing_symbol_not_on_any_list_is_not_ambiguous(self):
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("Tech")
+        repo.create_watchlist("Swing Setups")
+
+        found, ambiguous, candidates = _resolve_watchlist(self.db, None, containing_symbol="RIVN")
+
+        self.assertIsNone(found)
+        self.assertFalse(ambiguous)
+        self.assertEqual(candidates, [])
 
 
 class TestRunActionNeverRaises(_DBBase):

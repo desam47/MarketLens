@@ -650,23 +650,47 @@ def _kickoff_backfill(symbol: str) -> None:
         logger.warning("chat action: backfill kickoff failed for %s: %s", symbol, e)
 
 
-def _resolve_watchlist(db, name: str | None):
-    """``(watchlist, ambiguous)``. ``name`` given -> look it up by name
-    (None if it doesn't exist). ``name`` omitted -> the single active
-    watchlist if there's exactly one; ``(None, True)`` if there are
-    several (the caller should ask which one, never guess); ``(None,
-    False)`` if there are none yet."""
+def _resolve_watchlist(db, name: str | None, *, containing_symbol: str | None = None):
+    """``(watchlist, ambiguous, candidates)``.
+
+    ``name`` given -> look it up by name (None if it doesn't exist;
+    never ambiguous).
+
+    ``name`` omitted, no ``containing_symbol`` (add_to_watchlist /
+    delete_watchlist) -> the single active watchlist if there's exactly
+    one; ambiguous if there are several (the caller should ask which
+    one, never guess); ``(None, False, [])`` if there are none yet.
+
+    ``name`` omitted, ``containing_symbol`` given (remove_from_watchlist)
+    -> resolved by MEMBERSHIP, not total watchlist count: a ticker on
+    exactly one of the trader's lists resolves cleanly even if they have
+    several lists overall; on 2+ lists it's ambiguous; on none, it's a
+    clean "not found" (not ambiguous — there's nothing to pick between).
+
+    ``candidates`` is only non-empty in the ambiguous case, for the
+    caller to name the real options instead of a generic "which one?".
+    """
     from backend.repositories.watchlist_repository import WatchlistRepository
 
     repo = WatchlistRepository(db)
     if name:
-        return repo.get_watchlist_by_name(name), False
+        return repo.get_watchlist_by_name(name), False, []
+
     lists = repo.get_watchlists(active_only=True)
+
+    if containing_symbol:
+        holders = [wl for wl in lists if repo.get_watchlist_symbol(wl.id, containing_symbol)]
+        if len(holders) == 1:
+            return holders[0], False, []
+        if not holders:
+            return None, False, []
+        return None, True, holders
+
     if len(lists) == 1:
-        return lists[0], False
+        return lists[0], False, []
     if not lists:
-        return None, False
-    return None, True
+        return None, False, []
+    return None, True, lists
 
 
 def _create_alert(db, parsed) -> tuple[str, bool]:
@@ -709,9 +733,10 @@ def _add_to_watchlist(db, parsed) -> tuple[str, bool]:
     symbol = (parsed.action_symbol or "").upper().strip()
     if not symbol:
         return "Which ticker should I add?", False
-    wl, ambiguous = _resolve_watchlist(db, parsed.action_watchlist)
+    wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
     if ambiguous:
-        return "You have more than one watchlist — which one should I add it to?", True
+        names = ", ".join(c.name for c in candidates)
+        return f"You have more than one watchlist ({names}) — which one should I add it to?", True
     repo = WatchlistRepository(db)
     if wl is None:
         wl = repo.create_watchlist(parsed.action_watchlist or "Watchlist")
@@ -727,11 +752,23 @@ def _remove_from_watchlist(db, parsed) -> tuple[str, bool]:
     symbol = (parsed.action_symbol or "").upper().strip()
     if not symbol:
         return "Which ticker should I remove?", False
-    wl, ambiguous = _resolve_watchlist(db, parsed.action_watchlist)
+    # Ambiguity here is by MEMBERSHIP, not total watchlist count: a
+    # ticker that's only on one of the trader's lists resolves cleanly
+    # even if they have several lists overall (see _resolve_watchlist).
+    wl, ambiguous, candidates = _resolve_watchlist(
+        db, parsed.action_watchlist, containing_symbol=symbol,
+    )
     if ambiguous:
-        return "You have more than one watchlist — which one should I remove it from?", True
+        names = ", ".join(c.name for c in candidates)
+        return (
+            f"{symbol} is on more than one watchlist ({names}) — "
+            "which one should I remove it from?",
+            True,
+        )
     if wl is None:
-        return "I couldn't find that watchlist.", False
+        if parsed.action_watchlist:
+            return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".', False
+        return f"{symbol} isn't on any of your watchlists.", False
     ok = WatchlistRepository(db).remove_symbol_from_watchlist(wl.id, symbol)
     if not ok:
         return f"{symbol} wasn't in {wl.name}.", False
@@ -761,9 +798,10 @@ def _create_watchlist(db, parsed) -> tuple[str, bool]:
 def _delete_watchlist(db, parsed) -> tuple[str, bool]:
     from backend.repositories.watchlist_repository import WatchlistRepository
 
-    wl, ambiguous = _resolve_watchlist(db, parsed.action_watchlist)
+    wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
     if ambiguous:
-        return "You have more than one watchlist — which one should I delete?", True
+        names = ", ".join(c.name for c in candidates)
+        return f"You have more than one watchlist ({names}) — which one should I delete?", True
     if wl is None:
         return "I couldn't find that watchlist.", False
     name = wl.name
