@@ -191,6 +191,34 @@ async def get_session_for_symbol(
         repo.close()
 
 
+class ClearHistoryResponse(BaseModel):
+    deleted_sessions: int
+    deleted_messages: int
+
+
+@router.delete("/sessions", response_model=ClearHistoryResponse)
+async def clear_sessions(
+    scope: Literal["universal", "symbol", "alert"] | None = Query(default=None),
+    alert_trigger_id: int | None = Query(default=None),
+):
+    """Delete chat sessions and every message under them.
+
+    The "Clear" button in the AI Hub chat calls this with
+    ``scope=universal`` so a clear actually flushes the thread instead
+    of leaving orphaned sessions behind. With no filter it wipes all
+    chat history; ``alert_trigger_id`` narrows it to an alert-opened
+    thread.
+    """
+    repo = ChatRepository()
+    try:
+        sessions, messages = await asyncio.to_thread(
+            repo.delete_sessions, scope=scope, alert_trigger_id=alert_trigger_id,
+        )
+        return ClearHistoryResponse(deleted_sessions=sessions, deleted_messages=messages)
+    finally:
+        repo.close()
+
+
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageResponse])
 async def get_messages(session_id: int, limit: int = Query(default=50, ge=1, le=200)):
     repo = ChatRepository()

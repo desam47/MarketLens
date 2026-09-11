@@ -292,5 +292,45 @@ class TestSendMessageStream(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
 
+class TestClearSessions(unittest.TestCase):
+
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_clear_universal_history(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.delete_sessions.return_value = (9, 150)
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.delete("/api/ai/chat/sessions?scope=universal")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"deleted_sessions": 9, "deleted_messages": 150})
+        mock_repo.delete_sessions.assert_called_once_with(scope="universal", alert_trigger_id=None)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_clear_all_history_no_filter(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.delete_sessions.return_value = (0, 0)
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.delete("/api/ai/chat/sessions")
+
+        self.assertEqual(resp.status_code, 200)
+        mock_repo.delete_sessions.assert_called_once_with(scope=None, alert_trigger_id=None)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_clear_by_alert_trigger(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.delete_sessions.return_value = (1, 4)
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.delete("/api/ai/chat/sessions?alert_trigger_id=7")
+
+        self.assertEqual(resp.status_code, 200)
+        mock_repo.delete_sessions.assert_called_once_with(scope=None, alert_trigger_id=7)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -140,6 +140,49 @@ class TestChatRepository(unittest.TestCase):
         session = repo.create_session("AAPL")
         self.assertEqual(repo.get_messages(session.id), [])
 
+    def test_delete_sessions_by_scope_removes_sessions_and_messages(self):
+        repo = self._repo()
+        u1 = repo.create_session(scope="universal")
+        u2 = repo.create_session(scope="universal")
+        s1 = repo.create_session("AAPL")  # scope="symbol"
+        for sid in (u1.id, u2.id, s1.id):
+            repo.add_message(sid, "user", "hi")
+            repo.add_message(sid, "assistant", "hello")
+
+        sessions, messages = repo.delete_sessions(scope="universal")
+        self.assertEqual((sessions, messages), (2, 4))
+
+        db = repo.db
+        self.assertEqual(db.query(ChatSession).count(), 1)  # only the symbol one
+        self.assertEqual(db.query(ChatSession).first().id, s1.id)
+        self.assertEqual(db.query(ChatMessage).count(), 2)  # symbol session's messages kept
+
+    def test_delete_sessions_no_filter_wipes_everything(self):
+        repo = self._repo()
+        repo.add_message(repo.create_session(scope="universal").id, "user", "a")
+        repo.add_message(repo.create_session("MSFT").id, "user", "b")
+
+        sessions, messages = repo.delete_sessions()
+        self.assertEqual((sessions, messages), (2, 2))
+        self.assertEqual(repo.db.query(ChatSession).count(), 0)
+        self.assertEqual(repo.db.query(ChatMessage).count(), 0)
+
+    def test_delete_sessions_nothing_matches(self):
+        repo = self._repo()
+        repo.create_session("AAPL")
+        self.assertEqual(repo.delete_sessions(scope="universal"), (0, 0))
+        self.assertEqual(repo.db.query(ChatSession).count(), 1)
+
+    def test_delete_sessions_by_alert_trigger(self):
+        repo = self._repo()
+        a = repo.create_session("AAPL", alert_trigger_id=7)
+        repo.add_message(a.id, "user", "explain this alert")
+        repo.create_session("AAPL", alert_trigger_id=9)
+
+        sessions, messages = repo.delete_sessions(alert_trigger_id=7)
+        self.assertEqual((sessions, messages), (1, 1))
+        self.assertEqual(repo.db.query(ChatSession).count(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -100,6 +100,40 @@ class ChatRepository:
     def get_session(self, session_id: int) -> ChatSession | None:
         return self.db.query(ChatSession).filter(ChatSession.id == session_id).first()
 
+    def delete_sessions(
+        self,
+        *,
+        scope: str | None = None,
+        alert_trigger_id: int | None = None,
+    ) -> tuple[int, int]:
+        """Delete chat sessions and their messages.
+
+        Filters are ANDed; no filter deletes every chat session. Returns
+        ``(sessions_deleted, messages_deleted)``. Messages are removed
+        explicitly (SQLite declares no ON DELETE CASCADE) before the
+        sessions.
+        """
+        q = self.db.query(ChatSession.id)
+        if scope is not None:
+            q = q.filter(ChatSession.scope == scope)
+        if alert_trigger_id is not None:
+            q = q.filter(ChatSession.alert_trigger_id == alert_trigger_id)
+        ids = [row[0] for row in q.all()]
+        if not ids:
+            return (0, 0)
+        msgs = (
+            self.db.query(ChatMessage)
+            .filter(ChatMessage.session_id.in_(ids))
+            .delete(synchronize_session=False)
+        )
+        sess = (
+            self.db.query(ChatSession)
+            .filter(ChatSession.id.in_(ids))
+            .delete(synchronize_session=False)
+        )
+        self.db.commit()
+        return (int(sess), int(msgs))
+
     # --- Messages -----------------------------------------------------
 
     def add_message(self, session_id: int, role: str, content: str) -> ChatMessage:

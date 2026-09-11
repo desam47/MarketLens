@@ -9,6 +9,7 @@ jest.mock('../services/api', () => ({
     getChatMessages: jest.fn(),
     sendChatMessage: jest.fn(),
     streamChatMessage: jest.fn(),
+    clearChatHistory: jest.fn(),
   },
 }));
 
@@ -21,6 +22,7 @@ beforeEach(() => {
     created_at: '', updated_at: '',
   } as any);
   mockApi.getChatMessages.mockResolvedValue([]);
+  mockApi.clearChatHistory.mockResolvedValue({ deleted_sessions: 1, deleted_messages: 2 });
 });
 
 describe('ChatPanel (universal)', () => {
@@ -113,6 +115,25 @@ describe('ChatPanel (universal)', () => {
 
     await waitFor(() => expect(screen.getByText('Risk-on.')).toBeInTheDocument());
     expect(onSymbolResolved).not.toHaveBeenCalled();
+  });
+
+  it('Clear flushes history via the API then reopens an empty session', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'old q', created_at: '', grounded: null } as any,
+      { id: 2, session_id: 1, role: 'assistant', content: 'old a', created_at: '', grounded: true } as any,
+    ]);
+    mockApi.createChatSession
+      .mockResolvedValueOnce({ id: 1, symbol: null, scope: 'universal', alert_trigger_id: null, created_at: '', updated_at: '' } as any)
+      .mockResolvedValueOnce({ id: 2, symbol: null, scope: 'universal', alert_trigger_id: null, created_at: '', updated_at: '' } as any);
+
+    render(<ChatPanel />);
+    expect(await screen.findByText('old a')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /clear/i }));
+
+    await waitFor(() => expect(mockApi.clearChatHistory).toHaveBeenCalled());
+    expect(mockApi.createChatSession).toHaveBeenCalledWith(undefined, null, true);
+    await waitFor(() => expect(screen.queryByText('old a')).not.toBeInTheDocument());
   });
 
   it('falls back to the blocking endpoint when the stream never starts', async () => {

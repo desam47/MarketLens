@@ -13,8 +13,8 @@
  * append the user's bubble immediately, then append the real assistant
  * reply (or roll back + show an error on failure).
  *
- * "Clear" (top-right) opens a brand-new session — the old conversation
- * isn't deleted, just no longer what a plain re-open returns.
+ * "Clear" (top-right) permanently deletes the chat history — every
+ * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api, { ChatMessage } from '../services/api';
@@ -82,6 +82,9 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
     setClearing(true);
     setError(null);
     try {
+      // Actually flush the history — sessions + messages — not just
+      // hide it behind a new session.
+      await api.clearChatHistory(alertTriggerId ?? undefined);
       const session = await api.createChatSession(undefined, alertTriggerId, true);
       setSessionId(session.id);
       setMessages([]);
@@ -203,7 +206,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
             className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
             onClick={handleClear}
             disabled={loading || clearing || messages.length === 0}
-            title="Start a fresh conversation — the old one isn't deleted, just no longer shown here"
+            title="Permanently delete this chat's history and start fresh"
           >
             {clearing ? '⟳' : '🗑 Clear'}
           </button>

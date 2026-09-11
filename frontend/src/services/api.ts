@@ -1882,6 +1882,20 @@ class ApiService {
     return this.fetch<ChatMessage[]>(`/ai/chat/sessions/${sessionId}/messages?limit=${limit}`);
   }
 
+  /**
+   * Delete chat history. With an `alertTriggerId` it clears that
+   * alert-opened thread; otherwise it clears the universal AI Hub chat
+   * (all its sessions + messages). Backs the "Clear" button.
+   */
+  async clearChatHistory(
+    alertTriggerId?: number | null,
+  ): Promise<{ deleted_sessions: number; deleted_messages: number }> {
+    const qs = alertTriggerId != null
+      ? `?alert_trigger_id=${alertTriggerId}`
+      : '?scope=universal';
+    return this.fetch(`/ai/chat/sessions${qs}`, { method: 'DELETE' });
+  }
+
   async sendChatMessage(sessionId: number, content: string): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
