@@ -100,6 +100,47 @@ _STATS_INTENT = re.compile(
 _ACTION_INTENT = re.compile(
     r"\b(alert\w*|notify|remind\w*|watch ?list\w*|track\w*)\b", re.I)
 
+# Deterministic safety net for delete_watchlist intent the model leaves
+# untagged (action="none", prose reply instead). Confirmed live
+# 2026-09-11 that the configured chat model still does this on some
+# turns even after two rewrites of CHAT_SYSTEM_PROMPT rule 10/11 — a
+# model instruction-following gap, not a prompt-wording one, so it
+# needs a backstop that doesn't depend on the model cooperating.
+# Deliberately narrow: only "delete/remove/clear ... watchlist" with no
+# ticker resolved this turn (see ``_fallback_action``), so it never
+# misfires on remove_from_watchlist ("remove AAPL from my watchlist")
+# or a non-destructive mention ("what's on my watchlist").
+_DELETE_WATCHLIST_FALLBACK = re.compile(
+    r"\b(delete|remove|clear|trash|get rid of)\b[^.!?]{0,20}\bwatch ?list\b", re.I)
+
+# Same rationale, for the turn AFTER a server-authored confirmation
+# question (``_confirm_prompt``): confirmed live 2026-09-11 that the
+# model can answer its own "yes" turn by narrating a fake completion in
+# "reply" while still leaving action="none" instead of re-proposing the
+# action with action_confirmed=true. These parse the exact, fixed-format
+# questions _confirm_prompt composes back out of the prior assistant
+# turn, so the follow-up executes deterministically instead of trusting
+# the model to remember and restate the pending action correctly.
+_AFFIRM_INTENT = re.compile(
+    r"^\s*(yes\b|yep\b|yeah\b|yup\b|confirm(ed)?\b|do it\b|go ahead\b|sure\b|ok(ay)?\b)", re.I)
+_CONFIRM_DELETE_WATCHLIST_RE = re.compile(r'^Delete the watchlist "(?P<name>.+)"\? This removes')
+_CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
+    r'^Remove (?P<sym>\S+)(?: from "(?P<wl>[^"]+)")?\? Say yes to confirm\.$')
+
+# "How many watchlists do I have" / "what are my watchlists" / "what's
+# on my watchlist" — the model is never told the trader's actual
+# watchlists (no such data reaches build_chat_prompt), so it can only
+# guess or, correctly per rule 11, decline. Confirmed live 2026-09-11
+# it does the latter ("I don't have visibility..."), which is honest
+# but unhelpful when the app has the real answer one query away.
+# Answered deterministically, before the (slow) AI call, so accuracy
+# never depends on the model and the trader isn't waiting on a round
+# trip for something the DB already knows.
+_WATCHLIST_LIST_INTENT = re.compile(
+    r"how many watchlists?\b|"
+    r"\b(which|what)\b.{0,20}\bwatchlists?\b|"
+    r"\blist\b.{0,10}\bwatchlists?\b", re.I)
+
 # Short-lived per-symbol context cache — a burst of follow-ups about one
 # name rebuilt the whole scan + aux-data each turn.
 _CTX_TTL = 12.0
@@ -437,7 +478,10 @@ def _generate_reply(
     ):
         return f"I don't have enough data on {unavailable[0]} yet to answer that.", False
 
-    if not ai_manager.is_available():
+    if not symbol_blocks and _WATCHLIST_LIST_INTENT.search(user_content):
+        return _watchlist_list_reply(db), True
+
+    if not ai_manager.enabled:
         return "AI is currently unavailable, so I can't answer that right now.", False
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
@@ -464,7 +508,7 @@ def _generate_reply(
         logger.info("Chat reply failed to parse: %s", e)
         return "I couldn't process that — could you rephrase?", False
 
-    return _finalize_parsed(db, parsed, symbol_blocks)
+    return _finalize_parsed(db, parsed, symbol_blocks, user_content, transcript)
 
 
 def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
@@ -474,7 +518,72 @@ def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
     return f"(You named more tickers than I can dig into at once — I looked at {shown}.)"
 
 
-def _finalize_parsed(db, parsed, symbol_blocks: list[dict]) -> tuple[str, bool]:
+def _watchlist_list_reply(db) -> str:
+    """Real answer to "how many/which watchlists do I have" — straight
+    from the DB, not the model's guess. See ``_WATCHLIST_LIST_INTENT``.
+    """
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    watchlists = WatchlistRepository(db).get_watchlists(active_only=True)
+    if not watchlists:
+        return "You don't have any watchlists yet."
+
+    def _describe(wl) -> str:
+        symbols = [s.symbol for s in wl.symbols if s.is_enabled]
+        names = ", ".join(symbols) if symbols else "no symbols"
+        return f'"{wl.name}" ({len(symbols)}: {names})'
+
+    if len(watchlists) == 1:
+        return f"You have 1 watchlist: {_describe(watchlists[0])}."
+    return (
+        f"You have {len(watchlists)} watchlists: "
+        + "; ".join(_describe(wl) for wl in watchlists) + "."
+    )
+
+
+def _fallback_action(user_content: str, symbol_blocks: list[dict]) -> str | None:
+    """A deterministic ``action`` to use when the model left ``"none"``
+    despite an unambiguous destructive request — see
+    ``_DELETE_WATCHLIST_FALLBACK``. Returns ``None`` when nothing should
+    override the model's own ``"none"``.
+    """
+    if symbol_blocks:
+        return None  # a resolved ticker means this is more likely remove_from_watchlist
+    if _DELETE_WATCHLIST_FALLBACK.search(user_content):
+        return "delete_watchlist"
+    return None
+
+
+def _fallback_confirmation(
+    user_content: str, transcript: list[tuple[str, str]],
+) -> tuple[str, str | None, str | None] | None:
+    """A deterministic ``(action, action_symbol, action_watchlist)`` to
+    use when the trader just said yes to the app's OWN previous
+    confirmation question but the model left ``action="none"`` on this
+    turn — see ``_CONFIRM_DELETE_WATCHLIST_RE`` /
+    ``_CONFIRM_REMOVE_FROM_WATCHLIST_RE``. Returns ``None`` when the
+    prior turn wasn't a recognizable confirmation question, this turn
+    isn't an affirmative, or the question's target can't be parsed back
+    out with confidence (e.g. a placeholder like "that ticker").
+    """
+    if not transcript or transcript[-1][0] != "assistant":
+        return None
+    if not _AFFIRM_INTENT.search(user_content):
+        return None
+    prior = transcript[-1][1]
+    m = _CONFIRM_DELETE_WATCHLIST_RE.match(prior)
+    if m:
+        return "delete_watchlist", None, m.group("name")
+    m = _CONFIRM_REMOVE_FROM_WATCHLIST_RE.match(prior)
+    if m:
+        return "remove_from_watchlist", m.group("sym"), m.group("wl")
+    return None
+
+
+def _finalize_parsed(
+    db, parsed, symbol_blocks: list[dict],
+    user_content: str = "", transcript: list[tuple[str, str]] | None = None,
+) -> tuple[str, bool]:
     """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded)``.
 
     Runs the chat's tools: ``wants_reanalysis`` (a real ``analyze_symbol``
@@ -482,7 +591,11 @@ def _finalize_parsed(db, parsed, symbol_blocks: list[dict]) -> tuple[str, bool]:
     see the module docstring). A destructive action without
     ``action_confirmed`` never reaches ``_run_action`` — it gets a
     server-authored confirmation question instead, regardless of what
-    the model set for "reply".
+    the model set for "reply". When the model leaves ``action="none"``,
+    ``_fallback_action`` / ``_fallback_confirmation`` get one more
+    chance to catch an unambiguous destructive request (or its
+    confirmation) before it falls through to the model's own (possibly
+    hallucinated) prose.
     """
     if parsed.wants_reanalysis:
         known = [b["symbol"] for b in symbol_blocks]
@@ -494,9 +607,18 @@ def _finalize_parsed(db, parsed, symbol_blocks: list[dict]) -> tuple[str, bool]:
         if known:
             return "Which ticker should I run the full analysis for?", True
         return "Tell me which ticker you'd like me to run the full analysis for.", False
+    if parsed.action == "none":
+        fallback = _fallback_action(user_content, symbol_blocks)
+        if fallback is not None:
+            parsed.action = fallback
+        else:
+            confirmed = _fallback_confirmation(user_content, transcript or [])
+            if confirmed is not None:
+                parsed.action, parsed.action_symbol, parsed.action_watchlist = confirmed
+                parsed.action_confirmed = True
     if parsed.action != "none":
         if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
-            return _confirm_prompt(parsed), True
+            return _confirm_prompt(db, parsed), True
         return _run_action(db, parsed)
     return parsed.reply, parsed.grounded
 
@@ -524,7 +646,11 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         ))
         return
 
-    if not ai_manager.is_available():
+    if not turn.symbol_blocks and _WATCHLIST_LIST_INTENT.search(turn.user_content):
+        yield ("result", (_watchlist_list_reply(db), True))
+        return
+
+    if not ai_manager.enabled:
         yield ("result", (
             "AI is currently unavailable, so I can't answer that right now.", False,
         ))
@@ -573,7 +699,7 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         yield ("result", (streamed or "I couldn't process that — could you rephrase?", False))
         return
 
-    yield ("result", _finalize_parsed(db, parsed, turn.symbol_blocks))
+    yield ("result", _finalize_parsed(db, parsed, turn.symbol_blocks, turn.user_content, turn.transcript))
 
 
 def _run_reanalysis(symbol: str) -> tuple[str, bool]:
@@ -620,10 +746,19 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
 _DESTRUCTIVE_ACTIONS = {"delete_alert", "remove_from_watchlist", "delete_watchlist"}
 
 
-def _confirm_prompt(parsed) -> str:
+def _confirm_prompt(db, parsed) -> str:
     """Server-authored confirmation text for a destructive action —
     never the model's own prose, so wording never depends on the model
-    getting prompt-following right."""
+    getting prompt-following right.
+
+    The model is never told how many watchlists exist or their names
+    (that's not in the chat context at all), so it can't reliably judge
+    whether "my watchlist" is ambiguous — it either guesses or asks
+    defensively even with exactly one list. delete_watchlist resolves
+    the real target here, the same way ``_delete_watchlist`` itself
+    will once confirmed, so the question always names the actual
+    watchlist (or the actual ambiguity) instead of a vague fallback.
+    """
     if parsed.action == "delete_alert":
         return "Delete that alert? Say yes to confirm."
     if parsed.action == "remove_from_watchlist":
@@ -631,7 +766,13 @@ def _confirm_prompt(parsed) -> str:
         where = f' from "{parsed.action_watchlist}"' if parsed.action_watchlist else ""
         return f"Remove {sym}{where}? Say yes to confirm."
     if parsed.action == "delete_watchlist":
-        name = parsed.action_watchlist or "that watchlist"
+        name = parsed.action_watchlist
+        if not name:
+            wl, ambiguous, candidates = _resolve_watchlist(db, None)
+            if ambiguous:
+                names = ", ".join(c.name for c in candidates)
+                return f"You have more than one watchlist ({names}) — which one should I delete?"
+            name = wl.name if wl is not None else "that watchlist"
         return (
             f'Delete the watchlist "{name}"? This removes every ticker in it — '
             "say yes to confirm."
@@ -854,6 +995,43 @@ def _run_backtest(db, parsed) -> tuple[str, bool]:
     )
 
 
+def _set_entity_type(db, parsed) -> tuple[str, bool]:
+    """Relabel a watchlist ticker as "stock" or "etf". Not destructive —
+    a mislabeled classification is a one-field correction, not data loss
+    — so it fires on the first clear request like create_alert, no
+    confirm gate."""
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    symbol = (parsed.action_symbol or "").upper().strip()
+    entity_type = parsed.action_entity_type
+    if not symbol or entity_type is None:
+        return "Which ticker, and should it be a stock or an ETF?", False
+    # Same membership-based resolution as remove_from_watchlist: a
+    # symbol on exactly one of the trader's lists resolves cleanly even
+    # with several lists overall.
+    wl, ambiguous, candidates = _resolve_watchlist(
+        db, parsed.action_watchlist, containing_symbol=symbol,
+    )
+    if ambiguous:
+        names = ", ".join(c.name for c in candidates)
+        return (
+            f"{symbol} is on more than one watchlist ({names}) — "
+            "which one should I update?",
+            True,
+        )
+    if wl is None:
+        if parsed.action_watchlist:
+            return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".', False
+        return f"{symbol} isn't on any of your watchlists.", False
+    updated = WatchlistRepository(db).update_symbol_in_watchlist(
+        wl.id, symbol, entity_type=entity_type,
+    )
+    if updated is None:
+        return f"{symbol} wasn't in {wl.name}.", False
+    label = "an ETF" if entity_type == "etf" else "a stock"
+    return f"Done — {symbol} is now marked as {label} in {wl.name}.", True
+
+
 _ACTION_HANDLERS = {
     "create_alert": _create_alert,
     "delete_alert": _delete_alert,
@@ -862,6 +1040,7 @@ _ACTION_HANDLERS = {
     "create_watchlist": _create_watchlist,
     "delete_watchlist": _delete_watchlist,
     "run_backtest": _run_backtest,
+    "set_entity_type": _set_entity_type,
 }
 
 

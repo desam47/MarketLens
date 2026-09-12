@@ -19,17 +19,22 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.ai.chat import (
+    _WATCHLIST_LIST_INTENT,
     _add_to_watchlist,
     _confirm_prompt,
     _create_alert,
     _create_watchlist,
     _delete_alert,
     _delete_watchlist,
+    _fallback_action,
+    _fallback_confirmation,
     _finalize_parsed,
     _remove_from_watchlist,
     _resolve_watchlist,
     _run_action,
     _run_backtest,
+    _set_entity_type,
+    _watchlist_list_reply,
     answer_chat_message,
 )
 from backend.ai.manager import ai_manager
@@ -335,6 +340,102 @@ class TestActionHandlers(_DBBase):
         self.assertIn("couldn't find", text.lower())
 
 
+class TestSetEntityType(_DBBase):
+    def test_relabels_stock_to_etf(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Default")
+        repo.add_symbol_to_watchlist(wl.id, "SPY")
+
+        text, grounded = _set_entity_type(
+            self.db, _parsed(action_symbol="SPY", action_entity_type="etf"),
+        )
+
+        self.assertTrue(grounded)
+        self.assertIn("SPY", text)
+        self.assertIn("ETF", text)
+        sym = repo.get_watchlist_symbol(wl.id, "SPY")
+        self.assertEqual(sym.entity_type, "etf")
+
+    def test_relabels_etf_to_stock(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Default")
+        repo.add_symbol_to_watchlist(wl.id, "SPY")
+        repo.update_symbol_in_watchlist(wl.id, "SPY", entity_type="etf")
+
+        text, grounded = _set_entity_type(
+            self.db, _parsed(action_symbol="SPY", action_entity_type="stock"),
+        )
+
+        self.assertTrue(grounded)
+        self.assertEqual(repo.get_watchlist_symbol(wl.id, "SPY").entity_type, "stock")
+
+    def test_missing_entity_type_asks_not_writes(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Default")
+        repo.add_symbol_to_watchlist(wl.id, "SPY")
+
+        text, grounded = _set_entity_type(self.db, _parsed(action_symbol="SPY"))
+
+        self.assertFalse(grounded)
+        self.assertIsNone(repo.get_watchlist_symbol(wl.id, "SPY").entity_type)
+
+    def test_symbol_not_on_any_watchlist(self):
+        text, grounded = _set_entity_type(
+            self.db, _parsed(action_symbol="ZZZZ", action_entity_type="etf"),
+        )
+        self.assertFalse(grounded)
+        self.assertIn("isn't on any of your watchlists", text)
+
+    def test_ambiguous_when_on_two_lists(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        swing = repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "SPY")
+        repo.add_symbol_to_watchlist(swing.id, "SPY")
+
+        text, grounded = _set_entity_type(
+            self.db, _parsed(action_symbol="SPY", action_entity_type="etf"),
+        )
+
+        self.assertTrue(grounded)
+        self.assertIn("Tech", text)
+        self.assertIn("Swing Setups", text)
+        self.assertIsNone(repo.get_watchlist_symbol(tech.id, "SPY").entity_type)
+        self.assertIsNone(repo.get_watchlist_symbol(swing.id, "SPY").entity_type)
+
+    def test_named_watchlist_resolves_the_ambiguity(self):
+        repo = WatchlistRepository(self.db)
+        tech = repo.create_watchlist("Tech")
+        swing = repo.create_watchlist("Swing Setups")
+        repo.add_symbol_to_watchlist(tech.id, "SPY")
+        repo.add_symbol_to_watchlist(swing.id, "SPY")
+
+        text, grounded = _set_entity_type(self.db, _parsed(
+            action_symbol="SPY", action_entity_type="etf", action_watchlist="Tech",
+        ))
+
+        self.assertTrue(grounded)
+        self.assertEqual(repo.get_watchlist_symbol(tech.id, "SPY").entity_type, "etf")
+        self.assertIsNone(repo.get_watchlist_symbol(swing.id, "SPY").entity_type)
+
+    def test_not_destructive_not_gated_by_confirmation(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Default")
+        repo.add_symbol_to_watchlist(wl.id, "SPY")
+
+        text, grounded = _finalize_parsed(
+            self.db,
+            _parsed(
+                action="set_entity_type", action_symbol="SPY", action_entity_type="etf",
+                action_confirmed=False,
+            ),
+            symbol_blocks=[],
+        )
+
+        self.assertTrue(grounded)
+        self.assertEqual(repo.get_watchlist_symbol(wl.id, "SPY").entity_type, "etf")
+
+
 class TestResolveWatchlist(_DBBase):
     def test_by_name(self):
         wl = WatchlistRepository(self.db).create_watchlist("Swing Setups")
@@ -495,19 +596,143 @@ class TestRunActionNeverRaises(_DBBase):
         self.assertIn("went wrong", text.lower())
 
 
-class TestConfirmPromptWording(unittest.TestCase):
+class TestConfirmPromptWording(_DBBase):
     def test_delete_alert_wording(self):
-        self.assertIn("confirm", _confirm_prompt(_parsed(action="delete_alert")).lower())
+        self.assertIn(
+            "confirm", _confirm_prompt(self.db, _parsed(action="delete_alert")).lower(),
+        )
 
     def test_remove_from_watchlist_wording_includes_symbol_and_list(self):
-        text = _confirm_prompt(_parsed(
+        text = _confirm_prompt(self.db, _parsed(
             action="remove_from_watchlist", action_symbol="RIVN", action_watchlist="Swing Setups",
         ))
         self.assertIn("RIVN", text)
         self.assertIn("Swing Setups", text)
 
     def test_delete_watchlist_wording_includes_name(self):
-        text = _confirm_prompt(_parsed(action="delete_watchlist", action_watchlist="Swing Setups"))
+        text = _confirm_prompt(
+            self.db, _parsed(action="delete_watchlist", action_watchlist="Swing Setups"),
+        )
+        self.assertIn("Swing Setups", text)
+
+    def test_delete_watchlist_no_name_resolves_the_single_watchlist(self):
+        # The model is never told the trader's watchlist count/names, so it
+        # can leave action_watchlist unset even when there's exactly one —
+        # the confirmation question must still name it correctly, not fall
+        # back to a vague "that watchlist" and not ask "which one" when
+        # there's nothing to disambiguate.
+        from backend.repositories.watchlist_repository import WatchlistRepository
+        WatchlistRepository(self.db).create_watchlist("My Longs")
+        text = _confirm_prompt(self.db, _parsed(action="delete_watchlist", action_watchlist=None))
+        self.assertIn("My Longs", text)
+        self.assertNotIn("which one", text.lower())
+
+    def test_delete_watchlist_no_name_with_multiple_asks_with_real_names(self):
+        from backend.repositories.watchlist_repository import WatchlistRepository
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("My Longs")
+        repo.create_watchlist("Swing Setups")
+        text = _confirm_prompt(self.db, _parsed(action="delete_watchlist", action_watchlist=None))
+        self.assertIn("My Longs", text)
+        self.assertIn("Swing Setups", text)
+        self.assertIn("which one", text.lower())
+
+
+class TestFallbackAction(unittest.TestCase):
+    """_fallback_action: the deterministic safety net for a destructive
+    request the model left untagged (action="none"). Confirmed live
+    2026-09-11 the model does this even after prompt fixes."""
+
+    def test_delete_watchlist_phrasing_with_no_symbol_matches(self):
+        for phrase in (
+            "delete my watchlist", "please remove my watchlist",
+            "can you clear my watchlist", "trash my watch list",
+        ):
+            self.assertEqual(_fallback_action(phrase, []), "delete_watchlist", phrase)
+
+    def test_resolved_symbol_this_turn_suppresses_the_fallback(self):
+        # "remove AAPL from my watchlist" also matches the phrase, but a
+        # resolved ticker means remove_from_watchlist, not delete_watchlist
+        # — the fallback must not misfire and nuke the whole list.
+        blocks = [{"symbol": "AAPL"}]
+        self.assertIsNone(_fallback_action("remove AAPL from my watchlist", blocks))
+
+    def test_unrelated_text_does_not_match(self):
+        self.assertIsNone(_fallback_action("what's the market doing today", []))
+        self.assertIsNone(_fallback_action("add AAPL to my watchlist", []))
+
+
+class TestFallbackConfirmation(unittest.TestCase):
+    """_fallback_confirmation: the safety net for the turn AFTER the
+    app's own confirmation question — confirmed live 2026-09-11 the
+    model can narrate a fake "done" here too instead of re-proposing
+    the action with action_confirmed=true."""
+
+    def test_yes_after_delete_watchlist_confirm_resolves_name(self):
+        transcript = [("assistant", 'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.')]
+        self.assertEqual(
+            _fallback_confirmation("yes", transcript),
+            ("delete_watchlist", None, "Watch1"),
+        )
+
+    def test_yes_after_remove_from_watchlist_confirm_resolves_symbol_and_list(self):
+        transcript = [("assistant", 'Remove AAPL from "Watch1"? Say yes to confirm.')]
+        self.assertEqual(
+            _fallback_confirmation("yes", transcript),
+            ("remove_from_watchlist", "AAPL", "Watch1"),
+        )
+
+    def test_non_affirmative_reply_does_not_match(self):
+        transcript = [("assistant", 'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.')]
+        self.assertIsNone(_fallback_confirmation("actually never mind", transcript))
+
+    def test_prior_non_confirmation_message_does_not_match(self):
+        transcript = [("assistant", "Here's what's happening with AAPL today.")]
+        self.assertIsNone(_fallback_confirmation("yes", transcript))
+
+    def test_empty_transcript_does_not_match(self):
+        self.assertIsNone(_fallback_confirmation("yes", []))
+
+
+class TestWatchlistListReply(_DBBase):
+    """_watchlist_list_reply / _WATCHLIST_LIST_INTENT: a deterministic,
+    real answer to "how many/which watchlists do I have" — the model
+    is never given this data, so left to itself it either guesses or
+    (confirmed live 2026-09-11) declines outright."""
+
+    def test_intent_matches_reported_phrasing(self):
+        for phrase in (
+            "how many watchlist i have", "how many watchlists do i have",
+            "what watchlists do I have", "which watchlists do I have",
+            "list my watchlists",
+        ):
+            self.assertTrue(_WATCHLIST_LIST_INTENT.search(phrase), phrase)
+
+    def test_intent_does_not_match_unrelated_watchlist_mentions(self):
+        for phrase in ("delete my watchlist", "add AAPL to my watchlist"):
+            self.assertFalse(_WATCHLIST_LIST_INTENT.search(phrase), phrase)
+
+    def test_no_watchlists(self):
+        self.assertIn("don't have any", _watchlist_list_reply(self.db))
+
+    def test_single_watchlist_names_real_symbols(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Watch1")
+        repo.add_symbol_to_watchlist(wl.id, "AAPL")
+        repo.add_symbol_to_watchlist(wl.id, "NVDA")
+        text = _watchlist_list_reply(self.db)
+        self.assertIn("1 watchlist", text)
+        self.assertIn("Watch1", text)
+        self.assertIn("AAPL", text)
+        self.assertIn("NVDA", text)
+
+    def test_multiple_watchlists_all_named(self):
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("Longs")
+        repo.create_watchlist("Swing Setups")
+        text = _watchlist_list_reply(self.db)
+        self.assertIn("2 watchlists", text)
+        self.assertIn("Longs", text)
         self.assertIn("Swing Setups", text)
 
 
@@ -598,6 +823,66 @@ class TestEndToEnd(unittest.TestCase):
             self.assertIsNone(AlertRepository(db).get_by_id(alert_id))
         finally:
             db.close()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_delete_watchlist_survives_model_never_setting_action(self, mock_ai):
+        """Regression test for the exact bug reported live 2026-09-11: the
+        model left action="none" on BOTH the initial "delete my
+        watchlist" turn and the "yes" confirmation turn, narrating fake
+        prose ("Which watchlist...", "...has been deleted") each time
+        while the watchlist was never actually touched. The
+        _fallback_action / _fallback_confirmation safety nets must catch
+        both turns regardless of what the model returns.
+        """
+        db = self.Session()
+        repo = WatchlistRepository(db)
+        wl = repo.create_watchlist("Watch1")
+        wl_id = wl.id
+        repo.add_symbol_to_watchlist(wl_id, "AAPL")
+        db.close()
+
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete.return_value = _reply(
+            '{"reply": "Which watchlist would you like to delete?", "grounded": false, '
+            '"action": "none"}'
+        )
+        msg1, grounded1, *_ = answer_chat_message(self.session_id, "delete my watchlist")
+        self.assertIn("Watch1", msg1.content)
+        self.assertIn("confirm", msg1.content.lower())
+        db = self.Session()
+        try:
+            self.assertIsNotNone(WatchlistRepository(db).get_watchlist(wl_id))
+        finally:
+            db.close()
+
+        mock_ai.complete.return_value = _reply(
+            '{"reply": "The watchlist has been deleted.", "grounded": false, "action": "none"}'
+        )
+        msg2, grounded2, *_ = answer_chat_message(self.session_id, "yes")
+        self.assertIn("deleted", msg2.content.lower())
+        self.assertIn("Watch1", msg2.content)
+        db = self.Session()
+        try:
+            self.assertIsNone(WatchlistRepository(db).get_watchlist(wl_id))
+        finally:
+            db.close()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_how_many_watchlists_answered_without_asking_the_model(self, mock_ai):
+        db = self.Session()
+        repo = WatchlistRepository(db)
+        wl = repo.create_watchlist("Watch1")
+        repo.add_symbol_to_watchlist(wl.id, "AAPL")
+        db.close()
+
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+
+        msg, grounded, *_ = answer_chat_message(self.session_id, "how many watchlist i have")
+        self.assertIn("Watch1", msg.content)
+        self.assertIn("AAPL", msg.content)
+        mock_ai.complete.assert_not_called()
 
 
 if __name__ == "__main__":

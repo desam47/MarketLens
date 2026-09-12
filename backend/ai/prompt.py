@@ -624,7 +624,7 @@ class ChatReplyResponse(BaseModel):
         "none", "create_alert", "delete_alert",
         "add_to_watchlist", "remove_from_watchlist",
         "create_watchlist", "delete_watchlist",
-        "run_backtest",
+        "run_backtest", "set_entity_type",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -632,6 +632,8 @@ class ChatReplyResponse(BaseModel):
     action_parameter: str | None = Field(default=None, max_length=120)
     action_label: str | None = Field(default=None, max_length=120)
     action_target_id: int | None = None
+    # set_entity_type only: "stock" or "etf" to relabel action_symbol as.
+    action_entity_type: Literal["stock", "etf"] | None = None
     action_confirmed: bool = False
 
     @field_validator("action_condition_type")
@@ -712,19 +714,22 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have SEVEN more tools, via "action": create_alert, delete_alert, \
+10. You have EIGHT more tools, via "action": create_alert, delete_alert, \
     add_to_watchlist, remove_from_watchlist, create_watchlist, \
-    delete_watchlist, run_backtest.
-    - create_alert / add_to_watchlist / create_watchlist / run_backtest \
-      fire on the FIRST clear request — no confirmation needed. Fill \
-      the matching action_* fields.
+    delete_watchlist, run_backtest, set_entity_type.
+    - create_alert / add_to_watchlist / create_watchlist / run_backtest / \
+      set_entity_type fire on the FIRST clear request — no confirmation \
+      needed. Fill the matching action_* fields.
     - delete_alert / remove_from_watchlist / delete_watchlist are \
-      DESTRUCTIVE. On the first mention, do NOT set "action" (leave it \
-      "none") — instead reply in plain English asking the trader to \
-      confirm exactly what you would remove. Only set the action, with \
-      action_confirmed=true, on a LATER turn where the trader's own \
-      message clearly confirms (yes / confirm / do it / go ahead) — \
-      check the prior conversation for what you asked.
+      DESTRUCTIVE. Set "action" and its action_* fields (target id / \
+      symbol / watchlist) as soon as it's clear what the trader wants \
+      removed — even on the first mention — but leave \
+      action_confirmed=false unless the trader's OWN message you are \
+      replying to right now clearly confirms (yes / confirm / do it / \
+      go ahead) a destructive action you already proposed in a prior \
+      turn. The app itself asks the confirmation question when \
+      action_confirmed is false — do not compose your own confirmation \
+      wording in "reply" for these three actions.
     - delete_alert needs action_target_id, the numeric "id" from \
       active_alerts in the <market> block. If you can't find a \
       matching alert there, say so in "reply" instead of guessing an \
@@ -735,17 +740,32 @@ Rules you must follow:
       "5" for a percent). action_label is an optional short name.
     - add_to_watchlist / remove_from_watchlist / create_watchlist / \
       delete_watchlist use action_symbol and/or action_watchlist (the \
-      watchlist name — omit it to mean "the" watchlist when there's \
-      only one; if several exist and none was named, ask which one \
-      instead of guessing).
+      watchlist name). You are NOT told how many watchlists the \
+      trader has or their names, so never guess a count or ask "which \
+      watchlist" yourself — set action_watchlist ONLY when the trader \
+      said a specific name; otherwise leave it unset and let the app \
+      resolve it (it knows the real list and will ask by name, with \
+      the real options, if it's genuinely ambiguous).
     - run_backtest needs action_symbol. It runs a fresh 6-month daily \
       backtest of the engine's own signals and reports a real win rate \
       / average return — use it when the trader asks how a setup or \
       ticker has performed historically, NOT for "is it moving right \
       now" questions (that's the tape section already in context).
+    - set_entity_type needs action_symbol and action_entity_type ("stock" \
+      or "etf") — use it when the trader says a ticker is mislabeled or \
+      asks you to mark/reclassify it as a stock vs an ETF. This is a \
+      real per-watchlist label the app stores and can change; never say \
+      you can't relabel a ticker — set this action instead.
     - When "action" is set to anything but "none", "reply" is ignored \
       (a short placeholder is fine) — the app executes the action and \
       replies with its own result instead, same as wants_reanalysis.
+11. NEVER state or imply in "reply" that you added, removed, deleted, \
+    created, or changed anything (an alert, a watchlist, a ticker) — \
+    you cannot perform any of those yourself; only the app can, and \
+    only when "action" is set to the matching tool this turn. If \
+    "action" is "none", nothing was changed, no matter what the \
+    trader asked for — say what you need (a confirmation, a missing \
+    ticker, a clarification) instead of claiming it's done.
 """
 
 # Rough token estimate for the assembled prompt's size guard.

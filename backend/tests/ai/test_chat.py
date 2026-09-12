@@ -207,6 +207,7 @@ class TestDegradeContract(_Base):
     @patch("backend.ai.chat.ai_manager")
     def test_ai_disabled_stores_message(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
+        mock_ai.enabled = False
         mock_ai.is_available.return_value = False
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertFalse(grounded)
@@ -485,6 +486,7 @@ class TestStreamChatMessage(_Base):
     @patch("backend.ai.chat.ai_manager")
     def test_ai_off_still_produces_final(self, mock_ai):
         self.mock_resolve.return_value = ([], False)
+        mock_ai.enabled = False
         mock_ai.is_available.return_value = False
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = True
