@@ -68,8 +68,8 @@ const srTypeLabel: Record<string, string> = {
   this_week_low: "This Week's Low",
   prev_week_high: 'Prev Week High',
   prev_week_low: 'Prev Week Low',
-  all_time_high: 'All Time High',
-  all_time_low: 'All Time Low',
+  week_52_high: '52 Week High',
+  week_52_low: '52 Week Low',
   pivot_high: 'Pivot High',
   pivot_low: 'Pivot Low',
   swing_high: 'Swing High',
@@ -78,7 +78,7 @@ const srTypeLabel: Record<string, string> = {
 };
 
 // The S/R panels pair a level with its counterpart on the same row —
-// Today's High next to Today's Low, All Time High next to All Time Low,
+// Today's High next to Today's Low, 52 Week High next to 52 Week Low,
 // etc. Grouping key = the type minus its _high/_low suffix; this map
 // orders those groups (period recency first, then swings/pivots/zones).
 const srBaseOrder: Record<string, number> = {
@@ -86,7 +86,7 @@ const srBaseOrder: Record<string, number> = {
   prev_day: 1,
   this_week: 2,
   prev_week: 3,
-  all_time: 4,
+  week_52: 4,
   swing: 5,
   pivot: 6,
   consolidation_zone: 7,
@@ -198,7 +198,7 @@ const TransitionsPanel = memo(function TransitionsPanel({
 // Renders /price-range data (SRLevel[]) as concept-paired rows: a
 // concept's high sits in the left (Resistance) column and its low in
 // the right (Support) column ON THE SAME ROW (Today's High | Today's
-// Low, All Time High | All Time Low, ...). Groups ordered by
+// Low, 52 Week High | 52 Week Low, ...). Groups ordered by
 // srBaseOrder; within a group the nearest level to the current price
 // comes first. `—` fills a side with no counterpart.
 const SRPanel = memo(function SRPanel({
