@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 def _raise_if_unavailable(status_code: int, name: str, body_preview: str = "") -> None:
     """Shared response-status classification for ``complete`` / ``stream``.
 
-    401/403/404/429 and 5xx are recoverable — raise ``ProviderUnavailable``
+    401/402/403/404/429 and 5xx are recoverable — raise ``ProviderUnavailable``
     so the manager tries the next provider. Other 4xx mean our own request
     is malformed and should be loud; the caller handles those.
     """
-    if status_code in (401, 403, 404, 429):
+    if status_code in (401, 402, 403, 404, 429):
         raise ProviderUnavailable(
             f"{name} auth/routing/rate-limit error {status_code}: {body_preview[:200]}"
         )
@@ -122,21 +122,22 @@ class OpenAICompatibleProvider(AIProvider):
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
 
-        if r.status_code in (401, 403, 404, 429):
-            # Auth / not-found / rate-limited — treat as recoverable so
-            # the manager can try the next provider (e.g. Ollama is up
-            # but the model name is wrong; or, found live 2026-09-09,
-            # openrouter's free-tier model returned a bare 429). A 429
-            # means the provider is temporarily saying no, not that our
-            # request is malformed — it belongs with the other
-            # "provider unavailable right now" cases below, not with
-            # genuine 4xx request errors (see the raise_for_status()
-            # branch below, which is deliberately NOT caught: those
-            # mean our own request is broken and should be loud, not
-            # silently degraded). Before this fix, 429 fell into that
-            # uncaught branch and crashed the whole HTTP request with
-            # an unhandled 500 — violating /api/ai/analyze's own
-            # contract of never 500ing for a provider-side failure.
+        if r.status_code in (401, 402, 403, 404, 429):
+            # Auth / payment-required / not-found / rate-limited — treat as
+            # recoverable so the manager can try the next provider (e.g.
+            # Ollama is up but the model name is wrong; or, found live
+            # 2026-09-09, openrouter's free-tier model returned a bare 429;
+            # or, found live 2026-09-11, a gateway with exhausted credits
+            # returns 402 instead of 401). None of these mean our request
+            # is malformed — they belong with the other "provider
+            # unavailable right now" cases below, not with genuine 4xx
+            # request errors (see the raise_for_status() branch below,
+            # which is deliberately NOT caught: those mean our own request
+            # is broken and should be loud, not silently degraded). Before
+            # this fix, these codes fell into that uncaught branch and
+            # crashed the whole HTTP request with an unhandled 500 —
+            # violating /api/ai/analyze's own contract of never 500ing for
+            # a provider-side failure.
             raise ProviderUnavailable(
                 f"{self.name} auth/routing/rate-limit error {r.status_code}: {r.text[:200]}"
             )
@@ -311,9 +312,9 @@ class AnthropicProvider(AIProvider):
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 
-        if r.status_code in (401, 403, 404, 429):
+        if r.status_code in (401, 402, 403, 404, 429):
             # See OpenAICompatibleProvider.complete's identical guard —
-            # 429 belongs with the recoverable "provider unavailable
+            # 402/429 belong with the recoverable "provider unavailable
             # right now" cases, not the uncaught malformed-request
             # branch below.
             raise ProviderUnavailable(
