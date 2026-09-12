@@ -73,6 +73,24 @@ def _patch_quotes_client_logger() -> None:
 
     QuotesClient.set_file_logger = _patched
 
+    # Same missing-dedup-guard defect on the sibling stream-logger method —
+    # ``QuotesClient.set_stream_logger`` unconditionally attaches a fresh
+    # ``StreamHandler`` to the process-global ``webull.data`` logger, so the
+    # same internal-retry path that leaks a file handler above (see comment
+    # block) would also leak one more stdout handler per retry left
+    # unpatched.
+    orig_set_stream_logger = QuotesClient.set_stream_logger
+    _quotes_stream_logger_names_registered: set[str] = set()
+
+    def _patched_stream(self, log_level=logging.INFO, logger_name="webull.data",
+                         stream=None, format_string=None):
+        if logger_name in _quotes_stream_logger_names_registered:
+            return None
+        _quotes_stream_logger_names_registered.add(logger_name)
+        return orig_set_stream_logger(self, log_level, logger_name, stream, format_string)
+
+    QuotesClient.set_stream_logger = _patched_stream
+
 
 _patch_quotes_client_logger()
 

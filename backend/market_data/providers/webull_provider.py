@@ -95,6 +95,44 @@ def _patched_set_file_logger(
 
 _wb_client.ApiClient.set_file_logger = _patched_set_file_logger
 
+# ``set_stream_logger`` is the same defect as ``set_file_logger`` above, on
+# a sibling method the earlier fix didn't cover: ``TradeClient``/``DataClient``
+# both call ``api_client.set_stream_logger(stream=sys.stdout, ...)`` with no
+# ``log_level`` argument, so it silently keeps the SDK's own hard-coded
+# default (``logging.DEBUG``) — which, unlike the file logger, was never
+# overridden by anything here. Confirmed live 2026-09-12: this is what set
+# the ``webull.core`` logger itself to DEBUG (every child logger, including
+# ``webull.core.auth.composer.default_signature_composer``, inherits that
+# effective level) and attached a raw ``StreamHandler(stdout)`` alongside
+# it — doubling every DEBUG line (once via this handler's own formatter,
+# once via propagation to the app's root JSON handler) on every single
+# signed request, which was enough synchronous stdout I/O on the ingestion
+# thread to stall the API server from ever accepting a connection. Same
+# fix, same dedup rationale: default to WARNING unless the app itself is in
+# debug mode, and guard against leaking one more handler per extra
+# TradeClient/DataClient construction (no ``path`` here to key on, so dedupe
+# on ``logger_name`` alone — stdout is the only stream any caller passes).
+_orig_set_stream_logger = _wb_client.ApiClient.set_stream_logger
+_stream_logger_names_registered: set[str] = set()
+
+def _patched_set_stream_logger(
+    self,
+    log_level=None,
+    logger_name="webull.core",
+    stream=None,
+    format_string=None,
+):
+    if log_level is None:
+        log_level = logging.DEBUG if _settings.debug else logging.WARNING
+    if logger_name in _stream_logger_names_registered:
+        self._stream_logger_set = True
+        return None
+    _stream_logger_names_registered.add(logger_name)
+    return _orig_set_stream_logger(self, log_level, logger_name, stream, format_string)
+
+
+_wb_client.ApiClient.set_stream_logger = _patched_set_stream_logger
+
 # ``webull.core.http.response`` is a *separate* module from the one patched
 # above, and it does something the ``set_file_logger`` patch cannot touch:
 # at import time (module-level, unconditional) it does
