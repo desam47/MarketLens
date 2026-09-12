@@ -499,23 +499,38 @@ class Scanner:
             return []
         start = time.monotonic()
 
-        # Batch pre-fetch bars and quotes on the event-loop thread (both are
-        # DB reads via SQLAlchemy + optional Redis cache; no blocking I/O that
-        # would warrant a to_thread here — the DB session is quick and the cache
-        # hit avoids the provider entirely).
-        from backend.database import SessionLocal
+        # Batch pre-fetch bars and quotes. On a Redis cache hit this is
+        # cheap, but on a miss both calls fall through to blocking provider
+        # HTTP requests (yfinance/webull/alpaca) — and Alpaca in particular
+        # can take 15-20s to time out. Run on a worker thread so a slow
+        # provider call stalls this scan, not the entire event loop (a
+        # blocking call here previously froze every other in-flight
+        # request on the server, not just this one).
+        #
+        # No ``db`` session is passed to ``get_batch_historical_bars``: that
+        # parameter only enables a secondary DB-backed cache read *below*
+        # Redis, but the caller checks it out for the entire call —
+        # including every slow provider fallback inside it — so one cold
+        # scan could hold a pooled connection hostage for a minute while the
+        # background ingestion pipeline (which needs the same pool) backed
+        # up behind it, stalling unrelated requests server-wide. Redis is
+        # enabled and is the primary cache here, so skipping the DB tier
+        # only matters on a Redis miss, and any bars fetched still get
+        # written back to Redis for next time.
+        def _prefetch() -> tuple[dict, dict]:
+            bars = market_data_manager.get_batch_historical_bars(
+                symbols,
+                timeframe="1d",
+                range_="3mo",
+                use_cache=True,
+            )
+            quotes = market_data_manager.get_batch_quotes(symbols)
+            return bars, quotes
+
         batch_bars: dict = {}
         batch_quotes: dict = {}
         try:
-            with SessionLocal() as db:
-                batch_bars = market_data_manager.get_batch_historical_bars(
-                    symbols,
-                    timeframe="1d",
-                    range_="3mo",
-                    use_cache=True,
-                    db=db,
-                )
-                batch_quotes = market_data_manager.get_batch_quotes(symbols)
+            batch_bars, batch_quotes = await asyncio.to_thread(_prefetch)
         except Exception as e:
             logger.warning(f"Async scan batch pre-fetch failed, falling back to per-symbol: {e}")
 
