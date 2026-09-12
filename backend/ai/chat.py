@@ -141,6 +141,27 @@ _WATCHLIST_LIST_INTENT = re.compile(
     r"\b(which|what)\b.{0,20}\bwatchlists?\b|"
     r"\blist\b.{0,10}\bwatchlists?\b", re.I)
 
+# "What tickers/symbols are in <name>" / "what's in the <name> watchlist" —
+# same rationale as _WATCHLIST_LIST_INTENT, but for a *specific* named
+# watchlist rather than "list them all". Confirmed live 2026-09-12: asked
+# "what tickers are in Market Context" (a real watchlist name that also
+# happens to collide with the unrelated market-context regime feature),
+# the model had no watchlist data at all and fabricated a plausible-looking
+# answer — the union of every real watchlist's symbols, deduped and
+# alphabetized, presented as if it were that one list's real contents.
+# Answered deterministically from the DB before the (slow, guessable) AI
+# call, same as _WATCHLIST_LIST_INTENT. Falls through to the model (which
+# should decline per system-prompt rule 11) when the captured name doesn't
+# match any real watchlist, rather than claiming "no such watchlist" itself
+# — a typo'd or partial name is still worth a human-facing clarification,
+# not a flat DB-driven "not found".
+_WATCHLIST_CONTENTS_INTENT = re.compile(
+    r"\b(?:what|which)\b[^.!?\n]{0,25}\b(?:tickers?|symbols?|stocks?)\b[^.!?\n]{0,10}\b(?:in|on)\b\s+"
+    r"(?:the\s+|my\s+)?(?P<name1>.*?)\s*(?:watch ?lists?|lists?)?[\?\.!]*$|"
+    r"what'?s\s+(?:in|on)\s+(?:the\s+|my\s+)?(?P<name2>.*?)\s*(?:watch ?lists?|lists?)?[\?\.!]*$",
+    re.I,
+)
+
 # Short-lived per-symbol context cache — a burst of follow-ups about one
 # name rebuilt the whole scan + aux-data each turn.
 _CTX_TTL = 12.0
@@ -478,8 +499,14 @@ def _generate_reply(
     ):
         return f"I don't have enough data on {unavailable[0]} yet to answer that.", False
 
-    if not symbol_blocks and _WATCHLIST_LIST_INTENT.search(user_content):
-        return _watchlist_list_reply(db), True
+    if not symbol_blocks:
+        m = _WATCHLIST_CONTENTS_INTENT.search(user_content)
+        if m:
+            reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
+            if reply:
+                return reply, True
+        if _WATCHLIST_LIST_INTENT.search(user_content):
+            return _watchlist_list_reply(db), True
 
     if not ai_manager.enabled:
         return "AI is currently unavailable, so I can't answer that right now.", False
@@ -539,6 +566,33 @@ def _watchlist_list_reply(db) -> str:
         f"You have {len(watchlists)} watchlists: "
         + "; ".join(_describe(wl) for wl in watchlists) + "."
     )
+
+
+def _watchlist_contents_reply(db, name: str) -> str | None:
+    """Real answer to "what tickers are in <name>" for one *specific*
+    named watchlist — straight from the DB. See
+    ``_WATCHLIST_CONTENTS_INTENT``. Returns ``None`` (falls through to
+    the model) when ``name`` doesn't match any real watchlist, exact or
+    case-insensitive.
+    """
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    name = name.strip(" \"'")
+    if not name:
+        return None
+    repo = WatchlistRepository(db)
+    wl = repo.get_watchlist_by_name(name)
+    if wl is None:
+        lowered = name.lower()
+        wl = next(
+            (w for w in repo.get_watchlists(active_only=True) if w.name.lower() == lowered),
+            None,
+        )
+    if wl is None:
+        return None
+    symbols = [s.symbol for s in wl.symbols if s.is_enabled]
+    names = ", ".join(symbols) if symbols else "no symbols"
+    return f'"{wl.name}" has {len(symbols)}: {names}.'
 
 
 def _fallback_action(user_content: str, symbol_blocks: list[dict]) -> str | None:
@@ -646,9 +700,16 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         ))
         return
 
-    if not turn.symbol_blocks and _WATCHLIST_LIST_INTENT.search(turn.user_content):
-        yield ("result", (_watchlist_list_reply(db), True))
-        return
+    if not turn.symbol_blocks:
+        m = _WATCHLIST_CONTENTS_INTENT.search(turn.user_content)
+        if m:
+            reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
+            if reply:
+                yield ("result", (reply, True))
+                return
+        if _WATCHLIST_LIST_INTENT.search(turn.user_content):
+            yield ("result", (_watchlist_list_reply(db), True))
+            return
 
     if not ai_manager.enabled:
         yield ("result", (

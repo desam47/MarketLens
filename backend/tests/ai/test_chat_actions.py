@@ -19,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.ai.chat import (
+    _WATCHLIST_CONTENTS_INTENT,
     _WATCHLIST_LIST_INTENT,
     _add_to_watchlist,
     _confirm_prompt,
@@ -34,6 +35,7 @@ from backend.ai.chat import (
     _run_action,
     _run_backtest,
     _set_entity_type,
+    _watchlist_contents_reply,
     _watchlist_list_reply,
     answer_chat_message,
 )
@@ -736,6 +738,70 @@ class TestWatchlistListReply(_DBBase):
         self.assertIn("Swing Setups", text)
 
 
+class TestWatchlistContentsReply(_DBBase):
+    """_watchlist_contents_reply / _WATCHLIST_CONTENTS_INTENT: a
+    deterministic, real answer to "what tickers are in <name>" for one
+    specific named watchlist. Confirmed live 2026-09-12: asked "what
+    tickers are in Market Context" (a real watchlist name), the model had
+    no watchlist data and fabricated the union of every real watchlist's
+    symbols as if it were that one list's contents."""
+
+    def test_intent_matches_reported_phrasing_and_captures_name(self):
+        cases = {
+            "what tickers are in Market Context": "Market Context",
+            "What tickers are in Market Context?": "Market Context",
+            "which symbols are on my Market Context list": "Market Context",
+            'what\'s in the Market Context watchlist': "Market Context",
+            "what's in the Market Context watchlist?": "Market Context",
+            "what tickers are in my Default watchlist": "Default",
+        }
+        for phrase, expected in cases.items():
+            m = _WATCHLIST_CONTENTS_INTENT.search(phrase)
+            self.assertIsNotNone(m, phrase)
+            name = m.group("name1") or m.group("name2") or ""
+            self.assertEqual(name, expected, phrase)
+
+    def test_generic_watchlist_mentions_capture_empty_name(self):
+        # These should fall through to _WATCHLIST_LIST_INTENT (list-all),
+        # not resolve as a bogus named lookup.
+        for phrase in ("what's on my watchlist", "how many watchlists do I have"):
+            m = _WATCHLIST_CONTENTS_INTENT.search(phrase)
+            if m:
+                name = m.group("name1") or m.group("name2") or ""
+                self.assertEqual(name, "", phrase)
+
+    def test_unknown_name_returns_none(self):
+        self.assertIsNone(_watchlist_contents_reply(self.db, "Nonexistent List"))
+
+    def test_empty_name_returns_none(self):
+        self.assertIsNone(_watchlist_contents_reply(self.db, "  "))
+
+    def test_known_name_returns_only_that_lists_symbols(self):
+        repo = WatchlistRepository(self.db)
+        default = repo.create_watchlist("Default")
+        for sym in ("SPY", "CTNT", "CYN", "DVLT", "AAPL", "MSFT"):
+            repo.add_symbol_to_watchlist(default.id, sym)
+        mc = repo.create_watchlist("Market Context")
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
+            repo.add_symbol_to_watchlist(mc.id, sym)
+
+        text = _watchlist_contents_reply(self.db, "Market Context")
+        self.assertIn("Market Context", text)
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
+            self.assertIn(sym, text)
+        # Must NOT leak the other watchlist's non-overlapping symbols.
+        for sym in ("CTNT", "CYN", "DVLT", "AAPL", "MSFT"):
+            self.assertNotIn(sym, text)
+
+    def test_case_insensitive_fallback(self):
+        repo = WatchlistRepository(self.db)
+        wl = repo.create_watchlist("Market Context")
+        repo.add_symbol_to_watchlist(wl.id, "SPY")
+        text = _watchlist_contents_reply(self.db, "market context")
+        self.assertIsNotNone(text)
+        self.assertIn("SPY", text)
+
+
 class TestEndToEnd(unittest.TestCase):
     """Through answer_chat_message -> _generate_reply -> _finalize_parsed
     -> the real repos, proving the db gets threaded all the way down."""
@@ -882,6 +948,35 @@ class TestEndToEnd(unittest.TestCase):
         msg, grounded, *_ = answer_chat_message(self.session_id, "how many watchlist i have")
         self.assertIn("Watch1", msg.content)
         self.assertIn("AAPL", msg.content)
+        mock_ai.complete.assert_not_called()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_named_watchlist_contents_answered_without_asking_the_model(self, mock_ai):
+        # Reproduces the live 2026-09-12 bug report verbatim: two real
+        # watchlists exist ("Default" and "Market Context"), and asking
+        # about the "Market Context" one specifically must answer with
+        # only ITS symbols — not the union of both, which is what the
+        # model fabricated when it had no watchlist data at all.
+        db = self.Session()
+        repo = WatchlistRepository(db)
+        default = repo.create_watchlist("Default")
+        for sym in ("SPY", "CTNT", "CYN", "DVLT", "AAPL", "MSFT"):
+            repo.add_symbol_to_watchlist(default.id, sym)
+        mc = repo.create_watchlist("Market Context")
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
+            repo.add_symbol_to_watchlist(mc.id, sym)
+        db.close()
+
+        mock_ai.is_available.return_value = True
+        mock_ai.settings.max_tokens = 20000
+
+        msg, grounded, *_ = answer_chat_message(
+            self.session_id, "What tickers are in Market Context"
+        )
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
+            self.assertIn(sym, msg.content)
+        for sym in ("CTNT", "CYN", "DVLT", "AAPL", "MSFT"):
+            self.assertNotIn(sym, msg.content)
         mock_ai.complete.assert_not_called()
 
 

@@ -745,7 +745,11 @@ Rules you must follow:
       watchlist" yourself — set action_watchlist ONLY when the trader \
       said a specific name; otherwise leave it unset and let the app \
       resolve it (it knows the real list and will ask by name, with \
-      the real options, if it's genuinely ambiguous).
+      the real options, if it's genuinely ambiguous). The same applies \
+      to READING a watchlist's contents ("what's in my X watchlist") — \
+      you are never told what's actually on any watchlist, so never \
+      guess or invent a list of tickers for one; say you don't have \
+      visibility into watchlist contents instead.
     - run_backtest needs action_symbol. It runs a fresh 6-month daily \
       backtest of the engine's own signals and reports a real win rate \
       / average return — use it when the trader asks how a setup or \
