@@ -44,6 +44,14 @@ class ProviderStatus:
     healthy: bool
     is_primary: bool
     error: str | None = None
+    # The model this chain entry actually resolved to (may differ from
+    # a "type:model" entry's suffix if that suffix was empty and it
+    # fell through to a default) — None if the provider couldn't be
+    # built at all. Lets the UI distinguish two same-type chain
+    # entries ("openai_compatible" primary + "openai_compatible"
+    # fallback running a different model) that would otherwise show
+    # identical names.
+    model: str | None = None
 
 
 class AIManager:
@@ -82,6 +90,15 @@ class AIManager:
     def _get_provider(self, name: str) -> AIProvider:
         """Build (or return cached) provider for ``name``.
 
+        ``name`` is a chain entry as returned by
+        ``settings.all_providers()``: either a bare provider type
+        ("ollama") or a "type:model" composite
+        ("openai_compatible:deepseek-v3"). The composite form lets two
+        chain entries share one provider TYPE while running different
+        models — providers are cached by this exact string, so two
+        bare entries with the same type would just collide on the
+        cache and silently reuse the first one's model.
+
         ``settings.base_url`` / ``model`` / ``api_key`` configure the
         PRIMARY provider (``settings.provider``) only. A fallback-chain
         entry is, by definition, a different service — applying the
@@ -102,44 +119,48 @@ class AIManager:
         without a base_url (``openai_compatible`` requires one; not a
         concern for named providers with sensible defaults).
 
-        The FIRST fallback entry gets its own independent config too
-        (``settings.fallback_model``/``fallback_base_url``/
-        ``fallback_api_key``, all opt-in via ``AI_FALLBACK_*`` — empty
-        by default, which preserves the exact prior behavior). Found
-        live 2026-09-10: the fallback was permanently stuck on
-        ollama's hardcoded default model (llama3.2) with no way to
-        point it at a stronger locally-installed model (e.g.
-        qwen3:14b) — this is deliberately NOT the same field as
-        ``model``/``base_url`` above (that would reintroduce the
-        2026-09-09 bug this docstring describes), just a second,
-        independently-configured slot for one specific chain entry.
+        A non-primary entry gets ``None`` for base_url/api_key (falling
+        through to ``build_provider``'s own per-type default, e.g.
+        ollama's ``http://localhost:11434/v1`` + ``llama3.2``) unless
+        an explicit ``:model`` suffix names a model, in which case that
+        wins. There is no separate override field for "the first
+        fallback" — every chain entry's model comes from its own
+        string, uniformly.
+
+        A chain entry whose TYPE matches the primary's (e.g. a second
+        agentrouter model listed as a fallback) is a different case:
+        it's genuinely the *same* provider/gateway, just a different
+        model, so it reuses the primary's base_url/api_key rather than
+        falling through to that type's generic defaults.
         """
         with self._lock:
             if name in self._providers:
                 return self._providers[name]
+            provider_type, _, explicit_model = name.partition(":")
+            explicit_model = explicit_model or None
             is_primary = name == self.settings.provider
-            fallback_chain = self.settings.fallback_chain()
-            is_first_fallback = (
-                not is_primary and fallback_chain and name == fallback_chain[0]
+            is_same_type_as_primary = (
+                not is_primary and provider_type == self.settings.provider
             )
             if is_primary:
                 resolved_base = self.settings.base_url
                 resolved_model = self.settings.model
                 resolved_key = self.settings.api_key
-            elif is_first_fallback:
-                resolved_base = self.settings.fallback_base_url or None
-                resolved_model = self.settings.fallback_model or None
-                resolved_key = self.settings.fallback_api_key or None
+            elif is_same_type_as_primary:
+                resolved_base = self.settings.base_url
+                resolved_model = explicit_model or self.settings.model
+                resolved_key = self.settings.api_key
             else:
-                resolved_base = resolved_model = resolved_key = None
+                resolved_base = resolved_key = None
+                resolved_model = explicit_model
             # OpenAI-compatible providers (ollama, lm_studio) need /v1
             # appended to the base URL; the user-facing settings.base_url
             # omits it so it's discoverable without knowing the path.
-            if name in ("ollama", "lm_studio") and resolved_base:
+            if provider_type in ("ollama", "lm_studio") and resolved_base:
                 if not resolved_base.rstrip("/").endswith("/v1"):
                     resolved_base = resolved_base.rstrip("/") + "/v1"
             provider = build_provider(
-                name,
+                provider_type,
                 base_url=resolved_base,
                 model=resolved_model,
                 api_key=resolved_key,
@@ -177,6 +198,11 @@ class AIManager:
         for i, name in enumerate(self._all_providers()):
             healthy = False
             err: str | None = None
+            model: str | None = None
+            try:
+                model = getattr(self._get_provider(name), "_model", None)
+            except ValueError:
+                pass
             if self.enabled:
                 try:
                     healthy = self._healthy(name)
@@ -188,6 +214,7 @@ class AIManager:
                     healthy=healthy,
                     is_primary=(i == 0),
                     error=err,
+                    model=model,
                 )
             )
         return out

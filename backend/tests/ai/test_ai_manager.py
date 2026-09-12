@@ -395,15 +395,6 @@ class TestAIManager(unittest.TestCase):
             health_check_timeout=1.0,
             max_tokens=100,
             temperature=0.3,
-            # Explicit, not left to fall through to the real .env —
-            # AISettings still reads env_file for anything not passed
-            # here, and the live .env now sets AI_FALLBACK_MODEL for
-            # real use. Same test-isolation issue this house already
-            # fixed once for AI_ENABLED (see test_config's
-            # _env_file=None pattern) applied to these newer fields.
-            fallback_model="",
-            fallback_base_url="",
-            fallback_api_key=None,
         )
         defaults.update(overrides)
         return AIManager(AISettings(**defaults))
@@ -645,11 +636,6 @@ class TestFallbackProviderIsolation(unittest.TestCase):
             api_key="sk-primary-secret",
             timeout=1.0,
             health_check_timeout=1.0,
-            # Explicit, not left to fall through to the real .env —
-            # see the identical comment on TestAIManager._make_manager.
-            fallback_model="",
-            fallback_base_url="",
-            fallback_api_key=None,
         )
         defaults.update(overrides)
         return AIManager(AISettings(**defaults))
@@ -692,92 +678,62 @@ class TestFallbackProviderIsolation(unittest.TestCase):
         self.assertEqual(primary._model, "llama3.2")
 
 
-class TestFallbackModelOverride(unittest.TestCase):
-    """The fallback provider's own config (AI_FALLBACK_MODEL/BASE_URL/
-    API_KEY) — found live 2026-09-10: the fallback was permanently
-    stuck on its hardcoded per-type default model (ollama's
-    "llama3.2") with no way to point it at a stronger locally-installed
-    model, even though only the primary's model was ever configurable.
+class TestSameProviderMultipleModels(unittest.TestCase):
+    """"type:model" fallback-chain entries — running a second (or
+    third) model through the same provider TYPE as another chain
+    entry. Plain entries are cached/deduped by bare type name, so this
+    syntax exists specifically to avoid that collision.
     """
 
     def _make_manager(self, **overrides) -> AIManager:
         defaults = dict(
             enabled=True,
             provider="openai_compatible",
-            fallback_providers="ollama",
-            model="claude-opus-4-8",
-            base_url="https://example-gateway.test/v1",
-            api_key="sk-primary-secret",
+            fallback_providers="",
+            model="deepseek-v4-flash",
+            base_url="https://gateway.test/v1",
+            api_key="sk-gateway-secret",
             timeout=1.0,
             health_check_timeout=1.0,
-            # Explicit blank default — must not fall through to
-            # whatever AI_FALLBACK_MODEL/etc. the real .env happens to
-            # have set for actual use (see the identical comment on
-            # TestAIManager._make_manager). Tests that want a real
-            # override pass fallback_model=... explicitly per-call.
-            fallback_model="",
-            fallback_base_url="",
-            fallback_api_key=None,
         )
         defaults.update(overrides)
         return AIManager(AISettings(**defaults))
 
-    def test_fallback_model_override_applies_to_the_first_fallback(self):
-        m = self._make_manager(fallback_model="qwen3:14b")
-        fallback = m._get_provider("ollama")
-        self.assertEqual(fallback._model, "qwen3:14b")
-        # The primary must be completely unaffected.
+    def test_second_entry_same_type_gets_its_own_model(self):
+        m = self._make_manager(
+            fallback_providers="openai_compatible:deepseek-v3,ollama"
+        )
         primary = m._get_provider("openai_compatible")
-        self.assertEqual(primary._model, "claude-opus-4-8")
+        second = m._get_provider("openai_compatible:deepseek-v3")
+        self.assertEqual(primary._model, "deepseek-v4-flash")
+        self.assertEqual(second._model, "deepseek-v3")
+        # Distinct cache entries — not the same object, not the same model.
+        self.assertIsNot(primary, second)
 
-    def test_fallback_base_url_and_api_key_override_also_apply(self):
+    def test_same_type_entry_reuses_primarys_base_url_and_key(self):
         m = self._make_manager(
-            fallback_model="qwen3:14b",
-            fallback_base_url="http://192.168.1.50:11434/v1",
-            fallback_api_key="sk-fallback-secret",
+            fallback_providers="openai_compatible:deepseek-v3"
         )
-        fallback = m._get_provider("ollama")
-        self.assertEqual(fallback._base_url, "http://192.168.1.50:11434/v1")
-        self.assertEqual(fallback._api_key, "sk-fallback-secret")
+        second = m._get_provider("openai_compatible:deepseek-v3")
+        self.assertEqual(second._base_url, "https://gateway.test/v1")
+        self.assertEqual(second._api_key, "sk-gateway-secret")
 
-    def test_blank_fallback_overrides_keep_the_providers_own_default(self):
-        """Regression: leaving AI_FALLBACK_MODEL etc. unset (the
-        default) must behave exactly as before these fields existed —
-        the provider's own built-in default, not an empty string
-        passed through to the HTTP client."""
-        m = self._make_manager()  # no fallback_* overrides
-        fallback = m._get_provider("ollama")
-        self.assertEqual(fallback._model, "llama3.2")
-        self.assertEqual(fallback._base_url, "http://localhost:11434/v1")
-        self.assertIsNone(fallback._api_key)
+    def test_different_type_entry_with_explicit_model_still_works(self):
+        """The ":model" syntax isn't limited to same-type entries — a
+        genuinely different fallback provider can use it too, and it
+        wins over that provider type's hardcoded default."""
+        m = self._make_manager(fallback_providers="ollama:qwen3:14b")
+        fallback = m._get_provider("ollama:qwen3:14b")
+        self.assertEqual(fallback._model, "qwen3:14b")
 
-    def test_override_does_not_apply_to_a_second_fallback_entry(self):
-        """Only the FIRST fallback gets the override — a second chain
-        entry (if one exists) still gets its own type default, not a
-        copy of the first fallback's override."""
+    def test_status_reports_resolved_model_per_entry(self):
         m = self._make_manager(
-            fallback_providers="ollama,openai",
-            fallback_model="qwen3:14b",
+            fallback_providers="openai_compatible:deepseek-v3,ollama"
         )
-        second = m._get_provider("openai")
-        self.assertNotEqual(second._model, "qwen3:14b")
-        self.assertEqual(second._model, "gpt-4o-mini")  # openai's own default
-
-    def test_override_does_not_apply_when_that_name_is_actually_primary(self):
-        """If 'ollama' is ever the PRIMARY (not a fallback), the
-        fallback_* override must not leak into it — only the regular
-        primary settings (model/base_url/api_key) apply there."""
-        m = self._make_manager(
-            provider="ollama",
-            fallback_providers="",
-            model="llama3.2",
-            base_url="http://localhost:11434",
-            api_key=None,
-            fallback_model="qwen3:14b",
-        )
-        primary = m._get_provider("ollama")
-        self.assertEqual(primary._model, "llama3.2")
-        self.assertNotEqual(primary._model, "qwen3:14b")
+        statuses = m.status()
+        self.assertEqual(statuses[0].model, "deepseek-v4-flash")
+        self.assertEqual(statuses[1].model, "deepseek-v3")
+        self.assertEqual(statuses[2].model, "llama3.2")
 
 
 # --- Quant engine independence -------------------------------------
@@ -898,8 +854,7 @@ class TestManagerStreaming(unittest.TestCase):
     def _mgr(self, **ov):
         d = dict(enabled=True, provider="ollama", fallback_providers="",
                  model="llama3.2", base_url="http://localhost:11434/v1", api_key=None,
-                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3,
-                 fallback_model="", fallback_base_url="", fallback_api_key=None)
+                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3)
         d.update(ov)
         return AIManager(AISettings(**d))
 

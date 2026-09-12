@@ -58,6 +58,7 @@ class ProviderStatusResponse(BaseModel):
     healthy: bool
     is_primary: bool
     error: str | None = None
+    model: str | None = None
 
 
 class ConfigResponse(BaseModel):
@@ -226,7 +227,11 @@ async def ai_status() -> list[ProviderStatusResponse]:
     return await asyncio.to_thread(
         lambda: [
             ProviderStatusResponse(
-                name=s.name, healthy=s.healthy, is_primary=s.is_primary, error=s.error
+                name=s.name,
+                healthy=s.healthy,
+                is_primary=s.is_primary,
+                error=s.error,
+                model=s.model,
             )
             for s in ai_manager.status()
         ]

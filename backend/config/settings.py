@@ -330,6 +330,19 @@ class AISettings(BaseSettings):
     # Comma-separated fallback chain (e.g. "openrouter,openai"). Empty
     # by default; the manager treats the chain as an ordered list and
     # tries each in turn.
+    #
+    # An entry may also be "type:model" (e.g. "ollama:qwen3:14b" or
+    # "openai_compatible:deepseek-v3") to pin that entry to a specific
+    # model instead of the provider type's hardcoded default — this is
+    # the ONLY way to choose a fallback's model; there is no separate
+    # override field. It's also required to run a SECOND model through
+    # the same provider type as another chain entry, since providers
+    # are cached (and thus deduped) by their bare type name — repeating
+    # a type with no ``:model`` suffix would just reuse the first
+    # instance's model instead of trying a different one. A ``:model``
+    # entry that names the same type as the primary provider reuses
+    # the primary's base_url/api_key (same gateway, different model);
+    # otherwise it falls through to that type's own defaults.
     fallback_providers: str = Field(default="")
     # Default model hint for the primary provider.
     model: str = Field(default="llama3.2")
@@ -345,19 +358,6 @@ class AISettings(BaseSettings):
     # Sampling / output limits.
     max_tokens: int = Field(default=1000)
     temperature: float = Field(default=0.3)
-
-    # Independent config for the first fallback provider — so it isn't
-    # stuck on its hardcoded per-type default (e.g. ollama's
-    # "llama3.2") when a better local model is installed. Deliberately
-    # SEPARATE from `model`/`base_url`/`api_key` above, not reused —
-    # those apply to the primary only; a fallback silently inheriting
-    # the primary's config was a real bug (fixed 2026-09-09, see
-    # AIManager._get_provider()'s docstring). Empty string (the
-    # default) means "use the provider type's own built-in default",
-    # matching the behavior before these fields existed.
-    fallback_model: str = Field(default="")
-    fallback_base_url: str = Field(default="")
-    fallback_api_key: str | None = Field(default=None)
 
     # Universal AI Hub chat (2026-09-10). Max tickers one chat turn will
     # build full quant context for (extra named tickers are dropped with
@@ -376,7 +376,13 @@ class AISettings(BaseSettings):
     backtest_tool_enabled: bool = Field(default=False)
 
     def fallback_chain(self) -> list[str]:
-        """Return the ordered list of fallback providers (excluding primary)."""
+        """Return the ordered list of fallback providers (excluding primary).
+
+        Entries may be bare provider types ("ollama") or "type:model"
+        composites ("openai_compatible:deepseek-v3") — see
+        ``fallback_providers`` for what the latter does. Returned
+        as-is; ``AIManager`` is what parses the ``:model`` suffix.
+        """
         return [p.strip() for p in self.fallback_providers.split(",") if p.strip()]
 
     def all_providers(self) -> list[str]:
