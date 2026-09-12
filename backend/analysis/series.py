@@ -16,6 +16,8 @@ imports these functions from here rather than defining them locally.
 """
 from __future__ import annotations
 
+from cachetools import TTLCache
+
 from backend.database import SessionLocal
 from backend.repositories import bar_repository
 
@@ -54,6 +56,29 @@ def load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
             "data_status": b.data_status.value if hasattr(b.data_status, "value") else b.data_status,
         })
     return out
+
+
+# Calendar-anchored S/R levels (today/prev-day/this-week/prev-week/52-week
+# high & low) are computed from a dedicated daily series independent of
+# whatever timeframe/limit the caller wants — see
+# SupportResistanceEngine.detect()'s `reference_bars` param. That series
+# can be up to 5000 daily bars, and both `/api/analysis/{symbol}/price-range`
+# and the AI context builder (backend/ai/context.py) ask for the identical
+# series per symbol, so it's cached here rather than re-queried from the DB
+# on every request.
+_REFERENCE_BARS_LIMIT = 5000
+_reference_bars_cache: TTLCache[str, list[dict]] = TTLCache(maxsize=200, ttl=60)
+
+
+def load_reference_bars(symbol: str) -> list[dict]:
+    """Load (and cache, 60s TTL) the daily reference-bar series for `symbol`."""
+    symbol = symbol.upper()
+    cached = _reference_bars_cache.get(symbol)
+    if cached is not None:
+        return cached
+    bars = load_bars(symbol, "1d", limit=_REFERENCE_BARS_LIMIT)
+    _reference_bars_cache[symbol] = bars
+    return bars
 
 
 def bar_dicts_to_arrays(bars: list[dict]) -> dict:

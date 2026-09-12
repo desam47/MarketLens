@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from enum import StrEnum
 from typing import Literal
@@ -46,8 +46,8 @@ class SRType(StrEnum):
     THIS_WEEK_LOW = "this_week_low"
     PREV_WEEK_HIGH = "prev_week_high"
     PREV_WEEK_LOW = "prev_week_low"
-    ALL_TIME_HIGH = "all_time_high"
-    ALL_TIME_LOW = "all_time_low"
+    WEEK_52_HIGH = "week_52_high"
+    WEEK_52_LOW = "week_52_low"
     PIVOT_HIGH = "pivot_high"
     PIVOT_LOW = "pivot_low"
     SWING_HIGH = "swing_high"
@@ -161,14 +161,31 @@ class SupportResistanceEngine:
         bars: Sequence[dict],
         symbol: str = "",
         timeframe: str = "",
+        reference_bars: Sequence[dict] | None = None,
     ) -> SRResult:
         """Scan bars for support and resistance levels.
 
         ``bars`` is a sequence of dicts each containing at minimum
         ``high``, ``low``, ``close``, ``volume`` keys (and optionally
-        ``timestamp``). They must be ordered oldest → newest.
+        ``timestamp``). They must be ordered newest → oldest (index 0 =
+        the current/latest bar) — matches ``load_bars``'s ``desc=True``.
         Only bars up to ``last_index`` (inclusive) are used; no data
         after that point influences the result.
+
+        ``reference_bars`` (optional) is a separate, typically coarser
+        (e.g. daily) bar series used ONLY to compute the calendar-anchored
+        levels — TODAY_HIGH/LOW, THIS_WEEK_HIGH/LOW, PREV_DAY_HIGH/LOW,
+        PREV_WEEK_HIGH/LOW, WEEK_52_HIGH/LOW. Those six pairs describe
+        calendar facts about the symbol (what did it do today / this
+        week / over the trailing year), not facts about whichever chart
+        timeframe the caller happens to be viewing — deriving them from
+        ``bars`` instead made them drift between timeframes (e.g. "today's
+        high" on the 1h chart differing from the 1m chart, or "52-week
+        high" only reaching back as far as that timeframe's own bar limit).
+        Swing highs/lows, pivots, and consolidation zones remain
+        genuinely timeframe-specific and are still computed from
+        ``bars``. When omitted, falls back to using ``bars`` itself for
+        the calendar levels too (single-series behavior, e.g. for tests).
 
         Returns an ``SRResult`` with all detected levels.
         """
@@ -185,6 +202,7 @@ class SupportResistanceEngine:
         closes = [b["close"] for b in bars]
         highs = [b["high"] for b in bars]
         lows = [b["low"] for b in bars]
+        volumes = [b.get("volume", 0) or 0 for b in bars]
         # Bars arrive newest→oldest (desc=True), so closes[0] is the latest close.
         latest_close = closes[0] if closes else None
 
@@ -192,12 +210,45 @@ class SupportResistanceEngine:
         if timestamps and timestamps[-1] is None:
             timestamps = None
 
+        # Calendar-anchored levels (steps 1-5 below) are computed from this
+        # series, not `bars`/`highs`/`lows`/`timestamps` — see docstring.
+        ref = bars if not reference_bars else reference_bars
+        ref_n = len(ref)
+        ref_highs = [b["high"] for b in ref]
+        ref_lows = [b["low"] for b in ref]
+        ref_closes = [b["close"] for b in ref]
+        ref_volumes = [b.get("volume", 0) or 0 for b in ref]
+        ref_timestamps = [b.get("timestamp") for b in ref]
+        if ref_timestamps and ref_timestamps[-1] is None:
+            ref_timestamps = None
+
         levels: list[SRLevel] = []
 
-        # 1. Today's high / low — the most recent bar (index 0 = newest)
-        if n > 0:
-            for price, stype in ((highs[0], SRType.TODAY_HIGH),
-                                  (lows[0], SRType.TODAY_LOW)):
+        # 1. Today's high / low — aggregate every bar matching ref[0]'s
+        #    calendar date (ref arrives newest→oldest). For daily bars this
+        #    is just ref[0]'s own OHLC; for intraday reference bars using
+        #    ref[0] alone was wrong — a single 1-minute candle's high/low is
+        #    nowhere near the full session's actual range. Computed from
+        #    `ref`, not `bars`, so this is identical across all chart
+        #    timeframes for a given symbol at a given moment.
+        today_indices: list[int] = []
+        if ref_n > 0:
+            today_indices = [0]
+            today_date = None
+            if ref_timestamps and ref_timestamps[0] is not None:
+                today_date = getattr(ref_timestamps[0], "date", lambda: None)()
+            if today_date is not None:
+                for i in range(1, ref_n):
+                    ts = ref_timestamps[i]
+                    bar_date = getattr(ts, "date", lambda: None)() if ts is not None else None
+                    if bar_date != today_date:
+                        break
+                    today_indices.append(i)
+
+            today_high = max(ref_highs[i] for i in today_indices)
+            today_low = min(ref_lows[i] for i in today_indices)
+            for price, stype in ((today_high, SRType.TODAY_HIGH),
+                                  (today_low, SRType.TODAY_LOW)):
                 levels.append(SRLevel(
                     price=price,
                     type=stype,
@@ -207,13 +258,13 @@ class SupportResistanceEngine:
                     age=0,
                     distance_from_price=self._distance_pct(price, latest_close),
                     origin_index=0,
-                    timestamp=timestamps[0] if timestamps else None,
+                    timestamp=ref_timestamps[0] if ref_timestamps else None,
                 ))
 
         # 2. This week's running high / low — scan from newest to oldest
-        #     until we hit a week boundary.
-        if timestamps:
-            this_week = getattr(timestamps[0], "isocalendar", lambda: (None, None, None))()
+        #     until we hit a week boundary. Computed from `ref` (see step 1).
+        if ref_timestamps:
+            this_week = getattr(ref_timestamps[0], "isocalendar", lambda: (None, None, None))()
             if callable(this_week[0]):
                 this_week = None
             else:
@@ -221,74 +272,109 @@ class SupportResistanceEngine:
         else:
             this_week = None
 
+        this_week_bar_count = 0
         if this_week:
-            week_high = highs[0]
-            week_low = lows[0]
-            for i in range(n):
-                ts = timestamps[i]
+            week_high = ref_highs[0]
+            week_low = ref_lows[0]
+            last_in_week_idx = 0
+            for i in range(ref_n):
+                ts = ref_timestamps[i]
                 wk = getattr(ts, "isocalendar", lambda: (None, None, None))()
                 if callable(wk[0]):
                     break
                 if wk[:2] != this_week:
                     break
-                week_high = max(week_high, highs[i])
-                week_low = min(week_low, lows[i])
+                week_high = max(week_high, ref_highs[i])
+                week_low = min(week_low, ref_lows[i])
+                last_in_week_idx = i
+                this_week_bar_count = i + 1
             # Always emit this week's H/L — they may match today's H/L
             # (which is fine; the engine dedup pass will keep the strongest).
+            # age/origin_index/timestamp point at the *oldest bar still in
+            # this week* (last_in_week_idx), not the oldest bar in the whole
+            # ref array — otherwise this drifts arbitrarily stale on any
+            # fetch window wider than a week.
             levels.append(SRLevel(
                 price=week_high, type=SRType.THIS_WEEK_HIGH,
                 timeframe=timeframe, strength=0.75, touch_count=1,
-                age=n - 1,  # oldest bar in this week
+                age=self._age(last_in_week_idx),
                 distance_from_price=self._distance_pct(week_high, latest_close),
-                origin_index=n - 1,
-                timestamp=timestamps[n - 1] if timestamps else None,
+                origin_index=last_in_week_idx,
+                timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
             ))
             levels.append(SRLevel(
                 price=week_low, type=SRType.THIS_WEEK_LOW,
                 timeframe=timeframe, strength=0.75, touch_count=1,
-                age=n - 1,
+                age=self._age(last_in_week_idx),
                 distance_from_price=self._distance_pct(week_low, latest_close),
-                origin_index=n - 1,
-                timestamp=timestamps[n - 1] if timestamps else None,
+                origin_index=last_in_week_idx,
+                timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
             ))
 
-        # 3. Previous day high / low — scan bars[1:] (skip today's bar) so the
-        #     first detected day change is yesterday→day before, giving correct
-        #     prev_day levels. Keep only the most recent one of each type.
-        if n > 1:
+        # 3. Previous day high / low — skip the entire *today* group (not just
+        #     ref[0]) so the first detected day change is yesterday→day
+        #     before. Keep only the most recent one of each type. Computed
+        #     from `ref` (see step 1).
+        day_skip = len(today_indices) if ref_n > 0 else 0
+        if ref_n > day_skip:
             day_levels = self._prev_period_levels(
-                highs[1:], lows[1:], closes[1:], "day", timestamps[1:]
+                ref_highs[day_skip:], ref_lows[day_skip:], "day",
+                ref_timestamps[day_skip:] if ref_timestamps else None,
+                index_offset=day_skip, latest_close=latest_close,
             )
             day_levels = self._keep_most_recent_of_each_type(day_levels)
             levels.extend(day_levels)
 
-        # 4. Previous week high / low — scan bars[1:] (skip current week) so the
-        #     first detected week change is prev_week→week before. Keep only the
-        #     most recent one of each type.
-        if n > 1:
+        # 4. Previous week high / low — skip the entire *this week* group
+        #     (not just ref[0]) so the first detected week change is
+        #     prev_week→week before. Keep only the most recent one of each
+        #     type. Computed from `ref` (see step 1).
+        week_skip = this_week_bar_count or day_skip
+        if ref_n > week_skip:
             week_levels = self._prev_period_levels(
-                highs[1:], lows[1:], closes[1:], "week", timestamps[1:]
+                ref_highs[week_skip:], ref_lows[week_skip:], "week",
+                ref_timestamps[week_skip:] if ref_timestamps else None,
+                index_offset=week_skip, latest_close=latest_close,
             )
             week_levels = self._keep_most_recent_of_each_type(week_levels)
             levels.extend(week_levels)
 
-        # 5. All-time high / low — highest high and lowest low in the entire dataset
-        ath_price = max(highs)
-        atl_price = min(lows)
-        ath_idx = highs.index(ath_price)
-        atl_idx = lows.index(atl_price)
-        for price, idx, stype in (
-            (ath_price, ath_idx, SRType.ALL_TIME_HIGH),
-            (atl_price, atl_idx, SRType.ALL_TIME_LOW),
-        ):
-            levels.append(SRLevel(
-                price=price, type=stype, timeframe=timeframe,
-                strength=0.9, touch_count=1,
-                age=self._age(idx, last_index),
-                distance_from_price=self._distance_pct(price, latest_close),
-                origin_index=idx,
-                timestamp=timestamps[idx] if timestamps else None,
-            ))
+        # 5. 52-week high / low — highest high and lowest low over the
+        #     trailing 52 weeks (364 days) of the reference dataset, not the
+        #     entire history (see step 1). Falls back to the full reference
+        #     series when timestamps aren't available to bound the window.
+        _WEEK_52_DAYS = 364
+        window_highs, window_lows, window_indices = ref_highs, ref_lows, list(range(ref_n))
+        if ref_timestamps and ref_timestamps[0] is not None:
+            try:
+                cutoff = ref_timestamps[0] - timedelta(days=_WEEK_52_DAYS)
+            except TypeError:
+                cutoff = None
+            if cutoff is not None:
+                window_highs, window_lows, window_indices = [], [], []
+                for i, ts in enumerate(ref_timestamps):
+                    if ts is not None and ts >= cutoff:
+                        window_highs.append(ref_highs[i])
+                        window_lows.append(ref_lows[i])
+                        window_indices.append(i)
+
+        if window_highs:
+            w52_high_price = max(window_highs)
+            w52_low_price = min(window_lows)
+            w52_high_idx = window_indices[window_highs.index(w52_high_price)]
+            w52_low_idx = window_indices[window_lows.index(w52_low_price)]
+            for price, idx, stype in (
+                (w52_high_price, w52_high_idx, SRType.WEEK_52_HIGH),
+                (w52_low_price, w52_low_idx, SRType.WEEK_52_LOW),
+            ):
+                levels.append(SRLevel(
+                    price=price, type=stype, timeframe=timeframe,
+                    strength=0.9, touch_count=1,
+                    age=self._age(idx),
+                    distance_from_price=self._distance_pct(price, latest_close),
+                    origin_index=idx,
+                    timestamp=ref_timestamps[idx] if ref_timestamps else None,
+                ))
 
         # 6. Swing highs / lows — local peaks / troughs confirmed by lookback_period bars
         # Filter out noise: only keep swings with strength >= 0.1
@@ -297,71 +383,93 @@ class SupportResistanceEngine:
         swing_low_indices = self._swing_lows(lows)
         for idx in swing_high_indices:
             price = highs[idx]
-            strength = self._swing_strength(price, highs, highs[idx:idx+1],
-                                             self.lookback_period)
+            age = self._age(idx)
+            touch_count = self._count_touches(price, highs)
+            volume_ratio = self._volume_ratio(idx, volumes)
+            strength = self._swing_strength(
+                price, highs, latest_close, age, touch_count, volume_ratio,
+            )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
             levels.append(SRLevel(
                 price=price, type=SRType.SWING_HIGH, timeframe=timeframe,
-                strength=strength, touch_count=1,
-                age=self._age(idx, last_index),
+                strength=strength, touch_count=touch_count,
+                age=age,
                 distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
         for idx in swing_low_indices:
             price = lows[idx]
-            strength = self._swing_strength(price, lows, lows[idx:idx+1],
-                                             self.lookback_period)
+            age = self._age(idx)
+            touch_count = self._count_touches(price, lows)
+            volume_ratio = self._volume_ratio(idx, volumes)
+            strength = self._swing_strength(
+                price, lows, latest_close, age, touch_count, volume_ratio,
+            )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
             levels.append(SRLevel(
                 price=price, type=SRType.SWING_LOW, timeframe=timeframe,
-                strength=strength, touch_count=1,
-                age=self._age(idx, last_index),
+                strength=strength, touch_count=touch_count,
+                age=age,
                 distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
 
-        # 7. Pivot high / low (classic R1 / S1 Camarilla)
-        # Only scan the most recent 50 bars to avoid flooding the output
-        # with one pivot per bar. Older pivots are unlikely to still be
-        # meaningful S/R levels anyway.
-        pp_period = max(self.pivot_period or 5, 1)
-        pivot_start = max(pp_period, n - 50)
-        for i in range(pivot_start, n):
-            h = highs[i]
-            lo = lows[i]
-            c = closes[i]
-            pp = (h + lo + c) / 3.0
-            r1 = 2 * pp - lo
-            s1 = 2 * pp - h
-            # R1 pivot resistance
-            r1_strength = self._swing_strength(r1, highs, [h], pp_period)
-            if r1_strength > 0 and r1 > closes[i]:
+        # 7. Pivot high / low (classic R1 / S1) — one pivot pair, derived
+        #    from the PRIOR completed session's aggregated H/L/C (the
+        #    conventional pivot-point convention: one pivot set per
+        #    session, not one per bar). Computed from `ref` — the same
+        #    calendar-anchored series as prev_day/prev_week — so pivots
+        #    are timeframe-invariant too, and so `_prev_day_ohlc`'s
+        #    day-grouping works whether `ref` is genuinely daily
+        #    (production) or intraday (the reference_bars=None fallback,
+        #    e.g. in tests). `day_skip` (computed in step 3) already
+        #    excludes *today's* group.
+        prev_session = self._prev_day_ohlc(
+            ref_highs[day_skip:], ref_lows[day_skip:], ref_closes[day_skip:],
+            ref_timestamps[day_skip:] if ref_timestamps else None,
+            index_offset=day_skip,
+        )
+        if prev_session is not None and latest_close is not None:
+            sh, sl, sc, s_origin = prev_session
+            pp = (sh + sl + sc) / 3.0
+            r1 = 2 * pp - sl
+            s1 = 2 * pp - sh
+            age = self._age(s_origin)
+            if r1 > latest_close:
+                touch_count = self._count_touches(r1, ref_highs)
+                volume_ratio = self._volume_ratio(s_origin, ref_volumes)
+                strength = self._swing_strength(
+                    r1, ref_highs, latest_close, age, touch_count, volume_ratio,
+                ) * 0.8
                 levels.append(SRLevel(
                     price=r1, type=SRType.PIVOT_HIGH, timeframe=timeframe,
-                    strength=r1_strength * 0.8, touch_count=1,
-                    age=self._age(i, last_index),
+                    strength=strength, touch_count=touch_count,
+                    age=age,
                     distance_from_price=self._distance_pct(r1, latest_close),
-                    origin_index=i,
-                    timestamp=timestamps[i] if timestamps else None,
+                    origin_index=s_origin,
+                    timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
                 ))
-            # S1 pivot support
-            s1_strength = self._swing_strength(s1, lows, [lo], pp_period)
-            if s1_strength > 0 and s1 < closes[i]:
+            if s1 < latest_close:
+                touch_count = self._count_touches(s1, ref_lows)
+                volume_ratio = self._volume_ratio(s_origin, ref_volumes)
+                strength = self._swing_strength(
+                    s1, ref_lows, latest_close, age, touch_count, volume_ratio,
+                ) * 0.8
                 levels.append(SRLevel(
                     price=s1, type=SRType.PIVOT_LOW, timeframe=timeframe,
-                    strength=s1_strength * 0.8, touch_count=1,
-                    age=self._age(i, last_index),
+                    strength=strength, touch_count=touch_count,
+                    age=age,
                     distance_from_price=self._distance_pct(s1, latest_close),
-                    origin_index=i,
-                    timestamp=timestamps[i] if timestamps else None,
+                    origin_index=s_origin,
+                    timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
                 ))
 
         # 8. Merge levels into consolidation zones
-        zones = self._build_zones(levels)
+        zones = self._build_zones(levels, latest_close)
         for zone in zones:
             levels.append(zone)
 
@@ -403,27 +511,47 @@ class SupportResistanceEngine:
         self,
         price: float,
         series: Sequence[float],
-        recent: Sequence[float],
-        period: int,
+        latest_price: float | None,
+        age: int,
+        touch_count: int = 1,
+        volume_ratio: float = 1.0,
     ) -> float:
         """Compute a 0..1 strength score for a level.
 
-        Combines:
-        - How many ATRs the level is away from recent price
-        - How long the level has been "untouched"
+        Weighted blend of four independently-normalized components:
+        - ``dist_score``   (40%): how close the level is to the current
+          price, in ATRs — closer = more immediately relevant.
+        - ``age_score``    (30%): how long the level has existed, in bars
+          — older untested levels are more significant.
+        - ``touch_score``  (15%): how many times price has revisited this
+          level (see ``_count_touches``) — more touches = more respected.
+        - ``volume_score`` (15%): relative volume at the level's origin
+          bar (see ``_volume_ratio``) — a level formed on high volume is
+          more likely to matter than one formed on a quiet bar.
+
+        ``latest_price`` must be the actual current/latest price, not a
+        bar from ``series`` — using ``series[-1]`` here previously (the
+        *oldest* bar in the newest→oldest arrays this engine uses)
+        silently inverted the distance score. ``age`` must be the level's
+        own bar age (e.g. via ``self._age(idx)``), not a constant
+        configured lookback period — passing a constant meant every level
+        in a category scored identically regardless of how old it
+        actually was.
         """
         atr = self._atr_approx(series)
-        if atr <= 0:
+        if atr <= 0 or latest_price is None:
             return 0.5
-        # ATR distance: closer = slightly stronger (resistance near price
-        # is more immediately relevant), capped at 5 ATRs
-        dist_atrs = abs(price - series[-1]) / atr
-        dist_score = max(0.0, 1.0 - dist_atrs / 5.0) * 0.5
-        # Age: older untested levels are stronger (if the level hasn't
-        # been broken recently, it is a stronger S/R)
-        # We measure age as bars since the level first appeared
-        age_score = min(period / (period + 5.0), 1.0) * 0.5
-        return dist_score + age_score
+        dist_atrs = abs(price - latest_price) / atr
+        dist_score = max(0.0, 1.0 - dist_atrs / 5.0)
+        age_score = min(age / 50.0, 1.0)
+        touch_score = min(max(touch_count - 1, 0) / 4.0, 1.0)
+        volume_score = min(max(volume_ratio, 0.0) / 3.0, 1.0)
+        return (
+            dist_score * 0.40
+            + age_score * 0.30
+            + touch_score * 0.15
+            + volume_score * 0.15
+        )
 
     def _atr_approx(self, series: Sequence[float]) -> float:
         """Approximate ATR from a high/low/close series as |H - L|."""
@@ -431,8 +559,43 @@ class SupportResistanceEngine:
             return 1.0
         return max(abs(series[-1] - series[0]) / len(series), 1e-9)
 
-    def _age(self, origin: int, last: int) -> int:
-        return max(0, last - origin)
+    def _count_touches(self, price: float, series: Sequence[float]) -> int:
+        """Count bars in ``series`` within ``zone_width_pct`` of ``price``.
+
+        Gives swings/pivots a real touch count instead of the previous
+        hardcoded ``1`` — a level price touches by chance once (its own
+        origin bar) at minimum, so this is always >= 1 for a price that
+        actually occurs in ``series``.
+        """
+        if not series:
+            return 1
+        tolerance = abs(price) * self.zone_width_pct
+        return sum(1 for v in series if abs(v - price) <= tolerance) or 1
+
+    def _volume_ratio(self, idx: int, volumes: Sequence[float]) -> float:
+        """Volume at ``idx`` relative to the series' average volume.
+
+        Returns 1.0 (neutral) when volumes are missing/empty/all-zero or
+        ``idx`` is out of range, rather than raising or dividing by zero.
+        """
+        if not volumes or idx < 0 or idx >= len(volumes):
+            return 1.0
+        avg = sum(volumes) / len(volumes)
+        if avg <= 0:
+            return 1.0
+        return volumes[idx] / avg
+
+    def _age(self, origin_index: int) -> int:
+        """Bars since this level's origin bar.
+
+        Bars arrive newest→oldest (index 0 = current bar), so a level's
+        age in bars is simply its own index — no "last bar" reference
+        needed. (Previously computed as ``last_index - origin_index``,
+        which assumed the opposite, oldest→newest ordering and produced
+        inverted ages: a level from minutes ago showed a huge age while
+        one from hours ago showed a tiny one.)
+        """
+        return max(0, origin_index)
 
     def _distance_pct(self, price: float, reference: float | None) -> float | None:
         if reference is None or reference == 0:
@@ -443,14 +606,23 @@ class SupportResistanceEngine:
         self,
         highs: Sequence[float],
         lows: Sequence[float],
-        closes: Sequence[float],
         period: Literal["day", "week"],
         timestamps: Sequence | None,
+        index_offset: int = 0,
+        latest_close: float | None = None,
     ) -> list[SRLevel]:
         """Detect previous day OR previous week high and low levels.
 
         Only emits levels for the requested ``period`` ('day' or 'week'),
         not both. This lets callers request day and week levels independently.
+
+        ``highs``/``lows``/``timestamps`` are a slice of the full bars array
+        (the caller has already trimmed off the current day/week's own
+        bars); ``index_offset`` is that slice's starting position in the
+        full array, so origin_index/age reflect true bar distance rather
+        than a position within the slice. ``latest_close`` is the true
+        latest close (not the slice's own [0], which is already stale by
+        definition since the slice excludes the most recent period).
         """
         if timestamps is None:
             return []
@@ -486,7 +658,11 @@ class SupportResistanceEngine:
                 if bar_indices:
                     ph = max(highs[j] for j in bar_indices)
                     pl = min(lows[j]  for j in bar_indices)
-                    age = n - max(bar_indices)
+                    # bar_indices is ascending within this slice; since bars
+                    # run newest→oldest, the smallest index is this group's
+                    # most recent bar — that's the level's true origin.
+                    origin_idx = bar_indices[0] + index_offset
+                    age = self._age(origin_idx)
                     for price, stype in ((ph, hi_type), (pl, lo_type)):
                         levels.append(SRLevel(
                             price=price,
@@ -496,8 +672,8 @@ class SupportResistanceEngine:
                             touch_count=1,
                             age=age,
                             distance_from_price=self._distance_pct(
-                                price, closes[0] if closes else None),
-                            origin_index=bar_indices[0],
+                                price, latest_close),
+                            origin_index=origin_idx,
                             timestamp=timestamps[bar_indices[0]],
                         ))
                 bar_indices = []
@@ -507,13 +683,56 @@ class SupportResistanceEngine:
 
         return levels
 
-    def _build_zones(self, levels: list[SRLevel]) -> list[SRLevel]:
+    def _prev_day_ohlc(
+        self,
+        highs: Sequence[float],
+        lows: Sequence[float],
+        closes: Sequence[float],
+        timestamps: Sequence | None,
+        index_offset: int = 0,
+    ) -> tuple[float, float, float, int] | None:
+        """Aggregate H/L/C for the most recent complete calendar day.
+
+        ``highs``/``lows``/``closes``/``timestamps`` are a slice with the
+        current/"today" group already trimmed off by the caller (mirrors
+        ``_prev_period_levels``'s day-grouping so it works whether the
+        slice is genuinely daily bars or intraday bars grouped by date()).
+        Returns ``(high, low, close, origin_index)`` for that day, where
+        ``close`` is the most recent (smallest-index) bar's close — bars
+        run newest→oldest, so that's the session's actual closing price —
+        or ``None`` if there's no complete day in the slice.
+        """
+        if not timestamps:
+            return None
+        bar_indices: list[int] = []
+        day = None
+        for i, ts in enumerate(timestamps):
+            if ts is None:
+                continue
+            cur = getattr(ts, "date", lambda: None)()
+            if cur is None:
+                continue
+            if day is not None and cur != day:
+                break
+            bar_indices.append(i)
+            day = cur
+        if not bar_indices:
+            return None
+        high = max(highs[j] for j in bar_indices)
+        low = min(lows[j] for j in bar_indices)
+        close = closes[bar_indices[0]]
+        origin_index = bar_indices[0] + index_offset
+        return high, low, close, origin_index
+
+    def _build_zones(
+        self, levels: list[SRLevel], latest_close: float | None = None
+    ) -> list[SRLevel]:
         """Merge nearby resistance (high) and support (low) levels into zones."""
         candidates = [level for level in levels
                       if level.type in (
                           SRType.TODAY_HIGH, SRType.PREV_DAY_HIGH,
                           SRType.THIS_WEEK_HIGH, SRType.PREV_WEEK_HIGH,
-                          SRType.ALL_TIME_HIGH, SRType.ALL_TIME_LOW,
+                          SRType.WEEK_52_HIGH, SRType.WEEK_52_LOW,
                           SRType.TODAY_LOW, SRType.PREV_DAY_LOW,
                           SRType.THIS_WEEK_LOW, SRType.PREV_WEEK_LOW,
                           SRType.SWING_HIGH, SRType.SWING_LOW,
@@ -545,7 +764,15 @@ class SupportResistanceEngine:
             total_strength = sum(c.strength for c in group)
             # Zones are slightly weaker than the strongest component
             strength = min(total_strength / len(group) * 0.9, 1.0)
-            earliest_idx = min(c.origin_index or 0 for c in group)
+            # Components can originate from two different bar arrays now
+            # (calendar-anchored levels from `reference_bars`, technical
+            # levels — swings — from `bars`), so their origin_index values
+            # are not comparable across the group. Each component's own
+            # `.age` is already computed correctly against its own source
+            # array; pick the youngest component directly instead of
+            # recomputing via min(origin_index), which would incorrectly
+            # mix the two index spaces.
+            youngest = min(group, key=lambda c: c.age if c.age is not None else 0)
             latest_ts = max((c.timestamp for c in group if c.timestamp),
                             default=None)
             out.append(SRLevel(
@@ -554,9 +781,9 @@ class SupportResistanceEngine:
                 timeframe=group[0].timeframe,
                 strength=strength,
                 touch_count=len(group),
-                age=self._age(earliest_idx, len(group)),
-                distance_from_price=self._distance_pct(avg_price, group[0].distance_from_price),
-                origin_index=earliest_idx,
+                age=youngest.age,
+                distance_from_price=self._distance_pct(avg_price, latest_close),
+                origin_index=youngest.origin_index,
                 component_prices=components,
                 timestamp=latest_ts,
             ))

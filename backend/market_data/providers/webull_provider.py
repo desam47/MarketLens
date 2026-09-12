@@ -65,13 +65,21 @@ _file_logger_paths_registered: set[tuple[str, str]] = set()
 def _patched_set_file_logger(
     self,
     path,
-    log_level=logging.DEBUG,
+    log_level=None,
     logger_name="webull.core",
     format_string=None,
     when="H",
     interval=1,
     backup_count=72,
 ):
+    # The SDK's own default (logging.DEBUG) makes every signed request emit
+    # several verbose lines (HMAC signature composer output, full request/
+    # response bodies) — harmless in isolation, but confirmed live 2026-09-11
+    # to be the source of unbounded log growth (60GB+ in a shell-redirected
+    # stdout capture) once accumulated across long-running dev sessions.
+    # Default to WARNING; only go verbose when the app itself is in debug mode.
+    if log_level is None:
+        log_level = logging.DEBUG if _settings.debug else logging.WARNING
     # Replace a bare filename with the project-local absolute path so the
     # log file is always created inside the project, regardless of CWD.
     abs_path = str(_WEBULL_LOG) if Path(path).name == path else path
@@ -86,6 +94,24 @@ def _patched_set_file_logger(
 
 
 _wb_client.ApiClient.set_file_logger = _patched_set_file_logger
+
+# ``webull.core.http.response`` is a *separate* module from the one patched
+# above, and it does something the ``set_file_logger`` patch cannot touch:
+# at import time (module-level, unconditional) it does
+#   logger.setLevel(logging.DEBUG); logger.propagate = False
+#   logger.addHandler(logging.StreamHandler())
+# ``propagate = False`` means our ``webull.core`` level/handler settings
+# above never apply to it — it is a fully independent DEBUG firehose
+# straight to stderr, on every single HTTP response (full request/response
+# bodies) from every quote/bar poll. Confirmed live 2026-09-12: this is
+# what was flooding backend.log/start.log (multi-GB) and causing the
+# ingestion thread to burn CPU/disk I/O formatting and writing full
+# response bodies continuously — which in turn starved the API server's
+# request-handling thread (same process, shares the GIL) for seconds at
+# a time. Importing ``webull.core.client`` transitively imports this
+# module, so it's already loaded by the time we get here; force its level
+# back down immediately after.
+logging.getLogger("webull.core.http.response").setLevel(logging.WARNING)
 
 import logging
 from datetime import datetime, timedelta, timezone

@@ -111,6 +111,15 @@ _mtf_history_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=60)
 _transitions_cache: TTLCache[str, Any] = TTLCache(maxsize=200, ttl=30)
 
 
+def _reference_bars_cache_stats() -> dict[str, int]:
+    # Imported lazily to avoid a module-load-order dependency between
+    # backend.api.ttl_cache and backend.analysis.series (the cache itself
+    # lives there, next to load_reference_bars, since both the analysis
+    # router and backend.ai.context.py import it directly).
+    from backend.analysis.series import _reference_bars_cache
+    return {"size": _reference_bars_cache.currsize, "maxsize": _reference_bars_cache.maxsize}
+
+
 def get_cache_stats() -> dict[str, dict[str, int]]:
     """Return current cache sizes for the health/monitoring endpoint."""
     return {
@@ -128,6 +137,7 @@ def get_cache_stats() -> dict[str, dict[str, int]]:
         "strategy_history": {"size": _strategy_history_cache.currsize, "maxsize": _strategy_history_cache.maxsize},
         "mtf_history": {"size": _mtf_history_cache.currsize, "maxsize": _mtf_history_cache.maxsize},
         "transitions": {"size": _transitions_cache.currsize, "maxsize": _transitions_cache.maxsize},
+        "reference_bars": _reference_bars_cache_stats(),
     }
 
 

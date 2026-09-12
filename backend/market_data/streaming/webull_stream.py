@@ -38,6 +38,44 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _STREAM_LOG = _PROJECT_ROOT / "logs" / "webull_data_streaming_sdk.log"
 
+# Same class of bug as ``ApiClient.set_file_logger`` (patched in
+# webull_provider.py): ``QuotesClient.set_file_logger`` also writes to a
+# bare CWD-relative filename and unconditionally does
+# ``logging.getLogger(logger_name).addHandler(...)`` with no dedup guard.
+# Passing ``customer_logger=_stream_logger()`` into ``connect_and_loop_start``
+# avoids this on a normal connect, but the SDK's own internal retry path
+# (seen live: "Protocol not supported" -> internal retry -> "exited due to
+# thread terminated") re-invokes ``_init_logger()`` without forwarding our
+# customer_logger, which falls through to the hard-coded-path branch and
+# writes ``webull_data_streaming_sdk.log`` into the project root (confirmed
+# live 2026-09-12) — and would leak one more duplicate handler per retry if
+# left unpatched, the same growth pattern already fixed for the REST client.
+# Patch at the source so it's safe regardless of which path the SDK takes.
+_quotes_file_logger_paths_registered: set[tuple[str, str]] = set()
+
+
+def _patch_quotes_client_logger() -> None:
+    from webull.data.internal.quotes_client import QuotesClient
+
+    orig_set_file_logger = QuotesClient.set_file_logger
+
+    def _patched(self, path, log_level=logging.INFO, logger_name="webull.data",
+                 format_string=None, when="H", interval=1, backup_count=72):
+        abs_path = str(_STREAM_LOG) if Path(path).name == path else path
+        key = (logger_name, abs_path)
+        if key in _quotes_file_logger_paths_registered:
+            return None
+        _quotes_file_logger_paths_registered.add(key)
+        Path(abs_path).parent.mkdir(exist_ok=True)
+        return orig_set_file_logger(
+            self, abs_path, log_level, logger_name, format_string, when, interval, backup_count
+        )
+
+    QuotesClient.set_file_logger = _patched
+
+
+_patch_quotes_client_logger()
+
 _SnapshotCb = Callable[[str, float, float | None, "object", float | None, float | None, float | None], None]
 _TradeCb = Callable[[str, float, float | None, "object", str | None], None]
 _StatusCb = Callable[[str], None]

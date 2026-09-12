@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from ...analysis.series import bar_dicts_to_arrays as _bar_dicts_to_arrays
 from ...analysis.series import load_bars as _load_bars
+from ...analysis.series import load_reference_bars as _load_reference_bars
 from ...analysis.series import macd_histogram_series as _macd_histogram_series
 from ...analysis.series import rsi_series as _rsi_series
 from ...divergence import DivergenceEngine
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
 # All timestamps in responses → America/New_York (EST/EDT auto-handled).
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
+
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
@@ -158,11 +160,18 @@ async def get_price_range(
                 "latest_close": None,
                 "last_index": 0,
             }
+        # Calendar-anchored levels (today/prev day/this week/prev week/
+        # 52-week) are computed from a separate, cached daily series,
+        # independent of the requested timeframe/limit, so they return
+        # identical values no matter which chart timeframe is being viewed.
+        reference_bars = await asyncio.to_thread(_load_reference_bars, symbol)
         # Engine uses index 0 as "today" / latest and scans toward older bars
         # for prev-period and swing detection, so it works directly with
         # _load_bars's desc=True (newest -> oldest) ordering.
         engine = SupportResistanceEngine(lookback_period=5, lookback_bars=limit)
-        result = engine.detect(bars, symbol=symbol, timeframe=timeframe)
+        result = engine.detect(
+            bars, symbol=symbol, timeframe=timeframe, reference_bars=reference_bars
+        )
         levels = result.levels[:max_levels]
         return {
             "symbol": symbol,

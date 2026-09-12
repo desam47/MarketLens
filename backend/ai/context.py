@@ -305,12 +305,23 @@ def build_context(
     sr: dict[str, Any] = {}
     try:
         from backend.analysis.series import load_bars as _load_bars_for_sr
+        from backend.analysis.series import load_reference_bars as _load_reference_bars_for_sr
         from backend.support_resistance import SupportResistanceEngine
 
         sr_bars = _load_bars_for_sr(sym, timeframe, limit=200)
         if len(sr_bars) >= 20:
+            # Calendar-anchored levels (today/prev-day/this-week/prev-week/
+            # 52-week high & low) must come from a dedicated daily series,
+            # not `sr_bars` (which is at `timeframe`'s own granularity) —
+            # see SupportResistanceEngine.detect()'s `reference_bars` param
+            # and backend/api/analysis/router.py's identical fetch. Without
+            # this, AI chat/analysis reported different "today's high" etc.
+            # depending on which timeframe last populated the context.
+            reference_bars = _load_reference_bars_for_sr(sym)
             sr_engine = SupportResistanceEngine(lookback_period=5, lookback_bars=200)
-            sr_result = sr_engine.detect(sr_bars, symbol=sym, timeframe=timeframe)
+            sr_result = sr_engine.detect(
+                sr_bars, symbol=sym, timeframe=timeframe, reference_bars=reference_bars
+            )
             latest_close = sr_result.latest_close
             if latest_close is not None:
                 supports: list[dict[str, Any]] = []
