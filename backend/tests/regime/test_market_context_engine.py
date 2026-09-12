@@ -22,9 +22,9 @@ class TestMarketContextEngine(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_engine_initialization(self):
-        """Engine initializes with 4 sub-engines (SPY, QQQ, IWM, ^VIX)."""
+        """Engine initializes with 4 sub-engines (SPY, QQQ, IWM, VIXY)."""
         self.assertEqual(len(self.engine.sub_engines), 4)
-        for sym in ("SPY", "QQQ", "IWM", "^VIX"):
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
             self.assertIn(sym, self.engine.sub_engines)
 
     # ------------------------------------------------------------------
@@ -40,7 +40,7 @@ class TestMarketContextEngine(unittest.TestCase):
         """After enough ticks, sub-engines produce a regime each."""
         # Feed enough data to all 4 sub-engines
         now = datetime.now()
-        for sym in ("SPY", "QQQ", "IWM", "^VIX"):
+        for sym in ("SPY", "QQQ", "IWM", "VIXY"):
             for i in range(20):
                 self.engine.update(
                     price=100.0 + i * 0.1,
@@ -63,7 +63,7 @@ class TestMarketContextEngine(unittest.TestCase):
             "SPY": MarketRegime.RISK_ON,
             "QQQ": MarketRegime.RISK_ON,
             "IWM": MarketRegime.RISK_ON,
-            "^VIX": MarketRegime.NEUTRAL,
+            "VIXY": MarketRegime.NEUTRAL,
         })
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "risk_on")
@@ -75,7 +75,7 @@ class TestMarketContextEngine(unittest.TestCase):
             "SPY": MarketRegime.RISK_OFF,
             "QQQ": MarketRegime.RISK_OFF,
             "IWM": MarketRegime.NEUTRAL,
-            "^VIX": MarketRegime.RISK_OFF,
+            "VIXY": MarketRegime.RISK_OFF,
         })
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "risk_off")
@@ -86,7 +86,7 @@ class TestMarketContextEngine(unittest.TestCase):
             "SPY": MarketRegime.NEUTRAL,
             "QQQ": MarketRegime.NEUTRAL,
             "IWM": MarketRegime.NEUTRAL,
-            "^VIX": MarketRegime.RISK_ON,
+            "VIXY": MarketRegime.RISK_ON,
         })
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "neutral")
@@ -97,7 +97,7 @@ class TestMarketContextEngine(unittest.TestCase):
             "SPY": MarketRegime.RISK_ON,
             "QQQ": MarketRegime.RISK_OFF,
             "IWM": MarketRegime.NEUTRAL,
-            "^VIX": MarketRegime.RISK_ON,
+            "VIXY": MarketRegime.RISK_ON,
         })
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "transition")
@@ -108,7 +108,7 @@ class TestMarketContextEngine(unittest.TestCase):
             "SPY": MarketRegime.RISK_ON,
             "QQQ": MarketRegime.RISK_ON,
             "IWM": MarketRegime.RISK_OFF,
-            "^VIX": MarketRegime.RISK_OFF,
+            "VIXY": MarketRegime.RISK_OFF,
         })
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "transition")
@@ -162,7 +162,7 @@ class TestMarketContextEngine(unittest.TestCase):
             trend_strength=0.65,
             momentum=0.4,
             volatility_state="normal",
-            sub_regimes={"SPY": "risk_on", "QQQ": "risk_on", "IWM": "neutral", "^VIX": "risk_off"},
+            sub_regimes={"SPY": "risk_on", "QQQ": "risk_on", "IWM": "neutral", "VIXY": "risk_off"},
             contributing_factors={"primary_reason": "consensus_risk_on"},
             timestamp=datetime(2025, 1, 1, 12, 0, 0),
         )

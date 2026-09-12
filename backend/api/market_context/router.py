@@ -71,11 +71,17 @@ def _seed_sub_engine(
                 BarModel.symbol == symbol.upper(),
                 BarModel.timeframe == "1d",
             )
-            .order_by(BarModel.timestamp.asc())
+            .order_by(BarModel.timestamp.desc())
             .limit(200)
             .all()
         )
-        for bar in rows:
+        # Query above orders newest-first to get the most RECENT 200 bars
+        # (found live 2026-09-11: ascending + limit(200) was grabbing the
+        # OLDEST 200 of e.g. SPY's 753 stored days — seeding every restart
+        # with bars from over a year ago instead of a live-relevant
+        # window). Replay into the regime engine oldest-to-newest so its
+        # EMA/ADX indicators build up in the correct chronological order.
+        for bar in reversed(rows):
             # BarModel stores naive **America/New_York** datetimes (the
             # SQLAlchemy DateTime column has no tzinfo=True). Engines compare
             # against aware values, so stamp the zone before pushing through.

@@ -112,6 +112,7 @@ class MarketContextEngine:
             return None
 
         regime, confidence, factors = self._aggregate(sub_regimes)
+        trend_strength, momentum, volatility_state = self._aggregate_metrics()
         ts = max(
             (e.get_current_regime().timestamp for e in self.sub_engines.values()
              if e.get_current_regime()),
@@ -121,9 +122,9 @@ class MarketContextEngine:
         signal = MarketContextSignal(
             regime=regime,
             confidence=confidence,
-            trend_strength=factors.get("trend_strength", 0.0),
-            momentum=factors.get("momentum", 0.0),
-            volatility_state=factors.get("volatility_state", "unknown"),
+            trend_strength=trend_strength,
+            momentum=momentum,
+            volatility_state=volatility_state,
             sub_regimes={k: v.value for k, v in sub_regimes.items()},
             contributing_factors=factors,
             timestamp=ts,
@@ -191,6 +192,51 @@ class MarketContextEngine:
         # Mixed → TRANSITION
         factors["primary_reason"] = "mixed_sub_regimes"
         return MarketRegime.TRANSITION.value, 0.6, factors
+
+    def _aggregate_metrics(self) -> tuple[float, float, str]:
+        """Average trend strength/momentum/volatility across sub-engines.
+
+        Reuses each sub-engine's own RegimeSignal.strength (0..1, already
+        its considered conviction in the current call) and
+        supporting_factors (trend_direction, volatility_pct) instead of
+        recomputing anything from raw price history.
+        """
+        strengths: list[float] = []
+        momenta: list[float] = []
+        vol_pcts: list[float] = []
+        for engine in self.sub_engines.values():
+            sig = engine.get_current_regime()
+            if sig is None:
+                continue
+            strengths.append(sig.strength)
+            direction = sig.supporting_factors.get("trend_direction")
+            sign = 1.0 if direction == "uptrend" else -1.0 if direction == "downtrend" else 0.0
+            momenta.append(sign * sig.strength)
+            vol_pct = sig.supporting_factors.get("volatility_pct")
+            if vol_pct is not None:
+                vol_pcts.append(vol_pct)
+
+        if not strengths:
+            return 0.0, 0.0, "unknown"
+
+        trend_strength = sum(strengths) / len(strengths)
+        momentum = sum(momenta) / len(momenta)
+
+        if vol_pcts:
+            avg_vol = sum(vol_pcts) / len(vol_pcts)
+            # Same thresholds MarketRegimeEngine itself classifies with —
+            # every sub-engine carries the same constants, so any one works.
+            sample_engine = next(iter(self.sub_engines.values()))
+            if avg_vol > sample_engine.volatility_threshold_high:
+                volatility_state = "high"
+            elif avg_vol < sample_engine.volatility_threshold_low:
+                volatility_state = "low"
+            else:
+                volatility_state = "normal"
+        else:
+            volatility_state = "unknown"
+
+        return trend_strength, momentum, volatility_state
 
     def _prune_history(self, symbol: str, max_len: int = 100) -> None:
         hist = self._price_history[symbol]
