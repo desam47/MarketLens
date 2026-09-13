@@ -4,6 +4,7 @@ import api, {
   Divergence,
   ScanResult,
   SRLevel,
+  PriceHistoryItem,
   TapeSnapshot,
   Transition,
 } from '../services/api';
@@ -70,28 +71,17 @@ const srTypeLabel: Record<string, string> = {
   prev_week_low: 'Prev Week Low',
   week_52_high: '52 Week High',
   week_52_low: '52 Week Low',
-  pivot_high: 'Pivot High',
-  pivot_low: 'Pivot Low',
+  pivot_pp: 'PP',
+  pivot_r1: 'R1',
+  pivot_r2: 'R2',
+  pivot_r3: 'R3',
+  pivot_s1: 'S1',
+  pivot_s2: 'S2',
+  pivot_s3: 'S3',
   swing_high: 'Swing High',
   swing_low: 'Swing Low',
   consolidation_zone: 'Zone',
 };
-
-// The S/R panels pair a level with its counterpart on the same row —
-// Today's High next to Today's Low, 52 Week High next to 52 Week Low,
-// etc. Grouping key = the type minus its _high/_low suffix; this map
-// orders those groups (period recency first, then swings/pivots/zones).
-const srBaseOrder: Record<string, number> = {
-  today: 0,
-  prev_day: 1,
-  this_week: 2,
-  prev_week: 3,
-  week_52: 4,
-  swing: 5,
-  pivot: 6,
-  consolidation_zone: 7,
-};
-const srBaseKey = (type: string): string => type.replace(/_(high|low)$/, '');
 
 function formatDelta(delta: number): string {
   return (delta > 0 ? '+' : '') + delta.toFixed(1);
@@ -145,6 +135,10 @@ const TransitionsPanel = memo(function TransitionsPanel({
         <h2>Trend Transitions</h2>
         <span className="timeframe-tag">{timeframe}</span>
       </div>
+      <p className="panel-caveat">
+        Score is a close-price z-score vs a 21-bar SMA (±2σ), not the
+        blended TrendEngine score.
+      </p>
       <div className="score-bar">
         <span className="score-label">Score</span>
         <div className="progress-bar" style={{ flex: 1 }}>
@@ -195,12 +189,10 @@ const TransitionsPanel = memo(function TransitionsPanel({
 });
 
 // --- Support & Resistance levels panel ---
-// Renders /price-range data (SRLevel[]) as concept-paired rows: a
-// concept's high sits in the left (Resistance) column and its low in
-// the right (Support) column ON THE SAME ROW (Today's High | Today's
-// Low, 52 Week High | 52 Week Low, ...). Groups ordered by
-// srBaseOrder; within a group the nearest level to the current price
-// comes first. `—` fills a side with no counterpart.
+// Renders /price-range data (SRLevel[]) as a classic pivot table: one row
+// per level, ordered R3 -> R1 -> PP -> S1 -> S3 by the API. Resistance
+// rows (R1-R3) are red, support rows (S1-S3) and the PP pivot are green,
+// and the row nearest the last close is highlighted as the actionable one.
 const SRPanel = memo(function SRPanel({
   levels,
   latestClose,
@@ -208,100 +200,133 @@ const SRPanel = memo(function SRPanel({
   levels: SRLevel[];
   latestClose: number | null;
 }) {
-  const highLabel = 'Resistance';
-  const lowLabel = 'Support';
-
-  // Group by base concept, split each into high/low, then zip into
-  // paired rows so a concept's high and low line up.
-  const groups = new Map<string, { highs: SRLevel[]; lows: SRLevel[] }>();
-  for (const l of levels) {
-    const base = srBaseKey(l.type);
-    if (!groups.has(base)) groups.set(base, { highs: [], lows: [] });
-    const g = groups.get(base)!;
-    const isHigh = l.type.endsWith('_high')
-      ? true
-      : l.type.endsWith('_low')
-        ? false
-        : latestClose != null ? l.price >= latestClose : true; // zone → by price
-    (isHigh ? g.highs : g.lows).push(l);
-  }
-
-  const shownRows: { high: SRLevel | null; low: SRLevel | null }[] = [];
-  const orderedBases = Array.from(groups.keys()).sort(
-    (a, b) => (srBaseOrder[a] ?? 99) - (srBaseOrder[b] ?? 99),
-  );
-  for (const base of orderedBases) {
-    const g = groups.get(base)!;
-    const highs = [...g.highs].sort((a, b) => a.price - b.price); // nearest above first
-    const lows = [...g.lows].sort((a, b) => b.price - a.price);   // nearest below first
-    for (let i = 0; i < Math.max(highs.length, lows.length); i++) {
-      shownRows.push({ high: highs[i] ?? null, low: lows[i] ?? null });
-    }
-  }
+  const NEAR_PCT = 3.0;
+  const isResistance = (t: string) => t.startsWith('pivot_r');
 
   return (
     <div className="card analysis-card">
       <h2>Support &amp; Resistance</h2>
-      {latestClose != null && (
-        <div className="current-price">
-          <span className="price-label">Last</span>
-          <span className="price-value">${strPrice(latestClose)}</span>
-        </div>
-      )}
-      {shownRows.length === 0 ? (
+      {levels.length === 0 ? (
         <p className="empty-state">No levels detected</p>
       ) : (
-        <div className="sr-grid">
-          {(['high', 'low'] as const).map(side => {
-            const label = side === 'high' ? highLabel : lowLabel;
-            const color = side === 'high' ? '#ef4444' : '#10b981';
-            return (
-              <div key={side} className="sr-column">
-                <h3 style={{ color }}>{label}</h3>
-                <table className="sr-table">
-                  <thead>
-                    <tr>
-                      <th>Type</th>
-                      <th>Price</th>
-                      <th>Str</th>
-                      <th>Dist</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shownRows.map((r, i) => {
-                      const l = side === 'high' ? r.high : r.low;
-                      if (!l) {
-                        return <tr key={i}><td colSpan={4} className="empty-cell">—</td></tr>;
-                      }
-                      // Signed % from current price: + above, − below.
-                      // Computed here, not from l.distance_from_price —
-                      // that backend field is unreliable for consolidation
-                      // zones (reports absurd values like 26397%).
-                      const dist = latestClose
-                        ? ((l.price - latestClose) / latestClose) * 100
-                        : null;
-                      return (
-                        <tr key={i}>
-                          <td className="sr-type">{srTypeLabel[l.type] || l.type}</td>
-                          <td className="sr-price">${strPrice(l.price)}</td>
-                          <td className="sr-strength">
-                            <div className="mini-bar">
-                              <div
-                                className="mini-fill"
-                                style={{ width: `${(l.strength * 100).toFixed(0)}%`, backgroundColor: color }}
-                              />
-                            </div>
-                          </td>
-                          <td className="sr-dist">{pct(dist)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
+        <table className="sr-table sr-pivot-table">
+          <thead>
+            <tr>
+              <th>Level</th>
+              <th>Price</th>
+              <th>Str</th>
+              <th>Touch</th>
+              <th>Dist</th>
+            </tr>
+          </thead>
+          <tbody>
+            {levels.map((l, i) => {
+              const dist = latestClose
+                ? ((l.price - latestClose) / latestClose) * 100
+                : null;
+              const isNear = dist != null && Math.abs(dist) <= NEAR_PCT;
+              const color = isResistance(l.type) ? '#ef4444' : '#10b981';
+              return (
+                <tr key={i} className={isNear ? 'sr-row-near' : undefined}>
+                  <td className="sr-type" style={{ color, fontWeight: 600 }}>
+                    {srTypeLabel[l.type] || l.type}
+                  </td>
+                  <td className="sr-price">${strPrice(l.price)}</td>
+                  <td className="sr-strength">
+                    <div className="mini-bar">
+                      <div
+                        className="mini-fill"
+                        style={{ width: `${(l.strength * 100).toFixed(0)}%`, backgroundColor: color }}
+                      />
+                    </div>
+                  </td>
+                  <td className="sr-touch">{l.touch_count}</td>
+                  <td className="sr-dist">{pct(dist)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+});
+
+// --- Price History panel ---
+// Renders the calendar-anchored reference levels (today / prev day / this week /
+// prev week / 52-week high & low) that the S/R pivot table intentionally omits,
+// paired into one row per period. High is blue, Low is purple.
+const PriceHistoryPanel = memo(function PriceHistoryPanel({
+  history,
+  latestClose,
+  change,
+  changePercent,
+}: {
+  history: PriceHistoryItem[];
+  latestClose: number | null;
+  change?: number | null;
+  changePercent?: number | null;
+}) {
+  // Pair the high/low of each period into a single row.
+  const byPeriod: Record<string, { high?: PriceHistoryItem; low?: PriceHistoryItem }> = {};
+  for (const h of history) {
+    const period = h.type.replace(/_(high|low)$/, "");
+    byPeriod[period] = byPeriod[period] || {};
+    if (h.type.endsWith("_high")) byPeriod[period].high = h;
+    else byPeriod[period].low = h;
+  }
+  // Preserve engine's display order (today -> prev day -> this week -> ...).
+  const rows = history
+    .filter((h) => h.type.endsWith("_high"))
+    .map((h) => {
+      const period = h.type.replace(/_high$/, "");
+      return { period, high: byPeriod[period].high, low: byPeriod[period].low, label: h.label.replace(" High", "") };
+    });
+
+  return (
+    <div className="card analysis-card">
+      <h2>Price History</h2>
+      {latestClose != null && (
+        <div className="current-price">
+          <span className="price-label">Last Close</span>
+          <span className="price-value">${strPrice(latestClose)}</span>
+          {change != null && (
+            <span
+              className="price-change"
+              style={{ color: change >= 0 ? '#10b981' : '#ef4444' }}
+            >
+              {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent != null
+                ? `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`
+                : '—'})
+            </span>
+          )}
         </div>
+      )}
+      {rows.length === 0 ? (
+        <p className="empty-state">No history levels available</p>
+      ) : (
+        <table className="sr-table price-history-table">
+          <thead>
+            <tr>
+              <th>Period</th>
+              <th>High</th>
+              <th>Low</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td className="ph-label">{r.label}</td>
+                <td className="ph-high">
+                  {r.high ? `$${strPrice(r.high.price)}` : "—"}
+                </td>
+                <td className="ph-low">
+                  {r.low ? `$${strPrice(r.low.price)}` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
@@ -415,6 +440,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [transitionsLoading, setTransitionsLoading] = useState(true);
 
   const [srLevels, setSrLevels] = useState<SRLevel[]>([]);
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryItem[]>([]);
   const [latestClose, setLatestClose] = useState<number | null>(null);
   const [srLoading, setSrLoading] = useState(true);
 
@@ -461,6 +487,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     try {
       const data = await api.getPriceRange(symbol, timeframe);
       setSrLevels(data?.levels || []);
+      setPriceHistory(data?.price_history || []);
       setLatestClose(data?.latest_close ?? null);
     } catch (err: any) {
       console.error('Failed to load price-range levels:', err);
@@ -571,6 +598,16 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
 
+  // Period-over-period change for the S/R panel: compare the latest bar's
+  // close to the prior bar's close (bars arrive newest→oldest). The backend
+  // Quote model has no change field, so we derive it here — the same delta
+  // the BarsTable shows per row.
+  const barsChange =
+    bars.length >= 2 && typeof bars[0].close === 'number' && typeof bars[1].close === 'number' && bars[1].close !== 0
+      ? bars[0].close - bars[1].close
+      : null;
+  const barsChangePct = barsChange != null ? (barsChange / bars[1].close) * 100 : null;
+
   return (
     <div className="symbol-page">
       <div className="dashboard-header">
@@ -578,9 +615,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           <h1>{symbol} Analysis</h1>
           <p className="subtitle">
             {priceDisplay}
-            {quote?.change != null && (
-              <span style={{ color: quote.change >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
-                {quote.change >= 0 ? '+' : ''}{quote.change?.toFixed(2)} ({quote.changePercent?.toFixed(2)}%)
+            {barsChange != null && (
+              <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
+                {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(2)} ({barsChangePct != null
+                  ? `${barsChangePct >= 0 ? '+' : ''}${barsChangePct.toFixed(2)}%`
+                  : '—'})
               </span>
             )}
           </p>
@@ -619,6 +658,18 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       </div>
 
       <div className="symbol-grid">
+        <PriceHistoryPanel
+          history={priceHistory}
+          latestClose={latestClose}
+          change={barsChange}
+          changePercent={barsChangePct}
+        />
+        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
+          <SRPanel
+            levels={srLevels}
+            latestClose={latestClose}
+          />
+        </div>
         <div className={transitionsLoading && transitions.length === 0 ? 'card-loading-skeleton' : ''}>
           <TransitionsPanel
             transitions={transitions}
@@ -627,9 +678,6 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
             timeframe={timeframe}
           />
-        </div>
-        <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
-          <SRPanel levels={srLevels} latestClose={latestClose} />
         </div>
         <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />

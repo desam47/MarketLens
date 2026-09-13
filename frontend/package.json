@@ -46,5 +46,8 @@
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
     "webpack-bundle-analyzer": "^5"
+  },
+  "overrides": {
+    "@types/node": "^20.19.0"
   }
 }

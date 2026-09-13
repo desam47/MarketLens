@@ -2148,6 +2148,14 @@ h4 {
   border-radius: 4px;
 }
 
+.analysis-card .panel-caveat {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .score-bar {
   display: flex;
   align-items: center;
@@ -2276,6 +2284,51 @@ h4 {
   color: var(--text-muted);
 }
 
+.sr-touch {
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.sr-components {
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Actionable levels — within 3% of the last close — stand out from distant
+   reference levels (52-week, pivots, etc.). */
+.sr-row-near td {
+  background: rgba(56, 189, 248, 0.08);
+}
+
+/* Price History table — pairs each period's High (blue) / Low (purple). */
+.price-history-table .ph-label {
+  color: var(--text-secondary);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 600;
+}
+
+.price-history-table .ph-high {
+  color: #0ea5e9;
+  font-weight: 600;
+}
+
+.price-history-table .ph-low {
+  color: #a855f7;
+  font-weight: 600;
+}
+
+.sr-zones {
+  margin-top: 16px;
+}
+
+.sr-zones h3 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #f59e0b;
+}
+
 .current-price {
   display: flex;
   align-items: baseline;
@@ -2291,6 +2344,12 @@ h4 {
 .price-value {
   font-size: 24px;
   font-weight: 700;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.price-change {
+  font-size: 14px;
+  font-weight: 600;
   font-family: 'SF Mono', Monaco, monospace;
 }
 

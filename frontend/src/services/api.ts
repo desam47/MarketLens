@@ -269,9 +269,17 @@ export interface SRLevel {
   strength: number;
   touch_count: number;
   age: number | null;
-  distance_from_price: number | null;
   origin_index: number | null;
   component_prices: number[];
+  timestamp: string | null;
+}
+
+export interface PriceHistoryItem {
+  label: string;
+  type: string;
+  price: number;
+  strength: number;
+  distance_pct: number | null;
   timestamp: string | null;
 }
 
@@ -280,6 +288,7 @@ export interface SRResult {
   timeframe: string;
   levels: SRLevel[];
   count: number;
+  price_history: PriceHistoryItem[];
   latest_close: number | null;
   last_index: number;
 }
