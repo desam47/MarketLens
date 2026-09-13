@@ -11,7 +11,7 @@
  *   // Component re-renders only when a symbol's result changes.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import api, { ScanResult, ScannerEvent } from '../services/api';
+import api, { ScanResult, ScannerEvent, ScannerSubscriber } from '../services/api';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
@@ -38,14 +38,19 @@ export function useScannerStream({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   // Keep a ref to the subscriber so we can disconnect without tearing down
-  // the component's render state.
-  const subRef = useRef(api.createScannerSubscriber());
+  // the component's render state. Created lazily rather than passed as the
+  // useRef argument: an argument expression is evaluated on every render, so
+  // that form allocated a throwaway, never-connected subscriber each time.
+  const subRef = useRef<ScannerSubscriber | null>(null);
+  if (subRef.current === null) {
+    subRef.current = api.createScannerSubscriber();
+  }
+  const sub = subRef.current;
 
   // Track which symbols are "wanted" so we can diff on symbols change.
   const prevSymbolsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const sub = subRef.current;
     const prevSymbols = prevSymbolsRef.current;
 
     // Unsubscribe from symbols that are no longer wanted.
@@ -75,19 +80,19 @@ export function useScannerStream({
       sub.connect();
     }
 
-    return () => {
-      // Only unsubscribe — don't disconnect the socket. The subscriber may
-      // be reused if the parent re-mounts with the same symbols.
-      for (const sym of symbols) {
-        sub.unsubscribe(sym);
-      }
-    };
+    // Deliberately no cleanup here. Removals are handled by the diff above,
+    // and unmounting disconnects the socket in the effect below. An earlier
+    // version unsubscribed every symbol in this cleanup, which permanently
+    // killed live updates for any symbol present in BOTH the outgoing and
+    // incoming lists: ``unsubscribe`` deletes from the subscriber's Set, so
+    // the next diff classified that symbol as "already wanted" and never
+    // re-subscribed it (found live 2026-09-13 — switching between two
+    // watchlists that share a symbol stopped that symbol's pushes until a
+    // full reload, because ``connect``'s onopen only replays the Set).
   }, [symbols]);
 
   // Wire the event listener (stable callback ref pattern).
   useEffect(() => {
-    const sub = subRef.current;
-
     const handleEvent = (evt: ScannerEvent) => {
       if (evt.type === 'scan_result') {
         setLiveResults((prev) => {
@@ -113,9 +118,9 @@ export function useScannerStream({
     const unsubscribe = sub.onEvent(handleEvent);
     const unsubStatus = sub.onStatus(setConnectionStatus);
 
-    // The subscriber may already be open (e.g. if symbols were set before
-    // this effect ran). Sync the current status.
-    sub.onStatus(setConnectionStatus);
+    // No extra status sync needed: onStatus() replays the subscriber's
+    // current status to the listener immediately, so the registration above
+    // already covers the "socket opened before this effect ran" case.
 
     return () => {
       unsubStatus();
@@ -128,7 +133,6 @@ export function useScannerStream({
   // (potentially remounted) one. The eslint disable is the standard
   // pattern for unmount-only effects.
   useEffect(() => {
-    const sub = subRef.current;
     return () => {
       sub.disconnect();
     };
@@ -139,13 +143,13 @@ export function useScannerStream({
    * subscriber re-subscribes on open. Useful after the backend restarts.
    */
   const refresh = useCallback(() => {
-    subRef.current.disconnect();
+    sub.disconnect();
     setLiveResults({});
     setErrors({});
     // Reset the "explicitly closed" flag so connect() actually opens the socket.
     // The subscriber instance is reused across mounts so this state persists.
-    (subRef.current as any).explicitlyClosed = false;
-    subRef.current.connect();
+    (sub as any).explicitlyClosed = false;
+    sub.connect();
   }, []);
 
   return { liveResults, connectionStatus, errors, refresh };

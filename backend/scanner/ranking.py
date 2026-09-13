@@ -222,7 +222,7 @@ class RankingEngine:
 
     def _build_strongest_bullish(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
         for r in results:
             total = self._directional_score(r)
@@ -241,14 +241,19 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), len(results)
 
     def _build_strongest_bearish(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
+        eligible_count = 0
         for r in results:
             total = self._directional_score(r)
+            # Only include genuinely bearish (negative) entries.
+            if total >= 0:
+                continue
+            eligible_count += 1
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
@@ -258,11 +263,11 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), eligible_count
 
     def _build_strongest_momentum(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
         for r in results:
             macd = r.indicator_values.get("macd")
@@ -277,45 +282,73 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), len(results)
 
     def _build_biggest_improvement(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
+        eligible_count = 0
         for r in results:
-            score = r.scores.get("trend_strength", 0.0)
+            # Improvement = Strong trend (high trend_strength) AND bullish bias.
+            # Directional score > 0 confirms bullishness.
+            strength = r.scores.get("trend_strength", 0.0)
+            directional = self._directional_score(r)
+
+            if directional <= 0:
+                continue
+            eligible_count += 1
+
+            score = strength * (1 + directional)
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
                     score=score,
                     rank=0,
-                    metrics={"trend_strength": score, "adx": r.indicator_values.get("adx") or 0.0},
+                    metrics={
+                        "trend_strength": strength,
+                        "directional_score": directional,
+                        "adx": r.indicator_values.get("adx") or 0.0
+                    },
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), eligible_count
 
     def _build_biggest_deterioration(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
+        eligible_count = 0
         for r in results:
-            score = r.scores.get("trend_strength", 0.0)
+            # Deterioration = Strong trend (high trend_strength) AND bearish bias.
+            # Directional score < 0 confirms bearishness.
+            strength = r.scores.get("trend_strength", 0.0)
+            directional = self._directional_score(r)
+
+            if directional >= 0:
+                continue
+            eligible_count += 1
+
+            # Use absolute value of directional score to scale the strength of deterioration.
+            score = strength * (1 + abs(directional))
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
                     score=score,
                     rank=0,
-                    metrics={"trend_strength": score},
+                    metrics={
+                        "trend_strength": strength,
+                        "directional_score": directional
+                    },
                 )
             )
-        scored.sort(key=lambda e: e.score)
-        return _top_n(scored, top_n)
+        scored.sort(key=lambda e: e.score, reverse=True)
+        return _top_n(scored, top_n), eligible_count
 
     def _build_best_mtf_alignment(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
         for r in results:
             bull = _mtf_bullish_count(r)
@@ -331,11 +364,11 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), len(results)
 
     def _build_strongest_relative_strength(
         self, results: list[ScanResult], top_n: int
-    ) -> list[RankedEntry]:
+    ) -> tuple[list[RankedEntry], int]:
         scored = []
         for r in results:
             score = _total_trend_confidence(r)
@@ -348,7 +381,7 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n)
+        return _top_n(scored, top_n), len(results)
 
     # ---- Public entry point -------------------------------------------
 
@@ -388,13 +421,21 @@ class RankingEngine:
             builder = builders.get(name)
             if builder is None:
                 continue
-            entries = builder(candidates, top_n)
+
+            # Some builders now return (entries, eligible_count) to support
+            # per-category filtering (e.g. bearish guard).
+            result = builder(candidates, top_n)
+            if isinstance(result, tuple):
+                entries, eligible_count = result
+            else:
+                entries, eligible_count = result, len(candidates)
+
             out[name] = NamedRanking(
                 name=name,
                 label=meta["label"],
                 description=meta["description"],
                 entries=entries,
-                total_eligible=len(candidates),
+                total_eligible=eligible_count,
             )
 
         self.last_result = out

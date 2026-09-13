@@ -24,8 +24,8 @@ from sqlalchemy.orm import Session
 from backend.repositories.watchlist_repository import WatchlistRepository
 from ...scanner.filters import (
     AndFilter,
-    DailyBullish,
     OrFilter,
+    TrueFilter,
     default_registry,
 )
 from ...scanner.ranking import RankingEngine, default_ranking_engine
@@ -161,14 +161,22 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
 def _build_filter(filters: list[_FilterRequest], match: str):
     """Build a Filter expression from a request body.
 
-    Empty filter list returns a "match all" filter (DailyBullish with a
-    negative confidence threshold always matches any trend direction).
+    Empty filter list returns ``TrueFilter`` — a genuine match-all. This
+    used to be ``DailyBullish(min_confidence=-1.0)``, on the mistaken
+    belief that disabling the confidence floor made it match everything:
+    ``TimeframeDirection.matches()`` still requires
+    ``direction == "uptrend"`` regardless of confidence, so "match all"
+    silently excluded every symbol whose daily trend was not literally an
+    uptrend (found live 2026-09-13: ``{"filters": []}`` matched 2 of the
+    10 cached symbols where ``{"filters": [{"type": "true"}]}`` matched
+    all 10). ``TrueFilter`` is the same fix NL search already made for
+    this exact bug — see ``filters.py``.
 
     Unknown filter types are surfaced as ``HTTPException(400)`` so the
     client sees a 4xx rather than an opaque 500.
     """
     if not filters:
-        return AndFilter([DailyBullish(min_confidence=-1.0)])
+        return TrueFilter()
     try:
         built = [default_registry.build(f.model_dump()) for f in filters]
     except ValueError as exc:
@@ -176,6 +184,24 @@ def _build_filter(filters: list[_FilterRequest], match: str):
     if match.upper() == "OR":
         return OrFilter(built)
     return AndFilter(built)
+
+
+def _scoped_cache(symbols: list[str] | None) -> list[ScanResult]:
+    """Return cached scan results, narrowed to ``symbols`` when given.
+
+    ``market_scanner.scan_results`` is a module-global that accumulates
+    every symbol ever scanned. Reading it directly makes an endpoint that
+    advertises a ``symbols`` scope silently rank/filter over the whole
+    universe instead (found live 2026-09-13: ``POST /api/scanner/rankings``
+    with ``symbols=["SPY"]`` still reported ``total_eligible`` for all 10
+    cached symbols). Every endpoint that accepts a symbol scope must read
+    the cache through here.
+    """
+    cache = list(market_scanner.scan_results.values())
+    if symbols:
+        wanted = {s.upper() for s in symbols}
+        cache = [r for r in cache if r.symbol.upper() in wanted]
+    return cache
 
 
 def _serialize_named_ranking(rr) -> _NamedRankingResponse:
@@ -228,16 +254,16 @@ async def filter_scan_results(
 ):
     """Run the named filter against the scanner's current cache.
 
-    If ``symbols`` is provided, only those symbols are scanned first (so
-    the response reflects the latest data). Otherwise we operate on the
-    existing cache.
+    If ``symbols`` is provided, those symbols are scanned first (so the
+    response reflects the latest data) and the result set is scoped to
+    them. Otherwise every cached symbol is eligible.
     """
     f = _build_filter(filter_body.filters, filter_body.match)
 
     if symbols:
         await market_scanner.scan_symbols_async([s.upper() for s in symbols])
 
-    cache = list(market_scanner.scan_results.values())
+    cache = _scoped_cache(symbols)
     if not cache:
         return []
 
@@ -254,14 +280,15 @@ async def get_named_rankings(
 ):
     """Compute named rankings (Strongest Bullish, etc.) over the cache.
 
-    An optional filter narrows the candidate set before ranking.
+    An optional filter narrows the candidate set before ranking, and an
+    optional ``symbols`` scope narrows it to those symbols only.
     """
     f = _build_filter(filter_body.filters, filter_body.match)
 
     if symbols:
         await market_scanner.scan_symbols_async([s.upper() for s in symbols])
 
-    cache = list(market_scanner.scan_results.values())
+    cache = _scoped_cache(symbols)
     if not cache:
         return _empty_rankings(engine)
 
@@ -311,10 +338,10 @@ async def get_top_movers(
     if not watchlist_symbols:
         return []
 
-    symbols = [ws.symbol for ws in watchlist_symbols]
+    symbols = [str(ws.symbol) for ws in watchlist_symbols]
     await market_scanner.scan_symbols_async(symbols)
 
-    cache = list(market_scanner.scan_results.values())
+    cache = _scoped_cache(symbols)
     ranking_key = "strongest_bullish" if direction == "bullish" else "strongest_bearish"
     named = default_ranking_engine.rank(cache, top_n=limit)
     target = named.get(ranking_key)
@@ -352,10 +379,10 @@ async def get_watchlist_rankings(
     if not watchlist_symbols:
         return _empty_rankings(engine)
 
-    symbols = [ws.symbol for ws in watchlist_symbols]
+    symbols = [str(ws.symbol) for ws in watchlist_symbols]
     await market_scanner.scan_symbols_async(symbols)
 
-    cache = list(market_scanner.scan_results.values())
+    cache = _scoped_cache(symbols)
     ranked = engine.rank(cache, top_n=top_n)
     return [_serialize_named_ranking(rr) for rr in ranked.values()]
 

@@ -15,7 +15,7 @@ const bullishSignals = new Set([
   'MACD_BULLISH', 'RSI_OVERSOLD', 'MULTI_TIMEFRAME_BULLISH',
   'TREND_BULLISH', 'VOLUME_EXPANSION', 'BREAKOUT',
   'DAILY_BULLISH', 'MTF_BULLISH', 'STRONG_TREND', 'TREND_STRENGTHENS',
-  'FULL_ALIGNMENT', 'BULLISH_DIVERGENCE',
+  'FULL_ALIGNMENT', 'BULLISH_DIVERGENCE', 'HIGH_VOLUME',
 ]);
 
 const bearishSignals = new Set([
@@ -41,10 +41,12 @@ function isBullish(r: TopMoverResult): boolean {
 }
 
 function scoreBadge(score: number): { label: string; color: string } {
+  // Colors follow the app-wide trend convention (#22c55e bullish /
+  // #ef4444 bearish, doc 4.1.12). This previously used near-miss hexes
+  // (#10b981 / #dc2626) for the |score| > 50 band only, so the same panel
+  // rendered two different greens depending on magnitude.
   const sign = score > 0 ? '+' : '';
-  if (score > 50) return { label: sign + score.toFixed(0), color: '#10b981' };
   if (score > 0) return { label: sign + score.toFixed(0), color: '#22c55e' };
-  if (score < -50) return { label: score.toFixed(0), color: '#dc2626' };
   if (score < 0) return { label: score.toFixed(0), color: '#ef4444' };
   return { label: '0', color: '#9ca3af' };
 }

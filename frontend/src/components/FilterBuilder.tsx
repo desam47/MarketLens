@@ -53,11 +53,16 @@ const FILTER_DEFS: FilterDef[] = [
     paramDefs: [
       {
         key: 'timeframe', label: 'Timeframe', type: 'select', default: '1d',
+        // Only the timeframes the scanner actually populates. The trend engine
+        // fills trend_signals for ONE_MINUTE/FIVE_MINUTE/FIFTEEN_MINUTE/
+        // ONE_HOUR/FOUR_HOUR/ONE_DAY (backend/scanner/scanner.py) — a filter on
+        // 30m or 1w resolved fine on the backend but could never match a
+        // symbol, so those options were removed rather than left as silent
+        // never-match choices.
         options: [
           { value: '1m', label: '1m' }, { value: '5m', label: '5m' },
-          { value: '15m', label: '15m' }, { value: '30m', label: '30m' },
-          { value: '1h', label: '1h' }, { value: '4h', label: '4h' },
-          { value: '1d', label: '1d' }, { value: '1w', label: '1wk' },
+          { value: '15m', label: '15m' }, { value: '1h', label: '1h' },
+          { value: '4h', label: '4h' }, { value: '1d', label: '1d' },
         ],
       },
       {

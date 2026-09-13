@@ -76,7 +76,13 @@ class ScanResult:
         if not self.scores:
             return 0.0
         if weights is None:
-            weights = {name: 1.0 for name in self.scores.keys()}
+            # Default to directional-only weights to ensure a genuine bullish/bearish signal.
+            # Magnitude-only factors (trend_strength, adx, volatility, volume) are excluded.
+            weights = {
+                "momentum": 1.0,
+                "macd": 1.0,
+                "rsi": 1.0,
+            }
         total_weight = sum(abs(weights.get(name, 0)) for name in self.scores.keys())
         if total_weight == 0:
             return 0.0

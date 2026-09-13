@@ -119,7 +119,7 @@ class TestRankingEngine(unittest.TestCase):
             # positive signs for the bullish one. The "score" field is
             # the non-directional _total used by other categories.
             _result("BULL", score=90.0, momentum=60.0, macd=2.0),
-            _result("NEUT", score=50.0, momentum=0.0, macd=0.0),
+            _result("NEUT", score=50.0, momentum=-1.0, macd=-0.1),
             _result("BEAR", score=10.0, momentum=-60.0, macd=-2.0),
         ]
         out = self.engine.rank(results, top_n=2)
@@ -158,8 +158,8 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_biggest_improvement_adx_weighted(self):
         results = [
-            _result("LOW", trend_strength=20.0, adx=15.0),
-            _result("HIGH", trend_strength=85.0, adx=45.0),
+            _result("LOW", trend_strength=20.0, adx=15.0, momentum=1.0, macd=0.1),
+            _result("HIGH", trend_strength=85.0, adx=45.0, momentum=10.0, macd=1.0),
         ]
         out = self.engine.rank(results)
         imp = out["biggest_improvement"]

@@ -411,7 +411,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
               <h1>Live Scanner</h1>
               <p className="info-text">
                 {filterResults !== null
-                  ? `Showing ${filterResults.length} filtered result${filterResults.length !== 1 ? 's' : ''} — live stream paused.`
+                  ? `Showing ${filterResults.length} filtered result${filterResults.length !== 1 ? 's' : ''} — snapshot; the live stream keeps updating in the background.`
                   : 'Streaming scan results over WebSocket. Updates push as the ingestion service ingests fresh quotes.'}
               </p>
             </div>

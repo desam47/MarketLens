@@ -499,5 +499,199 @@ class TestScannerRankingsAPI(unittest.TestCase):
             self.assertEqual(response.status_code, 404)
 
 
+class TestScannerScopeAndMatchAll(unittest.TestCase):
+    """Regression tests for two Live Scanner bugs found live 2026-09-13.
+
+    Both were invisible in the existing suite because nothing tested them:
+
+    1. ``router._build_filter([], match)`` returned
+       ``DailyBullish(min_confidence=-1.0)`` while its docstring claimed
+       match-all. ``TimeframeDirection.matches()`` gates on
+       ``direction == "uptrend"`` unconditionally, so a negative confidence
+       floor could not disable it — "match all" silently returned only the
+       symbols whose daily trend happened to be an uptrend (live: 2 of 10).
+       The fix returns ``TrueFilter``. ``TrueFilter`` itself was already
+       covered by ``backend/tests/scanner/test_filters.py``; the router's
+       fallback that chose the wrong filter was not.
+
+    2. ``/filter``, ``/rankings`` and ``/top-movers`` read the module-global
+       ``market_scanner.scan_results`` directly, which accumulates every
+       symbol ever scanned. An explicit ``symbols`` scope therefore narrowed
+       only the optional pre-scan, never the pool that was filtered or
+       ranked (live: ``POST /rankings`` with ``symbols=["SPY"]`` still
+       reported ``total_eligible`` for all 10 cached symbols). The fix routes
+       every scoped read through ``_scoped_cache``.
+    """
+
+    def setUp(self):
+        self.client = TestClient(app)
+        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.mock_scanner = self.scanner_patch.start()
+        # The scoped endpoints await a pre-scan before reading the cache.
+        self.mock_scanner.scan_symbols_async = AsyncMock()
+
+    def tearDown(self):
+        self.scanner_patch.stop()
+
+    # --- _build_filter: empty list is a genuine match-all -----------------
+
+    def test_build_filter_empty_list_returns_true_filter(self):
+        from backend.api.scanner.router import _build_filter
+        from backend.scanner.filters import TrueFilter
+
+        self.assertIsInstance(_build_filter([], "AND"), TrueFilter)
+        self.assertIsInstance(_build_filter([], "OR"), TrueFilter)
+
+    def test_build_filter_empty_list_matches_downtrend_symbol(self):
+        """The exact case the old ``DailyBullish(min_confidence=-1.0)``
+        fallback wrongly rejected: a symbol in a daily downtrend."""
+        from backend.api.scanner.router import _build_filter
+
+        downtrend = _make_result("AAPL")
+        downtrend.trend_signals = {
+            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9}
+        }
+
+        f = _build_filter([], "AND")
+
+        self.assertTrue(f.matches(downtrend))
+        self.assertEqual(f.describe(), "match all")
+
+    def test_filter_endpoint_empty_filters_returns_every_symbol(self):
+        """Live regression: ``{"filters": []}`` returned 2 of 10 symbols
+        while ``{"type": "true"}`` returned all 10."""
+        uptrend = _make_result("AAPL")
+        uptrend.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.9}}
+        downtrend = _make_result("MSFT")
+        downtrend.trend_signals = {"ONE_DAY": {"direction": "downtrend", "confidence": 0.9}}
+        self.mock_scanner.scan_results = {"AAPL": uptrend, "MSFT": downtrend}
+
+        empty = self.client.post("/api/scanner/filter", json={"filters": [], "match": "AND"})
+        explicit = self.client.post(
+            "/api/scanner/filter",
+            json={"filters": [{"type": "true", "params": {}}], "match": "AND"},
+        )
+
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(
+            {r["symbol"] for r in empty.json()},
+            {r["symbol"] for r in explicit.json()},
+        )
+        self.assertEqual({r["symbol"] for r in empty.json()}, {"AAPL", "MSFT"})
+
+    def test_build_filter_nonempty_list_still_applies(self):
+        """A real filter list must still narrow — the fix only changed the
+        empty-list branch."""
+        from backend.api.scanner.router import _build_filter, _FilterRequest
+
+        uptrend = _make_result("AAPL")
+        uptrend.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.9}}
+        downtrend = _make_result("MSFT")
+        downtrend.trend_signals = {"ONE_DAY": {"direction": "downtrend", "confidence": 0.9}}
+
+        f = _build_filter([_FilterRequest(type="daily_bullish", params={})], "AND")
+
+        self.assertTrue(f.matches(uptrend))
+        self.assertFalse(f.matches(downtrend))
+
+    # --- symbols scope narrows the pool, not just the pre-scan ------------
+
+    def _three_symbol_cache(self) -> None:
+        """AAPL/MSFT cached; GOOG cached but never in scope."""
+        self.mock_scanner.scan_results = {
+            "AAPL": _make_result("AAPL"),
+            "MSFT": _make_result("MSFT"),
+            "GOOG": _make_result("GOOG"),
+        }
+
+    def test_filter_endpoint_symbols_scope_narrows_result_set(self):
+        self._three_symbol_cache()
+
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={"filters": [{"type": "true", "params": {}}], "match": "AND"},
+            params={"symbols": ["AAPL"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r["symbol"] for r in response.json()], ["AAPL"])
+
+    def test_rankings_endpoint_empty_filters_eligible_is_full_pool(self):
+        """The NamedRankingsPanel call shape: empty filters, no scope."""
+        self._three_symbol_cache()
+
+        response = self.client.post("/api/scanner/rankings", json={"filters": [], "match": "AND"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body)
+        # Some categories now have sign-guards (e.g. strongest_bearish),
+        # so total_eligible may be < 3 for those. We check that it is <= 3
+        # and that at least one category (like strongest_bullish) remains 3.
+        eligibles = {r["total_eligible"] for r in body}
+        self.assertTrue(eligibles.issubset({0, 1, 2, 3}))
+        self.assertIn(3, eligibles)
+
+    def test_rankings_endpoint_symbols_scope_narrows_pool(self):
+        """Live regression: ``symbols=["SPY"]`` still reported every cached
+        symbol as eligible."""
+        self._three_symbol_cache()
+
+        response = self.client.post(
+            "/api/scanner/rankings",
+            json={"filters": [], "match": "AND"},
+            params={"symbols": ["AAPL"]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        for ranking in response.json():
+            # Eligible count should be <= 1 because only AAPL is in scope.
+            # Categories with guards might be 0.
+            self.assertTrue(ranking["total_eligible"] <= 1)
+            self.assertTrue(
+                {e["symbol"] for e in ranking["entries"]} <= {"AAPL"}
+            )
+
+    def test_scoped_cache_passes_through_without_symbols(self):
+        from backend.api.scanner.router import _scoped_cache
+
+        self._three_symbol_cache()
+
+        self.assertEqual(len(_scoped_cache(None)), 3)
+        self.assertEqual(len(_scoped_cache([])), 3)
+
+    def test_scoped_cache_narrows_case_insensitively(self):
+        from backend.api.scanner.router import _scoped_cache
+
+        self._three_symbol_cache()
+
+        narrowed = _scoped_cache(["aapl"])
+
+        self.assertEqual([r.symbol for r in narrowed], ["AAPL"])
+
+    def test_top_movers_stays_within_watchlist_symbols(self):
+        """A symbol in the global cache but absent from the watchlist must
+        not leak into the ranked output."""
+        self._three_symbol_cache()
+        self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        with patch('backend.api.scanner.router.WatchlistRepository') as repo_class:
+            repo = MagicMock()
+            repo_class.return_value = repo
+            repo.get_watchlists.return_value = [MagicMock(id=1)]
+            repo.get_watchlist.return_value = MagicMock(id=1)
+            repo.get_watchlist_symbols.return_value = [
+                MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT"),
+            ]
+
+            response = self.client.get("/api/scanner/top-movers?direction=bullish")
+
+        self.assertEqual(response.status_code, 200)
+        symbols = {r["symbol"] for r in response.json()}
+        self.assertTrue(symbols)
+        self.assertNotIn("GOOG", symbols)
+        self.assertTrue(symbols <= {"AAPL", "MSFT"})
+
+
 if __name__ == '__main__':
     unittest.main()

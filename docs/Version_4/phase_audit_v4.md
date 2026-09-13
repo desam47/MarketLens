@@ -1,7 +1,7 @@
 # Version 4 Phase Audit
 
-**Last updated:** 2026-09-10 (Phase 4.2 addendum: all four deferred open questions cleared — chat tool-calling, NL search match-all bug, AI health-check retry, restart_dev.sh's RQ-worker gap)
-**Status:** Active, no open questions remain. Phase 4.1 and Phase 4.2 both done.
+**Last updated:** 2026-09-13 (Live Scanner review: 4.2.8's match-all fix turned out to cover only one of two call paths — the scanner REST routes still had it, plus a `symbols=` scope bug; 7 Tier-1 fixes landed)
+**Status:** Active. Phase 4.1, 4.2 and the Live Scanner review all done. Five Tier-2 ranking-semantics questions surfaced, deliberately left as the user's call.
 **Scope:** AI integration — enable + validate the existing subsystem end-to-end (4.1), then build new AI-powered functionality on top of it (4.2, the "separate decision" 4.1's own open questions deferred). Charts was considered for this version (deferred from Version 3, never started under v4) and has moved on to Version 5 instead — see `docs/Version_5/`.
 
 ---
@@ -115,3 +115,58 @@ Per explicit user request, all three open questions Phase 4.2 left behind (plus 
 - ✅ 4.2.10 **`scripts/restart_dev.sh` now restarts RQ workers.** Previously only restarted backend/frontend by port; RQ workers (not port-bound) are now matched and killed by command line (`pgrep -f "rq worker .*marketlens-"`) and relaunched with the same invocation `start.sh`/`scripts/run.py` use.
 
 **Tests:** 4 new for 4.2.7 (tool fires on request, uncertainty/exception degrade paths, ordinary questions don't trigger it); 3 new for 4.2.8 (`TrueFilter` unit + registry + executor regression); 4 new for 4.2.9 (retry-then-succeed / retry-also-fails on both `is_available()` and `status()`, no-retry-when-healthy). 4.2.10: `bash -n` syntax check + the `pgrep` pattern verified live against real running workers, not executed destructively.
+
+---
+
+## Live Scanner Review — ✅ DONE (2026-09-13)
+
+**Trigger:** User request — "review ▶ Live Scanner", in the same phase-audit
+mode 4.1 opened with: walk the whole feature end-to-end, verify every
+candidate against the *live* backend at `http://127.0.0.1:5001` rather than
+by reading code alone, and report only what is independently reproducible.
+Followed by "ok lets fixed it" — this section is the as-built record.
+
+**Headline:** 4.2.8 declared the match-all bug fixed. It wasn't — it was
+fixed in `backend/nl_search/executor.py`'s call path only. The scanner REST
+routes call the *same* `_build_filter()` through a different route module
+that kept its own stale fallback, and unlike NL search it had a second,
+independent bug on top. Both are the kind that only show up when you point
+the review at real data, which is why the live probe — not the code read —
+is what found them.
+
+**Items:**
+
+- ✅ **B1 — `_build_filter([])` was still not match-all on the scanner REST routes.** `backend/api/scanner/router.py:_build_filter()`'s empty-list branch returned `DailyBullish(min_confidence=-1.0)`, with a docstring claiming that was "match all". `TimeframeDirection.matches` (`backend/scanner/filters.py:192-195`) hardcodes `signal.get("direction","").lower() == self.direction` — the disabled confidence floor never touched the direction gate, so "match all" silently excluded every non-uptrend symbol. **Verified live before:** `POST /api/scanner/filter {"filters":[],"match":"AND"}` → **2** rows (`AAPL`, `MSFT`); `{"filters":[{"type":"true"}]}` → **10** rows. Fixed by importing and returning the genuine `TrueFilter` (`filters.py`, registered as `"true"`, created in 4.2.8 for exactly this). **Verified live after:** both forms → **9** rows, identical symbol sets. (9 not 10 because the pool is now built from a cold cache for this backend process, and one cached symbol's scan didn't land in this run — the comparison that matters is empty-vs-explicit being byte-identical, and it is.)
+- ✅ **B2 — `symbols=` was a pre-scan hint, not a scope.** `/filter`, `/rankings`, `/top-movers` and `/watchlist/{id}/rankings` narrowed only what they *scanned*, then answered from the global `market_scanner.scan_results` cache — every symbol ever scanned by any watchlist or ad-hoc request. A caller asking for one symbol got the whole pool back. Added `_scoped_cache(symbols)` (case-insensitive narrowing of the cached map) and routed all four call sites through it. **Verified live after:** `/filter?symbols=['SPY']` → `['SPY']`; `/rankings?symbols=['SPY']` `total_eligible` **1** (was **10**); `?symbols=['SPY','AAPL']` → **2**; `/top-movers?direction=bullish` → exactly the 4 symbols of the active watchlist, no leakage.
+- ✅ **F1 — a symbol shared between two watchlists permanently stopped updating.** `frontend/src/hooks/useScannerStream.ts`'s `[symbols]` effect *body* was a correct diff, but its **cleanup** unsubscribed every symbol in the outgoing list. `ScannerSubscriber.unsubscribe()` deletes unconditionally from its `Set`, and `connect()`'s `onopen` replays only the current `Set` — so a symbol present in both the outgoing and incoming lists was never re-subscribed, and its live pushes stopped until a full page reload. It also fired on every re-render that produced a new array identity, not just watchlist switches. Removed the cleanup; the in-body diff plus the unmount disconnect already cover both cases.
+- ✅ **F2 — a throwaway subscriber was allocated on every render.** `const subRef = useRef(api.createScannerSubscriber())` evaluates the factory on each render (the argument expression always runs), building a fresh, never-connected subscriber per render for the life of the page. Now created lazily behind a null guard. Also removed a redundant second `sub.onStatus(setConnectionStatus)` registration — `onStatus()` already replays the subscriber's current status to a new listener, so the extra one was dead code.
+- ✅ **F3 — Top Movers rendered two different greens for the same magnitude band.** `scoreBadge` (`TopMoversCard.tsx`) used `#10b981`/`#dc2626` for `|score| > 50` and `#22c55e`/`#ef4444` otherwise. Collapsed to the app-wide trend palette from doc 4.1.12 (`#22c55e` bullish / `#ef4444` bearish / `#9ca3af` zero), three branches.
+- ✅ **F5 — a false claim that the live stream pauses during filter mode.** `ScannerPage.tsx` told the user the stream was paused while a filter was applied. Nothing is paused: the hook keeps its subscription and keeps updating `liveResults`; only the *rendered* rows switch to the snapshot. Reworded to say exactly that — the results are a snapshot and the stream keeps running behind them.
+- ✅ **F6 — the filter builder offered two timeframes that could never match.** `FilterBuilder.tsx` offered `30m` and `1w`. Both resolve fine in `filters._resolve` (lines 168/172), but `backend/scanner/scanner.py:138-139` populates `trend_signals` for only six timeframes (1m/5m/15m/1h/4h/1d), and `TimeframeDirection.matches` looks the key up in `result.trend_signals` and nothing else. Those two options weren't a partial filter, they were a guaranteed empty result. Removed rather than left as silent never-match choices.
+
+**Tests:** 11 new — `backend/tests/api/test_scanner_api.py::TestScannerScopeAndMatchAll`: `_build_filter([], match)` → `TrueFilter` under both AND and OR; the real downtrending symbol the old fallback wrongly rejected; `/filter` empty-vs-explicit equivalence; non-empty filters still narrow; `symbols=` narrowing `/filter` and `/rankings`; `_scoped_cache` pass-through and case-insensitive narrowing; `/top-movers` not leaking out-of-watchlist cached symbols. Scoped runs only, per standing instruction (full suite not run): `backend/tests/api/test_scanner_api.py` → **34 passed** (23 pre-existing + 11 new); `backend/tests/scanner/ backend/tests/nl_search/` → **182 passed**; `npx tsc --noEmit` → exit 0.
+
+**Verification:**
+```bash
+# B1 — empty filter list must equal an explicit match-all
+curl -s -X POST http://127.0.0.1:5001/api/scanner/filter \
+  -H 'Content-Type: application/json' -d '{"filters":[],"match":"AND"}' | python3 -m json.tool
+curl -s -X POST http://127.0.0.1:5001/api/scanner/filter \
+  -H 'Content-Type: application/json' -d '{"filters":[{"type":"true","params":{}}],"match":"AND"}' | python3 -m json.tool
+
+# B2 — scope must narrow the pool, not just the pre-scan
+curl -s -X POST 'http://127.0.0.1:5001/api/scanner/rankings?symbols=SPY' \
+  -H 'Content-Type: application/json' -d '{"filters":[],"match":"AND"}' | python3 -m json.tool
+```
+
+**Known, surfaced to the user, deliberately not changed — the ranking
+semantics.** Every one of these is a *meaning* decision about what the
+rankings are supposed to say, not a wiring bug, so they were reported
+rather than edited:
+
+1. `_build_strongest_bearish` mirrors `_build_strongest_bullish` — it sorts *ascending on the same directional metric*, so the two categories return the same symbols in reverse order rather than genuinely bearish ones. Live: bullish `['QQQ','SPY','IWM','VIXY']`, bearish exactly reversed.
+2. `_build_biggest_improvement` / `_build_biggest_deterioration` rank on `trend_strength`, which carries no direction — strongest-bearish ranks as "biggest improvement" if its magnitude is largest.
+3. `rank()` sets `total_eligible = len(candidates)` identically for all seven categories, so it reports the pool size, not each category's own eligibility.
+4. `calculate_signed_total_score`'s denominator is the sum of absolute weights, letting unsigned magnitude factors dominate the signed ones, and `Scanner.score_weights` is never passed in. Every live score observed is positive (18.7-38.1), which makes the app's own `<= -30` bearish band unreachable.
+5. `TopMoversCard.isBullish()`'s client-side re-filter now drops every row: all scores are positive and `HIGH_VOLUME` appears in neither the bullish nor the bearish signal Set, so it degenerates to `total_score > 0`. Net effect today — the bullish card lists the watchlist's symbols and the bearish card renders empty. This one is downstream of (1) and (4): removing the client filter without also sign-filtering the backend pool would just put the same reversed list in both cards.
+
