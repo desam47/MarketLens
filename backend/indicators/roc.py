@@ -1,7 +1,7 @@
 """
 Rate of Change (ROC) indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -22,7 +22,7 @@ class ROCIndicator(BaseIndicator):
         closes = [float(d['close']) for d in data]
 
         # Calculate ROC: ((Current Close - Close n periods ago) / Close n periods ago) * 100
-        roc_values = [None] * self.period  # First 'period' values are undefined
+        roc_values: list[float | None] = [None] * self.period  # First 'period' values are undefined
 
         for i in range(self.period, len(closes)):
             if closes[i - self.period] != 0:  # Avoid division by zero
@@ -32,7 +32,7 @@ class ROCIndicator(BaseIndicator):
                 roc_values.append(0.0)  # Or handle as appropriate
 
         # Filter out None values for clean return
-        self.values = [v for v in roc_values if v is not None]
+        self.values = cast(list[float], [v for v in roc_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

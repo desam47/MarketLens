@@ -19,15 +19,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
-from zoneinfo import ZoneInfo
 
 from backend.models.market_data import Bar, DataStatus
+from backend.utils.timezone import NY
 
-# Phase 3.1: ZoneInfo is imported once at module load and the America/New_York
-# instance is shared across all ``_bucket_start_1d`` calls. Previously the
-# ZoneInfo constructor ran on every resample, which is wasteful — the
-# timezone database is read-only and the instance is immutable.
-_NY_TZ = ZoneInfo("America/New_York")
+# Phase 3.1: the America/New_York ZoneInfo instance is shared across all
+# ``_bucket_start_1d`` calls. We reuse the canonical ``NY`` singleton from
+# ``backend.utils.timezone`` rather than constructing our own.
+_NY_TZ = NY
 
 
 # ---------------------------------------------------------------------- timeframes

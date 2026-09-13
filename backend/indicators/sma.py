@@ -2,7 +2,7 @@
 Simple Moving Average (SMA) indicator
 """
 
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -31,7 +31,7 @@ class SMAIndicator(BaseIndicator):
             self._price_history = self._price_history[-self.period * 2:]
 
         # Calculate SMA values for the new data points
-        sma_values = []
+        sma_values: list[float | None] = []
         start_index = max(0, len(self._price_history) - len(closes))
 
         for i in range(len(closes)):
@@ -47,7 +47,7 @@ class SMAIndicator(BaseIndicator):
                 sma_values.append(sma)
 
         # Store only the valid SMA values
-        self.values = [v for v in sma_values if v is not None]
+        self.values = cast(list[float], [v for v in sma_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

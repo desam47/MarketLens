@@ -1,7 +1,7 @@
 """
 Average True Range (ATR) indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -45,14 +45,14 @@ class ATRIndicator(BaseIndicator):
             return []
 
         # Calculate ATR as moving average of True Range
-        atr_values = [None] * (self.period - 1)  # First 'period-1' values are undefined
+        atr_values: list[float | None] = [None] * (self.period - 1)  # First 'period-1' values are undefined
 
         for i in range(self.period - 1, len(true_ranges)):
             atr = sum(true_ranges[i - self.period + 1:i + 1]) / self.period
             atr_values.append(atr)
 
         # Filter out None values for clean return
-        self.values = [v for v in atr_values if v is not None]
+        self.values = cast(list[float], [v for v in atr_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

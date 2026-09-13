@@ -1,7 +1,7 @@
 """
 Average Directional Index (ADX) indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -58,12 +58,12 @@ class ADXIndicator(BaseIndicator):
 
         return dm_plus, dm_minus, tr
 
-    def _wilder_smoothing(self, values: list[float], period: int) -> list[float]:
+    def _wilder_smoothing(self, values: list[float], period: int) -> list[float | None]:
         """Apply Wilder's smoothing (similar to EMA but with 1/period)"""
         if len(values) < period:
-            return [None] * len(values)
+            return cast(list[float | None], [None] * len(values))
 
-        smoothed = [None] * (period - 1)  # First 'period-1' values are undefined
+        smoothed: list[float | None] = [None] * (period - 1)  # First 'period-1' values are undefined
         # First smoothed value is simple average
         first_avg = sum(values[:period]) / period
         smoothed.append(first_avg)
@@ -92,9 +92,9 @@ class ADXIndicator(BaseIndicator):
         smoothed_tr = self._wilder_smoothing(tr, self.period)
 
         # Calculate DI+ and DI-
-        di_plus = []
-        di_minus = []
-        dx = []
+        di_plus: list[float | None] = []
+        di_minus: list[float | None] = []
+        dx: list[float | None] = []
 
         for i in range(len(smoothed_tr)):
             # The first (period - 1) entries of Wilder-smoothed arrays
@@ -139,7 +139,7 @@ class ADXIndicator(BaseIndicator):
         adx = self._wilder_smoothing(dx_numeric, self.period)
 
         # Filter out None values and store
-        self.values = [v for v in adx if v is not None]
+        self.values = cast(list[float], [v for v in adx if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

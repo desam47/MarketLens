@@ -1,7 +1,7 @@
 """
 Relative Strength Index (RSI) indicator
 """
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -37,7 +37,7 @@ class RSIIndicator(BaseIndicator):
         avg_loss = np.mean(losses[:self.period])
 
         # Calculate RSI
-        rsi_values = [None] * self.period  # First 'period' values are undefined
+        rsi_values: list[float | None] = [None] * self.period  # First 'period' values are undefined
 
         if avg_loss == 0:
             rsi_values.append(100.0)  # Avoid division by zero
@@ -60,7 +60,7 @@ class RSIIndicator(BaseIndicator):
                 rsi_values.append(rsi)
 
         # Filter out None values for clean return
-        self.values = [v for v in rsi_values if v is not None]
+        self.values = cast(list[float], [v for v in rsi_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

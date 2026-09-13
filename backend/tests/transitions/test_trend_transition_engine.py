@@ -113,6 +113,21 @@ class TestTrendTransitionEngine(unittest.TestCase):
         result = engine.detect(scores)
         self.assertEqual(result, [])
 
+    def test_zero_is_neutral_not_reversal(self):
+        """Exactly-zero is neutral: touching zero from a standstill is not a
+        reversal (#5). prev=0 -> curr>0 and prev=0 -> curr<0 must both be
+        filtered, since nothing was actually reversed."""
+        engine = TrendTransitionEngine(window=1, min_delta=10.0)
+        self.assertEqual(engine.detect([0.0, 30.0]), [])
+        self.assertEqual(engine.detect([0.0, -30.0]), [])
+
+    def test_zero_to_positive_is_not_acceleration(self):
+        """prev=0 -> curr>0 is not a BULLISH_ACCELERATION either: there is no
+        prior positive momentum to accelerate (both must be strictly > 0)."""
+        engine = TrendTransitionEngine(window=1, min_delta=10.0)
+        result = engine.detect([0.0, 80.0])
+        self.assertEqual(result, [])
+
     def test_below_min_delta_filtered(self):
         """Score delta smaller than min_delta is ignored."""
         engine = TrendTransitionEngine(window=1, min_delta=50.0)
@@ -148,6 +163,31 @@ class TestTrendTransitionEngine(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertAlmostEqual(result.current_score, 75.0)
         self.assertEqual(result.type, TransitionType.BULLISH_ACCELERATION)
+
+    def test_latest_uses_newest_timestamp(self):
+        """When scores are newest-first, latest() must resolve by timestamp
+        (newest transition), NOT by array position. This guards against the
+        prior off-by-one bug where latest() returned the oldest transition
+        because the series is inverted before reaching the engine."""
+        engine = TrendTransitionEngine(window=1, min_delta=10.0)
+        # Newest-first scores with matching newest-first timestamps. The
+        # newest *timestamp* belongs to index 1 (the first point that has a
+        # full window of history behind it), so the newest transition is NOT
+        # at the end of the array.
+        ts_new, ts_mid, ts_old = (
+            datetime(2024, 1, 4),
+            datetime(2024, 1, 3),
+            datetime(2024, 1, 2),
+        )
+        scores = [75.0, 40.0, 20.0, 10.0]
+        timestamps = [ts_new, ts_mid, ts_old, datetime(2024, 1, 1)]
+        result = engine.latest(scores, timestamps=timestamps)
+        self.assertIsNotNone(result)
+        # The newest transition is the one at index 1 (prev=75 -> curr=40),
+        # timestamp ts_mid. The old code returned the last element (index 3,
+        # timestamp 2024-01-01) -- the oldest, not the newest.
+        self.assertEqual(result.timestamp, ts_mid)
+        self.assertAlmostEqual(result.current_score, 40.0)
 
     def test_latest_empty(self):
         engine = TrendTransitionEngine(window=10)

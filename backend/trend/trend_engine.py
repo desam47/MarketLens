@@ -13,7 +13,7 @@ from ..engines.timeframe import (
     multi_symbol_timeframe_engine,
 )
 from ..indicators.base_indicator import IndicatorEngine
-from ..utils.timezone import NY, UTC
+from ..utils.timezone import ny_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,7 @@ def _ensure_aware(dt: datetime) -> datetime:
     """
     if dt is None:
         raise ValueError("timestamp must not be None")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=NY)
-    return dt.astimezone(UTC)
+    return ny_to_utc(dt)
 
 class TrendDirection(StrEnum):
     """Trend direction"""

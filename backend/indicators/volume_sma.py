@@ -1,7 +1,7 @@
 """
 Volume Simple Moving Average indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -22,14 +22,14 @@ class VolumeSMAIndicator(BaseIndicator):
         volumes = [float(d['volume']) for d in data]
 
         # Calculate SMA
-        sma_values = [None] * (self.period - 1)  # First 'period-1' values are undefined
+        sma_values: list[float | None] = [None] * (self.period - 1)  # First 'period-1' values are undefined
 
         for i in range(self.period - 1, len(volumes)):
             sma = sum(volumes[i - self.period + 1:i + 1]) / self.period
             sma_values.append(sma)
 
         # Filter out None values for clean return
-        self.values = [v for v in sma_values if v is not None]
+        self.values = cast(list[float], [v for v in sma_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

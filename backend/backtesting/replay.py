@@ -22,6 +22,11 @@ from backend.indicators import ADXIndicator, MACDIndicator, RSIIndicator
 from backend.models.market_data import Bar
 from backend.scanner.scanner import ScanResult
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .parameters import ExperimentParameters
+
 # How many bars of recent volume the replay path uses to decide whether
 # a "HIGH_VOLUME" signal should fire. The live scanner uses a 1,000,000
 # hardcoded placeholder; for replay we use a relative threshold of
@@ -57,7 +62,7 @@ def _bars_to_dicts(bars: Sequence[Bar]) -> list[dict]:
 def build_indicator_values(
     window: Sequence[Bar],
     current_volume: float,
-    params: ExperimentParameters | None = None,  # noqa: F821
+    params: ExperimentParameters | None = None,
 ) -> dict[str, float | int | None]:
     """Compute the indicator values used by ``_generate_signals`` for
     a single replay step.
@@ -124,7 +129,7 @@ def build_scan_result(
     symbol: str,
     timestamp: datetime,
     window: Sequence[Bar],
-    params: ExperimentParameters | None = None,  # noqa: F821
+    params: ExperimentParameters | None = None,
 ) -> ScanResult:
     """Build a synthetic ``ScanResult`` for a given bar's timestamp.
 

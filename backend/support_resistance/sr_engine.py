@@ -5,8 +5,10 @@ Detects and scores S/R levels across seven types per the spec:
 
 - SWING_HIGH   : local peak confirmed by ``lookback_period`` bars on both sides
 - SWING_LOW    : local trough confirmed by ``lookback_period`` bars on both sides
-- PIVOT_HIGH   : classic Camarilla/Woodie-style pivot high (H - 2*L + C)
-- PIVOT_LOW    : classic pivot low (2*H - L - C)
+- PIVOT_PP/R1/R2/R3 : classic pivot table (standard 5-point method) —
+  P = (H+L+C)/3, R1 = 2P-L, R2 = P+(H-L), R3 = H+2(P-L); S mirrors.
+- PIVOT_S1/S2/S3    : classic pivot table support levels (S1 = 2P-H,
+  S2 = P-(H-L), S3 = L-2(H-P)).
 - PREV_DAY_HIGH: previous trading day's high
 - PREV_DAY_LOW : previous trading day's low
 - PREV_WEEK_HIGH / PREV_WEEK_LOW: same for week
@@ -20,9 +22,15 @@ Every level carries the fields required by the spec:
 - ``type``
 - ``timeframe``
 - ``strength`` (0..1)
-- ``touch_count``
+- ``touch_count`` (how many times price revisited this level)
 - ``age`` (bars since the level was last touched)
-- ``distance_from_price`` (absolute distance to the latest close, as %)
+- ``origin_index`` (bar index where the level was first detected)
+
+The signed percentage distance from the latest close is NOT stored on the
+level — the frontend computes it directly from ``price`` and the latest
+close (it is a display concern, and a backend value would drift from the
+live price the UI shows). Keeping it off the contract avoids the penny-stock
+``26397%`` nonsense that a stale/synthetic ``latest_close`` produced.
 
 Historical-only: all levels are computed from data available at
 ``end_index + 1`` — no look-ahead.
@@ -48,8 +56,13 @@ class SRType(StrEnum):
     PREV_WEEK_LOW = "prev_week_low"
     WEEK_52_HIGH = "week_52_high"
     WEEK_52_LOW = "week_52_low"
-    PIVOT_HIGH = "pivot_high"
-    PIVOT_LOW = "pivot_low"
+    PIVOT_PP = "pivot_pp"
+    PIVOT_R1 = "pivot_r1"
+    PIVOT_R2 = "pivot_r2"
+    PIVOT_R3 = "pivot_r3"
+    PIVOT_S1 = "pivot_s1"
+    PIVOT_S2 = "pivot_s2"
+    PIVOT_S3 = "pivot_s3"
     SWING_HIGH = "swing_high"
     SWING_LOW = "swing_low"
     CONSOLIDATION_ZONE = "consolidation_zone"
@@ -67,8 +80,6 @@ class SRLevel:
     touch_count: int
     # Bars since this level was last active (0 = current bar, None = unknown)
     age: int | None
-    # Distance from latest close, expressed as a percentage
-    distance_from_price: float | None
     # Index in the source data where this level was first detected
     origin_index: int | None = None
     # For consolidation zones: list of component prices
@@ -83,7 +94,6 @@ class SRLevel:
             "strength": self.strength,
             "touch_count": self.touch_count,
             "age": self.age,
-            "distance_from_price": self.distance_from_price,
             "origin_index": self.origin_index,
             "component_prices": list(self.component_prices),
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
@@ -222,6 +232,12 @@ class SupportResistanceEngine:
         if ref_timestamps and ref_timestamps[-1] is None:
             ref_timestamps = None
 
+        # True ATR for the two source series. Swing/pivot levels are scored
+        # against the ATR of the series they actually come from (bars vs ref),
+        # so distance relevance is consistent for each level type.
+        atr_bars = self._true_atr(highs, lows, closes)
+        atr_ref = self._true_atr(ref_highs, ref_lows, ref_closes)
+
         levels: list[SRLevel] = []
 
         # 1. Today's high / low — aggregate every bar matching ref[0]'s
@@ -256,13 +272,16 @@ class SupportResistanceEngine:
                     strength=0.8,
                     touch_count=1,
                     age=0,
-                    distance_from_price=self._distance_pct(price, latest_close),
                     origin_index=0,
                     timestamp=ref_timestamps[0] if ref_timestamps else None,
                 ))
 
         # 2. This week's running high / low — scan from newest to oldest
         #     until we hit a week boundary. Computed from `ref` (see step 1).
+        #     NOTE: uses ISO calendar weeks (Mon–Sun); a Sunday session can
+        #     fall in the prior ISO week, so "this week" may occasionally
+        #     start Monday rather than the market's trading week. Acceptable
+        #     for a reference level, but documented as a known boundary case.
         if ref_timestamps:
             this_week = getattr(ref_timestamps[0], "isocalendar", lambda: (None, None, None))()
             if callable(this_week[0]):
@@ -298,7 +317,6 @@ class SupportResistanceEngine:
                 price=week_high, type=SRType.THIS_WEEK_HIGH,
                 timeframe=timeframe, strength=0.75, touch_count=1,
                 age=self._age(last_in_week_idx),
-                distance_from_price=self._distance_pct(week_high, latest_close),
                 origin_index=last_in_week_idx,
                 timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
             ))
@@ -306,7 +324,6 @@ class SupportResistanceEngine:
                 price=week_low, type=SRType.THIS_WEEK_LOW,
                 timeframe=timeframe, strength=0.75, touch_count=1,
                 age=self._age(last_in_week_idx),
-                distance_from_price=self._distance_pct(week_low, latest_close),
                 origin_index=last_in_week_idx,
                 timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
             ))
@@ -371,8 +388,7 @@ class SupportResistanceEngine:
                     price=price, type=stype, timeframe=timeframe,
                     strength=0.9, touch_count=1,
                     age=self._age(idx),
-                    distance_from_price=self._distance_pct(price, latest_close),
-                    origin_index=idx,
+                        origin_index=idx,
                     timestamp=ref_timestamps[idx] if ref_timestamps else None,
                 ))
 
@@ -387,7 +403,7 @@ class SupportResistanceEngine:
             touch_count = self._count_touches(price, highs)
             volume_ratio = self._volume_ratio(idx, volumes)
             strength = self._swing_strength(
-                price, highs, latest_close, age, touch_count, volume_ratio,
+                price, latest_close, age, touch_count, volume_ratio, atr_bars,
             )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
@@ -395,7 +411,6 @@ class SupportResistanceEngine:
                 price=price, type=SRType.SWING_HIGH, timeframe=timeframe,
                 strength=strength, touch_count=touch_count,
                 age=age,
-                distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
@@ -405,7 +420,7 @@ class SupportResistanceEngine:
             touch_count = self._count_touches(price, lows)
             volume_ratio = self._volume_ratio(idx, volumes)
             strength = self._swing_strength(
-                price, lows, latest_close, age, touch_count, volume_ratio,
+                price, latest_close, age, touch_count, volume_ratio, atr_bars,
             )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
@@ -413,21 +428,26 @@ class SupportResistanceEngine:
                 price=price, type=SRType.SWING_LOW, timeframe=timeframe,
                 strength=strength, touch_count=touch_count,
                 age=age,
-                distance_from_price=self._distance_pct(price, latest_close),
                 origin_index=idx,
                 timestamp=timestamps[idx] if timestamps else None,
             ))
 
-        # 7. Pivot high / low (classic R1 / S1) — one pivot pair, derived
-        #    from the PRIOR completed session's aggregated H/L/C (the
-        #    conventional pivot-point convention: one pivot set per
-        #    session, not one per bar). Computed from `ref` — the same
-        #    calendar-anchored series as prev_day/prev_week — so pivots
-        #    are timeframe-invariant too, and so `_prev_day_ohlc`'s
-        #    day-grouping works whether `ref` is genuinely daily
-        #    (production) or intraday (the reference_bars=None fallback,
-        #    e.g. in tests). `day_skip` (computed in step 3) already
-        #    excludes *today's* group.
+        # 7. Classic pivot table (PP / R1-R3 / S1-S3) — the standard
+        #    5-point pivot set, derived from the PRIOR completed session's
+        #    aggregated H/L/C (the conventional pivot-point convention: one
+        #    pivot set per session, not one per bar). Computed from `ref` —
+        #    the same calendar-anchored series as prev_day/prev_week — so
+        #    pivots are timeframe-invariant too. `_prev_day_ohlc`'s
+        #    day-grouping works whether `ref` is genuinely daily (production)
+        #    or intraday (the reference_bars=None fallback, e.g. in tests).
+        #    `day_skip` (computed in step 3) already excludes *today's* group.
+        #
+        #    Resistance levels (R1-R3) are only emitted when they sit ABOVE
+        #    the latest close; support levels (PP and S1-S3) only when at or
+        #    below it. That keeps the table free of levels the price has
+        #    already blown through (e.g. when close is near the highs, the R1
+        #    that's now below price is dropped), so the panel shows what's
+        #    actually ahead of the market.
         prev_session = self._prev_day_ohlc(
             ref_highs[day_skip:], ref_lows[day_skip:], ref_closes[day_skip:],
             ref_timestamps[day_skip:] if ref_timestamps else None,
@@ -437,33 +457,42 @@ class SupportResistanceEngine:
             sh, sl, sc, s_origin = prev_session
             pp = (sh + sl + sc) / 3.0
             r1 = 2 * pp - sl
+            r2 = pp + (sh - sl)
+            r3 = sh + 2 * (pp - sl)
             s1 = 2 * pp - sh
-            age = self._age(s_origin)
-            if r1 > latest_close:
-                touch_count = self._count_touches(r1, ref_highs)
+            s2 = pp - (sh - sl)
+            s3 = sl - 2 * (sh - pp)
+            aget = self._age(s_origin)
+            pivot_specs = [
+                # (type, price, is_resistance)
+                (SRType.PIVOT_R3, r3, True),
+                (SRType.PIVOT_R2, r2, True),
+                (SRType.PIVOT_R1, r1, True),
+                (SRType.PIVOT_PP, pp, False),
+                (SRType.PIVOT_S1, s1, False),
+                (SRType.PIVOT_S2, s2, False),
+                (SRType.PIVOT_S3, s3, False),
+            ]
+            # Emit the full 5-point pivot table (R3..S3) unconditionally —
+            # a classic pivot table always shows all seven levels regardless
+            # of where the latest close sits. Side filtering previously hid
+            # R-levels on up days and S-levels on down days, which made the
+            # panel look incomplete. The frontend still colors them
+            # resistances (red) vs supports (green) and the AI context
+            # consumer re-buckets by price <= latest_close, so nothing else
+            # depends on the old asymmetry.
+            for stype, price, is_resistance in pivot_specs:
+                touch_count = self._count_touches(
+                    price, ref_highs if is_resistance else ref_lows
+                )
                 volume_ratio = self._volume_ratio(s_origin, ref_volumes)
                 strength = self._swing_strength(
-                    r1, ref_highs, latest_close, age, touch_count, volume_ratio,
-                ) * 0.8
+                    price, latest_close, aget, touch_count, volume_ratio, atr_ref,
+                )
                 levels.append(SRLevel(
-                    price=r1, type=SRType.PIVOT_HIGH, timeframe=timeframe,
+                    price=price, type=stype, timeframe=timeframe,
                     strength=strength, touch_count=touch_count,
-                    age=age,
-                    distance_from_price=self._distance_pct(r1, latest_close),
-                    origin_index=s_origin,
-                    timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
-                ))
-            if s1 < latest_close:
-                touch_count = self._count_touches(s1, ref_lows)
-                volume_ratio = self._volume_ratio(s_origin, ref_volumes)
-                strength = self._swing_strength(
-                    s1, ref_lows, latest_close, age, touch_count, volume_ratio,
-                ) * 0.8
-                levels.append(SRLevel(
-                    price=s1, type=SRType.PIVOT_LOW, timeframe=timeframe,
-                    strength=strength, touch_count=touch_count,
-                    age=age,
-                    distance_from_price=self._distance_pct(s1, latest_close),
+                    age=aget,
                     origin_index=s_origin,
                     timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
                 ))
@@ -510,11 +539,11 @@ class SupportResistanceEngine:
     def _swing_strength(
         self,
         price: float,
-        series: Sequence[float],
         latest_price: float | None,
         age: int,
         touch_count: int = 1,
         volume_ratio: float = 1.0,
+        atr: float | None = None,
     ) -> float:
         """Compute a 0..1 strength score for a level.
 
@@ -529,17 +558,16 @@ class SupportResistanceEngine:
           bar (see ``_volume_ratio``) — a level formed on high volume is
           more likely to matter than one formed on a quiet bar.
 
-        ``latest_price`` must be the actual current/latest price, not a
-        bar from ``series`` — using ``series[-1]`` here previously (the
-        *oldest* bar in the newest→oldest arrays this engine uses)
-        silently inverted the distance score. ``age`` must be the level's
-        own bar age (e.g. via ``self._age(idx)``), not a constant
-        configured lookback period — passing a constant meant every level
-        in a category scored identically regardless of how old it
-        actually was.
+        ``latest_price`` must be the actual current/latest price. ``age``
+        must be the level's own bar age (e.g. via ``self._age(idx)``), not
+        a constant configured lookback — a constant would make every level
+        in a category score identically regardless of how old it is.
+        ``atr`` is the *true* Average True Range of the source series
+        (see ``_true_atr``), passed in by the caller so it reflects the
+        same bars the level came from. Falls back to 0.5 when ATR can't be
+        computed.
         """
-        atr = self._atr_approx(series)
-        if atr <= 0 or latest_price is None:
+        if atr is None or atr <= 0 or latest_price is None:
             return 0.5
         dist_atrs = abs(price - latest_price) / atr
         dist_score = max(0.0, 1.0 - dist_atrs / 5.0)
@@ -553,11 +581,30 @@ class SupportResistanceEngine:
             + volume_score * 0.15
         )
 
-    def _atr_approx(self, series: Sequence[float]) -> float:
-        """Approximate ATR from a high/low/close series as |H - L|."""
-        if len(series) < 2:
+    def _true_atr(
+        self,
+        highs: Sequence[float],
+        lows: Sequence[float],
+        closes: Sequence[float],
+    ) -> float:
+        """Average True Range over the (newest→oldest) OHLC series.
+
+        True range per bar = max(H − L, |H − prev_close|, |L − prev_close|),
+        averaged across the series. This replaces the old ``_atr_approx``
+        which used (total price range ÷ bar count) — that metric conflated
+        a steady multi-week trend with high volatility, inflating the
+        denominator and silently driving every level's distance score
+        toward zero (it was 40% of the strength blend).
+        """
+        n = len(highs)
+        if n < 2 or len(lows) < 2 or len(closes) < 2:
             return 1.0
-        return max(abs(series[-1] - series[0]) / len(series), 1e-9)
+        trs: list[float] = []
+        for i in range(1, n):
+            h, l, c_prev = highs[i], lows[i], closes[i - 1]
+            trs.append(max(h - l, abs(h - c_prev), abs(l - c_prev)))
+        atr = sum(trs) / len(trs)
+        return atr if atr > 0 else 1.0
 
     def _count_touches(self, price: float, series: Sequence[float]) -> int:
         """Count bars in ``series`` within ``zone_width_pct`` of ``price``.
@@ -585,7 +632,7 @@ class SupportResistanceEngine:
             return 1.0
         return volumes[idx] / avg
 
-    def _age(self, origin_index: int) -> int:
+    def _age(self, origin_index: int | None) -> int:
         """Bars since this level's origin bar.
 
         Bars arrive newest→oldest (index 0 = current bar), so a level's
@@ -594,13 +641,13 @@ class SupportResistanceEngine:
         which assumed the opposite, oldest→newest ordering and produced
         inverted ages: a level from minutes ago showed a huge age while
         one from hours ago showed a tiny one.)
-        """
-        return max(0, origin_index)
 
-    def _distance_pct(self, price: float, reference: float | None) -> float | None:
-        if reference is None or reference == 0:
-            return None
-        return abs(price - reference) / abs(reference) * 100.0
+        ``origin_index`` is ``int | None``; treat ``None`` as "age unknown"
+        and fall back to 0 rather than crashing on ``max(0, None)``.
+        """
+        if origin_index is None:
+            return 0
+        return max(0, origin_index)
 
     def _prev_period_levels(
         self,
@@ -634,8 +681,6 @@ class SupportResistanceEngine:
         is_day = period == "day"
         prev_period: Any = None
         bar_indices: list[int] = []
-        day_type   = (SRType.PREV_DAY_HIGH,  SRType.PREV_DAY_LOW)
-        week_type  = (SRType.PREV_WEEK_HIGH, SRType.PREV_WEEK_LOW)
         hi_type: type[SRType]
         lo_type: type[SRType]
         if is_day:
@@ -671,8 +716,6 @@ class SupportResistanceEngine:
                             strength=0.6 if is_day else 0.5,
                             touch_count=1,
                             age=age,
-                            distance_from_price=self._distance_pct(
-                                price, latest_close),
                             origin_index=origin_idx,
                             timestamp=timestamps[bar_indices[0]],
                         ))
@@ -782,7 +825,6 @@ class SupportResistanceEngine:
                 strength=strength,
                 touch_count=len(group),
                 age=youngest.age,
-                distance_from_price=self._distance_pct(avg_price, latest_close),
                 origin_index=youngest.origin_index,
                 component_prices=components,
                 timestamp=latest_ts,
@@ -818,9 +860,30 @@ class SupportResistanceEngine:
         for level in levels:
             if level.type not in by_type:
                 by_type[level.type] = level
-            elif level.origin_index < by_type[level.type].origin_index:
+            elif self._is_more_recent(level, by_type[level.type]):
                 by_type[level.type] = level
         return list(by_type.values())
+
+    @staticmethod
+    def _is_more_recent(
+        candidate: SRLevel, incumbent: SRLevel
+    ) -> bool:
+        """Return ``True`` if ``candidate`` is more recent than ``incumbent``.
+
+        Bars are ordered newest→oldest, so a *smaller* ``origin_index`` means
+        more recent. ``origin_index`` is ``int | None`` on ``SRLevel``; a ``None``
+        value can't be compared with ``<`` (it raises ``TypeError``), so we treat
+        ``None`` as "unknown age / oldest" — i.e. never more recent than a known
+        index. This keeps the comparison crash-free for levels built with the
+        default ``origin_index=None`` (e.g. JSON round-trips or external callers).
+        """
+        c_idx = candidate.origin_index
+        i_idx = incumbent.origin_index
+        if c_idx is None:
+            return False
+        if i_idx is None:
+            return True
+        return c_idx < i_idx
 
 
 __all__ = [

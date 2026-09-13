@@ -1,7 +1,7 @@
 """
 Relative Volume indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -23,22 +23,22 @@ class RelativeVolumeIndicator(BaseIndicator):
         volumes = [float(d['volume']) for d in data]
 
         # Calculate Volume SMA first
-        volume_sma_values = [None] * (self.period - 1)  # First 'period-1' values are undefined
+        volume_sma_values: list[float | None] = [None] * (self.period - 1)  # First 'period-1' values are undefined
 
         for i in range(self.period - 1, len(volumes)):
             sma = sum(volumes[i - self.period + 1:i + 1]) / self.period
             volume_sma_values.append(sma)
 
         # Calculate Relative Volume: Current Volume / Volume SMA
-        rv_values = [None] * len(volumes)  # Initialize with None
+        rv_values: list[float | None] = [None] * len(volumes)  # Initialize with None
 
         for i in range(len(volumes)):
             if i >= self.period - 1 and volume_sma_values[i] is not None and volume_sma_values[i] != 0:
                 rv_values[i] = volumes[i] / volume_sma_values[i]
 
         # Filter out None values for clean return
-        self.values = [v for v in rv_values if v is not None]
-        self.volume_sma = [v for v in volume_sma_values if v is not None]  # Store for potential use
+        self.values = cast(list[float], [v for v in rv_values if v is not None])
+        self.volume_sma = cast(list[float], [v for v in volume_sma_values if v is not None])  # Store for potential use
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

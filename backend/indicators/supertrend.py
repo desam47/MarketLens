@@ -1,7 +1,7 @@
 """
 SuperTrend indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .atr import ATRIndicator
 from .base_indicator import BaseIndicator
@@ -43,7 +43,7 @@ class SuperTrendIndicator(BaseIndicator):
             true_ranges.append(true_range)
 
         # Calculate ATR (simple moving average of true ranges)
-        atr_values = []
+        atr_values: list[float | None] = []
         for i in range(len(true_ranges)):
             if i < self.atr_period - 1:
                 atr_values.append(None)
@@ -52,7 +52,7 @@ class SuperTrendIndicator(BaseIndicator):
                 atr_values.append(atr)
 
         # Filter out None values
-        return [v for v in atr_values if v is not None]
+        return cast(list[float], [v for v in atr_values if v is not None])
 
     def calculate(self, data: list[dict[str, Any]]) -> list[float]:
         """Calculate SuperTrend for the given data"""
@@ -69,7 +69,7 @@ class SuperTrendIndicator(BaseIndicator):
         lows = [float(d['low']) for d in data]
         closes = [float(d['close']) for d in data]
 
-        supertrend_values = []
+        supertrend_values: list[float | None] = []
 
         # Calculate basic upper and lower bands
         for i in range(len(data)):
@@ -141,7 +141,7 @@ class SuperTrendIndicator(BaseIndicator):
                 supertrend_values.append(self.prev_supertrend)
 
         # Filter out None values and store
-        self.values = [v for v in supertrend_values if v is not None]
+        self.values = cast(list[float], [v for v in supertrend_values if v is not None])
         # Set is_uptrend from the final direction so both calculate() and
         # update() agree on the trend signal after warm-up.
         self.is_uptrend = self.prev_direction

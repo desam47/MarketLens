@@ -183,9 +183,19 @@ class TrendTransitionEngine:
         symbol: str = "",
         timeframe: str = "",
     ) -> TrendTransition | None:
-        """Return the most recent transition, or ``None``."""
+        """Return the most recent transition, or ``None``.
+
+        "Most recent" is resolved by timestamp when ``timestamps`` are
+        supplied (max timestamp wins). Without timestamps the engine has
+        no notion of time, so the chronologically-last emitted transition
+        (highest index, which the router presents newest-first) is used.
+        """
         all_t = self.detect(scores, timestamps, symbol, timeframe)
-        return all_t[-1] if all_t else None
+        if not all_t:
+            return None
+        if timestamps is not None:
+            return max(all_t, key=lambda t: t.timestamp or datetime.min)
+        return all_t[-1]
 
     # --- internals ---
 
@@ -197,17 +207,21 @@ class TrendTransitionEngine:
         Returns ``None`` if the pair does not represent a meaningful
         transition under current thresholds.
         """
-        # Reversals are sign-flips with enough magnitude on both sides.
-        if prev <= -self.reversal_threshold and curr >= self.reversal_threshold:
-            # Either prev<0 curr>0, or both cross the threshold.
-            if prev < 0 < curr or (prev <= -self.reversal_threshold and curr >= self.reversal_threshold):
-                # Differentiate bullish vs bearish reversal by the sign of the *delta*
-                # (a bullish reversal is rising into positive; a bearish reversal
-                # is falling into negative).
-                if delta > 0:
-                    return TransitionType.BULLISH_REVERSAL
-                return TransitionType.BEARISH_REVERSAL
-        if prev >= self.reversal_threshold and curr <= -self.reversal_threshold:
+        # Reversals: the score crosses zero with a strict sign change on both
+        # sides (below -reversal_threshold then above +reversal_threshold, or
+        # vice versa). Zero is *neutral*: a series that merely touches zero
+        # (prev=0 -> curr>0, or prev>0 -> curr=0) is NOT a reversal, so we
+        # use strict inequalities and leave exactly-zero as non-reversal.
+        if prev < -self.reversal_threshold and curr > self.reversal_threshold:
+            # Differentiate bullish vs bearish reversal by the sign of the
+            # *delta* (a bullish reversal is rising into positive; a bearish
+            # reversal is falling into negative).
+            return (
+                TransitionType.BULLISH_REVERSAL
+                if delta > 0
+                else TransitionType.BEARISH_REVERSAL
+            )
+        if prev > self.reversal_threshold and curr < -self.reversal_threshold:
             return TransitionType.BEARISH_REVERSAL
 
         # Acceleration / weakening: same-sign pair, magnitude delta large enough.

@@ -1,7 +1,7 @@
 """
 Swing High indicator
 """
-from typing import Any
+from typing import Any, cast
 
 from .base_indicator import BaseIndicator
 
@@ -36,7 +36,7 @@ class SwingHighIndicator(BaseIndicator):
             self._high_history = self._high_history[-(len(data) + self.lookback_period * 2):]
 
         # Calculate swing high values
-        swing_values = []
+        swing_values: list[float | None] = []
         start_index = max(0, len(self._high_history) - len(highs))
 
         for i in range(len(highs)):
@@ -71,7 +71,7 @@ class SwingHighIndicator(BaseIndicator):
                 swing_values.append(None)
 
         # Store only the valid swing high values (non-None)
-        self.values = [v for v in swing_values if v is not None]
+        self.values = cast(list[float], [v for v in swing_values if v is not None])
         return self.values.copy()
 
     def update(self, new_data: dict[str, Any]) -> float | None:

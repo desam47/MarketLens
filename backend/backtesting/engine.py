@@ -36,7 +36,7 @@ import logging
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from backend.utils.timezone import now_ny
 
@@ -54,6 +54,11 @@ from .replay import (
     build_scan_result,
     classify_regime,
 )
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .parameters import ExperimentParameters
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +110,7 @@ class BacktestConfig:
     strategy_version: str | None = None
     # Phase 19: optional experiment parameters. When supplied, the
     # engine uses the indicated indicator periods and RSI thresholds.
-    experiment_params: ExperimentParameters | None = None  # noqa: F821
+    experiment_params: ExperimentParameters | None = None
     # Phase 19: tag each trade with the market regime at entry time
     # (risk_on / risk_off / neutral) from the ADX+RSI bar-window.
     regime_tagging_enabled: bool = False
@@ -459,7 +464,7 @@ def _build_scanner():
     return Scanner()
 
 
-def replay_generate_signals(result: ScanResult, params: ExperimentParameters | None = None) -> None:  # noqa: F821
+def replay_generate_signals(result: ScanResult, params: ExperimentParameters | None = None) -> None:
     """Generate signals from ``result.indicator_values`` using per-experiment
     RSI thresholds.
 

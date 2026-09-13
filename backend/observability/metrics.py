@@ -68,7 +68,7 @@ def stop_memory_profiling() -> None:
             _tracemalloc_started = False
 
 
-def get_tracemalloc_snapshot() -> dict:
+def get_tracemalloc_snapshot() -> dict | None:
     """
     Return a JSON-serializable snapshot of Python heap memory.
 

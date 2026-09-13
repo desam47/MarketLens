@@ -101,33 +101,49 @@ class TestSupportResistanceEngine(unittest.TestCase):
         self.assertIsInstance(lvl.touch_count, int)
         self.assertIsInstance(lvl.age, int)
         self.assertGreaterEqual(lvl.age, 0)
-        if lvl.distance_from_price is not None:
-            self.assertGreaterEqual(lvl.distance_from_price, 0.0)
+        # distance_from_price was removed from the level contract (the
+        # frontend computes signed % distance from price directly) — assert
+        # the remaining required fields are present and well-formed.
+        self.assertNotIn("distance_from_price", lvl.to_dict())
 
-    def test_pivot_highs_and_lows_detected(self):
+    def test_pivot_table_detected(self):
         engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100)
         bars = _make_bars(80)
         result = engine.detect(bars)
         pivots = [lvl for lvl in result.levels
-                  if lvl.type in (SRType.PIVOT_HIGH, SRType.PIVOT_LOW)]
+                  if lvl.type in (SRType.PIVOT_PP, SRType.PIVOT_R1, SRType.PIVOT_R2,
+                                  SRType.PIVOT_R3, SRType.PIVOT_S1, SRType.PIVOT_S2,
+                                  SRType.PIVOT_S3)]
         self.assertGreater(len(pivots), 0)
 
-    def test_pivot_high_above_pivot_low(self):
-        """Each bar's pivot high (R1) must be above its pivot low (S1)."""
+    def test_pivot_table_ordering_and_sides(self):
+        """R levels must be above PP, S levels below; R only above close."""
         engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100)
         bars = _make_bars(80)
         result = engine.detect(bars)
-        # Group by origin_index to check per-bar
         by_index: dict = {}
         for lvl in result.levels:
-            if lvl.type in (SRType.PIVOT_HIGH, SRType.PIVOT_LOW):
+            if lvl.type in (SRType.PIVOT_PP, SRType.PIVOT_R1, SRType.PIVOT_R2,
+                            SRType.PIVOT_R3, SRType.PIVOT_S1, SRType.PIVOT_S2,
+                            SRType.PIVOT_S3):
                 by_index.setdefault(lvl.origin_index, []).append(lvl)
         for idx, group in by_index.items():
-            phs = [lvl.price for lvl in group if lvl.type == SRType.PIVOT_HIGH]
-            pls = [lvl.price for lvl in group if lvl.type == SRType.PIVOT_LOW]
-            if phs and pls:
-                self.assertGreater(min(phs), max(pls),
-                    f"at bar {idx}: pivot high {min(phs)} should be > pivot low {max(pls)}")
+            prices = {lvl.type: lvl.price for lvl in group}
+            if SRType.PIVOT_PP in prices:
+                pp = prices[SRType.PIVOT_PP]
+                if SRType.PIVOT_R1 in prices:
+                    self.assertGreater(prices[SRType.PIVOT_R1], pp,
+                        f"at bar {idx}: R1 {prices[SRType.PIVOT_R1]} should be > PP {pp}")
+                if SRType.PIVOT_S1 in prices:
+                    self.assertLess(prices[SRType.PIVOT_S1], pp,
+                        f"at bar {idx}: S1 {prices[SRType.PIVOT_S1]} should be < PP {pp}")
+                # Monotonic: R3 > R2 > R1 > PP > S1 > S2 > S3
+                seq = [SRType.PIVOT_R3, SRType.PIVOT_R2, SRType.PIVOT_R1,
+                       SRType.PIVOT_PP, SRType.PIVOT_S1, SRType.PIVOT_S2,
+                       SRType.PIVOT_S3]
+                present = [prices[s] for s in seq if s in prices]
+                for a, b in zip(present, present[1:]):
+                    self.assertGreater(a, b, f"at bar {idx}: pivot sequence must be decreasing")
 
     def test_prev_day_levels_with_timestamps(self):
         engine = SupportResistanceEngine(lookback_period=2, lookback_bars=200)

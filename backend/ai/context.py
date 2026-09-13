@@ -475,13 +475,24 @@ def build_context(
             bars = load_bars(sym, timeframe, limit=200)
             if len(bars) >= 30:
                 arrays = bar_dicts_to_arrays(bars)
-                closes = arrays["closes"]
+                # load_bars returns desc=True (newest→oldest) but the
+                # DivergenceEngine assumes chronological (oldest→newest)
+                # order: pivot `a` is the older bar, pivot `b` the newer, and
+                # the divergence is stamped with timestamps[b]. Reverse every
+                # array so the engine sees time in the order it expects; its
+                # output is sorted by pivot_b_index ascending, so [-1] remains
+                # the most recent (newest pivot) divergence.
+                highs = list(reversed(arrays["highs"]))
+                lows = list(reversed(arrays["lows"]))
+                closes = list(reversed(arrays["closes"]))
+                volumes = list(reversed(arrays["volumes"]))
+                timestamps = list(reversed(arrays["timestamps"]))
                 rsi = rsi_series(closes, period=14)
                 macd = macd_histogram_series(closes, fast=12, slow=26, signal=9)
                 found = DivergenceEngine(pivot_lookback=2, max_pivots_apart=80).detect(
-                    arrays["highs"], arrays["lows"], closes,
-                    volumes=arrays["volumes"], rsi=rsi, macd=macd,
-                    timestamps=arrays["timestamps"], symbol=sym, timeframe=timeframe,
+                    highs, lows, closes,
+                    volumes=volumes, rsi=rsi, macd=macd,
+                    timestamps=timestamps, symbol=sym, timeframe=timeframe,
                 )
                 if found:
                     divergence = found[-1].to_dict()
