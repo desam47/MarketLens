@@ -132,7 +132,9 @@ async def lifespan(app: FastAPI):
 
     alerts_engine.startup()
     digest_service.start()
-    start_memory_profiling()
+    # start_memory_profiling() removed — tracemalloc is expensive and
+    # grows with uptime.  Heap profiling is opt-in via the toggle
+    # endpoint POST /api/system/memory_profile {"enabled": true}.
     initialize_tracing()
 
     # Start the market data ingestion service FIRST so it loads its

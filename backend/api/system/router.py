@@ -161,10 +161,9 @@ def _safe_cache_stats() -> dict | None:
     side-effects) we surface ``None`` instead of failing the endpoint.
     """
     try:
-        from ...market_data.services.manager import MarketDataManager
+        from ...market_data.services.manager import market_data_manager
 
-        manager = MarketDataManager()
-        return manager.get_cache_stats()
+        return market_data_manager.get_cache_stats()
     except Exception:
         return None
 
@@ -207,11 +206,10 @@ def _safe_provider_stats() -> dict | None:
     payload so the system health UI can surface live-stream health.
     """
     try:
-        from ...market_data.services.manager import MarketDataManager
+        from ...market_data.services.manager import market_data_manager
 
-        manager = MarketDataManager()
         out: dict = {}
-        for name, provider in manager.providers.items():
+        for name, provider in market_data_manager.providers.items():
             try:
                 status = provider.get_provider_status()
                 entry = {
@@ -235,7 +233,7 @@ def _safe_provider_stats() -> dict | None:
 
 
 @router.get("/performance", response_model=PerformanceResponse)
-async def get_performance() -> PerformanceResponse:
+def get_performance() -> PerformanceResponse:
     """Return live process and service metrics."""
     snap = get_snapshot()
     return PerformanceResponse(
@@ -315,7 +313,7 @@ async def restart_services() -> dict:
 
 
 @router.get("/metrics", response_class=Response)
-async def prometheus_metrics() -> Response:
+def prometheus_metrics() -> Response:
     """Prometheus exposition endpoint (text format 0.0.4).
 
     Scraped by Prometheus / VictoriaMetrics. The text is generated

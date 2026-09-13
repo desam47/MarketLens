@@ -70,14 +70,28 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
 
 
 def get_tape_engine(symbol: str) -> TapeEngine:
-    """Get or create the shared TapeEngine for ``symbol``."""
+    """Get or create the shared TapeEngine for ``symbol``.
+
+    The historical-seed replay (Webull Time & Sales) used to run inline
+    here, blocking the request on a synchronous SDK network call that can
+    take 5-15s (or hang until the SDK's own timeout) — so the very first
+    ``GET /api/tape/{symbol}`` would time out. The engine is now returned
+    immediately and the seed runs in a daemon thread, populating history
+    in the background. ``get_snapshot()`` works from the live stream in
+    the meantime, so the endpoint never blocks on the seed.
+    """
     symbol = symbol.upper()
     if symbol not in _engines:
         engine = TapeEngine(symbol)
         _engines[symbol] = engine
-        seeded = _seed_from_webull_ticks(symbol, engine)
         engine_registry.register("trade", symbol, engine.update)
-        logger.info("Tape engine ready for %s (%d prints seeded)", symbol, seeded)
+        threading.Thread(
+            target=_seed_from_webull_ticks,
+            args=(symbol, engine),
+            name=f"tape-seed-{symbol}",
+            daemon=True,
+        ).start()
+        logger.info("Tape engine ready for %s (seeding in background)", symbol)
     return _engines[symbol]
 
 

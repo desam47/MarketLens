@@ -209,19 +209,12 @@ def _cache_metrics() -> list[str]:
     failing the scrape.
     """
     try:
-        from ..market_data.services.manager import MarketDataManager
+        from ..market_data.services.manager import market_data_manager
     except Exception:
         return []
 
     try:
-        manager = MarketDataManager()
-    except Exception:
-        # Manager may have side effects in its constructor (Redis
-        # connection). Don't fail the scrape over it.
-        return []
-
-    try:
-        stats = manager.get_cache_stats()
+        stats = market_data_manager.get_cache_stats()
     except Exception:
         return []
 
@@ -406,15 +399,10 @@ def _provider_metrics() -> list[str]:
     """
     try:
         from ..market_data.services.manager import (
-            MarketDataManager,
+            market_data_manager,
             _circuit_breakers,
             _rate_limiter,
         )
-    except Exception:
-        return []
-
-    try:
-        manager = MarketDataManager()
     except Exception:
         return []
 
@@ -458,7 +446,7 @@ def _provider_metrics() -> list[str]:
 
     # Emit a series for every provider the manager knows about, even
     # if it has 0 throttled calls, so dashboards can render zero-baselines.
-    known_providers: set[str] = set(manager.providers.keys()) | set(throttle_stats.keys())
+    known_providers: set[str] = set(market_data_manager.providers.keys()) | set(throttle_stats.keys())
     for provider_name in sorted(known_providers):
         lines.append(
             _format_line(
