@@ -58,6 +58,11 @@ class TapeEngine:
         # (ts_epoch_s, price, size, side) — pruned to _long_w
         self._prints: list[tuple[float, float, int, str]] = []
         self._last_price: float | None = None
+        # Timestamp of whichever event (trade print or L1 snapshot) most
+        # recently set ``_last_price`` — lets note_price() reject a
+        # snapshot that's older than a trade we've already applied,
+        # instead of unconditionally clobbering the price.
+        self._last_price_ts: float | None = None
         self._last_trade_ts: float | None = None
 
         # current 1-second accumulator
@@ -81,7 +86,9 @@ class TapeEngine:
         ts_s = _to_epoch_s(timestamp)
         with self._lock:
             s = side if side in ("buy", "sell") else self._tick_rule(price)
-            self._last_price = price
+            if self._last_price_ts is None or ts_s >= self._last_price_ts:
+                self._last_price = price
+                self._last_price_ts = ts_s
             self._last_trade_ts = ts_s
             self._prints.append((ts_s, price, size, s))
             cutoff = ts_s - self._long_w
@@ -105,9 +112,11 @@ class TapeEngine:
             p = float(price)
         except (TypeError, ValueError):
             return
+        ts = _to_epoch_s(timestamp)
         with self._lock:
-            self._last_price = p
-            ts = _to_epoch_s(timestamp)
+            if self._last_price_ts is None or ts >= self._last_price_ts:
+                self._last_price = p
+                self._last_price_ts = ts
             if self._last_trade_ts is None or ts > self._last_trade_ts:
                 self._last_trade_ts = ts
 
@@ -193,18 +202,33 @@ class TapeEngine:
             sv_hist = list(self._sv_history)
         now_s = now_s if now_s is not None else (last_ts or _to_epoch_s(None))
 
-        main = self._window(prints, now_s, self._main_w)
+        # Windows are nested (fast_w <= main_w <= long_w, enforced by
+        # TapeSettings' cross-field validator) so each narrower window is
+        # filtered from the previous one instead of re-scanning the full
+        # ``prints`` list three times — this endpoint is polled every
+        # ~15s per open symbol page.
         long_ = self._window(prints, now_s, self._long_w)
-        fast = self._window(prints, now_s, self._fast_w)
+        main = self._window(long_, now_s, self._main_w)
+        fast = self._window(main, now_s, self._fast_w)
 
-        buy_v = sum(sz for _, _, sz, s in main if s == "buy")
-        sell_v = sum(sz for _, _, sz, s in main if s == "sell")
+        # Single pass over ``main`` for all of its derived stats, rather
+        # than four separate full scans (buy_v, sell_v, notional, largest).
+        buy_v = 0
+        sell_v = 0
+        notional = 0.0
+        largest = 0
+        for _, pr, sz, s in main:
+            if s == "buy":
+                buy_v += sz
+            else:
+                sell_v += sz
+            notional += pr * sz
+            if sz > largest:
+                largest = sz
         tot_v = buy_v + sell_v
         signed_v = buy_v - sell_v
         buy_ratio = (buy_v / tot_v) if tot_v else None
-        notional = sum(pr * sz for _, pr, sz, _ in main)
         vwap = (notional / tot_v) if tot_v else None
-        largest = max((sz for _, _, sz, _ in main), default=0)
 
         speed_main = len(main) / self._main_w
         speed_fast = len(fast) / self._fast_w
@@ -251,7 +275,25 @@ class TapeEngine:
             mu = statistics.fmean(sv_hist)
             sd = statistics.pstdev(sv_hist)
             if sd > 0:
-                z = (signed_v - mu) / sd
+                # sv_hist holds one signed-volume sample per closed 1s
+                # bucket, but signed_v is summed over the whole main
+                # window (self._main_w seconds) — comparing them directly
+                # inflates z by ~sqrt(main_w) (e.g. ~8x for a 60s window),
+                # tripping heavy_pressure_z on almost any nonzero net flow.
+                # Scale the per-second baseline up to the same window: mean
+                # scales linearly with the number of samples summed, stdev
+                # scales with its square root (for roughly independent
+                # per-second samples). Cap the sample count at
+                # ``len(sv_hist)``, not just ``self._main_w`` — a
+                # freshly-started engine (or one with sparse trading) may
+                # not yet have main_w seconds of *active* history, and
+                # scaling by the full configured window would overstate
+                # the expected baseline sum, producing a spurious signal.
+                n = min(len(sv_hist), self._main_w)
+                mu_w = mu * n
+                sd_w = sd * (n ** 0.5)
+                if sd_w > 0:
+                    z = (signed_v - mu_w) / sd_w
         thr = settings.tape.heavy_pressure_z
         if z is not None:
             if z >= thr:

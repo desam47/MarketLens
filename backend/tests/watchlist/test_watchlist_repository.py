@@ -94,12 +94,13 @@ class TestWatchlistRepository(unittest.TestCase):
         # Patch WatchlistSymbol constructor
         with patch('backend.repositories.watchlist_repository.WatchlistSymbol', return_value=mock_watchlist_symbol):
             # Test
-            result, is_new = self.repo.add_symbol_to_watchlist(1, "AAPL")
+            result, is_new, did_reenable = self.repo.add_symbol_to_watchlist(1, "AAPL")
 
             # Assertions
-            # Phase 3.3.14: add_symbol_to_watchlist now returns (symbol, is_new_row)
+            # add_symbol_to_watchlist returns (symbol, is_new_row, did_reenable)
             self.assertEqual(result, mock_watchlist_symbol)
             self.assertTrue(is_new)
+            self.assertFalse(did_reenable)
             self.repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
             self.mock_db.add.assert_called_once_with(mock_watchlist_symbol)
             self.mock_db.commit.assert_called_once()
@@ -118,16 +119,39 @@ class TestWatchlistRepository(unittest.TestCase):
         self.mock_db.refresh = MagicMock()
 
         # Test
-        result, is_new = self.repo.add_symbol_to_watchlist(1, "AAPL")
+        result, is_new, did_reenable = self.repo.add_symbol_to_watchlist(1, "AAPL")
 
-        # Assertions
-        # Phase 3.3.14: returning a tuple (symbol, is_new_row=False for re-enable)
+        # Assertions: is_new_row=False (no new row inserted), but
+        # did_reenable=True flags the re-enable so callers can trigger the
+        # same live-tracking/backfill/stream-subscription wake-up a new
+        # row would get.
         self.assertEqual(result, mock_watchlist_symbol)
         self.assertFalse(is_new)
+        self.assertTrue(did_reenable)
         self.repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
         self.assertTrue(mock_watchlist_symbol.is_enabled)  # Should be re-enabled
         self.mock_db.commit.assert_called_once()
         self.mock_db.refresh.assert_called_once_with(mock_watchlist_symbol)
+
+    def test_add_symbol_to_watchlist_existing_enabled(self):
+        """Adding a symbol that already exists and is already enabled is a
+        pure no-op: no new row, no re-enable, no commit/refresh."""
+        mock_watchlist_symbol = MagicMock(spec=WatchlistSymbol)
+        mock_watchlist_symbol.id = 1
+        mock_watchlist_symbol.watchlist_id = 1
+        mock_watchlist_symbol.symbol = "AAPL"
+        mock_watchlist_symbol.is_enabled = True  # Already enabled
+        self.repo.get_watchlist_symbol = MagicMock(return_value=mock_watchlist_symbol)
+        self.mock_db.commit = MagicMock()
+        self.mock_db.refresh = MagicMock()
+
+        result, is_new, did_reenable = self.repo.add_symbol_to_watchlist(1, "AAPL")
+
+        self.assertEqual(result, mock_watchlist_symbol)
+        self.assertFalse(is_new)
+        self.assertFalse(did_reenable)
+        self.mock_db.commit.assert_not_called()
+        self.mock_db.refresh.assert_not_called()
 
     def test_remove_symbol_from_watchlist(self):
         """Test removing a symbol from a watchlist.

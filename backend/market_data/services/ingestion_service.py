@@ -1579,8 +1579,36 @@ class MarketDataIngestionService:
         ``backfill_service.py``'s module docstring for the incident that
         caused — SOFI backfilling with only 1m+1h data after both
         attempts crashed on a lock bound to the wrong loop).
+
+        Also (re-)subscribes ``symbol`` on the Webull MQTT stream, which is
+        wholly independent of the REST-tracking state below and always
+        attempted, not just on first add: it's the ONLY thing that feeds
+        ``backend.tape.tape_engine.TapeEngine`` (see
+        ``backend/market_data/streaming/bridge.py``'s module docstring).
+        Without this, a symbol added directly via the watchlist endpoints
+        (as opposed to being present in the one watchlist
+        ``ingestion_service`` loads at startup and subscribes via
+        ``main.py``'s lifespan) got REST-polled quotes/bars but never a
+        live trade tick — its Tape Pressure card would show a one-time
+        historical seed that ages out of the rolling window and then stays
+        permanently empty. A re-enabled symbol needs this same (re-)wake-up
+        too: disabling a symbol doesn't remove it from ``self.symbols`` or
+        unsubscribe it, but it was never subscribed in the first place if
+        it was disabled before ever being live-subscribed — so this must
+        run unconditionally, ahead of the REST-tracking early-return below
+        (subscribing twice is a harmless no-op; ``WebullStreamClient.
+        subscribe()`` dedups against its own subscribed-set).
         """
         symbol = symbol.upper()
+        try:
+            from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
+            _stream = get_webull_stream_client()
+            if _stream is not None:
+                _stream.subscribe([symbol])
+        except Exception:  # noqa: BLE001
+            pass
+
         if symbol in self.symbols:
             return
         self.symbols.append(symbol)

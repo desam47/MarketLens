@@ -5,7 +5,7 @@ Application configuration settings
 import os
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Project root is two levels up from this file (backend/config/settings.py).
@@ -825,6 +825,25 @@ class TapeSettings(BaseSettings):
     # signed-volume z-score above which pressure is "heavy_buy"/"heavy_sell".
     heavy_pressure_z: float = Field(default=2.0, gt=0)
     retention_days: int = Field(default=2, ge=1)
+
+    @model_validator(mode="after")
+    def _check_window_ordering(self) -> "TapeSettings":
+        """TapeEngine assumes fast_w <= main_w <= long_w (nested windows —
+        get_snapshot() filters main from long_ and fast from main; the
+        pressure z-score also assumes signed_v is summed over a window no
+        wider than the history pruning retains). A misconfiguration here
+        wasn't rejected before, so e.g. TAPE_WINDOW_SECONDS > TAPE_LONG_
+        WINDOW_SECONDS silently deflated tape_speed/tape_accel with no
+        error — fail fast at startup instead.
+        """
+        if not (self.fast_window_seconds <= self.window_seconds <= self.long_window_seconds):
+            raise ValueError(
+                "TapeSettings windows must satisfy "
+                "fast_window_seconds <= window_seconds <= long_window_seconds "
+                f"(got fast={self.fast_window_seconds}, window={self.window_seconds}, "
+                f"long={self.long_window_seconds})"
+            )
+        return self
 
 
 class AITradePlanTrackingSettings(BaseSettings):

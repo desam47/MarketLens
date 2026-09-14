@@ -40,7 +40,7 @@ def _safe_call(fn, *args, default=None, **kwargs):
         return default
 
 
-def build_digest_payload(watchlist_id: int | None = None, db=None) -> dict[str, Any]:
+def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = False, db=None) -> dict[str, Any]:
     """Gather a structured digest payload, in-process, no HTTP round-trips.
 
     Never raises — every section degrades to an empty/absent value on
@@ -65,10 +65,27 @@ def build_digest_payload(watchlist_id: int | None = None, db=None) -> dict[str, 
     regime = _safe_call(_get_regime, default={})
 
     # --- Watchlist symbols ---
-    symbols = _safe_call(_resolve_watchlist_symbols, None, db, default=[]) or []
+    if aggregate_all:
+        # gather symbols from all active watchlists
+        if db is None:
+            from backend.database import SessionLocal
+            db = SessionLocal()
+        from backend.repositories.watchlist_repository import WatchlistRepository
+        repo = WatchlistRepository(db)
+        all_wls = repo.get_watchlists(active_only=True)
+        symbol_set = set()
+        for wl in all_wls:
+            syms = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            symbol_set.update(ws.symbol for ws in syms)
+        symbols = list(symbol_set)
+    else:
+        symbols = _safe_call(_resolve_watchlist_symbols, None, db, default=[]) or []
 
     # --- Scanner cache (whatever's already warm — no fresh scan
     # triggered here; the digest reads, it doesn't force work) ---
+    # Ensure the scanner has scanned all symbols so we can aggregate).
+    # Use run_sync to drive the async scan.
+    run_sync(market_scanner.scan_symbols_async(symbols))
     cache = {
         s: market_scanner.scan_results[s]
         for s in symbols
@@ -206,7 +223,7 @@ def generate_and_store_digest(session: str, watchlist_id: int | None = None) -> 
     """
     from backend.repositories.ai_digest_repository import AIDigestRepository
 
-    payload = build_digest_payload(watchlist_id=watchlist_id)
+    payload = build_digest_payload(watchlist_id=watchlist_id, aggregate_all=(watchlist_id is None))
     narrative = narrate_digest(payload)
 
     repo = AIDigestRepository()

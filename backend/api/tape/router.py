@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.config.settings import settings
-from backend.utils.timezone import now_ny
+from backend.utils.timezone import format_edt_iso, now_ny
 
 router = APIRouter(prefix="/api/tape", tags=["tape"])
 
@@ -33,7 +33,12 @@ async def get_tape_snapshot(symbol: str):
     from backend.api.tape.registry import get_tape_engine
 
     snap = get_tape_engine(symbol).get_snapshot()
-    return {"symbol": symbol.upper(), "snapshot": snap, "as_of": now_ny().isoformat()}
+    # format_edt_iso attaches an explicit EDT/EST offset (project
+    # convention for values crossing the frontend boundary) — a naive
+    # isoformat() string would be parsed as browser-local time by
+    # `new Date(...)`, silently shifting the displayed time for any
+    # viewer outside America/New_York.
+    return {"symbol": symbol.upper(), "snapshot": snap, "as_of": format_edt_iso(now_ny())}
 
 
 @router.get("/{symbol}/bars")

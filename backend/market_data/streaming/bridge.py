@@ -33,6 +33,13 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_) -> None:
 
 
 def on_stream_trade(symbol, price, size, ts, side) -> None:
-    engine_registry.dispatch_trade(
-        symbol, price, size or 0, timestamp=_ensure_aware(ts), side=side,
-    )
+    try:
+        engine_registry.dispatch_trade(
+            symbol, price, size or 0, timestamp=_ensure_aware(ts), side=side,
+        )
+    except Exception as e:  # noqa: BLE001
+        # Mirrors on_stream_snapshot's guard: without this, a malformed
+        # trade tick's exception is only caught by _on_message's generic,
+        # symbol-less handler in webull_stream.py, making it harder to
+        # tell which symbol's tape feed broke from the logs alone.
+        logger.debug("stream trade -> tape failed for %s: %s", symbol, e)

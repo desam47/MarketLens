@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo, lazy, Suspense } from 'react';
 import api, {
   Bar,
   Divergence,
@@ -455,6 +455,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [tape, setTape] = useState<TapeSnapshot | null>(null);
   const [tapeDisabled, setTapeDisabled] = useState(false);
+  const [tapeError, setTapeError] = useState<string | null>(null);
+  // Tracks the symbol a fetchTape call was issued for, so a slow response
+  // for a symbol the user has since navigated away from can't overwrite
+  // the currently-displayed symbol's tape data.
+  const tapeRequestSymbolRef = useRef<string>(symbol);
 
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
@@ -528,16 +533,26 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   }, [symbol, timeframe]);
 
   const fetchTape = useCallback(async () => {
+    const requestedSymbol = symbol;
+    tapeRequestSymbolRef.current = requestedSymbol;
     try {
-      const data = await api.getTape(symbol);
+      const data = await api.getTape(requestedSymbol);
+      // The user may have switched symbols while this request was in
+      // flight — a stale response for a symbol we're no longer showing
+      // must not clobber the current one.
+      if (tapeRequestSymbolRef.current !== requestedSymbol) return;
       setTape(data.snapshot);
       setTapeDisabled(false);
+      setTapeError(null);
     } catch (err: any) {
+      if (tapeRequestSymbolRef.current !== requestedSymbol) return;
       // 503 = tape streaming off; anything else is a real error.
       if (String(err?.message || '').includes('503')) {
         setTapeDisabled(true);
+        setTapeError(null);
       } else {
         console.error('Failed to load tape:', err);
+        setTapeError(err?.message || 'Failed to load tape data');
       }
       setTape(null);
     }
@@ -690,7 +705,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
           />
         </div>
-        <TapePressureCard tape={tape} disabled={tapeDisabled} />
+        <TapePressureCard tape={tape} disabled={tapeDisabled} error={tapeError} />
         <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
           <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>

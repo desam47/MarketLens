@@ -185,7 +185,7 @@ class TestWatchlistAPI(unittest.TestCase):
         )
         mock_sym.entity_type = "stock"
         mock_sym.notes = None
-        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True)
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True, False)
 
         with (
             patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
@@ -218,7 +218,7 @@ class TestWatchlistAPI(unittest.TestCase):
         and enqueue_backfill — not just some of them. Previously untested;
         every existing add-path test used pre-uppercased fixtures."""
         mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL")
-        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True)
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True, False)
 
         with (
             patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
@@ -235,11 +235,35 @@ class TestWatchlistAPI(unittest.TestCase):
         mock_ingestion.register_symbol.assert_called_once_with("AAPL")
         mock_enqueue.assert_called_once_with("AAPL")
 
-    def test_add_symbol_skips_backfill_trigger_for_reenabled_symbol(self):
-        """is_new_row=False (a previously-disabled symbol being re-enabled,
-        not a fresh add) must NOT trigger tracking/backfill again."""
+    def test_add_symbol_triggers_backfill_trigger_for_reenabled_symbol(self):
+        """did_reenable=True (a previously-disabled symbol being re-enabled)
+        must trigger tracking/backfill the same as a fresh add — re-enabling
+        needs the same live-tracking/MQTT-subscription wake-up a new row
+        gets, since disabling a symbol doesn't tear either down."""
         mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL")
-        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, False)
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, False, True)
+
+        with (
+            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.backfill_queue.enqueue_backfill",
+                return_value="backfill-fakejobid",
+            ) as mock_enqueue,
+        ):
+            response = self.client.post(
+                "/api/watchlists/1/symbols", json={"symbol": "AAPL"}
+            )
+
+        self.assertEqual(response.status_code, 201)
+        mock_ingestion.register_symbol.assert_called_once_with("AAPL")
+        mock_enqueue.assert_called_once_with("AAPL")
+
+    def test_add_symbol_skips_backfill_trigger_for_already_enabled_symbol(self):
+        """is_new_row=False AND did_reenable=False (the symbol already
+        exists in this watchlist and was already enabled — a pure no-op)
+        must NOT trigger tracking/backfill again."""
+        mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL")
+        self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, False, False)
 
         with patch(
             "backend.market_data.services.ingestion_service.ingestion_service"

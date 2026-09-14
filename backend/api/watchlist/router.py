@@ -267,23 +267,29 @@ def get_watchlist_symbols(watchlist_id: int, enabled_only: bool = True, db: Sess
 def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db: Session = Depends(get_db)):
     """Add a symbol to a watchlist.
 
-    If the symbol is newly added (not re-enabled), it starts live-tracking
-    immediately and a background backfill of bar history is enqueued — see
-    ``_start_symbol_tracking_and_backfill``. Neither step does provider
-    I/O on this request thread, so this endpoint returns as soon as the DB
-    row is written.
+    If the symbol is newly added OR re-enabled from a disabled row, it
+    starts live-tracking immediately and a background backfill of bar
+    history is enqueued — see ``_start_symbol_tracking_and_backfill``. A
+    re-enable needs the same wake-up as a new row: disabling a symbol
+    doesn't currently tear down its live tracking/stream subscription, but
+    treating "new" and "re-enabled" identically here is what keeps this
+    endpoint correct if that ever changes, and it's also what makes a
+    symbol added to a second watchlist (arriving here as a no-op "already
+    exists, enabled" case) distinct from one that actually needs
+    (re-)starting. Neither step does provider I/O on this request thread,
+    so this endpoint returns as soon as the DB row is written.
     """
     repo = WatchlistRepository(db)
     # First check if watchlist exists
     watchlist = repo.get_watchlist(watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
-    watchlist_symbol, is_new_row = repo.add_symbol_to_watchlist(
+    watchlist_symbol, is_new_row, did_reenable = repo.add_symbol_to_watchlist(
         watchlist_id=watchlist_id,
         symbol=symbol.symbol,
         entity_type=symbol.entity_type or "stock",
     )
-    if is_new_row:
+    if is_new_row or did_reenable:
         _start_symbol_tracking_and_backfill(symbol.symbol.upper())
     return watchlist_symbol
 
@@ -527,8 +533,8 @@ def import_watchlist_symbols(
         if not result.valid:
             errors.append(f"{symbol}: {result.error or 'invalid'}")
             continue
-        _, is_new_row = repo.add_symbol_to_watchlist(watchlist_id, symbol)
-        if is_new_row:
+        _, is_new_row, did_reenable = repo.add_symbol_to_watchlist(watchlist_id, symbol)
+        if is_new_row or did_reenable:
             _start_symbol_tracking_and_backfill(symbol)
         imported.append(symbol)
         slots_left -= 1

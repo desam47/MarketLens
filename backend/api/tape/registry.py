@@ -20,6 +20,12 @@ from backend.tape.tape_engine import TapeEngine
 logger = logging.getLogger(__name__)
 
 _engines: dict[str, TapeEngine] = {}
+# Guards check-then-insert on ``_engines`` — called from both the FastAPI
+# event loop (a request thread, via asyncio.to_thread or a sync endpoint)
+# and the Webull SDK's own callback thread (via bridge.on_stream_snapshot),
+# so an unguarded check-then-insert can race and construct two engines for
+# the same symbol, each registered independently with engine_registry.
+_engines_lock = threading.Lock()
 
 # Background persistence: drain every engine's closed 1-second bars into
 # ``tape_bars`` on a timer, so the read paths stay pure and memory is
@@ -34,7 +40,12 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
     """Replay up to ~200 recent prints so the engine isn't stone cold.
 
     Best-effort — a failure just means the engine warms from the live
-    stream over the next minute.
+    stream over the next minute. Everything here — the network call AND
+    the row parsing/sorting that follows — is inside one try/except: a
+    single malformed row (e.g. a mixed str/int timestamp that would raise
+    TypeError in the sort key, or a non-numeric price/size) must degrade
+    to "seed skipped", not kill this daemon thread with an unhandled
+    exception.
     """
     try:
         from backend.market_data.services.manager import get_cached_provider
@@ -48,25 +59,34 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
         rows = resp.json()
         if not isinstance(rows, list):
             return 0
+
+        prints = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            price = r.get("price") or r.get("deal_price")
+            size = r.get("volume") or r.get("size") or r.get("trade_volume")
+            ts = r.get("trade_time") or r.get("timestamp") or r.get("time")
+            raw_side = str(r.get("side") or r.get("direction") or "").lower()
+            side = "buy" if raw_side in ("1", "buy", "b") else "sell" if raw_side in ("2", "sell", "s") else None
+            if price is None:
+                continue
+            try:
+                prints.append((ts, float(price), int(size or 0), side))
+            except (TypeError, ValueError):
+                # One row with a garbage price/size shouldn't drop the
+                # whole seed — skip it and keep the rest.
+                continue
+        # Sort key tolerates a mix of numeric/str/None timestamps across
+        # rows (Webull's tick shape isn't guaranteed uniform) — anything
+        # not already an int/float sorts as if it were epoch 0 rather than
+        # raising TypeError comparing str vs int/float.
+        prints.sort(key=lambda p: p[0] if isinstance(p[0], (int, float)) else 0)
+        engine.seed(prints)
+        return len(prints)
     except Exception as e:  # noqa: BLE001
         logger.debug("tape seed failed for %s: %s", symbol, e)
         return 0
-
-    prints = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        price = r.get("price") or r.get("deal_price")
-        size = r.get("volume") or r.get("size") or r.get("trade_volume")
-        ts = r.get("trade_time") or r.get("timestamp") or r.get("time")
-        raw_side = str(r.get("side") or r.get("direction") or "").lower()
-        side = "buy" if raw_side in ("1", "buy", "b") else "sell" if raw_side in ("2", "sell", "s") else None
-        if price is None:
-            continue
-        prints.append((ts, float(price), int(size or 0), side))
-    prints.sort(key=lambda p: (p[0] or 0))
-    engine.seed(prints)
-    return len(prints)
 
 
 def get_tape_engine(symbol: str) -> TapeEngine:
@@ -81,9 +101,17 @@ def get_tape_engine(symbol: str) -> TapeEngine:
     the meantime, so the endpoint never blocks on the seed.
     """
     symbol = symbol.upper()
-    if symbol not in _engines:
-        engine = TapeEngine(symbol)
-        _engines[symbol] = engine
+    with _engines_lock:
+        engine = _engines.get(symbol)
+        is_new = engine is None
+        if is_new:
+            engine = TapeEngine(symbol)
+            _engines[symbol] = engine
+    # Registration + seeding happen outside the lock — they're side
+    # effects on OTHER objects (engine_registry, a new thread), not on
+    # ``_engines`` itself, and only run once per symbol since `is_new` was
+    # decided atomically above.
+    if is_new:
         engine_registry.register("trade", symbol, engine.update)
         threading.Thread(
             target=_seed_from_webull_ticks,
@@ -92,7 +120,7 @@ def get_tape_engine(symbol: str) -> TapeEngine:
             daemon=True,
         ).start()
         logger.info("Tape engine ready for %s (seeding in background)", symbol)
-    return _engines[symbol]
+    return engine
 
 
 def has_tape_engine(symbol: str) -> bool:

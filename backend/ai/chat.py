@@ -954,8 +954,8 @@ def _add_to_watchlist(db, parsed) -> tuple[str, bool]:
     repo = WatchlistRepository(db)
     if wl is None:
         wl = repo.create_watchlist(parsed.action_watchlist or "Watchlist")
-    _, is_new = repo.add_symbol_to_watchlist(wl.id, symbol)
-    if is_new:
+    _, is_new, did_reenable = repo.add_symbol_to_watchlist(wl.id, symbol)
+    if is_new or did_reenable:
         _kickoff_backfill(symbol)
     return f"Done — added {symbol} to {wl.name}.", True
 
@@ -1002,9 +1002,9 @@ def _create_watchlist(db, parsed) -> tuple[str, bool]:
     symbol = (parsed.action_symbol or "").upper().strip()
     suffix = ""
     if symbol:
-        _, is_new = repo.add_symbol_to_watchlist(wl.id, symbol)
+        _, is_new, did_reenable = repo.add_symbol_to_watchlist(wl.id, symbol)
         suffix = f" with {symbol}"
-        if is_new:
+        if is_new or did_reenable:
             _kickoff_backfill(symbol)
     return f'Done — created "{name}"{suffix}.', True
 

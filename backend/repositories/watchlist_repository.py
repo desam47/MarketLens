@@ -124,15 +124,21 @@ class WatchlistRepository:
 
     def add_symbol_to_watchlist(self, watchlist_id: int, symbol: str,
                                position: int | None = None,
-                               entity_type: str | None = None) -> tuple[WatchlistSymbol, bool]:
+                               entity_type: str | None = None) -> tuple[WatchlistSymbol, bool, bool]:
         """Add a symbol to a watchlist.
 
-        Returns a tuple ``(WatchlistSymbol, is_new_row)``. ``is_new_row`` is
-        True if a brand-new ``WatchlistSymbol`` row was inserted, False if
-        the symbol already existed (and was possibly re-enabled).
+        Returns a tuple ``(WatchlistSymbol, is_new_row, did_reenable)``.
+        ``is_new_row`` is True if a brand-new ``WatchlistSymbol`` row was
+        inserted. ``did_reenable`` is True if an existing, previously
+        *disabled* row was flipped back to enabled. At most one of the two
+        is True — adding a symbol that already exists and is already
+        enabled returns ``(existing, False, False)``, a plain no-op.
 
-        Phase 3.3.14: the router uses ``is_new_row`` to decide whether to
-        trigger a backfill of bar history for the symbol.
+        Phase 3.3.14: the router uses ``is_new_row or did_reenable`` to
+        decide whether to (re-)start live tracking / backfill / stream
+        subscription for the symbol — a re-enabled row needs the same
+        wake-up a brand-new one does, since disabling a symbol tears down
+        its live tracking (see ``update_symbol_in_watchlist``).
         """
         symbol = symbol.upper()
 
@@ -140,11 +146,13 @@ class WatchlistRepository:
         existing = self.get_watchlist_symbol(watchlist_id, symbol)
         if existing:
             # If exists but disabled, re-enable it
+            did_reenable = False
             if not existing.is_enabled:
                 existing.is_enabled = True
                 self.db.commit()
                 self.db.refresh(existing)
-            return existing, False
+                did_reenable = True
+            return existing, False, did_reenable
 
         # Determine position if not provided
         if position is None:
@@ -163,7 +171,7 @@ class WatchlistRepository:
         self.db.add(watchlist_symbol)
         self.db.commit()
         self.db.refresh(watchlist_symbol)
-        return watchlist_symbol, True
+        return watchlist_symbol, True, False
 
     def remove_symbol_from_watchlist(self, watchlist_id: int, symbol: str) -> bool:
         """Permanently remove a symbol from a watchlist (hard delete)."""

@@ -105,11 +105,12 @@ class TestWatchlistNewFeatures(unittest.TestCase):
             lambda wl_id, sym: existing.get(sym) if existing else None
         )
         self.mock_repo.get_watchlist_symbol_count.return_value = enabled_count
-        # The router unpacks this as `_, is_new_row = repo.add_symbol_to_watchlist(...)`
+        # The router unpacks this as
+        # `_, is_new_row, did_reenable = repo.add_symbol_to_watchlist(...)`
         # — an unconfigured MagicMock's default __iter__ yields 0 items, which
-        # makes that unpack raise "not enough values to unpack (expected 2, got 0)".
+        # makes that unpack raise "not enough values to unpack (expected 3, got 0)".
         self.mock_repo.add_symbol_to_watchlist.side_effect = (
-            lambda wl_id, sym, **kw: (_mock_symbol(symbol=sym), True)
+            lambda wl_id, sym, **kw: (_mock_symbol(symbol=sym), True, False)
         )
 
     def test_import_imports_valid_skips_duplicates(self):
