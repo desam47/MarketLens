@@ -92,3 +92,11 @@ conf/token_stream/
 
 # Local mypy cache (not covered by the .pytest_cache/.ruff_cache lines above)
 .mypy_cache/
+
+# Written by scripts/git-hooks/post-commit after every commit. It is a local
+# build artifact, not tracked history: it always describes the checked-out
+# commit, so tracking it would make either every commit dirty (hook rewrites
+# it before the commit is made) or permanently stale (pre-commit hooks see
+# only the previous commit). backend/version.py reads it and falls back to
+# "dev" when absent (e.g. a fresh clone or Docker build without the hook).
+version.txt

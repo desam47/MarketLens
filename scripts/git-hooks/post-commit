@@ -1,0 +1,67 @@
+#!/bin/bash
+# post-commit hook: stamp the current semantic version into version.txt.
+#
+# This runs AFTER each commit, so `git describe` sees the commit that was
+# just made and the version string always matches the checked-out code.
+# (A pre-commit hook cannot do this: it runs before the new commit exists,
+# so the stamp is permanently one commit behind — that lag is what produced
+# the confusing "pre-rebase-backup-3-gc67bb6d" while HEAD was elsewhere.)
+#
+# version.txt is a local build artifact and is gitignored. Consumers
+# (backend/version.py) fall back to "dev" when it is absent — e.g. a fresh
+# clone, a Docker build, or a tarball without hooks installed.
+#
+# Stamping lives in post-commit (not pre-commit) on purpose: the pre-commit
+# hook file belongs to the ruff/mypy framework (`pre-commit install`
+# overwrites .git/hooks/pre-commit), so the two never collide.
+#
+# Format:  v<tag>                if HEAD is exactly on a version tag
+#          v<tag>+<n>.g<hash>    if N commits past the nearest v* tag
+#          v0.0.0+g.<hash>       if no version tag exists in history yet
+#
+# Examples:
+#   v3.3.0                  HEAD is the v3.3.0 tag itself
+#   v3.3.0+206.g8326937     206 commits past v3.3.0
+#   v0.0.0+g.c67bb6d        no version tag in history yet
+#
+# Only tags starting with "v" are considered — rescue/backup tags created
+# during rebases (which was the original bug) are ignored by design.
+#
+# Create a new version by tagging a commit:  git tag v3.4.0
+#
+# Install once per clone (absolute symlink — a relative one breaks because
+# git resolves it against .git/hooks/, not the repo root):
+#   ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/post-commit" .git/hooks/post-commit
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VERSION_FILE="$REPO_ROOT/version.txt"
+
+# If HEAD is exactly on a version tag, that IS the version.
+if TAG=$(git describe --tags --match 'v*' --exact-match HEAD 2>/dev/null); then
+    echo "$TAG" > "$VERSION_FILE"
+else
+    # Find the most recent version tag reachable from HEAD.
+    # ``--match 'v*'`` restricts to version tags; ``--abbrev=7`` keeps the
+    # hash short and consistent.  The fallback handles the pre-first-tag
+    # case; we normalize to ``v0.0.0+g.<hash>`` so the version string is
+    # always valid semver.
+    DESC=$(git describe --tags --match 'v*' --long --abbrev=7 HEAD 2>/dev/null \
+           || git rev-parse --short=7 HEAD)
+    if [[ "$DESC" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-g[0-9a-f]+$ ]]; then
+        # Reformat "v3.3.0-206-g8326937" → "v3.3.0+206.g8326937" so the
+        # version reads as semver+build metadata (PEP 440-friendly,
+        # easier to parse in logs and the System Health page).
+        BASE="${DESC%%-*}"            # v3.3.0
+        AHEAD="${DESC#*-}"            # 206-g8326937
+        COMMITS="${AHEAD%%-*}"        # 206
+        HASH="${DESC##*-g}"           # 8326937
+        echo "${BASE}+${COMMITS}.g${HASH}" > "$VERSION_FILE"
+    else
+        # No version tag in history — use v0.0.0 as a placeholder.
+        echo "v0.0.0+g.${DESC}" > "$VERSION_FILE"
+    fi
+fi
+
+echo "version.txt stamped: $(cat "$VERSION_FILE")"

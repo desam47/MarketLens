@@ -32,6 +32,10 @@ pip install -e ".[dev]"
 # Install pre-commit hooks (runs ruff on every commit)
 pip install pre-commit
 pre-commit install
+
+# Install the version-stamping hook (writes version.txt after each commit).
+# Separate from the pre-commit framework slot above — both can coexist.
+ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/post-commit" .git/hooks/post-commit
 ```
 
 ### Run the API locally

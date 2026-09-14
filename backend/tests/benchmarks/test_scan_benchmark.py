@@ -71,8 +71,14 @@ def fresh_scanner():
 
 
 def test_scan_symbols_sync(fresh_scanner, benchmark):
-    """Baseline: sequential ``scan_symbols`` over 30 symbols."""
-    result = benchmark(fresh_scanner.scan_symbols, SAMPLE_SYMBOLS)
+    """Baseline: sequential ``scan_symbols`` over 30 symbols.
+
+    ``scan_symbols`` is now ``async def`` (it awaits the batch bars fetch) but
+    still scans symbols one-by-one, so it remains the serial baseline against
+    the concurrent ``scan_symbols_async``. Drive it on a private loop — calling
+    it directly would benchmark a never-awaited coroutine.
+    """
+    result = benchmark(lambda: asyncio.run(fresh_scanner.scan_symbols(SAMPLE_SYMBOLS)))
     assert len(result) == len(SAMPLE_SYMBOLS)
 
 

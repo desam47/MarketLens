@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
@@ -379,11 +380,48 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
 
     SYMBOL = "ZZTESTLIVE1H"
 
+    # The live-resample path has a weekend guard (``if now.weekday() >= 5:
+    # return 0`` in _resample_1h_from_1m_and_upsert) that makes these tests
+    # fail on Sat/Sun when they read the real wall clock. Freeze "now" to a
+    # Wednesday session hour so the suite is calendar-independent, and base
+    # _hour_start() on the same frozen clock so test data and the function's
+    # default bucket always agree.
+    _FROZEN_NY = datetime(2026, 9, 9, 14, 30)  # Wednesday, mid-session
+
+    def setUp(self):
+        from unittest.mock import patch
+
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+
+        frozen = self._FROZEN_NY
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen.replace(tzinfo=tz)
+                return frozen
+
+        self._clock_patch = patch(
+            "backend.market_data.services.ingestion_service.datetime",
+            _FrozenDatetime,
+        )
+        self._clock_patch.start()
+
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self._clock_patch.stop()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
     def _hour_start(self):
-        from datetime import datetime
-        from backend.utils.timezone import NY as _NY_TZ
-        now = datetime.now(_NY_TZ)
-        return now.replace(minute=0, second=0, microsecond=0).replace(tzinfo=None)
+        return self._FROZEN_NY.replace(minute=0, second=0, microsecond=0)
 
     def _insert_1m_bar(self, db, ts, close, session="regular"):
         from backend.models.market_data_sql import BarModel
@@ -393,19 +431,6 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
             timestamp=ts, provider="test", data_status="HISTORICAL",
             source="raw", session=session,
         ))
-
-    def setUp(self):
-        from backend.database import SessionLocal
-        from backend.models.market_data_sql import BarModel
-        self.db = SessionLocal()
-        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
-        self.db.commit()
-
-    def tearDown(self):
-        from backend.models.market_data_sql import BarModel
-        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
-        self.db.commit()
-        self.db.close()
 
     async def test_builds_incomplete_bar_from_this_hours_1m_bars(self):
         from datetime import timedelta

@@ -937,14 +937,23 @@ mypy backend/
 
 ### Git Hooks & Versioning
 
-After cloning, install the pre-commit hook so `version.txt` is stamped with the
-current semantic version on every commit.  The version is read by
+After cloning, install the post-commit hook so `version.txt` is stamped with the
+current semantic version after every commit.  The version is read by
 `backend/config/settings.py` and exposed as the `version` field in
 `/api/health` and `/api/system/status`, and shown on the System Health page.
 
 ```bash
-ln -sf scripts/git-hooks/pre-commit .git/hooks/pre-commit
+ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/post-commit" .git/hooks/post-commit
 ```
+
+Use an **absolute** symlink target — git resolves hook paths relative to
+`.git/hooks/`, so a relative `ln -sf scripts/...` would dangle.  The stamping
+lives in *post*-commit on purpose: a pre-commit hook runs before the new commit
+exists and would always describe the *previous* one.  `version.txt` is a local
+build artifact and is gitignored (absent in a fresh clone or Docker build,
+where `backend/version.py` falls back to `dev`).  The `.git/hooks/pre-commit`
+slot is reserved for the ruff/mypy framework (`pre-commit install`), so the two
+never overwrite each other.
 
 **Create a new release by tagging a commit:**
 

@@ -6,6 +6,7 @@ requiring a running server. Database operations are performed against
 a real (but isolated) in-memory SQLite database so the repository
 queries are exercised end-to-end.
 """
+import contextlib
 import os
 import sys
 import tempfile
@@ -72,16 +73,18 @@ _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 import backend.repositories.experiment_repository as _exp_repo
 
-# This module is also the only one in the suite that uses ``with
-# TestClient(app) as client:`` — that context-manager form is what actually
-# triggers FastAPI's lifespan startup (a bare ``TestClient(app)`` does not).
-# The lifespan calls ``ingestion_service.start()``, which spawns a REAL
-# daemon thread that hits real network providers and writes to the real
-# ``marketlens.db`` on a 30-60s cadence — and, being a process-wide
-# singleton with its own captured SessionLocal, keeps doing so for the rest
-# of the pytest process once started, regardless of this module's DB
-# isolation. Patch ``.start()`` to a no-op for the same setUpModule/
-# tearDownModule-scoped reason as above.
+# This module is the only one in the suite that triggers FastAPI's lifespan
+# startup (``with TestClient(app)``; a bare ``TestClient(app)`` does not).
+# The lifespan is expensive — alembic subprocess, Redis SCAN+DELETE,
+# provider warmups that make real HTTP calls — so it now runs ONCE for the
+# whole module via the shared client below, not once per test. It still
+# calls ``ingestion_service.start()``, which spawns a REAL daemon thread
+# that hits real network providers and writes to the real ``marketlens.db``
+# on a 30-60s cadence — and, being a process-wide singleton with its own
+# captured SessionLocal, keeps doing so for the rest of the pytest process
+# once started, regardless of this module's DB isolation. Patch
+# ``.start()`` to a no-op for the same setUpModule/tearDownModule-scoped
+# reason as above.
 from unittest.mock import patch as _patch
 from backend.market_data.services.ingestion_service import ingestion_service as _ingestion_service
 
@@ -115,9 +118,22 @@ def setUpModule():
     # Build a fresh schema on the temp DB before any tests run.
     Base.metadata.create_all(bind=engine)
 
+    # Start the lifespan exactly once for this module (see the note above
+    # ``_client()``). Do it after the DB rebinds so anything the startup
+    # touches goes through the isolated temp DB, just like the old
+    # per-test lifespan did.
+    global _shared_client, _client_stack
+    _client_stack = contextlib.ExitStack()
+    _shared_client = _client_stack.enter_context(TestClient(app))
+
 
 def tearDownModule():
-    """Drop the temp database file and restore the real engine/SessionLocal."""
+    """Stop the shared client, drop the temp DB, restore the real engine."""
+    # Shut the lifespan down BEFORE restoring the DB rebinds / stopping the
+    # ingestion patch — mirrors the old ordering where shutdown happened
+    # inside each test with the isolation still in effect.
+    if _client_stack is not None:
+        _client_stack.close()
     engine.dispose()
     try:
         os.unlink(_TMP_DB.name)
@@ -130,8 +146,24 @@ def tearDownModule():
     _ingestion_start_patch.stop()
 
 
+# One lifespan startup for the whole module instead of one per test.
+#
+# Each ``with _client() as client:`` re-ran the full FastAPI lifespan
+# — alembic subprocess, Redis key flush, alerts/digest/tracing startup,
+# trend and market-context warmups that make real provider HTTP calls —
+# measured at ~12-18s per entry (11 entries ≈ 135s of suite time, plus
+# real-network leakage into the logs). Nothing in these tests depends on
+# the lifespan re-running, so setUpModule enters it once and every test
+# shares the same client.
+_shared_client = None
+_client_stack = None
+
+
+@contextlib.contextmanager
 def _client():
-    return TestClient(app)
+    """Yield the module-shared TestClient without re-running the lifespan."""
+    assert _shared_client is not None, "setUpModule must create the shared client"
+    yield _shared_client
 
 
 class _DBSession:
@@ -171,13 +203,13 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         self.db.close()
 
     def test_list_experiments_empty(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.get("/api/strategy-lab/")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), [])
 
     def test_create_experiment_persists_row(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.post(
                 "/api/strategy-lab/",
                 json={
@@ -200,7 +232,7 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         self.assertEqual(data["symbols"], "AAPL")
 
     def test_get_experiment_not_found(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.get("/api/strategy-lab/9999")
         self.assertEqual(resp.status_code, 404)
 
@@ -227,7 +259,7 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         )
         self.db._session.commit()
 
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.get(f"/api/strategy-lab/{exp.id}")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
@@ -235,7 +267,7 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         self.assertEqual(data["status"], "completed")
 
     def test_delete_experiment_not_found(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.delete("/api/strategy-lab/9999")
         self.assertEqual(resp.status_code, 404)
 
@@ -262,13 +294,13 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         self.db._session.commit()
         eid = exp.id
 
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.delete(f"/api/strategy-lab/{eid}")
         self.assertEqual(resp.status_code, 204)
         self.assertIsNone(self.db.get_experiment(eid))
 
     def test_compare_experiments_missing_one_returns_404(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.post(
                 "/api/strategy-lab/compare",
                 json={"experiment_ids": [88888, 99999]},
@@ -278,7 +310,7 @@ class TestStrategyLabEndpoints(unittest.TestCase):
         self.assertIn("88888", resp.json()["detail"])
 
     def test_get_experiment_runs_not_found(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.get("/api/strategy-lab/9999/runs")
         self.assertEqual(resp.status_code, 404)
 
@@ -310,7 +342,7 @@ class TestExperimentCreateValidation(unittest.TestCase):
     """Validate request body constraints."""
 
     def test_end_date_before_start_date_rejected(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.post(
                 "/api/strategy-lab/",
                 json={
@@ -323,7 +355,7 @@ class TestExperimentCreateValidation(unittest.TestCase):
         self.assertEqual(resp.status_code, 422)
 
     def test_empty_symbols_rejected(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.post(
                 "/api/strategy-lab/",
                 json={
@@ -336,7 +368,7 @@ class TestExperimentCreateValidation(unittest.TestCase):
         self.assertEqual(resp.status_code, 422)
 
     def test_symbols_uppercased(self):
-        with TestClient(app) as client:
+        with _client() as client:
             resp = client.post(
                 "/api/strategy-lab/",
                 json={

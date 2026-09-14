@@ -269,8 +269,12 @@ class TestProviderMetricsPrometheus(unittest.TestCase):
 
         # Also stub the manager's providers dict and rate-limiter stats so
         # _provider_metrics() can't emit any per-provider metrics.
-        # _provider_metrics() imports MarketDataManager and _rate_limiter from
-        # the manager module lazily, so we only need to patch the source.
+        # NOTE: _provider_metrics() imports the module-level
+        # ``market_data_manager`` SINGLETON (not the MarketDataManager
+        # class), so patching the class does nothing — an earlier version
+        # of this test did exactly that and passed only when no other test
+        # had registered providers on the real singleton yet. Patching the
+        # singleton name makes the test order-independent.
         fake_manager = MagicMock()
         fake_manager.providers = MagicMock()
         fake_manager.providers.keys = MagicMock(return_value=iter([]))
@@ -279,8 +283,8 @@ class TestProviderMetricsPrometheus(unittest.TestCase):
         fake_limiter.stats = MagicMock(return_value={})
 
         with patch(
-            "backend.market_data.services.manager.MarketDataManager",
-            return_value=fake_manager,
+            "backend.market_data.services.manager.market_data_manager",
+            fake_manager,
         ), patch(
             "backend.market_data.services.manager._rate_limiter", fake_limiter
         ):
