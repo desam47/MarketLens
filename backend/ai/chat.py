@@ -53,6 +53,10 @@ from backend.ai.chat_symbols import resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
 from backend.ai.market_baseline import build_market_baseline
+# Chat runs its sync generator helpers on loop-less worker threads
+# (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
+# bridged with run_sync/stream_sync rather than awaited.
+from backend.ai.sync_bridge import run_sync, stream_sync
 from backend.ai.prompt import (
     CHAT_SYSTEM_PROMPT,
     UncertaintyResponse,
@@ -513,7 +517,7 @@ def _generate_reply(
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     try:
-        resp = ai_manager.complete(
+        resp = run_sync(ai_manager.complete(
             prompt=build_chat_prompt(
                 symbol_blocks, unavailable, market_baseline, transcript,
                 user_content, alert_context,
@@ -521,7 +525,7 @@ def _generate_reply(
             ),
             system=CHAT_SYSTEM_PROMPT,
             max_tokens=500,
-        )
+        ))
     except Exception as e:  # noqa: BLE001
         logger.warning("Chat AI call raised: %s", e)
         return "Something went wrong reaching the AI provider — please try again.", False
@@ -728,13 +732,17 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
     extractor = ReplyExtractor()
     try:
         if ai_manager.settings.chat_streaming:
-            for chunk in ai_manager.stream(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500):
+            for chunk in stream_sync(
+                ai_manager.stream(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
+            ):
                 raw += chunk
                 delta = extractor.feed(raw)
                 if delta:
                     yield ("delta", delta)
         else:
-            resp = ai_manager.complete(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
+            resp = run_sync(
+                ai_manager.complete(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
+            )
             raw = resp.text or ""
             delta = extractor.feed(raw)
             if delta:
@@ -774,7 +782,7 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
     grounded=False chat reply rather than surfaced as an error.
     """
     try:
-        result = analyze_symbol(symbol)
+        result = run_sync(analyze_symbol(symbol))
     except Exception as e:  # noqa: BLE001 — the tool call must never crash the turn
         logger.warning("Chat-triggered reanalysis failed for %s: %s", symbol, e)
         return (

@@ -1,11 +1,12 @@
 """
 Tests for market scanner
 """
+import asyncio
 import os
 import sys
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
@@ -355,15 +356,16 @@ class TestScanner(unittest.TestCase):
         mock_market_data_manager.get_batch_quotes.side_effect = (
             lambda symbols: {s: make_quote(s) for s in symbols}
         )
-        mock_market_data_manager.get_batch_historical_bars.return_value = {}
+        # get_batch_historical_bars is async now — scan_symbols awaits it.
+        mock_market_data_manager.get_batch_historical_bars = AsyncMock(return_value={})
         # Individual call paths (fallback / indicator enrichment).
         mock_market_data_manager.get_quote.side_effect = lambda s: make_quote(s)
         mock_market_data_manager.get_latest_bar.return_value = make_bar("MOCK")
         mock_market_data_manager.get_historical_bars.return_value = [make_bar("MOCK")]
 
-        # Scan symbols
+        # Scan symbols (async — drive it on a private loop)
         symbols = ["AAPL", "GOOGL", "MSFT"]
-        results = self.scanner.scan_symbols(symbols)
+        results = asyncio.run(self.scanner.scan_symbols(symbols))
 
         # Assertions
         self.assertEqual(len(results), 3)

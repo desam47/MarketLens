@@ -440,7 +440,8 @@ class WebullProvider(BaseMarketDataProvider):
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull snapshot HTTP {resp.status_code}")
-            data = resp.json()
+            from ..provider import safe_json
+            data = safe_json(resp.text, url=resp.url)
             if not isinstance(data, list) or not data:
                 raise RuntimeError(f"Webull returned empty snapshot for {sym}")
             field = data[0]
@@ -475,7 +476,8 @@ class WebullProvider(BaseMarketDataProvider):
             )
             results: dict[str, Quote] = {}
             if resp.status_code == 200:
-                data = resp.json()
+                from ..provider import safe_json
+                data = safe_json(resp.text, url=resp.url)
                 if isinstance(data, list):
                     for field in data:
                         sym = field.get("symbol", "").upper()
@@ -591,7 +593,8 @@ class WebullProvider(BaseMarketDataProvider):
             )
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull bars HTTP {resp.status_code}")
-            data = resp.json()
+            from ..provider import safe_json
+            data = safe_json(resp.text, url=resp.url)
             if not isinstance(data, list):
                 self._reset_error_state()
                 return []
@@ -907,7 +910,9 @@ class WebullProvider(BaseMarketDataProvider):
             resp = self._data_client.market_data.get_snapshot(sym, "US_STOCK")
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull status HTTP {resp.status_code}")
-            field = (resp.json() or [{}])[0]
+            from ..provider import safe_json
+            data = safe_json(resp.text, url=resp.url)
+            field = (data or [{}])[0]
             state = str(field.get("marketStatus") or field.get("marketState") or "")
             is_open = state.upper() in ("OPEN", "REGULAR", "PRE", "POST", "TRUE")
             status = MarketStatus(

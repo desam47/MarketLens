@@ -415,10 +415,13 @@ def _ai_resolve_name_uncached(text: str) -> list[str]:
     try:
         from backend.ai.manager import ai_manager
         from backend.ai.prompt import extract_json_object
+        from backend.ai.sync_bridge import run_sync
 
-        if not ai_manager.is_available():
+        # Chat name-resolution runs in sync/loop-less contexts (to_thread
+        # worker threads) — bridge the async manager calls.
+        if not run_sync(ai_manager.is_available()):
             return []
-        resp = ai_manager.complete(
+        resp = run_sync(ai_manager.complete(
             prompt=(
                 "Extract US stock ticker symbols for any companies named in this "
                 "message. Reply with a JSON object: {\"tickers\": [\"AAPL\", ...]}. "
@@ -426,7 +429,7 @@ def _ai_resolve_name_uncached(text: str) -> list[str]:
             ),
             system="You map company names to their US ticker symbols. JSON only.",
             max_tokens=120,
-        )
+        ))
         if resp.text is None:
             return []
         import json

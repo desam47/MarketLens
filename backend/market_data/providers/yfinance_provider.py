@@ -13,7 +13,7 @@ ALPN protocols. curl_cffi uses libcurl under the hood and correctly impersonates
 real browser (Chrome 120), bypassing the anti-bot protection.
 """
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from datetime import datetime, timezone
 
 from curl_cffi import requests as curl_requests
@@ -27,7 +27,7 @@ from backend.models.market_data import (
 )
 from backend.utils.timezone import to_ny
 
-from ..provider import BaseMarketDataProvider
+from ..provider import BaseMarketDataProvider, safe_json
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +62,13 @@ class YFinanceProvider(BaseMarketDataProvider):
             raise RuntimeError(
                 f"Yahoo Finance HTTP {r.status_code} for {symbol}: {r.text[:200]}"
             )
-        data = r.json()
+        data = safe_json(r.text, url=url)
         result = (data.get("chart") or {}).get("result")
         if not result:
             err = (data.get("chart") or {}).get("error")
             raise ValueError(f"No chart data for {symbol}: {err}")
-        return result[0]
+        return result[0] if isinstance(result, list) and result else {}
+
 
     @staticmethod
     def _meta(chart: dict) -> dict:
@@ -317,7 +318,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                 raise RuntimeError(
                     f"Yahoo Finance HTTP {r.status_code} for batch quote: {r.text[:200]}"
                 )
-            data = r.json()
+            data = safe_json(r.text, url=url)
             quote_data = data.get("quoteResponse", {}).get("result", [])
             # Build a map from symbol to quote data
             quote_map = {item["symbol"]: item for item in quote_data}
@@ -353,7 +354,7 @@ class YFinanceProvider(BaseMarketDataProvider):
             self._handle_error(e, f"Failed to get batch quotes for {symbols}")
             raise
 
-    def get_batch_historical_bars(
+    async def get_batch_historical_bars(
         self,
         symbols: list[str],
         timeframe: str = "1d",
@@ -364,25 +365,27 @@ class YFinanceProvider(BaseMarketDataProvider):
         """
         if not symbols:
             return {}
-        results: dict[str, list[Bar]] = {}
 
-        def _fetch_one(symbol: str) -> tuple[str, list[Bar] | None, Exception | None]:
+        # Concurrency cap restored: Yahoo rate-limits aggressive
+        # parallel chart fetches (the old sync path used a 20-thread
+        # pool for exactly this reason) — an uncapped gather over the
+        # whole universe gets us 429s.
+        sem = asyncio.Semaphore(20)
+
+        async def _fetch_one(symbol: str) -> tuple[str, list[Bar]]:
             try:
-                return (symbol, self.get_historical_bars(symbol, timeframe=timeframe, range_=range_), None)
-            except Exception as e:
-                return (symbol, None, e)
+                async with sem:
+                    bars = await asyncio.to_thread(
+                        self.get_historical_bars, symbol, timeframe=timeframe, range_=range_
+                    )
+                return (symbol, bars)
+            except Exception:
+                return (symbol, [])
 
-        # Cap workers at 20 — YFinance rate-limits aggressively and a
-        # larger pool gets us blocked. 20 in-flight HTTP calls is the
-        # sweet spot for a residential connection.
-        with ThreadPoolExecutor(max_workers=min(len(symbols), 20)) as pool:
-            for symbol, bars, err in pool.map(_fetch_one, symbols):
-                if err is not None or bars is None:
-                    results[symbol] = []
-                else:
-                    results[symbol] = bars
+        tasks = [_fetch_one(s) for s in symbols]
+        results_list = await asyncio.gather(*tasks)
 
-        return results
+        return dict(results_list)
 
     def get_market_status(self, symbol: str) -> MarketStatus:
         try:

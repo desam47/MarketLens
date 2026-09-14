@@ -1,7 +1,7 @@
 # Version 4 Phase Audit
 
-**Last updated:** 2026-09-13 (Live Scanner review: 4.2.8's match-all fix turned out to cover only one of two call paths — the scanner REST routes still had it, plus a `symbols=` scope bug; 7 Tier-1 fixes landed)
-**Status:** Active. Phase 4.1, 4.2 and the Live Scanner review all done. Five Tier-2 ranking-semantics questions surfaced, deliberately left as the user's call.
+**Last updated:** 2026-09-13 (Tier-2 ranking semantics fixed: directional scoring, sign guards, and eligible counts verified)
+**Status:** Active. Phase 4.1, 4.2 and the Live Scanner review all done. Tier-2 ranking-semantics fixes completed and verified.
 **Scope:** AI integration — enable + validate the existing subsystem end-to-end (4.1), then build new AI-powered functionality on top of it (4.2, the "separate decision" 4.1's own open questions deferred). Charts was considered for this version (deferred from Version 3, never started under v4) and has moved on to Version 5 instead — see `docs/Version_5/`.
 
 ---

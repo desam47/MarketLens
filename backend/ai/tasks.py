@@ -23,6 +23,9 @@ from datetime import datetime
 from backend.utils.timezone import now_ny
 
 from backend.ai.analyze import analyze_symbol
+# RQ workers run these tasks in loop-less processes, so the async
+# analyze_symbol is bridged with run_sync rather than awaited.
+from backend.ai.sync_bridge import run_sync
 from backend.api.ai_templates.router import resolve_and_render
 from backend.database import SessionLocal
 from backend.models import AIAnalysisJob
@@ -94,11 +97,11 @@ def analyze_symbol_task(
             db.close()
 
     try:
-        result = analyze_symbol(
+        result = run_sync(analyze_symbol(
             symbol=symbol,
             timeframe=timeframe,
             system_prompt_override=rendered_system,
-        )
+        ))
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI analysis job %s failed", job_id)
         _update_status(job_id, "failed", error=str(exc) + "\n" + traceback.format_exc())
@@ -145,11 +148,11 @@ def _run_direct(
         finally:
             db.close()
 
-    result = analyze_symbol(
+    result = run_sync(analyze_symbol(
         symbol=symbol,
         timeframe=timeframe,
         system_prompt_override=rendered_system,
-    )
+    ))
     return {
         "summary": result.summary,
         "trend": result.trend,

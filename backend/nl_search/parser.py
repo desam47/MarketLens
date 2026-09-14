@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import extract_json_object
+from backend.ai.sync_bridge import run_sync
 
 from .prompt import NL_TRANSLATION_PROMPT, build_translation_prompt
 from .schema import NLFilters
@@ -325,7 +326,10 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
     if cached is not None:
         return cached
 
-    if not ai_manager.is_available():
+    # ``parse_query_with_ai`` runs in a worker thread (the router pushes
+    # ``parse_query`` through ``asyncio.to_thread``), so it has no event
+    # loop — bridge the async manager calls instead of awaiting.
+    if not run_sync(ai_manager.is_available()):
         return None
 
     try:
@@ -333,11 +337,11 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
         # AI_TEMPERATURE like every other AI call in the app, rather
         # than special-casing this one as a "must be deterministic"
         # task.
-        resp = ai_manager.complete(
+        resp = run_sync(ai_manager.complete(
             prompt=build_translation_prompt(query),
             system=NL_TRANSLATION_PROMPT,
             max_tokens=400,
-        )
+        ))
     except Exception as e:  # noqa: BLE001
         logger.warning("AI translation call raised: %s", e)
         return None

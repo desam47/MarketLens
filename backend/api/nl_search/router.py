@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import extract_json_object
+from backend.ai.sync_bridge import run_sync
 from ..dependencies import get_db
 from ...nl_search.executor import execute_query
 from ...nl_search.parser import parse_query
@@ -98,13 +99,15 @@ def _maybe_explain(
     Returns ``(explanation, used_ai)``. ``used_ai`` is ``False`` when
     AI was unavailable or the reply could not be parsed.
     """
-    if not explain or not entries or not ai_manager.is_available():
+    # Runs in a worker thread via ``asyncio.to_thread`` below, so it has
+    # no event loop — bridge the async manager calls instead of awaiting.
+    if not explain or not entries or not run_sync(ai_manager.is_available()):
         return None, False
 
     try:
         # No per-call temperature override — uses the configured
         # AI_TEMPERATURE like every other AI call in the app.
-        resp = ai_manager.complete(
+        resp = run_sync(ai_manager.complete(
             prompt=build_explain_prompt(
                 query=query,
                 filter_description=filter_description,
@@ -112,7 +115,7 @@ def _maybe_explain(
             ),
             system=NL_EXPLAIN_PROMPT,
             max_tokens=300,
-        )
+        ))
     except Exception as e:
         logger.warning("AI explanation call raised: %s", e)
         return None, False
@@ -147,12 +150,12 @@ async def nl_search(
                 body.query, body.top_n, body.explain)
 
     # --- Step 1: derive the filter schema ---
-    # parse_query() may call out to the AI provider synchronously
-    # (httpx.Client, not AsyncClient) — run it off the event loop so a
-    # slow/remote provider round-trip (openrouter.ai etc., ~1-1.5s)
-    # doesn't stall every other request this process is serving
-    # (WebSocket price broadcasts included) for the duration. Same
-    # pattern already used for AI calls in backend/api/ai/router.py.
+    # parse_query() may call out to the AI provider (the async manager,
+    # bridged via run_sync on a private loop inside the worker thread) —
+    # run it off the event loop so a slow/remote provider round-trip
+    # (openrouter.ai etc., ~1-1.5s) doesn't stall every other request
+    # this process is serving (WebSocket price broadcasts included).
+    # Same pattern already used for AI calls in backend/api/ai/router.py.
     filters, extras, parser_used = await asyncio.to_thread(
         parse_query,
         body.query,
@@ -166,8 +169,14 @@ async def nl_search(
         filters = filters.model_copy(update={"top_n": body.top_n})
 
     # --- Step 3: execute ---
+    # The executor may call the async scanner (cache refresh) via
+    # run_sync, which fails inside a running loop — so it too must run
+    # in a loop-less worker thread. The SQLAlchemy ``Session`` is only
+    # used during the call, not after, so handing it to the thread is
+    # safe (same pattern as Step 1).
     try:
-        result = execute_query(
+        result = await asyncio.to_thread(
+            execute_query,
             filters,
             extras=extras,
             watchlist_id=body.watchlist_id,

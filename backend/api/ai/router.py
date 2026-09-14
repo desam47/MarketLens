@@ -189,18 +189,14 @@ async def analyze(
         )
 
     # 3. Call the LLM (blocking HTTP — the most expensive operation).
-    #    asyncio.to_thread frees the worker thread so concurrent requests
-    #    can be served while the LLM response is in flight.
-    def _call_analyze():
-        return analyze_symbol(
-            symbol=symbol.upper(),
-            timeframe=timeframe,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system_prompt_override=rendered_system,
-        )
-
-    result = await asyncio.to_thread(_call_analyze)
+    #    The AI manager and providers are now async, so we await them directly.
+    result = await analyze_symbol(
+        symbol=symbol.upper(),
+        timeframe=timeframe,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system_prompt_override=rendered_system,
+    )
 
     return AnalyzeResponse(
         summary=result.summary,
@@ -223,25 +219,24 @@ async def analyze(
 async def ai_status() -> list[ProviderStatusResponse]:
     """Return the health of each provider in the AI chain."""
     # ai_manager.status() walks the provider chain and may make a health
-    # probe (HTTP ping) — keep it off the event loop.
-    return await asyncio.to_thread(
-        lambda: [
-            ProviderStatusResponse(
-                name=s.name,
-                healthy=s.healthy,
-                is_primary=s.is_primary,
-                error=s.error,
-                model=s.model,
-            )
-            for s in ai_manager.status()
-        ]
-    )
+    # probe (HTTP ping) — we now await it directly.
+    status_list = await ai_manager.status()
+    return [
+        ProviderStatusResponse(
+            name=s.name,
+            healthy=s.healthy,
+            is_primary=s.is_primary,
+            error=s.error,
+            model=s.model,
+        )
+        for s in status_list
+    ]
 
 
 @router.get("/config", response_model=ConfigResponse)
 async def ai_config() -> ConfigResponse:
     """Return the frontend-safe AI configuration (no API key)."""
-    cfg = await asyncio.to_thread(lambda: ai_manager.safe_config())
+    cfg = ai_manager.safe_config()
     return ConfigResponse(**cfg)
 
 

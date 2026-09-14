@@ -23,6 +23,7 @@ import logging
 
 from backend.ai.context import build_context
 from backend.ai.manager import ai_manager
+from backend.ai.sync_bridge import run_sync
 from backend.ai.prompt import (
     ALERT_COMMENTARY_SYSTEM_PROMPT,
     build_alert_commentary_prompt,
@@ -59,7 +60,9 @@ def generate_commentary(trigger_id: int) -> str | None:
             )
             return None
 
-        if not ai_manager.is_available():
+        # Runs in an RQ worker thread (no event loop) — bridge the
+        # async manager calls.
+        if not run_sync(ai_manager.is_available()):
             return None
 
         # Skip news/fundamentals — commentary explains *why this
@@ -97,11 +100,11 @@ def generate_commentary(trigger_id: int) -> str | None:
         }
 
         try:
-            resp = ai_manager.complete(
+            resp = run_sync(ai_manager.complete(
                 prompt=build_alert_commentary_prompt(payload),
                 system=ALERT_COMMENTARY_SYSTEM_PROMPT,
                 max_tokens=200,
-            )
+            ))
         except Exception as e:  # noqa: BLE001
             logger.warning("Alert commentary AI call raised: %s", e)
             return None

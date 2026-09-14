@@ -3,7 +3,7 @@ import os
 import sys
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -62,8 +62,9 @@ class TestNLSearchEndpoint(unittest.TestCase):
         # mocked unavailable, or a real, now-enabled AI backend answers
         # for real and ai_explanation_used flips true underneath this
         # test (found live 2026-09-09, when AI_ENABLED became true).
-        mock_ai.is_available.return_value = False
-        mock_router_ai.is_available.return_value = False
+        # is_available is async now (bridged via run_sync) — stub AsyncMock.
+        mock_ai.is_available = AsyncMock(return_value=False)
+        mock_router_ai.is_available = AsyncMock(return_value=False)
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem
         mock_exec.return_value = ExecutionResult(
@@ -98,9 +99,11 @@ class TestNLSearchEndpoint(unittest.TestCase):
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.nl_search.parser.ai_manager")
     def test_ai_translation_used_flag(self, mock_ai, mock_exec):
-        mock_ai.is_available.return_value = True
-        mock_ai.complete.return_value = MagicMock(
-            text=None, provider="disabled", model="llama3.2"
+        # is_available/complete are async now — stub as AsyncMock so the
+        # run_sync bridge in parser.py receives a coroutine.
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.complete = AsyncMock(
+            return_value=MagicMock(text=None, provider="disabled", model="llama3.2")
         )
         from backend.nl_search.executor import ExecutionResult
         mock_exec.return_value = ExecutionResult(
@@ -122,7 +125,8 @@ class TestNLSearchEndpoint(unittest.TestCase):
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.nl_search.parser.ai_manager")
     def test_garbage_query_returns_empty_results(self, mock_ai, mock_exec):
-        mock_ai.is_available.return_value = False
+        # Async now — must be an AsyncMock for the run_sync bridge.
+        mock_ai.is_available = AsyncMock(return_value=False)
         from backend.nl_search.executor import ExecutionResult
         mock_exec.return_value = ExecutionResult(
             matched_all=[],
@@ -146,8 +150,9 @@ class TestNLSearchEndpoint(unittest.TestCase):
         # See test_rule_based_query_returns_200's comment: the router's
         # own ai_manager reference (used for the explanation step) is
         # separate from the parser's and must be mocked too.
-        mock_ai.is_available.return_value = False
-        mock_router_ai.is_available.return_value = False
+        # is_available is async now — stub AsyncMock.
+        mock_ai.is_available = AsyncMock(return_value=False)
+        mock_router_ai.is_available = AsyncMock(return_value=False)
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem
         mock_exec.return_value = ExecutionResult(
@@ -176,7 +181,8 @@ class TestNLSearchEndpoint(unittest.TestCase):
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.nl_search.parser.ai_manager")
     def test_explain_false_skips_ai(self, mock_ai, mock_exec):
-        mock_ai.is_available.return_value = True  # AI is on but explain=False
+        # AI is on but explain=False — async is_available stubbed AsyncMock.
+        mock_ai.is_available = AsyncMock(return_value=True)
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem
         mock_exec.return_value = ExecutionResult(
@@ -222,11 +228,15 @@ class TestNLSearchEndpointAIExplanation(unittest.TestCase):
     @patch("backend.api.nl_search.router.execute_query")
     @patch("backend.api.nl_search.router.ai_manager")
     def test_explanation_when_ai_on_and_explain_true(self, mock_ai, mock_exec):
-        mock_ai.is_available.return_value = True
-        mock_ai.complete.return_value = MagicMock(
-            text='```json\n{"explanation": "All symbols are in a strong uptrend with high momentum."}\n```',
-            provider="ollama",
-            model="llama3.2",
+        # is_available/complete are async now (bridged via run_sync in
+        # _maybe_explain) — stub as AsyncMock.
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.complete = AsyncMock(
+            return_value=MagicMock(
+                text='```json\n{"explanation": "All symbols are in a strong uptrend with high momentum."}\n```',
+                provider="ollama",
+                model="llama3.2",
+            )
         )
         from backend.nl_search.executor import ExecutionResult
         from backend.nl_search.schema import ScannedResultItem

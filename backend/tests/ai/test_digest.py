@@ -5,7 +5,7 @@ generate_and_store_digest).
 """
 import unittest
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.ai.digest import build_digest_payload, narrate_digest
 from backend.ai.prompt import DigestNarrative
@@ -158,7 +158,7 @@ class TestNarrateDigest(unittest.TestCase):
 
     @patch("backend.ai.digest.ai_manager")
     def test_ai_off_falls_back_to_plain_narrative(self, mock_ai):
-        mock_ai.is_available.return_value = False
+        mock_ai.is_available = AsyncMock(return_value=False)
         payload = {
             "market_regime": {"regime": "RISK_ON"},
             "movers": {"top_bullish": [{"symbol": "A"}], "top_bearish": []},
@@ -170,11 +170,11 @@ class TestNarrateDigest(unittest.TestCase):
 
     @patch("backend.ai.digest.ai_manager")
     def test_successful_ai_reply_parsed(self, mock_ai):
-        mock_ai.is_available.return_value = True
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"narrative": "Markets are calm.", "headline_movers": ["A", "B"]}\n```',
             provider="ollama", model="llama3.2",
-        )
+        ))
         payload = {"market_regime": {}, "movers": {"top_bullish": [], "top_bearish": []}}
         result = narrate_digest(payload)
         self.assertEqual(result.narrative, "Markets are calm.")
@@ -182,10 +182,10 @@ class TestNarrateDigest(unittest.TestCase):
 
     @patch("backend.ai.digest.ai_manager")
     def test_malformed_ai_reply_falls_back_gracefully(self, mock_ai):
-        mock_ai.is_available.return_value = True
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text="not json", provider="ollama", model="llama3.2",
-        )
+        ))
         payload = {
             "market_regime": {"regime": "NEUTRAL"},
             "movers": {"top_bullish": [], "top_bearish": []},

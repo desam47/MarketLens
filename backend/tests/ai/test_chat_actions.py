@@ -13,7 +13,7 @@ Two layers:
     _finalize_parsed -> the repos) actually wires up.
 """
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -838,12 +838,12 @@ class TestEndToEnd(unittest.TestCase):
 
     @patch("backend.ai.chat.ai_manager")
     def test_add_to_watchlist_end_to_end(self, mock_ai):
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete.return_value = _reply(
+        mock_ai.complete = AsyncMock(return_value=_reply(
             '{"reply": "On it.", "grounded": true, "action": "add_to_watchlist", '
             '"action_symbol": "RIVN"}'
-        )
+        ))
 
         msg, grounded, *_ = answer_chat_message(self.session_id, "add RIVN to my watchlist")
 
@@ -863,12 +863,12 @@ class TestEndToEnd(unittest.TestCase):
         alert_id = alert.id
         db.close()
 
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete.return_value = _reply(
+        mock_ai.complete = AsyncMock(return_value=_reply(
             '{"reply": "Delete the NVDA alert?", "grounded": true, '
             '"action": "delete_alert", "action_target_id": ' + str(alert_id) + '}'
-        )
+        ))
 
         msg1, grounded1, *_ = answer_chat_message(self.session_id, "delete my nvda alert")
         self.assertIn("confirm", msg1.content.lower())
@@ -907,12 +907,12 @@ class TestEndToEnd(unittest.TestCase):
         repo.add_symbol_to_watchlist(wl_id, "AAPL")
         db.close()
 
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete.return_value = _reply(
+        mock_ai.complete = AsyncMock(return_value=_reply(
             '{"reply": "Which watchlist would you like to delete?", "grounded": false, '
             '"action": "none"}'
-        )
+        ))
         msg1, grounded1, *_ = answer_chat_message(self.session_id, "delete my watchlist")
         self.assertIn("Watch1", msg1.content)
         self.assertIn("confirm", msg1.content.lower())
@@ -942,7 +942,7 @@ class TestEndToEnd(unittest.TestCase):
         repo.add_symbol_to_watchlist(wl.id, "AAPL")
         db.close()
 
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
 
         msg, grounded, *_ = answer_chat_message(self.session_id, "how many watchlist i have")
@@ -967,7 +967,7 @@ class TestEndToEnd(unittest.TestCase):
             repo.add_symbol_to_watchlist(mc.id, sym)
         db.close()
 
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
 
         msg, grounded, *_ = answer_chat_message(

@@ -1,8 +1,9 @@
 """Phase 16 — API router tests for /api/ai/* endpoints."""
+import asyncio
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -141,11 +142,14 @@ class TestAIStatusEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_provider_statuses(self, mock_ai_mgr):
         from backend.ai.manager import ProviderStatus
-        mock_ai_mgr.status.return_value = [
+        # status() is async now — the endpoint awaits it, so the stub
+        # must be an AsyncMock (a plain MagicMock return_value makes the
+        # endpoint choke on `await <list>`).
+        mock_ai_mgr.status = AsyncMock(return_value=[
             ProviderStatus(name="ollama", healthy=True, is_primary=True),
             ProviderStatus(name="anthropic", healthy=False, is_primary=False,
                           error="connection refused"),
-        ]
+        ])
 
         resp = client.get("/api/ai/status")
         self.assertEqual(resp.status_code, 200)
@@ -308,16 +312,18 @@ class TestAIManagerRuntimeToggle(unittest.TestCase):
 
         mgr = AIManager(AISettings(enabled=False))
         # Override _healthy so the test is deterministic regardless of
-        # whether a real Ollama is running on localhost:11434.
-        mgr._healthy = lambda name: False
-        self.assertFalse(mgr.is_available())
+        # whether a real Ollama is running on localhost:11434. Both
+        # _healthy and is_available are async now — bridge with
+        # asyncio.run and stub _healthy with an AsyncMock.
+        mgr._healthy = AsyncMock(return_value=False)
+        self.assertFalse(asyncio.run(mgr.is_available()))
         mgr.set_enabled(True)
         # enabled=True but no providers are healthy -> still False.
-        self.assertFalse(mgr.is_available())
-        mgr._healthy = lambda name: True
-        self.assertTrue(mgr.is_available())
+        self.assertFalse(asyncio.run(mgr.is_available()))
+        mgr._healthy = AsyncMock(return_value=True)
+        self.assertTrue(asyncio.run(mgr.is_available()))
         mgr.set_enabled(False)
-        self.assertFalse(mgr.is_available())
+        self.assertFalse(asyncio.run(mgr.is_available()))
 
 
 if __name__ == "__main__":

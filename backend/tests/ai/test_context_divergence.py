@@ -121,14 +121,24 @@ class TestBuildContextDivergence(unittest.TestCase):
         also calls load_bars with the same (symbol, timeframe) args
         now, so the right assertion is "one fewer call than with
         divergence on", not "zero calls total" — this test used to
-        assert the latter, back when load_bars had only one caller."""
+        assert the latter, back when load_bars had only one caller.
+
+        S/R also pulls load_reference_bars()'s daily series (which
+        calls load_bars itself) through a 60s TTL cache — warm it by
+        an earlier test in this file and the first block counts one
+        call fewer than the second, so both measurements must start
+        cold."""
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
 
+        from backend.analysis.series import _reference_bars_cache
+
+        _reference_bars_cache.clear()
         with patch("backend.analysis.series.load_bars", return_value=_fake_bars()) as mock_lb:
             build_context("AAPL", "1d", include_divergence=True)
             with_divergence_calls = mock_lb.call_count
 
+        _reference_bars_cache.clear()
         with patch("backend.analysis.series.load_bars", return_value=_fake_bars()) as mock_lb:
             ctx = build_context("AAPL", "1d", include_divergence=False)
             without_divergence_calls = mock_lb.call_count

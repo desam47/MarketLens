@@ -16,7 +16,7 @@ adapters in addition to (or in place of) the HTTP ones.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,7 +51,7 @@ class AIProvider(ABC):
     name: str = "abstract"
 
     @abstractmethod
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         """Return True if the provider can answer right now.
 
         Implementations should use ``self.settings.health_check_timeout``
@@ -59,7 +59,7 @@ class AIProvider(ABC):
         """
 
     @abstractmethod
-    def complete(
+    async def complete(
         self,
         prompt: str,
         system: str | None = None,
@@ -74,14 +74,14 @@ class AIProvider(ABC):
         model, etc.) so the manager can try the next fallback.
         """
 
-    def stream(
+    async def stream(
         self,
         prompt: str,
         system: str | None = None,
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         """Yield the completion for ``prompt`` in incremental text chunks.
 
         Same ``ProviderUnavailable`` contract as :meth:`complete` — a
@@ -90,7 +90,7 @@ class AIProvider(ABC):
         runs :meth:`complete` and yields the whole reply once, so a
         provider that hasn't implemented real streaming still works.
         """
-        resp = self.complete(
+        resp = await self.complete(
             prompt, system=system, max_tokens=max_tokens, temperature=temperature
         )
         if resp.text:

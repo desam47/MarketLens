@@ -11,6 +11,7 @@ Covers:
   - is_available() returns True/False based on _data_client presence
   - Credentials are never logged or included in responses
 """
+import json
 import os
 import sys
 import unittest
@@ -90,6 +91,7 @@ class TestGetQuote(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = snapshot_response
+        mock_resp.text = json.dumps(snapshot_response)
         mock_data.market_data.get_snapshot.return_value = mock_resp
         return _make_provider(mock_data)
 
@@ -137,6 +139,7 @@ class TestGetHistoricalBars(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = bars_response
+        mock_resp.text = json.dumps(bars_response)
         mock_data.market_data.get_history_bar.return_value = mock_resp
         return _make_provider(mock_data)
 
@@ -257,6 +260,7 @@ class TestTimeframeInference(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = rows
+        mock_resp.text = json.dumps(rows)
         mock_data.market_data.get_history_bar.return_value = mock_resp
         p = _make_provider(mock_data)
         bars = p.get_historical_bars("spy", timeframe="1m", range_="1d")
@@ -280,6 +284,7 @@ class TestTimeframeInference(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = rows
+        mock_resp.text = json.dumps(rows)
         mock_data.market_data.get_history_bar.return_value = mock_resp
         p = _make_provider(mock_data)
         bars = p.get_historical_bars("spy", timeframe="1m", range_="1d")
@@ -304,6 +309,7 @@ class TestGetBatchQuotes(unittest.TestCase):
             {"symbol": "MSFT", "price": 300.0, "bid": 299.9, "ask": 300.1,
              "volume": 500_000, "quote_time": now_ms},
         ]
+        mock_resp.text = json.dumps(mock_resp.json.return_value)
         mock_data.market_data.get_snapshot.return_value = mock_resp
         p = _make_provider(mock_data)
         result = p.get_batch_quotes(["AAPL", "MSFT"])
@@ -322,6 +328,7 @@ class TestGetBatchQuotes(unittest.TestCase):
             {"symbol": "AAPL", "price": 150.0, "quote_time": now_ms},
             # MSFT omitted from response
         ]
+        mock_resp.text = json.dumps(mock_resp.json.return_value)
         mock_data.market_data.get_snapshot.return_value = mock_resp
         p = _make_provider(mock_data)
         result = p.get_batch_quotes(["AAPL", "MSFT"])
@@ -366,6 +373,7 @@ class TestGetMarketStatus(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = snapshot_response
+        mock_resp.text = json.dumps(snapshot_response)
         mock_data.market_data.get_snapshot.return_value = mock_resp
         return _make_provider(mock_data)
 
@@ -442,6 +450,7 @@ class TestExtendedHoursBars(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = bars_response
+        mock_resp.text = json.dumps(bars_response)
         mock_data.market_data.get_history_bar.return_value = mock_resp
         return _make_provider(mock_data)
 
@@ -537,6 +546,7 @@ class TestExtendedHoursQuotes(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = [field]
+        mock_resp.text = json.dumps([field])
         mock_data.market_data.get_snapshot.return_value = mock_resp
         return _make_provider(mock_data)
 

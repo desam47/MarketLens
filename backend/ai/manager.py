@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -175,7 +175,7 @@ class AIManager:
 
     # --- Public API ----------------------------------------------------
 
-    def is_available(self) -> bool:
+    async def is_available(self) -> bool:
         """True iff AI is enabled and at least one provider is healthy.
 
         We don't cache the answer: a health check takes a couple of
@@ -185,9 +185,12 @@ class AIManager:
         """
         if not self.enabled:
             return False
-        return any(self._healthy(name) for name in self._all_providers())
+        for name in self._all_providers():
+            if await self._healthy(name):
+                return True
+        return False
 
-    def status(self) -> list[ProviderStatus]:
+    async def status(self) -> list[ProviderStatus]:
         """Per-provider health snapshot for the dashboard.
 
         Always returns one entry per provider in the chain (even if
@@ -205,7 +208,7 @@ class AIManager:
                 pass
             if self.enabled:
                 try:
-                    healthy = self._healthy(name)
+                    healthy = await self._healthy(name)
                 except Exception as e:  # noqa: BLE001
                     err = str(e)[:200]
             out.append(
@@ -247,7 +250,7 @@ class AIManager:
             "api_key_set": bool(self.settings.api_key),
         }
 
-    def complete(
+    async def complete(
         self,
         prompt: str,
         system: str | None = None,
@@ -278,13 +281,13 @@ class AIManager:
                 last_error = str(e)
                 continue
 
-            if not provider.health_check():
+            if not await provider.health_check():
                 logger.info("AI provider %r unhealthy, falling through", name)
                 last_error = f"{name} health check failed"
                 continue
 
             try:
-                resp = provider.complete(
+                resp = await provider.complete(
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
@@ -304,14 +307,14 @@ class AIManager:
         )
         return AIResponse(text=None, provider="none", model=self.settings.model)
 
-    def stream(
+    async def stream(
         self,
         prompt: str,
         system: str | None = None,
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         """Stream a completion, walking the fallback chain.
 
         Yields incremental text chunks. Yields nothing when AI is
@@ -337,14 +340,14 @@ class AIManager:
                 last_error = str(e)
                 continue
 
-            if not provider.health_check():
+            if not await provider.health_check():
                 logger.info("AI provider %r unhealthy, falling through", name)
                 last_error = f"{name} health check failed"
                 continue
 
             started = False
             try:
-                for piece in provider.stream(
+                async for piece in provider.stream(
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
@@ -383,15 +386,16 @@ class AIManager:
     # unhealthy (just ~_HEALTH_RETRY_DELAY seconds slower).
     _HEALTH_RETRY_DELAY = 0.25
 
-    def _healthy(self, name: str) -> bool:
+    async def _healthy(self, name: str) -> bool:
         try:
             provider = self._get_provider(name)
         except ValueError:
             return False
-        if provider.health_check():
+        if await provider.health_check():
             return True
-        time.sleep(self._HEALTH_RETRY_DELAY)
-        return provider.health_check()
+        import asyncio
+        await asyncio.sleep(self._HEALTH_RETRY_DELAY)
+        return await provider.health_check()
 
 
 # --- Singleton ------------------------------------------------------

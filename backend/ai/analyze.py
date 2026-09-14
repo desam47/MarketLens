@@ -42,7 +42,7 @@ from backend.ai.prompt import (
 logger = logging.getLogger(__name__)
 
 
-def analyze_symbol(
+async def analyze_symbol(
     symbol: str,
     timeframe: str = "1d",
     *,
@@ -98,7 +98,7 @@ def analyze_symbol(
         system_prompt = system_prompt_override
     else:
         system_prompt = SYSTEM_PROMPT if advisory else SYSTEM_PROMPT_ANALYST_ONLY
-    ai_resp = ai_manager.complete(
+    ai_resp = await ai_manager.complete(
         prompt=build_user_prompt(ctx.to_dict()),
         system=system_prompt,
         max_tokens=max_tokens,

@@ -8,6 +8,7 @@ provider/caching/circuit-breaking infrastructure that lives next to it.
 ``_settings`` is imported from ``_providers`` so test patches at
 ``backend.market_data.services.manager._settings`` propagate here.
 """
+import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -491,7 +492,7 @@ class MarketDataManager:
 
         return quotes
 
-    def get_batch_historical_bars(
+    async def get_batch_historical_bars(
         self,
         symbols: list[str],
         timeframe: str = "1d",
@@ -527,7 +528,7 @@ class MarketDataManager:
                 try:
                     provider = self.providers[provider_name]
                     if hasattr(provider, "get_batch_historical_bars"):
-                        batch_bars = provider.get_batch_historical_bars(
+                        batch_bars = await provider.get_batch_historical_bars(
                             symbols_to_fetch, timeframe=timeframe, range_=range_
                         )
                         for symbol in symbols_to_fetch:

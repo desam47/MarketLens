@@ -21,6 +21,7 @@ from typing import Any
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.manager import ai_manager
+from backend.ai.sync_bridge import run_sync
 from backend.ai.prompt import (
     DIGEST_SYSTEM_PROMPT,
     DigestNarrative,
@@ -123,8 +124,14 @@ def build_digest_payload(watchlist_id: int | None = None, db=None) -> dict[str, 
             "score": round(_safe_call(r.calculate_signed_total_score, default=0.0), 2),
         }
         # advisory=False: the digest is a descriptive read, not a place
-        # for per-mover trade plans.
-        analysis = _safe_call(analyze_symbol, r.symbol, advisory=False, default=None)
+        # for per-mover trade plans. ``analyze_symbol`` is async and
+        # this whole module runs sync (in a to_thread worker via the
+        # digest router) — bridge via run_sync inside the lambda so
+        # _safe_call sees the coroutine's *result*, not the coroutine.
+        analysis = _safe_call(
+            lambda: run_sync(analyze_symbol(r.symbol, advisory=False)),
+            default=None,
+        )
         if analysis is not None and not getattr(analysis, "is_uncertain", True):
             entry["blurb"] = analysis.summary
         return entry
@@ -154,15 +161,18 @@ def narrate_digest(payload: dict[str, Any]) -> DigestNarrative:
     just not AI-written), matching analyze_symbol's uncertainty
     contract: a missing/bad AI answer must not break the caller.
     """
-    if not ai_manager.is_available():
+    # Runs in a loop-less worker thread (digest router pushes
+    # generate_and_store_digest through asyncio.to_thread) — bridge the
+    # async manager calls.
+    if not run_sync(ai_manager.is_available()):
         return _fallback_narrative(payload)
 
     try:
-        resp = ai_manager.complete(
+        resp = run_sync(ai_manager.complete(
             prompt=build_digest_user_prompt(payload),
             system=DIGEST_SYSTEM_PROMPT,
             max_tokens=400,
-        )
+        ))
         if resp.text is None:
             return _fallback_narrative(payload)
         return parse_digest_reply(resp.text)

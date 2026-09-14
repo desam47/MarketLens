@@ -452,7 +452,7 @@ class Scanner:
         except Exception as e:
             logger.error(f"Error generating signals for {result.symbol}: {e}")
 
-    def scan_symbols(self, symbols: list[str]) -> list[ScanResult]:
+    async def scan_symbols(self, symbols: list[str]) -> list[ScanResult]:
         """Scan multiple symbols and return results"""
         # Fetch historical bars and quotes for all symbols in batch to eliminate N+1 query problem
         from backend.database import SessionLocal
@@ -460,7 +460,7 @@ class Scanner:
         batch_quotes = {}
         try:
             with SessionLocal() as db:
-                batch_bars = market_data_manager.get_batch_historical_bars(
+                batch_bars = await market_data_manager.get_batch_historical_bars(
                     symbols,
                     timeframe="1d",
                     range_="3mo",
@@ -493,13 +493,13 @@ class Scanner:
         scan endpoints that are already ``async def``.
 
         Bars and quotes are batch pre-fetched before spawning threads — the same
-        pattern used by the synchronous :meth:`scan_symbols` — so each thread
+        pattern used by :meth:`scan_symbols` — so each thread
         receives its data already in memory instead of opening its own DB session
         and provider call. This converts N×DB-session + N×provider-call into a
         single batch DB query + single batch provider call.
 
-        The synchronous :meth:`scan_symbols` is preserved for any caller that
-        is not in an event loop.
+        Both :meth:`scan_symbols` and this method are async; sync callers
+        bridge through ``backend.ai.sync_bridge.run_sync``.
         """
         if not symbols:
             return []
@@ -524,12 +524,19 @@ class Scanner:
         # only matters on a Redis miss, and any bars fetched still get
         # written back to Redis for next time.
         def _prefetch() -> tuple[dict, dict]:
-            bars = market_data_manager.get_batch_historical_bars(
+            # Lazy import: backend.ai.__init__ pulls in analyze → context,
+            # which imports this module back — a top-level import here would
+            # be circular when scanner is the import entry point.
+            from backend.ai.sync_bridge import run_sync
+
+            # Runs on a worker thread (asyncio.to_thread below), so no
+            # event loop here — bridge the async batch-bars call.
+            bars = run_sync(market_data_manager.get_batch_historical_bars(
                 symbols,
                 timeframe="1d",
                 range_="3mo",
                 use_cache=True,
-            )
+            ))
             quotes = market_data_manager.get_batch_quotes(symbols)
             return bars, quotes
 

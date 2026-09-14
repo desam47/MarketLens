@@ -3,8 +3,10 @@ Market data provider interface and base classes
 """
 import logging
 import traceback
+import json
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any
 
 from ..models.market_data import (
     Bar,
@@ -15,6 +17,28 @@ from ..models.market_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ProviderDataError(Exception):
+    """Custom exception for errors occurring during market data retrieval or parsing"""
+    def __init__(self, message: str, url: str | None = None):
+        super().__init__(message)
+        self.url = url
+
+
+def safe_json(data: str, url: str | None = None) -> Any:
+    """
+    Safely parse JSON string, raising ProviderDataError on failure.
+
+    Args:
+        data: The JSON string to parse.
+        url: The source URL for the data, included in the exception if parsing fails.
+    """
+    try:
+        return json.loads(data)
+    except (ValueError, json.JSONDecodeError) as e:
+        msg = f"Failed to parse JSON response: {e}"
+        raise ProviderDataError(msg, url=url) from e
 
 
 class MarketDataProvider(ABC):

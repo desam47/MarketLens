@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from backend.ai.sync_bridge import run_sync
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.scanner.filters import (
     ADXStrong,
@@ -367,8 +368,11 @@ def execute_query(
         symbols = []
 
     # --- Warm the scanner cache ---
+    # scan_symbols is async; this runs in a loop-less worker thread
+    # (the nl-search router pushes execute_query through
+    # asyncio.to_thread) — bridge with run_sync.
     if symbols:
-        market_scanner.scan_symbols(symbols)
+        run_sync(market_scanner.scan_symbols(symbols))
 
     cache = list(market_scanner.scan_results.values())
 

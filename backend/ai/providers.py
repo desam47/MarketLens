@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
@@ -77,15 +77,15 @@ class OpenAICompatibleProvider(AIProvider):
             h["Authorization"] = f"Bearer {self._api_key}"
         return h
 
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         """Hit ``/v1/models`` (Ollama / LM Studio / OpenAI / OpenRouter).
 
         Returns False on any error so the manager can fall through.
         """
         url = f"{self._base_url}/models"
         try:
-            with httpx.Client(timeout=self._health_check_timeout) as client:
-                r = client.get(url, headers=self._headers())
+            async with httpx.AsyncClient(timeout=self._health_check_timeout) as client:
+                r = await client.get(url, headers=self._headers())
             return r.status_code == 200
         except (httpx.HTTPError, httpx.StreamError) as e:
             logger.debug("AI health check failed for %s: %s", self.name, e)
@@ -94,7 +94,7 @@ class OpenAICompatibleProvider(AIProvider):
             logger.warning("AI health check raised for %s: %s", self.name, e)
             return False
 
-    def complete(
+    async def complete(
         self,
         prompt: str,
         system: str | None = None,
@@ -117,8 +117,8 @@ class OpenAICompatibleProvider(AIProvider):
             body["temperature"] = temperature
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                r = client.post(url, json=body, headers=self._headers())
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(url, json=body, headers=self._headers())
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
 
@@ -178,14 +178,14 @@ class OpenAICompatibleProvider(AIProvider):
             raw=data,
         )
 
-    def stream(
+    async def stream(
         self,
         prompt: str,
         system: str | None = None,
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         url = f"{self._base_url}/chat/completions"
         messages: list[dict[str, str]] = []
         if system:
@@ -198,15 +198,15 @@ class OpenAICompatibleProvider(AIProvider):
             body["temperature"] = temperature
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                with client.stream(
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                async with client.stream(
                     "POST", url, json=body, headers=self._headers()
                 ) as r:
                     if r.status_code >= 400:
-                        r.read()
+                        await r.aread()
                         _raise_if_unavailable(r.status_code, self.name, r.text)
                         r.raise_for_status()
-                    for line in r.iter_lines():
+                    async for line in r.aiter_lines():
                         if not line or not line.startswith("data:"):
                             continue
                         payload = line[5:].strip()
@@ -258,7 +258,7 @@ class AnthropicProvider(AIProvider):
             h["x-api-key"] = self._api_key
         return h
 
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         # Anthropic has no list-models endpoint. Probe a tiny
         # completion request with max_tokens=1 — if the API key is
         # bad, this returns 401; if the network is up, this returns
@@ -266,8 +266,8 @@ class AnthropicProvider(AIProvider):
         if not self._api_key:
             return False
         try:
-            with httpx.Client(timeout=self._health_check_timeout) as client:
-                r = client.post(
+            async with httpx.AsyncClient(timeout=self._health_check_timeout) as client:
+                r = await client.post(
                     f"{self._base_url}/v1/messages",
                     headers=self._headers(),
                     json={
@@ -282,7 +282,7 @@ class AnthropicProvider(AIProvider):
         except Exception:  # noqa: BLE001
             return False
 
-    def complete(
+    async def complete(
         self,
         prompt: str,
         system: str | None = None,
@@ -303,8 +303,8 @@ class AnthropicProvider(AIProvider):
             body["temperature"] = temperature
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                r = client.post(
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                r = await client.post(
                     f"{self._base_url}/v1/messages",
                     headers=self._headers(),
                     json=body,
@@ -352,14 +352,14 @@ class AnthropicProvider(AIProvider):
             raw=data,
         )
 
-    def stream(
+    async def stream(
         self,
         prompt: str,
         system: str | None = None,
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
-    ) -> Iterator[str]:
+    ) -> AsyncIterator[str]:
         if not self._api_key:
             raise ProviderUnavailable("anthropic: api_key not set")
         body: dict[str, Any] = {
@@ -374,16 +374,16 @@ class AnthropicProvider(AIProvider):
             body["temperature"] = temperature
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                with client.stream(
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                async with client.stream(
                     "POST", f"{self._base_url}/v1/messages",
                     json=body, headers=self._headers(),
                 ) as r:
                     if r.status_code >= 400:
-                        r.read()
+                        await r.aread()
                         _raise_if_unavailable(r.status_code, "anthropic", r.text)
                         r.raise_for_status()
-                    for line in r.iter_lines():
+                    async for line in r.aiter_lines():
                         if not line or not line.startswith("data:"):
                             continue
                         try:

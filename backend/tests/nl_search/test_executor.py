@@ -1,7 +1,7 @@
 """Tests for the NL search executor."""
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.models.market_data import DataStatus, Quote
 from backend.nl_search.executor import (
@@ -204,6 +204,7 @@ class TestExecuteQuery(unittest.TestCase):
         msft.trend_signals = {"ONE_DAY": {"direction": "downtrend", "confidence": 0.8}}
 
         mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft}
+        mock_scanner.scan_symbols = AsyncMock()
         mock_resolve.return_value = ["AAPL", "MSFT"]
 
         f = NLFilters(direction="bullish")
@@ -236,6 +237,7 @@ class TestExecuteQuery(unittest.TestCase):
             r.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}}
 
         mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft, "GOOG": goog}
+        mock_scanner.scan_symbols = AsyncMock()
         mock_resolve.return_value = ["AAPL", "MSFT", "GOOG"]
 
         f = NLFilters(direction="bullish", top_n=3, ranking="strongest_bullish")
@@ -255,6 +257,7 @@ class TestExecuteQuery(unittest.TestCase):
             r.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}}
             results[s] = r
         mock_scanner.scan_results = results
+        mock_scanner.scan_symbols = AsyncMock()
         mock_resolve.return_value = symbols
 
         f = NLFilters(direction="bullish", top_n=3, ranking="strongest_bullish")
@@ -275,6 +278,7 @@ class TestExecuteQueryWithRSPercent(unittest.TestCase):
             r.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}}
 
         mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft}
+        mock_scanner.scan_symbols = AsyncMock()
         mock_resolve.return_value = ["AAPL", "MSFT"]
 
         f = NLFilters(outperforms="QQQ")

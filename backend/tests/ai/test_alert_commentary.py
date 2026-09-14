@@ -9,7 +9,7 @@ exception — the caller is an RQ worker task with no one watching for
 a raised exception the way a request handler would.
 """
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.ai.alert_commentary import generate_commentary
 from backend.ai.provider import AIResponse
@@ -72,12 +72,12 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.to_dict.return_value = {"price": 150.5}
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"commentary": "Price crossed above the 150 threshold."}\n```',
             provider="ollama", model="llama3.2",
-        )
+        ))
 
         result = generate_commentary(1)
 
@@ -103,7 +103,7 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = False
+        mock_ai.is_available = AsyncMock(return_value=False)
 
         result = generate_commentary(1)
 
@@ -119,11 +119,11 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.to_dict.return_value = {}
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text="not json at all", provider="ollama", model="llama3.2",
-        )
+        ))
 
         result = generate_commentary(1)
 
@@ -139,9 +139,9 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.to_dict.return_value = {}
-        mock_ai.complete.side_effect = RuntimeError("provider down")
+        mock_ai.complete = AsyncMock(side_effect=RuntimeError("provider down"))
 
         result = generate_commentary(1)
 
@@ -158,11 +158,11 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = True
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"commentary": "Fired on alert facts alone."}\n```',
             provider="ollama", model="llama3.2",
-        )
+        ))
 
         with patch(
             "backend.ai.alert_commentary.build_context",
@@ -184,11 +184,11 @@ class TestGenerateCommentary(unittest.TestCase):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
-        mock_ai.is_available.return_value = True
+        mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.to_dict.return_value = {}
-        mock_ai.complete.return_value = AIResponse(
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"commentary": "ok"}\n```', provider="ollama", model="llama3.2",
-        )
+        ))
 
         generate_commentary(1)
 

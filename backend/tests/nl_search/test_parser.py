@@ -1,6 +1,6 @@
 """Tests for the rule-based NL query parser."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend.nl_search.parser import (
     _apply_conflict_rules,
@@ -259,7 +259,7 @@ class TestParseQuery(unittest.TestCase):
         # reachable, "asdfghjkl" got a confident-but-wrong AI parse
         # instead of falling through to "default").
         with patch("backend.nl_search.parser.ai_manager") as mock_ai:
-            mock_ai.is_available.return_value = False
+            mock_ai.is_available = AsyncMock(return_value=False)
             f, extras, used = parse_query("asdfghjkl")
         self.assertEqual(used, "default")
         self.assertTrue(f.match_all)
@@ -305,7 +305,7 @@ class TestParseQueryScopeOverride(unittest.TestCase):
 
     def test_default_path_respects_market_scope(self):
         with patch("backend.nl_search.parser.ai_manager") as mock_ai:
-            mock_ai.is_available.return_value = False
+            mock_ai.is_available = AsyncMock(return_value=False)
             f, _, used = parse_query("asdfghjkl", base={"scope": "market"})
         self.assertEqual(used, "default")
         self.assertEqual(f.scope, "market")

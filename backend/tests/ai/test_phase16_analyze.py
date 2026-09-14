@@ -14,11 +14,12 @@ Plus parse-prompt-validation coverage and a mocked end-to-end test
 that exercises the full path: context → prompt → mock provider →
 parsed response.
 """
+import asyncio
 import json
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
@@ -418,10 +419,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=None, provider="disabled", model="llama3.2"
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertEqual(result.trend, "uncertain")
         self.assertIn("disabled", result.summary)
@@ -431,7 +433,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
     def test_returns_uncertainty_when_no_quant_data(self, mock_ctx, mock_ai):
         mock_ctx.side_effect = InsufficientDataError("no quote for ZZZZ")
         # ai_manager is never called
-        result = analyze_symbol("ZZZZ", "1d")
+        result = asyncio.run(analyze_symbol("ZZZZ", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("not available", result.summary)
         mock_ai.complete.assert_not_called()
@@ -442,10 +444,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=None, provider="none", model="llama3.2"
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("unavailable", result.summary)
 
@@ -455,10 +458,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text="Sorry, I can't help with that.", provider="ollama", model="llama3.2"
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("could not be parsed", result.summary)
 
@@ -469,6 +473,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
             trend_state={"direction": "uptrend", "strength": "strong", "confidence": 0.9},
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -485,7 +490,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, AnalysisResponse)
         self.assertNotIsInstance(result, UncertaintyResponse)
         self.assertEqual(result.trend, "bullish")
@@ -512,6 +517,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
         )
         mock_ai.settings.provider = "openrouter"  # the configured primary
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -528,7 +534,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",  # the actual fallback that answered
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertEqual(result.provider, "ollama")
         self.assertEqual(result.model, "llama3.2")
 
@@ -538,10 +544,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text="not json at all", provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertEqual(result.provider, "ollama")
         self.assertEqual(result.model, "llama3.2")
@@ -552,10 +559,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=None, provider="disabled", model="llama3.2"
         )
-        analyze_symbol("AAPL", "1d", max_tokens=500, temperature=0.5)
+        asyncio.run(analyze_symbol("AAPL", "1d", max_tokens=500, temperature=0.5))
         kwargs = mock_ai.complete.call_args.kwargs
         self.assertEqual(kwargs["max_tokens"], 500)
         self.assertEqual(kwargs["temperature"], 0.5)
@@ -566,10 +574,11 @@ class TestAnalyzeSymbol(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=None, provider="disabled", model="llama3.2"
         )
-        analyze_symbol("AAPL", "1d")
+        asyncio.run(analyze_symbol("AAPL", "1d"))
         # System prompt should mention "MarketLens"
         self.assertIn("MarketLens", mock_ai.complete.call_args.kwargs["system"])
         # User prompt should contain the context
@@ -584,6 +593,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             trend_state={"direction": "downtrend", "strength": "strong", "confidence": 0.9},
         )
         # AI says bullish while engine says downtrend
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -600,7 +610,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         # Result is still the AI's response — quant truth is separate
         self.assertEqual(result.trend, "bullish")
         # (Logging assertion would need caplog; out of scope for this test)
@@ -620,6 +630,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=760.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -636,7 +647,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertEqual(result.key_levels, [
             "756.64 support",   # <= 760.0
             "760.11 resistance",
@@ -651,6 +662,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=760.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -667,7 +679,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertEqual(result.key_levels, ["$756.64 support", "769.7 resistance"])
 
     @patch("backend.ai.analyze.ai_manager")
@@ -676,6 +688,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=None, timestamp="t", data_status="unknown",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = AIResponse(
             text=(
                 "```json\n"
@@ -692,7 +705,7 @@ class TestBareKeyLevelsLabeling(unittest.TestCase):
             ),
             provider="ollama", model="llama3.2",
         )
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertEqual(result.key_levels, ["756.64"])
 
 
@@ -741,8 +754,9 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
-        result = analyze_symbol("AAPL", "1d")
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
         mock_record.assert_called_once()
         args, _ = mock_record.call_args
         self.assertEqual(args[0], "AAPL")
@@ -758,8 +772,9 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._hold_reply()
-        analyze_symbol("AAPL", "1d")
+        asyncio.run(analyze_symbol("AAPL", "1d"))
         mock_record.assert_called_once()
 
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
@@ -771,9 +786,10 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
         )
+        mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
         mock_record.side_effect = RuntimeError("db is down")
-        result = analyze_symbol("AAPL", "1d")  # must not raise
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))  # must not raise
         self.assertEqual(result.trend, "bullish")
         self.assertIsNotNone(result.trade_plan)
 
