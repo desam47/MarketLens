@@ -305,7 +305,7 @@ async def list_ranking_categories():
 @router.get("/top-movers", response_model=list[_ScanResultResponse])
 async def get_top_movers(
     direction: str = Query("bullish", pattern="^(bullish|bearish)$"),
-    limit: int = Query(10, ge=1, le=50),
+    limit: int = Query(10, ge=0, le=50),
     watchlist_id: int | None = Query(None, description="Watchlist to scan (defaults to first active)"),
     db: Session = Depends(get_db),
 ):
@@ -315,30 +315,27 @@ async def get_top_movers(
     ``watchlist_id`` is omitted, scans the first active watchlist.
     """
     repo = WatchlistRepository(db)
-    if watchlist_id is None:
-        # Find the first active watchlist that actually has symbols.
-        # New (potentially empty) watchlists can shadow populated ones in the
-        # default sort order.
-        watchlists = repo.get_watchlists(active_only=True)
-        for wl in watchlists:
+    if watchlist_id is None or watchlist_id == 0:
+        # Scan across **all** active watchlists
+        all_wls = repo.get_watchlists(active_only=True)
+        symbols_set: set[str] = set()
+        for wl in all_wls:
             symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
-            if symbols:
-                watchlist_id = wl.id
-                break
-        else:
-            # All active watchlists are empty — return empty result rather
-            # than silently scanning nothing.
+            # each element in `symbols` is a WatchlistSymbol instance
+            symbols_set.update(ws.symbol for ws in symbols)
+        if not symbols_set:
+            return []
+        watchlist_symbols = list(symbols_set)
+    else:
+        # Existing behavior for a specific watchlist
+        watchlist = repo.get_watchlist(watchlist_id)
+        if watchlist is None:
+            raise HTTPException(status_code=404, detail="Watchlist not found")
+        watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+        if not watchlist_symbols:
             return []
 
-    watchlist = repo.get_watchlist(watchlist_id)
-    if watchlist is None:
-        raise HTTPException(status_code=404, detail="Watchlist not found")
-
-    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
-    if not watchlist_symbols:
-        return []
-
-    symbols = [str(ws.symbol) for ws in watchlist_symbols]
+    symbols = [ws if isinstance(ws, str) else str(ws.symbol) for ws in watchlist_symbols]
     await market_scanner.scan_symbols_async(symbols)
 
     cache = _scoped_cache(symbols)
@@ -379,7 +376,7 @@ async def get_watchlist_rankings(
     if not watchlist_symbols:
         return _empty_rankings(engine)
 
-    symbols = [str(ws.symbol) for ws in watchlist_symbols]
+    symbols = [ws if isinstance(ws, str) else str(ws.symbol) for ws in watchlist_symbols]
     await market_scanner.scan_symbols_async(symbols)
 
     cache = _scoped_cache(symbols)
@@ -566,7 +563,8 @@ async def scan_watchlist_top(
 
     by_symbol = {r.symbol.upper(): r for r in market_scanner.scan_results.values()}
     out: list[_ScanResultResponse] = []
-    for sym, _score in ranked[: max(0, limit)]:
+    top = limit if limit > 0 else len(ranked)
+    for sym, _score in ranked[: top]:
         result = by_symbol.get(sym.upper())
         if result is not None:
             out.append(_result_to_dict(result))
