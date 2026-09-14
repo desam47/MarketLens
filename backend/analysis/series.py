@@ -88,13 +88,26 @@ def bar_dicts_to_arrays(bars: list[dict]) -> dict:
             "opens": [], "highs": [], "lows": [], "closes": [],
             "volumes": [], "timestamps": [],
         }
+    opens: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
+    closes: list[float] = []
+    volumes: list[float] = []
+    timestamps: list = []
+    for b in bars:
+        opens.append(b["open"])
+        highs.append(b["high"])
+        lows.append(b["low"])
+        closes.append(b["close"])
+        volumes.append(b["volume"])
+        timestamps.append(b["timestamp"])
     return {
-        "opens": [b["open"] for b in bars],
-        "highs": [b["high"] for b in bars],
-        "lows": [b["low"] for b in bars],
-        "closes": [b["close"] for b in bars],
-        "volumes": [b["volume"] for b in bars],
-        "timestamps": [b["timestamp"] for b in bars],
+        "opens": opens,
+        "highs": highs,
+        "lows": lows,
+        "closes": closes,
+        "volumes": volumes,
+        "timestamps": timestamps,
     }
 
 

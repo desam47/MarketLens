@@ -68,6 +68,8 @@ def _is_sqlite_url(url: str) -> bool:
 _SQLITE_PRAGMAS_ON_CONNECT = [
     "PRAGMA journal_mode=WAL",
     "PRAGMA synchronous=NORMAL",
+    # Wait up to 30000 ms (30 seconds) on locked DB before raising OperationalError
+    "PRAGMA busy_timeout=30000",
     # Checkpoint every 1000 WAL pages (~4 MB). Lower = more frequent
     # fsyncs, snappier crash recovery, slower writes. 1000 is the
     # SQLite default and the sweet spot for our workload.

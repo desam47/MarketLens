@@ -55,6 +55,13 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
             ts = conn.execute(text("PRAGMA temp_store")).scalar()
         self.assertEqual(int(ts), 2)
 
+    def test_busy_timeout_is_30_seconds(self):
+        """busy_timeout = 30000 ms (30 seconds)."""
+        from backend.database.db import engine
+        with engine.connect() as conn:
+            bt = conn.execute(text("PRAGMA busy_timeout")).scalar()
+        self.assertEqual(int(bt), 30000)
+
 
 class TestWalPragmasOnPooledConnection(unittest.TestCase):
     """A second connection from the pool must see the same PRAGMAs applied.
