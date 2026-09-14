@@ -42,6 +42,9 @@ def run_sync(coro: "Coroutine[Any, Any, T]") -> T:
     Raises ``RuntimeError`` if called from inside a running loop —
     that call site should be ``await``-ing instead.
     """
+    if not asyncio.iscoroutine(coro) and not hasattr(coro, "__await__"):
+        return coro  # type: ignore[return-value]
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:

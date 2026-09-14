@@ -9,7 +9,7 @@ import os
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 
 def start_backend():
     """Start FastAPI backend"""
