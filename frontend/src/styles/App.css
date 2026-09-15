@@ -2601,7 +2601,7 @@ h4 {
   display: grid;
   /* Symbol | Price | Score | Trend | Signals | Last Update */
   /* column-gap creates the visible spacing between columns. */
-  grid-template-columns: 80px 80px 56px 240px minmax(280px, 1fr) 100px;
+  grid-template-columns: 80px 80px 64px 240px minmax(280px, 1fr) 100px;
   column-gap: 1.25rem;
   width: 100%;
   min-width: 0;
@@ -2611,7 +2611,7 @@ h4 {
 
 .scanner-vheader-cell {
   text-align: left;
-  padding: 0.6rem 0.35rem;
+  padding: 0.5rem 0.5rem;
   color: var(--text-muted);
   font-weight: 600;
   font-size: 0.8rem;
@@ -2625,7 +2625,7 @@ h4 {
 /* Virtualized scanner row. */
 .scanner-vrow {
   display: grid;
-  grid-template-columns: 80px 80px 56px 240px minmax(280px, 1fr) 100px;
+  grid-template-columns: 80px 80px 64px 240px minmax(280px, 1fr) 100px;
   column-gap: 1.25rem;
   align-items: center;
   min-width: 0;
@@ -2646,6 +2646,7 @@ h4 {
 .scanner-vcell {
   padding: 0.5rem 0.5rem;
   font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2679,10 +2680,36 @@ h4 {
   color: var(--text-primary);
 }
 
+.cell-price {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.cell-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+}
+
 .cell-signals {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+}
+
+.cell-freshness {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.freshness-time {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.freshness-age {
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 .signal-chip {
@@ -2731,15 +2758,13 @@ h4 {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
-  gap: 0.6rem;
+  gap: 0.5rem;
   align-items: center;
   justify-content: flex-start;
-  padding: 0.25rem 0.15rem;
   overflow: hidden;
   min-width: 0;
   width: 100%;
   max-width: 100%;
-  height: 100%;
   box-sizing: border-box;
   white-space: nowrap;
   contain: layout;

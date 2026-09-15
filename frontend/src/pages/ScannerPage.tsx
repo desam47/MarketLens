@@ -137,8 +137,8 @@ const ScannerRow = React.memo(function ScannerRow({
       onClick={() => onSelectSymbol(sym)}
     >
       <div className="scanner-vcell cell-symbol">{sym}</div>
-      <div className="scanner-vcell">{result?.quote?.price != null ? strPrice(result.quote.price) : '—'}</div>
-      <div className={`scanner-vcell ${result ? scoreClass(result.total_score) : ''}`}>
+      <div className="scanner-vcell cell-price">{result?.quote?.price != null ? strPrice(result.quote.price) : '—'}</div>
+      <div className={`scanner-vcell cell-score ${result ? scoreClass(result.total_score) : ''}`}>
         {result ? result.total_score.toFixed(1) : '…'}
       </div>
       <TrendColumn trendSignals={result?.trend_signals ?? {}} />
