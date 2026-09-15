@@ -97,10 +97,6 @@ function pct(v: number | null | undefined): string {
   return v.toFixed(2) + '%';
 }
 
-function barColor(close: number, open: number): string {
-  return close >= open ? '#10b981' : '#ef4444';
-}
-
 /** Color a change value by its own sign, independent of candle direction.
 A bar can be a down-candle (close < open) yet still post a positive change
 vs the prior bar's close — coloring by candle color would mis-color that
@@ -414,7 +410,6 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                   chgAbs != null && prev.close > 0
                     ? (chgAbs / prev.close) * 100
                     : null;
-                const c = barColor(b.close, b.open);
                 return (
                   <tr key={i}>
                     <td>{b.timestamp ? (() => {
@@ -430,7 +425,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
-                    <td style={{ color: c }}>${strPrice(b.close)}</td>
+                    <td>${strPrice(b.close)}</td>
                     <td style={{ color: changeColor(chgAbs) }}>
                       {chgAbs != null ? `${chgAbs >= 0 ? '+' : ''}${chgAbs.toFixed(2)}` : '—'}
                     </td>
