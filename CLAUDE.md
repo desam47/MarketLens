@@ -26,7 +26,7 @@ Two features depend on a running RQ worker, not just the API process: AI analysi
 
 ```bash
 rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers    # AI analysis jobs
-rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill   # ticker backfill (run twice for the concurrency-of-2 cap)
+rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill   # ticker backfill (one worker — run 2 only if you accept more Webull 429 pressure)
 ```
 
 Requires `REDIS_ENABLED=true` in `.env` and a running Redis instance. Without a worker running, added tickers get a `BackfillJob` row stuck at `status: "queued"` forever (check via `GET /api/watchlists/symbols/{symbol}/backfill-status`) — the symbol still gets live quotes/1m bars (that's independent of backfill), it just never gets historical bars.

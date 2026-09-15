@@ -780,8 +780,9 @@ class WebullProvider(BaseMarketDataProvider):
         """Fetch historical bars for multiple symbols in a single API call.
 
         Uses POST /market-data/stock/batch-bars which shares the same 60/min
-        rate limit as the single-symbol GET — but batches up to 100 symbols
-        per call, making it vastly more efficient for watchlist ingestion.
+        rate limit as the single-symbol GET — but batches up to 20 symbols
+        per call (Webull's hard API cap), issuing multiple calls for larger
+        watchlists.
         Returns a dict mapping symbol → list of bars (oldest→newest).
 
         ``include_extended_hours``: see ``get_historical_bars`` — same
@@ -789,6 +790,8 @@ class WebullProvider(BaseMarketDataProvider):
         """
         if not symbols:
             return {}
+
+        _WEBULL_BATCH_LIMIT = 20
 
         try:
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
@@ -806,35 +809,50 @@ class WebullProvider(BaseMarketDataProvider):
             trading_sessions = ["PRE", "RTH", "ATH"] if ext_hours else None
 
             sym_list = [s.upper() for s in symbols]
-            resp = self._data_client.market_data.get_batch_history_bar(
-                sym_list, "US_STOCK", timespan, count=str(count),
-                trading_sessions=trading_sessions,
-                real_time_required=(timespan == "M1") or None,
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(f"Webull batch bars HTTP {resp.status_code}")
 
-            # Response shape (verified 2026-09-07):
-            #   {"result": [{"symbol": "AAPL", "result": [{time,open,...}, ...]},
-            #               {"symbol": "NVDA", "result": [{time,open,...}, ...]}]}
-            # The SDK returns a list under the "result" key with per-symbol
-            # entries. We index by symbol for stable ordering.
-            data = resp.json()
+            # The Webull batch-bars endpoint rejects requests with more than
+            # 20 symbols (HTTP 417 "symbols size must be between 1 and 20").
+            # The docstring above (written against Webull's older batch cap of
+            # 100) drifted, and this hard limit is what causes the live 1m
+            # ingestion loop to fail outright for any watchlist over 20
+            # symbols — silently routing after-hours 1m bars (and therefore
+            # the regime/trend engine dispatches that feed the dashboard's
+            # "Real-time market intelligence" freshness indicator) to the
+            # fallback provider, which doesn't request extended-hours data.
+            # Chunking the batch here keeps the primary provider in the loop
+            # and stays within the documented Webull contract.
             rows_by_symbol: dict[str, list[dict]] = {}
-            if isinstance(data, dict) and isinstance(data.get("result"), list):
-                for entry in data["result"]:
-                    if not isinstance(entry, dict):
-                        continue
-                    sym = str(entry.get("symbol") or "").upper()
-                    if not sym:
-                        continue
-                    rows_by_symbol[sym] = entry.get("result") or []
-            elif isinstance(data, dict):
-                # Older / alternative shape: {"AAPL": [...], "NVDA": [...]}
-                rows_by_symbol = {k: v or [] for k, v in data.items() if isinstance(v, list)}
-            else:
-                self._reset_error_state()
-                return {}
+            for chunk_start in range(0, len(sym_list), _WEBULL_BATCH_LIMIT):
+                chunk = sym_list[chunk_start:chunk_start + _WEBULL_BATCH_LIMIT]
+                resp = self._data_client.market_data.get_batch_history_bar(
+                    chunk, "US_STOCK", timespan, count=str(count),
+                    trading_sessions=trading_sessions,
+                    real_time_required=(timespan == "M1") or None,
+                )
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Webull batch bars HTTP {resp.status_code}")
+                data = resp.json()
+
+                # Response shape (verified 2026-09-07):
+                #   {"result": [{"symbol": "AAPL", "result": [{time,open,...}, ...]},
+                #               {"symbol": "NVDA", "result": [{time,open,...}, ...]}]}
+                # The SDK returns a list under the "result" key with per-symbol
+                # entries. We index by symbol for stable ordering.
+                if isinstance(data, dict) and isinstance(data.get("result"), list):
+                    for entry in data["result"]:
+                        if not isinstance(entry, dict):
+                            continue
+                        sym = str(entry.get("symbol") or "").upper()
+                        if not sym:
+                            continue
+                        rows_by_symbol[sym] = entry.get("result") or []
+                elif isinstance(data, dict):
+                    # Older / alternative shape: {"AAPL": [...], "NVDA": [...]}
+                    for k, v in data.items():
+                        if isinstance(v, list):
+                            rows_by_symbol[k.upper()] = v or []
+                # Malformed/empty response for this chunk: skip silently and
+                # let subsequent chunks / the fallback provider cover it.
 
             result: dict[str, list["Bar"]] = {}
             for sym in sym_list:

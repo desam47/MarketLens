@@ -43,9 +43,14 @@ if command -v rq >/dev/null 2>&1; then
     echo "🚀 Starting AI analysis worker (marketlens-workers) ..."
     rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers &
     WORKER_PIDS+=($!)
-    echo "🚀 Starting backfill workers (marketlens-backfill x2) ..."
-    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill &
-    WORKER_PIDS+=($!)
+    echo "🚀 Starting backfill worker (marketlens-backfill x1) ..."
+    # One backfill worker, not two. Two workers run backfill jobs concurrently
+    # and, together with the live 1m ingestion loop, all instantiate a Webull
+    # provider at once — enough to trip Webull's REST 429 (TOO_MANY_REQUESTS)
+    # on the /openapi/config token endpoint, which starves the live 1m bar
+    # feed and leaves the "latest bar" frozen. One worker serializes the
+    # heavy historical fetches so the live loop keeps quota to write fresh
+    # 1m bars. (Reverting to 2 just requires duplicating the line below.)
     rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill &
     WORKER_PIDS+=($!)
 else

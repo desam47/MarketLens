@@ -658,5 +658,30 @@ class TestSetFileLoggerDedup(unittest.TestCase):
         self.assertEqual(orig.call_count, 2)
 
 
+class TestGetHistoricalBarsBatchChunking(unittest.TestCase):
+    def test_chunks_when_more_than_20_symbols(self):
+        symbols = [f"SYM{i:02d}" for i in range(25)]
+        mock_data = MagicMock()
+
+        call_counts: list[int] = []
+
+        def _fake_resp(*args: object, **kwargs: object) -> MagicMock:
+            call_counts.append(len(args[0]))  # type: ignore[arg-type]
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.json.return_value = {
+                "result": [{"symbol": s, "result": []} for s in args[0]]  # type: ignore[union-attr]
+            }
+            return resp
+
+        mock_data.market_data.get_batch_history_bar.side_effect = _fake_resp
+        provider = _make_provider(mock_data)
+
+        result = provider.get_historical_bars_batch(symbols, "1d")
+
+        self.assertEqual(call_counts, [20, 5])
+        self.assertEqual(set(result.keys()), {s.upper() for s in symbols})
+
+
 if __name__ == "__main__":
     unittest.main()

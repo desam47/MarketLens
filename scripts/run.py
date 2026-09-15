@@ -3,9 +3,9 @@
 MarketLens - Start both backend and frontend
 Run: python3 run.py
 """
+import os
 import subprocess
 import sys
-import os
 import time
 from pathlib import Path
 
@@ -31,13 +31,17 @@ def start_frontend():
 
 def start_workers():
     """Start the RQ background workers — AI analysis jobs and symbol-history
-    backfill (two backfill workers, matching the old in-process
-    concurrency-cap-of-2). Without these, POST /api/ai/jobs and adding a
-    ticker to a watchlist both silently queue a job that nothing ever
-    consumes (found via a 2026-09-08 completeness audit — this script
-    started only the API + frontend, same gap as start.sh). Returns an
-    empty list (soft-fail) if the `rq` CLI isn't installed; the app still
-    runs, it just won't process background jobs.
+    backfill (one backfill worker). Two workers run backfill jobs concurrently
+    and, with the live 1m ingestion loop, all instantiate a Webull provider at
+    once — enough to trip Webull's REST 429 (TOO_MANY_REQUESTS) on the
+    /openapi/config token endpoint, which starves the live 1m bar feed and
+    leaves the "latest bar" frozen. One worker serializes the heavy
+    historical fetches so the live loop keeps quota. Without these workers,
+    POST /api/ai/jobs and adding a ticker to a watchlist both silently queue
+    a job that nothing ever consumes (found via a 2026-09-08 completeness
+    audit — this script started only the API + frontend, same gap as
+    start.sh). Returns an empty list (soft-fail) if the `rq` CLI isn't
+    installed; the app still runs, it just won't process background jobs.
     """
     import shutil
     if shutil.which("rq") is None:
@@ -46,7 +50,7 @@ def start_workers():
         print("   run until you install it (pip install rq) and restart.")
         return []
     print("🚀 Starting AI analysis worker (marketlens-workers)")
-    print("🚀 Starting backfill workers (marketlens-backfill x2)")
+    print("🚀 Starting backfill worker (marketlens-backfill x1)")
     redis_url = "redis://localhost:6379/0"
     return [
         # --worker-class SimpleWorker: RQ's default Worker forks a child
@@ -54,7 +58,6 @@ def start_workers():
         # reproducibly segfaults the forked child — see
         # backend/workers/backfill_worker.py's module docstring.
         subprocess.Popen(["rq", "worker", "--url", redis_url, "--worker-class", "rq.worker.SimpleWorker", "marketlens-workers"], cwd=ROOT),
-        subprocess.Popen(["rq", "worker", "--url", redis_url, "--worker-class", "rq.worker.SimpleWorker", "marketlens-backfill"], cwd=ROOT),
         subprocess.Popen(["rq", "worker", "--url", redis_url, "--worker-class", "rq.worker.SimpleWorker", "marketlens-backfill"], cwd=ROOT),
     ]
 
