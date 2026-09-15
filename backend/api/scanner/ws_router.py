@@ -31,7 +31,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from backend.market_data.services.engine_seeder import engine_registry
 from backend.scanner.scanner import market_scanner
 
-from .router import _result_to_dict
+from .router import _result_to_lite_dict
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +200,7 @@ class ScannerDispatcher:
         # timestamp per symbol and skip re-runs that come in too soon.
         # Symbol → monotonic seconds of last successful scan.
         self._last_scan_at: dict[str, float] = {}
+        self._last_broadcast_at: str | None = None
         # Cooldown in seconds. 30s matches the ingestion quote interval,
         # so a normal flow produces at most one scan per symbol per
         # cycle. Backtests / real-time bursts are still throttled.
@@ -264,45 +265,55 @@ class ScannerDispatcher:
     async def _scan_and_broadcast_all(self) -> None:
         """Re-scan every subscribed symbol, respecting the per-symbol cooldown.
 
-        Phase 20 perf fix: the dispatcher is triggered on every
-        ``engine_registry`` quote event, but a single quote can fire
-        many times per second under load (especially when the regime
-        engine or scanner has multiple subscribers). Without throttling
-        we re-scan + re-serialize + broadcast for every tick. The
-        cooldown table (``_last_scan_at``) means each symbol is scanned
-        at most once per ``_cooldown_seconds`` window.
+        Scans are batched and run concurrently via ``scan_symbols_async``,
+        which pre-fetches bars/quotes for all symbols in one batch
+        (avoiding the N+1 DB-session pattern) and then runs each
+        ``scan_symbol`` on a worker thread via ``asyncio.gather``.
+        This turns N sequential HTTP/DB round-trips into a single
+        batch fetch + parallel scans.
         """
         import time as _time
         symbols = self._manager.get_subscribed_symbols()
         now = _time.monotonic()
+
+        # Cooldown gate: partition subscribed symbols into those that need
+        # a fresh scan and those still under cooldown.
+        to_scan: list[str] = []
+        still_cooling: list[str] = []
         for symbol in symbols:
-            # Cooldown gate: skip the scan (and the broadcast) if we
-            # already produced a result for this symbol very recently.
             last = self._last_scan_at.get(symbol, 0.0)
             if now - last < self._cooldown_seconds:
-                continue
+                still_cooling.append(symbol)
+            else:
+                to_scan.append(symbol)
 
-            # Re-check after the scan starts — a subscription may have
-            # been removed in the meantime, in which case we skip the
-            # broadcast but still run the scan (the cached result is
-            # useful for any later HTTP read).
-            try:
-                result = await asyncio.to_thread(market_scanner.scan_symbol, symbol)
-            except Exception as e:
-                logger.warning(f"Scan failed for {symbol}: {e}")
-                # Still notify subscribers of the error.
-                if self._manager.has_subscribers(symbol):
-                    await self._manager.broadcast(
-                        symbol,
-                        {"type": "scan_error", "symbol": symbol, "error": str(e)},
-                    )
-                continue
+        if not to_scan:
+            # Nothing to scan — but subscribers may still be waiting for
+            # initial results. If we've never broadcast any of them, the
+            # frontend shows "waiting" indefinitely, so let a single
+            # still-cooling symbol through as a best-effort push.
+            if still_cooling and self._last_broadcast_at is None:
+                to_scan = still_cooling  # will still respect cooldown below
+            else:
+                return
 
-            # Record successful scan time *before* the broadcast so
-            # that a slow send doesn't get bypassed by a re-entry
-            # that races with the same scan.
-            self._last_scan_at[symbol] = _time.monotonic()
+        # Record scan timestamps BEFORE the batch so re-entrant quote events
+        # don't trigger duplicate scans of the same symbols.
+        scan_time = _time.monotonic()
+        for symbol in to_scan:
+            self._last_scan_at[symbol] = scan_time
 
+        # Batch pre-fetch + concurrent scan: scan_symbols_async fetches
+        # bars/quotes for all symbols in one batch, then runs each
+        # scan_symbol in a worker thread via asyncio.gather.
+        try:
+            results = await market_scanner.scan_symbols_async(to_scan)
+        except Exception as e:
+            logger.error(f"Batch scan failed for {len(to_scan)} symbols: {e}")
+            return
+
+        # Broadcast each result to its subscribers.
+        for symbol, result in zip(to_scan, results):
             if not self._manager.has_subscribers(symbol):
                 continue
 
@@ -310,13 +321,14 @@ class ScannerDispatcher:
                 payload = {
                     "type": "scan_result",
                     "symbol": symbol,
-                    "data": _result_to_dict(result).model_dump(mode="json"),
+                    "data": _result_to_lite_dict(result).model_dump(mode="json"),
                 }
             except Exception as e:
                 logger.error(f"Failed to serialize scan result for {symbol}: {e}")
                 continue
 
             await self._manager.broadcast(symbol, payload)
+            self._last_broadcast_at = symbol
 
 
 # The dispatcher is initialized lazily at app startup (see ``install``).

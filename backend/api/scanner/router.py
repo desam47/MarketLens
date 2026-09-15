@@ -158,6 +158,40 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
     )
 
 
+def _result_to_lite_dict(result: ScanResult) -> _ScanResultResponse:
+    """Lightweight serialization for the WebSocket live stream.
+
+    The ScannerPage table only displays symbol, price, total_score,
+    trend directions, signals, and timestamp. The full ``_result_to_dict``
+    payload also ships per-indicator values, per-dimension scores, and
+    rank — ~20 extra JSON fields per symbol that the live table never
+    reads. This omits those to cut per-message payload roughly in half.
+    """
+    rs = result.trend_signals or {}
+    trend_lite: dict[str, Any] = {}
+    for tf, sig in rs.items():
+        if isinstance(sig, dict):
+            trend_lite[tf] = {
+                "direction": sig.get("direction"),
+                "confidence": sig.get("confidence"),
+            }
+        else:
+            trend_lite[tf] = sig
+
+    return _ScanResultResponse(
+        symbol=result.symbol,
+        timestamp=_to_dashboard_tz(result.timestamp),
+        quote=_quote_to_dict(result.quote),
+        indicator_values={},
+        scores={},
+        total_score=result.calculate_signed_total_score(),
+        rank=None,
+        signals=list(result.signals or []),
+        trend_signals=trend_lite,
+        is_enabled=getattr(result, "is_enabled", True),
+    )
+
+
 def _build_filter(filters: list[_FilterRequest], match: str):
     """Build a Filter expression from a request body.
 
@@ -202,6 +236,23 @@ def _scoped_cache(symbols: list[str] | None) -> list[ScanResult]:
         wanted = {s.upper() for s in symbols}
         cache = [r for r in cache if r.symbol.upper() in wanted]
     return cache
+
+
+async def _ensure_symbols_scanned(symbols: list[str]) -> None:
+    """Scan symbols that are not yet in the scanner cache.
+
+    Replaces the previous pattern of unconditionally calling
+    ``scan_symbols_async`` for every symbol on every rankings/filter
+    request. The WebSocket dispatcher already scans subscribed symbols
+    on a 30-second cadence, so most symbols will already have a cached
+    result — re-scanning them here is redundant work that doubles the
+    backend load and slows down the sidebar.
+
+    Only the *missing* symbols (never scanned) are fetched here.
+    """
+    missing = [s for s in symbols if s.upper() not in market_scanner.scan_results]
+    if missing:
+        await market_scanner.scan_symbols_async(missing)
 
 
 def _serialize_named_ranking(rr) -> _NamedRankingResponse:
@@ -261,9 +312,12 @@ async def filter_scan_results(
     f = _build_filter(filter_body.filters, filter_body.match)
 
     if symbols:
-        await market_scanner.scan_symbols_async([s.upper() for s in symbols])
+        # Only scan symbols that aren't already cached — avoids duplicating
+        # work the WebSocket dispatcher is already doing every 30s.
+        upper_symbols = [s.upper() for s in symbols]
+        await _ensure_symbols_scanned(upper_symbols)
 
-    cache = _scoped_cache(symbols)
+    cache = _scoped_cache(upper_symbols if symbols else None)
     if not cache:
         return []
 
@@ -286,9 +340,12 @@ async def get_named_rankings(
     f = _build_filter(filter_body.filters, filter_body.match)
 
     if symbols:
-        await market_scanner.scan_symbols_async([s.upper() for s in symbols])
+        # Only scan symbols that aren't already cached — avoids duplicating
+        # work the WebSocket dispatcher is already doing every 30s.
+        upper_symbols = [s.upper() for s in symbols]
+        await _ensure_symbols_scanned(upper_symbols)
 
-    cache = _scoped_cache(symbols)
+    cache = _scoped_cache(upper_symbols if symbols else None)
     if not cache:
         return _empty_rankings(engine)
 
