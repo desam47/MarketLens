@@ -98,7 +98,7 @@ class TestUniversalTurn(_Base):
     @patch("backend.ai.chat.build_context")
     def test_full_round_trip_persists_both_messages(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "AAPL up.", "grounded": true}'))
@@ -132,7 +132,7 @@ class TestUniversalTurn(_Base):
     @patch("backend.ai.chat.build_context")
     def test_two_tickers_two_blocks(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -168,7 +168,7 @@ class TestUniversalTurn(_Base):
     @patch("backend.ai.chat.build_context")
     def test_cold_engine_block_marked_and_pruned(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["RIVN"], False)
-        mock_ctx.return_value.to_dict.return_value = dict(COLD_CTX)
+        mock_ctx.return_value.compact.return_value = dict(COLD_CTX)
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -186,7 +186,7 @@ class TestUniversalTurn(_Base):
     def test_mixed_available_and_unavailable(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "RIVN"], False)
         mock_ctx.side_effect = [
-            MagicMock(to_dict=MagicMock(return_value=WARM_CTX)),
+            MagicMock(compact=MagicMock(return_value=WARM_CTX)),
             InsufficientDataError("no RIVN"),
         ]
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -205,7 +205,7 @@ class TestUniversalTurn(_Base):
     @patch("backend.ai.chat.build_context")
     def test_capped_note_added(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL", "MSFT", "NVDA"], True)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -230,7 +230,7 @@ class TestDegradeContract(_Base):
     @patch("backend.ai.chat.build_context")
     def test_malformed_reply_degrades(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=AIResponse(text="not json", provider="ollama", model="x"))
@@ -241,7 +241,7 @@ class TestDegradeContract(_Base):
     @patch("backend.ai.chat.build_context")
     def test_ai_exception_degrades(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(side_effect=RuntimeError("provider down"))
@@ -284,7 +284,7 @@ class TestAlertContext(_Base):
         s = self._make_session(symbol="AAPL", alert_trigger_id=trig.id, scope="alert")
 
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -302,7 +302,7 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.build_context")
     def test_single_symbol_reanalysis_runs(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply(
@@ -322,7 +322,7 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.build_context")
     def test_multi_symbol_reanalysis_without_target_is_rejected(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply(
@@ -338,7 +338,7 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.build_context")
     def test_multi_symbol_reanalysis_with_target_runs(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply(
@@ -355,7 +355,7 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.build_context")
     def test_reanalysis_uncertainty_is_ungrounded(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply(
@@ -370,7 +370,7 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.build_context")
     def test_ordinary_reply_does_not_invoke_tool(self, mock_ctx, mock_ai, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "up.", "grounded": true}'))
@@ -385,7 +385,7 @@ class TestTurnIntent(_Base):
 
     def _wire(self, mock_ctx, mock_ai, symbols=("AAPL",)):
         self.mock_resolve.return_value = (list(symbols), False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -435,7 +435,7 @@ class TestContextCache(_Base):
     @patch("backend.ai.chat.build_context")
     def test_second_turn_same_symbol_served_from_cache(self, mock_ctx, mock_ai):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
@@ -516,7 +516,7 @@ class TestStreamChatMessage(_Base):
     @patch("backend.ai.chat.ai_manager")
     def test_reanalysis_final_overrides_streamed_text(self, mock_ai, mock_ctx, mock_analyze):
         self.mock_resolve.return_value = (["AAPL"], False)
-        mock_ctx.return_value.to_dict.return_value = WARM_CTX
+        mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = True

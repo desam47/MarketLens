@@ -23,12 +23,12 @@ import logging
 
 from backend.ai.context import build_context
 from backend.ai.manager import ai_manager
-from backend.ai.sync_bridge import run_sync
 from backend.ai.prompt import (
     ALERT_COMMENTARY_SYSTEM_PROMPT,
     build_alert_commentary_prompt,
     parse_alert_commentary_reply,
 )
+from backend.ai.sync_bridge import run_sync
 from backend.database import SessionLocal
 from backend.models import Alert, AlertTrigger
 
@@ -73,7 +73,7 @@ def generate_commentary(trigger_id: int) -> str | None:
             context = build_context(
                 trigger.symbol, include_news=False, include_fundamentals=False,
             )
-            context_dict = context.to_dict()
+            context_dict = context.compact()
         except Exception as e:  # noqa: BLE001
             # InsufficientDataError or any other context-building
             # failure — still worth trying with just the alert/trigger

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+import threading
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -62,6 +63,7 @@ class OpenAICompatibleProvider(AIProvider):
         api_key: str | None,
         timeout: float = 30.0,
         health_check_timeout: float = 2.0,
+        structured_output: bool = False,
     ) -> None:
         self.name = provider_name
         # Strip a trailing slash so urljoin doesn't double up.
@@ -70,12 +72,65 @@ class OpenAICompatibleProvider(AIProvider):
         self._api_key = api_key
         self._timeout = timeout
         self._health_check_timeout = health_check_timeout
+        # O11: when True, the provider sends response_format={"type":"json_object"}
+        # and the manager trusts the response is valid JSON (skips regex).
+        self.supports_structured_output = structured_output
+        # Persistent clients with connection pooling — avoids TCP/TLS
+        # setup on every call. Lazy-initialized on first use (under
+        # _client_lock) because pooled connections bind to the event
+        # loop that opens them — see backend/ai/sync_bridge.py.
+        self._client: httpx.AsyncClient | None = None
+        self._hc_client: httpx.AsyncClient | None = None
+        self._client_lock = threading.Lock()
 
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if self._api_key:
             h["Authorization"] = f"Bearer {self._api_key}"
         return h
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return the persistent completion client, creating it lazily.
+
+        Double-checked under ``_client_lock``: first-use can be hit by
+        several threads at once (to_thread workers, a FastAPI request
+        beside a background job), and an unlocked check-then-create
+        lets each loser build a client whose pool never gets closed.
+        """
+        client = self._client
+        if client is not None and not client.is_closed:
+            return client
+        with self._client_lock:
+            client = self._client
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(
+                    timeout=self._timeout,
+                    limits=httpx.Limits(
+                        max_connections=10, max_keepalive_connections=5,
+                    ),
+                )
+                self._client = client
+            return client
+
+    def _get_hc_client(self) -> httpx.AsyncClient:
+        """Return the persistent health-check client (shorter timeout).
+
+        Same double-checked locking as :meth:`_get_client`.
+        """
+        client = self._hc_client
+        if client is not None and not client.is_closed:
+            return client
+        with self._client_lock:
+            client = self._hc_client
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(
+                    timeout=self._health_check_timeout,
+                    limits=httpx.Limits(
+                        max_connections=2, max_keepalive_connections=1,
+                    ),
+                )
+                self._hc_client = client
+            return client
 
     async def health_check(self) -> bool:
         """Hit ``/v1/models`` (Ollama / LM Studio / OpenAI / OpenRouter).
@@ -84,8 +139,7 @@ class OpenAICompatibleProvider(AIProvider):
         """
         url = f"{self._base_url}/models"
         try:
-            async with httpx.AsyncClient(timeout=self._health_check_timeout) as client:
-                r = await client.get(url, headers=self._headers())
+            r = await self._get_hc_client().get(url, headers=self._headers())
             return r.status_code == 200
         except (httpx.HTTPError, httpx.StreamError) as e:
             logger.debug("AI health check failed for %s: %s", self.name, e)
@@ -101,6 +155,7 @@ class OpenAICompatibleProvider(AIProvider):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AIResponse:
         url = f"{self._base_url}/chat/completions"
         messages: list[dict[str, str]] = []
@@ -115,10 +170,12 @@ class OpenAICompatibleProvider(AIProvider):
             body["max_tokens"] = max_tokens
         if temperature is not None:
             body["temperature"] = temperature
+        # O11: structured output — request the provider force JSON format.
+        if response_format is not None:
+            body["response_format"] = response_format
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                r = await client.post(url, json=body, headers=self._headers())
+            r = await self._get_client().post(url, json=body, headers=self._headers())
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
 
@@ -176,6 +233,7 @@ class OpenAICompatibleProvider(AIProvider):
             provider=self.name,
             model=data.get("model", self._model),
             raw=data,
+            structured=response_format is not None,
         )
 
     async def stream(
@@ -185,6 +243,7 @@ class OpenAICompatibleProvider(AIProvider):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         url = f"{self._base_url}/chat/completions"
         messages: list[dict[str, str]] = []
@@ -196,12 +255,13 @@ class OpenAICompatibleProvider(AIProvider):
             body["max_tokens"] = max_tokens
         if temperature is not None:
             body["temperature"] = temperature
+        if response_format is not None:
+            body["response_format"] = response_format
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                async with client.stream(
-                    "POST", url, json=body, headers=self._headers()
-                ) as r:
+            async with self._get_client().stream(
+                "POST", url, json=body, headers=self._headers()
+            ) as r:
                     if r.status_code >= 400:
                         await r.aread()
                         _raise_if_unavailable(r.status_code, self.name, r.text)
@@ -221,6 +281,20 @@ class OpenAICompatibleProvider(AIProvider):
                             yield piece
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
+
+    async def aclose(self) -> None:
+        """Close both persistent clients (idempotent).
+
+        MUST be awaited on the bridge loop — the loop the pooled
+        connections were opened on. ``AIManager.shutdown()`` arranges
+        that via ``sync_bridge.on_bridge``; nothing should call this
+        from an arbitrary loop.
+        """
+        for attr in ("_client", "_hc_client"):
+            client = getattr(self, attr)
+            setattr(self, attr, None)
+            if client is not None and not client.is_closed:
+                await client.aclose()
 
 
 class AnthropicProvider(AIProvider):
@@ -242,12 +316,19 @@ class AnthropicProvider(AIProvider):
         api_key: str | None = None,
         timeout: float = 30.0,
         health_check_timeout: float = 2.0,
+        structured_output: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
         self._timeout = timeout
         self._health_check_timeout = health_check_timeout
+        self.supports_structured_output = structured_output
+        # Persistent clients — same pattern as OpenAICompatibleProvider
+        # (lazy, lock-guarded, loop-bound; closed by manager.shutdown()).
+        self._client: httpx.AsyncClient | None = None
+        self._hc_client: httpx.AsyncClient | None = None
+        self._client_lock = threading.Lock()
 
     def _headers(self) -> dict[str, str]:
         h = {
@@ -258,6 +339,40 @@ class AnthropicProvider(AIProvider):
             h["x-api-key"] = self._api_key
         return h
 
+    def _get_client(self) -> httpx.AsyncClient:
+        """Persistent completion client (double-checked under lock)."""
+        client = self._client
+        if client is not None and not client.is_closed:
+            return client
+        with self._client_lock:
+            client = self._client
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(
+                    timeout=self._timeout,
+                    limits=httpx.Limits(
+                        max_connections=10, max_keepalive_connections=5,
+                    ),
+                )
+                self._client = client
+            return client
+
+    def _get_hc_client(self) -> httpx.AsyncClient:
+        """Persistent health-check client (double-checked under lock)."""
+        client = self._hc_client
+        if client is not None and not client.is_closed:
+            return client
+        with self._client_lock:
+            client = self._hc_client
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(
+                    timeout=self._health_check_timeout,
+                    limits=httpx.Limits(
+                        max_connections=2, max_keepalive_connections=1,
+                    ),
+                )
+                self._hc_client = client
+            return client
+
     async def health_check(self) -> bool:
         # Anthropic has no list-models endpoint. Probe a tiny
         # completion request with max_tokens=1 — if the API key is
@@ -266,16 +381,15 @@ class AnthropicProvider(AIProvider):
         if not self._api_key:
             return False
         try:
-            async with httpx.AsyncClient(timeout=self._health_check_timeout) as client:
-                r = await client.post(
-                    f"{self._base_url}/v1/messages",
-                    headers=self._headers(),
-                    json={
-                        "model": self._model,
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "ping"}],
-                    },
-                )
+            r = await self._get_hc_client().post(
+                f"{self._base_url}/v1/messages",
+                headers=self._headers(),
+                json={
+                    "model": self._model,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "ping"}],
+                },
+            )
             return r.status_code == 200
         except (httpx.HTTPError, httpx.StreamError):
             return False
@@ -289,6 +403,7 @@ class AnthropicProvider(AIProvider):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AIResponse:
         if not self._api_key:
             raise ProviderUnavailable("anthropic: api_key not set")
@@ -301,14 +416,29 @@ class AnthropicProvider(AIProvider):
             body["system"] = system
         if temperature is not None:
             body["temperature"] = temperature
+        # O11: Anthropic enforces structured output via tool-use. We
+        # declare a single tool with the JSON schema from
+        # response_format and force it: the model must call the tool,
+        # guaranteeing the response is valid JSON matching the schema.
+        if response_format is not None:
+            schema = response_format.get("json_schema", response_format)
+            tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            tool_schema = schema if isinstance(schema.get("parameters"), dict) else schema
+            body["tools"] = [
+                {
+                    "name": tool_name,
+                    "description": tool_schema.get("description", "Return the JSON result."),
+                    "input_schema": tool_schema.get("parameters") or tool_schema,
+                }
+            ]
+            body["tool_choice"] = {"type": "tool", "name": tool_name}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                r = await client.post(
-                    f"{self._base_url}/v1/messages",
-                    headers=self._headers(),
-                    json=body,
-                )
+            r = await self._get_client().post(
+                f"{self._base_url}/v1/messages",
+                headers=self._headers(),
+                json=body,
+            )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 
@@ -335,11 +465,27 @@ class AnthropicProvider(AIProvider):
                 f"anthropic returned a non-JSON body (HTTP {r.status_code}): {e}"
             ) from e
         try:
-            text = "".join(
-                block.get("text", "")
-                for block in data["content"]
-                if block.get("type") == "text"
-            )
+            if response_format is not None and data.get("content"):
+                # Tool-use path: the model was forced to call our
+                # json_output tool, so the first tool_use block holds
+                # the guaranteed-valid JSON.
+                text = ""
+                for block in data["content"]:
+                    if block.get("type") == "tool_use":
+                        text = json.dumps(block.get("input", {}))
+                        break
+                if not text:
+                    text = "".join(
+                        block.get("text", "")
+                        for block in data["content"]
+                        if block.get("type") == "text"
+                    )
+            else:
+                text = "".join(
+                    block.get("text", "")
+                    for block in data["content"]
+                    if block.get("type") == "text"
+                )
         except (KeyError, TypeError) as e:
             raise ProviderUnavailable(
                 f"anthropic returned unexpected payload: {e}"
@@ -350,6 +496,7 @@ class AnthropicProvider(AIProvider):
             provider=self.name,
             model=data.get("model", self._model),
             raw=data,
+            structured=response_format is not None,
         )
 
     async def stream(
@@ -359,6 +506,7 @@ class AnthropicProvider(AIProvider):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         if not self._api_key:
             raise ProviderUnavailable("anthropic: api_key not set")
@@ -372,13 +520,24 @@ class AnthropicProvider(AIProvider):
             body["system"] = system
         if temperature is not None:
             body["temperature"] = temperature
+        if response_format is not None:
+            schema = response_format.get("json_schema", response_format)
+            tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            tool_schema = schema if isinstance(schema.get("parameters"), dict) else schema
+            body["tools"] = [
+                {
+                    "name": tool_name,
+                    "description": tool_schema.get("description", "Return the JSON result."),
+                    "input_schema": tool_schema.get("parameters") or tool_schema,
+                }
+            ]
+            body["tool_choice"] = {"type": "tool", "name": tool_name}
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                async with client.stream(
-                    "POST", f"{self._base_url}/v1/messages",
-                    json=body, headers=self._headers(),
-                ) as r:
+            async with self._get_client().stream(
+                "POST", f"{self._base_url}/v1/messages",
+                json=body, headers=self._headers(),
+            ) as r:
                     if r.status_code >= 400:
                         await r.aread()
                         _raise_if_unavailable(r.status_code, "anthropic", r.text)
@@ -399,6 +558,18 @@ class AnthropicProvider(AIProvider):
                             break
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
+
+    async def aclose(self) -> None:
+        """Close both persistent clients (idempotent).
+
+        Same bridge-loop requirement as
+        :meth:`OpenAICompatibleProvider.aclose`.
+        """
+        for attr in ("_client", "_hc_client"):
+            client = getattr(self, attr)
+            setattr(self, attr, None)
+            if client is not None and not client.is_closed:
+                await client.aclose()
 
 
 # --- Factory --------------------------------------------------------
@@ -438,6 +609,7 @@ def build_provider(
     api_key: str | None,
     timeout: float,
     health_check_timeout: float,
+    structured_output: bool = False,
 ) -> AIProvider:
     """Factory: instantiate the right provider class for ``name``.
 
@@ -455,6 +627,7 @@ def build_provider(
             api_key=api_key,
             timeout=timeout,
             health_check_timeout=health_check_timeout,
+            structured_output=structured_output,
         )
     # OpenAI-compatible family.
     if name == "openai_compatible":
@@ -472,6 +645,7 @@ def build_provider(
         api_key=api_key,
         timeout=timeout,
         health_check_timeout=health_check_timeout,
+        structured_output=structured_output,
     )
 
 

@@ -17,17 +17,18 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.manager import ai_manager
-from backend.ai.sync_bridge import run_sync
 from backend.ai.prompt import (
     DIGEST_SYSTEM_PROMPT,
     DigestNarrative,
     build_digest_user_prompt,
     parse_digest_reply,
 )
+from backend.ai.sync_bridge import run_sync
 from backend.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -146,17 +147,52 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
         # digest router) — bridge via run_sync inside the lambda so
         # _safe_call sees the coroutine's *result*, not the coroutine.
         analysis = _safe_call(
-            lambda: run_sync(analyze_symbol(r.symbol, advisory=False)),
+            lambda: run_sync(analyze_symbol(r.symbol, advisory=False, portfolio_symbols=symbols)),
             default=None,
         )
         if analysis is not None and not getattr(analysis, "is_uncertain", True):
             entry["blurb"] = analysis.summary
         return entry
 
-    movers = {
-        "top_bullish": [_mover_dict(r) for r in top_bullish],
-        "top_bearish": [_mover_dict(r) for r in top_bearish],
-    }
+    # O5: parallelize mover analysis with a bounded thread pool. Each
+    # worker thread calls run_sync() → the shared bridge loop drives the
+    # async analyze_symbol() calls. Provider httpx clients cap at ~10
+    # concurrent connections, so max_workers=4 is a conservative bound
+    # that stays well under that limit while cutting wall-clock time from
+    # N × per-call-latency to ~⌈N/4⌉ × per-call-latency.
+    # Results are collected by submission index (not completion order) to
+    # preserve the ranked ordering from above. A single failed analysis
+    # degrades to a symbol+score entry (no blurb) instead of aborting the
+    # whole digest.
+    all_movers = list(top_bullish) + list(top_bearish)
+    bullish_count = len(top_bullish)
+    mover_results: list[dict[str, Any]] = [{}] * len(all_movers)
+
+    if all_movers:
+        max_workers = min(4, len(all_movers))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_mover_dict, r) for r in all_movers]
+            for i, future in enumerate(futures):
+                try:
+                    mover_results[i] = future.result()
+                except Exception as e:  # noqa: BLE001
+                    r = all_movers[i]
+                    symbol = getattr(r, "symbol", "unknown")
+                    logger.warning(
+                        "Mover analysis failed for %s: %s", symbol, e,
+                    )
+                    mover_results[i] = {
+                        "symbol": symbol,
+                        "score": round(
+                            _safe_call(r.calculate_signed_total_score, default=0.0), 2,
+                        ),
+                    }
+        movers = {
+            "top_bullish": mover_results[:bullish_count],
+            "top_bearish": mover_results[bullish_count:],
+        }
+    else:
+        movers = {"top_bullish": [], "top_bearish": []}
 
     return {
         "watchlist_size": len(symbols),

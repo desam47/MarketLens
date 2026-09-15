@@ -3,6 +3,8 @@ Tests for backend.ai.digest — the daily/session AI digest's
 aggregation logic (build_digest_payload / narrate_digest /
 generate_and_store_digest).
 """
+import threading
+import time
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -193,6 +195,178 @@ class TestNarrateDigest(unittest.TestCase):
         result = narrate_digest(payload)
         self.assertIsInstance(result, DigestNarrative)
         self.assertIn("NEUTRAL", result.narrative)
+
+
+# --- O5: parallel mover analysis ------------------------------------
+
+
+class TestDigestParallelMoverAnalysis(unittest.TestCase):
+    """O5: verify parallelized mover analysis with a bounded thread pool."""
+
+    @patch("backend.ai.digest.analyze_symbol", new_callable=MagicMock)
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_bounded_concurrency_max_four_workers(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        # 10 symbols → 5 bullish + 5 bearish = 10 movers;
+        # max_workers = min(4, 10) = 4 → at most 4 concurrent analyses.
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        symbols = [f"S{i}" for i in range(10)]
+        mock_resolve.return_value = symbols
+        results = {
+            s: _fake_result(s, 90.0 - i * 10) if i < 5 else _fake_result(s, -90.0 + (i - 5) * 10)
+            for i, s in enumerate(symbols)
+        }
+        mock_scanner.scan_results = results
+        mock_scanner.scan_symbols_async = AsyncMock()
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def counting_analyze(symbol, **kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.1)
+            with lock:
+                active -= 1
+            return MagicMock(is_uncertain=False, summary=f"Analysis for {symbol}")
+
+        mock_analyze.side_effect = counting_analyze
+
+        build_digest_payload()
+
+        self.assertLessEqual(max_active, 4)
+
+    @patch("backend.ai.digest.analyze_symbol", new_callable=MagicMock)
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_ordered_output_preserved_despite_different_completion_times(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        # A=90 (slowest), B=80, C=70 (fastest) — ranked order must
+        # survive even though C finishes before A.
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        mock_resolve.return_value = ["A", "B", "C"]
+        results = {
+            "A": _fake_result("A", 90.0),
+            "B": _fake_result("B", 80.0),
+            "C": _fake_result("C", 70.0),
+        }
+        mock_scanner.scan_results = results
+        mock_scanner.scan_symbols_async = AsyncMock()
+
+        delays = {"A": 0.15, "B": 0.05, "C": 0.01}
+
+        def delayed_analyze(symbol, **kwargs):
+            time.sleep(delays[symbol])
+            return MagicMock(is_uncertain=False, summary=f"Analysis for {symbol}")
+
+        mock_analyze.side_effect = delayed_analyze
+
+        payload = build_digest_payload()
+
+        self.assertEqual(
+            [m["symbol"] for m in payload["movers"]["top_bullish"]],
+            ["A", "B", "C"],
+        )
+
+    @patch("backend.ai.digest.analyze_symbol", new_callable=MagicMock)
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_per_mover_failure_isolation(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        # One symbol's analysis crashes; the other two must still
+        # produce blurbs. _safe_call swallows the analyze_symbol error
+        # inside _mover_dict, so future.result() returns normally.
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        mock_resolve.return_value = ["A", "B", "C"]
+        results = {
+            "A": _fake_result("A", 90.0),
+            "B": _fake_result("B", 80.0),
+            "C": _fake_result("C", 70.0),
+        }
+        mock_scanner.scan_results = results
+        mock_scanner.scan_symbols_async = AsyncMock()
+
+        def failing_analyze(symbol, **kwargs):
+            if symbol == "B":
+                raise RuntimeError("analysis crashed")
+            return MagicMock(is_uncertain=False, summary=f"Analysis for {symbol}")
+
+        mock_analyze.side_effect = failing_analyze
+
+        payload = build_digest_payload()
+
+        bullish = payload["movers"]["top_bullish"]
+        self.assertEqual([m["symbol"] for m in bullish], ["A", "B", "C"])
+        self.assertIn("blurb", bullish[0])  # A
+        self.assertNotIn("blurb", bullish[1])  # B — degraded, no blurb
+        self.assertIn("blurb", bullish[2])  # C
+
+    @patch("backend.ai.digest.analyze_symbol", new_callable=MagicMock)
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_empty_mover_lists_no_executor_or_analysis(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        mock_resolve.return_value = []
+        mock_scanner.scan_results = {}
+        mock_scanner.scan_symbols_async = AsyncMock()
+
+        build_digest_payload()
+
+        mock_analyze.assert_not_called()
+
+    @patch("backend.ai.digest.analyze_symbol", new_callable=MagicMock)
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_parallelism_proves_faster_than_sequential(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        # 8 movers × 0.1s each: sequential ≈ 0.8s, 4-worker parallel ≈ 0.2s.
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        symbols = [f"S{i}" for i in range(8)]
+        mock_resolve.return_value = symbols
+        results = {
+            s: _fake_result(s, 90.0 - i * 10) if i < 4 else _fake_result(s, -90.0 + (i - 4) * 10)
+            for i, s in enumerate(symbols)
+        }
+        mock_scanner.scan_results = results
+        mock_scanner.scan_symbols_async = AsyncMock()
+
+        def slow_analyze(symbol, **kwargs):
+            time.sleep(0.1)
+            return MagicMock(is_uncertain=False, summary=f"Analysis for {symbol}")
+
+        mock_analyze.side_effect = slow_analyze
+
+        start = time.monotonic()
+        build_digest_payload()
+        elapsed = time.monotonic() - start
+
+        # 2 batches × 0.1s ≈ 0.2s; sequential would be 0.8s.
+        self.assertLess(elapsed, 0.6)
 
 
 if __name__ == "__main__":

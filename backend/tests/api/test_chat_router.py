@@ -2,6 +2,8 @@
 Tests for /api/ai/chat/* — Version 4, AI feature 4 conversational chat
 panel endpoints.
 """
+import asyncio
+import threading
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -225,6 +227,30 @@ class TestSendMessage(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(resp.json()["grounded"])
         self.assertEqual(resp.json()["unavailable"], ["RIVN"])
+
+
+class TestSSEBackpressure(unittest.TestCase):
+    def test_bounded_queue_blocks_producer_until_consumer_drains(self):
+        from backend.api.ai.chat_router import _SSE_QUEUE_MAXSIZE, _put_sse_item
+
+        async def scenario():
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
+            queue.put_nowait("first")
+            result = []
+            producer = threading.Thread(
+                target=lambda: result.append(_put_sse_item(loop, queue, "second")),
+            )
+            producer.start()
+            await asyncio.sleep(0.05)
+            self.assertTrue(producer.is_alive())
+            await queue.get()
+            await asyncio.sleep(0)
+            await asyncio.to_thread(producer.join, 1)
+            self.assertFalse(producer.is_alive())
+            self.assertEqual(result, [True])
+
+        asyncio.run(scenario())
 
 
 class TestSendMessageStream(unittest.TestCase):

@@ -493,20 +493,26 @@ class TestAIManager(unittest.TestCase):
         self.assertEqual(resp.provider, "ollama")
         mock_complete.assert_called_once()
 
+    @patch("asyncio.sleep", new_callable=AsyncMock)
     @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock)
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
-    def test_complete_falls_through_on_unavailable(self, mock_complete, mock_hc):
-        # Primary is unhealthy, fallback is healthy.
-        mock_hc.side_effect = [False, True]
+    def test_complete_falls_through_on_unavailable(self, mock_complete, mock_hc, _sleep):
+        # O4: complete() no longer does a pre-flight health_check —
+        # instead it calls provider.complete() directly and falls
+        # through on ProviderUnavailable. So the primary failing
+        # means its complete() raises, not its health_check failing.
+        mock_complete.side_effect = [
+            ProviderUnavailable("ollama down"),
+            AIResponse(text="from-openai", provider="openai", model="gpt-4o-mini"),
+        ]
         m = self._make_manager(provider="ollama", fallback_providers="openai")
-        mock_complete.return_value = AIResponse(
-            text="from-openai", provider="openai", model="gpt-4o-mini",
-        )
         resp = asyncio.run(m.complete("hi"))
         self.assertEqual(resp.text, "from-openai")
         self.assertEqual(resp.provider, "openai")
-        # Complete was called once (for the fallback), not for the primary
-        self.assertEqual(mock_complete.call_count, 1)
+        # Both providers were tried directly (primary raised, fallback succeeded)
+        self.assertEqual(mock_complete.call_count, 2)
+        # health_check is no longer called from complete() at all
+        mock_hc.assert_not_called()
 
     @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False)
     def test_complete_returns_none_when_all_unhealthy(self, _hc):
@@ -609,6 +615,77 @@ class TestAIManager(unittest.TestCase):
         m = self._make_manager(provider="ollama")
         self.assertTrue(asyncio.run(m.is_available()))
         self.assertEqual(mock_hc.call_count, 1)
+
+
+# --- O3: TTL health-check cache -------------------------------------
+
+
+class TestHealthCheckCache(unittest.TestCase):
+    """The TTL cache in _healthy() must:
+    - short-circuit repeated is_available()/status() calls within the window
+    - still run the retry path on a cache miss (preserving call counts)
+    - invalidate per-provider (one stale entry doesn't block others)
+    """
+
+    def _make_manager(self, **overrides) -> AIManager:
+        defaults = dict(
+            enabled=True,
+            provider="ollama",
+            fallback_providers="openai",
+            timeout=1.0,
+            health_check_timeout=1.0,
+        )
+        defaults.update(overrides)
+        return AIManager(AISettings(**defaults))
+
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    def test_cached_after_first_successful_is_available(self, mock_hc, _sleep):
+        m = self._make_manager()
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 1)
+        # Second call — provider is cached healthy, no new health checks
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 1)
+
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock)
+    def test_retry_runs_on_cache_miss_then_cached(self, mock_hc, _sleep):
+        # First is_available(): miss → retry [False, True] → cached True
+        mock_hc.side_effect = [False, True]
+        m = self._make_manager()
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 2)
+        # Second is_available(): cache hit, no retry needed
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 2)
+
+    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False)
+    def test_unhealthy_result_cached_no_retry_on_second_call(self, mock_hc):
+        # With return_value=False, _healthy() retries once per provider
+        # (2 calls each), then caches False — the second is_available()
+        # should hit the cache and not re-check.
+        m = self._make_manager()
+        self.assertFalse(asyncio.run(m.is_available()))
+        # 2 providers, 2 checks each (retry) = 4 total
+        self.assertEqual(mock_hc.call_count, 4)
+        self.assertFalse(asyncio.run(m.is_available()))
+        # Cache hits — no additional health checks
+        self.assertEqual(mock_hc.call_count, 4)
+
+    @patch("backend.ai.manager.time.monotonic")
+    @patch("asyncio.sleep", new_callable=AsyncMock)
+    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    def test_cache_expires_after_ttl(self, mock_hc, _sleep, mock_time):
+        # Freeze time at 0.0, then advance past TTL.
+        mock_time.return_value = 0.0
+        m = self._make_manager()
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 1)
+        # Simulate TTL expiry (10s+)
+        mock_time.return_value = 10.5
+        self.assertTrue(asyncio.run(m.is_available()))
+        self.assertEqual(mock_hc.call_count, 2)
 
 
 # --- Fallback providers get their own defaults, not the primary's --
@@ -912,5 +989,131 @@ class TestManagerStreaming(unittest.TestCase):
             self.assertEqual(asyncio.run(_collect(m.stream("hi"))), ["part"])
 
 
+class TestShutdown(unittest.TestCase):
+    """AIManager.shutdown() must close every built provider's persistent
+    httpx client on the bridge loop, clear caches, and be idempotent.
+    """
+
+    def _make_manager(self, **overrides):
+        defaults = dict(
+            enabled=True,
+            provider="openai_compatible",
+            fallback_providers="ollama",
+            base_url="https://test.local/v1",
+            model="gpt-4o-mini",
+            api_key="sk-test",
+            timeout=1.0,
+            health_check_timeout=1.0,
+        )
+        defaults.update(overrides)
+        return AIManager(AISettings(**defaults))
+
+    @patch("backend.ai.manager.on_bridge", new_callable=AsyncMock)
+    def test_shutdown_closes_all_built_providers(self, mock_on_bridge):
+        m = self._make_manager()
+        p1 = m._get_provider("openai_compatible")
+        p2 = m._get_provider("ollama")
+        p1.aclose = MagicMock()
+        p2.aclose = MagicMock()
+        self.assertEqual(len(m._providers), 2)
+        asyncio.run(m.shutdown())
+        p1.aclose.assert_called_once()
+        p2.aclose.assert_called_once()
+        self.assertEqual(mock_on_bridge.call_count, 2)
+        self.assertEqual(len(m._providers), 0)
+        self.assertEqual(len(m._health_cache), 0)
+
+    @patch("backend.ai.manager.on_bridge", new_callable=AsyncMock)
+    def test_shutdown_is_idempotent(self, mock_on_bridge):
+        m = self._make_manager()
+        p1 = m._get_provider("openai_compatible")
+        p1.aclose = MagicMock()
+        asyncio.run(m.shutdown())
+        asyncio.run(m.shutdown())
+        p1.aclose.assert_called_once()
+        self.assertEqual(mock_on_bridge.call_count, 1)
+
+    @patch("backend.ai.manager.on_bridge", new_callable=AsyncMock)
+    def test_shutdown_swallows_aclose_errors(self, mock_on_bridge):
+        m = self._make_manager()
+        p1 = m._get_provider("openai_compatible")
+        p2 = m._get_provider("ollama")
+        p1.aclose = MagicMock()
+        p2.aclose = MagicMock()
+        mock_on_bridge.side_effect = [RuntimeError("boom"), None]
+        asyncio.run(m.shutdown())
+        self.assertEqual(len(m._providers), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- O12: provider-specific model routing -------------------------------
+
+
+class TestModelRouting(unittest.TestCase):
+    """O12: complete()/stream() accept a ``model`` kwarg that routes
+    the call through a specific chain entry first, then falls
+    through to the default chain. This lets callers pick a cheaper/
+    faster model for low-stakes requests (chat) without
+    reconfiguring the whole provider chain."""
+
+    def _mgr(self, **ov):
+        d = dict(enabled=True, provider="ollama", fallback_providers="",
+                 model="llama3.2", base_url="http://localhost:11434/v1", api_key=None,
+                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3)
+        d.update(ov)
+        return AIManager(AISettings(**d))
+
+    def test_model_routes_through_named_entry_first(self):
+        m = self._mgr()
+        prov = MagicMock()
+        prov.complete = AsyncMock(
+            return_value=AIResponse(text="ok", provider="openai:gpt-4o", model="gpt-4o")
+        )
+        with patch.object(m, "_get_provider", return_value=prov) as mock_get:
+            resp = asyncio.run(m.complete("hi", model="openai:gpt-4o"))
+        self.assertEqual(resp.text, "ok")
+        self.assertEqual(mock_get.call_args_list[0].args[0], "openai:gpt-4o")
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_model_falls_through_to_default_chain(self):
+        m = self._mgr(provider="ollama", fallback_providers="openai")
+        prov1 = MagicMock()
+        prov1.complete = AsyncMock(side_effect=ProviderUnavailable("named down"))
+        prov2 = MagicMock()
+        prov2.complete = AsyncMock(
+            return_value=AIResponse(text="ok", provider="ollama", model="llama3.2")
+        )
+        with patch.object(m, "_get_provider", side_effect=[prov1, prov2]) as mock_get:
+            resp = asyncio.run(m.complete("hi", model="openai:gpt-4o"))
+        self.assertEqual(resp.text, "ok")
+        self.assertEqual(mock_get.call_args_list[0].args[0], "openai:gpt-4o")
+        self.assertEqual(mock_get.call_args_list[1].args[0], "ollama")
+        self.assertEqual(mock_get.call_count, 2)
+
+    def test_model_dedupes_when_named_entry_is_primary(self):
+        m = self._mgr(provider="ollama")
+        prov = MagicMock()
+        prov.complete = AsyncMock(
+            return_value=AIResponse(text="ok", provider="ollama", model="llama3.2")
+        )
+        with patch.object(m, "_get_provider", return_value=prov) as mock_get:
+            resp = asyncio.run(m.complete("hi", model="ollama"))
+        self.assertEqual(resp.text, "ok")
+        # "ollama" is both the named entry and the primary — tried once
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_no_model_uses_default_chain(self):
+        m = self._mgr(provider="ollama", fallback_providers="openai")
+        prov = MagicMock()
+        prov.complete = AsyncMock(
+            return_value=AIResponse(text="ok", provider="ollama", model="llama3.2")
+        )
+        with patch.object(m, "_get_provider", return_value=prov) as mock_get:
+            resp = asyncio.run(m.complete("hi"))
+        self.assertEqual(resp.text, "ok")
+        # Default chain: primary only (no fallbacks in this mgr)
+        self.assertEqual(mock_get.call_args_list[0].args[0], "ollama")
+        self.assertEqual(mock_get.call_count, 1)

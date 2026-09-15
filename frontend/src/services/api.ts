@@ -1652,26 +1652,32 @@ class ApiService {
     });
   }
 
-  // Phase 16: AI symbol analysis (extended in Phase 2.4.5 for template_id)
-  async analyzeSymbol(
-    symbol: string,
-    timeframe: string = '1d',
-    options?: {
-      max_tokens?: number;
-      temperature?: number;
-      template_id?: number;
-    },
-  ): Promise<AIAnalysisResult> {
-    const params = new URLSearchParams({ symbol, timeframe });
-    if (options?.max_tokens) params.set('max_tokens', String(options.max_tokens));
-    if (options?.temperature != null) params.set('temperature', String(options.temperature));
-    if (options?.template_id != null) params.set('template_id', String(options.template_id));
-    // The endpoint is POST-only (backend/api/ai/router.py) — this.fetch()
-    // defaults to GET when no method is given, which 405s. Found live
-    // 2026-09-09 clicking "Re-run" in AIAnalysisPanel with AI actually
-    // enabled for the first time.
-    return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' });
-  }
+// Phase 16: AI symbol analysis (extended in Phase 2.4.5 for template_id)
+    async analyzeSymbol(
+        symbol: string,
+        timeframe: string = '1d',
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            template_id?: number;
+            // O10: comma-separated peer tickers for cross-ticker correlation context
+            portfolio_symbols?: string;
+            // O12: chain-entry name to route this call through a specific model
+            model?: string;
+        },
+    ): Promise<AIAnalysisResult> {
+        const params = new URLSearchParams({ symbol, timeframe });
+        if (options?.max_tokens) params.set('max_tokens', String(options.max_tokens));
+        if (options?.temperature != null) params.set('temperature', String(options.temperature));
+        if (options?.template_id != null) params.set('template_id', String(options.template_id));
+        if (options?.portfolio_symbols) params.set('portfolio_symbols', options.portfolio_symbols);
+        if (options?.model) params.set('model', options.model);
+        // The endpoint is POST-only (backend/api/ai/router.py) — this.fetch()
+        // defaults to GET when no method is given, which 405s. Found live
+        // 2026-09-09 clicking "Re-run" in AIAnalysisPanel with AI actually
+        // enabled for the first time.
+        return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' });
+    }
 
   // Phase 16: AI provider config
   async getAIConfig(): Promise<AIConfig> {

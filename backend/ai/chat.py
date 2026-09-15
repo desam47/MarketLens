@@ -196,7 +196,7 @@ def _build_context_cached(sym: str, *, news: bool, funda: bool, diverg: bool) ->
             return hit[1]
     ctx = build_context(
         sym, include_news=news, include_fundamentals=funda, include_divergence=diverg,
-    ).to_dict()
+    ).compact()
     with _ctx_lock:
         _ctx_cache[key] = (now, ctx)
         _ctx_cache.move_to_end(key)

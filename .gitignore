@@ -100,3 +100,4 @@ conf/token_stream/
 # only the previous commit). backend/version.py reads it and falls back to
 # "dev" when absent (e.g. a fresh clone or Docker build without the hook).
 version.txt
+backend/conf/token.txt

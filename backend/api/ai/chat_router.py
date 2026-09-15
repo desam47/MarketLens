@@ -18,7 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Literal
+import threading
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -262,6 +263,22 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+_SSE_QUEUE_MAXSIZE = 1
+
+
+def _put_sse_item(
+    loop: asyncio.AbstractEventLoop,
+    queue: asyncio.Queue[Any],
+    item: Any,
+) -> bool:
+    future = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
+    try:
+        future.result()
+    except (asyncio.CancelledError, RuntimeError):
+        return False
+    return True
+
+
 @router.post("/sessions/{session_id}/messages/stream")
 async def send_message_stream(session_id: int, payload: SendMessageRequest):
     """Send a message and stream the assistant's reply over SSE.
@@ -289,43 +306,67 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
 
     async def event_stream():
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
+        stop = threading.Event()
         _DONE = object()
 
         def drain():
             try:
                 for ev in stream_chat_message(session_id, payload.content):
-                    loop.call_soon_threadsafe(queue.put_nowait, ev)
-            except Exception as e:  # noqa: BLE001 — surface as an error frame
-                logger.warning("chat stream drain failed: %s", e)
-                loop.call_soon_threadsafe(
-                    queue.put_nowait, ("error", "The chat turn could not be started."),
-                )
+                    if stop.is_set():
+                        break
+                    if not _put_sse_item(loop, queue, ev):
+                        break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat stream drain failed: %s", exc)
+                if not stop.is_set():
+                    _put_sse_item(loop, queue, ("error", "The chat turn could not be started."))
             finally:
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                if not stop.is_set():
+                    _put_sse_item(loop, queue, _DONE)
 
-        loop.run_in_executor(None, drain)
+        executor_future = loop.run_in_executor(None, drain)
 
-        while True:
-            ev = await queue.get()
-            if ev is _DONE:
-                break
-            kind, payload_ = ev
-            if kind == "meta":
-                yield _sse("meta", payload_)
-            elif kind == "delta":
-                yield _sse("delta", {"text": payload_})
-            elif kind == "final":
-                message, grounded, focus, partial, unavailable = payload_
-                yield _sse(
-                    "final",
-                    _message_to_response(
-                        message, grounded=grounded, focus=focus,
-                        partial=partial, unavailable=unavailable,
-                    ).model_dump(),
-                )
-            elif kind == "error":
-                yield _sse("error", {"message": payload_})
+        def reap_executor(future):
+            try:
+                future.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat stream executor failed: %s", exc)
+
+        executor_future.add_done_callback(reap_executor)
+
+        try:
+            while True:
+                ev = await queue.get()
+                if ev is _DONE:
+                    break
+                kind, payload_ = cast(tuple[str, Any], ev)
+                if kind == "meta":
+                    yield _sse("meta", payload_)
+                elif kind == "delta":
+                    yield _sse("delta", {"text": payload_})
+                elif kind == "final":
+                    message, grounded, focus, partial, unavailable = payload_
+                    yield _sse(
+                        "final",
+                        _message_to_response(
+                            message, grounded=grounded, focus=focus,
+                            partial=partial, unavailable=unavailable,
+                        ).model_dump(),
+                    )
+                elif kind == "error":
+                    yield _sse("error", {"message": payload_})
+        except asyncio.CancelledError:
+            stop.set()
+            try:
+                await asyncio.wait_for(queue.get(), timeout=0.1)
+            except (TimeoutError, asyncio.CancelledError):
+                pass
+            raise
+        finally:
+            stop.set()
 
     return StreamingResponse(
         event_stream(),

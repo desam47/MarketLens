@@ -25,7 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from datetime import UTC
 
-from backend.ai.analyze import analyze_symbol
+from backend.ai.analyze import (
+    _adaptive_temperature,
+    _calibrate_confidence,
+    _clear_analysis_cache,
+    _data_quality,
+    analyze_symbol,
+)
 from backend.ai.context import (
     AnalysisContext,
     InsufficientDataError,
@@ -36,7 +42,10 @@ from backend.ai.prompt import (
     AnalysisResponse,
     UncertaintyResponse,
     build_user_prompt,
+    make_analysis_response_format,
     parse_ai_reply,
+    render_system_prompt,
+    summarize_context,
 )
 from backend.ai.provider import AIResponse
 from backend.scanner.scanner import ScanResult
@@ -401,6 +410,454 @@ class TestBuildContext(unittest.TestCase):
     def test_context_symbol_uppercased(self):
         ctx = build_context("aapl", "1d")
         self.assertEqual(ctx.symbol, "AAPL")
+
+    def test_compact_drops_empty_fields(self):
+        ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live", trend_state={"direction": "bullish"},
+        )
+        compact = ctx.compact()
+        self.assertIn("trend_state", compact)
+        self.assertEqual(compact["trend_state"], {"direction": "bullish"})
+        self.assertNotIn("news", compact)
+        self.assertNotIn("tape", compact)
+        self.assertNotIn("fundamentals", compact)
+        self.assertNotIn("track_record", compact)
+        self.assertIn("price", compact)
+        self.assertIn("data_status", compact)
+
+    def test_compact_keeps_empty_when_all_fields_populated(self):
+        ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live", timeframe_scores={"1d": {"direction": "bullish"}},
+            trend_state={"direction": "bullish"},
+            market_structure={"total_score": 10.0},
+            market_regime={"regime": "risk_on"},
+            relative_strength={"benchmark": "SPY"},
+            sector_alignment={"sector_etf": "XLK"},
+            volume={"rvol": 1.2},
+            momentum={"rsi": 65.0},
+            support_resistance={"supports": [{"price": 99.0}]},
+            trend_transition={"direction": "up"},
+            historical_signal_stats={"win_rate": 0.5},
+            news=[{"headline": "test"}],
+            fundamentals={"sector": "Tech"},
+            divergence={"type": "bullish"},
+            tape={"pressure": 1.0},
+            track_record={"total_signals": 5},
+        )
+        compact = ctx.compact()
+        self.assertEqual(len(compact), 21)
+
+
+# --- O9: scan cache reuse in build_context -----------------------------
+
+
+class TestBuildContextScanCache(unittest.TestCase):
+    """build_context() reuses a fresh cached ScanResult instead of
+    calling market_scanner.scan_symbol() — critical for the digest path
+    which batch-scans all symbols once."""
+
+    @patch("backend.ai.context.market_scanner")
+    def test_reuses_fresh_cached_scan_result(self, mock_scanner):
+        from datetime import datetime
+
+        # Fresh scan in the cache (now)
+        fresh = _fake_scan_result()
+        fresh.timestamp = datetime.now(UTC)
+        mock_scanner.get_scan_result.return_value = fresh
+
+        ctx = build_context("AAPL", "1d")
+        self.assertEqual(ctx.symbol, "AAPL")
+        mock_scanner.scan_symbol.assert_not_called()
+
+    @patch("backend.ai.context.market_scanner")
+    def test_stale_cache_triggers_rescan(self, mock_scanner):
+        from datetime import datetime, timedelta
+
+        # Stale scan (10 seconds ago, past the 5s TTL)
+        stale = _fake_scan_result()
+        stale.timestamp = datetime.now(UTC) - timedelta(seconds=10)
+        mock_scanner.get_scan_result.return_value = stale
+        mock_scanner.scan_symbol.return_value = fresh_result = _fake_scan_result()
+        fresh_result.timestamp = datetime.now(UTC)
+
+        ctx = build_context("AAPL", "1d")
+        self.assertEqual(ctx.symbol, "AAPL")
+        mock_scanner.scan_symbol.assert_called_once_with("AAPL")
+
+    @patch("backend.ai.context.market_scanner")
+    def test_no_cache_triggers_scan(self, mock_scanner):
+        mock_scanner.get_scan_result.return_value = None
+        mock_scanner.scan_symbol.return_value = _fake_scan_result()
+
+        ctx = build_context("AAPL", "1d")
+        self.assertEqual(ctx.symbol, "AAPL")
+        mock_scanner.scan_symbol.assert_called_once_with("AAPL")
+
+
+class TestSummarizeContext(unittest.TestCase):
+    """summarize_context truncates only safe-to-lose verbose fields."""
+
+    def test_small_context_unchanged(self):
+        ctx = {"symbol": "AAPL", "price": 100.0, "trend_state": {"direction": "bullish"}}
+        result = summarize_context(ctx)
+        self.assertEqual(result, ctx)
+        self.assertNotIn("context_summarized", result)
+
+    def test_large_context_truncated(self):
+        long_headlines = [{"headline": "X" * 200} for _ in range(130)]
+        ctx = {
+            "symbol": "AAPL",
+            "price": 100.0,
+            "trend_state": {"direction": "bullish"},
+            "news": long_headlines,
+        }
+        result = summarize_context(ctx)
+        self.assertTrue(result.get("context_summarized"))
+        self.assertLessEqual(len(result["news"]), 3)
+        for item in result["news"]:
+            self.assertLessEqual(len(item["headline"]), 120)
+
+    def test_large_context_capped_fundamentals(self):
+        ctx = {
+            "symbol": "AAPL",
+            "fundamentals": {"sector": "Tech", "industry": "Y" * 20000},
+        }
+        result = summarize_context(ctx, token_budget=1000)
+        self.assertTrue(result.get("context_summarized"))
+        self.assertLessEqual(len(result["fundamentals"]["industry"]), 60)
+
+    def test_large_context_capped_signals(self):
+        ctx = {
+            "symbol": "AAPL",
+            "market_structure": {"total_score": 10.0, "signals": [f"signal-{i}-padding" for i in range(500)]},
+        }
+        result = summarize_context(ctx, token_budget=500)
+        self.assertTrue(result.get("context_summarized"))
+        self.assertLessEqual(len(result["market_structure"]["signals"]), 5)
+
+    def test_preserves_core_quant_fields(self):
+        ctx = {
+            "symbol": "AAPL",
+            "price": 100.0,
+            "timeframe": "1d",
+            "trend_state": {"direction": "bullish"},
+            "market_regime": {"regime": "risk_on"},
+            "volume": {"rvol": 1.2},
+            "momentum": {"rsi": 65.0},
+            "support_resistance": {"supports": [{"price": 99.0}]},
+            "news": [{"headline": "X" * 200} for _ in range(10)],
+        }
+        result = summarize_context(ctx, token_budget=100)
+        for k in ["symbol", "price", "timeframe", "trend_state", "market_regime", "volume", "momentum", "support_resistance"]:
+            self.assertIn(k, result)
+        self.assertEqual(result["trend_state"], {"direction": "bullish"})
+
+    def test_custom_budget(self):
+        ctx = {"symbol": "AAPL", "news": [{"headline": "X" * 200} for _ in range(10)]}
+        result = summarize_context(ctx, token_budget=100)
+        self.assertTrue(result.get("context_summarized"))
+        if "news" in result:
+            self.assertLessEqual(len(result["news"]), 3)
+
+
+# --- O4: short-term analysis cache -------------------------------------
+
+
+class TestAnalysisCache(unittest.TestCase):
+    """analyze_symbol() caches results for the same symbol/timeframe/advisory."""
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_second_call_returns_cached(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text='{"summary":"AAPL shows mixed signals across timeframes.","trend":"bullish","confidence":0.5}',
+            provider="test", model="test",
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        r1 = asyncio.run(analyze_symbol("AAPL", "1d"))
+        r2 = asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertIs(r1.trend, r2.trend)
+        # Second call should NOT re-invoke the AI or build_context
+        self.assertEqual(mock_ai.complete.call_count, 1)
+        self.assertEqual(mock_ctx.call_count, 1)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_different_advisory_not_cached(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text='{"summary":"AAPL shows mixed signals across timeframes.","trend":"bullish","confidence":0.5}',
+            provider="test", model="test",
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d", advisory=True))
+        asyncio.run(analyze_symbol("AAPL", "1d", advisory=False))
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_system_prompt_override_skips_cache(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text='{"summary":"AAPL shows mixed signals across timeframes.","trend":"bullish","confidence":0.5}',
+            provider="test", model="test",
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d", system_prompt_override="custom"))
+        asyncio.run(analyze_symbol("AAPL", "1d", system_prompt_override="custom"))
+        # Both calls bypass cache → two AI calls
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_uncertainty_result_cached(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text=None, provider="disabled", model="llama3.2",
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_stale_cache_misses(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text='{"summary":"AAPL shows mixed signals across timeframes.","trend":"bullish","confidence":0.5}',
+            provider="test", model="test",
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+
+        # Simulate cache expiry by backdating the entry
+        from backend.ai.analyze import _analysis_cache, _cache_lock
+        with _cache_lock:
+            old_ts, old_resp = _analysis_cache[("AAPL", "1d", True)]
+            _analysis_cache[("AAPL", "1d", True)] = (
+                old_ts - 999, old_resp,
+            )
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+
+class TestCalibrateConfidence(unittest.TestCase):
+    """_calibrate_confidence dampens confidence when the AI's historical
+    win-rate on a symbol is poor and the sample is large enough."""
+
+    def test_empty_track_record_returns_confidence_unchanged(self):
+        self.assertAlmostEqual(_calibrate_confidence(0.9, {}), 0.9)
+
+    def test_insufficient_sample_leaves_unchanged(self):
+        tr = {"win_rate": 0.3, "sample_size": 3}
+        self.assertAlmostEqual(_calibrate_confidence(0.8, tr), 0.8)
+
+    def test_high_win_rate_leaves_unchanged(self):
+        tr = {"win_rate": 0.7, "sample_size": 10}
+        self.assertAlmostEqual(_calibrate_confidence(0.9, tr), 0.9)
+
+    def test_poor_win_rate_dampens_toward_neutral(self):
+        tr = {"win_rate": 0.3, "sample_size": 20}
+        # 0.9 → 0.5 + (0.9 - 0.5) * 0.5 = 0.7
+        result = _calibrate_confidence(0.9, tr)
+        self.assertAlmostEqual(result, 0.7)
+
+    def test_low_confidence_dampens_upward(self):
+        tr = {"win_rate": 0.2, "sample_size": 15}
+        # 0.2 → 0.5 + (0.2 - 0.5) * 0.5 = 0.35
+        result = _calibrate_confidence(0.2, tr)
+        self.assertAlmostEqual(result, 0.35)
+
+    def test_damping_never_exceeds_declared(self):
+        tr = {"win_rate": 0.1, "sample_size": 10}
+        for c in (0.0, 0.3, 0.5, 0.9, 1.0):
+            result = _calibrate_confidence(c, tr)
+            self.assertGreaterEqual(result, 0.0)
+            self.assertLessEqual(result, 1.0)
+
+    def test_damping_moves_toward_neutral(self):
+        """Dampening always pulls confidence halfway toward 0.5."""
+        tr = {"win_rate": 0.1, "sample_size": 10}
+        # above neutral → goes down
+        self.assertLess(_calibrate_confidence(0.9, tr), 0.9)
+        self.assertAlmostEqual(_calibrate_confidence(0.9, tr), 0.7)
+        # below neutral → goes up (toward 0.5)
+        self.assertGreater(_calibrate_confidence(0.2, tr), 0.2)
+        self.assertAlmostEqual(_calibrate_confidence(0.2, tr), 0.35)
+
+    def test_damping_never_uses_default_sample_size(self):
+        """When sample_size key is missing, default 0 → insufficient → unchanged."""
+        tr = {"win_rate": 0.2}
+        self.assertAlmostEqual(_calibrate_confidence(0.8, tr), 0.8)
+
+
+# --- O7: adaptive temperature -----------------------------------------
+
+
+class TestAdaptiveTemperature(unittest.TestCase):
+    """Adaptive temperature picks 0.2 for rich contexts, 0.5 for sparse."""
+
+    def test_sparse_context_gets_higher_temperature(self):
+        ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live",
+        )
+        self.assertEqual(_data_quality(ctx), 0.0)
+        self.assertEqual(_adaptive_temperature(ctx), 0.5)
+
+    def test_rich_context_gets_lower_temperature(self):
+        ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live",
+            timeframe_scores={"1d": {"direction": "bullish"}},
+            trend_state={"direction": "bullish"},
+            market_structure={"total_score": 10.0},
+            market_regime={"regime": "risk_on"},
+            relative_strength={"benchmark": "SPY"},
+            sector_alignment={"sector_etf": "XLK"},
+            support_resistance={"supports": [{"price": 99.0}]},
+            trend_transition={"direction": "up"},
+            historical_signal_stats={"win_rate": 0.5},
+            news=[{"headline": "test"}],
+            fundamentals={"sector": "Tech"},
+            divergence={"type": "bullish"},
+            tape={"pressure": 1.0},
+            track_record={"total_signals": 5},
+        )
+        self.assertEqual(_data_quality(ctx), 1.0)
+        self.assertEqual(_adaptive_temperature(ctx), 0.2)
+
+    def test_moderate_context_gets_higher_temperature(self):
+        ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live",
+            trend_state={"direction": "bullish"},
+            market_regime={"regime": "risk_on"},
+        )
+        quality = _data_quality(ctx)
+        self.assertLess(quality, 0.5)
+        self.assertEqual(_adaptive_temperature(ctx), 0.5)
+
+
+# --- I1/I2: confidence calibration + regime-aware prompt --------------
+
+
+class TestRenderSystemPrompt(unittest.TestCase):
+    """render_system_prompt() must inject I1 win-rate calibration and
+    I2 regime-aware risk-first framing."""
+
+    def test_no_injections_when_no_data(self):
+        result = render_system_prompt(
+            "base", track_record={}, market_regime={},
+        )
+        self.assertEqual(result, "base")
+
+    def test_i1_injects_win_rate_calibration(self):
+        tr = {"win_rate": 0.65, "sample_size": 20}
+        result = render_system_prompt(
+            "base", track_record=tr, market_regime={},
+        )
+        self.assertIn("historical accuracy on this ticker is 65%", result)
+        self.assertIn("20 resolved calls", result)
+        self.assertTrue(result.startswith("base\n\n"))
+
+    def test_i1_skips_calibration_when_no_win_rate(self):
+        result = render_system_prompt(
+            "base", track_record={"sample_size": 5}, market_regime={},
+        )
+        self.assertEqual(result, "base")
+
+    def test_i1_skips_calibration_when_no_sample_size(self):
+        result = render_system_prompt(
+            "base", track_record={"win_rate": 0.5}, market_regime={},
+        )
+        self.assertEqual(result, "base")
+
+    def test_i2_injects_risk_first_for_high_volatility(self):
+        mr = {"regime": "high_volatility"}
+        result = render_system_prompt(
+            "base", track_record={}, market_regime=mr,
+        )
+        self.assertIn("capital preservation", result)
+        self.assertIn("high_volatility", result)
+
+    def test_i2_injects_risk_first_for_crisis(self):
+        mr = {"regime": "crisis"}
+        result = render_system_prompt(
+            "base", track_record={}, market_regime=mr,
+        )
+        self.assertIn("crisis", result)
+
+    def test_i2_no_injection_for_calm_regime(self):
+        mr = {"regime": "risk_on"}
+        result = render_system_prompt(
+            "base", track_record={}, market_regime=mr,
+        )
+        self.assertEqual(result, "base")
+
+    def test_i1_and_i2_both_injected(self):
+        tr = {"win_rate": 0.3, "sample_size": 10}
+        mr = {"regime": "crisis"}
+        result = render_system_prompt("base", track_record=tr, market_regime=mr)
+        self.assertIn("30%", result)
+        self.assertIn("10 resolved calls", result)
+        self.assertIn("crisis", result)
+
+
+class TestHighVolatilityTemperature(unittest.TestCase):
+    """I2 lowers temperature further in crisis/high-volatility regimes."""
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_high_vol_caps_temp_via_analyze(self, mock_ctx, mock_ai):
+        """In crisis regime, even a rich context gets temp capped at 0.15."""
+        rich_ctx = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t",
+            data_status="live",
+            market_regime={"regime": "crisis"},
+            trend_state={"direction": "bullish"},
+            market_structure={"total_score": 10.0},
+            support_resistance={"supports": [{"price": 99.0}]},
+        )
+        mock_ctx.return_value = rich_ctx
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
+            text='{"summary":"AAPL shows mixed signals across timeframes.","trend":"bullish","confidence":0.5}',
+            provider="test", model="test",
+        ))
+        mock_ai.settings = MagicMock(max_tokens=20000)
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        temp = mock_ai.complete.call_args.kwargs["temperature"]
+        self.assertLessEqual(temp, 0.15)
 
 
 # --- analyze_symbol end-to-end (mocked) -----------------------------
@@ -837,6 +1294,211 @@ class TestNoIndicatorRecalculation(unittest.TestCase):
             lower = p.lower()
             self.assertIn("never compute", lower)
             self.assertIn("never override", lower)
+
+
+# --- O11: Structured output schema + response parsing -------------------
+
+
+class TestStructuredOutputSchema(unittest.TestCase):
+    """O11: make_analysis_response_format() returns a valid OpenAI response_format."""
+
+    def test_returns_json_object_type(self):
+        fmt = make_analysis_response_format()
+        self.assertEqual(fmt["type"], "json_object")
+
+    def test_includes_schema_with_required_fields(self):
+        fmt = make_analysis_response_format()
+        schema = fmt["json_schema"]
+        self.assertIn("required", schema["parameters"])
+        self.assertIn("summary", schema["parameters"]["required"])
+        self.assertIn("trend", schema["parameters"]["required"])
+        self.assertIn("confidence", schema["parameters"]["required"])
+
+    def test_schema_properties_match_analysis_response(self):
+        fmt = make_analysis_response_format()
+        props = fmt["json_schema"]["parameters"]["properties"]
+        self.assertIn("summary", props)
+        self.assertIn("trend", props)
+        self.assertIn("confidence", props)
+        self.assertIn("supporting_factors", props)
+        self.assertIn("risk_factors", props)
+        self.assertIn("timeframe_conflicts", props)
+        self.assertIn("key_levels", props)
+
+    def test_trend_enum_matches_trend_label(self):
+        fmt = make_analysis_response_format()
+        trend_values = set(fmt["json_schema"]["parameters"]["properties"]["trend"]["enum"])
+        # At minimum the basic trend labels must be present
+        for basic in ("bullish", "bearish", "mixed", "uncertain"):
+            self.assertIn(basic, trend_values)
+
+
+class TestParseStructuredReply(unittest.TestCase):
+    """parse_ai_reply with structured=True skips regex extraction."""
+
+    def test_structured_reply_parsed_directly(self):
+        text = '{"summary": "Test analysis text here", "trend": "bullish", "confidence": 0.8}'
+        result = parse_ai_reply(text, structured=True)
+        self.assertIsInstance(result, AnalysisResponse)
+        self.assertEqual(result.trend, "bullish")
+        self.assertEqual(result.confidence, 0.8)
+
+    def test_structured_reply_strips_markdown_fences(self):
+        text = '```json\n{"summary": "Test analysis text here", "trend": "bearish", "confidence": 0.3}\n```'
+        result = parse_ai_reply(text, structured=True)
+        self.assertEqual(result.trend, "bearish")
+        self.assertEqual(result.confidence, 0.3)
+
+    def test_structured_fallback_to_regex_on_wrapping_text(self):
+        # Even in structured mode, if the provider wrapped the JSON in
+        # extra prose, we fall back to extract_json_object.
+        text = 'Here is the result:\n{"summary": "Test analysis here", "trend": "mixed", "confidence": 0.5}\nThanks!'
+        result = parse_ai_reply(text, structured=True)
+        self.assertIsInstance(result, AnalysisResponse)
+        self.assertEqual(result.trend, "mixed")
+
+    def test_unstructured_uses_regex_extraction(self):
+        text = 'Some prose\n{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.9}\nmore prose'
+        result = parse_ai_reply(text, structured=False)
+        self.assertEqual(result.trend, "bullish")
+
+    def test_structured_invalid_json_falls_back(self):
+        # malformed JSON that regex also can't parse → ValueError
+        text = "not json at all"
+        with self.assertRaises(ValueError):
+            parse_ai_reply(text, structured=True)
+
+
+class TestAnalyzeStructuredOutput(unittest.TestCase):
+    """End-to-end: analyze_symbol() passes response_format when supported."""
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_passes_response_format_when_supported(self, mock_build_ctx, mock_ai):
+        """When primary supports structured output, response_format is passed."""
+        ctx = build_context("AAPL")
+        mock_build_ctx.return_value = ctx
+        mock_ai.primary_supports_structured_output.return_value = True
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
+            text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.7}',
+            provider="test_provider",
+            model="test_model",
+            structured=True,
+        ))
+        asyncio.run(analyze_symbol("AAPL"))
+        call_kwargs = mock_ai.complete.call_args
+        self.assertIsNotNone(call_kwargs.kwargs.get("response_format"))
+        self.assertIn("json_schema", call_kwargs.kwargs["response_format"])
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_omits_response_format_when_unsupported(self, mock_build_ctx, mock_ai):
+        """When primary doesn't support structured output, response_format is None."""
+        ctx = build_context("AAPL")
+        mock_build_ctx.return_value = ctx
+        mock_ai.primary_supports_structured_output.return_value = False
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
+            text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.7}',
+            provider="test_provider",
+            model="test_model",
+            structured=False,
+        ))
+        asyncio.run(analyze_symbol("AAPL"))
+        call_kwargs = mock_ai.complete.call_args
+        self.assertIsNone(call_kwargs.kwargs.get("response_format"))
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_structured_flag_propagated_to_parse(self, mock_build_ctx, mock_ai):
+        """The structured flag from the response is passed to parse_ai_reply."""
+        ctx = build_context("AAPL")
+        mock_build_ctx.return_value = ctx
+        mock_ai.primary_supports_structured_output.return_value = True
+        mock_ai.complete = AsyncMock(return_value=AIResponse(
+            text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.9}',
+            provider="test_provider",
+            model="test_model",
+            structured=True,
+        ))
+        with patch("backend.ai.analyze.parse_ai_reply") as mock_parse:
+            mock_parse.return_value = AnalysisResponse(
+                summary="Test analysis here",
+                trend="bullish",
+                confidence=0.9,
+            )
+            asyncio.run(analyze_symbol("AAPL"))
+            mock_parse.assert_called_once()
+            args = mock_parse.call_args
+            self.assertEqual(args.kwargs.get("structured"), True)
+
+
+# --- O10: multi-symbol correlation context -------------------------------
+
+
+class TestCorrelationContext(unittest.TestCase):
+    """O10 — build_context() can scan peer symbols and summarize their
+    trend direction so the AI can reason about cross-ticker
+    confluence/divergence instead of analyzing each ticker in isolation."""
+
+    @patch("backend.ai.context.market_scanner")
+    def test_no_peers_returns_empty(self, mock_scanner):
+        mock_scanner.scan_symbol.return_value = _fake_scan_result()
+        ctx = build_context("AAPL", "1d")
+        self.assertEqual(ctx.correlation_context, {})
+
+    @patch("backend.ai.context.market_scanner")
+    def test_peers_summarized(self, mock_scanner):
+        peer = _fake_scan_result()
+        mock_scanner.scan_symbol.return_value = peer
+        ctx = build_context("AAPL", "1d", portfolio_symbols=["MSFT", "GOOG"])
+        self.assertEqual(ctx.correlation_context["peer_count"], 2)
+        self.assertGreaterEqual(ctx.correlation_context["aligned"], 1)
+        self.assertEqual(len(ctx.correlation_context["peers"]), 2)
+
+    @patch("backend.ai.context.market_scanner")
+    def test_self_excluded_from_peers(self, mock_scanner):
+        peer = _fake_scan_result()
+        mock_scanner.scan_symbol.return_value = peer
+        ctx = build_context("AAPL", "1d", portfolio_symbols=["AAPL", "MSFT"])
+        # AAPL is the subject (scanned once as primary), MSFT is the
+        # only peer — AAPL must NOT be re-scanned as a peer.
+        self.assertEqual(ctx.correlation_context["peer_count"], 1)
+        called_syms = [call.args[0] for call in mock_scanner.scan_symbol.call_args_list]
+        self.assertIn("MSFT", called_syms)
+        # AAPL is called once (as the primary scan), not twice (as a peer)
+        self.assertEqual(called_syms.count("AAPL"), 1)
+
+    def test_render_system_prompt_injects_correlation(self):
+        from backend.ai.prompt import render_system_prompt
+
+        base = "You are an analyst."
+        prompt = render_system_prompt(
+            base,
+            track_record={},
+            market_regime={},
+            correlation_context={
+                "peer_count": 5,
+                "aligned": 3,
+                "opposed": 1,
+                "primary_sector": "Technology",
+            },
+        )
+        self.assertIn("Portfolio/sector peers", prompt)
+        self.assertIn("Technology", prompt)
+        self.assertIn("3 bullish", prompt)
+        self.assertIn("1 bearish", prompt)
+
+    def test_render_system_prompt_skips_when_empty(self):
+        from backend.ai.prompt import render_system_prompt
+
+        base = "You are an analyst."
+        prompt = render_system_prompt(
+            base,
+            track_record={},
+            market_regime={},
+            correlation_context={},
+        )
+        self.assertEqual(prompt, base)
 
 
 if __name__ == "__main__":

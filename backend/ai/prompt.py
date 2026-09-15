@@ -332,18 +332,33 @@ def extract_json_object(text: str | None) -> str:
     raise ValueError("no JSON object found in AI reply")
 
 
-def parse_ai_reply(text: str | None) -> AnalysisResponse:
+def parse_ai_reply(text: str | None, structured: bool = False) -> AnalysisResponse:
     """Extract a structured ``AnalysisResponse`` from an AI reply.
 
     Strategy:
-    1. Delegate JSON extraction to :func:`extract_json_object`.
-    2. ``json.loads`` and validate against the model.
+    1. When ``structured`` is True (the provider guaranteed JSON output),
+       try ``json.loads`` directly on the text — skip regex extraction.
+    2. Otherwise (or if direct parse fails), delegate JSON extraction to
+       :func:`extract_json_object`.
+    3. ``json.loads`` and validate against the model.
 
     Raises ``ValueError`` when the reply is empty, doesn't contain
     JSON, or fails schema validation. The caller should fall back
     to an ``UncertaintyResponse`` in that case — the spec says we
     must never trust a malformed AI reply.
     """
+    if structured:
+        text_stripped = (text or "").strip()
+        if text_stripped.startswith("```json"):
+            text_stripped = text_stripped.removeprefix("```json")
+        if text_stripped.endswith("```"):
+            text_stripped = text_stripped.removesuffix("```")
+        text_stripped = text_stripped.strip()
+        try:
+            data = json.loads(text_stripped)
+            return AnalysisResponse.model_validate(data)
+        except (json.JSONDecodeError, ValueError):
+            pass
     candidate = extract_json_object(text)
     data = json.loads(candidate)
     return AnalysisResponse.model_validate(data)
@@ -443,6 +458,108 @@ Rules you must follow:
    forcing a setup. This is research to inform a trader's own \
    decision, not a directive.
 """
+
+
+# I1: Confidence calibration — injects the AI's own track-record win-rate
+# into the system prompt so the model can self-calibrate its confidence.
+_CONFIDENCE_CALIBRATION = """\
+Your historical accuracy on this ticker is {win_rate}% over {n} resolved \
+calls. Calibrate your confidence accordingly — if your past calls on this \
+ticker have been wrong more often than right, lower your confidence."""
+
+# I2: Regime-aware prompt tuning — adds a risk-first framing clause when
+# the market regime signals high volatility or crisis conditions.
+_RISK_FIRST_CLAUSE = """\
+IMPORTANT — you are currently in a {regime} market regime. In this \
+environment, prioritize capital preservation over profit capture. \
+Weight risk_factors more heavily than supporting_factors: a setup that \
+looks attractive in a calm regime may be a trap in high volatility. \
+Reduce position-size reasoning accordingly (smaller, tighter, and \
+more conservative)."""
+
+# O10: Cross-ticker correlation summary — injects the portfolio/sector
+# peer trend directions so the model can reason about confluence and
+# divergence instead of analyzing each ticker in isolation.
+_CORRELATION_CLAUSE = """\
+Portfolio/sector peers ({peer_count} scanned): {aligned} bullish, \
+{opposed} bearish. Primary sector: {sector}. When the ticker you are \
+analyzing is moving WITH the sector/peer group, the trend is more \
+likely to continue; when it is diverging (moving against the group), \
+treat that as a warning sign and weight risk_factors accordingly. \
+A lone bullish signal in a sea of bearish peers is a divergence, not \
+a buying opportunity."""
+
+
+def _format_win_rate(win_rate: float) -> str:
+    """Format a 0.0-1.0 win rate as a percentage string."""
+    return f"{int(win_rate * 100)}%"
+
+
+def render_system_prompt(
+    base_prompt: str,
+    *,
+    track_record: dict[str, Any],
+    market_regime: dict[str, Any],
+    correlation_context: dict[str, Any] | None = None,
+) -> str:
+    """Render a system prompt with I1/I2 dynamic injections.
+
+    I1 — Confidence calibration: when ``track_record`` has a ``win_rate``
+    and ``sample_size``, appends a calibration clause so the model knows
+    its own historical accuracy on this ticker.
+
+    I2 — Regime-aware tuning: when ``market_regime`` signals
+    ``high_volatility`` or ``crisis``, appends a risk-first framing
+    clause and lowers the effective guidance.
+
+    O10 — Multi-symbol correlation: when ``correlation_context`` has
+    peer data, appends a cross-ticker confluence summary so the model
+    can reason about portfolio/sector alignment instead of analyzing
+    in isolation.
+
+    Args:
+        base_prompt: The base system prompt (``SYSTEM_PROMPT`` or
+            ``SYSTEM_PROMPT_ANALYST_ONLY``).
+        track_record: The ``AnalysisContext.track_record`` dict.
+        market_regime: The ``AnalysisContext.market_regime`` dict.
+        correlation_context: The ``AnalysisContext.correlation_context``
+            dict (optional).
+    """
+    additions: list[str] = []
+
+    # --- I1: confidence calibration ---
+    win_rate = track_record.get("win_rate")
+    sample_size = track_record.get("sample_size", 0)
+    if win_rate is not None and sample_size:
+        additions.append(
+            _CONFIDENCE_CALIBRATION.format(
+                win_rate=_format_win_rate(win_rate), n=sample_size,
+            )
+        )
+
+    # --- I2: regime-aware risk-first framing ---
+    regime_str = market_regime.get("regime", "")
+    if regime_str in ("high_volatility", "crisis"):
+        additions.append(_RISK_FIRST_CLAUSE.format(regime=regime_str))
+
+    # --- O10: cross-ticker correlation summary ---
+    if correlation_context and correlation_context.get("peer_count"):
+        peer_count = correlation_context["peer_count"]
+        aligned = correlation_context.get("aligned", 0)
+        opposed = correlation_context.get("opposed", 0)
+        sector = correlation_context.get("primary_sector", "")
+        additions.append(
+            _CORRELATION_CLAUSE.format(
+                peer_count=peer_count,
+                aligned=aligned,
+                opposed=opposed,
+                sector=sector or "Unknown",
+            )
+        )
+
+    if not additions:
+        return base_prompt
+    return base_prompt + "\n\n" + "\n\n".join(additions)
 
 
 def build_user_prompt(context_dict: dict[str, Any]) -> str:
@@ -783,6 +900,83 @@ def _approx_tokens(s: str) -> int:
     return len(s) // 4
 
 
+_MAX_NEWS_ITEMS = 3
+_MAX_NEWS_TEXT_CHARS = 120
+_MAX_SIGNALS = 5
+_MAX_TIMEFRAME_SCORES = 2
+_MAX_FUNDAMENTALS_TEXT_CHARS = 60
+_DEFAULT_ANALYSIS_TOKEN_BUDGET = 4000
+
+
+def summarize_context(
+    context_dict: dict[str, Any],
+    *,
+    token_budget: int | None = None,
+) -> dict[str, Any]:
+    """Compress large list/string fields so the serialized context fits within *token_budget*.
+
+    Only safe-to-lose verbose fields (``news``, ``market_structure.signals``,
+    non-primary ``timeframe_scores``, ``fundamentals`` text) are touched.
+    All scalar and core quant fields are preserved so a schema-valid
+    ``AnalysisResponse`` can still be produced.  A ``"context_summarized"``
+    flag is set on the returned dict when truncation occurs.
+    """
+    budget = token_budget if token_budget is not None else _DEFAULT_ANALYSIS_TOKEN_BUDGET
+    body = json.dumps(context_dict, default=str)
+    if _approx_tokens(body) <= budget:
+        return context_dict
+
+    out = dict(context_dict)
+    out["context_summarized"] = True
+
+    news = out.get("news")
+    if isinstance(news, list) and len(news) > _MAX_NEWS_ITEMS:
+        out["news"] = _truncate_news(news[:_MAX_NEWS_ITEMS])
+
+    ms = out.get("market_structure")
+    if isinstance(ms, dict) and isinstance(ms.get("signals"), list):
+        ms = dict(ms)
+        ms["signals"] = ms["signals"][:_MAX_SIGNALS]
+        out["market_structure"] = ms
+
+    tf_scores = out.get("timeframe_scores")
+    if isinstance(tf_scores, dict) and len(tf_scores) > _MAX_TIMEFRAME_SCORES:
+        primary = out.get("timeframe", "1d").upper()
+        keys = sorted(tf_scores, key=lambda k: k == primary, reverse=True)
+        out["timeframe_scores"] = {k: tf_scores[k] for k in keys[:_MAX_TIMEFRAME_SCORES]}
+
+    funda = out.get("fundamentals")
+    if isinstance(funda, dict):
+        out["fundamentals"] = {
+            k: v[:_MAX_FUNDAMENTALS_TEXT_CHARS]
+            if isinstance(v, str) and len(v) > _MAX_FUNDAMENTALS_TEXT_CHARS
+            else v
+            for k, v in funda.items()
+        }
+
+    if _approx_tokens(json.dumps(out, default=str)) > budget:
+        out.pop("news", None)
+
+    return out
+
+
+def _truncate_news(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    capped: list[dict[str, Any]] = []
+    for item in items[:_MAX_NEWS_ITEMS]:
+        if isinstance(item, dict):
+            capped.append(
+                {
+                    k: v[:_MAX_NEWS_TEXT_CHARS]
+                    if isinstance(v, str) and len(v) > _MAX_NEWS_TEXT_CHARS
+                    else v
+                    for k, v in item.items()
+                }
+            )
+        else:
+            capped.append(item)
+    return capped
+
+
 def build_chat_prompt(
     symbol_blocks: list[dict[str, Any]],
     unavailable_symbols: list[str],
@@ -932,3 +1126,56 @@ def render_template(template: str, variables: dict[str, Any]) -> str:
         value = variables.get(name, "")
         return str(value) if value is not None else ""
     return _TEMPLATE_VAR_RE.sub(_replace, template)
+
+
+# --- O11: Structured output schema -----------------------------------
+
+# When the provider supports structured output, the manager passes this
+# response_format dict so the model is forced to return a single JSON
+# object matching AnalysisResponse. On OpenAI-compatible endpoints this
+# becomes ``response_format={"type": "json_object"}``; on Anthropic it
+# becomes a single tool_use declaration whose input_schema is the
+# schema below.
+ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "name": "analysis_json_output",
+    "description": "Structured JSON conforming to AnalysisResponse.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string", "minLength": 10, "maxLength": 2000},
+            "trend": {
+                "type": "string",
+                "enum": ["bullish", "bearish", "neutral", "mixed", "uncertain"],
+            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "supporting_factors": {
+                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+            },
+            "risk_factors": {
+                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+            },
+            "timeframe_conflicts": {
+                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+            },
+            "key_levels": {
+                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+            },
+        },
+        "required": ["summary", "trend", "confidence"],
+    },
+}
+
+
+def make_analysis_response_format() -> dict[str, Any]:
+    """Return the ``response_format`` dict for the OpenAI-compatible channel.
+
+    OpenAI-compatible endpoints expect ``response_format={"type": "json_object"}``
+    to enable JSON mode. We embed the ANALYSIS_JSON_SCHEMA inside the
+    ``json_schema`` key so providers that support schema validation use it;
+    the Anthropic adapter ignores the wrapper and reads from ``json_schema``.
+    """
+    return {
+        "type": "json_object",
+        "json_schema": ANALYSIS_JSON_SCHEMA,
+    }

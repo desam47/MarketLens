@@ -73,7 +73,7 @@ class TestGenerateCommentary(unittest.TestCase):
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_build_context.return_value.to_dict.return_value = {"price": 150.5}
+        mock_build_context.return_value.compact.return_value = {"price": 150.5}
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"commentary": "Price crossed above the 150 threshold."}\n```',
             provider="ollama", model="llama3.2",
@@ -120,7 +120,7 @@ class TestGenerateCommentary(unittest.TestCase):
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_build_context.return_value.to_dict.return_value = {}
+        mock_build_context.return_value.compact.return_value = {}
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text="not json at all", provider="ollama", model="llama3.2",
         ))
@@ -140,7 +140,7 @@ class TestGenerateCommentary(unittest.TestCase):
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_build_context.return_value.to_dict.return_value = {}
+        mock_build_context.return_value.compact.return_value = {}
         mock_ai.complete = AsyncMock(side_effect=RuntimeError("provider down"))
 
         result = generate_commentary(1)
@@ -185,7 +185,7 @@ class TestGenerateCommentary(unittest.TestCase):
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_build_context.return_value.to_dict.return_value = {}
+        mock_build_context.return_value.compact.return_value = {}
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='```json\n{"commentary": "ok"}\n```', provider="ollama", model="llama3.2",
         ))

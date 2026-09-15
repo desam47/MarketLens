@@ -286,6 +286,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Trade plan tracker shutdown failed: {e}")
     shutdown_tracing()
+    try:
+        from backend.ai.manager import ai_manager
+        from backend.ai.sync_bridge import stop_bridge_loop
+
+        await ai_manager.shutdown()
+        stop_bridge_loop()
+    except Exception as e:
+        logger.warning(f"AI manager shutdown failed: {e}")
 
 
 app = FastAPI(

@@ -41,6 +41,20 @@ from ..rate_limit import _ai_limiter, check_rate_limit
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
+def _parse_portfolio_symbols(raw: str | None) -> list[str] | None:
+    """Parse a comma-separated ``portfolio_symbols`` query string.
+
+    Returns ``None`` when no peers were supplied (the default), so
+    ``build_context`` skips the O10 peer scan entirely. Empty/whitespace
+    entries are dropped — a trailing comma in the query string is a
+    common typo and shouldn't crash the analysis.
+    """
+    if not raw:
+        return None
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    return symbols or None
+
+
 # --- Request / Response models ---------------------------------------
 
 
@@ -154,6 +168,25 @@ async def analyze(
             "template must be available in the context (symbol, timeframe, ...)."
         ),
     ),
+    portfolio_symbols: str | None = Query(
+        default=None,
+        description=(
+            "O10: comma-separated list of peer tickers the AI can compare "
+            "against (e.g. 'MSFT,GOOG,SPY'). Up to 8 are scanned and their "
+            "trend directions summarized so the AI can reason about cross-"
+            "ticker confluence/divergence instead of analyzing in isolation."
+        ),
+    ),
+    model: str | None = Query(
+        default=None,
+        description=(
+            "O12: optional chain-entry name (e.g. 'openai:gpt-4o' or "
+            "'ollama:qwen3:14b') to route this specific call through a "
+            "particular provider/model instead of the default chain. The "
+            "named entry is tried first, then falls through to the standard "
+            "fallback chain."
+        ),
+    ),
     db: Session = Depends(get_db),
     _rl: None = Depends(check_rate_limit(_ai_limiter)),
 ) -> AnalyzeResponse:
@@ -196,6 +229,8 @@ async def analyze(
         max_tokens=max_tokens,
         temperature=temperature,
         system_prompt_override=rendered_system,
+        portfolio_symbols=_parse_portfolio_symbols(portfolio_symbols),
+        model=model,
     )
 
     return AnalyzeResponse(

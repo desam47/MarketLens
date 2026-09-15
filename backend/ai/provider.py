@@ -36,6 +36,10 @@ class AIResponse:
     provider: str
     model: str
     raw: dict[str, Any] | None = None
+    # True when the provider was asked to return structured JSON
+    # (via response_format / tool-use). Lets callers skip regex
+    # extraction and parse the raw text directly.
+    structured: bool = False
 
 
 class AIProvider(ABC):
@@ -49,6 +53,11 @@ class AIProvider(ABC):
     """
 
     name: str = "abstract"
+    # O11: whether this provider supports a structured JSON output
+    # guarantee (OpenAI response_format, Anthropic tool-use). When
+    # True, the manager passes a JSON schema and the response text is
+    # guaranteed to be valid JSON — callers can skip regex extraction.
+    supports_structured_output: bool = False
 
     @abstractmethod
     async def health_check(self) -> bool:
@@ -66,6 +75,7 @@ class AIProvider(ABC):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AIResponse:
         """Return a completion for ``prompt`` (with optional system prompt).
 
@@ -81,6 +91,7 @@ class AIProvider(ABC):
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """Yield the completion for ``prompt`` in incremental text chunks.
 
@@ -91,10 +102,22 @@ class AIProvider(ABC):
         provider that hasn't implemented real streaming still works.
         """
         resp = await self.complete(
-            prompt, system=system, max_tokens=max_tokens, temperature=temperature
+            prompt, system=system, max_tokens=max_tokens,
+            temperature=temperature, response_format=response_format,
         )
         if resp.text:
             yield resp.text
+
+    async def aclose(self) -> None:
+        """Release held resources (persistent HTTP clients, pools).
+
+        Default no-op so providers without pooled state can ignore it.
+        ``AIManager.shutdown()`` calls this on every built provider at
+        app shutdown; implementations holding an ``httpx.AsyncClient``
+        MUST close it here, and MUST assume it is awaited on the event
+        loop the client was used on (the sync-bridge loop), not an
+        arbitrary caller's loop.
+        """
 
 
 class ProviderUnavailable(RuntimeError):

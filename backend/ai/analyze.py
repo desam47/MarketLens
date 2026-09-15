@@ -27,6 +27,10 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
+from collections import OrderedDict
+from typing import Any
 
 from backend.ai.context import AnalysisContext, InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
@@ -36,10 +40,84 @@ from backend.ai.prompt import (
     AnalysisResponse,
     UncertaintyResponse,
     build_user_prompt,
+    make_analysis_response_format,
     parse_ai_reply,
+    render_system_prompt,
+    summarize_context,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# O7: adaptive temperature defaults based on context data quality.
+# When the context is sparse (few populated fields), a higher temperature
+# lets the AI hedge its answers ("I'm not confident in X because Y is
+# missing"). When the context is rich, a lower temperature gives more
+# deterministic, focused responses. An explicit caller override always wins.
+_TEMPERATURE_HIGH_DATA = 0.2
+_TEMPERATURE_LOW_DATA = 0.5
+
+
+def _data_quality(ctx: AnalysisContext) -> float:
+    """Score context completeness in [0, 1].
+
+    Counts optional dict/list fields that are populated (non-empty) and
+    divides by the total number of such fields. Scalar fields (symbol,
+    price, etc.) are always present by construction, so they don't count.
+    """
+    optional_fields = [
+        ctx.timeframe_scores, ctx.trend_state, ctx.market_structure,
+        ctx.market_regime, ctx.relative_strength, ctx.sector_alignment,
+        ctx.support_resistance, ctx.trend_transition,
+        ctx.historical_signal_stats, ctx.news, ctx.fundamentals,
+        ctx.divergence, ctx.tape, ctx.track_record,
+    ]
+    populated = sum(1 for f in optional_fields if f)
+    return populated / len(optional_fields)
+
+
+def _adaptive_temperature(ctx: AnalysisContext) -> float:
+    """Pick a temperature based on context data quality.
+
+    Rich context → lower temperature for deterministic, focused answers.
+    Sparse context → higher temperature for hedged, cautious responses.
+    """
+    quality = _data_quality(ctx)
+    if quality >= 0.5:
+        return _TEMPERATURE_HIGH_DATA
+    return _TEMPERATURE_LOW_DATA
+
+
+# === O4: short-term analysis result cache =============================
+# Deduplicates analysis for the same symbol/timeframe/advisory within a
+# short window so that "Re-run" clicks and simultaneous digest movers
+# don't each rebuild the full context and re-call the AI provider.
+
+_ANALYSIS_TTL = 45.0
+_ANALYSIS_CACHE_MAX_ENTRIES = 128
+
+_analysis_cache: OrderedDict[tuple[str, str, bool], tuple[float, AnalysisResponse | UncertaintyResponse]] = OrderedDict()
+_cache_lock = threading.Lock()
+
+
+def _clear_analysis_cache() -> None:
+    """Empty the analysis result cache. Intended for test teardown."""
+    with _cache_lock:
+        _analysis_cache.clear()
+
+
+def _cache_result(
+    key: tuple[str, str, bool] | None,
+    result: AnalysisResponse | UncertaintyResponse,
+) -> None:
+    """Store a result in the short-term cache with TTL + size-bounded eviction."""
+    if key is None:
+        return
+    now = time.monotonic()
+    with _cache_lock:
+        _analysis_cache[key] = (now, result)
+        if len(_analysis_cache) > _ANALYSIS_CACHE_MAX_ENTRIES:
+            _analysis_cache.popitem(last=False)
 
 
 async def analyze_symbol(
@@ -50,6 +128,8 @@ async def analyze_symbol(
     temperature: float | None = None,
     system_prompt_override: str | None = None,
     advisory: bool = True,
+    portfolio_symbols: list[str] | None = None,
+    model: str | None = None,
 ) -> AnalysisResponse | UncertaintyResponse:
     """Run a full AI analysis for ``symbol``.
 
@@ -71,7 +151,10 @@ async def analyze_symbol(
         symbol: Ticker symbol to analyze.
         timeframe: Primary analysis timeframe (default "1d").
         max_tokens: Override max tokens for this call.
-        temperature: Override temperature for this call.
+        temperature: Override temperature for this call. When ``None``
+            (default), an adaptive temperature is chosen based on context
+            data quality: 0.2 for rich contexts, 0.5 for sparse ones.
+            Use this parameter only to force a specific value.
         system_prompt_override: If provided, use this rendered system prompt
             instead of the built-in ``SYSTEM_PROMPT``. Used when a saved
             user template is selected for the request.
@@ -80,14 +163,41 @@ async def analyze_symbol(
             False it stays analyst-only — used by batch callers like the
             digest that only want the read. Ignored if
             ``system_prompt_override`` is set.
+        portfolio_symbols (O10): an optional list of peer tickers the
+            caller already knows about (e.g. the active watchlist). When
+            provided, ``build_context`` scans up to 8 peers and the AI
+            can reason about cross-ticker confluence/divergence instead
+            of analyzing in isolation.
+        model (O12): optional chain-entry name (e.g. ``"openai:gpt-4o"``
+            or ``"ollama:qwen3:14b"``) to route this specific call
+            through a particular provider/model instead of the default
+            chain. Useful when a caller wants a stronger model for a
+            formal analysis without reconfiguring the whole chain.
     """
-    # --- Step 1: gather structured quant context ---
+    # --- Step 1: check short-term cache (O4) ---
+    # Skip cache when a custom system prompt is provided — the caller
+    # explicitly wants a fresh, template-driven analysis, not a cached
+    # result from a different prompt.
+    if system_prompt_override is None:
+        cache_key = (symbol.upper(), timeframe, advisory)
+        now = time.monotonic()
+        with _cache_lock:
+            hit = _analysis_cache.get(cache_key)
+            if hit is not None and now - hit[0] < _ANALYSIS_TTL:
+                _analysis_cache.move_to_end(cache_key)
+                return hit[1]
+    else:
+        cache_key = None
+
+    # --- Step 2: gather structured quant context ---
     ctx: AnalysisContext | None = None
     try:
-        ctx = build_context(symbol, timeframe)
+        ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
-        return _uncertainty(f"Quantitative data not available: {e}")
+        result = _uncertainty(f"Quantitative data not available: {e}")
+        _cache_result(cache_key, result)
+        return result
     except Exception as e:
         # Unexpected error in the context builder — propagate
         logger.exception("Context builder failed for %s: %s", symbol, e)
@@ -97,12 +207,41 @@ async def analyze_symbol(
     if system_prompt_override:
         system_prompt = system_prompt_override
     else:
-        system_prompt = SYSTEM_PROMPT if advisory else SYSTEM_PROMPT_ANALYST_ONLY
+        base = SYSTEM_PROMPT if advisory else SYSTEM_PROMPT_ANALYST_ONLY
+        # I1 + I2: inject confidence calibration (win-rate) and
+        # regime-aware risk-first framing into the system prompt based
+        # on the live context data.
+        system_prompt = render_system_prompt(
+            base,
+            track_record=ctx.track_record,
+            market_regime=ctx.market_regime,
+            correlation_context=ctx.correlation_context,
+        )
+
+    # O7 + I2: when the caller hasn't explicitly overridden temperature,
+    # pick one based on context data quality AND market regime — sparse
+    # data or high-volatility regime → higher temperature (hedged,
+    # cautious); rich data in calm regime → lower temperature.
+    if temperature is not None:
+        final_temperature = temperature
+    else:
+        final_temperature = _adaptive_temperature(ctx)
+        # I2: high vol / crisis → extra conservatism
+        regime = ctx.market_regime.get("regime", "")
+        if regime in ("high_volatility", "crisis"):
+            final_temperature = min(final_temperature, 0.15)
+
+    # O11: if the primary provider supports structured output, request
+    # a JSON-mode reply and skip regex extraction during parsing.
+    response_format = make_analysis_response_format() if ai_manager.primary_supports_structured_output() else None
+
     ai_resp = await ai_manager.complete(
-        prompt=build_user_prompt(ctx.to_dict()),
+        prompt=build_user_prompt(summarize_context(ctx.compact())),
         system=system_prompt,
         max_tokens=max_tokens,
-        temperature=temperature,
+        temperature=final_temperature,
+        response_format=response_format,
+        model=model,
     )
 
     if ai_resp.text is None:
@@ -111,11 +250,13 @@ async def analyze_symbol(
         else:
             msg = f"AI providers unavailable (tried: {ai_resp.provider})"
         logger.info("AI unavailable for %s: %s", symbol, msg)
-        return _uncertainty(msg, provider=ai_resp.provider, model=ai_resp.model)
+        result = _uncertainty(msg, provider=ai_resp.provider, model=ai_resp.model)
+        _cache_result(cache_key, result)
+        return result
 
     # --- Step 3: parse and validate ---
     try:
-        parsed = parse_ai_reply(ai_resp.text)
+        parsed = parse_ai_reply(ai_resp.text, structured=ai_resp.structured)
     except ValueError as e:
         logger.warning(
             "AI reply failed validation for %s (provider=%s): %s",
@@ -123,12 +264,14 @@ async def analyze_symbol(
             ai_resp.provider,
             e,
         )
-        return _uncertainty(
+        result = _uncertainty(
             f"AI response could not be parsed: {e}. "
             f"Provider: {ai_resp.provider}. Model: {ai_resp.model}.",
             provider=ai_resp.provider,
             model=ai_resp.model,
         )
+        _cache_result(cache_key, result)
+        return result
 
     # Validate that the trend agrees broadly with the engine's direction.
     # The AI is allowed to disagree (e.g. "mixed" when signals conflict),
@@ -139,6 +282,14 @@ async def analyze_symbol(
     ai_trend = parsed.trend
     if ctx_dir and ai_trend not in ("mixed", "uncertain"):
         _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
+
+    # O8: calibrate the AI's confidence against actual resolved outcomes
+    # for this symbol.  If the AI has been wrong more than right, dampen
+    # the declared confidence toward neutral.
+    if parsed.confidence is not None:
+        parsed.confidence = _calibrate_confidence(
+            parsed.confidence, ctx.track_record,
+        )
 
     # Record which provider/model actually answered — found live
     # 2026-09-10: every caller previously reported the configured
@@ -166,12 +317,53 @@ async def analyze_symbol(
     except Exception as e:  # noqa: BLE001
         logger.warning("trade plan capture failed for %s: %s", symbol, e)
 
+    _cache_result(cache_key, parsed)
     return parsed
 
 
 # --- Internals -------------------------------------------------------
 
 _BARE_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+# O8: track-record confidence calibration.
+# When the AI's historical win-rate on a symbol is below this threshold we
+# dampen the declared confidence toward 0.5 so the UI never shows high
+# certainty on a ticker the AI has been wrong about.
+_CONFIDENCE_DAMPING_THRESHOLD = 0.5
+# How much of the original gap (confidence — 0.5) survives when damping
+# is applied. 0.5 means halve the distance to neutral.
+_CONFIDENCE_DAMPING_FACTOR = 0.5
+# Below this sample size we skip calibration — not enough resolved calls
+# to draw statistical conclusions.
+_CONFIDENCE_MIN_SAMPLE = 5
+
+
+def _calibrate_confidence(
+    confidence: float,
+    track_record: dict[str, Any],
+) -> float:
+    """Dampen (or leave unchanged) an AI-declared confidence score based on
+    the symbol's historical resolved outcome track record.
+
+    When the AI's own resolved win-rate on this ticker has been below
+    50% over ≥ 5 resolved calls, the declared confidence is pulled
+    halfway toward 0.5 — so a 0.9 becomes 0.7 and a 0.2 becomes 0.35.
+    This is a *conservative* adjustment: it never pushes confidence
+    above what the AI declared, and it leaves high-accuracy or
+    insufficient-sample records untouched.
+    """
+    if not track_record:
+        return confidence
+    win_rate = track_record.get("win_rate")
+    sample_size = track_record.get("sample_size", 0)
+    if win_rate is None or sample_size < _CONFIDENCE_MIN_SAMPLE:
+        return confidence
+    if win_rate >= _CONFIDENCE_DAMPING_THRESHOLD:
+        return confidence
+    neutral = 0.5
+    gap = confidence - neutral
+    dampened_gap = gap * _CONFIDENCE_DAMPING_FACTOR
+    return neutral + dampened_gap
 
 
 def _label_bare_key_levels(levels: list[str], price: float | None) -> list[str]:

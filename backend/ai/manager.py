@@ -31,6 +31,7 @@ from typing import Any
 
 from backend.ai.provider import AIProvider, AIResponse, ProviderUnavailable
 from backend.ai.providers import build_provider
+from backend.ai.sync_bridge import on_bridge
 from backend.config.settings import AISettings
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,14 @@ class AIManager:
         # running" rather than "what's configured" (safe_config() alone).
         # None until the first successful call since process start.
         self._last_success: dict[str, str] | None = None
+        # O3: TTL cache of provider health results. is_available()/status()
+        # are polled by UI badges and each health check is a real
+        # network round-trip — caching the *resolved* result (after the
+        # retry in _healthy) avoids redundant checks within the window.
+        # Keyed by chain-entry name (same key space as _providers).
+        # Values: (healthy: bool, timestamp: float).
+        self._health_cache: dict[str, tuple[bool, float]] = {}
+        self._cache_lock = Lock()
 
     @property
     def enabled(self) -> bool:
@@ -166,12 +175,25 @@ class AIManager:
                 api_key=resolved_key,
                 timeout=self.settings.timeout,
                 health_check_timeout=self.settings.health_check_timeout,
+                structured_output=self.settings.structured_output,
             )
             self._providers[name] = provider
             return provider
 
     def _all_providers(self) -> list[str]:
         return self.settings.all_providers()
+
+    def primary_supports_structured_output(self) -> bool:
+        """True iff the primary provider was built with structured output.
+
+        Used by ``analyze_symbol()`` to decide whether to pass
+        ``response_format`` and skip regex extraction on the response.
+        """
+        if not self._providers:
+            return False
+        primary = self.settings.provider
+        provider = self._providers.get(primary)
+        return provider is not None and provider.supports_structured_output
 
     # --- Public API ----------------------------------------------------
 
@@ -257,6 +279,8 @@ class AIManager:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AIResponse:
         """Run a completion, walking the fallback chain.
 
@@ -267,12 +291,32 @@ class AIManager:
         The ``provider`` field on the returned response records the
         name of the first provider we tried (or "none" if AI is
         disabled) so callers can surface "we tried Ollama" in the UI.
+
+        ``model`` (O12): when provided, try this specific chain entry
+        first — e.g. ``model="openai:gpt-4o-mini"`` for a quick chat
+        turn, ``model="openai:gpt-4o"`` for a formal analysis. The
+        entry is tried before the default chain; if it fails, the
+        manager falls through to the standard fallback chain as usual.
+        This lets callers pick a cheaper/faster model for low-stakes
+        requests without reconfiguring the whole provider chain.
         """
         if not self.enabled:
             return AIResponse(text=None, provider="disabled", model=self.settings.model)
 
+        # O12: optional model-specific routing — try the named entry
+        # first, then fall through to the standard chain.
+        chain = [model] + self._all_providers() if model else self._all_providers()
+        # Dedupe while preserving order (the named entry may already be
+        # the primary — we don't want to try it twice).
+        seen: set[str] = set()
+        deduped_chain: list[str] = []
+        for n in chain:
+            if n not in seen:
+                seen.add(n)
+                deduped_chain.append(n)
+
         last_error: str | None = None
-        for name in self._all_providers():
+        for name in deduped_chain:
             try:
                 provider = self._get_provider(name)
             except ValueError as e:
@@ -281,17 +325,21 @@ class AIManager:
                 last_error = str(e)
                 continue
 
-            if not await provider.health_check():
-                logger.info("AI provider %r unhealthy, falling through", name)
-                last_error = f"{name} health check failed"
-                continue
-
+            # O4: no pre-flight health_check() here. The real
+            # provider.complete() call raises ProviderUnavailable on
+            # connection/auth/runtime errors, which is caught below
+            # and triggers fallback. The pre-flight was redundant
+            # (it made a lightweight /v1/models round-trip that the
+            # actual /v1/chat/completions call would have surfaced
+            # anyway) and doubled the latency per provider attempt
+            # when the gateway was flapping.
             try:
                 resp = await provider.complete(
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
                     temperature=temperature if temperature is not None else self.settings.temperature,
+                    response_format=response_format,
                 )
             except ProviderUnavailable as e:
                 logger.info("AI provider %r unavailable: %s", name, e)
@@ -314,8 +362,13 @@ class AIManager:
         *,
         max_tokens: int | None = None,
         temperature: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream a completion, walking the fallback chain.
+
+        ``model`` (O12): when provided, try this specific chain entry
+        first — see ``complete()`` for the full rationale.
 
         Yields incremental text chunks. Yields nothing when AI is
         disabled or every provider is unavailable — the caller treats an
@@ -331,8 +384,16 @@ class AIManager:
         if not self.enabled:
             return
 
+        chain = [model] + self._all_providers() if model else self._all_providers()
+        seen: set[str] = set()
+        deduped_chain: list[str] = []
+        for n in chain:
+            if n not in seen:
+                seen.add(n)
+                deduped_chain.append(n)
+
         last_error: str | None = None
-        for name in self._all_providers():
+        for name in deduped_chain:
             try:
                 provider = self._get_provider(name)
             except ValueError as e:
@@ -340,11 +401,9 @@ class AIManager:
                 last_error = str(e)
                 continue
 
-            if not await provider.health_check():
-                logger.info("AI provider %r unhealthy, falling through", name)
-                last_error = f"{name} health check failed"
-                continue
-
+            # O4: skip pre-flight health_check() — let provider.stream()
+            # surface ProviderUnavailable directly, same rationale as
+            # complete() above.
             started = False
             try:
                 async for piece in provider.stream(
@@ -352,6 +411,7 @@ class AIManager:
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
                     temperature=temperature if temperature is not None else self.settings.temperature,
+                    response_format=response_format,
                 ):
                     started = True
                     yield piece
@@ -386,16 +446,70 @@ class AIManager:
     # unhealthy (just ~_HEALTH_RETRY_DELAY seconds slower).
     _HEALTH_RETRY_DELAY = 0.25
 
+    # O3: how long a cached health result is considered fresh. UI
+    # badges poll every few seconds — this window absorbs the gap
+    # without surfacing a stale "healthy" for a provider that just
+    # went down, while still cutting ~90% of the check load.
+    _HEALTH_CACHE_TTL = 10.0
+
+    def _cached_health(self, name: str) -> bool | None:
+        """Return a cached health result if fresh, else None.
+
+        The caller (only ``_healthy``) treats ``None`` as a cache
+        miss and recomputes via health check + retry, then stores
+        the final result. This keeps the retry path's call counts
+        intact (tests assert on ``health_check`` invocation count)
+        while still short-circuiting repeated checks within the TTL.
+        """
+        with self._cache_lock:
+            if name in self._health_cache:
+                result, ts = self._health_cache[name]
+                if time.monotonic() - ts < self._HEALTH_CACHE_TTL:
+                    return result
+        return None
+
     async def _healthy(self, name: str) -> bool:
+        cached = self._cached_health(name)
+        if cached is not None:
+            return cached
         try:
             provider = self._get_provider(name)
         except ValueError:
             return False
         if await provider.health_check():
-            return True
-        import asyncio
-        await asyncio.sleep(self._HEALTH_RETRY_DELAY)
-        return await provider.health_check()
+            result = True
+        else:
+            import asyncio
+            await asyncio.sleep(self._HEALTH_RETRY_DELAY)
+            result = await provider.health_check()
+        with self._cache_lock:
+            self._health_cache[name] = (result, time.monotonic())
+        return result
+
+    async def shutdown(self) -> None:
+        """Close all persistent provider clients and clear caches.
+
+        Each provider's ``aclose()`` is dispatched onto the shared bridge
+        loop (see :mod:`backend.ai.sync_bridge`), because the pooled
+        ``httpx.AsyncClient`` connections were bound to that loop when
+        first used.  Safe to call multiple times — already-closed
+        providers are no-ops.
+
+        Called from the FastAPI lifespan shutdown handler; sync callers
+        outside an event loop should wrap with ``run_sync``.
+        """
+        with self._lock:
+            providers = list(self._providers.values())
+            self._providers.clear()
+            self._health_cache.clear()
+        for provider in providers:
+            aclose = getattr(provider, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await on_bridge(aclose())
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error closing provider %s: %s", provider.name, e)
 
 
 # --- Singleton ------------------------------------------------------

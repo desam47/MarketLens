@@ -44,3 +44,14 @@ def _disable_real_aux_data_calls():
             provider="disabled", timestamp=now_ny(),
         )
         yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_analysis_cache():
+    """O4: clear the short-term analysis cache between tests so cached
+    results from one test don't leak into another."""
+    from backend.ai.analyze import _clear_analysis_cache
+
+    _clear_analysis_cache()
+    yield
+    _clear_analysis_cache()

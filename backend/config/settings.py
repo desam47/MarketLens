@@ -358,6 +358,13 @@ class AISettings(BaseSettings):
     # Sampling / output limits.
     max_tokens: int = Field(default=1000)
     temperature: float = Field(default=0.3)
+    # O11: request structured JSON output from providers that support it.
+    # When True, the completion request includes response_format forcing
+    # JSON mode and the manager skips regex extraction during parsing.
+    # Supported by: openai, openrouter, ollama (7B+ models), anthropic.
+    # Ollama/LM Studio depend on the local model actually honouring the
+    # response_format field — disable if your model ignores it.
+    structured_output: bool = Field(default=True)
 
     # Universal AI Hub chat (2026-09-10). Max tickers one chat turn will
     # build full quant context for (extra named tickers are dropped with
