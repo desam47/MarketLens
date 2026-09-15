@@ -109,32 +109,36 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
       </div>
       <div className="virt-cell td-confidence">
-        <div className="conf-bar">
-          <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
+        <div className="conf-inner">
+          <div className="conf-bar">
+            <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
+          </div>
+          <span className="conf-label">{fmt(row.confidence, 0)}%</span>
         </div>
-        <span className="conf-label">{fmt(row.confidence, 0)}%</span>
       </div>
       <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
-          title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
-          disabled={isToggling}
-          onClick={() => onToggleSymbol(row.symbol)}
-        >
-          {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
-        </button>
-        <button
-          className="row-action-btn row-action-danger"
-          title="Remove from watchlist"
-          disabled={isDeleting}
-          onClick={() => onDeleteSymbol(row.symbol)}
-        >
-          {isDeleting ? '…' : '×'}
-        </button>
+        <div className="actions-inner">
+          <button
+            className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
+            title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+            disabled={isToggling}
+            onClick={() => onToggleSymbol(row.symbol)}
+          >
+            {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
+          </button>
+          <button
+            className="row-action-btn row-action-danger"
+            title="Remove from watchlist"
+            disabled={isDeleting}
+            onClick={() => onDeleteSymbol(row.symbol)}
+          >
+            {isDeleting ? '…' : '×'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -484,29 +488,33 @@ const WatchlistRow = React.memo(function WatchlistRow({
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
       </td>
       <td className="td-confidence">
-        <div className="conf-bar">
-          <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
+        <div className="conf-inner">
+          <div className="conf-bar">
+            <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
+          </div>
+          <span className="conf-label">{fmt(row.confidence, 0)}%</span>
         </div>
-        <span className="conf-label">{fmt(row.confidence, 0)}%</span>
       </td>
       <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
-        <button
-          className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
-          title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
-          disabled={isToggling}
-          onClick={() => onToggleSymbol(row.symbol)}
-        >
-          {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
-        </button>
-        <button
-          className="row-action-btn row-action-danger"
-          title="Remove from watchlist"
-          disabled={isDeleting}
-          onClick={() => onDeleteSymbol(row.symbol)}
-        >
-          {isDeleting ? '…' : '×'}
-        </button>
+        <div className="actions-inner">
+          <button
+            className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
+            title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+            disabled={isToggling}
+            onClick={() => onToggleSymbol(row.symbol)}
+          >
+            {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
+          </button>
+          <button
+            className="row-action-btn row-action-danger"
+            title="Remove from watchlist"
+            disabled={isDeleting}
+            onClick={() => onDeleteSymbol(row.symbol)}
+          >
+            {isDeleting ? '…' : '×'}
+          </button>
+        </div>
       </td>
     </tr>
   );
