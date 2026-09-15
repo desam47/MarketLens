@@ -3119,14 +3119,14 @@ h4 {
 .td-actions {
   white-space: nowrap;
   text-align: center;
-  vertical-align: middle;
-}
-
-.actions-inner {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
+}
+
+.actions-inner {
+  display: contents;
 }
 
 /* Row disabled state */
@@ -3276,14 +3276,14 @@ h4 {
 }
 
 .td-confidence {
-  min-width: 120px;
-  vertical-align: middle;
-}
-
-.conf-inner {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 120px;
+}
+
+.conf-inner {
+  display: contents;
 }
 
 .conf-bar {
