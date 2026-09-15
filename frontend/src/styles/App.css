@@ -5724,8 +5724,7 @@ h4 {
   position: relative;
   width: 0;
   overflow: hidden;
-  transition: width 0.2s ease;
-  border-right: 1px solid var(--border, #374151);
+  transition: width 0.2s ease, border-color 0.2s ease;
   background: var(--bg-secondary, #1e2130);
   display: flex;
   flex-direction: column;
@@ -5733,6 +5732,7 @@ h4 {
 
 .scanner-sidebar.open {
   width: 340px;
+  border-right: 1px solid var(--border, #374151);
 }
 
 .sidebar-toggle-btn {
