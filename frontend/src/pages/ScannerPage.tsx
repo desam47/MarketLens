@@ -13,7 +13,7 @@
  * who wants to dig into a symbol clicks the row to navigate to the
  * Symbol page.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { ScanResult, Watchlist, WatchlistSymbol } from '../services/api';
 import { useScannerStream } from '../hooks/useScannerStream';
@@ -204,20 +204,22 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   /** When a filter is applied, this holds the filtered results. */
   const [filterResults, setFilterResults] = useState<ScanResult[] | null>(null);
 
-  // Measure the table wrapper so react-window fills the available height
-  // instead of being capped at a fixed 500px (~9 rows).
-  const tableWrapperRef = useRef<HTMLDivElement>(null);
+  // Measure the table list container so react-window fills the available
+  // height instead of being capped at a fixed 500px (~9 rows). We use a
+  // state-based ref (not useRef) so the ResizeObserver effect fires when
+  // the element first appears after loading — a useRef would stay null
+  // during the skeleton phase and the effect would never set up.
+  const [tableWrapperEl, setTableWrapperEl] = useState<HTMLDivElement | null>(null);
   const [tableHeight, setTableHeight] = useState(500);
   useEffect(() => {
-    const el = tableWrapperRef.current;
-    if (!el) return;
-    const update = () => setTableHeight(el.clientHeight);
+    if (!tableWrapperEl) return;
+    const update = () => setTableHeight(tableWrapperEl.clientHeight);
     update();
     const ro = new ResizeObserver(update);
-    ro.observe(el);
+    ro.observe(tableWrapperEl);
     window.addEventListener('resize', update);
     return () => { ro.disconnect(); window.removeEventListener('resize', update); };
-  }, []);
+  }, [tableWrapperEl]);
 
   // Fetch watchlists on mount.
   useEffect(() => {
@@ -506,7 +508,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                 <div className="scanner-vheader-cell">Captured</div>
               </div>
               {/* Virtualized body — react-window only renders visible rows */}
-              <div className="scanner-vlist" ref={tableWrapperRef}>
+              <div className="scanner-vlist" ref={setTableWrapperEl}>
                 <FixedSizeList
                   height={tableHeight}
                   itemCount={rows.length}
