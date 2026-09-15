@@ -101,6 +101,16 @@ function barColor(close: number, open: number): string {
   return close >= open ? '#10b981' : '#ef4444';
 }
 
+/** Color a change value by its own sign, independent of candle direction.
+A bar can be a down-candle (close < open) yet still post a positive change
+vs the prior bar's close — coloring by candle color would mis-color that
+change. Used for the Change / Change % columns (and matching the header's
+"Last Close" delta coloring). */
+function changeColor(v: number | null | undefined): string {
+  if (v == null) return 'inherit';
+  return v >= 0 ? '#10b981' : '#ef4444';
+}
+
 function str(v: number | null | undefined): string {
   if (v == null) return '—';
   return v.toFixed(2);
@@ -421,10 +431,10 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
                     <td style={{ color: c }}>${strPrice(b.close)}</td>
-                    <td style={{ color: c }}>
+                    <td style={{ color: changeColor(chgAbs) }}>
                       {chgAbs != null ? `${chgAbs >= 0 ? '+' : ''}${chgAbs.toFixed(2)}` : '—'}
                     </td>
-                    <td style={{ color: c }}>
+                    <td style={{ color: changeColor(chg) }}>
                       {chg !== null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
                     </td>
                     <td>{(b.volume / 1000).toFixed(0)}k</td>
