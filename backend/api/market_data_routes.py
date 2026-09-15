@@ -35,6 +35,7 @@ def _to_dashboard_tz(value: datetime | None) -> str:
 class IngestionStatusResponse(BaseModel):
     is_running: bool
     symbols: list[str]
+    watchlists: list[str]
     timeframes: list[str]
     last_quote_updates: dict[str, str]
     last_bar_updates: dict[str, dict[str, str]]
@@ -88,6 +89,7 @@ async def get_ingestion_status():
     return IngestionStatusResponse(
         is_running=ingestion_service.is_running,
         symbols=ingestion_service.symbols,
+        watchlists=ingestion_service.get_tracking_watchlists(),
         timeframes=ingestion_service.timeframes,
         last_quote_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
                           for k, v in ingestion_service.last_quote_update.items()},

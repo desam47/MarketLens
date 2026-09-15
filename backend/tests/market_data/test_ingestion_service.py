@@ -12,6 +12,8 @@ import threading
 import time
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
@@ -48,6 +50,58 @@ class TestIngestionServiceLifecycle(unittest.TestCase):
         self.assertIs(self.service._thread, first_thread)
         self.service.stop()
         time.sleep(0.2)
+
+
+class TestIngestionWatchlistTracking(unittest.TestCase):
+    def test_get_tracking_watchlists_returns_only_lists_with_enabled_symbols(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        service = MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
+        db = MagicMock()
+        repo = MagicMock()
+        active_watchlists = [
+            SimpleNamespace(id=1, name="Watchlist 1"),
+            SimpleNamespace(id=2, name="Watchlist 2"),
+            SimpleNamespace(id=3, name="Watchlist 3"),
+        ]
+        repo.get_watchlists.return_value = active_watchlists
+        repo.get_watchlist_symbols.side_effect = [
+            [SimpleNamespace(symbol="AAPL")],
+            [],
+            [SimpleNamespace(symbol="MSFT"), SimpleNamespace(symbol="NVDA")],
+        ]
+
+        with patch(
+            "backend.market_data.services.ingestion_service.SessionLocal",
+            return_value=db,
+        ), patch(
+            "backend.market_data.services.ingestion_service.WatchlistRepository",
+            return_value=repo,
+        ):
+            self.assertEqual(
+                service.get_tracking_watchlists(),
+                ["Watchlist 1", "Watchlist 3"],
+            )
+
+        db.close.assert_called_once_with()
+
+    def test_status_response_exposes_tracking_watchlists(self):
+        from backend.api import market_data_routes
+
+        service = MagicMock()
+        service.is_running = True
+        service.symbols = ["AAPL"]
+        service.timeframes = ["1m"]
+        service.last_quote_update = {}
+        service.last_bar_update = {}
+        service.last_status_update = {}
+        service.get_tracking_watchlists.return_value = ["Watchlist 1", "Watchlist 2"]
+
+        with patch.object(market_data_routes, "ingestion_service", service):
+            response = asyncio.run(market_data_routes.get_ingestion_status())
+
+        self.assertEqual(response.watchlists, ["Watchlist 1", "Watchlist 2"])
+        service.get_tracking_watchlists.assert_called_once_with()
 
 
 class TestCorrelationIdPropagation(unittest.TestCase):

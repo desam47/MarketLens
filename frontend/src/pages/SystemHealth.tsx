@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
-import api, { HealthData, SystemStatus, SystemConfig, BackupStatusData } from '../services/api';
+import api, { HealthData, IngestionStatus, SystemStatus, SystemConfig, BackupStatusData } from '../services/api';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 import { ErrorBanner } from '../components/ErrorBanner';
 
@@ -125,7 +125,7 @@ const IngestionCard = memo(function IngestionCard({
   toggling,
   onToggle,
 }: {
-  ingestionStatus: any;
+  ingestionStatus: IngestionStatus | null;
   loading: boolean;
   error: string | null;
   toggling: boolean;
@@ -151,7 +151,7 @@ const IngestionCard = memo(function IngestionCard({
               {ingestionStatus.is_running ? 'Running' : 'Stopped'}
             </span>
           </p>
-          <p><strong>Tracked Symbols:</strong> {ingestionStatus.symbols?.join(', ') || 'None'}</p>
+          <p><strong>Tracking:</strong> {ingestionStatus.watchlists?.join(', ') || 'None'}</p>
           <p><strong>Timeframes:</strong> {ingestionStatus.timeframes?.join(', ') || 'None'}</p>
           {ingestionStatus.last_quote_updates && (() => {
             const lastUpdate = Object.values(ingestionStatus.last_quote_updates)[0];
@@ -260,7 +260,7 @@ const ConnectionTestCard = memo(function ConnectionTestCard({
 }: {
   health: HealthData | null;
   systemStatus: SystemStatus | null;
-  ingestionStatus: any;
+  ingestionStatus: IngestionStatus | null;
   backupStatus: BackupStatusData | null;
   loading: boolean;
 }) {
@@ -315,7 +315,7 @@ export function SystemHealth() {
   const [configLoading, setConfigLoading] = useState(true);
   const [configError, setConfigError] = useState<string | null>(null);
 
-  const [ingestionStatus, setIngestionStatus] = useState<any>(null);
+  const [ingestionStatus, setIngestionStatus] = useState<IngestionStatus | null>(null);
   const [ingestionLoading, setIngestionLoading] = useState(true);
   const [ingestionError, setIngestionError] = useState<string | null>(null);
 

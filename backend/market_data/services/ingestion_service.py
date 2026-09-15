@@ -193,18 +193,16 @@ class MarketDataIngestionService:
             }
 
     def _load_symbols_from_watchlist(self) -> list[str]:
-        return self._load_symbols_from_all_active_watchlists()
+        return self._load_symbols_and_watchlists_from_all_active_watchlists()[0]
 
-    def _load_symbols_from_all_active_watchlists(self) -> list[str]:
-        """Load all enabled symbols from every active watchlist.
+    def _load_symbols_and_watchlists_from_all_active_watchlists(
+        self, include_symbols: bool = True
+    ) -> tuple[list[str], list[str]]:
+        """Load symbols and contributing watchlist names from active watchlists.
 
-        The original ingestion logic only pulled symbols from the first active
-        watchlist, leading to only the benchmark tickers being tracked.  This
-        helper aggregates all active watchlists, de‑duplicates the resulting
-        symbols, and returns a sorted list to keep deterministic order.
-
-        If there are no active watchlists or none contain enabled symbols the
-        method returns an empty list.
+        Symbols are de-duplicated and sorted for deterministic ingestion. Watchlist
+        names retain newest-first database order and only include lists with at
+        least one enabled symbol.
         """
         try:
             db = SessionLocal()
@@ -213,26 +211,35 @@ class MarketDataIngestionService:
                 active_wls = repo.get_watchlists(active_only=True)
                 seen = set()
                 symbols: list[str] = []
-                # keep the newest‑first order as returned by get_watchlists
+                watchlists: list[str] = []
                 for wl in active_wls:
-                    for ws in repo.get_watchlist_symbols(wl.id, enabled_only=True):
-                        sym = ws.symbol.upper()
-                        if sym not in seen:
-                            seen.add(sym)
-                            symbols.append(sym)
-                if symbols:
-                    logger.info(f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}")
-                else:
-                    if active_wls:
-                        logger.info("Active watchlists exist but all are empty — no symbols to ingest")
+                    watchlist_symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+                    if watchlist_symbols:
+                        watchlists.append(wl.name)
+                    if include_symbols:
+                        for ws in watchlist_symbols:
+                            sym = ws.symbol.upper()
+                            if sym not in seen:
+                                seen.add(sym)
+                                symbols.append(sym)
+                if include_symbols:
+                    if symbols:
+                        logger.info(f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}")
                     else:
-                        logger.info("No active watchlist found — no symbols to ingest")
-                return sorted(symbols)
+                        if active_wls:
+                            logger.info("Active watchlists exist but all are empty — no symbols to ingest")
+                        else:
+                            logger.info("No active watchlist found — no symbols to ingest")
+                return (sorted(symbols), watchlists) if include_symbols else ([], watchlists)
             finally:
                 db.close()
         except Exception as e:
             logger.warning(f"Failed to load symbols from all active watchlists: {e}")
-            return []
+            return [], []
+
+    def get_tracking_watchlists(self) -> list[str]:
+        """Return active watchlists that contribute enabled symbols."""
+        return self._load_symbols_and_watchlists_from_all_active_watchlists(include_symbols=False)[1]
 
     def start(self):
         """Start the ingestion service in a background thread.
@@ -253,7 +260,7 @@ class MarketDataIngestionService:
         # Load symbols from active watchlist if none were explicitly set.
         # Done here (not in __init__) so the DB is guaranteed to be ready.
         if not self.symbols:
-            self.symbols = self._load_symbols_from_all_active_watchlists()
+            self.symbols = self._load_symbols_and_watchlists_from_all_active_watchlists()[0]
             # Only ingest what the watchlist contains. If no watchlist has symbols,
             # ingestion is a no-op — everything shows empty until the user adds stocks.
             if self.symbols:
@@ -1646,7 +1653,7 @@ class MarketDataIngestionService:
         Returns the new (full) symbol list. If the service is not running,
         only updates ``self.symbols`` and the tracking dicts.
         """
-        new_symbols = self._load_symbols_from_all_active_watchlists()
+        new_symbols = self._load_symbols_and_watchlists_from_all_active_watchlists()[0]
         old_set = set(self.symbols)
         new_set = set(new_symbols)
         added = new_set - old_set

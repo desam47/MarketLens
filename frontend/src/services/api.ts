@@ -156,6 +156,14 @@ export interface SystemConfig {
   timestamp: string;
 }
 
+export interface IngestionStatus {
+  is_running: boolean;
+  symbols?: string[];
+  watchlists?: string[];
+  timeframes?: string[];
+  last_quote_updates?: Record<string, string>;
+}
+
 // Phase 3.3.3: WAL mode + Litestream health snapshot.
 export interface BackupStatusData {
   timestamp: string;
@@ -1476,7 +1484,7 @@ class ApiService {
     return this.fetch(`/market-data/bars/${symbol}`);
   }
 
-  async getIngestionStatus(): Promise<any> {
+  async getIngestionStatus(): Promise<IngestionStatus> {
     return this.fetch('/market-data/ingestion/status');
   }
 
