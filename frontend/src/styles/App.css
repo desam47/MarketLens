@@ -2458,6 +2458,9 @@ h4 {
 .scanner-page {
   max-width: 1400px;
   margin: 0 auto;
+  height: calc(100vh - 4rem);
+  display: flex;
+  flex-direction: column;
 }
 
 .scanner-header {
@@ -2544,6 +2547,15 @@ h4 {
   width: 100%;
   min-width: 980px;
   max-width: 100%;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.scanner-vlist {
+  flex: 1;
+  overflow: hidden;
 }
 
 .scanner-table-wrapper .scanner-vheader,
@@ -5670,7 +5682,8 @@ h4 {
   display: flex;
   flex-direction: row;
   gap: 0;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .scanner-main {
@@ -5678,6 +5691,7 @@ h4 {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 /* Sidebar */

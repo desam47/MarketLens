@@ -13,7 +13,7 @@
  * who wants to dig into a symbol clicks the row to navigate to the
  * Symbol page.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { ScanResult, Watchlist, WatchlistSymbol } from '../services/api';
 import { useScannerStream } from '../hooks/useScannerStream';
@@ -203,6 +203,21 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('rankings');
   /** When a filter is applied, this holds the filtered results. */
   const [filterResults, setFilterResults] = useState<ScanResult[] | null>(null);
+
+  // Measure the table wrapper so react-window fills the available height
+  // instead of being capped at a fixed 500px (~9 rows).
+  const tableWrapperRef = useRef<HTMLDivElement>(null);
+  const [tableHeight, setTableHeight] = useState(500);
+  useEffect(() => {
+    const el = tableWrapperRef.current;
+    if (!el) return;
+    const update = () => setTableHeight(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener('resize', update);
+    return () => { ro.disconnect(); window.removeEventListener('resize', update); };
+  }, []);
 
   // Fetch watchlists on mount.
   useEffect(() => {
@@ -491,15 +506,17 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                 <div className="scanner-vheader-cell">Captured</div>
               </div>
               {/* Virtualized body — react-window only renders visible rows */}
-              <FixedSizeList
-                height={Math.min(rows.length * ROW_HEIGHT, 500)}
-                itemCount={rows.length}
-                itemSize={ROW_HEIGHT}
-                width="100%"
-                itemData={{ rows, errors, onSelectSymbol: handleSelectSymbol }}
-              >
-                {VirtualRow}
-              </FixedSizeList>
+              <div className="scanner-vlist" ref={tableWrapperRef}>
+                <FixedSizeList
+                  height={tableHeight}
+                  itemCount={rows.length}
+                  itemSize={ROW_HEIGHT}
+                  width="100%"
+                  itemData={{ rows, errors, onSelectSymbol: handleSelectSymbol }}
+                >
+                  {VirtualRow}
+                </FixedSizeList>
+              </div>
             </div>
           )}
         </div>
