@@ -386,18 +386,24 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                 <th>High</th>
                 <th>Low</th>
                 <th>Close</th>
-                <th>Vol</th>
-                <th>%</th>
+                <th>Change</th>
+                <th>Change %</th>
+                <th>Volume</th>
               </tr>
             </thead>
             <tbody>
               {bars.map((b, i) => {
-                // Each bar shows % change from the next older bar (bars[i+1])
+                // Each bar shows change from the next older bar (bars[i+1]);
+                // bars arrive newest→oldest. Absolute $ change + % change.
                 const prev = bars[i + 1];
-                // Positive chg = price went UP from older bar to this bar
-                const chg = prev && prev.close > 0
-                  ? ((b.close - prev.close) / prev.close * 100)
-                  : null;
+                const chgAbs =
+                  prev && typeof prev.close === 'number' && typeof b.close === 'number'
+                    ? b.close - prev.close
+                    : null;
+                const chg =
+                  chgAbs != null && prev.close > 0
+                    ? (chgAbs / prev.close) * 100
+                    : null;
                 const c = barColor(b.close, b.open);
                 return (
                   <tr key={i}>
@@ -410,15 +416,18 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                           timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
                         });
                         return `${date} ${time}`;
-                    })() : '—'}</td>
+                      })() : '—'}</td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
                     <td style={{ color: c }}>${strPrice(b.close)}</td>
-                    <td>{(b.volume / 1000).toFixed(0)}k</td>
+                    <td style={{ color: c }}>
+                      {chgAbs != null ? `${chgAbs >= 0 ? '+' : ''}${chgAbs.toFixed(2)}` : '—'}
+                    </td>
                     <td style={{ color: c }}>
                       {chg !== null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
                     </td>
+                    <td>{(b.volume / 1000).toFixed(0)}k</td>
                   </tr>
                 );
               })}
