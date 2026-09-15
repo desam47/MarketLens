@@ -63,49 +63,57 @@ function providerLabel(provider: string): string {
 }
 
 export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps) {
-  const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
-  const [config, setConfig] = useState<AIConfig | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hasRun, setHasRun] = useState(false);
-  const [toggling, setToggling] = useState(false);
-  const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
-  const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
-  const [backgroundError, setBackgroundError] = useState<string | null>(null);
-  const pollRef = useRef<number | null>(null);
+    const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
+    const [config, setConfig] = useState<AIConfig | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [hasRun, setHasRun] = useState(false);
+    const [toggling, setToggling] = useState(false);
+    const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
+    const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
+    const [backgroundError, setBackgroundError] = useState<string | null>(null);
+    const pollRef = useRef<number | null>(null);
 
-  // Fetch AI config on mount so the user knows whether the feature is available.
-  useEffect(() => {
-    let cancelled = false;
-    api.getAIConfig()
-      .then(cfg => { if (!cancelled) setConfig(cfg); })
-      .catch(() => { /* config endpoint may be down; non-fatal */ });
-    return () => { cancelled = true; };
-  }, []);
+    // O10: peer tickers the AI can compare against (cross-ticker correlation)
+    const [peerSymbols, setPeerSymbols] = useState<string>('');
+    // O12: optional chain-entry name to route this call through a specific model
+    const [modelOverride, setModelOverride] = useState<string>('');
 
-  const runAnalysis = useCallback(async () => {
-    if (!symbol) return;
-    setLoading(true);
-    setError(null);
-    // Clear any stale background job state
-    if (pollRef.current !== null) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    setBackgroundJobId(null);
-    setBackgroundStatus(null);
-    setBackgroundError(null);
-    try {
-      const result = await api.analyzeSymbol(symbol, timeframe);
-      setAnalysis(result);
-      setHasRun(true);
-    } catch (e: any) {
-      setError(e.message || 'Analysis failed');
-      setHasRun(true);
-    } finally {
-      setLoading(false);
-    }
-  }, [symbol, timeframe]);
+    // Fetch AI config on mount so the user knows whether the feature is available.
+    useEffect(() => {
+        let cancelled = false;
+        api.getAIConfig()
+            .then(cfg => { if (!cancelled) setConfig(cfg); })
+            .catch(() => { /* config endpoint may be down; non-fatal */ });
+        return () => { cancelled = true; };
+    }, []);
+
+    const runAnalysis = useCallback(async () => {
+        if (!symbol) return;
+        setLoading(true);
+        setError(null);
+        // Clear any stale background job state
+        if (pollRef.current !== null) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+        setBackgroundJobId(null);
+        setBackgroundStatus(null);
+        setBackgroundError(null);
+        try {
+            const result = await api.analyzeSymbol(symbol, timeframe, {
+                portfolio_symbols: peerSymbols || undefined,
+                model: modelOverride || undefined,
+            });
+            setAnalysis(result);
+            setHasRun(true);
+        } catch (e: any) {
+            setError(e.message || 'Analysis failed');
+            setHasRun(true);
+        } finally {
+            setLoading(false);
+        }
+    }, [symbol, timeframe, peerSymbols, modelOverride]);
 
   // ── Background job runner ─────────────────────────────────────────────
 
@@ -266,23 +274,52 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         )}
       </div>
 
-      {backgroundStatus === 'queued' && (
-        <div className="ai-loading">
-          <p>⏳ Job queued — polling for result…</p>
-          <p className="info-text">Poll every 2 seconds until done</p>
+{backgroundStatus === 'queued' && (
+            <div className="ai-loading">
+                <p>⏳ Job queued — polling for result…</p>
+                <p className="info-text">Poll every 2 seconds until done</p>
+            </div>
+        )}
+        {backgroundStatus === 'started' && (
+            <div className="ai-loading">
+                <p>⚙️ Analysis in progress…</p>
+                <p className="info-text">Still computing indicators and querying the AI model</p>
+            </div>
+        )}
+        {backgroundError && (
+            <div className="ai-error">
+                <p>⚠️ Background job failed: {backgroundError}</p>
+            </div>
+        )}
+
+        {/* O10 + O12: optional peer/model controls — empty by default so
+            the standard analyze path is unchanged unless the user opts in. */}
+        <div className="ai-controls">
+            <label className="ai-control">
+                <span className="ai-control-label" title="Comma-separated peer tickers the AI can compare against">
+                    Peers
+                </span>
+                <input
+                    type="text"
+                    value={peerSymbols}
+                    onChange={e => setPeerSymbols(e.target.value)}
+                    placeholder="MSFT,GOOG,SPY"
+                    disabled={loading}
+                />
+            </label>
+            <label className="ai-control">
+                <span className="ai-control-label" title="Chain-entry name to route this call through (e.g. openai:gpt-4o-mini)">
+                    Model
+                </span>
+                <input
+                    type="text"
+                    value={modelOverride}
+                    onChange={e => setModelOverride(e.target.value)}
+                    placeholder="openai:gpt-4o-mini"
+                    disabled={loading}
+                />
+            </label>
         </div>
-      )}
-      {backgroundStatus === 'started' && (
-        <div className="ai-loading">
-          <p>⚙️ Analysis in progress…</p>
-          <p className="info-text">Still computing indicators and querying the AI model</p>
-        </div>
-      )}
-      {backgroundError && (
-        <div className="ai-error">
-          <p>⚠️ Background job failed: {backgroundError}</p>
-        </div>
-      )}
 
       {aiDisabled && (
         <div className="ai-disabled-info">
