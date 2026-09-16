@@ -20,6 +20,37 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
 
 
+class TestResampleWideningHours(unittest.TestCase):
+    """Regression for a live bug (2026-09-16): 15m shared 5m's 60-min
+    resample lookback window (base_hours from target_mins alone, no extra
+    widening) but has to fill 3x larger buckets from it — only ~4 complete
+    buckets of redundancy vs 5m's ~12. A brief 1m-feed hiccup left too few
+    1m bars to close 15m's newest bucket, stalling DVLT's 15m bar at
+    11:30 while its 5m bar was already at 12:20 and 30m (which gets its
+    own dedicated padding) was unaffected. 15m must get the same kind of
+    padding 30m already has, not 0."""
+
+    def test_15m_has_dedicated_widening_like_30m(self):
+        from backend.market_data.services.ingestion_service import (
+            MarketDataIngestionService,
+        )
+        widening = MarketDataIngestionService._RESAMPLE_WIDENING_HOURS
+        self.assertGreaterEqual(widening["15m"], 1)
+        self.assertEqual(widening["15m"], widening["30m"])
+
+    def test_2m_3m_5m_remain_unpadded(self):
+        """These have 12+ complete buckets in their base window, so they
+        don't need the extra padding 15m now gets — only asserting 15m
+        changed, not that everything did."""
+        from backend.market_data.services.ingestion_service import (
+            MarketDataIngestionService,
+        )
+        widening = MarketDataIngestionService._RESAMPLE_WIDENING_HOURS
+        self.assertEqual(widening["2m"], 0)
+        self.assertEqual(widening["3m"], 0)
+        self.assertEqual(widening["5m"], 0)
+
+
 class TestIngestionServiceLifecycle(unittest.TestCase):
     """Basic start/stop without requiring a live market data provider."""
 

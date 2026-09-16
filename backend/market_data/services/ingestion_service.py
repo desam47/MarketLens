@@ -331,8 +331,19 @@ class MarketDataIngestionService:
     _SUBHOUR_TFS: list[str] = ["2m", "3m", "5m", "15m", "30m"]
 
     # Widening per target TF (hours), mirroring bar_repository._WIDENING_HOURS.
+    #
+    # 15m gets the same padding as 30m (not 0, like 2m/3m/5m) — with 0
+    # widening it shared 5m's 60-min base window but had to fill 3x
+    # larger buckets from it, leaving only ~4 complete buckets of
+    # redundancy vs 5m's ~12. A brief 1m-feed hiccup (provider hiccups
+    # are common — see this file's gap-fill loop) could leave too few 1m
+    # bars to close 15m's newest bucket at all, stalling it for several
+    # 2-min passes while 5m/30m kept updating normally. Confirmed live
+    # 2026-09-16: DVLT's 15m bar stuck at 11:30 while its 5m bar was
+    # already at 12:20 and 30m correctly at 11:30 (30m's own window
+    # genuinely hadn't closed yet — not the same issue).
     _RESAMPLE_WIDENING_HOURS: dict[str, int] = {
-        "2m": 0, "3m": 0, "5m": 0, "15m": 0, "30m": 1,
+        "2m": 0, "3m": 0, "5m": 0, "15m": 1, "30m": 1,
         "1h": 1, "4h": 4, "1d": 24, "1wk": 168,
     }
 
