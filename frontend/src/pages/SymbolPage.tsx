@@ -697,6 +697,18 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     return () => clearInterval(id);
   }, [handleRefresh]);
 
+  // Browsers throttle setInterval heavily in backgrounded/inactive tabs,
+  // so a tab left in the background can sit on stale data far longer
+  // than 30s until its throttled timer eventually fires again. Refetch
+  // immediately on tab-focus-regain to close that gap.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') handleRefresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [handleRefresh]);
+
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
 

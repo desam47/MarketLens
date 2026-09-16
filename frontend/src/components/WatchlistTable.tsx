@@ -212,6 +212,18 @@ export function WatchlistTable({
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // Browsers throttle setInterval heavily in backgrounded/inactive tabs,
+  // so a tab left in the background can sit on a stale scan for far
+  // longer than 30s until its throttled timer eventually fires again.
+  // Refetch immediately on tab-focus-regain to close that gap.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchData(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [fetchData]);
+
   // --- Per-symbol actions -----------------------------------------------
 
   const handleToggleSymbol = useCallback(async (symbol: string) => {
