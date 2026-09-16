@@ -21,7 +21,11 @@ interface DashboardProps {
 
 export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const [selectedPreset, setSelectedPreset] = useState<string>('day_trading');
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  // Defaults on so a tab left open doesn't silently freeze — matches the
+  // fix already applied to the Watchlist and Symbol page this session.
+  // Confirmed live: AAPL's regime engine was current server-side, but a
+  // Dashboard tab with this off showed "Stuck · 2d ago" the whole time.
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
   const [globalError, setGlobalError] = useState<string | null>(null);
 
@@ -137,6 +141,26 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       fetchAll();
     }, 30000);
     return () => clearInterval(interval);
+  }, [autoRefresh, fetchAll]);
+
+  // Browsers throttle setInterval heavily in backgrounded/inactive tabs
+  // (Chrome can drop a 30s timer to firing once a minute or less), and
+  // regime.data_age_seconds is a server-computed snapshot from the last
+  // successful fetch, not something that live-ticks on the client — so a
+  // tab left in the background sits on an increasingly stale snapshot
+  // until its throttled timer eventually fires again. Root cause of a
+  // live report (2026-09-16): the freshness pill intermittently showing
+  // "Stuck · 1h ago" then recovering, even though the backend regime
+  // engine itself was never more than ~3min stale. Refetching immediately
+  // on tab-focus-regain closes that gap regardless of how long the timer
+  // was throttled.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchAll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [autoRefresh, fetchAll]);
 
   const isRefreshing = regimeLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
