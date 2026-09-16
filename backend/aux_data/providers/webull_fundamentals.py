@@ -69,30 +69,36 @@ class WebullFundamentalsProvider(FundamentalProvider):
     def __init__(self) -> None:
         super().__init__("webull_fundamentals")
 
-    def _client(self):
+    def _provider(self):
         from backend.market_data.services.manager import get_cached_provider
 
         provider = get_cached_provider("webull")
-        if provider is None or not hasattr(provider, "_data_client"):
+        if provider is None or not hasattr(provider, "get_financial_indicators"):
             raise RuntimeError("Webull provider unavailable (not enabled / not credentialed)")
-        return provider._data_client.fundamentals
+        return provider
 
     def get_fundamentals(self, symbol: str) -> FundamentalsResponse:
+        from backend.market_data.services.providers import _call_provider
+
         sym = symbol.upper()
         values: dict = {}
         issuer: str | None = None
         errors = []
         try:
-            fc = self._client()
+            provider = self._provider()
+            # Routed through _call_provider (not provider._data_client
+            # directly) so fundamentals calls share Webull's per-provider
+            # rate limiter/circuit breaker with quotes/bars/tape ticks,
+            # instead of bypassing it.
             try:
-                resp = fc.get_financials_indicators(sym, "US_STOCK")
+                resp = _call_provider(provider, "get_financial_indicators", sym)
                 if getattr(resp, "status_code", 200) == 200:
                     body = resp.json()
                     values = body.get("values", body) if isinstance(body, dict) else {}
             except Exception as e:  # noqa: BLE001
                 errors.append(f"indicators: {e}")
             try:
-                resp = fc.get_fund_brief(sym, "US_STOCK")
+                resp = _call_provider(provider, "get_fund_brief", sym)
                 if getattr(resp, "status_code", 200) == 200:
                     b = resp.json()
                     issuer = b.get("issuer") or b.get("name") if isinstance(b, dict) else None

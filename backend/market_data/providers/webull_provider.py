@@ -523,6 +523,45 @@ class WebullProvider(BaseMarketDataProvider):
                 for s in symbols
             }
 
+    # ---------------------------------------------------------------- tape
+    def get_recent_ticks(self, symbol: str, count: int = 200):
+        """Raw Time & Sales response for ``symbol`` (up to ``count`` recent prints).
+
+        Returns the SDK's raw response object (``.status_code`` / ``.json()``)
+        rather than a typed model — the caller (tape seeding, see
+        ``backend/api/tape/registry.py``) parses Webull's tick shape itself,
+        since it isn't uniform across symbols/sessions. Exists as a real
+        provider method (rather than callers reaching into
+        ``provider._data_client`` directly, as this used to) so it can be
+        called through ``_call_provider`` and share Webull's per-provider
+        rate limiter/circuit breaker — a watchlist's worth of tape-seed
+        threads firing this unthrottled, straight through the raw SDK
+        client, was previously able to burst past Webull's own rate limit.
+        """
+        return self._data_client.market_data.get_tick(
+            symbol.upper(), "US_STOCK", count=str(count)
+        )
+
+    # ---------------------------------------------------------------- fundamentals
+    def get_financial_indicators(self, symbol: str):
+        """Raw ``get_financials_indicators`` response — per-share ratio/margin
+        metrics. See ``backend/aux_data/providers/webull_fundamentals.py`` for
+        the field mapping. Returns the raw SDK response (``.status_code`` /
+        ``.json()``); a real provider method (not a caller reaching into
+        ``provider._data_client`` directly) so it goes through
+        ``_call_provider`` and shares Webull's rate limiter/circuit breaker
+        with every other Webull call instead of bypassing it.
+        """
+        return self._data_client.fundamentals.get_financials_indicators(
+            symbol.upper(), "US_STOCK"
+        )
+
+    def get_fund_brief(self, symbol: str):
+        """Raw ``get_fund_brief`` response — used only for the issuer/company
+        name. Same rationale as ``get_financial_indicators`` above.
+        """
+        return self._data_client.fundamentals.get_fund_brief(symbol.upper(), "US_STOCK")
+
     # ---------------------------------------------------------------- bars
     def get_historical_bars(
         self,

@@ -14,6 +14,8 @@ IMPORTANT: import _settings and redis from _providers so that patches at
 ``backend.market_data.services.manager._settings`` and
 ``backend.market_data.services.manager.redis`` propagate to all internal modules.
 """
+import threading
+
 from . import _providers as _shared
 from ._providers import get_redis, get_redis_cache, get_settings, redis
 from .cache import RedisCache, _redis_cache
@@ -103,6 +105,31 @@ def get_1h_1d_fallback_providers(timeframe: str) -> list[str]:
 # unavailable", so the next call retries construction from scratch.
 _provider_instance_cache: dict[str, object] = {}
 
+# Single-flight construction lock, one per provider name. Without this,
+# concurrent callers for the same not-yet-cached name (e.g.
+# warmup_tape_engines() spawning one seed thread per watchlist symbol,
+# each hitting get_cached_provider("webull")) would all race past the
+# `name in _provider_instance_cache` check together and each construct
+# their own instance. For WebullProvider that meant one auth handshake
+# (account_v2.get_account_list()) per racing caller — confirmed live
+# 2026-09-16: a ~17-symbol watchlist warmup fired ~17 simultaneous
+# bootstrap calls and tripped Webull's own rate limiter (429
+# TOO_MANY_REQUESTS), which then kept re-triggering since a failed
+# construction is deliberately left uncached (see below) so the next
+# caller retries. Serializing construction per name collapses that
+# burst to one real attempt; the rest wait and reuse its result.
+_provider_construction_locks: dict[str, threading.Lock] = {}
+_provider_locks_guard = threading.Lock()
+
+
+def _construction_lock(name: str) -> threading.Lock:
+    with _provider_locks_guard:
+        lock = _provider_construction_locks.get(name)
+        if lock is None:
+            lock = threading.Lock()
+            _provider_construction_locks[name] = lock
+        return lock
+
 
 def get_cached_provider(name: str):
     """Return a cached instance of the named provider, constructing it
@@ -118,13 +145,18 @@ def get_cached_provider(name: str):
             f"Unknown provider {name!r} — available: {list(_PROVIDER_CLASSES.keys())}"
         )
         return None
-    try:
-        instance = provider_cls()
-    except Exception as e:
-        logger.warning(f"Failed to instantiate {name}: {e}")
-        return None
-    _provider_instance_cache[name] = instance
-    return instance
+    with _construction_lock(name):
+        # Re-check: another thread may have constructed (or failed to
+        # construct) this provider while we were waiting for the lock.
+        if name in _provider_instance_cache:
+            return _provider_instance_cache[name]
+        try:
+            instance = provider_cls()
+        except Exception as e:
+            logger.warning(f"Failed to instantiate {name}: {e}")
+            return None
+        _provider_instance_cache[name] = instance
+        return instance
 
 
 def _clear_provider_cache() -> None:

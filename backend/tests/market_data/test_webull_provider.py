@@ -131,6 +131,76 @@ class TestGetQuote(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# get_recent_ticks tests
+# ---------------------------------------------------------------------------
+class TestGetRecentTicks(unittest.TestCase):
+    """get_recent_ticks exists as a real provider method (rather than tape
+    seeding reaching into provider._data_client directly) so it can be
+    routed through _call_provider and share Webull's rate limiter/circuit
+    breaker. See backend/api/tape/registry.py's _seed_from_webull_ticks."""
+
+    def test_calls_sdk_get_tick_with_upper_symbol_and_stringified_count(self):
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_data.market_data.get_tick.return_value = mock_resp
+        p = _make_provider(mock_data)
+
+        result = p.get_recent_ticks("aapl", count=200)
+
+        mock_data.market_data.get_tick.assert_called_once_with(
+            "AAPL", "US_STOCK", count="200"
+        )
+        self.assertIs(result, mock_resp)
+
+    def test_default_count_is_200(self):
+        mock_data = MagicMock()
+        p = _make_provider(mock_data)
+
+        p.get_recent_ticks("TSLA")
+
+        mock_data.market_data.get_tick.assert_called_once_with(
+            "TSLA", "US_STOCK", count="200"
+        )
+
+
+# ---------------------------------------------------------------------------
+# get_financial_indicators / get_fund_brief tests
+# ---------------------------------------------------------------------------
+class TestGetFundamentalsMethods(unittest.TestCase):
+    """Same rationale as get_recent_ticks: real provider methods (rather
+    than webull_fundamentals.py reaching into provider._data_client
+    directly) so fundamentals calls can be routed through _call_provider
+    and share Webull's rate limiter/circuit breaker."""
+
+    def test_get_financial_indicators_calls_sdk_with_upper_symbol(self):
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_data.fundamentals.get_financials_indicators.return_value = mock_resp
+        p = _make_provider(mock_data)
+
+        result = p.get_financial_indicators("aapl")
+
+        mock_data.fundamentals.get_financials_indicators.assert_called_once_with(
+            "AAPL", "US_STOCK"
+        )
+        self.assertIs(result, mock_resp)
+
+    def test_get_fund_brief_calls_sdk_with_upper_symbol(self):
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_data.fundamentals.get_fund_brief.return_value = mock_resp
+        p = _make_provider(mock_data)
+
+        result = p.get_fund_brief("tsla")
+
+        mock_data.fundamentals.get_fund_brief.assert_called_once_with("TSLA", "US_STOCK")
+        self.assertIs(result, mock_resp)
+
+
+# ---------------------------------------------------------------------------
 # get_historical_bars tests
 # ---------------------------------------------------------------------------
 class TestGetHistoricalBars(unittest.TestCase):

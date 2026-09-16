@@ -49,11 +49,17 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
     """
     try:
         from backend.market_data.services.manager import get_cached_provider
+        from backend.market_data.services.providers import _call_provider
 
         provider = get_cached_provider("webull")
         if provider is None:
             return 0
-        resp = provider._data_client.market_data.get_tick(symbol, "US_STOCK", count="200")
+        # Routed through _call_provider (not provider._data_client directly)
+        # so this shares Webull's per-provider rate limiter/circuit breaker
+        # instead of firing unthrottled — a full watchlist's worth of these
+        # firing at once (one per symbol, from warmup_tape_engines()) could
+        # otherwise burst past Webull's own rate limit on its own.
+        resp = _call_provider(provider, "get_recent_ticks", symbol, count=200)
         if getattr(resp, "status_code", 200) != 200:
             return 0
         rows = resp.json()

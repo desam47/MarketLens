@@ -443,6 +443,53 @@ class TestGetCachedProvider(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(construct_count["n"], 1)
 
+    def test_concurrent_callers_construct_only_once(self):
+        """Regression for a live bug (2026-09-16): warmup_tape_engines()
+        spawns one thread per watchlist symbol, each calling
+        get_cached_provider("webull"). With no lock, every thread sees a
+        cold cache at the same instant and runs its own (network-bound)
+        __init__ — for a ~17-symbol watchlist that fired ~17 concurrent
+        Webull auth handshakes and tripped Webull's own rate limiter
+        (429 TOO_MANY_REQUESTS). Racing callers must share one
+        construction instead."""
+        import threading
+        import time
+
+        construct_count = {"n": 0}
+        count_lock = threading.Lock()
+        n_threads = 8
+        start_barrier = threading.Barrier(n_threads)
+
+        class _SlowProvider:
+            def __init__(self):
+                with count_lock:
+                    construct_count["n"] += 1
+                # Widen the race window the way a real network-bound
+                # __init__ (e.g. WebullProvider's auth handshake) would.
+                time.sleep(0.05)
+
+        results: list = []
+        results_lock = threading.Lock()
+
+        def _call():
+            start_barrier.wait(timeout=2)  # every thread reaches the call together
+            instance = self.manager_mod.get_cached_provider("slow")
+            with results_lock:
+                results.append(instance)
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"slow": _SlowProvider}
+        ):
+            threads = [threading.Thread(target=_call) for _ in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+        self.assertEqual(construct_count["n"], 1)
+        self.assertEqual(len(results), n_threads)
+        self.assertTrue(all(r is results[0] for r in results))
+
 
 if __name__ == '__main__':
     unittest.main()

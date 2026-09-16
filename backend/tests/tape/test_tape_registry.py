@@ -1,6 +1,6 @@
 """Tests for backend.api.tape.registry."""
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend.api.tape import registry
 from backend.market_data.services.engine_seeder import engine_registry
@@ -54,6 +54,45 @@ class TestTapeRegistry(unittest.TestCase):
 
         with patch.object(settings.tape, "enabled", False):
             self.assertEqual(registry.warmup_tape_engines(), [])
+
+
+class TestSeedFromWebullTicks(unittest.TestCase):
+    """_seed_from_webull_ticks must fetch ticks through _call_provider
+    (rate limiter + circuit breaker), not by reaching into
+    provider._data_client directly — a full watchlist's worth of
+    concurrent tape-seed threads doing the latter could burst past
+    Webull's own rate limit unthrottled."""
+
+    def test_seed_routes_through_call_provider_not_raw_data_client(self):
+        mock_provider = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = []
+
+        with patch(
+            "backend.market_data.services.manager.get_cached_provider",
+            return_value=mock_provider,
+        ), patch(
+            "backend.market_data.services.providers._call_provider",
+            return_value=mock_resp,
+        ) as mock_call:
+            engine = TapeEngine("AAPL")
+            n = registry._seed_from_webull_ticks("AAPL", engine)
+
+        mock_call.assert_called_once_with(
+            mock_provider, "get_recent_ticks", "AAPL", count=200
+        )
+        mock_provider._data_client.market_data.get_tick.assert_not_called()
+        self.assertEqual(n, 0)
+
+    def test_seed_returns_0_when_provider_unavailable(self):
+        with patch(
+            "backend.market_data.services.manager.get_cached_provider",
+            return_value=None,
+        ):
+            engine = TapeEngine("AAPL")
+            n = registry._seed_from_webull_ticks("AAPL", engine)
+        self.assertEqual(n, 0)
 
 
 if __name__ == "__main__":

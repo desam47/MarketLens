@@ -23,25 +23,35 @@ def _series(*vals):
 
 
 class _FakeFundamentals:
+    """Stands in for the real WebullProvider that get_cached_provider("webull")
+    returns. get_fundamentals() now calls _call_provider(provider, method_name,
+    sym) — i.e. getattr(provider, method_name)(sym) — so this needs the real
+    WebullProvider method names/signatures (one positional arg, "US_STOCK"
+    baked in), not the raw SDK client's 2-arg shape.
+
+    ``name`` is a distinct dummy (not "webull") so these tests' failures don't
+    trip the real "webull" circuit breaker's shared, module-level state and
+    affect other tests or live traffic.
+    """
+    name = "webull_fundamentals_fake"
+
     def __init__(self, values=None, issuer="Apple Inc", raise_ind=False, raise_brief=False):
         self._values, self._issuer = values, issuer
         self._raise_ind, self._raise_brief = raise_ind, raise_brief
 
-    def get_financials_indicators(self, sym, cat):
+    def get_financial_indicators(self, sym):
         if self._raise_ind:
             raise RuntimeError("indicators boom")
         return _resp({"currency": "US", "values": self._values or {}})
 
-    def get_fund_brief(self, sym, cat):
+    def get_fund_brief(self, sym):
         if self._raise_brief:
             raise RuntimeError("brief boom")
         return _resp({"issuer": self._issuer} if self._issuer else {})
 
 
 def _patch_client(fake):
-    prov = MagicMock()
-    prov._data_client.fundamentals = fake
-    return patch("backend.market_data.services.manager.get_cached_provider", return_value=prov)
+    return patch("backend.market_data.services.manager.get_cached_provider", return_value=fake)
 
 
 class TestLatestHelper(unittest.TestCase):
