@@ -350,6 +350,8 @@ export interface BarsResult {
 export interface TopMoverResult {
   symbol: string;
   quote: ScanQuote | null;
+  change: number | null;
+  change_pct: number | null;
   indicator_values: Record<string, any>;
   scores: Record<string, number>;
   total_score: number;

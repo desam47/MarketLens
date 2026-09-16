@@ -7,48 +7,14 @@ interface TopMoversCardProps {
   onSelectSymbol?: (symbol: string) => void;
 }
 
-// Signal names emitted by backend.scanner._generate_signals (see
-// backend/scanner/scanner.py). The dashboard is read-only — the backend
-// already filtered by ranking category, so this is just a defensive
-// re-classification in case the API returns a wrong-direction symbol.
-const bullishSignals = new Set([
-  'MACD_BULLISH', 'RSI_OVERSOLD', 'MULTI_TIMEFRAME_BULLISH',
-  'TREND_BULLISH', 'VOLUME_EXPANSION', 'BREAKOUT',
-  'DAILY_BULLISH', 'MTF_BULLISH', 'STRONG_TREND', 'TREND_STRENGTHENS',
-  'FULL_ALIGNMENT', 'BULLISH_DIVERGENCE', 'HIGH_VOLUME',
-]);
-
-const bearishSignals = new Set([
-  'MACD_BEARISH', 'RSI_OVERBOUGHT', 'MULTI_TIMEFRAME_BEARISH',
-  'TREND_BEARISH', 'BREAKDOWN', 'TREND_WEAKENS',
-  'DAILY_BEARISH', 'MTF_BEARISH', 'WEAK_TREND', 'TIMEFRAME_CONFLICT',
-  'BEARISH_DIVERGENCE',
-]);
-
-function isBullish(r: TopMoverResult): boolean {
-  // The backend's directional ranking is authoritative. The total_score
-  // it returns is now a *signed* weighted average (positive = bullish,
-  // negative = bearish). A defensive check: if the scanner emitted any
-  // bearish signal and the score is not clearly positive, treat as
-  // bearish; if it emitted any bullish signal and the score is not
-  // clearly negative, treat as bullish. If signals are empty or
-  // unrecognised, fall back to the signed total_score.
-  const bullCount = r.signals.filter(s => bullishSignals.has(s)).length;
-  const bearCount = r.signals.filter(s => bearishSignals.has(s)).length;
-  if (bullCount > bearCount) return true;
-  if (bearCount > bullCount) return false;
-  return r.total_score > 0;
-}
-
-function scoreBadge(score: number): { label: string; color: string } {
+function changeBadge(changePct: number | null): { label: string; color: string } {
   // Colors follow the app-wide trend convention (#22c55e bullish /
-  // #ef4444 bearish, doc 4.1.12). This previously used near-miss hexes
-  // (#10b981 / #dc2626) for the |score| > 50 band only, so the same panel
-  // rendered two different greens depending on magnitude.
-  const sign = score > 0 ? '+' : '';
-  if (score > 0) return { label: sign + score.toFixed(0), color: '#22c55e' };
-  if (score < 0) return { label: score.toFixed(0), color: '#ef4444' };
-  return { label: '0', color: '#9ca3af' };
+  // #ef4444 bearish, doc 4.1.12).
+  if (changePct == null) return { label: '—', color: '#9ca3af' };
+  const sign = changePct > 0 ? '+' : '';
+  if (changePct > 0) return { label: `${sign}${changePct.toFixed(2)}%`, color: '#22c55e' };
+  if (changePct < 0) return { label: `${changePct.toFixed(2)}%`, color: '#ef4444' };
+  return { label: '0.00%', color: '#9ca3af' };
 }
 
 function MoverPanel({
@@ -81,7 +47,7 @@ function MoverPanel({
       </h3>
       <div className="top-movers-scroll">
         {movers.map(m => {
-          const badge = scoreBadge(m.total_score);
+          const badge = changeBadge(m.change_pct);
           return (
             <div
               key={m.symbol}
@@ -132,19 +98,28 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
     };
 
     const [bullResult, bearResult] = await Promise.all([
-      safeCall(() => api.getTopMovers('bullish', 10)),
-      safeCall(() => api.getTopMovers('bearish', 10)),
+      safeCall(() => api.getTopMovers('bullish', 20)),
+      safeCall(() => api.getTopMovers('bearish', 20)),
     ]);
 
-    // Backend already filters by ranking category, but post-filter as a
-    // safety net in case the ranking includes a wrong-direction symbol
-    // due to score magnitude.
+    // The backend ranks strongest_bullish/strongest_bearish by live
+    // change_pct now (real price direction, not the momentum/RSI
+    // composite score) — it's authoritative, trust it as-is. This used
+    // to re-filter both lists through isBullish() (a signals/total_score
+    // heuristic) as a "safety net," but that heuristic still reflects
+    // the old score-based direction, so it actively fought the new
+    // change_pct-based backend ranking: a symbol like a crashing penny
+    // stock with bullish-looking signals (oversold RSI, a lagging
+    // MACD_BULLISH) would get silently dropped from the bearish list
+    // (isBullish() said true) without ever qualifying for the bullish
+    // list either (its change_pct ranked it last there) — vanishing
+    // from Top Movers entirely. Found live 2026-09-16 (CTNT).
     // Defensive: the API may return an object (e.g. 404 error body) if
     // a route is misconfigured — guard against that so the dashboard
     // still renders instead of throwing.
     const asArray = <T,>(v: unknown): T[] => Array.isArray(v) ? (v as T[]) : [];
-    const bullData = asArray<TopMoverResult>(bullResult.data).filter(isBullish);
-    const bearData = asArray<TopMoverResult>(bearResult.data).filter(r => !isBullish(r));
+    const bullData = asArray<TopMoverResult>(bullResult.data);
+    const bearData = asArray<TopMoverResult>(bearResult.data);
 
     setBullish(bullData);
     setBearish(bearData);
