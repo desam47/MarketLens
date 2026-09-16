@@ -200,9 +200,20 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
     resolved history yet — the caller (context.py) treats an empty
     dict as "drop this section", same as every other best-effort
     context block. Opens and closes its own session — same convention
-    as this module's other entry points."""
+    as this module's other entry points.
+
+    The ``win_count``/``loss_count``/``expired_count``/``open_count``
+    buckets are pulled from a single grouped status-count query (one
+    pass over the table) instead of a separate ``COUNT(*)`` subquery
+    for open rows — the old code ran two queries where one suffices,
+    and the resolved win/loss tally was invisible to the UI.
+    ``sample_size``/``win_rate``/avg returns stay computed over the
+    most-recent ``limit`` resolved rows (the calibration sample).
+    """
     if not settings.ai_trade_plan_tracking.enabled:
         return {}
+
+    from sqlalchemy import func
 
     from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
 
@@ -219,13 +230,17 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
         if not rows:
             return {}
 
+        # One grouped pass yields every status bucket at once — no
+        # second COUNT(*) round-trip for open rows.
+        status_counts = dict(
+            db.query(AITradePlanOutcome.status, func.count())
+            .filter(AITradePlanOutcome.symbol == sym)
+            .group_by(AITradePlanOutcome.status)
+            .all()
+        )
+
         wins = [r for r in rows if r.status == "win"]
         losses = [r for r in rows if r.status == "loss"]
-        open_count = (
-            db.query(AITradePlanOutcome)
-            .filter(AITradePlanOutcome.symbol == sym, AITradePlanOutcome.status == "open")
-            .count()
-        )
         win_returns = [r.return_pct for r in wins if r.return_pct is not None]
         loss_returns = [r.return_pct for r in losses if r.return_pct is not None]
         return {
@@ -233,7 +248,10 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
             "win_rate": round(len(wins) / len(rows), 2),
             "avg_return_win": round(fmean(win_returns), 4) if win_returns else None,
             "avg_return_loss": round(fmean(loss_returns), 4) if loss_returns else None,
-            "open_count": open_count,
+            "win_count": status_counts.get("win", 0),
+            "loss_count": status_counts.get("loss", 0),
+            "expired_count": status_counts.get("expired", 0),
+            "open_count": status_counts.get("open", 0),
         }
     finally:
         db.close()
