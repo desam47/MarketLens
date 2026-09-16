@@ -234,6 +234,12 @@ class TrendEngine:
         self._last_update_time: datetime | None = None
         self._last_price: float | None = None
 
+        # Tracks the close_time of the last CLOSED candle already fed to
+        # each short-TF's indicators (see _update_indicators_from_candles),
+        # so a still-forming candle contributes exactly one indicator
+        # update once it closes, not once per tick.
+        self._last_fed_closed_ts: dict[Timeframe, datetime] = {}
+
         # Initialize indicators for each timeframe
         self.indicators: dict[Timeframe, dict[str, Any]] = {}
         self._initialize_indicators()
@@ -391,8 +397,21 @@ class TrendEngine:
         """Feed indicators from the timeframe engine's real OHLCV candles.
 
         Each timeframe is updated at its own cadence:
-          - Short TFs (1m/2m/3m): update on every tick so the signal is
-            near-real-time; use the in-progress candle's accumulated OHLC.
+          - Short TFs (1m/2m/3m): update once per CLOSED candle, not on
+            every tick. These feed the "1m" (etc.) cell on the
+            Multi-Timeframe Trend panel, which users compare directly
+            against the 1m bar chart — that chart only ever shows closed
+            candles. Feeding the in-progress candle instead meant two
+            problems: the signal could visually contradict the chart
+            (reacting to a still-forming candle the chart doesn't show
+            yet), and — since each indicator's update() unconditionally
+            appends a new data point (see EMAIndicator.update) — a single
+            volatile minute with many ticks fed the *same* forming candle
+            dozens of times, each treated as a distinct new bar and
+            massively over-weighting that minute relative to real history.
+            Confirmed live 2026-09-16: DVLT's 1m cell flipped between
+            "downtrend" and "sideways" within two minutes while every
+            closed 1m bar in that window was higher than the last.
           - Longer TFs (5m+): prefer the in-progress candle's accumulated
             OHLC so all ticks contribute to the trend signal during the candle's
             lifetime. Fall back to the last closed candle when available; this
@@ -414,24 +433,32 @@ class TrendEngine:
             if timeframe == Timeframe.TICK:
                 continue
 
-            closed_candles = self.timeframe_engine.get_closed_candles(timeframe)
-            current_candle = self.timeframe_engine.current_candles.get(timeframe)
-
-            # Short TFs: always update using the in-progress candle.
-            # Other TFs: prefer the in-progress candle (most recent data). Fall
-            # back to the last closed candle only when there is no in-progress
-            # candle (e.g. a very-long-period TF whose candle hasn't opened yet).
             if timeframe in short_tfs:
-                candle = current_candle
-            elif current_candle is not None:
-                candle = current_candle
-            elif closed_candles:
-                candle = closed_candles[-1]
+                candle = self.timeframe_engine.get_latest_closed_candle(timeframe)
+                if candle is None or candle.open is None:
+                    continue
+                # Already fed this candle on an earlier tick this same
+                # (still-forming next) minute — skip so each closed candle
+                # contributes exactly one indicator update.
+                if self._last_fed_closed_ts.get(timeframe) == candle.close_time:
+                    continue
+                self._last_fed_closed_ts[timeframe] = candle.close_time
             else:
-                continue
+                closed_candles = self.timeframe_engine.get_closed_candles(timeframe)
+                current_candle = self.timeframe_engine.current_candles.get(timeframe)
+                # Prefer the in-progress candle (most recent data). Fall back
+                # to the last closed candle only when there is no in-progress
+                # candle (e.g. a very-long-period TF whose candle hasn't
+                # opened yet).
+                if current_candle is not None:
+                    candle = current_candle
+                elif closed_candles:
+                    candle = closed_candles[-1]
+                else:
+                    continue
 
-            if candle is None or candle.open is None:
-                continue
+                if candle is None or candle.open is None:
+                    continue
 
             data_point = {
                 "open": float(candle.open),

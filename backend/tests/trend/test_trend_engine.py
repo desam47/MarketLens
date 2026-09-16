@@ -66,6 +66,49 @@ class TestTrendEngine(unittest.TestCase):
         history = self.engine.get_trend_history(Timeframe.ONE_HOUR)
         self.assertIsInstance(history, list)
 
+    def test_short_tf_indicators_update_once_per_closed_candle_not_per_tick(self):
+        """Regression: live 2026-09-16, DVLT's 1m Multi-Timeframe Trend cell
+        flipped between "downtrend" and "sideways" within two minutes while
+        every closed 1m bar in that window was higher than the last. Root
+        cause: 1m/2m/3m indicators were fed the in-progress (still-forming)
+        candle on every tick, and EMAIndicator.update() unconditionally
+        appends a new point per call — so a volatile minute with many ticks
+        fed the same forming candle dozens of times, over-weighting that
+        minute relative to real closed-bar history. Short TFs must now
+        update exactly once per closed candle."""
+        ema_fast = self.engine.indicators[Timeframe.ONE_MINUTE]["ema_fast"]  # period 9
+
+        # Fixed, minute-aligned base time (not datetime.now()) — the burst
+        # below spans 38s and must never cross a minute boundary regardless
+        # of the real wall-clock second the test happens to run at.
+        base_time = datetime(2026, 1, 5, 9, 30, 0)
+
+        # TrendEngine.__init__ opens a real-time (datetime.now()) phantom
+        # candle as a side effect of creating a fresh per-symbol timeframe
+        # engine. That candle lands in a different (real "now") minute than
+        # this test's fixed base_time, so the first tick below closes it —
+        # one spurious feed unrelated to what this test checks. Prime past
+        # it with a throwaway update, then reset the indicator's state so
+        # the assertions that follow start from a clean slate.
+        self.engine.update(100.0, 1000, base_time)
+        ema_fast.values.clear()
+        if hasattr(ema_fast, "_warmup_buffer"):
+            ema_fast._warmup_buffer.clear()
+        ema_fast.prev_ema = None
+
+        # Many ticks within the same still-forming minute must not produce
+        # any indicator update at all (no closed candle exists yet).
+        for i in range(20):
+            self.engine.update(100.0 + i * 0.01, 1000, base_time + timedelta(seconds=i * 2))
+        self.assertEqual(len(ema_fast.values), 0)
+
+        # Advance into a new minute on each subsequent tick — each closes
+        # exactly the previous minute's candle. 9 such closes clears the
+        # EMA(9) warmup and appends exactly one value, not one per tick.
+        for i in range(1, 10):
+            self.engine.update(101.0 + i, 1000, base_time + timedelta(minutes=i))
+        self.assertEqual(len(ema_fast.values), 1)
+
     def test_trend_signal_creation(self):
         """Test creating a trend signal"""
         timestamp = datetime.now()
