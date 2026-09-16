@@ -61,6 +61,48 @@ _CONTEXT_WORKERS = 4
 # redundant full scan_symbol() (quote + trend + indicators + scoring).
 _SCAN_CACHE_TTL = 5.0
 
+# Module-level executor reused across build_context() calls instead of
+# creating (and tearing down) a ThreadPoolExecutor on every call. Thread
+# creation is the avoided cost; idle workers are cheap. The executor is
+# registered with Python's interpreter shutdown handler, which joins the
+# pool on exit — no explicit shutdown needed.
+_CONTEXT_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_CONTEXT_WORKERS, thread_name_prefix="context-build",
+)
+
+
+def _cached_scan(sym: str) -> ScanResult:
+    """Return a fresh-enough cached scan for ``sym``, else rescan.
+
+    Reuses the shared market_scanner result cache with a
+    ``_SCAN_CACHE_TTL`` staleness window, so the digest batch-scan
+    results are not duplicated by per-symbol build_context() calls —
+    including peer scans in _correlation_context(), which previously
+    always called scan_symbol() unconditionally and thus duplicated up
+    to 8 full scans per context build.
+
+    Mirrors the primary-symbol reuse block inside build_context(): a
+    cached ScanResult within the TTL window is returned as-is, otherwise
+    we fall back to a live scan_symbol(). Raises InsufficientDataError
+    if the scan fails or returns nothing — callers that want per-peer
+    resilience (e.g. _correlation_context) wrap the call in their own
+    try/except.
+    """
+    scan = market_scanner.get_scan_result(sym)
+    if isinstance(scan, ScanResult):
+        scan_ts = scan.timestamp
+        if scan_ts.tzinfo is None:
+            scan_ts = scan_ts.replace(tzinfo=UTC)
+        if (datetime.now(UTC) - scan_ts).total_seconds() < _SCAN_CACHE_TTL:
+            return scan
+    try:
+        scan = market_scanner.scan_symbol(sym)
+    except Exception as e:  # noqa: BLE001
+        raise InsufficientDataError(f"scan failed for {sym}: {e}") from e
+    if scan is None:
+        raise InsufficientDataError(f"no scan result for {sym}")
+    return scan
+
 
 class InsufficientDataError(RuntimeError):
     """Raised when the quant engine doesn't have enough data to ask
@@ -628,9 +670,11 @@ def _correlation_context(
         for peer in peers:
             psym = peer.upper()
             try:
-                scan = market_scanner.scan_symbol(psym)
-                if scan is None:
-                    continue
+                # O9: prefer the scanner's shared cache (5s TTL) before
+                # rescanning — peers often overlap the digest batch scan,
+                # and even when they don't this matches the primary-symbol
+                # reuse path instead of unconditionally running a full scan.
+                scan = _cached_scan(psym)
                 tsig = scan.trend_signals or {}
                 primary = tsig.get("1d") or tsig.get("ONE_DAY") or next(iter(tsig.values()), None)
                 if primary is None:
@@ -725,30 +769,7 @@ def build_context(
     # --- 1. Single-symbol scan (complete snapshot including MTF scores) ---
     # Runs on the caller's thread: every other sub-engine derives from it,
     # and it's the cheapest, most-cacheable call.
-    #
-    # O9: reuse a fresh cached ScanResult when available — the digest
-    # batch-scans all symbols via scan_symbols_async(), which stores
-    # results in market_scanner.scan_results; re-scanning each symbol
-    # again here would duplicate the work. A 5-second staleness window
-    # ensures market data hasn't meaningfully shifted.
-    scan = market_scanner.get_scan_result(sym)
-    if isinstance(scan, ScanResult):
-        scan_ts = scan.timestamp
-        if scan_ts.tzinfo is None:
-            scan_ts = scan_ts.replace(tzinfo=UTC)
-        age = (datetime.now(UTC) - scan_ts).total_seconds()
-        if age >= _SCAN_CACHE_TTL:
-            scan = None
-    else:
-        scan = None
-    if scan is None:
-        try:
-            scan = market_scanner.scan_symbol(sym)
-        except Exception as e:
-            raise InsufficientDataError(f"scan failed for {sym}: {e}") from e
-
-    if scan is None:
-        raise InsufficientDataError(f"no scan result for {sym}")
+    scan = _cached_scan(sym)
 
     quote = scan.quote
     # quote is a Pydantic model (or None)
@@ -828,32 +849,37 @@ def build_context(
     # parameter (dependency injection) purely to make this sharable.
     from backend.api.trend.registry import get_engine as _get_trend_engine
 
-    with ThreadPoolExecutor(max_workers=_CONTEXT_WORKERS) as ex:
-        f_regime = ex.submit(_regime_context, sym)
-        f_rs = ex.submit(_rs_context, sym)
-        f_sector = ex.submit(_sector_context, sym, get_trend_engine=_get_trend_engine)
-        f_sr = ex.submit(_sr_context, sym, tf)
-        f_news = ex.submit(_news_context, sym, include_news)
-        f_fund = ex.submit(_fundamentals_context, sym, include_fundamentals)
-        f_div = ex.submit(_divergence_context, sym, tf, include_divergence)
-        f_trans = ex.submit(_transition_context, sym, tf, get_trend_engine=_get_trend_engine)
-        f_stats = ex.submit(_signal_stats_context, sym, tf)
-        f_tape = ex.submit(_tape_context, sym)
-        f_track = ex.submit(_track_record_context, sym)
-        f_corr = ex.submit(_correlation_context, sym, portfolio_symbols=portfolio_symbols)
+    # Reuse the module-level executor instead of constructing a
+    # ThreadPoolExecutor on every build_context() call. The workers are
+    # cheap to keep idle and join themselves on interpreter shutdown;
+    # we intentionally do NOT shut it down here so the threads survive
+    # across calls.
+    ex = _CONTEXT_EXECUTOR
+    f_regime = ex.submit(_regime_context, sym)
+    f_rs = ex.submit(_rs_context, sym)
+    f_sector = ex.submit(_sector_context, sym, get_trend_engine=_get_trend_engine)
+    f_sr = ex.submit(_sr_context, sym, tf)
+    f_news = ex.submit(_news_context, sym, include_news)
+    f_fund = ex.submit(_fundamentals_context, sym, include_fundamentals)
+    f_div = ex.submit(_divergence_context, sym, tf, include_divergence)
+    f_trans = ex.submit(_transition_context, sym, tf, get_trend_engine=_get_trend_engine)
+    f_stats = ex.submit(_signal_stats_context, sym, tf)
+    f_tape = ex.submit(_tape_context, sym)
+    f_track = ex.submit(_track_record_context, sym)
+    f_corr = ex.submit(_correlation_context, sym, portfolio_symbols=portfolio_symbols)
 
-        market_regime = _safe_result(f_regime)
-        rs_list = _safe_result(f_rs) or []
-        sector_alignment = _safe_result(f_sector)
-        sr = _safe_result(f_sr)
-        news = _safe_result(f_news) or []
-        fundamentals = _safe_result(f_fund)
-        divergence = _safe_result(f_div)
-        transition = _safe_result(f_trans)
-        signal_stats = _safe_result(f_stats)
-        tape = _safe_result(f_tape)
-        track_record = _safe_result(f_track)
-        correlation_context = _safe_result(f_corr) or {}
+    market_regime = _safe_result(f_regime)
+    rs_list = _safe_result(f_rs) or []
+    sector_alignment = _safe_result(f_sector)
+    sr = _safe_result(f_sr)
+    news = _safe_result(f_news) or []
+    fundamentals = _safe_result(f_fund)
+    divergence = _safe_result(f_div)
+    transition = _safe_result(f_trans)
+    signal_stats = _safe_result(f_stats)
+    tape = _safe_result(f_tape)
+    track_record = _safe_result(f_track)
+    correlation_context = _safe_result(f_corr) or {}
 
     # Pick the primary benchmark (SPY) for the display
     primary_rs: dict[str, Any] = {}
