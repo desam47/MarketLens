@@ -166,7 +166,13 @@ def _grade_row(db, row, today) -> bool:
     if today - row.created_at.date() >= timedelta(days=holding_days):
         row.status = "expired"
         row.resolved_at = now_ny()
-        if bars:
+        # Fill-aware here too (2026-09-16): a plan whose entry zone was
+        # never touched never became a real position, so marking it to
+        # the last close and computing a return_pct as if one existed
+        # is a phantom number — same fill gate as the win/loss branch
+        # above, just applied to the "held the whole window and never
+        # resolved" case instead of "resolved by stop/target".
+        if filled and bars:
             row.resolved_price = bars[-1].close
             row.return_pct = _return_pct(row, entry_mid)
         return True
@@ -202,13 +208,18 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
     context block. Opens and closes its own session — same convention
     as this module's other entry points.
 
-    The ``win_count``/``loss_count``/``expired_count``/``open_count``
-    buckets are pulled from a single grouped status-count query (one
-    pass over the table) instead of a separate ``COUNT(*)`` subquery
-    for open rows — the old code ran two queries where one suffices,
-    and the resolved win/loss tally was invisible to the UI.
-    ``sample_size``/``win_rate``/avg returns stay computed over the
-    most-recent ``limit`` resolved rows (the calibration sample).
+    The ``all_time_win_count``/``all_time_loss_count``/
+    ``all_time_expired_count``/``all_time_open_count`` buckets are
+    pulled from a single grouped status-count query (one pass over the
+    table, replacing a separate ``COUNT(*)`` subquery for open rows)
+    over the symbol's ENTIRE history. ``sample_size``/``win_rate``/avg
+    returns are a DIFFERENT, narrower window — only the most-recent
+    ``limit`` resolved rows (the calibration sample the AI's confidence
+    is damped against). These two windows are deliberately different
+    questions ("how many opens do I have right now, all-time" vs. "how
+    have my last N calls done") — the ``all_time_`` prefix exists
+    specifically so a consumer never assumes they reconcile (bug found
+    2026-09-16: they didn't, and nothing in either field name said so).
     """
     if not settings.ai_trade_plan_tracking.enabled:
         return {}
@@ -248,10 +259,10 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
             "win_rate": round(len(wins) / len(rows), 2),
             "avg_return_win": round(fmean(win_returns), 4) if win_returns else None,
             "avg_return_loss": round(fmean(loss_returns), 4) if loss_returns else None,
-            "win_count": status_counts.get("win", 0),
-            "loss_count": status_counts.get("loss", 0),
-            "expired_count": status_counts.get("expired", 0),
-            "open_count": status_counts.get("open", 0),
+            "all_time_win_count": status_counts.get("win", 0),
+            "all_time_loss_count": status_counts.get("loss", 0),
+            "all_time_expired_count": status_counts.get("expired", 0),
+            "all_time_open_count": status_counts.get("open", 0),
         }
     finally:
         db.close()

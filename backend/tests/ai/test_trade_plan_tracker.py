@@ -230,6 +230,26 @@ class TestGradeRow(_DBBase):
         self.assertIsNotNone(row.return_pct)
 
     @patch("backend.repositories.bar_repository.get_bars")
+    def test_expires_without_ever_filling_has_no_phantom_return(self, mock_bars):
+        # Regression (2026-09-16): a plan whose entry zone gaps past and
+        # is never re-touched (buy entry [100,102]; every bar opens and
+        # stays above 108, the first target) never became a real
+        # position — expiring it must NOT mark it to the last close and
+        # compute a return_pct as if one had existed the whole window.
+        row = self._open_row(
+            time_horizon="scalp",  # 1-day holding window
+            created_at=datetime.now() - timedelta(days=5),
+        )
+        mock_bars.return_value = [
+            _bar("2026-01-02", o=112, h=115, low=110, c=113),  # gap, no fill
+        ]
+        resolved = tracker._grade_row(self.db, row, datetime.now().date())
+        self.assertTrue(resolved)
+        self.assertEqual(row.status, "expired")
+        self.assertIsNone(row.resolved_price)
+        self.assertIsNone(row.return_pct)
+
+    @patch("backend.repositories.bar_repository.get_bars")
     def test_no_bars_at_all_stays_open_until_window_expires(self, mock_bars):
         mock_bars.return_value = []
         row = self._open_row(created_at=datetime.now() - timedelta(days=1))
@@ -326,7 +346,7 @@ class TestGetTrackRecord(_DBBase):
         self.assertAlmostEqual(out["win_rate"], round(2 / 3, 2), places=3)
         self.assertAlmostEqual(out["avg_return_win"], 0.04, places=4)
         self.assertAlmostEqual(out["avg_return_loss"], -0.02, places=4)
-        self.assertEqual(out["open_count"], 1)
+        self.assertEqual(out["all_time_open_count"], 1)
 
     def test_different_symbol_not_mixed_in(self):
         self._row(symbol="AAPL", status="win")

@@ -47,7 +47,7 @@ from backend.ai.prompt import (
     render_system_prompt,
     summarize_context,
 )
-from backend.ai.provider import AIResponse
+from backend.ai.provider import AIResponse, StreamAttribution
 
 logger = logging.getLogger(__name__)
 
@@ -357,16 +357,28 @@ def _finalize_analysis(
     if ctx_dir and ai_trend not in ("mixed", "uncertain"):
         _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
 
-    declared_confidence = parsed.confidence
-    if declared_confidence is not None:
+    # parsed.confidence is already hard-capped at _CONFIDENCE_MAX (see
+    # AnalysisResponse._cap_confidence) by the time we see it here. The
+    # TRUE value the AI declared, if it exceeded that cap, was preserved
+    # into confidence_declared at construction time (see
+    # _preserve_raw_confidence) — prefer that over parsed.confidence so
+    # a 1.0 reply's provenance isn't lost behind the 0.95 cap.
+    capped_confidence = parsed.confidence
+    raw_confidence = (
+        parsed.confidence_declared if parsed.confidence_declared is not None else capped_confidence
+    )
+    if capped_confidence is not None:
         parsed.confidence = _calibrate_confidence(
-            declared_confidence, ctx.track_record,
+            capped_confidence, ctx.track_record,
         )
-        if declared_confidence != parsed.confidence:
-            parsed.confidence_declared = declared_confidence
+        if raw_confidence != parsed.confidence:
+            parsed.confidence_declared = raw_confidence
             parsed.confidence_sample_size = (
                 ctx.track_record.get("sample_size") if ctx.track_record else None
             )
+        else:
+            parsed.confidence_declared = None
+            parsed.confidence_sample_size = None
 
     # Surface the quantitative context that drove this read on the
     # response itself — they were injected into the prompt but never
@@ -398,8 +410,20 @@ def _finalize_analysis(
 
 
 def _result_to_dict(result: AnalysisResponse | UncertaintyResponse) -> dict[str, Any]:
-    """JSON-serializable dict of a finalized result for SSE 'final' frames."""
-    return result.model_dump(mode="json")
+    """JSON-serializable dict of a finalized result for SSE 'final' frames.
+
+    Includes ``is_uncertain`` so the frame genuinely matches the
+    blocking endpoint's ``AnalyzeResponse`` shape, as the SSE route's
+    own docstring claims — that field only exists on the router's
+    wrapper model (computed there via ``isinstance(result,
+    UncertaintyResponse)``), and was missing from this dict entirely
+    until 2026-09-16. Computed here, not in the router, because this is
+    the last point that still holds the concrete result type — the
+    router only ever sees the already-dumped dict.
+    """
+    data = result.model_dump(mode="json")
+    data["is_uncertain"] = isinstance(result, UncertaintyResponse)
+    return data
 
 
 async def analyze_symbol_stream(
@@ -484,6 +508,11 @@ async def analyze_symbol_stream(
 
     # --- stream the LLM ---
     accumulated: list[str] = []
+    # Populated by ai_manager.stream() itself at the moment a provider
+    # actually answers — race-free, unlike the old last_answered() read
+    # (a process-wide singleton any concurrent request could overwrite
+    # between this stream ending and this coroutine reading it back).
+    attribution = StreamAttribution()
     try:
         async for piece in ai_manager.stream(
             prompt=build_user_prompt(summarize_context(ctx.compact())),
@@ -492,6 +521,7 @@ async def analyze_symbol_stream(
             temperature=final_temperature,
             response_format=response_format,
             model=model,
+            attribution=attribution,
         ):
             accumulated.append(piece)
             yield ("delta", piece)
@@ -506,23 +536,16 @@ async def analyze_symbol_stream(
 
     text = "".join(accumulated) if accumulated else None
     if text is None:
-        # Disabled, or every provider was unavailable before first chunk.
-        if not ai_manager.enabled:
-            ai_resp = AIResponse(text=None, provider="disabled", model=model or ai_manager.settings.model, structured=False)
-        else:
-            last = ai_manager.last_answered()
-            prov = last["provider"] if last else ai_manager.settings.provider
-            ai_resp = AIResponse(text=None, provider=prov, model=model or ai_manager.settings.model, structured=False)
+        # Disabled, or every provider was unavailable before first chunk
+        # — no provider ever answered this request, so "none" (matching
+        # complete()'s equivalent all-failed path), not a guess from
+        # whichever provider happened to answer a DIFFERENT request last.
+        prov = "disabled" if not ai_manager.enabled else "none"
+        ai_resp = AIResponse(text=None, provider=prov, model=model or ai_manager.settings.model, structured=False)
     else:
-        last = ai_manager.last_answered()
-        prov = last["provider"] if last else (ai_manager.settings.provider if ai_manager.enabled else "disabled")
-        mod = last["model"] if last else (model or ai_manager.settings.model)
-        # structured only if we asked for it: the answering provider's
-        # capability is implied by response_format being non-None (chain
-        # supported it) on the uniform-settings path. parse_ai_reply
-        # degrades safely to regex if the reply wasn't actually JSON.
-        structured = bool(response_format is not None)
-        ai_resp = AIResponse(text=text, provider=prov, model=mod, structured=structured)
+        prov = attribution.provider or (ai_manager.settings.provider if ai_manager.enabled else "disabled")
+        mod = attribution.model or (model or ai_manager.settings.model)
+        ai_resp = AIResponse(text=text, provider=prov, model=mod, structured=attribution.structured)
 
     result = _finalize_analysis(symbol, ctx, ai_resp, cache_key)
     yield ("final", _result_to_dict(result))

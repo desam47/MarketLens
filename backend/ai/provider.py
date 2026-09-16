@@ -42,6 +42,27 @@ class AIResponse:
     structured: bool = False
 
 
+@dataclass
+class StreamAttribution:
+    """Out-parameter for ``AIManager.stream()`` (2026-09-16): populated
+    in place, at the moment a provider's stream actually starts
+    yielding text, with which provider/model answered and whether it
+    honors structured output.
+
+    Exists because ``AIManager.last_answered()`` is a process-wide
+    singleton updated by ANY concurrent ``complete()``/``stream()``
+    call — reading it back after a stream ends can return a different,
+    unrelated request's provider once the process handles concurrent
+    traffic. Passing a fresh ``StreamAttribution`` per call and reading
+    it back after the ``async for`` over ``stream()`` completes is
+    race-free: nothing else can write to this instance.
+    """
+
+    provider: str | None = None
+    model: str | None = None
+    structured: bool = False
+
+
 class AIProvider(ABC):
     """Abstract base for all AI providers.
 

@@ -47,13 +47,20 @@ from typing import Any
 
 from backend.scanner.scanner import ScanResult, market_scanner
 
-# How many sub-engine calls may run concurrently within one
-# build_context() call. The I/O-bound sources (news, fundamentals,
-# tape, DB lookups) overlap well here; the numpy-heavy engines release
-# the GIL too, so the CPU-bound ones parallelise as well. 4 matches the
-# plan's batch sizes and keeps scheduling overhead negligible relative
-# to the ~1-3s a context build otherwise takes.
-_CONTEXT_WORKERS = 4
+# Sized for TWO things sharing this one pool (2026-09-16, be59abd made
+# it process-wide instead of per-call — see _CONTEXT_EXECUTOR below):
+# (1) a single build_context() call fans out 12 sub-engine tasks
+# (regime/RS/sector/S-R/news/fundamentals/divergence/transition/signal-
+# stats/tape/track-record/correlation) — the previous value of 4 meant
+# even ONE call already oversubscribed 3:1; (2) several such calls can
+# now run concurrently (multi-symbol chat turns, the digest batch, a
+# live /analyze request) competing for the SAME pool, where each used
+# to get its own dedicated 4 workers before be59abd's per-call-pool ->
+# shared-pool change. The I/O-bound sources (news, fundamentals, tape,
+# DB lookups) overlap well here; the numpy-heavy engines release the
+# GIL too, so the CPU-bound ones parallelise as well — threads are
+# cheap enough for this workload that erring higher costs little.
+_CONTEXT_WORKERS = 16
 
 # O9: short TTL for reusing a scanner's cached ScanResult instead of
 # re-scanning. The digest batch-scans all watchlist symbols once, then

@@ -276,6 +276,29 @@ class AnalysisResponse(BaseModel):
     track_record: dict[str, Any] = Field(default_factory=dict)
     correlation_context: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _preserve_raw_confidence(cls, data: Any) -> Any:
+        # Runs on the raw input BEFORE _cap_confidence below, so this is
+        # the only point that ever sees what the AI actually declared —
+        # by the time any code downstream of construction reads
+        # `.confidence`, it's already capped. Bug found 2026-09-16: the
+        # confidence_declared field (added to expose exactly this
+        # "damping provenance") was being populated from `.confidence`
+        # AFTER the cap already ran, so a genuinely overconfident 1.0
+        # reply surfaced as confidence_declared=0.95 — silently hiding
+        # the real overconfidence the field exists to reveal. Only
+        # fires when the caller didn't already supply confidence_declared
+        # explicitly (e.g. round-tripping an already-built response).
+        if (
+            isinstance(data, dict)
+            and data.get("confidence_declared") is None
+            and isinstance(data.get("confidence"), (int, float))
+            and float(data["confidence"]) > _CONFIDENCE_MAX
+        ):
+            data["confidence_declared"] = float(data["confidence"])
+        return data
+
     @field_validator("confidence")
     @classmethod
     def _cap_confidence(cls, v: float) -> float:

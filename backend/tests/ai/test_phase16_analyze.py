@@ -995,6 +995,41 @@ class TestAnalyzeSymbol(unittest.TestCase):
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
+    def test_confidence_declared_survives_the_hard_cap_not_just_calibration(self, mock_ctx, mock_ai):
+        """Regression (2026-09-16): confidence_declared used to be read
+        from parsed.confidence AFTER AnalysisResponse's own 0.95 hard
+        cap already ran, so an AI reply of 1.0 surfaced as
+        confidence_declared=0.95 — hiding the real overconfidence the
+        field exists to expose. A good track record here means
+        calibration itself doesn't further reduce confidence, isolating
+        the hard-cap case specifically."""
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+            trend_state={"direction": "uptrend", "strength": "strong", "confidence": 0.9},
+            track_record={"win_rate": 0.9, "sample_size": 20},
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "AAPL is unmistakably breaking out here.",
+                    "trend": "bullish",
+                    "confidence": 1.0,
+                    "supporting_factors": ["above SMA 50"],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertEqual(result.confidence, 0.95)  # still hard-capped for display
+        self.assertEqual(result.confidence_declared, 1.0)  # but provenance shows the TRUE 1.0
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
     def test_reports_the_actual_answering_provider_not_the_configured_primary(
         self, mock_ctx, mock_ai
     ):
@@ -1486,7 +1521,6 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         mock_ai.chain_supports_structured_output.return_value = True
         mock_ai.settings.provider = "openrouter"
         mock_ai.settings.model = "gpt-4o"
-        mock_ai.last_answered.return_value = {"provider": "ollama", "model": "llama3.2"}
 
         payload = json.dumps({
             "summary": "AAPL is up on volume and breadth.",
@@ -1498,15 +1532,26 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
             "key_levels": [],
         })
 
-        async def _gen():
-            yield "```json\n"
-            yield payload
-            yield "\n```"
-
         # ai_manager.stream() is an async *generator function* (calling it
         # returns an async generator, not a coroutine), so mock it with a
-        # plain callable that returns an async generator object.
-        mock_ai.stream = lambda **kw: _gen()
+        # plain callable that returns an async generator object. The real
+        # AIManager.stream() populates the caller's StreamAttribution
+        # (2026-09-16, replacing the racy last_answered() singleton read)
+        # right before it returns — mirror that here so analyze_symbol_
+        # stream() learns the actual answering provider/model the same
+        # race-free way it would from the real manager.
+        def _stream(**kw):
+            async def _gen():
+                yield "```json\n"
+                yield payload
+                yield "\n```"
+                attribution = kw.get("attribution")
+                if attribution is not None:
+                    attribution.provider = "ollama"
+                    attribution.model = "llama3.2"
+            return _gen()
+
+        mock_ai.stream = _stream
 
         frames = []
         asyncio.run(self._collect(mock_ai, frames))
@@ -1524,6 +1569,12 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         self.assertEqual(final["model"], "llama3.2")
         self.assertIn("market_regime", final)
         self.assertIn("track_record", final)
+        # 2026-09-16: the final frame's own docstring claims it's
+        # "identical shape to POST /analyze" — that response has
+        # is_uncertain, so this one must too (a successful analysis is
+        # not uncertain).
+        self.assertIn("is_uncertain", final)
+        self.assertFalse(final["is_uncertain"])
 
     async def _collect(self, mock_ai, frames):
         from backend.ai.analyze import analyze_symbol_stream
@@ -1549,6 +1600,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         final = frames[-1][1]
         self.assertEqual(final["trend"], "uncertain")
         self.assertEqual(final["uncertainty_reason"], "disabled")
+        self.assertTrue(final["is_uncertain"])
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")

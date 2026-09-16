@@ -271,6 +271,25 @@ class OpenAICompatibleProvider(AIProvider):
                 if r.status_code >= 400:
                     await r.aread()
                     _raise_if_unavailable(r.status_code, self.name, r.text)
+                    # Anything reaching here is a 4xx NOT in
+                    # _raise_if_unavailable's recoverable set — genuinely
+                    # our own malformed request, the same class complete()
+                    # lets raise uncaught so it surfaces loudly (see that
+                    # method's comment). Streaming still degrades this to
+                    # ProviderUnavailable below rather than raising
+                    # uncaught (an uncaught exception mid-SSE-stream
+                    # previously broke the connection ungracefully), but
+                    # logging it at ERROR here — before it's downgraded to
+                    # the same INFO-level "provider unavailable" fallback
+                    # message as a routine outage — keeps a genuine bug in
+                    # our own request from being silently indistinguishable
+                    # from the provider just being down.
+                    logger.error(
+                        "%s returned request-error status %d during streaming "
+                        "(not recoverable/transient — likely a malformed "
+                        "request on our side): %s",
+                        self.name, r.status_code, r.text[:500],
+                    )
                     r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line or not line.startswith("data:"):
@@ -556,6 +575,19 @@ class AnthropicProvider(AIProvider):
                     if r.status_code >= 400:
                         await r.aread()
                         _raise_if_unavailable(r.status_code, "anthropic", r.text)
+                        # See OpenAICompatibleProvider.stream()'s identical
+                        # comment — a genuinely malformed request still
+                        # degrades to ProviderUnavailable (not raised
+                        # uncaught, to avoid breaking the SSE connection
+                        # mid-stream), but is logged at ERROR first so it's
+                        # not silently indistinguishable from a routine
+                        # provider outage.
+                        logger.error(
+                            "anthropic returned request-error status %d during "
+                            "streaming (not recoverable/transient — likely a "
+                            "malformed request on our side): %s",
+                            r.status_code, r.text[:500],
+                        )
                         r.raise_for_status()
                     async for line in r.aiter_lines():
                         if not line or not line.startswith("data:"):

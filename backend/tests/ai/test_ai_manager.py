@@ -974,6 +974,30 @@ class TestProviderStreaming(unittest.TestCase):
             asyncio.run(_collect(p.stream("hi")))
 
     @patch("backend.ai.providers.httpx.AsyncClient")
+    def test_openai_stream_unlisted_4xx_logs_at_error_not_silently(self, MockClient):
+        # 2026-09-16 regression: an unlisted 4xx during streaming still
+        # degrades to ProviderUnavailable (so the SSE connection doesn't
+        # break), but it must be logged at ERROR — same severity
+        # complete() surfaces this exact class of bug at (an uncaught
+        # exception) — not silently indistinguishable from a routine
+        # INFO-level "provider unavailable" fallback.
+        MockClient.return_value = _stream_client(_MockStreamCtx(422, text="bad request body"))
+        with self.assertLogs("backend.ai.providers", level="ERROR") as cm:
+            with self.assertRaises(ProviderUnavailable):
+                asyncio.run(_collect(self.p.stream("hi")))
+        self.assertTrue(any("422" in msg for msg in cm.output))
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
+    @patch("backend.ai.providers.logger")
+    def test_openai_stream_recoverable_4xx_does_not_log_at_error(self, mock_logger, MockClient):
+        # A recoverable status (429) is routine fallback, not a bug in
+        # our own request — must NOT get the loud ERROR treatment.
+        MockClient.return_value = _stream_client(_MockStreamCtx(429, text="slow down"))
+        with self.assertRaises(ProviderUnavailable):
+            asyncio.run(_collect(self.p.stream("hi")))
+        mock_logger.error.assert_not_called()
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
     def test_anthropic_stream_reads_content_block_delta(self, MockClient):
         p = AnthropicProvider(model="claude-x", api_key="sk-test", timeout=1.0)
         lines = [

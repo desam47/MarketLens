@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
-from backend.ai.provider import AIProvider, AIResponse, ProviderUnavailable
+from backend.ai.provider import AIProvider, AIResponse, ProviderUnavailable, StreamAttribution
 from backend.ai.providers import build_provider
 from backend.ai.sync_bridge import on_bridge
 from backend.config.settings import AISettings
@@ -398,11 +398,21 @@ class AIManager:
         temperature: float | None = None,
         response_format: dict[str, Any] | None = None,
         model: str | None = None,
+        attribution: StreamAttribution | None = None,
     ) -> AsyncIterator[str]:
         """Stream a completion, walking the fallback chain.
 
         ``model`` (O12): when provided, try this specific chain entry
         first — see ``complete()`` for the full rationale.
+
+        ``attribution`` (2026-09-16): pass a fresh ``StreamAttribution``
+        to learn which provider/model actually produced the text after
+        the stream ends, race-free — see that class's docstring for why
+        this exists instead of ``last_answered()``. Populated as soon as
+        a provider yields ANY text, even if it then fails mid-stream
+        (the caller still has that provider's partial output, so it's
+        still the right attribution for it) — left untouched if no
+        provider ever yields anything.
 
         Yields incremental text chunks. Yields nothing when AI is
         disabled or every provider is unavailable — the caller treats an
@@ -438,6 +448,14 @@ class AIManager:
             # O4: skip pre-flight health_check() — let provider.stream()
             # surface ProviderUnavailable directly, same rationale as
             # complete() above.
+            def _attribute() -> None:
+                if attribution is not None:
+                    attribution.provider = provider.name
+                    attribution.model = provider._model
+                    attribution.structured = bool(
+                        response_format is not None and provider.supports_structured_output
+                    )
+
             started = False
             try:
                 async for piece in provider.stream(
@@ -454,10 +472,12 @@ class AIManager:
                         "provider": provider.name,
                         "model": provider._model,
                     }
+                _attribute()
                 return
             except ProviderUnavailable as e:
                 if started:
                     logger.warning("AI provider %r failed mid-stream: %s", name, e)
+                    _attribute()
                     return
                 logger.info("AI provider %r unavailable: %s", name, e)
                 last_error = str(e)
