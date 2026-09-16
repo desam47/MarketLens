@@ -14,6 +14,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import api, { AIAnalysisResult, AIConfig, AIJobStatusResponse } from '../services/api';
 import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
+import { highlightMessage } from '../utils/textHighlight';
 
 interface AIAnalysisPanelProps {
   symbol: string;
@@ -74,11 +75,6 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
     const [backgroundError, setBackgroundError] = useState<string | null>(null);
     const pollRef = useRef<number | null>(null);
 
-    // O10: peer tickers the AI can compare against (cross-ticker correlation)
-    const [peerSymbols, setPeerSymbols] = useState<string>('');
-    // O12: optional chain-entry name to route this call through a specific model
-    const [modelOverride, setModelOverride] = useState<string>('');
-
     // Fetch AI config on mount so the user knows whether the feature is available.
     useEffect(() => {
         let cancelled = false;
@@ -101,10 +97,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         setBackgroundStatus(null);
         setBackgroundError(null);
         try {
-            const result = await api.analyzeSymbol(symbol, timeframe, {
-                portfolio_symbols: peerSymbols || undefined,
-                model: modelOverride || undefined,
-            });
+            const result = await api.analyzeSymbol(symbol, timeframe);
             setAnalysis(result);
             setHasRun(true);
         } catch (e: any) {
@@ -113,7 +106,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         } finally {
             setLoading(false);
         }
-    }, [symbol, timeframe, peerSymbols, modelOverride]);
+    }, [symbol, timeframe]);
 
   // ── Background job runner ─────────────────────────────────────────────
 
@@ -292,35 +285,6 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
             </div>
         )}
 
-        {/* O10 + O12: optional peer/model controls — empty by default so
-            the standard analyze path is unchanged unless the user opts in. */}
-        <div className="ai-controls">
-            <label className="ai-control">
-                <span className="ai-control-label" title="Comma-separated peer tickers the AI can compare against">
-                    Peers
-                </span>
-                <input
-                    type="text"
-                    value={peerSymbols}
-                    onChange={e => setPeerSymbols(e.target.value)}
-                    placeholder="MSFT,GOOG,SPY"
-                    disabled={loading}
-                />
-            </label>
-            <label className="ai-control">
-                <span className="ai-control-label" title="Chain-entry name to route this call through (e.g. openai:gpt-4o-mini)">
-                    Model
-                </span>
-                <input
-                    type="text"
-                    value={modelOverride}
-                    onChange={e => setModelOverride(e.target.value)}
-                    placeholder="openai:gpt-4o-mini"
-                    disabled={loading}
-                />
-            </label>
-        </div>
-
       {aiDisabled && (
         <div className="ai-disabled-info">
           <p>⚠️ AI is disabled.</p>
@@ -375,7 +339,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
           </div>
 
           <div className="ai-summary">
-            <p>{analysis.summary}</p>
+            <p>{highlightMessage(analysis.summary, [symbol])}</p>
           </div>
 
           {analysis.trade_plan && (
@@ -426,9 +390,9 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
                 </div>
               )}
 
-              <p className="tp-thesis">{analysis.trade_plan.thesis}</p>
+              <p className="tp-thesis">{highlightMessage(analysis.trade_plan.thesis, [symbol])}</p>
               <p className="tp-invalidation">
-                <b>Invalidation:</b> {analysis.trade_plan.invalidation}
+                <b>Invalidation:</b> {highlightMessage(analysis.trade_plan.invalidation, [symbol])}
               </p>
               <p className="tp-disclaimer">
                 Research to inform your own decision — not personalized financial advice.
@@ -441,7 +405,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
               <h3>🟢 Supporting Factors</h3>
               <ul>
                 {analysis.supporting_factors.map((f, i) => (
-                  <li key={i}>{f}</li>
+                  <li key={i}>{highlightMessage(f, [symbol])}</li>
                 ))}
               </ul>
             </div>
@@ -452,7 +416,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
               <h3>🔴 Risk Factors</h3>
               <ul>
                 {analysis.risk_factors.map((f, i) => (
-                  <li key={i}>{f}</li>
+                  <li key={i}>{highlightMessage(f, [symbol])}</li>
                 ))}
               </ul>
             </div>
@@ -463,7 +427,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
               <h3>⚖️ Timeframe Conflicts</h3>
               <ul>
                 {analysis.timeframe_conflicts.map((c, i) => (
-                  <li key={i}>{c}</li>
+                  <li key={i}>{highlightMessage(c, [symbol])}</li>
                 ))}
               </ul>
             </div>
@@ -474,7 +438,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
               <h3>🎯 Key Levels</h3>
               <ul>
                 {analysis.key_levels.map((l, i) => (
-                  <li key={i}>{l}</li>
+                  <li key={i}>{highlightMessage(l, [symbol])}</li>
                 ))}
               </ul>
             </div>

@@ -4187,52 +4187,6 @@ h4 {
     gap: 0.5rem;
 }
 
-/* O10 + O12: optional peer/model controls below the header. Empty by
-    default so the standard analyze path is unchanged unless the user
-    opts in. */
-.ai-controls {
-    display: flex;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-}
-
-.ai-control {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    flex: 1;
-    min-width: 160px;
-}
-
-.ai-control-label {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.ai-control input[type="text"] {
-    padding: 0.4rem 0.5rem;
-    border: 1px solid var(--border-color, #374151);
-    border-radius: 0.375rem;
-    background: var(--bg-primary, #1f2937);
-    color: var(--text-primary, #f9fafb);
-    font-size: 0.85rem;
-    font-family: inherit;
-}
-
-.ai-control input[type="text"]:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
-}
-
-.ai-control input[type="text"]:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
 .ai-icon {
   font-size: 1.2rem;
 }

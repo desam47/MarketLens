@@ -1,11 +1,14 @@
 /**
- * AIAnalysisPanel — Phase 16 + O10 + O12 tests.
+ * AIAnalysisPanel — provider/model attribution.
  *
- * Covers the optional peer/model controls added for O10 (cross-ticker
- * correlation context) and O12 (provider-specific model routing).
+ * The optional Peers/Model override controls (O10 cross-ticker
+ * correlation context, O12 provider-specific model routing) were
+ * removed from the panel (2026-09-16) — analyzeSymbol() is now called
+ * with no options. This covers what's left: the panel surfaces which
+ * model actually answered.
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { act } from '@testing-library/react';
 import { AIAnalysisPanel } from './AIAnalysisPanel';
 import api from '../services/api';
@@ -73,80 +76,41 @@ function setConfig(enabled = true) {
     });
 }
 
-describe('AIAnalysisPanel — O10 + O12 controls', () => {
+describe('AIAnalysisPanel', () => {
     beforeEach(() => {
         jest.clearAllMocks();
     });
 
-    it('renders peer and model inputs empty by default', async () => {
-        setConfig(false);
-        await act(async () => {
-            render(<AIAnalysisPanel symbol="AAPL" />);
-        });
-        expect(screen.getByPlaceholderText(/MSFT,GOOG,SPY/i)).toHaveValue('');
-        expect(screen.getByPlaceholderText(/openai:gpt-4o-mini/i)).toHaveValue('');
-    });
-
-    it('passes peer symbols and model override to analyzeSymbol', async () => {
-        setConfig(true);
-        mockApi.analyzeSymbol.mockResolvedValue(makeResult());
-        await act(async () => {
-            render(<AIAnalysisPanel symbol="AAPL" />);
-        });
-        // Auto-run on mount consumes the first analyzeSymbol call; wait for it
-        await waitFor(() => {
-            expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1);
-        });
-        const peerInput = screen.getByPlaceholderText(/MSFT,GOOG,SPY/i);
-        const modelInput = screen.getByPlaceholderText(/openai:gpt-4o-mini/i);
-        await act(async () => {
-            fireEvent.change(peerInput, { target: { value: 'MSFT,GOOG,SPY' } });
-            fireEvent.change(modelInput, { target: { value: 'openai:gpt-4o-mini' } });
-        });
-        const analyzeBtn = screen.getByRole('button', { name: /Re-run/i });
-        await act(async () => {
-            fireEvent.click(analyzeBtn);
-        });
-        await waitFor(() => {
-            expect(mockApi.analyzeSymbol).toHaveBeenLastCalledWith(
-                'AAPL',
-                '1d',
-                expect.objectContaining({
-                    portfolio_symbols: 'MSFT,GOOG,SPY',
-                    model: 'openai:gpt-4o-mini',
-                }),
-            );
-        });
-    });
-
-    it('omits portfolio_symbols and model when inputs are empty', async () => {
+    it('runs analysis with no options (no Peers/Model controls)', async () => {
         setConfig(true);
         mockApi.analyzeSymbol.mockResolvedValue(makeResult());
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
         await waitFor(() => {
-            expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1);
+            expect(mockApi.analyzeSymbol).toHaveBeenCalledWith('AAPL', '1d');
         });
-        // First call (auto-run on mount) should have undefined for both
-        const firstCall = mockApi.analyzeSymbol.mock.calls[0];
-        expect(firstCall[2]).toEqual(
-            expect.objectContaining({
-                portfolio_symbols: undefined,
-                model: undefined,
-            }),
-        );
     });
 
-    it('disables inputs while loading', async () => {
+    it('color-codes signed numbers, tickers, and sentiment words in the summary', async () => {
         setConfig(true);
-        // Keep the promise pending so loading stays true
-        mockApi.analyzeSymbol.mockReturnValue(new Promise(() => {}));
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            summary: 'AAPL is bullish, up +3.2% today on a breakout above resistance.',
+            supporting_factors: ['RSI is oversold around 26.6'],
+        }));
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
-        expect(screen.getByPlaceholderText(/MSFT,GOOG,SPY/i)).toBeDisabled();
-        expect(screen.getByPlaceholderText(/openai:gpt-4o-mini/i)).toBeDisabled();
+        await waitFor(() => {
+            expect(screen.getByText('+3.2%')).toHaveClass('chat-num-pos');
+        });
+        expect(screen.getByText('bullish')).toHaveClass('chat-num-pos');
+        expect(screen.getByText('breakout')).toHaveClass('chat-num-pos');
+        expect(screen.getAllByText('AAPL')[0]).toHaveClass('chat-ticker-ok');
+        expect(screen.getByText('RSI')).toHaveClass('chat-metric');
+        // 26.6 has no sign of its own — inherits "oversold" (bullish),
+        // the last metric/sentiment word before it in the same sentence.
+        expect(screen.getByText('26.6')).toHaveClass('chat-num-pos');
     });
 
     it('shows the model attribution from the response', async () => {
