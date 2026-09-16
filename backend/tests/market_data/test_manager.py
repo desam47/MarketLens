@@ -380,6 +380,31 @@ class TestGetCachedProvider(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(construct_count["n"], 1)
 
+    def test_adopts_market_data_manager_instance_instead_of_constructing_again(self):
+        """Regression: live 2026-09-16, MarketDataManager._initialize_providers()
+        (a separate startup code path) and this cache's first caller raced
+        to each build their own WebullProvider within the same second. If
+        MarketDataManager already has a live instance for `name`, reuse it
+        instead of running a second (network-bound) construction."""
+        construct_count = {"n": 0}
+
+        class _FakeProvider:
+            def __init__(self):
+                construct_count["n"] += 1
+
+        already_built = _FakeProvider()
+        construct_count["n"] = 0  # only count constructions *through the cache*
+
+        with patch.object(
+            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
+        ), patch.object(
+            self.manager_mod.market_data_manager, "providers", {"fake": already_built}
+        ):
+            result = self.manager_mod.get_cached_provider("fake")
+
+        self.assertIs(result, already_built)
+        self.assertEqual(construct_count["n"], 0)
+
     def test_unknown_provider_returns_none(self):
         with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {}):
             self.assertIsNone(self.manager_mod.get_cached_provider("bogus"))

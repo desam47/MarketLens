@@ -150,6 +150,18 @@ def get_cached_provider(name: str):
         # construct) this provider while we were waiting for the lock.
         if name in _provider_instance_cache:
             return _provider_instance_cache[name]
+        # MarketDataManager builds its own provider set independently at
+        # startup (MarketDataManager._initialize_providers, a separate
+        # code path from this cache). If it already has a live instance
+        # for `name`, adopt it instead of constructing a second one —
+        # confirmed live 2026-09-16: that startup construction and this
+        # cache's first caller (e.g. tape warmup) raced within the same
+        # second, each running its own Webull auth handshake, adding to
+        # the request burst this lock is otherwise collapsing.
+        existing = market_data_manager.providers.get(name)
+        if existing is not None:
+            _provider_instance_cache[name] = existing
+            return existing
         try:
             instance = provider_cls()
         except Exception as e:

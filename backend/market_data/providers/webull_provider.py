@@ -456,7 +456,7 @@ class WebullProvider(BaseMarketDataProvider):
                 data_status=DataStatus.DELAYED,
                 bid=float(field["bid"]) if field.get("bid") else None,
                 ask=float(field["ask"]) if field.get("ask") else None,
-                volume=int(field.get("volume") or 0) if field.get("volume") else None,
+                volume=int(float(field["volume"])) if field.get("volume") else None,
                 **_extended_hours_quote_fields(field),
             )
             self._reset_error_state()
@@ -492,7 +492,7 @@ class WebullProvider(BaseMarketDataProvider):
                             data_status=DataStatus.DELAYED,
                             bid=float(field["bid"]) if field.get("bid") else None,
                             ask=float(field["ask"]) if field.get("ask") else None,
-                            volume=int(field.get("volume") or 0)
+                            volume=int(float(field["volume"]))
                             if field.get("volume") else None,
                             **_extended_hours_quote_fields(field),
                         )
@@ -778,7 +778,7 @@ class WebullProvider(BaseMarketDataProvider):
                 high=float(row.get("high") or 0),
                 low=float(row.get("low") or 0),
                 close=float(row.get("close") or 0),
-                volume=int(row.get("volume") or 0) if row.get("volume") else 0,
+                volume=int(float(row["volume"])) if row.get("volume") else 0,
                 timeframe=timeframe,
                 provider=self.name,
                 data_status=DataStatus.HISTORICAL,
@@ -908,7 +908,7 @@ class WebullProvider(BaseMarketDataProvider):
                         high=float(row.get("high") or 0),
                         low=float(row.get("low") or 0),
                         close=float(row.get("close") or 0),
-                        volume=int(row.get("volume") or 0) if row.get("volume") else 0,
+                        volume=int(float(row["volume"])) if row.get("volume") else 0,
                         timeframe=timeframe,
                         provider=self.name,
                         data_status=DataStatus.HISTORICAL,

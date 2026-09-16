@@ -129,6 +129,15 @@ class TestGetQuote(unittest.TestCase):
             p.get_quote("TSLA")
         self.assertIn("empty snapshot", str(ctx.exception))
 
+    def test_quote_parses_decimal_string_volume(self):
+        """Regression: Webull can return volume as a decimal-formatted
+        string ('57259716.57259716'), which int() rejects outright."""
+        p = self._make_provider([
+            {"symbol": "TSLA", "price": 430.0, "volume": "57259716.57259716", "quote_time": 0}
+        ])
+        q = p.get_quote("tsla")
+        self.assertEqual(q.volume, 57259716)
+
 
 # ---------------------------------------------------------------------------
 # get_recent_ticks tests
@@ -247,6 +256,22 @@ class TestGetHistoricalBars(unittest.TestCase):
         # Provider includes all rows; rows without a timestamp get datetime.now
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[0].close, 50.5)
+
+    def test_bars_parses_decimal_string_volume(self):
+        """Regression: live 2026-09-16, TSLA 1d bars — Webull returned
+        volume as a decimal-formatted string ('57259716.57259716'), which
+        int() rejects outright (ValueError), crashing the whole bar fetch.
+        Must parse via float() first, matching the pattern already used
+        for extend_hour_volume."""
+        import time as _time
+        t1 = int(_time.time() * 1000)
+        p = self._make_provider([
+            {"time": t1, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+             "volume": "57259716.57259716"},
+        ])
+        bars = p.get_historical_bars("tsla", timeframe="1d", range_="5d")
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].volume, 57259716)
 
     def test_non_200_http_raises_runtime_error(self):
         """Non-200 from the SDK raises RuntimeError so the circuit breaker tracks it."""
@@ -386,6 +411,23 @@ class TestGetBatchQuotes(unittest.TestCase):
         self.assertEqual(result["AAPL"].price, 150.0)
         self.assertEqual(result["MSFT"].price, 300.0)
         self.assertEqual(result["AAPL"].provider, "webull")
+
+    def test_batch_quotes_parses_decimal_string_volume(self):
+        """Same regression as TestGetQuote's decimal-string-volume case,
+        for the batch snapshot path."""
+        import time as _time
+        now_ms = int(_time.time() * 1000)
+        mock_data = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"symbol": "TSLA", "price": 430.0, "volume": "57259716.57259716", "quote_time": now_ms},
+        ]
+        mock_resp.text = json.dumps(mock_resp.json.return_value)
+        mock_data.market_data.get_snapshot.return_value = mock_resp
+        p = _make_provider(mock_data)
+        result = p.get_batch_quotes(["TSLA"])
+        self.assertEqual(result["TSLA"].volume, 57259716)
 
     def test_batch_quotes_partial_response_fills_missing_with_error_quotes(self):
         """If the snapshot omits some symbols, those symbols get zero-price error Quotes."""
