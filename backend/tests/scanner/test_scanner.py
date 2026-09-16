@@ -255,6 +255,7 @@ class TestScanner(unittest.TestCase):
         result.indicator_values = {
             "adx": 30,
             "macd": 10,
+            "close": 200,
             "volume": 500000,
             "rsi": 40
         }

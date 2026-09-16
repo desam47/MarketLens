@@ -64,6 +64,8 @@ class _ScanResultResponse(BaseModel):
     symbol: str
     timestamp: str
     quote: _QuoteResponse | None = None
+    change: float | None = None
+    change_pct: float | None = None
     indicator_values: dict[str, Any]
     scores: dict[str, float]
     total_score: float
@@ -148,6 +150,8 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
         symbol=result.symbol,
         timestamp=_to_dashboard_tz(result.timestamp),
         quote=_quote_to_dict(result.quote),
+        change=result.change,
+        change_pct=result.change_pct,
         indicator_values=result.indicator_values or {},
         scores=result.scores or {},
         total_score=result.calculate_signed_total_score(),

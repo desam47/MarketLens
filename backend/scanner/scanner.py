@@ -22,6 +22,8 @@ class ScanResult:
         self.symbol = symbol
         self.timestamp = timestamp
         self.quote: Quote | None = None
+        self.change: float | None = None
+        self.change_pct: float | None = None
         self.trend_signals: dict[str, Any] = {}
         self.indicator_values: dict[str, Any] = {}
         self.scores: dict[str, float] = {}
@@ -78,9 +80,12 @@ class ScanResult:
         if weights is None:
             # Default to directional-only weights to ensure a genuine bullish/bearish signal.
             # Magnitude-only factors (trend_strength, adx, volatility, volume) are excluded.
+            # "macd" (the raw histogram) is also excluded: it's the same signal as
+            # "momentum" (see _calculate_scores), just unnormalized by price, so
+            # including both here would double-count one signal at a price-dependent
+            # scale rather than adding independent information.
             weights = {
                 "momentum": 1.0,
-                "macd": 1.0,
                 "rsi": 1.0,
             }
         total_weight = sum(abs(weights.get(name, 0)) for name in self.scores.keys())
@@ -155,6 +160,7 @@ class Scanner:
 
             # Calculate technical indicators
             self._calculate_indicators(result, symbol, historical_bars)
+            self._compute_change(result, historical_bars)
 
             # Calculate scores
             self._calculate_scores(result)
@@ -232,6 +238,25 @@ class Scanner:
 
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")
+
+    def _compute_change(self, result: ScanResult, historical_bars: list | None) -> None:
+        """Populate change/change_pct: live quote price vs prior close.
+
+        Mirrors the prev-close convention used elsewhere (see
+        ``_with_change`` in ``backend/api/analysis/router.py``) — compares
+        against the close of the bar immediately before the most recent
+        one, not that bar's own open, matching "Today's Change" semantics
+        rather than an intraday open->price move. ``historical_bars`` is
+        ascending (oldest -> newest, see ``_calculate_indicators``), so the
+        prior close is the second-to-last entry.
+        """
+        if not result.quote or not historical_bars or len(historical_bars) < 2:
+            return
+        prev_close = historical_bars[-2].close
+        if not prev_close:
+            return
+        result.change = result.quote.price - prev_close
+        result.change_pct = (result.change / prev_close) * 100
 
     def _populate_windowed_indicators(self, result: ScanResult, symbol: str, historical_bars: list | None = None):
         """Compute RSI / MACD / ADX from a bar history window.
@@ -347,12 +372,27 @@ class Scanner:
             # else: skip — score will be missing rather than zero
 
             # Momentum score (based on MACD). Positive MACD = bullish momentum;
-            # negative MACD = bearish momentum. Scale: MACD ≈ [-100, 100] → score [-50, 50].
+            # negative MACD = bearish momentum. The raw histogram is in
+            # price units (an EMA difference), so a fixed /2.0 scale meant
+            # for a ~[-100, 100] histogram left momentum near-zero for any
+            # normally-priced stock (e.g. a $500 stock's histogram sits
+            # around single digits, not hundreds) — total_score, and the
+            # Confidence % derived from it, ended up pinned near its floor
+            # for virtually every symbol. Express MACD as a % of price
+            # first so the score scales the same way regardless of the
+            # symbol's price level, then apply the same ATR-style ×20
+            # (see the volatility score below) and clamp to [-50, 50].
             macd = result.indicator_values.get("macd")
-            if macd is not None:
-                momentum_score = (macd / 2.0)          # [-50, 50], signed
+            close_price = result.indicator_values.get("close") or 0
+            if macd is not None and close_price:
+                macd_pct = (macd / close_price) * 100
+                momentum_score = max(-50.0, min(50.0, macd_pct * 20))
                 result.add_score("momentum", momentum_score)
-                result.add_score("macd", macd)         # raw, signed
+                # Raw histogram, kept only for the score-breakdown display —
+                # deliberately excluded from calculate_signed_total_score's
+                # default weights since it's the same unnormalized signal
+                # momentum already represents on a comparable scale.
+                result.add_score("macd", macd)
 
             # Volatility score: magnitude only (0-100), no direction signal.
             atr = result.indicator_values.get("atr", 0) or 0
