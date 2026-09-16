@@ -914,6 +914,22 @@ class TestProviderStreaming(unittest.TestCase):
             asyncio.run(_collect(self.p.stream("hi")))
 
     @patch("backend.ai.providers.httpx.AsyncClient")
+    def test_openai_stream_raises_unavailable_on_unlisted_4xx(self, MockClient):
+        # 405 is not in the recoverable-status set, but it must still surface
+        # as ProviderUnavailable rather than a raw HTTPStatusError escaping
+        # the generator (which would bypass AIManager.stream() fallback).
+        MockClient.return_value = _stream_client(_MockStreamCtx(405, text="method no"))
+        with self.assertRaises(ProviderUnavailable):
+            asyncio.run(_collect(self.p.stream("hi")))
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
+    def test_anthropic_stream_raises_unavailable_on_unlisted_4xx(self, MockClient):
+        p = AnthropicProvider(model="claude-x", api_key="sk-test", timeout=1.0)
+        MockClient.return_value = _stream_client(_MockStreamCtx(400, text="bad arg"))
+        with self.assertRaises(ProviderUnavailable):
+            asyncio.run(_collect(p.stream("hi")))
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
     def test_anthropic_stream_reads_content_block_delta(self, MockClient):
         p = AnthropicProvider(model="claude-x", api_key="sk-test", timeout=1.0)
         lines = [

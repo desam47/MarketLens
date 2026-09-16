@@ -262,24 +262,33 @@ class OpenAICompatibleProvider(AIProvider):
             async with self._get_client().stream(
                 "POST", url, json=body, headers=self._headers()
             ) as r:
-                    if r.status_code >= 400:
-                        await r.aread()
-                        _raise_if_unavailable(r.status_code, self.name, r.text)
-                        r.raise_for_status()
-                    async for line in r.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        payload = line[5:].strip()
-                        if payload == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(payload)
-                            piece = chunk["choices"][0].get("delta", {}).get("content")
-                        except (ValueError, KeyError, IndexError, TypeError):
-                            continue
-                        if piece:
-                            yield piece
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+                if r.status_code >= 400:
+                    await r.aread()
+                    _raise_if_unavailable(r.status_code, self.name, r.text)
+                    r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                        piece = chunk["choices"][0].get("delta", {}).get("content")
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        continue
+                    if piece:
+                        yield piece
+        except httpx.HTTPError as e:
+            # Covers ConnectError/TimeoutException/NetworkError/StreamError
+            # (transport failures) and HTTPStatusError from raise_for_status()
+            # above for non-recoverable/unlisted 4xx: any of these means the
+            # provider can't serve this stream, so convert to ProviderUnavailable
+            # and let AIManager.stream() try the next provider (pre-first-chunk)
+            # or end the stream gracefully (mid-stream). Previously the narrow
+            # (ConnectError, TimeoutException, NetworkError) tuple let a bare
+            # HTTPStatusError escape, bypassing fallback and surfacing as an
+            # unhandled error to the SSE layer.
             raise ProviderUnavailable(f"{self.name} unreachable: {e}") from e
 
     async def aclose(self) -> None:
@@ -556,7 +565,7 @@ class AnthropicProvider(AIProvider):
                                 yield piece
                         elif etype in ("message_stop", "error"):
                             break
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
+        except httpx.HTTPError as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 
     async def aclose(self) -> None:
