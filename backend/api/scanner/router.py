@@ -28,6 +28,7 @@ from ...scanner.filters import (
     TrueFilter,
     default_registry,
 )
+from ...market_data.services.manager import market_data_manager
 from ...scanner.ranking import RankingEngine, default_ranking_engine
 from ...scanner.scanner import ScanResult, market_scanner
 
@@ -453,8 +454,30 @@ async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
     Extracted so it can be wrapped by ``ttl_cached`` — the cache
     stores the serialised response dict, not the raw ``ScanResult``.
     The alerts engine is notified on every real scan (not on cache hits).
+
+    Fetches historical_bars/quote first, same as scan_symbols' batch
+    path — scan_symbol() computes change/change_pct from historical_bars
+    (see Scanner._compute_change), and without them this endpoint always
+    returned change_pct=None. That also poisoned the shared
+    market_scanner.scan_results cache other endpoints (filter, rankings)
+    read via _scoped_cache without necessarily re-scanning first, since
+    this and the batch path write to the same symbol-keyed dict — a
+    symbol viewed on the Symbol page just before checking Top Movers
+    could briefly show up there with no change_pct. Found live
+    2026-09-16 (CTNT).
     """
-    result = market_scanner.scan_symbol(symbol.upper())
+    symbol = symbol.upper()
+    try:
+        historical_bars = market_data_manager.get_historical_bars(
+            symbol, timeframe="1d", range_="3mo",
+        )
+    except Exception:
+        historical_bars = None
+    try:
+        quote = market_data_manager.get_quote(symbol)
+    except Exception:
+        quote = None
+    result = market_scanner.scan_symbol(symbol, historical_bars=historical_bars, quote=quote)
     from backend.alerts.engine import alerts_engine
     alerts_engine.evaluate_scan_result(result)
     return _result_to_dict(result)

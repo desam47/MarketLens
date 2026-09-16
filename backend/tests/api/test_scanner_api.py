@@ -41,9 +41,11 @@ def _make_result(
     scores: dict | None = None,
     signals: list[str] | None = None,
     rank: int | None = None,
+    change_pct: float | None = 2.5,
 ) -> ScanResult:
     result = ScanResult(symbol, datetime(2025, 1, 1, 12, 0, 0))
     result.quote = _make_quote(symbol)
+    result.change_pct = change_pct
     for k, v in (indicators or {
         "price": 150.0,
         "volume": 1_000_000,
@@ -66,6 +68,14 @@ class TestScannerAPI(unittest.TestCase):
         # Mock the scanner singleton the router imports.
         self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
         self.mock_scanner = self.scanner_patch.start()
+        # Mock the market data manager the router now calls directly (for
+        # historical_bars/quote pre-fetch ahead of scan_symbol — see
+        # _scan_and_notify) so single-symbol scan tests don't hit real
+        # providers.
+        self.mdm_patch = patch('backend.api.scanner.router.market_data_manager')
+        self.mock_mdm = self.mdm_patch.start()
+        self.mock_mdm.get_historical_bars.return_value = []
+        self.mock_mdm.get_quote.return_value = None
         # Mock the DB dependency to keep the watchlist endpoints self-contained.
         self.db_patch = patch('backend.api.dependencies.get_db')
         self.mock_get_db = self.db_patch.start()
@@ -89,6 +99,7 @@ class TestScannerAPI(unittest.TestCase):
 
     def tearDown(self):
         self.scanner_patch.stop()
+        self.mdm_patch.stop()
         self.db_patch.stop()
         self.repo_patch.stop()
 
@@ -117,8 +128,11 @@ class TestScannerAPI(unittest.TestCase):
         self.assertIsNotNone(data["quote"])
         self.assertEqual(data["quote"]["symbol"], "AAPL")
         self.assertEqual(data["quote"]["price"], 150.0)
-        # Scanner was called with upper-case symbol (the router normalizes)
-        self.mock_scanner.scan_symbol.assert_called_once_with("AAPL")
+        # Scanner was called with upper-case symbol (the router normalizes),
+        # plus the pre-fetched historical_bars/quote (see _scan_and_notify).
+        self.mock_scanner.scan_symbol.assert_called_once_with(
+            "AAPL", historical_bars=[], quote=None,
+        )
 
     def test_scan_symbol_uppercases_input(self):
         """Lower-case path input is normalized to upper-case before scanning."""
@@ -128,7 +142,41 @@ class TestScannerAPI(unittest.TestCase):
         response = self.client.get("/api/scanner/aapl")
 
         self.assertEqual(response.status_code, 200)
-        self.mock_scanner.scan_symbol.assert_called_once_with("AAPL")
+        self.mock_scanner.scan_symbol.assert_called_once_with(
+            "AAPL", historical_bars=[], quote=None,
+        )
+
+    def test_scan_symbol_passes_fetched_bars_and_quote_through(self):
+        """Regression for a live bug (2026-09-16, CTNT): this endpoint used
+        to call scan_symbol(symbol) with no historical_bars, so
+        change/change_pct were always null here even though the same
+        symbol's batch-scanned watchlist/top-movers view had them —
+        and since both paths write to the same shared
+        market_scanner.scan_results cache, a symbol viewed here right
+        before checking Top Movers could transiently drop out of it.
+        The router must fetch bars/quote and pass them through so
+        Scanner._compute_change has what it needs."""
+        from backend.models.market_data import Bar, DataStatus
+
+        bars = [
+            Bar(symbol="AAPL", timeframe="1d", open=1, high=1, low=1, close=140.0,
+                volume=100, timestamp=datetime(2025, 1, 1), provider="test",
+                data_status=DataStatus.HISTORICAL),
+            Bar(symbol="AAPL", timeframe="1d", open=1, high=1, low=1, close=150.0,
+                volume=100, timestamp=datetime(2025, 1, 2), provider="test",
+                data_status=DataStatus.HISTORICAL),
+        ]
+        quote = _make_quote("AAPL", price=155.0)
+        self.mock_mdm.get_historical_bars.return_value = bars
+        self.mock_mdm.get_quote.return_value = quote
+        self.mock_scanner.scan_symbol.return_value = _make_result("AAPL")
+
+        response = self.client.get("/api/scanner/AAPL")
+
+        self.assertEqual(response.status_code, 200)
+        self.mock_scanner.scan_symbol.assert_called_once_with(
+            "AAPL", historical_bars=bars, quote=quote,
+        )
 
     def test_scan_symbol_handles_exception(self):
         """A scanner exception becomes a 500 with the message as detail."""

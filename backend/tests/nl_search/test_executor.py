@@ -34,9 +34,11 @@ def _make_result(
     indicator_values: dict | None = None,
     scores: dict | None = None,
     signals: list[str] | None = None,
+    change_pct: float | None = 2.5,
 ) -> ScanResult:
     r = ScanResult(symbol, datetime(2026, 1, 1))
     r.quote = _make_quote(symbol)
+    r.change_pct = change_pct
     r.trend_signals = trend_signals or {
         "ONE_MINUTE": {"direction": "uptrend", "confidence": 0.7},
         "ONE_DAY": {"direction": "uptrend", "confidence": 0.8},
@@ -230,9 +232,11 @@ class TestExecuteQuery(unittest.TestCase):
     @patch("backend.nl_search.executor.market_scanner")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")
     def test_ranking_ordering(self, mock_resolve, mock_scanner):
-        aapl = _make_result("AAPL", scores={"momentum": 90.0})
-        msft = _make_result("MSFT", scores={"momentum": 70.0})
-        goog = _make_result("GOOG", scores={"momentum": 50.0})
+        # strongest_bullish ranks by live price change_pct, not the
+        # momentum score — set change_pct to match the intended order.
+        aapl = _make_result("AAPL", scores={"momentum": 90.0}, change_pct=9.0)
+        msft = _make_result("MSFT", scores={"momentum": 70.0}, change_pct=5.0)
+        goog = _make_result("GOOG", scores={"momentum": 50.0}, change_pct=1.0)
         for r in (aapl, msft, goog):
             r.trend_signals = {"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}}
 
@@ -244,7 +248,7 @@ class TestExecuteQuery(unittest.TestCase):
         result = execute_query(f, watchlist_id=1)
 
         symbols = [item.symbol for item in result.top_n]
-        # Sorted by total_score desc — AAPL first
+        # Sorted by change_pct desc — AAPL first
         self.assertEqual(symbols[0], "AAPL")
 
     @patch("backend.nl_search.executor.market_scanner")

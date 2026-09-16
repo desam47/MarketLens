@@ -8,8 +8,8 @@ output: instead of a single leaderboard, the scanner should produce
 
 The categories defined here are:
 
-- ``strongest_bullish`` — top N by total_score
-- ``strongest_bearish`` — bottom N by total_score
+- ``strongest_bullish`` — top N by live price change % (change_pct)
+- ``strongest_bearish`` — bottom N by live price change % (change_pct)
 - ``strongest_momentum`` — top N by |MACD histogram| * trend confidence
 - ``biggest_improvement`` — top N by trend_strength score (high-ADX uptrends)
 - ``biggest_deterioration`` — bottom N by trend_strength score
@@ -223,16 +223,31 @@ class RankingEngine:
     def _build_strongest_bullish(
         self, results: list[ScanResult], top_n: int
     ) -> tuple[list[RankedEntry], int]:
+        """Top N by live price change % — actual price direction, not the
+        momentum/RSI-based directional score (which is a contrarian/
+        oversold-bounce composite that can disagree sharply with where
+        price is actually moving, e.g. a crashing penny stock reading
+        "bullish" because deeply-oversold RSI plus a lagging-positive,
+        clamped-to-ceiling MACD outweigh the actual price collapse).
+        Symbols with no live change_pct (quote unavailable), or a
+        non-positive one, are excluded — a symbol that's actually down
+        must never show up as a "top bullish" mover just to pad out
+        top_n when fewer than top_n symbols are genuinely up. Mirrors
+        _build_strongest_bearish's symmetric ``change_pct >= 0`` guard.
+        """
         scored = []
         for r in results:
-            total = self._directional_score(r)
+            change_pct = r.change_pct
+            if change_pct is None or change_pct <= 0:
+                continue
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
-                    score=total,
+                    score=change_pct,
                     rank=0,
                     metrics={
-                        "directional_score": total,
+                        "change_pct": change_pct,
+                        "directional_score": self._directional_score(r),
                         "trend_strength": r.scores.get("trend_strength", 0.0),
                         "momentum": r.scores.get("momentum", 0.0),
                         "macd": r.scores.get("macd", 0.0),
@@ -241,25 +256,31 @@ class RankingEngine:
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
-        return _top_n(scored, top_n), len(results)
+        return _top_n(scored, top_n), len(scored)
 
     def _build_strongest_bearish(
         self, results: list[ScanResult], top_n: int
     ) -> tuple[list[RankedEntry], int]:
+        """Bottom N by live price change % — see _build_strongest_bullish's
+        docstring for why this ranks by change_pct instead of the
+        momentum/RSI directional score."""
         scored = []
         eligible_count = 0
         for r in results:
-            total = self._directional_score(r)
+            change_pct = r.change_pct
             # Only include genuinely bearish (negative) entries.
-            if total >= 0:
+            if change_pct is None or change_pct >= 0:
                 continue
             eligible_count += 1
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
-                    score=total,
+                    score=change_pct,
                     rank=0,
-                    metrics={"directional_score": total},
+                    metrics={
+                        "change_pct": change_pct,
+                        "directional_score": self._directional_score(r),
+                    },
                 )
             )
         scored.sort(key=lambda e: e.score)
