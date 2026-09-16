@@ -964,6 +964,37 @@ class TestAnalyzeSymbol(unittest.TestCase):
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
+    def test_confidence_damping_surfaces_declared_value_and_sample_size(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+            trend_state={"direction": "uptrend", "strength": "strong", "confidence": 0.9},
+            track_record={"win_rate": 0.3, "sample_size": 10},
+        )
+        mock_ai.complete = AsyncMock()
+        mock_ai.complete.return_value = AIResponse(
+            text=(
+                "```json\n"
+                + json.dumps({
+                    "summary": "AAPL squeezes above resistance on heavy volume.",
+                    "trend": "bullish",
+                    "confidence": 0.85,
+                    "supporting_factors": ["above SMA 50"],
+                    "risk_factors": [],
+                    "timeframe_conflicts": [],
+                })
+                + "\n```"
+            ),
+            provider="ollama", model="llama3.2",
+        )
+        result = asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertLess(result.confidence, 0.85)
+        self.assertAlmostEqual(result.confidence, 0.675)
+        self.assertEqual(result.confidence_declared, 0.85)
+        self.assertEqual(result.confidence_sample_size, 10)
+        self.assertEqual(result.uncertainty_reason, "none")
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
     def test_reports_the_actual_answering_provider_not_the_configured_primary(
         self, mock_ctx, mock_ai
     ):

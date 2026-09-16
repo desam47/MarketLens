@@ -36,6 +36,8 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             # from the primary provider.
             provider="ollama",
             model="llama3.2",
+            confidence_declared=0.9,
+            confidence_sample_size=12,
         )
 
         resp = client.post("/api/ai/analyze?symbol=AAPL&timeframe=1d")
@@ -49,6 +51,8 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["key_levels"], ["$200"])
         self.assertEqual(data["provider"], "ollama")
         self.assertEqual(data["model"], "llama3.2")
+        self.assertEqual(data["confidence_declared"], 0.9)
+        self.assertEqual(data["confidence_sample_size"], 12)
         self.assertFalse(data["is_uncertain"])
 
     @patch("backend.api.ai.router.analyze_symbol")

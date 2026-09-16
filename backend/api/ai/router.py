@@ -142,6 +142,8 @@ class AnalyzeResponse(BaseModel):
     # providers_unavailable / parse_failed) instead of parsing the
     # free-text summary.
     uncertainty_reason: str = "none"
+    confidence_declared: float | None = None
+    confidence_sample_size: int | None = None
 
 
 # --- Endpoints -----------------------------------------------------
@@ -275,6 +277,8 @@ async def analyze(
         track_record=getattr(result, "track_record", {}) or {},
         correlation_context=getattr(result, "correlation_context", {}) or {},
         uncertainty_reason=getattr(result, "uncertainty_reason", "none"),
+        confidence_declared=getattr(result, "confidence_declared", None),
+        confidence_sample_size=getattr(result, "confidence_sample_size", None),
     )
 
 

@@ -265,6 +265,8 @@ class AnalysisResponse(BaseModel):
     # never sets this — analyze_symbol() stamps it so the UI can render
     # actionable copy instead of parsing free-text summaries.
     uncertainty_reason: UncertaintyReason = "none"
+    confidence_declared: float | None = None
+    confidence_sample_size: int | None = None
     # Quantitative context, copied in by analyze_symbol() from
     # build_context(). Always present (possibly empty dicts) so the UI
     # can render regime / multi-timeframe / track-record / peer

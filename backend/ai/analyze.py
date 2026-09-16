@@ -357,11 +357,16 @@ def _finalize_analysis(
     if ctx_dir and ai_trend not in ("mixed", "uncertain"):
         _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
 
-    # O8: calibrate confidence against resolved outcomes for this symbol.
-    if parsed.confidence is not None:
+    declared_confidence = parsed.confidence
+    if declared_confidence is not None:
         parsed.confidence = _calibrate_confidence(
-            parsed.confidence, ctx.track_record,
+            declared_confidence, ctx.track_record,
         )
+        if declared_confidence != parsed.confidence:
+            parsed.confidence_declared = declared_confidence
+            parsed.confidence_sample_size = (
+                ctx.track_record.get("sample_size") if ctx.track_record else None
+            )
 
     # Surface the quantitative context that drove this read on the
     # response itself — they were injected into the prompt but never
