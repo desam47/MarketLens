@@ -21,7 +21,8 @@ class TestBuildMarketBaseline(unittest.TestCase):
         with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
              patch("backend.api.market_context.router.get_engine") as get_engine, \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls:
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             repo_cls.return_value.get_latest.return_value = None
             get_engine.return_value.get_current_context.return_value = None
             alert_cls.return_value.get_all_enabled.return_value = []
@@ -30,6 +31,23 @@ class TestBuildMarketBaseline(unittest.TestCase):
         self.assertIs(a, b)  # 2nd call served from cache
         c = market_baseline.build_market_baseline(use_cache=False)
         self.assertIsNot(a, c)  # forced rebuild
+
+    def test_invalidate_cache_forces_next_call_to_rebuild(self):
+        with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
+             patch("backend.api.market_context.router.get_engine") as get_engine, \
+             patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
+            repo_cls.return_value.get_latest.return_value = None
+            get_engine.return_value.get_current_context.return_value = None
+            alert_cls.return_value.get_all_enabled.return_value = []
+            a = market_baseline.build_market_baseline()
+            market_baseline.invalidate_cache()
+            b = market_baseline.build_market_baseline()
+        self.assertIsNot(a, b)  # cache was dropped, not served stale
+
+    def test_invalidate_cache_is_safe_with_no_prior_build(self):
+        market_baseline.invalidate_cache()  # must not raise
 
     def test_degrades_to_empty_sections_when_sources_missing(self):
         repo = MagicMock()
@@ -41,12 +59,14 @@ class TestBuildMarketBaseline(unittest.TestCase):
         with patch("backend.repositories.ai_digest_repository.AIDigestRepository", return_value=repo), \
              patch("backend.api.market_context.router.get_engine", return_value=engine), \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository", return_value=alert_repo):
+             patch("backend.repositories.alert_repository.AlertRepository", return_value=alert_repo), \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             out = market_baseline.build_market_baseline()
 
         self.assertEqual(out["regime_live"], {})
         self.assertEqual(out["digest"], {})
         self.assertEqual(out["watchlist_snapshot"], {"scored": [], "all_symbols": []})
+        self.assertEqual(out["watchlists"], [])
         self.assertEqual(out["active_alerts"], [])
         self.assertIn("as_of", out)
 
@@ -54,7 +74,8 @@ class TestBuildMarketBaseline(unittest.TestCase):
         with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
              patch("backend.api.market_context.router.get_engine") as get_engine, \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository", side_effect=RuntimeError("db down")):
+             patch("backend.repositories.alert_repository.AlertRepository", side_effect=RuntimeError("db down")), \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             repo_cls.return_value.get_latest.return_value = None
             get_engine.return_value.get_current_context.return_value = None
             out = market_baseline.build_market_baseline()
@@ -72,7 +93,8 @@ class TestBuildMarketBaseline(unittest.TestCase):
         with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
              patch("backend.api.market_context.router.get_engine") as get_engine, \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository", return_value=alert_repo):
+             patch("backend.repositories.alert_repository.AlertRepository", return_value=alert_repo), \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             repo_cls.return_value.get_latest.return_value = None
             get_engine.return_value.get_current_context.return_value = None
             out = market_baseline.build_market_baseline()
@@ -86,7 +108,8 @@ class TestBuildMarketBaseline(unittest.TestCase):
              patch("backend.repositories.ai_digest_repository.AIDigestRepository") as repo_cls, \
              patch("backend.api.market_context.router.get_engine") as get_engine, \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls:
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             repo_cls.return_value.get_latest.return_value = None
             get_engine.return_value.get_current_context.return_value = None
             alert_cls.return_value.get_all_enabled.return_value = []
@@ -113,7 +136,8 @@ class TestBuildMarketBaseline(unittest.TestCase):
         with patch("backend.repositories.ai_digest_repository.AIDigestRepository", return_value=repo), \
              patch("backend.api.market_context.router.get_engine", return_value=engine), \
              patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
-             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls:
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.ai.market_baseline._watchlist_index", return_value=[]):
             alert_cls.return_value.get_all_enabled.return_value = []
             out = market_baseline.build_market_baseline()
 
@@ -121,6 +145,45 @@ class TestBuildMarketBaseline(unittest.TestCase):
         self.assertEqual(out["digest"]["market_regime"], "RISK_ON")
         self.assertEqual(out["digest"]["movers"]["top_bullish"], [{"symbol": "NVDA"}])
         self.assertEqual(out["digest"]["mtf_alignment_counts"], {"bullish": 5, "bearish": 1})
+
+    def test_watchlists_carries_name_and_symbol_count(self):
+        wl = MagicMock()
+        wl.name = "Swing Setups"
+        enabled = MagicMock(is_enabled=True)
+        disabled = MagicMock(is_enabled=False)
+        wl.symbols = [enabled, enabled, disabled]
+        repo = MagicMock()
+        repo.get_watchlists.return_value = [wl]
+        with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as digest_cls, \
+             patch("backend.api.market_context.router.get_engine") as get_engine, \
+             patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.database.SessionLocal"), \
+             patch("backend.repositories.watchlist_repository.WatchlistRepository", return_value=repo):
+            digest_cls.return_value.get_latest.return_value = None
+            get_engine.return_value.get_current_context.return_value = None
+            alert_cls.return_value.get_all_enabled.return_value = []
+            out = market_baseline.build_market_baseline()
+
+        self.assertEqual(out["watchlists"], [{"name": "Swing Setups", "symbol_count": 2}])
+        repo.get_watchlists.assert_called_once_with(active_only=True)
+
+    def test_watchlists_degrades_to_empty_on_repo_error(self):
+        with patch("backend.repositories.ai_digest_repository.AIDigestRepository") as digest_cls, \
+             patch("backend.api.market_context.router.get_engine") as get_engine, \
+             patch("backend.api.main_helpers._watched_symbols", return_value=[]), \
+             patch("backend.repositories.alert_repository.AlertRepository") as alert_cls, \
+             patch("backend.database.SessionLocal"), \
+             patch(
+                 "backend.repositories.watchlist_repository.WatchlistRepository",
+                 side_effect=RuntimeError("db down"),
+             ):
+            digest_cls.return_value.get_latest.return_value = None
+            get_engine.return_value.get_current_context.return_value = None
+            alert_cls.return_value.get_all_enabled.return_value = []
+            out = market_baseline.build_market_baseline()
+
+        self.assertEqual(out["watchlists"], [])
 
 
 if __name__ == "__main__":

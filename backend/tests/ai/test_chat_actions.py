@@ -19,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.ai.chat import (
+    _MAX_CHAIN_STEPS,
     _WATCHLIST_CONTENTS_INTENT,
     _WATCHLIST_LIST_INTENT,
     _add_to_watchlist,
@@ -30,10 +31,13 @@ from backend.ai.chat import (
     _fallback_action,
     _fallback_confirmation,
     _finalize_parsed,
+    _modify_alert,
     _remove_from_watchlist,
     _resolve_watchlist,
     _run_action,
     _run_backtest,
+    _run_screen,
+    _run_turn_actions,
     _set_entity_type,
     _watchlist_contents_reply,
     _watchlist_list_reply,
@@ -108,7 +112,7 @@ class TestConfirmGate(_DBBase):
         alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
         parsed = _parsed(action="delete_alert", action_target_id=alert.id, action_confirmed=False)
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("confirm", text.lower())
         self.assertTrue(grounded)
@@ -118,7 +122,7 @@ class TestConfirmGate(_DBBase):
         alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
         parsed = _parsed(action="delete_alert", action_target_id=alert.id, action_confirmed=True)
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("deleted", text.lower())
         self.assertTrue(grounded)
@@ -131,7 +135,7 @@ class TestConfirmGate(_DBBase):
             action="remove_from_watchlist", action_symbol="AAPL", action_confirmed=False,
         )
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("confirm", text.lower())
         self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist_symbol(wl.id, "AAPL"))
@@ -143,7 +147,7 @@ class TestConfirmGate(_DBBase):
             action="remove_from_watchlist", action_symbol="AAPL", action_confirmed=True,
         )
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("removed", text.lower())
         self.assertIsNone(WatchlistRepository(self.db).get_watchlist_symbol(wl.id, "AAPL"))
@@ -154,7 +158,7 @@ class TestConfirmGate(_DBBase):
             action="delete_watchlist", action_watchlist="Swing Setups", action_confirmed=False,
         )
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("confirm", text.lower())
         self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist(wl.id))
@@ -165,7 +169,7 @@ class TestConfirmGate(_DBBase):
             action="delete_watchlist", action_watchlist="Swing Setups", action_confirmed=True,
         )
 
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
 
         self.assertIn("deleted", text.lower())
         self.assertIsNone(WatchlistRepository(self.db).get_watchlist(wl.id))
@@ -179,9 +183,174 @@ class TestConfirmGate(_DBBase):
             action_condition_type="price_above", action_parameter="200",
             action_confirmed=False,
         )
-        text, grounded = _finalize_parsed(self.db, parsed, [])
+        text, grounded, _ = _finalize_parsed(self.db, parsed, [])
         self.assertIn("done", text.lower())
         self.assertEqual(len(AlertRepository(self.db).get_all()), 1)
+
+
+class TestRunTurnActions(_DBBase):
+    """_run_turn_actions (2026-09-16): chains up to _MAX_CHAIN_STEPS
+    single-action completion calls within one turn, gated on a cheap
+    "and"/"then"/"also"/";" hint in the trader's OWN message so an
+    ordinary single-action turn never pays for an extra completion."""
+
+    def _mock_complete(self, *json_bodies: str):
+        p = patch("backend.ai.chat.ai_manager")
+        mock_ai = p.start()
+        self.addCleanup(p.stop)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_model = ""
+        mock_ai.complete = AsyncMock(side_effect=[_reply(b) for b in json_bodies])
+        return mock_ai
+
+    def test_no_chain_without_multi_step_hint(self):
+        mock_ai = self._mock_complete()  # no continuation call should happen at all
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [], "create a watchlist called Tech", None,
+        )
+        self.assertIn("Tech", text)
+        mock_ai.complete.assert_not_called()
+
+    def test_no_chain_when_first_step_did_not_execute(self):
+        # Hint present, but the first turn was just a plain answer
+        # (action="none") — nothing was executed, so there's nothing to
+        # continue from.
+        mock_ai = self._mock_complete()
+        parsed = _parsed(action="none", reply="Sure, here's the market and sector view.")
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [], "how's the market and sector doing", None,
+        )
+        self.assertEqual(text, "Sure, here's the market and sector view.")
+        mock_ai.complete.assert_not_called()
+
+    def test_chains_second_action_when_hinted(self):
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+            '"action_symbol": "NVDA", "action_watchlist": "Tech"}',
+            '{"reply": "ok", "grounded": true}',  # action="none" (default) — stop
+        )
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create a watchlist called Tech and add NVDA to it", None,
+        )
+        self.assertIn("Tech", text)
+        self.assertIn("NVDA", text)
+        self.assertEqual(mock_ai.complete.call_count, 2)
+        wl = WatchlistRepository(self.db).get_watchlist_by_name("Tech")
+        self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist_symbol(wl.id, "NVDA"))
+
+    def test_continuation_call_uses_the_lean_system_prompt(self):
+        # 2026-09-16 optimization: a chained continuation call must use
+        # CHAT_CONTINUATION_SYSTEM_PROMPT, not the full CHAT_SYSTEM_PROMPT
+        # — resending all 12 rules (grounding/analysis rules a
+        # continuation never needs) on every chained step is pure waste.
+        from backend.ai.prompt import CHAT_CONTINUATION_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT
+
+        mock_ai = self._mock_complete('{"reply": "ok", "grounded": true}')
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create a watchlist called Tech and add NVDA to it", None,
+        )
+        self.assertEqual(mock_ai.complete.call_count, 1)
+        used_system = mock_ai.complete.call_args.kwargs["system"]
+        self.assertEqual(used_system, CHAT_CONTINUATION_SYSTEM_PROMPT)
+        self.assertNotEqual(used_system, CHAT_SYSTEM_PROMPT)
+        self.assertLess(len(CHAT_CONTINUATION_SYSTEM_PROMPT), len(CHAT_SYSTEM_PROMPT))
+
+    def test_stops_chain_at_pending_confirmation(self):
+        alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "delete_alert", '
+            f'"action_target_id": {alert.id}}}',
+        )
+        parsed = _parsed(
+            action="create_alert", action_symbol="AAPL",
+            action_condition_type="price_above", action_parameter="200",
+        )
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create an AAPL alert and then delete my nvda alert", None,
+        )
+        self.assertIn("confirm", text.lower())
+        self.assertEqual(mock_ai.complete.call_count, 1)
+        # The destructive step only asked — it must not have run.
+        self.assertIsNotNone(AlertRepository(self.db).get_by_id(alert.id))
+
+    def test_respects_max_chain_steps(self):
+        # Every continuation keeps returning another real action — the
+        # cap must still stop it rather than looping indefinitely.
+        mock_ai = self._mock_complete(*[
+            '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+            f'"action_symbol": "SYM{i}", "action_watchlist": "Tech"}}'
+            for i in range(10)
+        ])
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create Tech and add A and B and C and D", None,
+        )
+        self.assertEqual(mock_ai.complete.call_count, _MAX_CHAIN_STEPS - 1)
+
+    def test_continuation_failure_stops_chain_without_raising(self):
+        p = patch("backend.ai.chat.ai_manager")
+        mock_ai = p.start()
+        self.addCleanup(p.stop)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_model = ""
+        mock_ai.complete = AsyncMock(side_effect=RuntimeError("provider down"))
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create a watchlist called Tech and add NVDA to it", None,
+        )
+        self.assertIn("Tech", text)  # first step's result still returned
+
+    def test_continuation_retries_once_on_malformed_reply(self):
+        mock_ai = self._mock_complete(
+            "not json at all",  # malformed — should be retried, not give up
+            '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+            '"action_symbol": "NVDA", "action_watchlist": "Tech"}',
+            '{"reply": "ok", "grounded": true}',  # stop the chain
+        )
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create a watchlist called Tech and add NVDA to it", None,
+        )
+        self.assertIn("NVDA", text)
+        self.assertEqual(mock_ai.complete.call_count, 3)  # malformed + retry + stop call
+
+    def test_screened_tickers_accumulate_across_chain(self):
+        from backend.nl_search.executor import ExecutionResult
+        from backend.nl_search.schema import ScannedResultItem
+
+        def item(symbol):
+            return ScannedResultItem(symbol=symbol, total_score=1.0, rank=1, signals=[])
+
+        first = ExecutionResult(
+            matched_all=[], filter_description="oversold", matched_count=1, universe_size=3,
+            top_n=[item("AAPL")],
+        )
+        second = ExecutionResult(
+            matched_all=[], filter_description="overbought", matched_count=1, universe_size=3,
+            top_n=[item("MSFT")],
+        )
+        with patch("backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")), \
+             patch("backend.nl_search.executor.execute_query", side_effect=[first, second]):
+            mock_ai = self._mock_complete(
+                '{"reply": "ok", "grounded": true, "action": "run_screen", '
+                '"action_query": "overbought"}',
+                '{"reply": "ok", "grounded": true}',
+            )
+            parsed = _parsed(action="run_screen", action_query="oversold")
+            text, grounded, screened = _run_turn_actions(
+                self.db, parsed, [], [], None, [],
+                "screen for oversold names and also overbought names", None,
+            )
+        self.assertEqual(screened, ["AAPL", "MSFT"])
 
 
 class TestActionHandlers(_DBBase):
@@ -212,6 +381,63 @@ class TestActionHandlers(_DBBase):
         text, grounded = _delete_alert(self.db, _parsed(action_target_id=999))
         self.assertFalse(grounded)
         self.assertIn("doesn't exist", text.lower())
+
+    def test_modify_alert_changes_threshold_in_place(self):
+        alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
+        original_id = alert.id
+        text, grounded = _modify_alert(
+            self.db, _parsed(action_target_id=alert.id, action_parameter="230"),
+        )
+        self.assertTrue(grounded)
+        self.assertIn("230", text)
+        updated = AlertRepository(self.db).get_by_id(original_id)
+        self.assertEqual(updated.parameter, "230")
+        self.assertEqual(updated.id, original_id)  # same row — not delete+recreate
+        self.assertEqual(updated.condition_type, "price_above")  # untouched field kept
+
+    def test_modify_alert_changes_condition_type(self):
+        alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
+        _modify_alert(self.db, _parsed(action_target_id=alert.id, action_condition_type="price_below"))
+        updated = AlertRepository(self.db).get_by_id(alert.id)
+        self.assertEqual(updated.condition_type, "price_below")
+        self.assertEqual(updated.parameter, "220")  # untouched field kept
+
+    def test_modify_alert_renames(self):
+        alert = AlertRepository(self.db).create("Old name", "NVDA", "price_above", "220")
+        _modify_alert(self.db, _parsed(action_target_id=alert.id, action_label="New name"))
+        updated = AlertRepository(self.db).get_by_id(alert.id)
+        self.assertEqual(updated.name, "New name")
+
+    def test_modify_alert_not_found(self):
+        text, grounded = _modify_alert(
+            self.db, _parsed(action_target_id=999, action_parameter="230"),
+        )
+        self.assertFalse(grounded)
+        self.assertIn("doesn't exist", text.lower())
+
+    def test_modify_alert_missing_id_asks(self):
+        text, grounded = _modify_alert(self.db, _parsed(action_parameter="230"))
+        self.assertFalse(grounded)
+        self.assertIn("id", text.lower())
+
+    def test_modify_alert_no_fields_asks_what_to_change(self):
+        alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
+        text, grounded = _modify_alert(self.db, _parsed(action_target_id=alert.id))
+        self.assertFalse(grounded)
+        self.assertIn("change", text.lower())
+        # Nothing was touched.
+        unchanged = AlertRepository(self.db).get_by_id(alert.id)
+        self.assertEqual(unchanged.parameter, "220")
+
+    def test_modify_alert_not_destructive_fires_without_confirmation(self):
+        alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
+        text, grounded, _ = _finalize_parsed(
+            self.db,
+            _parsed(action="modify_alert", action_target_id=alert.id, action_parameter="230"),
+            [],
+        )
+        self.assertNotIn("confirm", text.lower())
+        self.assertEqual(AlertRepository(self.db).get_by_id(alert.id).parameter, "230")
 
     def test_add_to_watchlist_creates_default_list_when_none_exists(self):
         text, grounded = _add_to_watchlist(self.db, _parsed(action_symbol="RIVN"))
@@ -425,7 +651,7 @@ class TestSetEntityType(_DBBase):
         wl = repo.create_watchlist("Default")
         repo.add_symbol_to_watchlist(wl.id, "SPY")
 
-        text, grounded = _finalize_parsed(
+        text, grounded, _ = _finalize_parsed(
             self.db,
             _parsed(
                 action="set_entity_type", action_symbol="SPY", action_entity_type="etf",
@@ -581,11 +807,105 @@ class TestRunBacktest(_DBBase):
             limiter.is_allowed.return_value = (True, 0)
             engine.run.return_value = 3
             repo_cls.return_value.get_run.return_value = run
-            text, grounded = _finalize_parsed(
+            text, grounded, _ = _finalize_parsed(
                 self.db, _parsed(action="run_backtest", action_symbol="AAPL"), [],
             )
         self.assertNotIn("confirm", text.lower())
         engine.run.assert_called_once()
+
+
+class TestRunScreen(_DBBase):
+    """run_screen — a real, non-destructive read over the trader's
+    watchlist via the existing nl_search parser/executor (the same
+    engine behind POST /api/nl-search)."""
+
+    def _result(self, *, top_n=None, universe_size=5, matched_count=None):
+        from backend.nl_search.executor import ExecutionResult
+
+        top_n = top_n or []
+        return ExecutionResult(
+            matched_all=[], top_n=top_n, filter_description="RSI oversold",
+            universe_size=universe_size,
+            matched_count=matched_count if matched_count is not None else len(top_n),
+        )
+
+    def _item(self, symbol, score):
+        from backend.nl_search.schema import ScannedResultItem
+
+        return ScannedResultItem(symbol=symbol, total_score=score, rank=1, signals=[])
+
+    def test_no_query(self):
+        text, grounded, _ = _run_screen(self.db, _parsed())
+        self.assertFalse(grounded)
+        self.assertIn("screen", text.lower())
+
+    def test_unknown_watchlist_name_degrades(self):
+        text, grounded, _ = _run_screen(
+            self.db, _parsed(action_query="oversold", action_watchlist="Nope"),
+        )
+        self.assertFalse(grounded)
+        self.assertIn("couldn't find", text)
+
+    def test_empty_universe_degrades(self):
+        with patch("backend.nl_search.parser.parse_query") as parse, \
+             patch("backend.nl_search.executor.execute_query") as execute:
+            parse.return_value = (MagicMock(), None, "rules")
+            execute.return_value = self._result(universe_size=0)
+            text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
+        self.assertFalse(grounded)
+        self.assertIn("empty", text.lower())
+
+    def test_no_matches_is_still_grounded(self):
+        with patch("backend.nl_search.parser.parse_query") as parse, \
+             patch("backend.nl_search.executor.execute_query") as execute:
+            parse.return_value = (MagicMock(), None, "rules")
+            execute.return_value = self._result(top_n=[], universe_size=8, matched_count=0)
+            text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
+        self.assertTrue(grounded)
+        self.assertIn("No matches", text)
+        self.assertIn("RSI oversold", text)
+
+    def test_happy_path_reports_matches(self):
+        with patch("backend.nl_search.parser.parse_query") as parse, \
+             patch("backend.nl_search.executor.execute_query") as execute:
+            parse.return_value = (MagicMock(), None, "rules")
+            execute.return_value = self._result(
+                top_n=[self._item("AAPL", 62.0), self._item("MSFT", 41.0)],
+            )
+            text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
+        self.assertTrue(grounded)
+        self.assertIn("AAPL", text)
+        self.assertIn("MSFT", text)
+        self.assertIn("2 matches", text)
+
+    def test_more_than_five_matches_are_summarized(self):
+        items = [self._item(f"T{i}", float(i)) for i in range(7)]
+        with patch("backend.nl_search.parser.parse_query") as parse, \
+             patch("backend.nl_search.executor.execute_query") as execute:
+            parse.return_value = (MagicMock(), None, "rules")
+            execute.return_value = self._result(top_n=items, matched_count=7)
+            text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
+        self.assertTrue(grounded)
+        self.assertIn("+2 more", text)
+
+    def test_executor_exception_degrades_gracefully(self):
+        with patch("backend.nl_search.parser.parse_query", side_effect=RuntimeError("boom")):
+            text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
+        self.assertFalse(grounded)
+        self.assertIn("went wrong", text)
+
+    def test_finalize_parsed_never_asks_for_confirmation(self):
+        # run_screen is not in _DESTRUCTIVE_ACTIONS — it fires on the
+        # first mention, like run_backtest.
+        with patch("backend.nl_search.parser.parse_query") as parse, \
+             patch("backend.nl_search.executor.execute_query") as execute:
+            parse.return_value = (MagicMock(), None, "rules")
+            execute.return_value = self._result(top_n=[self._item("AAPL", 62.0)])
+            text, grounded, _ = _finalize_parsed(
+                self.db, _parsed(action="run_screen", action_query="oversold"), [],
+            )
+        self.assertNotIn("confirm", text.lower())
+        self.assertIn("AAPL", text)
 
 
 class TestRunActionNeverRaises(_DBBase):
@@ -593,9 +913,53 @@ class TestRunActionNeverRaises(_DBBase):
         "create_alert": MagicMock(side_effect=RuntimeError("boom")),
     })
     def test_handler_exception_degrades_gracefully(self):
-        text, grounded = _run_action(self.db, _parsed(action="create_alert"))
+        text, grounded, _ = _run_action(self.db, _parsed(action="create_alert"))
         self.assertFalse(grounded)
         self.assertIn("went wrong", text.lower())
+
+
+class TestRunActionInvalidatesBaseline(_DBBase):
+    """2026-09-16: a chat action that changes alerts/watchlists must
+    drop backend.ai.market_baseline's cache, or a related follow-up
+    question within its 20s TTL (e.g. "create an alert" then
+    immediately "change it to 230") can see a pre-mutation snapshot."""
+
+    def test_create_alert_invalidates(self):
+        with patch("backend.ai.market_baseline.invalidate_cache") as inv:
+            _run_action(self.db, _parsed(
+                action="create_alert", action_symbol="AAPL",
+                action_condition_type="price_above", action_parameter="200",
+            ))
+        inv.assert_called_once()
+
+    def test_add_to_watchlist_invalidates(self):
+        with patch("backend.ai.market_baseline.invalidate_cache") as inv:
+            _run_action(self.db, _parsed(action="add_to_watchlist", action_symbol="RIVN"))
+        inv.assert_called_once()
+
+    def test_run_backtest_does_not_invalidate(self):
+        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
+             patch("backend.ai.chat._ACTION_HANDLERS", {
+                 "run_backtest": MagicMock(return_value=("ok", True)),
+             }):
+            _run_action(self.db, _parsed(action="run_backtest", action_symbol="AAPL"))
+        inv.assert_not_called()
+
+    def test_run_screen_does_not_invalidate(self):
+        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
+             patch("backend.ai.chat._ACTION_HANDLERS", {
+                 "run_screen": MagicMock(return_value=("ok", True, [])),
+             }):
+            _run_action(self.db, _parsed(action="run_screen", action_query="oversold"))
+        inv.assert_not_called()
+
+    def test_failed_handler_does_not_invalidate(self):
+        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
+             patch("backend.ai.chat._ACTION_HANDLERS", {
+                 "create_alert": MagicMock(side_effect=RuntimeError("boom")),
+             }):
+            _run_action(self.db, _parsed(action="create_alert"))
+        inv.assert_not_called()
 
 
 class TestConfirmPromptWording(_DBBase):
@@ -857,6 +1221,42 @@ class TestEndToEnd(unittest.TestCase):
             db.close()
 
     @patch("backend.ai.chat.ai_manager")
+    def test_multi_step_request_end_to_end(self, mock_ai):
+        """The regression this was built for: a single compound message
+        ("create X and add Y to it") used to only ever do the first
+        thing. Three real completion calls: the turn's own first-action
+        decision, then two multi-step continuations (the second one
+        stopping the chain with action="none")."""
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock(side_effect=[
+            _reply(
+                '{"reply": "ok", "grounded": true, "action": "create_watchlist", '
+                '"action_watchlist": "Tech"}'
+            ),
+            _reply(
+                '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+                '"action_symbol": "NVDA", "action_watchlist": "Tech"}'
+            ),
+            _reply('{"reply": "ok", "grounded": true}'),
+        ])
+
+        msg, grounded, *_ = answer_chat_message(
+            self.session_id, "create a watchlist called Tech and add NVDA to it",
+        )
+
+        self.assertIn("Tech", msg.content)
+        self.assertIn("NVDA", msg.content)
+        self.assertEqual(mock_ai.complete.await_count, 3)
+        db = self.Session()
+        try:
+            wl = WatchlistRepository(db).get_watchlist_by_name("Tech")
+            self.assertIsNotNone(wl)
+            self.assertIsNotNone(WatchlistRepository(db).get_watchlist_symbol(wl.id, "NVDA"))
+        finally:
+            db.close()
+
+    @patch("backend.ai.chat.ai_manager")
     def test_delete_alert_end_to_end_confirm_then_execute(self, mock_ai):
         db = self.Session()
         alert = AlertRepository(db).create("A", "NVDA", "price_above", "220")
@@ -889,6 +1289,76 @@ class TestEndToEnd(unittest.TestCase):
             self.assertIsNone(AlertRepository(db).get_by_id(alert_id))
         finally:
             db.close()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_run_screen_end_to_end_populates_focus(self, mock_ai):
+        """The regression this was built for: a screen surfaces tickers
+        the trader's own message never named (resolve_turn_symbols is
+        patched to [] in this class's setUp), so turn.focus alone would
+        be empty — the screened symbols must still reach the returned
+        `focus` list, or the frontend's per-ticker quick-action buttons
+        (add to watchlist / create alert) never render for them.
+        """
+        from backend.nl_search.executor import ExecutionResult
+        from backend.nl_search.schema import ScannedResultItem
+
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock(return_value=_reply(
+            '{"reply": "checking", "grounded": true, "action": "run_screen", '
+            '"action_query": "oversold"}'
+        ))
+        result = ExecutionResult(
+            matched_all=[],
+            top_n=[ScannedResultItem(symbol="AAPL", total_score=62.0, rank=1, signals=[])],
+            filter_description="RSI oversold", universe_size=5, matched_count=1,
+        )
+        with patch("backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")), \
+             patch("backend.nl_search.executor.execute_query", return_value=result):
+            msg, grounded, focus, partial, unavailable = answer_chat_message(
+                self.session_id, "which of my names look weak",
+            )
+
+        self.assertTrue(grounded)
+        self.assertIn("AAPL", msg.content)
+        self.assertIn("AAPL", focus)
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_analyze_named_watchlist_resolves_real_context(self, mock_ctx, mock_ai):
+        """Regression test for the reported bug: asking to analyze a
+        specific, real, named watchlist ('Analyze "My Watch" watchlist')
+        got a flat "I don't have visibility into the contents of your
+        watchlist" decline, even though the app has the real member
+        list one query away. resolve_turn_symbols is patched to always
+        return [] in this class's setUp (simulating "the message named
+        no ticker via the normal text-resolution path"), so this proves
+        the named-watchlist symbols are what actually populate the
+        turn's context — not a leftover from some other resolution path.
+        """
+        db = self.Session()
+        wl = WatchlistRepository(db).create_watchlist("My Watch")
+        WatchlistRepository(db).add_symbol_to_watchlist(wl.id, "DVLT")
+        db.close()
+
+        mock_ctx.return_value.compact.return_value = {
+            "price": 0.16, "trend_state": {"direction": "up"}, "momentum": {"rsi": 55},
+        }
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock(return_value=_reply(
+            '{"reply": "DVLT is trending up on light volume.", "grounded": true}'
+        ))
+
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session_id, 'Analyze "My Watch" watchlist',
+        )
+
+        self.assertTrue(grounded)
+        self.assertIn("DVLT", msg.content)
+        self.assertIn("DVLT", focus)
+        mock_ctx.assert_called_once()
+        self.assertEqual(mock_ctx.call_args.args[0], "DVLT")
 
     @patch("backend.ai.chat.ai_manager")
     def test_delete_watchlist_survives_model_never_setting_action(self, mock_ai):

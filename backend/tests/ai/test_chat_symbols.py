@@ -197,6 +197,40 @@ class TestResolveTurnSymbols(_Base):
         self.assertEqual(syms, [])
         mock_ai.assert_not_called()
 
+    @patch.object(chat_symbols, "_ai_resolve_name")
+    def test_ai_fallback_not_fired_on_ordinary_chat(self, mock_ai):
+        # Regression: `_looks_like_name`'s old blanket "any 4+ char
+        # non-stopword word" rule fired an AI call on nearly every
+        # ordinary message that reaches it, since no denylist can
+        # enumerate all of English. These have no ticker, no proper
+        # noun, and no "what about X" / "X stock" style trigger phrase.
+        ordinary = [
+            "how many watchlists do I have",
+            "any updates on the market",
+            "are there any alerts",
+            "since when did this start",
+            "how often does this happen",
+            "what time is it",
+            "give me a quick summary",
+            "can you check my alerts",
+            "is there anything interesting today",
+        ]
+        with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", True):
+            for msg in ordinary:
+                syms, _ = chat_symbols.resolve_turn_symbols(msg, [], [])
+                self.assertEqual(syms, [], msg)
+        mock_ai.assert_not_called()
+
+    @patch.object(chat_symbols, "_ai_resolve_name", return_value=["SOFI"])
+    def test_ai_fallback_fires_on_lowercase_trigger_phrase(self, mock_ai):
+        # A lowercase company name not in _NAME_TO_TICKER should still
+        # reach the AI fallback via an explicit "what about X" / "X
+        # stock" style trigger, even without capitalization.
+        with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", True):
+            syms, _ = chat_symbols.resolve_turn_symbols("what about sofi", [], [])
+        self.assertEqual(syms, ["SOFI"])
+        mock_ai.assert_called_once()
+
     def test_company_name_resolves_without_ai(self):
         self._patch_quotes({"GOOGL": _quote(160.0)})
         with patch.object(chat_symbols.settings.ai, "chat_symbol_ai_fallback", False):

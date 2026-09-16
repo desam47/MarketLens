@@ -81,7 +81,22 @@ _RE_BARE_METRIC = re.compile(
     r"target|targets|valuation|multiple|support|resistance|trend|dividend|yield|"
     r"buyback|earnings|revenue|catalyst)\b", re.I)
 _RE_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}\b")
-_RE_ALPHA_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z.'&-]{3,}\b")
+
+# Explicit "asking about a subject" phrasing — the only lowercase signal
+# worth one AI name->ticker call. A blanket "any non-stopword 4+ char
+# word" rule (the previous approach) fires on nearly every ordinary
+# sentence, since English has far more common words than any denylist
+# can enumerate; requiring a trigger phrase keeps this a rare escape
+# hatch instead of the default path.
+_RE_NAME_TRIGGER = re.compile(
+    r"\b(?:what about|how about|thoughts? on|opinions? on|check out|"
+    r"look(?:ing)? at|invest(?:ing)? in|how'?s|how is)\s+"
+    r"([a-z][a-z'&.-]{2,})\b",
+    re.I,
+)
+_RE_NAME_SUFFIX = re.compile(
+    r"\b([a-z][a-z'&.-]{2,})\s+(?:stock|shares|share price|ticker)\b", re.I,
+)
 
 # Common company / index names -> ticker. Deterministic, case-insensitive;
 # checked before the AI name->ticker fallback. Values not already in the
@@ -277,18 +292,27 @@ def _mask(text: str) -> tuple[str, list[str]]:
 
 def _looks_like_name(text: str) -> bool:
     """Worth one AI name->ticker lookup? True for a capitalized proper
-    noun, or any 4+ char word left after group-phrase masking that isn't
-    a stopword, a metric term, or conversational filler."""
+    noun, or a lowercase word introduced by an explicit "what about X" /
+    "X stock" style trigger phrase — as long as it isn't a stopword or a
+    metric term. Ordinary chat with neither signal ("how many
+    watchlists do I have") returns False without spending an AI call."""
     if _RE_PROPER_NOUN.search(text):
         return True
     masked, _ = _mask(text)
-    for m in _RE_ALPHA_TOKEN.finditer(masked):
-        w = m.group(0).strip(".'&-")
-        if (
+
+    def _is_candidate(word: str) -> bool:
+        w = word.strip(".'&-")
+        return bool(
             w
             and w.upper() not in _CHAT_STOPWORDS
             and not _RE_BARE_METRIC.fullmatch(w.lower())
-        ):
+        )
+
+    for m in _RE_NAME_TRIGGER.finditer(masked):
+        if _is_candidate(m.group(1)):
+            return True
+    for m in _RE_NAME_SUFFIX.finditer(masked):
+        if _is_candidate(m.group(1)):
             return True
     return False
 

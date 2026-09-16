@@ -744,10 +744,10 @@ class ChatReplyResponse(BaseModel):
     # says — see CHAT_SYSTEM_PROMPT rule 10 for when the model may set
     # them.
     action: Literal[
-        "none", "create_alert", "delete_alert",
+        "none", "create_alert", "modify_alert", "delete_alert",
         "add_to_watchlist", "remove_from_watchlist",
         "create_watchlist", "delete_watchlist",
-        "run_backtest", "set_entity_type",
+        "run_backtest", "set_entity_type", "run_screen",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -757,6 +757,12 @@ class ChatReplyResponse(BaseModel):
     action_target_id: int | None = None
     # set_entity_type only: "stock" or "etf" to relabel action_symbol as.
     action_entity_type: Literal["stock", "etf"] | None = None
+    # run_screen only: the trader's free-text screening criteria (e.g.
+    # "oversold with rising volume"), handed to the existing
+    # backend.nl_search parser/executor — the same engine behind
+    # POST /api/nl-search — rather than the model inventing filter logic
+    # itself.
+    action_query: str | None = Field(default=None, max_length=300)
     action_confirmed: bool = False
 
     @field_validator("action_condition_type")
@@ -769,6 +775,69 @@ class ChatReplyResponse(BaseModel):
             return None
         return v
 
+
+# Shared by CHAT_SYSTEM_PROMPT (rule 10) and CHAT_CONTINUATION_SYSTEM_PROMPT
+# — the per-tool field/behavior rules a completion needs to DECIDE an
+# action are identical whether it's the turn's first decision or a
+# multi-step continuation (rule 12); only the surrounding framing (when
+# to just answer instead, how "reply" is used, the watchlist-CONTENTS-
+# is-not-an-action carve-out) differs between the two, so only that
+# framing is duplicated, not these ~10 tool-behavior bullets. Kept
+# deliberately terse (2026-09-16 trim) — this text is resent on every
+# single completion call, including every chained continuation one.
+_ACTION_TOOL_DOCS = """\
+    - create_alert / modify_alert / add_to_watchlist / create_watchlist / \
+      run_backtest / set_entity_type / run_screen fire on the FIRST \
+      clear request — no confirmation needed. Fill the matching \
+      action_* fields.
+    - delete_alert / remove_from_watchlist / delete_watchlist are \
+      DESTRUCTIVE (modify_alert is NOT — it fires immediately like \
+      create_alert). Set "action" and its action_* fields as soon as \
+      it's clear what's being removed, but leave action_confirmed=false \
+      unless the trader's OWN message right now clearly confirms \
+      (yes / confirm / do it / go ahead) a destructive action you \
+      already proposed. The app asks the confirmation question itself \
+      when action_confirmed is false — never compose that wording \
+      yourself.
+    - delete_alert / modify_alert need action_target_id, the numeric \
+      "id" from active_alerts in the <market> block. If you can't find \
+      a matching alert there, say so instead of guessing an id.
+    - create_alert needs action_symbol, action_condition_type (one of: \
+      """ + ", ".join(_VALID_ALERT_CONDITION_TYPES) + """), and \
+      action_parameter (the threshold, e.g. "220" for a price level or \
+      "5" for a percent). action_label is an optional short name.
+    - modify_alert changes an EXISTING alert (found via active_alerts) \
+      in place instead of delete-then-recreate — e.g. "change my NVDA \
+      alert to 230". Set action_target_id plus only the fields \
+      actually changing; leave the rest null to keep their current \
+      value.
+    - add_to_watchlist / remove_from_watchlist / create_watchlist / \
+      delete_watchlist use action_symbol and/or action_watchlist (the \
+      watchlist name). The <market> block's "watchlists" array has \
+      every real name + size (not contents) — use real names in \
+      conversational "reply" text, but for the action itself only set \
+      action_watchlist when the trader named one; otherwise leave it \
+      unset and let the app resolve it (it will ask by name if \
+      genuinely ambiguous) — never guess which watchlist an unnamed \
+      "my watchlist" means yourself.
+    - run_backtest needs action_symbol — runs a fresh 6-month daily \
+      backtest of the engine's own signals with a real win rate / avg \
+      return. Use for "how has this performed historically", not "is \
+      it moving right now" (that's the tape section already in \
+      context).
+    - run_screen needs action_query, the trader's screening criteria \
+      verbatim or lightly cleaned (e.g. "oversold with rising \
+      volume") — a real screener over their watchlist, not answered \
+      from your context. action_watchlist is optional; their default \
+      list otherwise. Use for any find/screen/scan request or "which \
+      of my names look weak" — never answer those from the <market> \
+      block (market-wide only, no per-name results).
+    - set_entity_type needs action_symbol and action_entity_type \
+      ("stock" or "etf") — use when a ticker is mislabeled or the \
+      trader asks to reclassify it. A real, changeable per-watchlist \
+      label — never say you can't relabel a ticker, set this action \
+      instead.
+"""
 
 CHAT_SYSTEM_PROMPT = """\
 You are MarketLens Analyst & Advisor, having a back-and-forth \
@@ -791,12 +860,15 @@ Rules you must follow:
    directional call for that ticker, and you must say the engine isn't \
    tracking that name. Set "grounded" to false when that was the \
    question.
-3. For market-wide questions ("what's the market doing", "which of my \
-   names look weak") answer from the <market> block — regime_live is \
+3. For market-wide questions ("what's the market doing", "how's \
+   sentiment") answer from the <market> block — regime_live is \
    current; the digest is from its generated_at timestamp, so hedge if \
    it looks stale. Name only symbols that actually appear in the \
    block. If <market> is empty, say the market read isn't available \
-   and set "grounded" to false.
+   and set "grounded" to false. For "which of my names look weak/strong" \
+   or any request to find/rank/screen names by a description, use the \
+   run_screen tool (rule 10) instead — the <market> block has no \
+   per-name breakdown to answer that from.
 4. Prior turns are provided for conversational continuity, but the \
    <context>/<market> blocks are always the current live truth — if an \
    earlier turn discussed older data, prefer the blocks over your own \
@@ -837,52 +909,20 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have EIGHT more tools, via "action": create_alert, delete_alert, \
-    add_to_watchlist, remove_from_watchlist, create_watchlist, \
-    delete_watchlist, run_backtest, set_entity_type.
-    - create_alert / add_to_watchlist / create_watchlist / run_backtest / \
-      set_entity_type fire on the FIRST clear request — no confirmation \
-      needed. Fill the matching action_* fields.
-    - delete_alert / remove_from_watchlist / delete_watchlist are \
-      DESTRUCTIVE. Set "action" and its action_* fields (target id / \
-      symbol / watchlist) as soon as it's clear what the trader wants \
-      removed — even on the first mention — but leave \
-      action_confirmed=false unless the trader's OWN message you are \
-      replying to right now clearly confirms (yes / confirm / do it / \
-      go ahead) a destructive action you already proposed in a prior \
-      turn. The app itself asks the confirmation question when \
-      action_confirmed is false — do not compose your own confirmation \
-      wording in "reply" for these three actions.
-    - delete_alert needs action_target_id, the numeric "id" from \
-      active_alerts in the <market> block. If you can't find a \
-      matching alert there, say so in "reply" instead of guessing an \
-      id.
-    - create_alert needs action_symbol, action_condition_type (one of: \
-      """ + ", ".join(_VALID_ALERT_CONDITION_TYPES) + """), and \
-      action_parameter (the threshold, e.g. "220" for a price level or \
-      "5" for a percent). action_label is an optional short name.
-    - add_to_watchlist / remove_from_watchlist / create_watchlist / \
-      delete_watchlist use action_symbol and/or action_watchlist (the \
-      watchlist name). You are NOT told how many watchlists the \
-      trader has or their names, so never guess a count or ask "which \
-      watchlist" yourself — set action_watchlist ONLY when the trader \
-      said a specific name; otherwise leave it unset and let the app \
-      resolve it (it knows the real list and will ask by name, with \
-      the real options, if it's genuinely ambiguous). The same applies \
-      to READING a watchlist's contents ("what's in my X watchlist") — \
-      you are never told what's actually on any watchlist, so never \
-      guess or invent a list of tickers for one; say you don't have \
-      visibility into watchlist contents instead.
-    - run_backtest needs action_symbol. It runs a fresh 6-month daily \
-      backtest of the engine's own signals and reports a real win rate \
-      / average return — use it when the trader asks how a setup or \
-      ticker has performed historically, NOT for "is it moving right \
-      now" questions (that's the tape section already in context).
-    - set_entity_type needs action_symbol and action_entity_type ("stock" \
-      or "etf") — use it when the trader says a ticker is mislabeled or \
-      asks you to mark/reclassify it as a stock vs an ETF. This is a \
-      real per-watchlist label the app stores and can change; never say \
-      you can't relabel a ticker — set this action instead.
+10. You have TEN more tools, via "action": create_alert, modify_alert, \
+    delete_alert, add_to_watchlist, remove_from_watchlist, \
+    create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
+    run_screen.
+""" + _ACTION_TOOL_DOCS + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
+      ("what's in my X watchlist", "analyze my X watchlist") is never \
+      an "action" — the app resolves the name itself and gives you a \
+      normal <context> block per member ticker (same shape as any \
+      other named ticker) BEFORE you reply; just analyze those blocks \
+      normally, exactly as any other multi-ticker turn (rule 1 still \
+      applies: don't cross-reference numbers between tickers). Only \
+      say you lack visibility into a watchlist's contents when NO \
+      such block was provided this turn (an unresolved name) — not \
+      that watchlist data is categorically unavailable to you.
     - When "action" is set to anything but "none", "reply" is ignored \
       (a short placeholder is fine) — the app executes the action and \
       replies with its own result instead, same as wants_reanalysis.
@@ -893,7 +933,43 @@ Rules you must follow:
     "action" is "none", nothing was changed, no matter what the \
     trader asked for — say what you need (a confirmation, a missing \
     ticker, a clarification) instead of claiming it's done.
+12. Still exactly one "action" per reply — never invent a way to set \
+    more than one, even when a message asks for several things \
+    ("create a watchlist called Tech and add NVDA to it"). Set the \
+    first one now; the app decides on its own whether anything from \
+    the message still needs doing after that runs.
 """
+
+# A separate, deliberately lean system prompt for a multi-step
+# continuation call (backend.ai.chat._run_turn_actions, 2026-09-16) —
+# deciding "what's the next step of a compound request already in
+# progress" needs the tool rules (_ACTION_TOOL_DOCS) but none of
+# CHAT_SYSTEM_PROMPT's rules 1-9 about grounding a conversational
+# answer in <context>/<market> data, since a continuation call never
+# produces one ("reply" is always discarded here — see _run_turn_actions).
+# This prompt is resent on every chained step, so trimming it matters
+# more than trimming the main prompt: a 3-step compound turn used to
+# resend the FULL ~2.4k-token CHAT_SYSTEM_PROMPT three times; the 2nd
+# and 3rd calls now send this instead.
+CHAT_CONTINUATION_SYSTEM_PROMPT = """\
+You already ran the first step of a multi-part trader request; the \
+message below has the ORIGINAL request plus what's already been done. \
+Decide: is anything from the original request still undone?
+
+Your output is a single JSON object with EXACTLY these fields: \
+"reply" (string — always discarded here, a short placeholder is \
+fine), "grounded" (boolean, true), "action" (see tools below, or \
+"none" if everything requested is already done), plus whichever \
+action_* fields that tool needs (null for the rest). Wrap it in a \
+single ```json ... ``` block, no prose outside it. Still exactly one \
+"action" — never invent a way to set more than one, even if more \
+than one thing is still left; you'll be asked again after this one \
+runs.
+
+Tools, via "action": create_alert, modify_alert, delete_alert, \
+add_to_watchlist, remove_from_watchlist, create_watchlist, \
+delete_watchlist, run_backtest, set_entity_type, run_screen.
+""" + _ACTION_TOOL_DOCS
 
 # Rough token estimate for the assembled prompt's size guard.
 def _approx_tokens(s: str) -> int:

@@ -377,6 +377,19 @@ class AISettings(BaseSettings):
     # Off => the streaming endpoint still exists but emits the whole
     # reply in one chunk, so the frontend path is unchanged.
     chat_streaming: bool = Field(default=True)
+    # Optional chain-entry override (same "type" / "type:model" format
+    # as fallback_providers) tried before the default chain, for the
+    # chat completion call only — every other AI feature (digest,
+    # analyze_symbol, nl_search) is unaffected. Chat's reply contract is
+    # unusually strict (a fixed JSON shape, action-tagging rules, a
+    # destructive-action confirm gate) and a model that doesn't follow
+    # instructions reliably here shows up as wrong/hallucinated
+    # behavior a trader sees directly, not just a worse read — see the
+    # _fallback_action / _fallback_confirmation regex safety nets in
+    # backend/ai/chat.py, added because the default chain's model
+    # didn't reliably comply on its own. Empty (default) means no
+    # override — chat uses the same chain as everything else.
+    chat_model: str = Field(default="")
     # The chat's run_backtest action tool (2026-09-11) — a fresh 6-month
     # backtest of the engine's own signals, on demand. Off by default:
     # a chat-triggered backtest is a real, rate-limited compute cost.
@@ -869,6 +882,25 @@ class AITradePlanTrackingSettings(BaseSettings):
     grading_interval_seconds: float = Field(default=1800.0, ge=60.0)
 
 
+class NudgeSettings(BaseSettings):
+    """Proactive chat nudges (2026-09-15) — the universal AI Hub chat is
+    otherwise 100% reactive. Off unless ``AI_NUDGES_ENABLED=true``; when
+    off, ``backend.ai.nudges.NudgeService`` never starts a loop."""
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_NUDGES_", extra="ignore")
+    enabled: bool = Field(default=True)
+    poll_interval_seconds: float = Field(default=45.0, ge=5.0)
+    # |signed_total_score| a watched symbol must cross (not just sit
+    # at) to earn a "big move" nudge — see backend/scanner/filters.py's
+    # TrendScoreGt/Lt, where 50 is already used elsewhere as "strong."
+    # This is deliberately higher: a nudge interrupts, a screen result
+    # doesn't.
+    score_threshold: float = Field(default=60.0, gt=0)
+    # Minimum time before the same symbol can trigger another "big
+    # move" nudge, so a score oscillating around the threshold doesn't
+    # spam the thread.
+    cooldown_seconds: float = Field(default=1800.0, ge=60.0)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
     app_name: str = "MarketLens"
@@ -907,6 +939,7 @@ class Settings(BaseSettings):
     ai_trade_plan_tracking: AITradePlanTrackingSettings = Field(
         default_factory=AITradePlanTrackingSettings,
     )
+    ai_nudges: NudgeSettings = Field(default_factory=NudgeSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 

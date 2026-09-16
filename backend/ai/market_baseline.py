@@ -97,6 +97,33 @@ def _active_alerts() -> list[dict[str, Any]]:
         repo.close()
 
 
+def _watchlist_index() -> list[dict[str, Any]]:
+    """Every real watchlist's name + member count (NOT its contents —
+    see CHAT_SYSTEM_PROMPT rule 10). Lets the model recognize and refer
+    to a real watchlist by name (e.g. offering the actual options when a
+    request is ambiguous) instead of operating fully blind, while the
+    app still authoritatively resolves any actual action/read against a
+    named watchlist itself (backend.ai.chat._resolve_watchlist,
+    _resolve_named_watchlist_symbols) rather than trusting the model's
+    own judgement for the real side effect or the real member list.
+    """
+    from backend.database import SessionLocal
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    db = SessionLocal()
+    try:
+        repo = WatchlistRepository(db)
+        return [
+            {
+                "name": wl.name,
+                "symbol_count": len([s for s in wl.symbols if s.is_enabled]),
+            }
+            for wl in repo.get_watchlists(active_only=True)
+        ]
+    finally:
+        db.close()
+
+
 def _watchlist_snapshot() -> dict[str, Any]:
     from backend.api.main_helpers import _watched_symbols
     from backend.scanner.scanner import market_scanner
@@ -114,6 +141,25 @@ def _watchlist_snapshot() -> dict[str, Any]:
         scored.append({"symbol": sym, "signed_score": score, "signals": list(r.signals)})
     scored.sort(key=lambda d: d["signed_score"], reverse=True)
     return {"scored": scored, "all_symbols": known}
+
+
+def invalidate_cache() -> None:
+    """Drop the cached snapshot so the next ``build_market_baseline()``
+    call rebuilds instead of serving a stale one — call this right
+    after something the baseline reports on changes (an alert/watchlist
+    CRUD action from chat; see ``backend.ai.chat._run_action``'s
+    ``_BASELINE_MUTATING_ACTIONS``).
+
+    Without this, a chat action followed by a related question within
+    ``_CACHE_TTL`` seconds (e.g. "create an NVDA alert" then "change it
+    to 230") could see a pre-mutation snapshot — the cache's own
+    docstring assumes nothing it reads "moves meaningfully" within a
+    few seconds, which is false for a mutation the trader's own last
+    message just caused.
+    """
+    global _cached, _cached_at
+    with _cache_lock:
+        _cached, _cached_at = None, 0.0
 
 
 def build_market_baseline(*, use_cache: bool = True) -> dict[str, Any]:
@@ -134,6 +180,7 @@ def build_market_baseline(*, use_cache: bool = True) -> dict[str, Any]:
         "regime_live": _safe(_live_regime, {}),
         "digest": _safe(_latest_digest, {}),
         "watchlist_snapshot": _safe(_watchlist_snapshot, {"scored": [], "all_symbols": []}),
+        "watchlists": _safe(_watchlist_index, []),
         "active_alerts": _safe(_active_alerts, []),
     }
     with _cache_lock:

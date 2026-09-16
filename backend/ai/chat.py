@@ -30,6 +30,22 @@ text, not trusted AI prose (same "never trust the AI for the actual
 side effect" stance as TradePlan's model_validator re-deriving
 risk:reward instead of the AI's own arithmetic).
 
+2026-09-16: a single user message may ask for more than one of the
+above ("create a watchlist called Tech and add NVDA to it"). Rather
+than widen the flat JSON schema to carry a list of heterogeneous
+actions (this codebase deliberately keeps that schema flat — a weak
+local model mangles nested JSON far more often than an extra
+top-level key), _run_turn_actions chains multiple ONE-action
+completion calls within a single turn: after a real action executes,
+if the trader's own message hinted at more than one request (a cheap
+"and"/"then"/"also"/";" regex gate — never spent on an ordinary
+single-action turn), the model is asked once more, with a note on
+what already ran, whether anything from the original message is
+still undone. Bounded by _MAX_CHAIN_STEPS, and a destructive step
+still stops the chain for its own confirmation exactly as before —
+this only automates stringing together steps that individually
+already needed no confirmation.
+
 Follows analyze_symbol's "never raise for an expected failure mode"
 contract: AI off, InsufficientDataError, or a malformed reply all
 degrade to a stored assistant message explaining that (grounded=False)
@@ -50,6 +66,7 @@ from datetime import timedelta
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.chat_symbols import resolve_turn_symbols
+from backend.config.settings import settings
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
 from backend.ai.market_baseline import build_market_baseline
@@ -58,6 +75,7 @@ from backend.ai.market_baseline import build_market_baseline
 # bridged with run_sync/stream_sync rather than awaited.
 from backend.ai.sync_bridge import run_sync, stream_sync
 from backend.ai.prompt import (
+    CHAT_CONTINUATION_SYSTEM_PROMPT,
     CHAT_SYSTEM_PROMPT,
     UncertaintyResponse,
     build_chat_prompt,
@@ -75,6 +93,14 @@ logger = logging.getLogger(__name__)
 # as transcript text in the prompt.
 _TRANSCRIPT_TURNS = 6
 _TRANSCRIPT_MSG_CHARS = 600  # per-message clip inside the transcript
+
+# Multi-step actions (see module docstring, 2026-09-16). A cheap
+# deterministic gate on the trader's OWN message — chaining is only
+# ever attempted when this matches, so an ordinary single-action turn
+# never pays for the extra completion call.
+_MULTI_STEP_HINT = re.compile(r"\band\b|\bthen\b|\balso\b|;", re.I)
+# First action + up to this many chained follow-ups within one turn.
+_MAX_CHAIN_STEPS = 3
 
 # Per-turn intent — keeps aux-data HTTP and prompt tokens off turns that
 # don't ask for that material. Each pattern is deliberately generous:
@@ -165,6 +191,73 @@ _WATCHLIST_CONTENTS_INTENT = re.compile(
     r"what'?s\s+(?:in|on)\s+(?:the\s+|my\s+)?(?P<name2>.*?)\s*(?:watch ?lists?|lists?)?[\?\.!]*$",
     re.I,
 )
+
+# "Analyze my X watchlist" / "how's the X watchlist doing" / etc. — any
+# message naming a REAL watchlist by name, in a way that isn't already
+# _WATCHLIST_CONTENTS_INTENT's "list its tickers" ask. Each alternative
+# anchors WHERE the name starts (a quote, "my"/"the"/"a", or the start
+# of the message) so the lazy capture can't run backward across the
+# whole sentence ("how is my Swing Setups watchlist doing" must capture
+# "Swing Setups", not "how is my Swing Setups"). The capture itself is
+# still deliberately loose beyond that anchor (it'll happily match "my
+# favorite watchlist" -> name "favorite") because it's never trusted
+# directly — see ``_resolve_named_watchlist_symbols``, which only acts
+# on it after a real, case-insensitive DB lookup succeeds. That DB check
+# is the actual safety net, not this regex.
+_NAMED_WATCHLIST_RE = re.compile(
+    r'["“](?P<name1>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)["”]?\s+watch\s?lists?\b'
+    r'|(?:\bmy\s+|\bthe\s+)(?P<name2>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b'
+    r'|\bwatch\s?lists?\s+(?:called|named)\s+["“]?(?P<name3>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)["”]?(?=[\s,;:\?\.!]|$)',
+    re.I,
+)
+# Fallback for a message that leads with the watchlist name itself, no
+# "my"/"the"/quote in front ("Swing Setups watchlist status?") — a
+# separate, `.match`-only (start-of-string-only) pattern, not folded
+# into the alternation above: combining a bare `^` alternative with the
+# anchored ones there made `re.search` lock onto position 0 immediately
+# (an anchor is a zero-width, always-successful match), capturing the
+# ENTIRE prefix up to "watchlist" — e.g. "how is my Swing Setups
+# watchlist" captured "how is my Swing Setups" instead of "Swing
+# Setups" — since search tries alternatives in order at the first
+# position they succeed, never backtracking to a later, better one.
+_NAMED_WATCHLIST_LEADING_RE = re.compile(
+    r'^(?P<name>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b', re.I,
+)
+
+
+def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
+    """Deterministically resolve a specific, real watchlist the trader
+    NAMED in this message (e.g. 'analyze "My Watch" watchlist') to its
+    real member symbols, so the turn builds genuine <context> blocks for
+    them instead of the model declining with "no visibility" (see
+    CHAT_SYSTEM_PROMPT rule 10) — that rule is for when no real
+    watchlist can be resolved this way, not this case.
+
+    Returns ``[]`` (a silent no-op) whenever the captured name doesn't
+    match a real watchlist — never a guess.
+    """
+    m = _NAMED_WATCHLIST_RE.search(user_content)
+    if m:
+        name = m.group("name1") or m.group("name2") or m.group("name3") or ""
+    else:
+        m2 = _NAMED_WATCHLIST_LEADING_RE.match(user_content)
+        name = m2.group("name") if m2 else ""
+    name = name.strip(" \"'“”")
+    if not name:
+        return []
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    repo = WatchlistRepository(db)
+    wl = repo.get_watchlist_by_name(name)
+    if wl is None:
+        lowered = name.lower()
+        wl = next(
+            (w for w in repo.get_watchlists(active_only=True) if w.name.lower() == lowered),
+            None,
+        )
+    if wl is None:
+        return []
+    return [s.symbol for s in wl.symbols if s.is_enabled]
 
 # Short-lived per-symbol context cache — a burst of follow-ups about one
 # name rebuilt the whole scan + aux-data each turn.
@@ -279,6 +372,32 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         else []
     )
     symbols, capped = resolve_turn_symbols(user_content, transcript, base)
+
+    # A specific, real, named watchlist ("analyze my X watchlist") gets
+    # its member symbols folded in as if they'd been named individually
+    # — but not when a cheaper, more specific intent already owns this
+    # phrasing (_WATCHLIST_CONTENTS_INTENT's "what tickers are in X" /
+    # _WATCHLIST_LIST_INTENT's "which watchlists do I have" both get
+    # answered deterministically in _generate_reply without an AI call
+    # or per-symbol context build at all — skip here so this doesn't
+    # silently upgrade those into a full multi-ticker AI turn instead).
+    if (
+        not _WATCHLIST_CONTENTS_INTENT.search(user_content)
+        and not _WATCHLIST_LIST_INTENT.search(user_content)
+    ):
+        named_wl_symbols = _resolve_named_watchlist_symbols(repo.db, user_content)
+        if named_wl_symbols:
+            seen = {s.upper() for s in symbols}
+            for sym in named_wl_symbols:
+                sym = sym.upper()
+                if sym not in seen:
+                    seen.add(sym)
+                    symbols.append(sym)
+            cap = settings.ai.chat_max_tickers
+            if len(symbols) > cap:
+                symbols = symbols[:cap]
+                capped = True
+
     single = len(symbols) == 1
 
     # What this turn actually asks for — skip the rest.
@@ -364,13 +483,19 @@ def answer_chat_message(
     repo = ChatRepository()
     try:
         turn = _prepare_turn(repo, session_id, user_content)
-        reply_text, grounded = _generate_reply(
+        reply_text, grounded, screened = _generate_reply(
             repo.db, turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
             turn.user_content, turn.alert_context, turn.capped, turn.base,
         )
         grounded = grounded and not turn.unavailable  # deterministic fail-safe
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
-        return assistant_message, grounded, turn.focus, turn.partial, turn.unavailable
+        # `screened` is populated only by the run_screen tool — tickers the
+        # turn's own message never named, so turn.focus (derived from the
+        # user's text) wouldn't otherwise include them, and the frontend's
+        # per-ticker quick-action buttons (add to watchlist / create alert)
+        # key off `focus`/`partial` alone.
+        focus = list(dict.fromkeys([*turn.focus, *screened]))
+        return assistant_message, grounded, focus, turn.partial, turn.unavailable
     finally:
         repo.close()
 
@@ -399,12 +524,13 @@ def stream_chat_message(
 
         final_text: str | None = None
         grounded = False
+        screened: list[str] = []
         try:
             for kind, payload in _generate_reply_streaming(repo.db, turn):
                 if kind == "delta":
                     yield ("delta", payload)
                 else:  # "result"
-                    final_text, grounded = payload
+                    final_text, grounded, screened = payload
         except Exception as e:  # noqa: BLE001 — mirror _generate_reply's contract
             logger.warning("Chat stream generation raised: %s", e)
             final_text, grounded = (
@@ -417,7 +543,11 @@ def stream_chat_message(
             )
         grounded = grounded and not turn.unavailable
         msg = repo.add_message(session_id, "assistant", final_text)
-        yield ("final", (msg, grounded, turn.focus, turn.partial, turn.unavailable))
+        # See answer_chat_message's matching comment — `screened` (from
+        # run_screen) is merged into `focus` so the frontend's quick-action
+        # buttons pick up tickers the turn's own message never named.
+        focus = list(dict.fromkeys([*turn.focus, *screened]))
+        yield ("final", (msg, grounded, focus, turn.partial, turn.unavailable))
     finally:
         repo.close()
 
@@ -476,6 +606,47 @@ def _prune_context(ctx: dict, avail: dict, *, keep_stats: bool = False) -> dict:
     return out
 
 
+# One extra attempt on a failed completion/parse before giving up (2026-
+# 09-16) — this environment's local model has shown intermittent
+# malformed-JSON replies where an immediate identical retry succeeds
+# (observed live, not hypothetical), so trading a little latency for
+# meaningfully fewer user-visible "I couldn't process that" replies is
+# worth it. Total attempts = 1 + this.
+_CHAT_PARSE_RETRIES = 1
+
+
+def _complete_and_parse(prompt: str, system: str, max_tokens: int, model: str | None):
+    """One or more attempts at an AI completion + ``ChatReplyResponse``
+    parse, retrying ``_CHAT_PARSE_RETRIES`` more time(s) on either a raw
+    provider failure or a malformed reply before giving up.
+
+    Returns ``(parsed, failure_reason)`` — ``parsed`` is ``None`` on
+    total failure, with ``failure_reason`` ("ai_error" or "parse_error",
+    reflecting the LAST attempt) for the caller to pick a fallback
+    message. Never raises.
+    """
+    failure_reason = "ai_error"
+    for attempt in range(_CHAT_PARSE_RETRIES + 1):
+        try:
+            resp = run_sync(ai_manager.complete(
+                prompt=prompt, system=system, max_tokens=max_tokens, model=model,
+            ))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Chat AI call raised (attempt %d): %s", attempt + 1, e)
+            failure_reason = "ai_error"
+            continue
+        if resp.text is None:
+            logger.warning("Chat AI call returned no text (attempt %d)", attempt + 1)
+            failure_reason = "ai_error"
+            continue
+        try:
+            return parse_chat_reply(resp.text), None
+        except Exception as e:  # noqa: BLE001
+            logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
+            failure_reason = "parse_error"
+    return None, failure_reason
+
+
 def _generate_reply(
     db,
     symbol_blocks: list[dict],
@@ -486,9 +657,14 @@ def _generate_reply(
     alert_context: dict | None,
     capped: bool,
     base_symbols: list[str],
-) -> tuple[str, bool]:
+) -> tuple[str, bool, list[str]]:
     """Call the AI and parse its reply. Never raises — degrades to a
     plain reply with grounded=False.
+
+    Returns ``(text, grounded, screened)`` — ``screened`` is the tickers
+    a run_screen tool call surfaced (empty for every other path), for the
+    caller to fold into ``focus`` since they weren't named in the turn's
+    own message.
 
     When the AI's reply asks for ``wants_reanalysis``, runs the chat's
     one tool (see module docstring) for the named ticker instead.
@@ -501,45 +677,38 @@ def _generate_reply(
         and base_symbols
         and set(unavailable) == {s.upper() for s in base_symbols}
     ):
-        return f"I don't have enough data on {unavailable[0]} yet to answer that.", False
+        return f"I don't have enough data on {unavailable[0]} yet to answer that.", False, []
 
     if not symbol_blocks:
         m = _WATCHLIST_CONTENTS_INTENT.search(user_content)
         if m:
             reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
             if reply:
-                return reply, True
+                return reply, True, []
         if _WATCHLIST_LIST_INTENT.search(user_content):
-            return _watchlist_list_reply(db), True
+            return _watchlist_list_reply(db), True, []
 
     if not ai_manager.enabled:
-        return "AI is currently unavailable, so I can't answer that right now.", False
+        return "AI is currently unavailable, so I can't answer that right now.", False, []
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
-    try:
-        resp = run_sync(ai_manager.complete(
-            prompt=build_chat_prompt(
-                symbol_blocks, unavailable, market_baseline, transcript,
-                user_content, alert_context,
-                capped_note=_capped_note(capped, symbol_blocks), token_budget=budget,
-            ),
-            system=CHAT_SYSTEM_PROMPT,
-            max_tokens=500,
-        ))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Chat AI call raised: %s", e)
-        return "Something went wrong reaching the AI provider — please try again.", False
+    prompt = build_chat_prompt(
+        symbol_blocks, unavailable, market_baseline, transcript,
+        user_content, alert_context,
+        capped_note=_capped_note(capped, symbol_blocks), token_budget=budget,
+    )
+    parsed, failure_reason = _complete_and_parse(
+        prompt, CHAT_SYSTEM_PROMPT, 500, ai_manager.settings.chat_model or None,
+    )
+    if parsed is None:
+        if failure_reason == "ai_error":
+            return "Something went wrong reaching the AI provider — please try again.", False, []
+        return "I couldn't process that — could you rephrase?", False, []
 
-    if resp.text is None:
-        return "AI is currently unavailable, so I can't answer that right now.", False
-
-    try:
-        parsed = parse_chat_reply(resp.text)
-    except Exception as e:  # noqa: BLE001
-        logger.info("Chat reply failed to parse: %s", e)
-        return "I couldn't process that — could you rephrase?", False
-
-    return _finalize_parsed(db, parsed, symbol_blocks, user_content, transcript)
+    return _run_turn_actions(
+        db, parsed, symbol_blocks, unavailable, market_baseline, transcript,
+        user_content, alert_context,
+    )
 
 
 def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
@@ -641,14 +810,17 @@ def _fallback_confirmation(
 def _finalize_parsed(
     db, parsed, symbol_blocks: list[dict],
     user_content: str = "", transcript: list[tuple[str, str]] | None = None,
-) -> tuple[str, bool]:
-    """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded)``.
+) -> tuple[str, bool, list[str]]:
+    """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded, screened)``.
+
+    ``screened`` is the tickers a run_screen tool call surfaced (empty
+    for every other path) — see ``_generate_reply``'s docstring.
 
     Runs the chat's tools: ``wants_reanalysis`` (a real ``analyze_symbol``
-    run), or one of the six ``action`` values (alert / watchlist CRUD —
-    see the module docstring). A destructive action without
-    ``action_confirmed`` never reaches ``_run_action`` — it gets a
-    server-authored confirmation question instead, regardless of what
+    run), or one of the ``action`` values (alert / watchlist CRUD, a
+    backtest, a screen — see the module docstring). A destructive action
+    without ``action_confirmed`` never reaches ``_run_action`` — it gets
+    a server-authored confirmation question instead, regardless of what
     the model set for "reply". When the model leaves ``action="none"``,
     ``_fallback_action`` / ``_fallback_confirmation`` get one more
     chance to catch an unambiguous destructive request (or its
@@ -661,10 +833,11 @@ def _finalize_parsed(
         if not target and len(known) == 1:
             target = known[0]
         if target and target in known:
-            return _run_reanalysis(target)
+            text, grounded = _run_reanalysis(target)
+            return text, grounded, []
         if known:
-            return "Which ticker should I run the full analysis for?", True
-        return "Tell me which ticker you'd like me to run the full analysis for.", False
+            return "Which ticker should I run the full analysis for?", True, []
+        return "Tell me which ticker you'd like me to run the full analysis for.", False, []
     if parsed.action == "none":
         fallback = _fallback_action(user_content, symbol_blocks)
         if fallback is not None:
@@ -676,17 +849,93 @@ def _finalize_parsed(
                 parsed.action_confirmed = True
     if parsed.action != "none":
         if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
-            return _confirm_prompt(db, parsed), True
+            return _confirm_prompt(db, parsed), True, []
         return _run_action(db, parsed)
-    return parsed.reply, parsed.grounded
+    return parsed.reply, parsed.grounded, []
+
+
+def _action_was_executed(parsed) -> bool:
+    """True when ``_finalize_parsed`` actually ran a tool for ``parsed``
+    (not a plain reply, not a reanalysis, not a confirmation question
+    still waiting on the trader) — the signal ``_run_turn_actions`` uses
+    to decide whether chaining even applies. ``parsed`` reflects any
+    ``_fallback_action`` / ``_fallback_confirmation`` mutation
+    ``_finalize_parsed`` already made, since both operate in place.
+    """
+    if parsed.wants_reanalysis or parsed.action == "none":
+        return False
+    return not (parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed)
+
+
+def _run_turn_actions(
+    db, parsed, symbol_blocks: list[dict], unavailable: list[str],
+    market_baseline: dict | None, transcript: list[tuple[str, str]],
+    user_content: str, alert_context: dict | None,
+) -> tuple[str, bool, list[str]]:
+    """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
+    the trader's own message hints at more than one request (see
+    ``_MULTI_STEP_HINT``) and that first step was a real, already-
+    executed action — asks the model up to ``_MAX_CHAIN_STEPS - 1`` more
+    times whether anything from the ORIGINAL message is still undone,
+    running each additional step the same way. See the module docstring
+    (2026-09-16) for why this chains single-action completion calls
+    instead of widening the JSON schema.
+
+    The combined reply is built ONLY from each executed step's own
+    deterministic result text — never a continuation call's free-form
+    "reply" — per rule 11 (only the app's own action result may claim
+    something was done). A step that doesn't execute (model says
+    "none", or a destructive step still needs its own confirmation)
+    stops the chain there; its confirmation question (if any) is the
+    last thing appended.
+    """
+    text, grounded, screened = _finalize_parsed(db, parsed, symbol_blocks, user_content, transcript)
+    if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
+        return text, grounded, screened
+
+    texts = [text]
+    all_grounded = grounded
+    all_screened = list(screened)
+
+    for _ in range(_MAX_CHAIN_STEPS - 1):
+        continuation = (
+            "Original request: " + user_content + "\n"
+            "Already executed: " + " ".join(texts)
+        )
+        budget = max(2000, ai_manager.settings.max_tokens - 500)
+        prompt = build_chat_prompt(
+            symbol_blocks, unavailable, market_baseline, transcript,
+            continuation, alert_context, token_budget=budget,
+        )
+        next_parsed, failure_reason = _complete_and_parse(
+            prompt, CHAT_CONTINUATION_SYSTEM_PROMPT, 300,
+            ai_manager.settings.chat_model or None,
+        )
+        if next_parsed is None:
+            logger.info("chat multi-step continuation failed: %s", failure_reason)
+            break
+
+        if next_parsed.wants_reanalysis or next_parsed.action == "none":
+            break
+
+        step_text, step_grounded, step_screened = _finalize_parsed(
+            db, next_parsed, symbol_blocks, user_content, transcript,
+        )
+        texts.append(step_text)
+        all_grounded = all_grounded and step_grounded
+        all_screened.extend(step_screened)
+        if not _action_was_executed(next_parsed):
+            break  # a pending confirmation — stop the chain here
+
+    return " ".join(texts), all_grounded, list(dict.fromkeys(all_screened))
 
 
 def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
     """Streaming variant of :func:`_generate_reply`.
 
     Yields ``("delta", text)`` for each incremental piece of the reply,
-    then exactly one ``("result", (final_text, grounded))``. Never raises
-    — every failure mode ends in a ``("result", ...)``.
+    then exactly one ``("result", (final_text, grounded, screened))``.
+    Never raises — every failure mode ends in a ``("result", ...)``.
 
     The streamed deltas are the model's ``reply`` field decoded live from
     the partial JSON. The trailing ``result`` is authoritative: on the
@@ -700,7 +949,7 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         and set(turn.unavailable) == {s.upper() for s in turn.base}
     ):
         yield ("result", (
-            f"I don't have enough data on {turn.unavailable[0]} yet to answer that.", False,
+            f"I don't have enough data on {turn.unavailable[0]} yet to answer that.", False, [],
         ))
         return
 
@@ -709,15 +958,15 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         if m:
             reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
             if reply:
-                yield ("result", (reply, True))
+                yield ("result", (reply, True, []))
                 return
         if _WATCHLIST_LIST_INTENT.search(turn.user_content):
-            yield ("result", (_watchlist_list_reply(db), True))
+            yield ("result", (_watchlist_list_reply(db), True, []))
             return
 
     if not ai_manager.enabled:
         yield ("result", (
-            "AI is currently unavailable, so I can't answer that right now.", False,
+            "AI is currently unavailable, so I can't answer that right now.", False, [],
         ))
         return
 
@@ -728,47 +977,81 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         capped_note=_capped_note(turn.capped, turn.symbol_blocks), token_budget=budget,
     )
 
-    raw = ""
-    extractor = ReplyExtractor()
-    try:
-        if ai_manager.settings.chat_streaming:
-            for chunk in stream_sync(
-                ai_manager.stream(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
-            ):
-                raw += chunk
+    chat_model = ai_manager.settings.chat_model or None
+    parsed = None
+    failure_message = "I couldn't process that — could you rephrase?"
+    # Same retry rationale as _complete_and_parse — a malformed/empty
+    # reply gets one more full attempt before giving up. A retry's
+    # deltas stream to the client same as the first attempt's; the
+    # trailing ("result", ...) below is always authoritative and
+    # overwrites whatever partial text was shown, same as the existing
+    # reanalysis-tool path already does.
+    for attempt in range(_CHAT_PARSE_RETRIES + 1):
+        raw = ""
+        extractor = ReplyExtractor()
+        try:
+            if ai_manager.settings.chat_streaming:
+                for chunk in stream_sync(
+                    ai_manager.stream(
+                        prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500, model=chat_model,
+                    )
+                ):
+                    raw += chunk
+                    delta = extractor.feed(raw)
+                    if delta:
+                        yield ("delta", delta)
+            else:
+                resp = run_sync(
+                    ai_manager.complete(
+                        prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500, model=chat_model,
+                    )
+                )
+                raw = resp.text or ""
                 delta = extractor.feed(raw)
                 if delta:
                     yield ("delta", delta)
-        else:
-            resp = run_sync(
-                ai_manager.complete(prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500)
-            )
-            raw = resp.text or ""
-            delta = extractor.feed(raw)
-            if delta:
-                yield ("delta", delta)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Chat streaming AI call raised: %s", e)
-        yield ("result", (
-            "Something went wrong reaching the AI provider — please try again.", False,
-        ))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Chat streaming AI call raised (attempt %d): %s", attempt + 1, e)
+            failure_message = "Something went wrong reaching the AI provider — please try again."
+            continue
+
+        if not raw.strip():
+            failure_message = "AI is currently unavailable, so I can't answer that right now."
+            continue
+
+        try:
+            parsed = parse_chat_reply(raw)
+            break
+        except Exception as e:  # noqa: BLE001
+            logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
+            failure_message = extractor.text.strip() or failure_message
+
+    if parsed is None:
+        yield ("result", (failure_message, False, []))
         return
 
-    if not raw.strip():
-        yield ("result", (
-            "AI is currently unavailable, so I can't answer that right now.", False,
-        ))
-        return
+    yield ("result", _run_turn_actions(
+        db, parsed, turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
+        turn.user_content, turn.alert_context,
+    ))
 
-    try:
-        parsed = parse_chat_reply(raw)
-    except Exception as e:  # noqa: BLE001
-        logger.info("Chat reply failed to parse: %s", e)
-        streamed = extractor.text.strip()
-        yield ("result", (streamed or "I couldn't process that — could you rephrase?", False))
-        return
 
-    yield ("result", _finalize_parsed(db, parsed, turn.symbol_blocks, turn.user_content, turn.transcript))
+def _format_trade_plan(plan) -> str:
+    """One sentence rendering of a TradePlan — entry/stop/targets/R:R —
+    for a chat reply. ``plan`` is a ``backend.ai.prompt.TradePlan``.
+    """
+    parts = [f"{plan.recommendation.upper()} ({plan.conviction} conviction, {plan.time_horizon})"]
+    if plan.entry_zone_low is not None and plan.entry_zone_high is not None:
+        parts.append(f"entry {plan.entry_zone_low:g}-{plan.entry_zone_high:g}")
+    elif plan.entry_zone_low is not None:
+        parts.append(f"entry {plan.entry_zone_low:g}")
+    if plan.stop_loss is not None:
+        parts.append(f"stop {plan.stop_loss:g}")
+    if plan.targets:
+        parts.append(f"targets {', '.join(f'{t:g}' for t in plan.targets)}")
+    if plan.risk_reward is not None:
+        parts.append(f"R:R {plan.risk_reward:.1f}")
+    return "Trade plan: " + ", ".join(parts) + f". {plan.thesis}"
 
 
 def _run_reanalysis(symbol: str) -> tuple[str, bool]:
@@ -793,11 +1076,17 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
     if isinstance(result, UncertaintyResponse):
         return f"I tried to re-run the analysis for {symbol}, but {result.summary}", False
 
-    return (
+    text = (
         f"I re-ran the analysis for {symbol}: trend is now {result.trend} "
-        f"({result.confidence:.0%} confidence). {result.summary}",
-        True,
+        f"({result.confidence:.0%} confidence). {result.summary}"
     )
+    # analyze_symbol() runs with advisory=True by default, so a fresh
+    # reanalysis normally carries a trade_plan (entry/stop/targets) —
+    # the most actionable part of "the full read" the trader asked for.
+    # Surface it instead of silently dropping it.
+    if result.trade_plan is not None:
+        text += " " + _format_trade_plan(result.trade_plan)
+    return text, True
 
 
 # --- Action tools (2026-09-11): alert / watchlist CRUD from chat -------
@@ -813,6 +1102,20 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
 # do not own or close it.
 
 _DESTRUCTIVE_ACTIONS = {"delete_alert", "remove_from_watchlist", "delete_watchlist"}
+
+# Actions that change something build_market_baseline() reports on
+# (active_alerts / watchlists) — _run_action drops the baseline's cache
+# after one of these so the very next turn (which may be seconds later,
+# well inside the cache's own TTL) doesn't see a pre-mutation snapshot.
+# run_backtest / set_entity_type / run_screen are pure reads (or a
+# per-symbol label the baseline doesn't carry), so they're left out —
+# no point paying for a rebuild the baseline's own content wouldn't
+# reflect anyway.
+_BASELINE_MUTATING_ACTIONS = {
+    "create_alert", "modify_alert", "delete_alert",
+    "add_to_watchlist", "remove_from_watchlist",
+    "create_watchlist", "delete_watchlist",
+}
 
 
 def _confirm_prompt(db, parsed) -> str:
@@ -928,6 +1231,37 @@ def _create_alert(db, parsed) -> tuple[str, bool]:
         f"({condition_type.replace('_', ' ')} {parameter}).",
         True,
     )
+
+
+def _modify_alert(db, parsed) -> tuple[str, bool]:
+    """Change an EXISTING alert's condition/threshold/name in place,
+    instead of the delete-then-recreate the trader would otherwise need
+    (which loses the alert's id and its trigger history). Not
+    destructive — nothing is removed — so it fires on the first clear
+    request like create_alert, no confirmation needed. Only the fields
+    the trader actually asked to change should be set; the rest stay
+    at their current value (AlertRepository.update only touches a
+    field when it's not None).
+    """
+    from backend.repositories.alert_repository import AlertRepository
+
+    if parsed.action_target_id is None:
+        return "I don't have that alert's id — tell me which alert to change.", False
+    repo = AlertRepository(db)
+    if repo.get_by_id(parsed.action_target_id) is None:
+        return "That alert doesn't exist anymore.", False
+    if not (parsed.action_condition_type or parsed.action_parameter or parsed.action_label):
+        return "What should I change about that alert?", False
+    alert = repo.update(
+        parsed.action_target_id,
+        name=parsed.action_label,
+        condition_type=parsed.action_condition_type,
+        parameter=parsed.action_parameter,
+    )
+    if alert is None:  # deleted between the get_by_id check above and here
+        return "That alert doesn't exist anymore.", False
+    cond = (alert.condition_type or "").replace("_", " ")
+    return f'Done — "{alert.name}" is now {alert.symbol} {cond} {alert.parameter}.', True
 
 
 def _delete_alert(db, parsed) -> tuple[str, bool]:
@@ -1101,8 +1435,69 @@ def _set_entity_type(db, parsed) -> tuple[str, bool]:
     return f"Done — {symbol} is now marked as {label} in {wl.name}.", True
 
 
+def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
+    """Screen the trader's watchlist against free-text criteria, via the
+    same engine behind ``POST /api/nl-search`` (backend.nl_search) — a
+    fully-built AI-parsed screener that was previously only reachable
+    from its own dedicated search bar, not from chat. Read-only (no
+    confirm gate), same as run_backtest.
+
+    Unlike every other action handler, this one returns a 3-tuple
+    (``..., screened_symbols``) — the matched tickers, so
+    ``_run_action``/``_finalize_parsed`` can surface them in the turn's
+    ``focus`` list. They're genuine new information the trader's own
+    message never named (the whole point of screening), so without this
+    the frontend's per-ticker quick-action buttons (add to watchlist /
+    create alert) would never appear for them.
+    """
+    from backend.nl_search.executor import execute_query
+    from backend.nl_search.parser import parse_query
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    query = (parsed.action_query or "").strip()
+    if not query:
+        return "What should I screen your watchlist for?", False, []
+
+    watchlist_id = None
+    if parsed.action_watchlist:
+        wl = WatchlistRepository(db).get_watchlist_by_name(parsed.action_watchlist)
+        if wl is None:
+            return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".', False, []
+        watchlist_id = wl.id
+
+    try:
+        filters, extras, _parser_used = parse_query(
+            query, base={"scope": "watchlist", "watchlist_id": watchlist_id},
+        )
+        result = execute_query(filters, extras=extras, watchlist_id=watchlist_id, db=db)
+    except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
+        logger.warning("chat run_screen failed for %r: %s", query, e)
+        return "Something went wrong running that screen — please try again.", False, []
+
+    if result.universe_size == 0:
+        return "Your watchlist is empty, so there's nothing to screen.", False, []
+    if not result.top_n:
+        return (
+            f"No matches for {result.filter_description} across your "
+            f"{result.universe_size} watched symbols.",
+            True, [],
+        )
+
+    shown = result.top_n[:5]
+    items = ", ".join(f"{r.symbol} ({r.total_score:+.0f})" for r in shown)
+    more = f", +{len(result.top_n) - 5} more" if len(result.top_n) > 5 else ""
+    plural = "es" if result.matched_count != 1 else ""
+    return (
+        f"{result.matched_count} match{plural} for {result.filter_description}: "
+        f"{items}{more}.",
+        True,
+        [r.symbol for r in shown],
+    )
+
+
 _ACTION_HANDLERS = {
     "create_alert": _create_alert,
+    "modify_alert": _modify_alert,
     "delete_alert": _delete_alert,
     "add_to_watchlist": _add_to_watchlist,
     "remove_from_watchlist": _remove_from_watchlist,
@@ -1110,17 +1505,31 @@ _ACTION_HANDLERS = {
     "delete_watchlist": _delete_watchlist,
     "run_backtest": _run_backtest,
     "set_entity_type": _set_entity_type,
+    "run_screen": _run_screen,
 }
 
 
-def _run_action(db, parsed) -> tuple[str, bool]:
+def _run_action(db, parsed) -> tuple[str, bool, list[str]]:
     """Execute one action tool. Never raises — a failure degrades to a
-    plain reply with grounded=False, same contract as _run_reanalysis."""
+    plain reply with grounded=False, same contract as _run_reanalysis.
+
+    Most handlers return ``(text, grounded)``; run_screen returns a
+    3-tuple with the tickers it surfaced (see its docstring) — normalized
+    to ``(text, grounded, screened)`` here either way.
+    """
     handler = _ACTION_HANDLERS.get(parsed.action)
     if handler is None:  # pragma: no cover — action is a closed Literal
-        return "I couldn't do that — please try again.", False
+        return "I couldn't do that — please try again.", False, []
     try:
-        return handler(db, parsed)
+        result = handler(db, parsed)
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
-        return "Something went wrong doing that — please try again.", False
+        return "Something went wrong doing that — please try again.", False, []
+    if parsed.action in _BASELINE_MUTATING_ACTIONS:
+        from backend.ai.market_baseline import invalidate_cache
+
+        invalidate_cache()
+    if len(result) == 3:
+        return result
+    text, grounded = result
+    return text, grounded, []

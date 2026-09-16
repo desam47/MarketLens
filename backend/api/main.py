@@ -132,6 +132,9 @@ async def lifespan(app: FastAPI):
 
     alerts_engine.startup()
     digest_service.start()
+    if settings.ai_nudges.enabled:
+        from backend.ai.nudges import nudge_service
+        nudge_service.start()
     # start_memory_profiling() removed — tracemalloc is expensive and
     # grows with uptime.  Heap profiling is opt-in via the toggle
     # endpoint POST /api/system/memory_profile {"enabled": true}.

@@ -4600,6 +4600,46 @@ h4 {
   margin-top: 0.4rem;
 }
 
+.chat-num-pos {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.chat-num-neg {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.chat-ticker-ok {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.chat-ticker-partial {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.chat-ticker-none {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.chat-metric {
+  color: var(--info);
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .chat-ticker-ok,
+:root:not([data-theme="light"]) .chat-ticker-ok {
+  color: #4ade80;
+}
+
+:root[data-theme="dark"] .chat-ticker-partial,
+:root:not([data-theme="light"]) .chat-ticker-partial {
+  color: #fbbf24;
+}
+
 .chat-pill {
   font-size: 0.66rem;
   font-weight: 600;

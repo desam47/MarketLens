@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ChatPanel } from './ChatPanel';
 import api from '../services/api';
 
@@ -30,6 +30,10 @@ beforeEach(() => {
   mockApi.clearChatHistory.mockResolvedValue({ deleted_sessions: 1, deleted_messages: 2 });
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 describe('ChatPanel (universal)', () => {
   it('opens a universal session with no symbol on mount', async () => {
     render(<ChatPanel />);
@@ -56,6 +60,143 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText('AAPL ✓')).toBeInTheDocument();
     expect(screen.getByText('RIVN ◐ partial')).toBeInTheDocument();
     expect(screen.getByText('ZZZZ ✗ no data')).toBeInTheDocument();
+  });
+
+  it('colorizes signed numbers in an assistant reply', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 5, session_id: 1, role: 'assistant',
+        content: 'NVDA is +3.2% today after last week\'s -1.8% pullback.',
+        created_at: '', grounded: true, focus: ['NVDA'], partial: [], unavailable: [],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    const positive = await screen.findByText('+3.2%');
+    const negative = await screen.findByText('-1.8%');
+    expect(positive).toHaveClass('chat-num-pos');
+    expect(negative).toHaveClass('chat-num-neg');
+  });
+
+  it('does not colorize numbers in a user message', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 4, session_id: 1, role: 'user', content: 'what about -5%?',
+        created_at: '', grounded: null,
+      } as any,
+    ]);
+    const { container } = render(<ChatPanel />);
+    await screen.findByText('what about -5%?');
+    expect(container.querySelector('.chat-num-neg')).toBeNull();
+  });
+
+  it('colors ticker mentions by that reply\'s own grounding status', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 6, session_id: 1, role: 'assistant',
+        content: 'NVDA looks solid, PLTR is shakier, and ZZZZ has nothing to go on.',
+        created_at: '', grounded: false,
+        focus: ['NVDA'], partial: ['PLTR'], unavailable: ['ZZZZ'],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    expect((await screen.findAllByText('NVDA'))[0]).toHaveClass('chat-ticker-ok');
+    expect((await screen.findAllByText('PLTR'))[0]).toHaveClass('chat-ticker-partial');
+    expect(screen.getByText('ZZZZ')).toHaveClass('chat-ticker-none');
+  });
+
+  it('colors bullish/bearish words and neutral metric names', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 7, session_id: 1, role: 'assistant',
+        content: 'This looks like a bullish breakout, while RSI stays below overbought.',
+        created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    expect(await screen.findByText('bullish')).toHaveClass('chat-num-pos');
+    expect(screen.getByText('breakout')).toHaveClass('chat-num-pos');
+    expect(screen.getByText('overbought')).toHaveClass('chat-num-neg');
+    expect(screen.getByText('RSI')).toHaveClass('chat-metric');
+  });
+
+  it('colors a bare number by the nearest metric/sentiment word in its sentence', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 8, session_id: 1, role: 'assistant',
+        content:
+          'The RSI is oversold around 26.6 and the MACD is bearish, indicating some ' +
+          'downside pressure. Overall, the engine sees a sideways market with only ' +
+          'weak bearish signals for the ticker.',
+        created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    expect(await screen.findByText('RSI')).toHaveClass('chat-metric');
+    expect(screen.getByText('oversold')).toHaveClass('chat-num-pos');
+    // 26.6 has no sign of its own — it inherits "oversold" (the last
+    // metric/sentiment word before it in the same sentence), not "RSI".
+    expect(screen.getByText('26.6')).toHaveClass('chat-num-pos');
+  });
+
+  it('does not color an unsigned number with no metric/sentiment word before it', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 9, session_id: 1, role: 'assistant', content: 'You hold 20 shares of NVDA.',
+        created_at: '', grounded: true, focus: ['NVDA'], partial: [], unavailable: [],
+      } as any,
+    ]);
+    const { container } = render(<ChatPanel />);
+    await screen.findAllByText('NVDA');
+    const coloredNumbers = Array.from(
+      container.querySelectorAll('.chat-num-pos, .chat-num-neg, .chat-metric'),
+    ).map(el => el.textContent);
+    expect(coloredNumbers).not.toContain('20');
+  });
+
+  it('polls for and merges a proactive nudge dropped into the session', async () => {
+    jest.useFakeTimers();
+    mockApi.getChatMessages
+      .mockResolvedValueOnce([]) // initial history load on mount
+      .mockResolvedValueOnce([
+        {
+          id: 9, session_id: 1, role: 'assistant',
+          content: 'NVDA just crossed into strongly bullish scanner territory.',
+          created_at: '', grounded: true,
+        } as any,
+      ]);
+
+    const { container } = render(<ChatPanel />);
+    await waitFor(() => expect(mockApi.getChatMessages).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      jest.advanceTimersByTime(20000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // "bullish" is now its own highlighted span, so the nudge text spans
+    // multiple text nodes — check the bubble's full textContent instead
+    // of a single-node text match.
+    const bubble = container.querySelector('.chat-bubble.assistant');
+    expect(bubble?.textContent).toContain('NVDA just crossed into strongly bullish scanner territory.');
+  });
+
+  it('does not poll for a session opened from a specific alert trigger', async () => {
+    jest.useFakeTimers();
+    mockApi.getChatMessages.mockResolvedValueOnce([]);
+
+    render(<ChatPanel alertTriggerId={42} />);
+    await waitFor(() => expect(mockApi.createChatSession).toHaveBeenCalled());
+    mockApi.getChatMessages.mockClear();
+
+    await act(async () => {
+      jest.advanceTimersByTime(20000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockApi.getChatMessages).not.toHaveBeenCalled();
   });
 
   describe('quick actions', () => {
