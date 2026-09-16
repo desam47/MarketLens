@@ -196,15 +196,32 @@ def _stringify_list_item(item: Any) -> str:
     return str(item).strip()
 
 
+# Never surface a defensibly-certain confidence: an AI-stated 1.0 is
+# overconfidence (the engine's own score is never 1.0), and the UI has
+# no honest reason to show "100% sure" on a noisy market read. Cap at
+# 0.95 before calibration/damping so even a good track record can't
+# surface as 1.0. (2026-09-16 usefulness gap: previously confidence was
+# passed through unchanged, so a 1.0 reply reached the frontend.)
+_CONFIDENCE_MAX = 0.95
+
+
 class AnalysisResponse(BaseModel):
     """Strict schema for the AI's reply.
 
     The model is intentionally narrow: extra fields from the AI are
-    dropped, missing required fields cause a validation error, and
-    the ``trend`` value is restricted to a fixed vocabulary (after
+    dropped, missing required fields cause a validation error, and the
+    ``trend`` value is restricted to a fixed vocabulary (after
     ``_TREND_SYNONYMS`` normalization — see its comment). The
     quantitative engine's score is NOT part of this model — the
     spec is explicit that AI must never overwrite quant truth.
+
+    The ``market_regime`` / ``timeframe_scores`` / ``track_record`` /
+    ``correlation_context`` fields are NOT produced by the AI — they are
+    copied in from the build_context() result by analyze_symbol() so the
+    UI can render the regime badge, the MTF confidence row, the track
+    record strip, and the peer-alignment summary. They are deliberately
+    absent from ``ANALYSIS_JSON_SCHEMA`` (below), so the AI is not asked
+    to fabricate them and cannot overwrite quantitative truth.
     """
 
     summary: str = Field(..., min_length=10, max_length=2000)
@@ -230,6 +247,20 @@ class AnalysisResponse(BaseModel):
     # fallback-served analysis silently claimed to be from the primary.
     provider: str = "unknown"
     model: str = "unknown"
+    # Quantitative context, copied in by analyze_symbol() from
+    # build_context(). Always present (possibly empty dicts) so the UI
+    # can render regime / multi-timeframe / track-record / peer
+    # alignment panels without special-casing uncertainty. Not AI output.
+    market_regime: dict[str, Any] = Field(default_factory=dict)
+    timeframe_scores: dict[str, Any] = Field(default_factory=dict)
+    track_record: dict[str, Any] = Field(default_factory=dict)
+    correlation_context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("confidence")
+    @classmethod
+    def _cap_confidence(cls, v: float) -> float:
+        # Defensive against an overconfident model reply (see _CONFIDENCE_MAX).
+        return min(float(v), _CONFIDENCE_MAX)
 
     @field_validator("trend", mode="before")
     @classmethod

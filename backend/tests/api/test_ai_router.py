@@ -81,6 +81,58 @@ class TestAnalyzeEndpoint(unittest.TestCase):
 
     @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")
+    def test_confidence_capped_at_95(self, mock_ai_mgr, mock_analyze):
+        from backend.ai.prompt import AnalysisResponse
+        mock_analyze.return_value = AnalysisResponse(
+            summary="AAPL looks extremely bullish with high conviction here.",
+            trend="bullish",
+            confidence=1.0,  # overconfident AI reply → must be capped, not 1.0
+            provider="ollama",
+            model="llama3.2",
+            market_regime={"regime": "risk_on"},
+        )
+        mock_ai_mgr.settings.provider = "ollama"
+        mock_ai_mgr.settings.model = "llama3.2"
+
+        resp = client.post("/api/ai/analyze?symbol=AAPL")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["confidence"], 0.95)
+
+    @patch("backend.api.ai.router.analyze_symbol")
+    @patch("backend.api.ai.router.ai_manager")
+    def test_context_fields_surfaced(self, mock_ai_mgr, mock_analyze):
+        from backend.ai.prompt import AnalysisResponse
+        mock_analyze.return_value = AnalysisResponse(
+            summary="AAPL looks bullish.",
+            trend="bullish",
+            confidence=0.8,
+            supporting_factors=["Above SMA 50"],
+            risk_factors=["RSI overbought"],
+            key_levels=["$200"],
+            provider="ollama",
+            model="llama3.2",
+            market_regime={"regime": "risk_on"},
+            timeframe_scores={"1d": {"direction": "bullish", "strength": "strong"}},
+            track_record={"sample_size": 12, "win_rate": 0.75},
+            correlation_context={"peer_count": 2, "aligned": 1},
+        )
+        mock_ai_mgr.settings.provider = "ollama"
+        mock_ai_mgr.settings.model = "llama3.2"
+
+        resp = client.post("/api/ai/analyze?symbol=AAPL")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["market_regime"], {"regime": "risk_on"})
+        self.assertEqual(
+            data["timeframe_scores"],
+            {"1d": {"direction": "bullish", "strength": "strong"}},
+        )
+        self.assertEqual(data["track_record"]["sample_size"], 12)
+        self.assertEqual(data["correlation_context"]["peer_count"], 2)
+
+    @patch("backend.api.ai.router.analyze_symbol")
+    @patch("backend.api.ai.router.ai_manager")
     def test_returns_uncertainty_with_flag(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import UncertaintyResponse
         mock_analyze.return_value = UncertaintyResponse(
@@ -97,6 +149,10 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["trend"], "uncertain")
         self.assertEqual(data["confidence"], 0.0)
         self.assertTrue(data["is_uncertain"])
+        # No quantitative context reaches the UI when we fell back to
+        # uncertainty (no build_context() ran).
+        self.assertEqual(data["market_regime"], {})
+        self.assertEqual(data["correlation_context"], {})
 
     @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")

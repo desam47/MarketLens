@@ -23,6 +23,7 @@ Query parameters:
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -119,6 +120,14 @@ class AnalyzeResponse(BaseModel):
     is_uncertain: bool = False
     template_id: int | None = None
     template_name: str | None = None
+    # Quantitative context surfaced alongside the AI read (see
+    # AnalysisResponse.market_regime etc.) — regime badge, MTF
+    # confidence row, track-record strip, peer alignment. Empty dicts
+    # when the system fell back to uncertainty (no context available).
+    market_regime: dict[str, Any] = Field(default_factory=dict)
+    timeframe_scores: dict[str, Any] = Field(default_factory=dict)
+    track_record: dict[str, Any] = Field(default_factory=dict)
+    correlation_context: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- Endpoints -----------------------------------------------------
@@ -247,6 +256,10 @@ async def analyze(
         is_uncertain=isinstance(result, UncertaintyResponse),
         template_id=resolved_template_id,
         template_name=tmpl_obj.name if tmpl_obj else None,
+        market_regime=getattr(result, "market_regime", {}) or {},
+        timeframe_scores=getattr(result, "timeframe_scores", {}) or {},
+        track_record=getattr(result, "track_record", {}) or {},
+        correlation_context=getattr(result, "correlation_context", {}) or {},
     )
 
 

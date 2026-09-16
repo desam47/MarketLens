@@ -326,6 +326,17 @@ async def analyze_symbol(
             parsed.confidence, ctx.track_record,
         )
 
+    # Surface the quantitative context that drove this read (regime, MTF
+    # scores, the symbol's track record, and peer alignment) on the
+    # response itself — they were injected into the prompt but never
+    # returned, so the UI couldn't render a regime badge, the MTF
+    # confidence row, a track-record strip, or peer-alignment summary.
+    # Not AI output: copied verbatim from build_context().
+    parsed.market_regime = ctx.market_regime or {}
+    parsed.timeframe_scores = ctx.timeframe_scores or {}
+    parsed.track_record = ctx.track_record or {}
+    parsed.correlation_context = ctx.correlation_context or {}
+
     # Record which provider/model actually answered — found live
     # 2026-09-10: every caller previously reported the configured
     # PRIMARY (ai_manager.settings.provider/model) here instead,
