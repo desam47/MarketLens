@@ -96,8 +96,32 @@ def _adaptive_temperature(ctx: AnalysisContext) -> float:
 _ANALYSIS_TTL = 45.0
 _ANALYSIS_CACHE_MAX_ENTRIES = 128
 
-_analysis_cache: OrderedDict[tuple[str, str, bool], tuple[float, AnalysisResponse | UncertaintyResponse]] = OrderedDict()
+_analysis_cache: OrderedDict[tuple, tuple[float, AnalysisResponse | UncertaintyResponse]] = OrderedDict()
 _cache_lock = threading.Lock()
+
+
+def _cache_key(
+    symbol: str,
+    timeframe: str,
+    advisory: bool,
+    portfolio_symbols: list[str] | None,
+    model: str | None,
+    max_tokens: int | None,
+    temperature: float | None,
+) -> tuple:
+    """Stable, hashable cache key for an analysis call.
+
+    Includes every input that changes the *result*, not just the symbol:
+    ``portfolio_symbols`` (peer context), ``model`` (O12 routing), and the
+    ``max_tokens``/``temperature`` overrides. A previous version keyed only
+    on (symbol, timeframe, advisory), so re-running an analysis with peer
+    tickers returned a stale no-peer result. ``system_prompt_override`` is
+    handled separately (it always bypasses the cache entirely).
+    """
+    peers = tuple(portfolio_symbols) if portfolio_symbols else ()
+    mt = max_tokens or 0
+    t = temperature if temperature is not None else -1.0
+    return (symbol.upper(), timeframe, advisory, peers, model or "", mt, t)
 
 
 def _clear_analysis_cache() -> None:
@@ -107,7 +131,7 @@ def _clear_analysis_cache() -> None:
 
 
 def _cache_result(
-    key: tuple[str, str, bool] | None,
+    key: tuple | None,
     result: AnalysisResponse | UncertaintyResponse,
 ) -> None:
     """Store a result in the short-term cache with TTL + size-bounded eviction."""
@@ -177,9 +201,16 @@ async def analyze_symbol(
     # --- Step 1: check short-term cache (O4) ---
     # Skip cache when a custom system prompt is provided — the caller
     # explicitly wants a fresh, template-driven analysis, not a cached
-    # result from a different prompt.
+    # result from a different prompt. The cache key deliberately includes
+    # every input that changes the result (symbol, timeframe, advisory,
+    # and the caller-variance trio: portfolio_symbols, model, and the
+    # max_tokens/temperature overrides) so peer/model-specific analyses
+    # aren't served a stale no-peer result.
     if system_prompt_override is None:
-        cache_key = (symbol.upper(), timeframe, advisory)
+        cache_key = _cache_key(
+            symbol, timeframe, advisory,
+            portfolio_symbols, model, max_tokens, temperature,
+        )
         now = time.monotonic()
         with _cache_lock:
             hit = _analysis_cache.get(cache_key)

@@ -660,10 +660,11 @@ class TestAnalysisCache(unittest.TestCase):
         asyncio.run(analyze_symbol("AAPL", "1d"))
 
         # Simulate cache expiry by backdating the entry
-        from backend.ai.analyze import _analysis_cache, _cache_lock
+        from backend.ai.analyze import _analysis_cache, _cache_key, _cache_lock
+        key = _cache_key("AAPL", "1d", True, None, None, None, None)
         with _cache_lock:
-            old_ts, old_resp = _analysis_cache[("AAPL", "1d", True)]
-            _analysis_cache[("AAPL", "1d", True)] = (
+            old_ts, old_resp = _analysis_cache[key]
+            _analysis_cache[key] = (
                 old_ts - 999, old_resp,
             )
 

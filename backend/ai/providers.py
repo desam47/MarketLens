@@ -233,7 +233,7 @@ class OpenAICompatibleProvider(AIProvider):
             provider=self.name,
             model=data.get("model", self._model),
             raw=data,
-            structured=response_format is not None,
+            structured=bool(response_format is not None and self.supports_structured_output),
         )
 
     async def stream(
@@ -496,7 +496,7 @@ class AnthropicProvider(AIProvider):
             provider=self.name,
             model=data.get("model", self._model),
             raw=data,
-            structured=response_format is not None,
+            structured=bool(response_format is not None and self.supports_structured_output),
         )
 
     async def stream(
@@ -597,6 +597,7 @@ _DEFAULT_MODELS: dict[str, str] = {
     "lm_studio": "local-model",
     "openai": "gpt-4o-mini",
     "openrouter": "openai/gpt-4o-mini",
+    "openai_compatible": "gpt-3.5-turbo",
     "anthropic": "claude-3-5-sonnet-latest",
 }
 
