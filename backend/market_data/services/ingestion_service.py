@@ -386,11 +386,12 @@ class MarketDataIngestionService:
         _symbol: str | None = None,
         full_history: bool = False,
     ) -> int:
-        """Read 1m bars → resample → upsert confirmed-closed buckets.
+        """Read 1m bars → resample → upsert, including the in-progress bucket.
 
         Phase 3.7: writes resampled bars to the DB so reads return direct
-        rows instead of recomputing on every request. Only confirmed-closed
-        buckets (end-time < now) are written.
+        rows instead of recomputing on every request. Closed buckets
+        (end-time < now) are written HISTORICAL; the still-forming bucket
+        is written INCOMPLETE and refreshed on every pass, matching 1d/1h.
 
         By default, fetches only bars within a narrow recent window (see
         ``full_history`` below) to avoid loading ALL historical 1m bars into
@@ -475,13 +476,19 @@ class MarketDataIngestionService:
                     continue
 
                 # DB timestamps are naive NY. Get current NY time as naive for comparison.
+                # Write every bucket, not just closed ones — mirrors 1d/1h's
+                # live-bucket convention (_resample_1d_live_and_upsert /
+                # _resample_1h_from_1m_and_upsert): the still-forming bucket
+                # is written INCOMPLETE and re-upserted (same key) on every
+                # ~2-min pass until it closes, instead of being invisible
+                # until then.
                 now = datetime.now(_NY_TZ).replace(tzinfo=None)
                 to_write = []
                 for bar in resampled:
                     end = bar.timestamp + timedelta(minutes=target_mins)
-                    if end < now:
-                        bar.provider = f"aggregated_from_{source_tf}"
-                        to_write.append(bar)
+                    bar.provider = f"aggregated_from_{source_tf}"
+                    bar.data_status = DataStatus.HISTORICAL if end < now else DataStatus.INCOMPLETE
+                    to_write.append(bar)
                 if to_write:
                     written += upsert_bars(db, to_write)
                 # Small delay between symbols to avoid bursts
@@ -549,12 +556,12 @@ class MarketDataIngestionService:
                     buckets[bucket_start_ny].append(bar)
 
                 # DB timestamps are naive NY. Get current NY time as naive for comparison.
+                # Live in-progress bucket, same convention as 1d/1h/sub-hour:
+                # written INCOMPLETE and refreshed each pass until it closes.
                 now = datetime.now(_NY_TZ).replace(tzinfo=None)
                 to_write = []
                 for bucket_ts, member_bars in sorted(buckets.items()):
                     end = bucket_ts + timedelta(hours=4)
-                    if end >= now:
-                        continue  # bucket not yet closed
                     # Only write if the bucket has at least 2 bars (prevents
                     # fake bars from a single sparse/gappy 1h bar being
                     # incorrectly floored into a lone "4h bar") — EXCEPT the
@@ -579,7 +586,7 @@ class MarketDataIngestionService:
                         volume=sum(b.volume for b in member_bars),
                         timestamp=bucket_ts,
                         provider="aggregated_from_1h",
-                        data_status=DataStatus.HISTORICAL,
+                        data_status=DataStatus.HISTORICAL if end < now else DataStatus.INCOMPLETE,
                     )
                     to_write.append(bar)
 
@@ -667,8 +674,9 @@ class MarketDataIngestionService:
                     )
                     saturday_et = monday_et + timedelta(days=5)
 
-                    if now_et < saturday_et:
-                        continue  # week not yet closed (Sat 00:00 ET hasn't passed)
+                    # Live in-progress week, same convention as 1d/1h/4h/
+                    # sub-hour: written INCOMPLETE and refreshed each pass
+                    # until Sat 00:00 ET closes it out.
                     bar = Bar(
                         symbol=symbol.upper(),
                         timeframe="1wk",
@@ -679,7 +687,7 @@ class MarketDataIngestionService:
                         volume=sum(b.volume for b in member_bars),
                         timestamp=bucket_ts,
                         provider="aggregated_from_1d",
-                        data_status=DataStatus.HISTORICAL,
+                        data_status=DataStatus.HISTORICAL if now_et >= saturday_et else DataStatus.INCOMPLETE,
                     )
                     to_write.append(bar)
 
@@ -700,11 +708,15 @@ class MarketDataIngestionService:
         return written
 
     async def _resample_write_loop(self, initial_delay: float = 0.0):
-        """Every 2 min: resample 1m -> 2m/3m/5m/15m/30m, plus today's live
-        1d bar and today's 1h bars (rebuilt from 1m each pass — cheap,
-        bounded to today, and continuously corrects any already-closed
-        hour whose provider-sourced bar has a misaligned boundary; see
-        _resample_1h_from_1m_and_upsert)."""
+        """Every 2 min: resample 1m -> 2m/3m/5m/15m/30m, today's live 1d
+        bar, today's 1h bars (rebuilt from 1m each pass — cheap, bounded
+        to today, and continuously corrects any already-closed hour whose
+        provider-sourced bar has a misaligned boundary; see
+        _resample_1h_from_1m_and_upsert), plus 4h and 1wk — every
+        timeframe now shows its still-forming bucket live (INCOMPLETE),
+        not just the last fully-closed one, matching 1d's original
+        convention. 4h/1wk read the 1h/1d bars this same pass just
+        refreshed, so they run right after."""
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
         while self.is_running:
@@ -712,11 +724,13 @@ class MarketDataIngestionService:
                 for tf in self._SUBHOUR_TFS:
                     await self._resample_and_upsert(tf, source_tf="1m")
                 await self._resample_1d_live_and_upsert()
+                await self._resample_1d_to_1wk_and_upsert()
                 now_naive = datetime.now(_NY_TZ).replace(tzinfo=None)
                 today_start = now_naive.replace(hour=4, minute=0, second=0, microsecond=0)
                 if now_naive >= today_start:
                     hours = self._hour_starts_between(today_start, now_naive)
                     await self._resample_1h_from_1m_and_upsert(hour_starts=hours)
+                await self._resample_1h_to_4h_and_upsert()
             except Exception as e:
                 logger.error(f"Error in resample write loop: {e}")
             await self._jittered_sleep(120, jitter=10.0)
@@ -1353,6 +1367,12 @@ class MarketDataIngestionService:
     async def _4h_write_loop(self, initial_delay: float = 0.0):
         """At :02 ET every 4h (00:02, 04:02, 08:02, 12:02, 16:02, 20:02):
         resample 1h → 4h for the just-closed 4h bucket.
+
+        _resample_write_loop now also calls _resample_1h_to_4h_and_upsert
+        every ~2 min for the live in-progress bucket, which naturally
+        settles a closed bucket to HISTORICAL on its own too — this loop
+        is a redundant backstop at this point (harmless, same idempotent
+        upsert key), kept as a second guarantee rather than removed.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
@@ -1502,25 +1522,64 @@ class MarketDataIngestionService:
                 if not bars:
                     continue
 
-                # Write ALL fetched bars. upsert_bars is keyed on
-                # (symbol, timeframe, timestamp) with ON CONFLICT DO UPDATE,
-                # so this is safe — existing bars are not overwritten,
-                # only missing ones are inserted.
+                # Only write bars strictly newer than the DB's latest row —
+                # this function fetches a full day (~900-1200 bars) every
+                # cycle just to find the handful that are actually missing.
+                # Writing the whole fetched batch unconditionally (as this
+                # previously did, contradicting this function's own
+                # docstring) meant ~21 symbols x ~1000 row upserts every 2
+                # min, even when nothing was actually missing — found live
+                # 2026-09-16 via a steadily growing gap between "Ingested"
+                # log lines (100s -> 227s) traced to this loop's redundant
+                # write volume slowing down the whole DB, which in turn
+                # made every other ingestion loop (and the regime engine's
+                # "last tick" freshness) fall further behind each cycle.
+                new_bars = [b for b in bars if b.timestamp > latest_ts]
+                if not new_bars:
+                    continue
+
                 db = SessionLocal()
                 try:
-                    written = await _write_bars_in_chunks(db, bars)
+                    written = await _write_bars_in_chunks(db, new_bars)
                     db.commit()
                     if written:
                         logger.info(
                             f"gap-fill 1m: {symbol} wrote {written} bars "
-                            f"(total fetched={len(bars)}, "
-                            f"range=[{bars[0].timestamp}..{bars[-1].timestamp}])"
+                            f"(total fetched={len(bars)}, new={len(new_bars)}, "
+                            f"range=[{new_bars[0].timestamp}..{new_bars[-1].timestamp}])"
                         )
                         from backend.market_data.services.cache import _redis_cache
                         _redis_cache.invalidate_bars_for_symbol(symbol)
                     written_total += written
                 finally:
                     db.close()
+
+                # Notify live engines (regime/trend/multitimeframe) same as
+                # _ingest_1m_recent_window does. Without this, a bar that
+                # only ever arrives via gap-fill (the main ingest loop
+                # missed that minute for this symbol) updates the DB but
+                # every live analysis engine never finds out — it just
+                # sits frozen on whatever the last successfully-dispatched
+                # bar was. Found live 2026-09-16: AAPL/SPY's regime
+                # freshness stuck at "recent Xm ago" (once even jumping
+                # backward to a 2h-old signal) while their 1m bars in the
+                # DB were fully current — traced to exactly this gap:
+                # gap-fill silently patched the missing minutes but never
+                # dispatched them.
+                for bar in new_bars:
+                    try:
+                        engine_registry.dispatch_bar(
+                            symbol=symbol,
+                            timeframe="1m",
+                            price=float(bar.close or 0.0),
+                            volume=int(bar.volume or 0),
+                            timestamp=bar.timestamp,
+                            high=getattr(bar, "high", None),
+                            low=getattr(bar, "low", None),
+                            open_price=getattr(bar, "open", None),
+                        )
+                    except Exception as e:
+                        logger.debug(f"gap-fill dispatch_bar failed for {symbol}: {e}")
             except Exception as e:
                 logger.warning(f"gap-fill 1m: failed for {symbol}: {e}")
 

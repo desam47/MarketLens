@@ -674,6 +674,397 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         ])
 
 
+class TestSubHourResampleLive(unittest.IsolatedAsyncioTestCase):
+    """_resample_and_upsert (2m/3m/5m/15m/30m) now writes the still-forming
+    bucket too, marked INCOMPLETE, instead of only closed buckets —
+    extending the same live-bucket convention already proven for 1d/1h
+    down to the sub-hour targets (2026-09-16)."""
+
+    SYMBOL = "ZZTESTLIVE5M"
+    _FROZEN_NY = datetime(2026, 9, 9, 14, 7)  # Wednesday, mid-session
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+
+        frozen = self._FROZEN_NY
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen.replace(tzinfo=tz)
+                return frozen
+
+        self._clock_patch = patch(
+            "backend.market_data.services.ingestion_service.datetime",
+            _FrozenDatetime,
+        )
+        self._clock_patch.start()
+
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self._clock_patch.stop()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    def _insert_1m_bar(self, db, ts, close):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1m",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session="regular",
+        ))
+
+    async def test_forming_bucket_incomplete_closed_bucket_historical(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        # Closed bucket: 14:00-14:05 (end 14:05 < frozen now 14:07).
+        self._insert_1m_bar(self.db, datetime(2026, 9, 9, 14, 0), close=100.0)
+        self._insert_1m_bar(self.db, datetime(2026, 9, 9, 14, 4), close=101.0)
+        # Still-forming bucket: 14:05-14:10 (end 14:10 > frozen now 14:07).
+        self._insert_1m_bar(self.db, datetime(2026, 9, 9, 14, 5), close=102.0)
+        self._insert_1m_bar(self.db, datetime(2026, 9, 9, 14, 6), close=103.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_and_upsert(
+            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+        )
+        self.assertGreaterEqual(written, 2)
+
+        closed = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+            BarModel.timestamp == datetime(2026, 9, 9, 14, 0),
+        ).first()
+        forming = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
+            BarModel.timestamp == datetime(2026, 9, 9, 14, 5),
+        ).first()
+        self.assertIsNotNone(closed)
+        self.assertIsNotNone(forming)
+        self.assertEqual(closed.data_status, "HISTORICAL")
+        self.assertEqual(forming.data_status, "INCOMPLETE")
+        self.assertEqual(forming.close, 103.0)
+
+
+class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
+    """_resample_1h_to_4h_and_upsert now writes the still-forming 4h
+    bucket too, marked INCOMPLETE (2026-09-16), same convention as
+    sub-hour/1d/1h."""
+
+    SYMBOL = "ZZTESTLIVE4H"
+    _FROZEN_NY = datetime(2026, 9, 9, 13, 15)  # Wednesday, mid-session
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+
+        frozen = self._FROZEN_NY
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen.replace(tzinfo=tz)
+                return frozen
+
+        self._clock_patch = patch(
+            "backend.market_data.services.ingestion_service.datetime",
+            _FrozenDatetime,
+        )
+        self._clock_patch.start()
+
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self._clock_patch.stop()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    def _insert_1h_bar(self, db, ts, close):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1h",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session="regular",
+        ))
+
+    async def test_forming_bucket_incomplete_closed_bucket_historical(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        # Closed bucket: 08:00-12:00 (end 12:00 < frozen now 13:15).
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 8, 0), close=100.0)
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 9, 0), close=101.0)
+        # Still-forming bucket: 12:00-16:00 (end 16:00 > frozen now 13:15).
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 12, 0), close=102.0)
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 13, 0), close=103.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_to_4h_and_upsert()
+        self.assertGreaterEqual(written, 2)
+
+        closed = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "4h",
+            BarModel.timestamp == datetime(2026, 9, 9, 8, 0),
+        ).first()
+        forming = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "4h",
+            BarModel.timestamp == datetime(2026, 9, 9, 12, 0),
+        ).first()
+        self.assertIsNotNone(closed)
+        self.assertIsNotNone(forming)
+        self.assertEqual(closed.data_status, "HISTORICAL")
+        self.assertEqual(forming.data_status, "INCOMPLETE")
+        self.assertEqual(forming.close, 103.0)
+
+
+class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):
+    """_resample_1d_to_1wk_and_upsert now writes the current in-progress
+    week too, marked INCOMPLETE (2026-09-16), instead of being invisible
+    until Saturday 00:00 ET closes it — same convention as 1d/1h/4h/
+    sub-hour."""
+
+    SYMBOL = "ZZTESTLIVE1WK"
+    _FROZEN_NY = datetime(2026, 9, 9, 14, 30)  # Wednesday, mid-session
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+
+        frozen = self._FROZEN_NY
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is not None:
+                    return frozen.replace(tzinfo=tz)
+                return frozen
+
+        self._clock_patch = patch(
+            "backend.market_data.services.ingestion_service.datetime",
+            _FrozenDatetime,
+        )
+        self._clock_patch.start()
+
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self._clock_patch.stop()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    def _insert_1d_bar(self, db, ts, close):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1d",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session="regular",
+        ))
+
+    async def test_current_week_incomplete_prior_week_historical(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        # Prior week (closed: Sat 2026-09-05 00:00 ET has passed by frozen now).
+        self._insert_1d_bar(self.db, datetime(2026, 8, 31, 0, 0), close=90.0)  # Monday
+        self._insert_1d_bar(self.db, datetime(2026, 9, 1, 0, 0), close=91.0)
+        # Current week (open: Sat 2026-09-12 00:00 ET hasn't passed yet).
+        self._insert_1d_bar(self.db, datetime(2026, 9, 7, 0, 0), close=100.0)  # Monday
+        self._insert_1d_bar(self.db, datetime(2026, 9, 8, 0, 0), close=102.0)
+        self._insert_1d_bar(self.db, datetime(2026, 9, 9, 0, 0), close=105.0)
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1d_to_1wk_and_upsert()
+        self.assertGreaterEqual(written, 2)
+
+        rows = sorted(
+            self.db.query(BarModel).filter(
+                BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1wk",
+            ).all(),
+            key=lambda r: r.timestamp,
+        )
+        self.assertEqual(len(rows), 2)
+        prior_week, current_week = rows
+        self.assertEqual(prior_week.data_status, "HISTORICAL")
+        self.assertEqual(current_week.data_status, "INCOMPLETE")
+        self.assertEqual(current_week.close, 105.0)
+
+
+class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
+    """_gapfill_1m_once must only write bars newer than the DB's latest 1m
+    row, not unconditionally re-write the whole fetched day. Regression
+    for a live bug (2026-09-16): it fetched a full day (~900-1200 bars)
+    per symbol every 2 min but wrote all of them regardless — its own
+    docstring claimed it wrote "only bars newer than the DB's latest
+    row," but nothing in the code enforced that. ~21 symbols x ~1000
+    redundant row upserts every 2 min slowed the whole DB down, which
+    showed up live as a steadily growing gap between ingestion cycles
+    (100s -> 227s) and simple bar reads logging as slow_query."""
+
+    SYMBOL = "ZZTESTGAPFILL1M"
+
+    def setUp(self):
+        from backend.database import SessionLocal
+        from backend.models.market_data_sql import BarModel
+        self.db = SessionLocal()
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+
+    def tearDown(self):
+        from backend.models.market_data_sql import BarModel
+        self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
+        self.db.commit()
+        self.db.close()
+
+    def _insert_1m_bar(self, db, ts, close):
+        from backend.models.market_data_sql import BarModel
+        db.add(BarModel(
+            symbol=self.SYMBOL, timeframe="1m",
+            open=close, high=close, low=close, close=close, volume=1000,
+            timestamp=ts, provider="test", data_status="HISTORICAL",
+            source="raw", session="regular",
+        ))
+
+    async def test_only_writes_bars_newer_than_latest_db_row(self):
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data import Bar, DataStatus
+        from backend.models.market_data_sql import BarModel
+
+        latest = datetime(2026, 9, 9, 14, 0)
+        self._insert_1m_bar(self.db, latest, close=100.0)
+        self.db.commit()
+
+        # Simulate the provider chain returning a full day's worth of bars:
+        # one bar before, one AT, and two genuinely new ones after the
+        # already-stored latest row.
+        fetched = [
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=99, high=99, low=99, close=99,
+                volume=100, timestamp=latest - timedelta(minutes=1), provider="test",
+                data_status=DataStatus.HISTORICAL),
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
+                volume=100, timestamp=latest, provider="test",
+                data_status=DataStatus.HISTORICAL),
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=101, high=101, low=101, close=101,
+                volume=100, timestamp=latest + timedelta(minutes=1), provider="test",
+                data_status=DataStatus.HISTORICAL),
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=102, high=102, low=102, close=102,
+                volume=100, timestamp=latest + timedelta(minutes=2), provider="test",
+                data_status=DataStatus.HISTORICAL),
+        ]
+
+        with patch(
+            "backend.market_data.services.backfill_service._fetch_tier1_1m_bars",
+            new=AsyncMock(return_value=fetched),
+        ):
+            service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+            written = await service._gapfill_1m_once()
+
+        self.assertEqual(written, 2)
+        rows = self.db.query(BarModel).filter(
+            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1m",
+            BarModel.timestamp > latest,
+        ).all()
+        self.assertEqual(len(rows), 2)
+
+    async def test_writes_nothing_when_no_bars_are_newer(self):
+        from unittest.mock import AsyncMock, patch
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data import Bar, DataStatus
+
+        latest = datetime(2026, 9, 9, 14, 0)
+        self._insert_1m_bar(self.db, latest, close=100.0)
+        self.db.commit()
+
+        # Every fetched bar is at-or-before the DB's latest row — a
+        # steady-state cycle with nothing actually missing.
+        fetched = [
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
+                volume=100, timestamp=latest, provider="test",
+                data_status=DataStatus.HISTORICAL),
+        ]
+
+        with patch(
+            "backend.market_data.services.backfill_service._fetch_tier1_1m_bars",
+            new=AsyncMock(return_value=fetched),
+        ):
+            service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+            written = await service._gapfill_1m_once()
+
+        self.assertEqual(written, 0)
+
+    async def test_newly_written_bars_are_dispatched_to_live_engines(self):
+        """Regression for a live bug (2026-09-16): gap-fill wrote missing
+        bars to the DB but never called dispatch_bar, so the regime/trend
+        engines never found out — a symbol whose main ingest loop missed
+        a minute (gap-fill silently patched it 2 min later) showed a
+        frozen/stale "last tick" indefinitely even though its DB bars
+        were fully current. Found live on AAPL/SPY."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, patch
+        from backend.market_data.services.ingestion_service import (
+            MarketDataIngestionService, engine_registry,
+        )
+        from backend.models.market_data import Bar, DataStatus
+
+        latest = datetime(2026, 9, 9, 14, 0)
+        self._insert_1m_bar(self.db, latest, close=100.0)
+        self.db.commit()
+
+        new_bar_ts = latest + timedelta(minutes=1)
+        fetched = [
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
+                volume=100, timestamp=latest, provider="test",
+                data_status=DataStatus.HISTORICAL),
+            Bar(symbol=self.SYMBOL, timeframe="1m", open=101, high=102, low=100, close=101.5,
+                volume=555, timestamp=new_bar_ts, provider="test",
+                data_status=DataStatus.HISTORICAL),
+        ]
+
+        received = []
+
+        def _on_bar(**kwargs):
+            received.append(kwargs)
+
+        engine_registry.register("bar:1m", self.SYMBOL, _on_bar)
+        try:
+            with patch(
+                "backend.market_data.services.backfill_service._fetch_tier1_1m_bars",
+                new=AsyncMock(return_value=fetched),
+            ):
+                service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+                await service._gapfill_1m_once()
+        finally:
+            engine_registry.unregister("bar:1m", self.SYMBOL, _on_bar)
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0]["timestamp"], new_bar_ts)
+        self.assertEqual(received[0]["price"], 101.5)
+        self.assertEqual(received[0]["volume"], 555)
+
+
 class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
     """_instantiate_backfill_provider must delegate to the process-lifetime
     provider cache, not construct fresh on every call.
