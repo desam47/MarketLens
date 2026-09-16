@@ -183,6 +183,29 @@ class AIManager:
     def _all_providers(self) -> list[str]:
         return self.settings.all_providers()
 
+    def chain_supports_structured_output(self) -> bool:
+        """True iff ANY provider in the chain supports structured output.
+
+        Used by ``analyze_symbol()`` to decide whether to attach
+        ``response_format``: a structured-capable *fallback* must still
+        receive JSON mode even when the *primary* provider doesn't support
+        it, otherwise the answering (fallback) provider's ``structured``
+        flag comes back False and parsing needlessly falls back to regex.
+
+        This lazily instantiates every provider in the chain (cached by
+        name); provider construction is cheap (no network), and
+        ``analyze_symbol`` is only called on explicit user requests, never
+        in a hot loop.
+        """
+        for name in self._all_providers():
+            try:
+                p = self._get_provider(name)
+            except ValueError:
+                continue
+            if getattr(p, "supports_structured_output", False):
+                return True
+        return False
+
     def primary_supports_structured_output(self) -> bool:
         """True iff the primary provider was built with structured output.
 

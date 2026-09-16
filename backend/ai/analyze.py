@@ -262,9 +262,13 @@ async def analyze_symbol(
         if regime in ("high_volatility", "crisis"):
             final_temperature = min(final_temperature, 0.15)
 
-    # O11: if the primary provider supports structured output, request
-    # a JSON-mode reply and skip regex extraction during parsing.
-    response_format = make_analysis_response_format() if ai_manager.primary_supports_structured_output() else None
+    # O11: when the primary provider supports structured output, request a
+    # JSON-mode reply and skip regex extraction during parsing. Gated on the
+    # whole chain (not just the primary) so a structured-capable *fallback*
+    # still receives response_format when it ends up answering — otherwise
+    # ai_resp.structured is False for that provider and parsing needlessly
+    # falls back to regex. See chain_supports_structured_output().
+    response_format = make_analysis_response_format() if ai_manager.chain_supports_structured_output() else None
 
     ai_resp = await ai_manager.complete(
         prompt=build_user_prompt(summarize_context(ctx.compact())),

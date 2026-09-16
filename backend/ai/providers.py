@@ -170,8 +170,14 @@ class OpenAICompatibleProvider(AIProvider):
             body["max_tokens"] = max_tokens
         if temperature is not None:
             body["temperature"] = temperature
-        # O11: structured output — request the provider force JSON format.
-        if response_format is not None:
+        # O11: structured output — only request JSON mode when this provider
+        # actually supports it. Previously any non-None response_format was
+        # forwarded even to providers that don't honor it, which is fine for
+        # the uniform-settings case but produces a wrong `structured=True`
+        # contract if a non-supporting provider ever answers. Gating the
+        # request on self.supports_structured_output keeps the request shape
+        # and the ai_resp.structured flag in lockstep.
+        if response_format is not None and self.supports_structured_output:
             body["response_format"] = response_format
 
         try:
@@ -255,7 +261,7 @@ class OpenAICompatibleProvider(AIProvider):
             body["max_tokens"] = max_tokens
         if temperature is not None:
             body["temperature"] = temperature
-        if response_format is not None:
+        if response_format is not None and self.supports_structured_output:
             body["response_format"] = response_format
 
         try:

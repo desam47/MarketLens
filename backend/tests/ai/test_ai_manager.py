@@ -202,6 +202,38 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
         self.assertEqual(resp.model, "llama3.2")
 
     @patch("backend.ai.providers.httpx.AsyncClient")
+    def test_complete_omits_response_format_when_unsupported(self, MockClient):
+        # Provider built with supports_structured_output=False must NOT
+        # send response_format even when one was requested — keeps the
+        # request shape and the ai_resp.structured flag in lockstep.
+        client = MagicMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.post = AsyncMock(return_value=_MockResponse(200, {
+            "model": "llama3.2",
+            "choices": [{"message": {"content": "ok"}}],
+        }))
+        MockClient.return_value = client
+        asyncio.run(self.p.complete("hi", response_format={"type": "json_object"}))
+        body = client.post.call_args.kwargs["json"]
+        self.assertNotIn("response_format", body)
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
+    def test_complete_includes_response_format_when_supported(self, MockClient):
+        self.p.supports_structured_output = True
+        client = MagicMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.post = AsyncMock(return_value=_MockResponse(200, {
+            "model": "llama3.2",
+            "choices": [{"message": {"content": "ok"}}],
+        }))
+        MockClient.return_value = client
+        asyncio.run(self.p.complete("hi", response_format={"type": "json_object"}))
+        body = client.post.call_args.kwargs["json"]
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+
+    @patch("backend.ai.providers.httpx.AsyncClient")
     def test_complete_raises_unavailable_on_connection_error(self, MockClient):
         client = MagicMock()
         client.__aenter__.return_value = client
@@ -409,6 +441,18 @@ class TestAIManager(unittest.TestCase):
     def test_disabled_is_not_available(self):
         m = self._make_manager(enabled=False)
         self.assertFalse(asyncio.run(m.is_available()))
+
+    def test_chain_supports_structured_output_true_when_any_supported(self):
+        m = self._make_manager(provider="ollama", fallback_providers="openai")
+        # Flip the primary to unsupported; the openai fallback still is.
+        m._get_provider("ollama").supports_structured_output = False
+        self.assertTrue(m.chain_supports_structured_output())
+
+    def test_chain_supports_structured_output_false_when_none_supported(self):
+        m = self._make_manager(provider="ollama", fallback_providers="openai")
+        for name in m._all_providers():
+            m._get_provider(name).supports_structured_output = False
+        self.assertFalse(m.chain_supports_structured_output())
 
     def test_safe_config_strips_api_key(self):
         m = self._make_manager(api_key="sk-secret")

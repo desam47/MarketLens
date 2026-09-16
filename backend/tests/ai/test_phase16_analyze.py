@@ -1376,10 +1376,10 @@ class TestAnalyzeStructuredOutput(unittest.TestCase):
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
     def test_passes_response_format_when_supported(self, mock_build_ctx, mock_ai):
-        """When primary supports structured output, response_format is passed."""
+        """When any provider in the chain supports structured output, response_format is passed."""
         ctx = build_context("AAPL")
         mock_build_ctx.return_value = ctx
-        mock_ai.primary_supports_structured_output.return_value = True
+        mock_ai.chain_supports_structured_output.return_value = True
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.7}',
             provider="test_provider",
@@ -1394,10 +1394,10 @@ class TestAnalyzeStructuredOutput(unittest.TestCase):
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
     def test_omits_response_format_when_unsupported(self, mock_build_ctx, mock_ai):
-        """When primary doesn't support structured output, response_format is None."""
+        """When no provider in the chain supports structured output, response_format is None."""
         ctx = build_context("AAPL")
         mock_build_ctx.return_value = ctx
-        mock_ai.primary_supports_structured_output.return_value = False
+        mock_ai.chain_supports_structured_output.return_value = False
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.7}',
             provider="test_provider",
@@ -1414,7 +1414,7 @@ class TestAnalyzeStructuredOutput(unittest.TestCase):
         """The structured flag from the response is passed to parse_ai_reply."""
         ctx = build_context("AAPL")
         mock_build_ctx.return_value = ctx
-        mock_ai.primary_supports_structured_output.return_value = True
+        mock_ai.chain_supports_structured_output.return_value = True
         mock_ai.complete = AsyncMock(return_value=AIResponse(
             text='{"summary": "Test analysis here", "trend": "bullish", "confidence": 0.9}',
             provider="test_provider",
