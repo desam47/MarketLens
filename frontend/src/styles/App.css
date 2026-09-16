@@ -3112,8 +3112,7 @@ h4 {
 .watchlist-table thead th:nth-child(2) { width: 64px; }  /* Type */
 .watchlist-table thead th:nth-child(4) { width: 80px; }  /* Change % */
 .watchlist-table thead th:nth-child(5) { width: 80px; }  /* Score */
-.watchlist-table thead th:nth-child(6) { min-width: 120px; } /* Confidence */
-.watchlist-table thead th:nth-child(8) { width: 70px; }
+.watchlist-table thead th:nth-child(7) { width: 70px; }
 
 .watchlist-table tbody tr {
   cursor: pointer;
@@ -3302,40 +3301,6 @@ h4 {
   color: var(--danger);
 }
 
-.td-confidence {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 120px;
-}
-
-.conf-inner {
-  display: contents;
-}
-
-.conf-bar {
-  flex: 1;
-  height: 6px;
-  background: var(--bg-tertiary);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.conf-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent-primary), var(--info));
-  border-radius: 999px;
-  transition: width 0.2s ease;
-}
-
-.conf-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  min-width: 32px;
-  text-align: right;
-}
-
 .td-rs {
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
@@ -3358,7 +3323,7 @@ h4 {
 
 .watchlist-virt-header {
   display: grid;
-  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 120px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   height: 36px;
@@ -3376,7 +3341,7 @@ h4 {
 /* Each cell in the virtualized row uses the same column grid as the header. */
 .virt-row {
   display: grid;
-  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 120px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);

@@ -29,18 +29,6 @@ export function fmtPrice(p: number | null | undefined): string {
   return trimZeros(p.toFixed(4));
 }
 
-// ── Confidence estimation ─────────────────────────────────────────────────────
-
-/** Estimate confidence (0–100) from the magnitude of a score. */
-export function estimateConfidence(score: number): number {
-  const abs = Math.abs(score);
-  if (abs >= 70) return 90;
-  if (abs >= 50) return 75;
-  if (abs >= 30) return 60;
-  if (abs >= 15) return 45;
-  return 30;
-}
-
 // ── Display maps ──────────────────────────────────────────────────────────────
 
 export const RS_CLASS_LABELS: Record<string, string> = {

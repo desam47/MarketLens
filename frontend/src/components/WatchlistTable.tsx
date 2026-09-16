@@ -3,7 +3,6 @@ import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, { WatchlistScanResult, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
 import { formatETTime } from './chartMath';
 import {
-  estimateConfidence,
   fmt,
   fmtPrice,
   changeCellClass,
@@ -15,7 +14,7 @@ import {
 interface WatchlistTableProps {
   watchlistId: number;
   onSelectSymbol: (symbol: string) => void;
-  sortColumn?: 'symbol' | 'price' | 'change' | 'score' | 'confidence' | 'rs';
+  sortColumn?: 'symbol' | 'price' | 'change' | 'score' | 'rs';
   sortDirection?: 'asc' | 'desc';
 }
 
@@ -26,7 +25,6 @@ interface RowData {
   change: number | null;
   changePct: number | null;
   score: number;
-  confidence: number;
   rs: RelativeStrengthSignal | null;
   raw: WatchlistScanResult;
 }
@@ -99,14 +97,6 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
       <div className={`virt-cell td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
       </div>
-      <div className="virt-cell td-confidence">
-        <div className="conf-inner">
-          <div className="conf-bar">
-            <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
-          </div>
-          <span className="conf-label">{fmt(row.confidence, 0)}%</span>
-        </div>
-      </div>
       <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
@@ -171,7 +161,6 @@ export function WatchlistTable({
         change: r.change ?? null,
         changePct: r.change_pct ?? null,
         score: r.total_score,
-        confidence: estimateConfidence(r.total_score),
         rs: null,
         raw: r,
       }));
@@ -277,7 +266,6 @@ export function WatchlistTable({
         case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break;
         case 'change': cmp = (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity); break;
         case 'score': cmp = a.score - b.score; break;
-        case 'confidence': cmp = a.confidence - b.confidence; break;
         case 'rs': cmp = (a.rs?.rs_pct ?? 0) - (b.rs?.rs_pct ?? 0); break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
@@ -367,9 +355,6 @@ export function WatchlistTable({
             <div className={`virt-cell th ${thClass('score')}`} onClick={() => toggleSort('score')}>
               Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
             </div>
-            <div className={`virt-cell th ${thClass('confidence')}`} onClick={() => toggleSort('confidence')}>
-              Conf <SortIcon column="confidence" sortCol={sortCol} sortDir={sortDir} />
-            </div>
             <div className={`virt-cell th ${thClass('rs')}`} onClick={() => toggleSort('rs')}>
               Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
             </div>
@@ -405,9 +390,6 @@ export function WatchlistTable({
                 </th>
                 <th className={thClass('score')} onClick={() => toggleSort('score')}>
                   Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className={thClass('confidence')} onClick={() => toggleSort('confidence')}>
-                  Conf <SortIcon column="confidence" sortCol={sortCol} sortDir={sortDir} />
                 </th>
                 <th className={thClass('rs')} onClick={() => toggleSort('rs')}>
                   Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
@@ -487,14 +469,6 @@ const WatchlistRow = React.memo(function WatchlistRow({
       </td>
       <td className={`td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
-      </td>
-      <td className="td-confidence">
-        <div className="conf-inner">
-          <div className="conf-bar">
-            <div className="conf-fill" style={{ width: `${row.confidence}%` }} />
-          </div>
-          <span className="conf-label">{fmt(row.confidence, 0)}%</span>
-        </div>
       </td>
       <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
