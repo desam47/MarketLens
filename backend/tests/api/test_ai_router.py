@@ -140,6 +140,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             summary="AI analysis is disabled (set AI_ENABLED=true to enable)",
             trend="uncertain",
             confidence=0.0,
+            uncertainty_reason="disabled",
         )
         mock_ai_mgr.settings.provider = "ollama"
         mock_ai_mgr.settings.model = "llama3.2"
@@ -154,6 +155,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         # uncertainty (no build_context() ran).
         self.assertEqual(data["market_regime"], {})
         self.assertEqual(data["correlation_context"], {})
+        self.assertEqual(data["uncertainty_reason"], "disabled")
 
     @patch("backend.api.ai.router.analyze_symbol_stream")
     @patch("backend.api.ai.router.ai_manager")
@@ -167,6 +169,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
                 "supporting_factors": ["Above SMA 50"], "risk_factors": ["RSI overbought"],
                 "key_levels": ["$200"], "trade_plan": None,
                 "provider": "ollama", "model": "llama3.2", "is_uncertain": False,
+                "uncertainty_reason": "none",
                 "market_regime": {"regime": "risk_on"},
                 "timeframe_scores": {}, "track_record": {}, "correlation_context": {},
             })
@@ -198,7 +201,9 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         final = json.loads(next(d for ev, d in events if ev == "final"))
         self.assertEqual(final["trend"], "bullish")
         self.assertEqual(final["provider"], "ollama")
+        self.assertEqual(final["model"], "llama3.2")
         self.assertEqual(final["market_regime"], {"regime": "risk_on"})
+        self.assertEqual(final["uncertainty_reason"], "none")
         self.assertEqual(final["template_id"], None)
         self.assertEqual(final["template_name"], None)
 

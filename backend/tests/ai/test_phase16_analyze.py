@@ -885,6 +885,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertEqual(result.trend, "uncertain")
         self.assertIn("disabled", result.summary)
+        self.assertEqual(result.uncertainty_reason, "disabled")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
@@ -894,6 +895,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
         result = asyncio.run(analyze_symbol("ZZZZ", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("not available", result.summary)
+        self.assertEqual(result.uncertainty_reason, "insufficient_data")
         mock_ai.complete.assert_not_called()
 
     @patch("backend.ai.analyze.ai_manager")
@@ -909,6 +911,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("unavailable", result.summary)
+        self.assertEqual(result.uncertainty_reason, "providers_unavailable")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
@@ -923,6 +926,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
         self.assertIsInstance(result, UncertaintyResponse)
         self.assertIn("could not be parsed", result.summary)
+        self.assertEqual(result.uncertainty_reason, "parse_failed")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
@@ -956,6 +960,7 @@ class TestAnalyzeSymbol(unittest.TestCase):
         self.assertEqual(result.supporting_factors, ["MTF aligned bullish", "above SMA 50"])
         self.assertEqual(result.provider, "ollama")
         self.assertEqual(result.model, "llama3.2")
+        self.assertEqual(result.uncertainty_reason, "none")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
@@ -1512,6 +1517,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         self.assertEqual(kinds, ["meta", "final"])
         final = frames[-1][1]
         self.assertEqual(final["trend"], "uncertain")
+        self.assertEqual(final["uncertainty_reason"], "disabled")
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")

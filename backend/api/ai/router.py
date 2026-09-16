@@ -137,6 +137,11 @@ class AnalyzeResponse(BaseModel):
     timeframe_scores: dict[str, Any] = Field(default_factory=dict)
     track_record: dict[str, Any] = Field(default_factory=dict)
     correlation_context: dict[str, Any] = Field(default_factory=dict)
+    # Why the response fell back to uncertainty ("none" on success).
+    # Drives actionable UI copy (disabled / insufficient_data /
+    # providers_unavailable / parse_failed) instead of parsing the
+    # free-text summary.
+    uncertainty_reason: str = "none"
 
 
 # --- Endpoints -----------------------------------------------------
@@ -269,6 +274,7 @@ async def analyze(
         timeframe_scores=getattr(result, "timeframe_scores", {}) or {},
         track_record=getattr(result, "track_record", {}) or {},
         correlation_context=getattr(result, "correlation_context", {}) or {},
+        uncertainty_reason=getattr(result, "uncertainty_reason", "none"),
     )
 
 

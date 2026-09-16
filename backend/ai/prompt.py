@@ -53,6 +53,18 @@ TradeAction = Literal["buy", "sell", "hold", "avoid"]
 Conviction = Literal["low", "medium", "high"]
 TimeHorizon = Literal["scalp", "swing", "position"]
 
+# Why an AnalysisResponse fell back to uncertainty. NOT produced by the
+# AI (absent from ANALYSIS_JSON_SCHEMA) — set by analyze_symbol() so the
+# UI can render actionable copy instead of parsing free-text summaries.
+# ``none`` means the analysis succeeded.
+UncertaintyReason = Literal[
+    "none",
+    "disabled",
+    "insufficient_data",
+    "providers_unavailable",
+    "parse_failed",
+]
+
 
 class TradePlan(BaseModel):
     """The advisory layer: an explicit trade recommendation with entry
@@ -247,6 +259,12 @@ class AnalysisResponse(BaseModel):
     # fallback-served analysis silently claimed to be from the primary.
     provider: str = "unknown"
     model: str = "unknown"
+    # Why this result was uncertain. "none" means the analysis succeeded;
+    # otherwise one of the UncertaintyReason enums above (disabled /
+    # insufficient_data / providers_unavailable / parse_failed). The AI
+    # never sets this — analyze_symbol() stamps it so the UI can render
+    # actionable copy instead of parsing free-text summaries.
+    uncertainty_reason: UncertaintyReason = "none"
     # Quantitative context, copied in by analyze_symbol() from
     # build_context(). Always present (possibly empty dicts) so the UI
     # can render regime / multi-timeframe / track-record / peer
@@ -319,6 +337,10 @@ class UncertaintyResponse(BaseModel):
     # necessarily the configured primary.
     provider: str = "none"
     model: str = "unknown"
+    # Why this came back uncertain — drives actionable UI copy instead
+    # of parsing the free-text summary. Always "none" for AnalysisResponse
+    # (success) and never set by the AI on UncertaintyResponse.
+    uncertainty_reason: UncertaintyReason = "none"
 
 
 # --- Parsing --------------------------------------------------------

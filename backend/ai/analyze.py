@@ -39,6 +39,7 @@ from backend.ai.prompt import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_ANALYST_ONLY,
     AnalysisResponse,
+    UncertaintyReason,
     UncertaintyResponse,
     build_user_prompt,
     make_analysis_response_format,
@@ -228,7 +229,9 @@ async def analyze_symbol(
         ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
-        result = _uncertainty(f"Quantitative data not available: {e}")
+        result = _uncertainty(
+            f"Quantitative data not available: {e}", reason_enum="insufficient_data",
+        )
         _cache_result(cache_key, result)
         return result
     except Exception as e:
@@ -318,10 +321,12 @@ def _finalize_analysis(
     if ai_resp.text is None:
         if ai_resp.provider == "disabled":
             msg = "AI analysis is disabled (set AI_ENABLED=true to enable)"
+            reason = "disabled"
         else:
             msg = f"AI providers unavailable (tried: {ai_resp.provider})"
+            reason = "providers_unavailable"
         logger.info("AI unavailable for %s: %s", symbol, msg)
-        result = _uncertainty(msg, provider=ai_resp.provider, model=ai_resp.model)
+        result = _uncertainty(msg, reason_enum=reason, provider=ai_resp.provider, model=ai_resp.model)
         _cache_result(cache_key, result)
         return result
 
@@ -338,6 +343,7 @@ def _finalize_analysis(
         result = _uncertainty(
             f"AI response could not be parsed: {e}. "
             f"Provider: {ai_resp.provider}. Model: {ai_resp.model}.",
+            reason_enum="parse_failed",
             provider=ai_resp.provider,
             model=ai_resp.model,
         )
@@ -447,7 +453,9 @@ async def analyze_symbol_stream(
         ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
-        result = _uncertainty(f"Quantitative data not available: {e}")
+        result = _uncertainty(
+            f"Quantitative data not available: {e}", reason_enum="insufficient_data",
+        )
         _cache_result(cache_key, result)
         yield ("meta", {
             "symbol": symbol.upper(),
@@ -586,7 +594,11 @@ def _label_bare_key_levels(levels: list[str], price: float | None) -> list[str]:
 
 
 def _uncertainty(
-    reason: str, *, provider: str = "none", model: str = "unknown",
+    reason: str,
+    *,
+    reason_enum: UncertaintyReason = "none",
+    provider: str = "none",
+    model: str = "unknown",
 ) -> UncertaintyResponse:
     return UncertaintyResponse(
         summary=reason,
@@ -594,6 +606,7 @@ def _uncertainty(
         confidence=0.0,
         provider=provider,
         model=model,
+        uncertainty_reason=reason_enum,
     )
 
 
