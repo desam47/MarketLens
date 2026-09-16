@@ -3110,7 +3110,7 @@ h4 {
 
 .watchlist-table thead th:nth-child(1) { width: 80px; }  /* Symbol */
 .watchlist-table thead th:nth-child(2) { width: 64px; }  /* Type */
-.watchlist-table thead th:nth-child(4) { width: 100px; } /* Trend */
+.watchlist-table thead th:nth-child(4) { width: 80px; }  /* Change % */
 .watchlist-table thead th:nth-child(5) { width: 80px; }  /* Score */
 .watchlist-table thead th:nth-child(6) { min-width: 120px; } /* Confidence */
 .watchlist-table thead th:nth-child(8) { width: 70px; }
@@ -3261,6 +3261,19 @@ h4 {
   font-variant-numeric: tabular-nums;
 }
 
+.td-change {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.td-change.change-up {
+  color: var(--success);
+}
+
+.td-change.change-down {
+  color: var(--danger);
+}
+
 .td-price .price-chg {
   display: block;
   font-size: 0.7rem;
@@ -3274,29 +3287,6 @@ h4 {
 
 .td-price.price-down {
   color: var(--danger);
-}
-
-.trend-badge {
-  display: inline-block;
-  padding: 0.2rem 0.55rem;
-  border-radius: 0.375rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-.trend-badge.trend-bullish {
-  background: rgba(16, 185, 129, 0.15);
-  color: var(--success);
-}
-
-.trend-badge.trend-bearish {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--danger);
-}
-
-.trend-badge.trend-neutral {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
 }
 
 .td-score {
@@ -3368,7 +3358,7 @@ h4 {
 
 .watchlist-virt-header {
   display: grid;
-  grid-template-columns: 80px 64px 1fr 100px 80px 120px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 120px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   height: 36px;
@@ -3386,7 +3376,7 @@ h4 {
 /* Each cell in the virtualized row uses the same column grid as the header. */
 .virt-row {
   display: grid;
-  grid-template-columns: 80px 64px 1fr 100px 80px 120px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 80px 120px 1fr 70px;
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);

@@ -29,34 +29,6 @@ export function fmtPrice(p: number | null | undefined): string {
   return trimZeros(p.toFixed(4));
 }
 
-// ── Signal → trend direction ─────────────────────────────────────────────────
-
-const BULLISH_SIGNALS = new Set([
-  'daily_bullish', 'mtf_bullish', 'breakout', 'strong_trend',
-  'trend_strengthens', 'full_alignment', 'bullish_divergence',
-  'trend_crosses_above_70',
-]);
-
-const BEARISH_SIGNALS = new Set([
-  'daily_bearish', 'mtf_bearish', 'breakdown', 'weak_trend',
-  'trend_weakens', 'timeframe_conflict', 'bearish_divergence',
-  'trend_crosses_below_70',
-]);
-
-/** Derive a trend direction from a list of signal names. */
-export function deriveDirection(signals: string[]): 'bullish' | 'bearish' | 'neutral' {
-  if (signals.length === 0) return 'neutral';
-  let bullCount = 0;
-  let bearCount = 0;
-  for (const s of signals) {
-    if (BULLISH_SIGNALS.has(s)) bullCount++;
-    else if (BEARISH_SIGNALS.has(s)) bearCount++;
-  }
-  if (bullCount > bearCount) return 'bullish';
-  if (bearCount > bullCount) return 'bearish';
-  return 'neutral';
-}
-
 // ── Confidence estimation ─────────────────────────────────────────────────────
 
 /** Estimate confidence (0–100) from the magnitude of a score. */
@@ -70,18 +42,6 @@ export function estimateConfidence(score: number): number {
 }
 
 // ── Display maps ──────────────────────────────────────────────────────────────
-
-export const TREND_ICONS: Record<string, string> = {
-  bullish: '🐂',
-  bearish: '🐻',
-  neutral: '➡',
-};
-
-export const TREND_LABELS: Record<string, string> = {
-  bullish: 'Uptrend',
-  bearish: 'Downtrend',
-  neutral: 'Neutral',
-};
 
 export const RS_CLASS_LABELS: Record<string, string> = {
   strong_outperformer: 'Strong Outperformer',
@@ -114,6 +74,14 @@ export function priceCellClass(changePct: number | null | undefined): string {
   if (changePct == null) return '';
   if (changePct > 0) return 'price-up';
   if (changePct < 0) return 'price-down';
+  return '';
+}
+
+/** CSS class for a change cell color. */
+export function changeCellClass(changePct: number | null | undefined): string {
+  if (changePct == null) return '';
+  if (changePct > 0) return 'change-up';
+  if (changePct < 0) return 'change-down';
   return '';
 }
 

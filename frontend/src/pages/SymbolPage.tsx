@@ -517,6 +517,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(true);
+  // Tracks the symbol a fetchScan call was issued for, so a slow response
+  // for a symbol the user has since navigated away from can't overwrite
+  // the currently-displayed symbol's Score & Confidence data — same
+  // stale-response guard as tapeRequestSymbolRef below.
+  const scanRequestSymbolRef = useRef<string>(symbol);
 
   const [tape, setTape] = useState<TapeSnapshot | null>(null);
   const [tapeDisabled, setTapeDisabled] = useState(false);
@@ -624,14 +629,18 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   }, [symbol]);
 
   const fetchScan = useCallback(async () => {
+    const requestedSymbol = symbol;
+    scanRequestSymbolRef.current = requestedSymbol;
     setScanLoading(true);
     try {
-      const data = await api.getScanResult(symbol);
+      const data = await api.getScanResult(requestedSymbol);
+      if (scanRequestSymbolRef.current !== requestedSymbol) return;
       setScanResult(data);
     } catch (err: any) {
+      if (scanRequestSymbolRef.current !== requestedSymbol) return;
       console.error('Failed to load scan:', err);
     } finally {
-      setScanLoading(false);
+      if (scanRequestSymbolRef.current === requestedSymbol) setScanLoading(false);
     }
   }, [symbol]);
 

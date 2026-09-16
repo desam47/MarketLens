@@ -1,24 +1,21 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
-import api, { WatchlistScanResult, WatchlistSymbol, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
+import api, { WatchlistScanResult, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
 import { formatETTime } from './chartMath';
 import {
-  deriveDirection,
   estimateConfidence,
   fmt,
   fmtPrice,
-  priceCellClass,
+  changeCellClass,
   rsCellClass,
   rsCellLabel,
-  TREND_ICONS,
-  TREND_LABELS,
   isRowEnabled,
 } from './watchlistUtils';
 
 interface WatchlistTableProps {
   watchlistId: number;
   onSelectSymbol: (symbol: string) => void;
-  sortColumn?: 'symbol' | 'price' | 'score' | 'confidence' | 'rs';
+  sortColumn?: 'symbol' | 'price' | 'change' | 'score' | 'confidence' | 'rs';
   sortDirection?: 'asc' | 'desc';
 }
 
@@ -30,7 +27,6 @@ interface RowData {
   changePct: number | null;
   score: number;
   confidence: number;
-  trendDir: 'bullish' | 'bearish' | 'neutral';
   rs: RelativeStrengthSignal | null;
   raw: WatchlistScanResult;
 }
@@ -92,18 +88,13 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
           <span className="entity-tag entity-tag-stock">Stock</span>
         )}
       </div>
-      <div className={`virt-cell td-price ${priceCellClass(row.changePct)}`}>
+      <div className="virt-cell td-price">
         {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
-        {row.changePct != null && (
-          <span className="price-chg">
-            {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%
-          </span>
-        )}
       </div>
-      <div className="virt-cell">
-        <span className={`trend-badge trend-${row.trendDir}`}>
-          {TREND_ICONS[row.trendDir]} {TREND_LABELS[row.trendDir]}
-        </span>
+      <div className={`virt-cell td-change ${changeCellClass(row.changePct)}`}>
+        {row.changePct != null
+          ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
+          : '—'}
       </div>
       <div className={`virt-cell td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
         {row.score > 0 ? '+' : ''}{fmt(row.score)}
@@ -147,8 +138,8 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
 export function WatchlistTable({
   watchlistId,
   onSelectSymbol,
-  sortColumn = 'score',
-  sortDirection = 'desc',
+  sortColumn = 'symbol',
+  sortDirection = 'asc',
 }: WatchlistTableProps) {
   const [rows, setRows] = useState<RowData[]>([]);
   const [scanTimestamp, setScanTimestamp] = useState<string | null>(null);
@@ -177,11 +168,10 @@ export function WatchlistTable({
         symbol: r.symbol,
         entityType: (r.entity_type as 'stock' | 'etf' | null) ?? 'stock',
         price: r.quote?.price ?? null,
-        change: r.quote ? (r.quote as any).change ?? null : null,
-        changePct: r.quote ? (r.quote as any).changePercent ?? null : null,
+        change: r.change ?? null,
+        changePct: r.change_pct ?? null,
         score: r.total_score,
         confidence: estimateConfidence(r.total_score),
-        trendDir: deriveDirection(r.signals),
         rs: null,
         raw: r,
       }));
@@ -220,6 +210,17 @@ export function WatchlistTable({
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Keep prices/scores/change% current without a manual reload — the
+  // backend scan is always live (no TTL cache on this endpoint), so a
+  // stale table here is purely a frontend polling gap. Mirrors
+  // AlertsCard's 30s trigger refresh; `refresh=true` uses the small
+  // "Rescan" spinner instead of the full loading skeleton, so periodic
+  // updates don't blank the table while it refreshes.
+  useEffect(() => {
+    const interval = setInterval(() => fetchData(true), 30_000);
+    return () => clearInterval(interval);
   }, [fetchData]);
 
   // --- Per-symbol actions -----------------------------------------------
@@ -274,6 +275,7 @@ export function WatchlistTable({
       switch (sortCol) {
         case 'symbol': cmp = a.symbol.localeCompare(b.symbol); break;
         case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break;
+        case 'change': cmp = (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity); break;
         case 'score': cmp = a.score - b.score; break;
         case 'confidence': cmp = a.confidence - b.confidence; break;
         case 'rs': cmp = (a.rs?.rs_pct ?? 0) - (b.rs?.rs_pct ?? 0); break;
@@ -359,7 +361,9 @@ export function WatchlistTable({
             <div className={`virt-cell th ${thClass('price')}`} onClick={() => toggleSort('price')}>
               Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
             </div>
-            <div className="virt-cell th">Trend</div>
+            <div className={`virt-cell th ${thClass('change')}`} onClick={() => toggleSort('change')}>
+              Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
+            </div>
             <div className={`virt-cell th ${thClass('score')}`} onClick={() => toggleSort('score')}>
               Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
             </div>
@@ -396,7 +400,9 @@ export function WatchlistTable({
                 <th className={thClass('price')} onClick={() => toggleSort('price')}>
                   Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
                 </th>
-                <th>Trend</th>
+                <th className={thClass('change')} onClick={() => toggleSort('change')}>
+                  Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
+                </th>
                 <th className={thClass('score')} onClick={() => toggleSort('score')}>
                   Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
                 </th>
@@ -471,18 +477,13 @@ const WatchlistRow = React.memo(function WatchlistRow({
           <span className="entity-tag entity-tag-stock">Stock</span>
         )}
       </td>
-      <td className={`td-price ${priceCellClass(row.changePct)}`}>
+      <td className="td-price">
         {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
-        {row.changePct != null && (
-          <span className="price-chg">
-            {row.changePct > 0 ? '+' : ''}{fmt(row.changePct)}%
-          </span>
-        )}
       </td>
-      <td>
-        <span className={`trend-badge trend-${row.trendDir}`}>
-          {TREND_ICONS[row.trendDir]} {TREND_LABELS[row.trendDir]}
-        </span>
+      <td className={`td-change ${changeCellClass(row.changePct)}`}>
+        {row.changePct != null
+          ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
+          : '—'}
       </td>
       <td className={`td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
         {row.score > 0 ? '+' : ''}{fmt(row.score)}

@@ -32,9 +32,13 @@ function fmt(n: number, decimals = 1): string {
   return n.toFixed(decimals);
 }
 
+// Ranked by magnitude, not raw value — several dimensions (momentum, rsi,
+// macd) are signed, negative meaning bearish, and a raw-value sort would
+// push the strongest bearish dimensions to the bottom and out of the
+// top-N, hiding exactly the signal a bearish setup most needs to surface.
 function pickTopScores(scores: Record<string, number>, n = 4): [string, number][] {
   return Object.entries(scores)
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
     .slice(0, n);
 }
 
@@ -99,7 +103,11 @@ export function ScoreDetailPanel({
           <div className="score-breakdown-list">
             {topScores.map(([key, value]) => {
               const label = SCORE_LABELS[key] ?? key;
-              const pct = Math.min(Math.max(value, 0), 100);
+              // Bar width is magnitude (so a strong bearish reading draws a
+              // full bar, not an empty one); color carries direction.
+              const pct = Math.min(Math.abs(value), 100);
+              const barColor = value > 0 ? '#10b981' : value < 0 ? '#ef4444' : '#6b7280';
+              const sign = value > 0 ? '+' : '';
               return (
                 <div key={key} className="score-breakdown-item">
                   <span className="score-breakdown-label">{label}</span>
@@ -108,11 +116,11 @@ export function ScoreDetailPanel({
                       className="score-breakdown-fill"
                       style={{
                         width: `${pct}%`,
-                        backgroundColor: pct >= 60 ? '#10b981' : pct >= 40 ? '#f59e0b' : '#6b7280',
+                        backgroundColor: barColor,
                       }}
                     />
                   </div>
-                  <span className="score-breakdown-value">{fmt(value, 0)}</span>
+                  <span className="score-breakdown-value">{sign}{fmt(value, 0)}</span>
                 </div>
               );
             })}
