@@ -684,6 +684,19 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     return () => clearInterval(id);
   }, [fetchTape]);
 
+  // Quote/bars/scan/etc. otherwise only ever fetch once (on mount or
+  // symbol/timeframe change) — a page left open goes stale forever
+  // until a manual "Refresh" click. Confirmed live: at 12:10 the 5m bar
+  // chart was still showing 12:00 as the latest candle even though the
+  // backend already had 12:05 available, because nothing had re-asked
+  // for it. handleRefresh() re-fetches everything this page shows
+  // (tape included — its own 15s interval above already covers it, so
+  // this just re-fetches it slightly more often too, which is harmless).
+  useEffect(() => {
+    const id = setInterval(handleRefresh, 30000);
+    return () => clearInterval(id);
+  }, [handleRefresh]);
+
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
   const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
 
