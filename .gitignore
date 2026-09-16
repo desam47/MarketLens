@@ -49,6 +49,9 @@ marketlens.db
 *.db
 *.sqlite
 *.sqlite3
+# Runtime artifacts that land in data/ (e.g. watchlist-reset backups,
+# stray logs outside the logs/ rule). Not project source.
+data/
 # WAL mode (Phase 3.3.1) creates these alongside the DB; Litestream
 # (3.3.2) creates snapshot/wal files in its own directory.
 *.db-wal

@@ -72,11 +72,15 @@ fi
 # the app still runs, background jobs (AI analysis, ticker backfill) just
 # queue without being processed until a worker exists.
 if command -v rq >/dev/null 2>&1; then
-    echo "$(date): relaunching RQ workers (marketlens-workers x1, marketlens-backfill x2)" >> logs/restart_dev.log
+    # One backfill worker, not two — see start.sh's matching comment. Two
+    # backfill workers, together with the live 1m ingestion loop, all
+    # instantiate a Webull provider at once and trip Webull's REST 429
+    # (TOO_MANY_REQUESTS) on the token endpoint, starving the live 1m bar
+    # feed and leaving "latest bar" frozen. This script used to launch two
+    # (a leftover from before that fix landed in start.sh/scripts/run.py)
+    # and silently reintroduced the exact bug on every restart.
+    echo "$(date): relaunching RQ workers (marketlens-workers x1, marketlens-backfill x1)" >> logs/restart_dev.log
     nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers \
-        >> logs/rq_workers.log 2>&1 &
-    disown
-    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill \
         >> logs/rq_workers.log 2>&1 &
     disown
     nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill \

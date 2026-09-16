@@ -2307,21 +2307,21 @@ h4 {
   background: rgba(56, 189, 248, 0.08);
 }
 
-/* Price History table — pairs each period's High (blue) / Low (purple). */
+/* Price History table — pairs each period's High / Low. */
 .price-history-table .ph-label {
   color: var(--text-secondary);
   font-family: 'Inter', system-ui, sans-serif;
   font-weight: 600;
 }
 
-.price-history-table .ph-high {
-  color: #0ea5e9;
+.price-history-table .ph-high,
+.price-history-table .ph-low {
   font-weight: 600;
 }
 
-.price-history-table .ph-low {
-  color: #a855f7;
-  font-weight: 600;
+.price-history-table .ph-open,
+.price-history-table .ph-close {
+  color: var(--text-secondary);
 }
 
 .sr-zones {

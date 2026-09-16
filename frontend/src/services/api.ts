@@ -289,6 +289,11 @@ export interface PriceHistoryItem {
   strength: number;
   distance_pct: number | null;
   timestamp: string | null;
+  open?: number | null;
+  close?: number | null;
+  volume?: number | null;
+  change?: number | null;
+  change_pct?: number | null;
 }
 
 export interface SRResult {

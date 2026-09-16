@@ -8,7 +8,7 @@ live-tick state and can be served purely from the historical bar cache.
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -64,12 +64,122 @@ _PRICE_HISTORY_ORDER = [
 ]
 
 
-def _extract_price_history(result) -> list[dict]:
+def _compute_period_ohlc(reference_bars: list[dict]) -> dict[str, dict]:
+    """Aggregate open/high/low/close/volume for each calendar-anchored period
+    (today / prev day / this week / prev week / 52 week) from the daily
+    reference-bar series.
+
+    Mirrors the period boundaries ``SupportResistanceEngine`` uses for its
+    high/low levels (today's date, ISO calendar week, trailing 364 days —
+    see sr_engine.py's ``detect()`` steps 1-5) so the two stay consistent,
+    but computed independently here since the engine only tracks per-level
+    price/strength, not full OHLCV.
+
+    ``reference_bars`` must be ordered newest -> oldest (desc=True), one bar
+    per calendar day.
+    """
+    n = len(reference_bars)
+    if n == 0:
+        return {}
+
+    opens = [b["open"] for b in reference_bars]
+    highs = [b["high"] for b in reference_bars]
+    lows = [b["low"] for b in reference_bars]
+    closes = [b["close"] for b in reference_bars]
+    volumes = [b.get("volume", 0) or 0 for b in reference_bars]
+    timestamps = [b.get("timestamp") for b in reference_bars]
+
+    def _with_change(entry: dict, oldest_index: int) -> dict:
+        # "Change"/"Change %" compare this period's close to the close of the
+        # bar immediately before the period started (e.g. Today's Change is
+        # vs. yesterday's close, not vs. today's own open) — matching the
+        # prev-close convention used by the header's "Last Close" delta and
+        # by BarsTable's per-row Change, not an open->close intraday move.
+        prev_idx = oldest_index + 1
+        prev_close = closes[prev_idx] if prev_idx < n else None
+        change = entry["close"] - prev_close if prev_close is not None else None
+        change_pct = (change / prev_close) * 100 if change is not None and prev_close else None
+        entry["change"] = change
+        entry["change_pct"] = change_pct
+        return entry
+
+    def _bar(idx: int) -> dict:
+        return _with_change({
+            "open": opens[idx], "high": highs[idx], "low": lows[idx],
+            "close": closes[idx], "volume": volumes[idx],
+        }, oldest_index=idx)
+
+    def _group(indices: list[int]) -> dict:
+        # indices are ascending by position (newest -> oldest); the first is
+        # the group's most recent bar (close/today-side), the last its oldest
+        # (open).
+        return _with_change({
+            "open": opens[indices[-1]],
+            "high": max(highs[i] for i in indices),
+            "low": min(lows[i] for i in indices),
+            "close": closes[indices[0]],
+            "volume": sum(volumes[i] for i in indices),
+        }, oldest_index=indices[-1])
+
+    def _isocalendar_key(ts):
+        try:
+            return ts.isocalendar()[:2]
+        except (AttributeError, TypeError):
+            return None
+
+    periods: dict[str, dict] = {"today": _bar(0)}
+
+    # This week — bars sharing ref[0]'s ISO (year, week).
+    this_week_indices = [0]
+    this_week_key = _isocalendar_key(timestamps[0]) if timestamps[0] is not None else None
+    if this_week_key is not None:
+        for i in range(1, n):
+            if _isocalendar_key(timestamps[i]) != this_week_key:
+                break
+            this_week_indices.append(i)
+    periods["this_week"] = _group(this_week_indices)
+
+    # Prev day — the single reference bar right after today's.
+    day_skip = 1
+    if day_skip < n:
+        periods["prev_day"] = _bar(day_skip)
+
+    # Prev week — bars sharing the ISO week right after this week's group.
+    week_skip = len(this_week_indices)
+    if week_skip < n:
+        prev_week_key = _isocalendar_key(timestamps[week_skip])
+        prev_week_indices = [week_skip]
+        if prev_week_key is not None:
+            for i in range(week_skip + 1, n):
+                if _isocalendar_key(timestamps[i]) != prev_week_key:
+                    break
+                prev_week_indices.append(i)
+        periods["prev_week"] = _group(prev_week_indices)
+
+    # 52 week — trailing 364 days of the reference series.
+    _WEEK_52_DAYS = 364
+    window_indices = list(range(n))
+    if timestamps[0] is not None:
+        try:
+            cutoff = timestamps[0] - timedelta(days=_WEEK_52_DAYS)
+            window_indices = [
+                i for i, ts in enumerate(timestamps) if ts is not None and ts >= cutoff
+            ]
+        except TypeError:
+            pass
+    if window_indices:
+        periods["week_52"] = _group(window_indices)
+
+    return periods
+
+
+def _extract_price_history(result, reference_bars: list[dict] | None = None) -> list[dict]:
     by_type: dict[str, object] = {}
     for lvl in result.levels:
         t = lvl.type.value if hasattr(lvl.type, "value") else str(lvl.type)
         if t in _PRICE_HISTORY_LABELS:
             by_type[t] = lvl
+    period_ohlc = _compute_period_ohlc(reference_bars or [])
     history: list[dict] = []
     for t in _PRICE_HISTORY_ORDER:
         lvl = by_type.get(t)
@@ -81,7 +191,7 @@ def _extract_price_history(result) -> list[dict]:
             if latest_close
             else None
         )
-        history.append({
+        entry = {
             "label": _PRICE_HISTORY_LABELS[t],
             "type": t,
             "price": lvl.price,
@@ -90,7 +200,19 @@ def _extract_price_history(result) -> list[dict]:
             "timestamp": (
                 lvl.timestamp.isoformat() if getattr(lvl, "timestamp", None) else None
             ),
-        })
+        }
+        # Attach the period's full OHLCV (same values on both the _high and
+        # _low entry for a period — the frontend pairs them back into one row).
+        ohlc = period_ohlc.get(t.rsplit("_", 1)[0])
+        if ohlc is not None:
+            entry.update({
+                "open": ohlc["open"],
+                "close": ohlc["close"],
+                "volume": ohlc["volume"],
+                "change": ohlc["change"],
+                "change_pct": ohlc["change_pct"],
+            })
+        history.append(entry)
     return history
 
 
@@ -265,7 +387,7 @@ async def get_price_range(
                 pivot_levels.append(lvl)
         pivot_levels.sort(key=lambda l: PIVOT_TABLE_ORDER.get(l.type.value, 99))
         levels = pivot_levels[:max_levels]
-        price_history = _extract_price_history(result)
+        price_history = _extract_price_history(result, reference_bars)
         return {
             "symbol": symbol,
             "timeframe": timeframe,

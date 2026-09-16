@@ -118,6 +118,24 @@ function strPrice(v: number | null | undefined): string {
   return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+/** Format volume as k or M — shared by BarsTable and Price History, whose
+52-week row sums a full year of volume, far larger than a single bar's. */
+function formatVolume(v: number | null | undefined): string {
+  if (v == null) return '—';
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  return `${(v / 1000).toFixed(0)}k`;
+}
+
+/** Format a signed "Change" value with the same precision `strPrice` uses for
+prices. A hardcoded toFixed(2) rounds sub-cent moves on penny stocks to
+"0.00" while the paired Change % (computed from the same raw number) still
+shows a real figure — the two columns then contradict each other. */
+function formatChange(v: number | null | undefined): string {
+  if (v == null) return '—';
+  const sign = v >= 0 ? '+' : '-';
+  return sign + strPrice(Math.abs(v)).replace(/^0$/, '0.00');
+}
+
 // --- Transitions panel ---
 const TransitionsPanel = memo(function TransitionsPanel({
   transitions,
@@ -286,7 +304,20 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
     .filter((h) => h.type.endsWith("_high"))
     .map((h) => {
       const period = h.type.replace(/_high$/, "");
-      return { period, high: byPeriod[period].high, low: byPeriod[period].low, label: h.label.replace(" High", "") };
+      const low = byPeriod[period].low;
+      // open/close/volume/change are identical on the high and low entries
+      // for a period (the backend duplicates them onto both sides).
+      return {
+        period,
+        high: byPeriod[period].high,
+        low,
+        label: h.label.replace(" High", ""),
+        open: h.open,
+        close: h.close,
+        volume: h.volume,
+        change: h.change,
+        changePercent: h.change_pct,
+      };
     });
 
   return (
@@ -301,7 +332,7 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
               className="price-change"
               style={{ color: change >= 0 ? '#10b981' : '#ef4444' }}
             >
-              {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent != null
+              {formatChange(change)} ({changePercent != null
                 ? `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`
                 : '—'})
             </span>
@@ -315,20 +346,40 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
           <thead>
             <tr>
               <th>Period</th>
+              <th>Open</th>
               <th>High</th>
               <th>Low</th>
+              <th>Close</th>
+              <th>Change</th>
+              <th>Change %</th>
+              <th>Volume</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={i}>
                 <td className="ph-label">{r.label}</td>
+                <td className="ph-open">
+                  {r.open != null ? `$${strPrice(r.open)}` : "—"}
+                </td>
                 <td className="ph-high">
                   {r.high ? `$${strPrice(r.high.price)}` : "—"}
                 </td>
                 <td className="ph-low">
                   {r.low ? `$${strPrice(r.low.price)}` : "—"}
                 </td>
+                <td className="ph-close">
+                  {r.close != null ? `$${strPrice(r.close)}` : "—"}
+                </td>
+                <td style={{ color: changeColor(r.change) }}>
+                  {formatChange(r.change)}
+                </td>
+                <td style={{ color: changeColor(r.changePercent) }}>
+                  {r.changePercent != null
+                    ? `${r.changePercent >= 0 ? '+' : ''}${r.changePercent.toFixed(2)}%`
+                    : "—"}
+                </td>
+                <td>{formatVolume(r.volume)}</td>
               </tr>
             ))}
           </tbody>
@@ -427,12 +478,12 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     <td>${strPrice(b.low)}</td>
                     <td>${strPrice(b.close)}</td>
                     <td style={{ color: changeColor(chgAbs) }}>
-                      {chgAbs != null ? `${chgAbs >= 0 ? '+' : ''}${chgAbs.toFixed(2)}` : '—'}
+                      {formatChange(chgAbs)}
                     </td>
                     <td style={{ color: changeColor(chg) }}>
-                      {chg !== null ? `${chg > 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
+                      {chg !== null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
                     </td>
-                    <td>{(b.volume / 1000).toFixed(0)}k</td>
+                    <td>{formatVolume(b.volume)}</td>
                   </tr>
                 );
               })}
@@ -646,7 +697,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             {priceDisplay}
             {barsChange != null && (
               <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
-                {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(2)} ({barsChangePct != null
+                {formatChange(barsChange)} ({barsChangePct != null
                   ? `${barsChangePct >= 0 ? '+' : ''}${barsChangePct.toFixed(2)}%`
                   : '—'})
               </span>
