@@ -94,14 +94,50 @@ def _grade_row(db, row, today) -> bool:
 
     Returns True if it resolved (win/loss/expired) this pass, False if
     it's still open and should be left alone.
+
+    Fill-awareness (2026-09-16): a stop/target touch only resolves the
+    row if price actually entered the entry zone on this bar or an
+    earlier one — i.e. the position had been filled. A bar that gaps
+    past the entry zone (e.g. a short whose open is already above the
+    entry range and hits the stop) is NOT graded, because the stop only
+    applies to an established position. The pre-existing conservative
+    rule is preserved: when a single bar touches both the entry zone and
+    both stop and target, the stop wins (loss).
     """
     from backend.repositories.bar_repository import get_bars
 
     targets: list[float] = json.loads(row.targets_json or "[]")
     entry_mid = _entry_mid(row)
+    if row.entry_zone_low is not None and row.entry_zone_high is not None:
+        entry_lo, entry_hi = row.entry_zone_low, row.entry_zone_high
+    elif row.entry_zone_low is not None:
+        entry_lo = entry_hi = row.entry_zone_low
+    elif row.entry_zone_high is not None:
+        entry_lo = entry_hi = row.entry_zone_high
+    else:
+        entry_lo = entry_hi = None
+
+    def _touches_entry(bar) -> bool:
+        # No entry zone recorded → assume filled (don't change behavior
+        # for any row that lacks one). Otherwise the bar's [low, high]
+        # range must overlap the entry zone.
+        if entry_lo is None:
+            return True
+        return bar.low <= entry_hi and bar.high >= entry_lo
+
     bars = get_bars(db, row.symbol, "1d", from_ts=row.created_at)
+    filled = False
 
     for bar in bars:
+        # Only grade once the position has been filled on this bar or a
+        # prior one. Bars that gap past the entry zone (no fill) are
+        # skipped — a stop/target touch on an unfilled bar is not a real
+        # resolution.
+        if not filled:
+            if not _touches_entry(bar):
+                continue
+            filled = True
+
         # Conservative: a single OHLC bar can't tell us which happened
         # first intraday, so a bar that touches both is treated as a
         # stop-out, not a win.

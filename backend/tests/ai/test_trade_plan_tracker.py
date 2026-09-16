@@ -168,13 +168,45 @@ class TestGradeRow(_DBBase):
 
     @patch("backend.repositories.bar_repository.get_bars")
     def test_sell_stop_hit_is_a_loss(self, mock_bars):
+        # fill-aware: the entry zone must be touched first. bar1 fills
+        # [100,102], bar2 (gap-up) hits the stop at 106 → loss.
         row = self._open_row(
             recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
             stop_loss=106.0, targets_json=json.dumps([95.0, 90.0]),
         )
-        mock_bars.return_value = [_bar("2026-01-02", o=104, h=107, low=103, c=106)]
+        mock_bars.return_value = [
+            _bar("2026-01-02", o=101, h=102, low=100, c=101),  # fills entry zone
+            _bar("2026-01-03", o=104, h=107, low=103, c=106),  # gaps up, hits stop
+        ]
         tracker._grade_row(self.db, row, datetime.now().date())
         self.assertEqual(row.status, "loss")
+
+    @patch("backend.repositories.bar_repository.get_bars")
+    def test_sell_gap_past_entry_without_fill_is_not_graded(self, mock_bars):
+        # sell entry [100,102], stop 106; a single bar opening at 104 never
+        # enters the entry zone, so the stop hit must NOT grade the row.
+        row = self._open_row(
+            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
+            stop_loss=106.0, targets_json=json.dumps([95.0, 90.0]),
+        )
+        mock_bars.return_value = [
+            _bar("2026-01-02", o=104, h=107, low=103, c=106),  # gap, no fill
+        ]
+        resolved = tracker._grade_row(self.db, row, datetime.now().date())
+        self.assertFalse(resolved)
+        self.assertEqual(row.status, "open")
+
+    @patch("backend.repositories.bar_repository.get_bars")
+    def test_buy_gap_past_entry_without_fill_is_not_graded(self, mock_bars):
+        # buy entry [100,102], target 108; a single bar opening at 109 never
+        # fills the entry zone, so the target touch must NOT grade the row.
+        row = self._open_row()
+        mock_bars.return_value = [
+            _bar("2026-01-02", o=109, h=115, low=109, c=112),  # gap up, no fill
+        ]
+        resolved = tracker._grade_row(self.db, row, datetime.now().date())
+        self.assertFalse(resolved)
+        self.assertEqual(row.status, "open")
 
     @patch("backend.repositories.bar_repository.get_bars")
     def test_unresolved_within_holding_window_stays_open(self, mock_bars):
