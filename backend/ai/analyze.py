@@ -30,6 +30,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import AsyncIterator
 from typing import Any
 
 from backend.ai.context import AnalysisContext, InsufficientDataError, build_context
@@ -45,6 +46,7 @@ from backend.ai.prompt import (
     render_system_prompt,
     summarize_context,
 )
+from backend.ai.provider import AIResponse
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +236,37 @@ async def analyze_symbol(
         logger.exception("Context builder failed for %s: %s", symbol, e)
         raise
 
-    # --- Step 2: ask the AI ---
+    # --- Step 2: build the LLM request (prompt/temperature/response_format) ---
+    system_prompt, final_temperature, response_format = _build_request(
+        ctx, system_prompt_override, advisory, temperature,
+    )
+
+    # --- Step 3: ask the LLM ---
+    ai_resp = await ai_manager.complete(
+        prompt=build_user_prompt(summarize_context(ctx.compact())),
+        system=system_prompt,
+        max_tokens=max_tokens,
+        temperature=final_temperature,
+        response_format=response_format,
+        model=model,
+    )
+
+    return _finalize_analysis(symbol, ctx, ai_resp, cache_key)
+
+
+def _build_request(
+    ctx: AnalysisContext,
+    system_prompt_override: str | None,
+    advisory: bool,
+    temperature: float | None,
+) -> tuple[str, float, dict[str, Any] | None]:
+    """Render the system prompt, pick a temperature, and decide whether to
+    request structured (JSON-mode) output.
+
+    Factored out so both ``analyze_symbol()`` (blocking) and
+    ``analyze_symbol_stream()`` (SSE) build an identical request from the
+    same context — no drift between the two call paths.
+    """
     if system_prompt_override:
         system_prompt = system_prompt_override
     else:
@@ -262,23 +294,27 @@ async def analyze_symbol(
         if regime in ("high_volatility", "crisis"):
             final_temperature = min(final_temperature, 0.15)
 
-    # O11: when the primary provider supports structured output, request a
-    # JSON-mode reply and skip regex extraction during parsing. Gated on the
-    # whole chain (not just the primary) so a structured-capable *fallback*
-    # still receives response_format when it ends up answering — otherwise
-    # ai_resp.structured is False for that provider and parsing needlessly
-    # falls back to regex. See chain_supports_structured_output().
+    # O11: request JSON mode when the chain supports it (gated on the
+    # whole chain so a structured-capable fallback still gets mode when
+    # it ends up answering). See f1afc3c / chain_supports_structured_output.
     response_format = make_analysis_response_format() if ai_manager.chain_supports_structured_output() else None
+    return system_prompt, final_temperature, response_format
 
-    ai_resp = await ai_manager.complete(
-        prompt=build_user_prompt(summarize_context(ctx.compact())),
-        system=system_prompt,
-        max_tokens=max_tokens,
-        temperature=final_temperature,
-        response_format=response_format,
-        model=model,
-    )
 
+def _finalize_analysis(
+    symbol: str,
+    ctx: AnalysisContext,
+    ai_resp: AIResponse,
+    cache_key: tuple | None,
+) -> AnalysisResponse | UncertaintyResponse:
+    """Parse, validate, calibrate, attribute, and cache the AI reply.
+
+    Shared by ``analyze_symbol()`` and ``analyze_symbol_stream()`` so the
+    parsed/decorated response is identical whether the LLM was called via
+    ``complete()`` or ``stream()``. Returns an ``UncertaintyResponse``
+    (cached) when the AI is disabled/unavailable or its reply failed
+    validation — never raises for those expected failure modes.
+    """
     if ai_resp.text is None:
         if ai_resp.provider == "disabled":
             msg = "AI analysis is disabled (set AI_ENABLED=true to enable)"
@@ -289,7 +325,7 @@ async def analyze_symbol(
         _cache_result(cache_key, result)
         return result
 
-    # --- Step 3: parse and validate ---
+    # --- parse and validate ---
     try:
         parsed = parse_ai_reply(ai_resp.text, structured=ai_resp.structured)
     except ValueError as e:
@@ -308,54 +344,37 @@ async def analyze_symbol(
         _cache_result(cache_key, result)
         return result
 
-    # Validate that the trend agrees broadly with the engine's direction.
-    # The AI is allowed to disagree (e.g. "mixed" when signals conflict),
-    # but if the engine says "downtrend" and the AI says "bullish" with
-    # no "mixed" justification, we warn rather than block. The quant
-    # engine's score remains the source of truth.
+    # Warn (don't block) when the AI trend contradicts the engine's
+    # primary direction — the AI is allowed to say "mixed".
     ctx_dir = ctx.trend_state.get("direction", "")
     ai_trend = parsed.trend
     if ctx_dir and ai_trend not in ("mixed", "uncertain"):
         _log_trend_disagreements(symbol, ctx_dir, ai_trend, parsed)
 
-    # O8: calibrate the AI's confidence against actual resolved outcomes
-    # for this symbol.  If the AI has been wrong more than right, dampen
-    # the declared confidence toward neutral.
+    # O8: calibrate confidence against resolved outcomes for this symbol.
     if parsed.confidence is not None:
         parsed.confidence = _calibrate_confidence(
             parsed.confidence, ctx.track_record,
         )
 
-    # Surface the quantitative context that drove this read (regime, MTF
-    # scores, the symbol's track record, and peer alignment) on the
+    # Surface the quantitative context that drove this read on the
     # response itself — they were injected into the prompt but never
     # returned, so the UI couldn't render a regime badge, the MTF
-    # confidence row, a track-record strip, or peer-alignment summary.
+    # confidence row, the track-record strip, or peer alignment.
     # Not AI output: copied verbatim from build_context().
     parsed.market_regime = ctx.market_regime or {}
     parsed.timeframe_scores = ctx.timeframe_scores or {}
     parsed.track_record = ctx.track_record or {}
     parsed.correlation_context = ctx.correlation_context or {}
 
-    # Record which provider/model actually answered — found live
-    # 2026-09-10: every caller previously reported the configured
-    # PRIMARY (ai_manager.settings.provider/model) here instead,
-    # silently misattributing fallback-served analyses to the primary.
+    # Attribute to whoever actually answered (not the configured primary).
     parsed.provider = ai_resp.provider
     parsed.model = ai_resp.model
 
-    # Found live 2026-09-11: the prompt didn't actually ask for
-    # key_levels to be labeled (a gap now closed in SYSTEM_PROMPT), so
-    # weaker/older-cached-prompt replies can still come back as bare
-    # numbers ("756.64") with nothing saying support or resistance.
-    # Defense in depth for whatever slips through despite the prompt
-    # fix — label anything still bare, relative to the live price.
+    # Defense in depth: label any bare key levels relative to live price.
     parsed.key_levels = _label_bare_key_levels(parsed.key_levels, ctx.price)
 
-    # Single choke point (2026-09-11): every caller of analyze_symbol()
-    # funnels through here, so this is the one place that needs to know
-    # about trade-plan outcome tracking. Best-effort — a capture failure
-    # must never surface as an analysis failure.
+    # Single choke point: capture actionable trade plans (best-effort).
     try:
         from backend.ai.trade_plan_tracker import record_trade_plan
 
@@ -365,6 +384,135 @@ async def analyze_symbol(
 
     _cache_result(cache_key, parsed)
     return parsed
+
+
+def _result_to_dict(result: AnalysisResponse | UncertaintyResponse) -> dict[str, Any]:
+    """JSON-serializable dict of a finalized result for SSE 'final' frames."""
+    return result.model_dump(mode="json")
+
+
+async def analyze_symbol_stream(
+    symbol: str,
+    timeframe: str = "1d",
+    *,
+    advisory: bool = True,
+    system_prompt_override: str | None = None,
+    portfolio_symbols: list[str] | None = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> AsyncIterator[tuple[str, Any]]:
+    """Stream an AI analysis as ``(kind, payload)`` pairs for SSE.
+
+    Frames (mirror the chat SSE convention in chat_router.py):
+      ``("meta", {...})``  — once, up front: {symbol, timeframe,
+                            track_record, model}
+      ``("delta", <str>)`` — incremental summary text as it arrives
+      ``("final", {...})`` — the full finalized AnalysisResponse /
+                            UncertaintyResponse dict, after parse + cache
+      ``("error", <str>)` — if the stream can't even start
+
+    Only the summary is streamed token-by-token; the structured fields
+    (trend, confidence, trade_plan, market_regime, ...) are emitted once
+    in the ``final`` frame after the full reply is accumulated and
+    validated via ``_finalize_analysis()`` — identical handling to the
+    blocking ``analyze_symbol()``.
+    """
+    # --- cache check (O4) ---
+    if system_prompt_override is None:
+        cache_key = _cache_key(
+            symbol, timeframe, advisory,
+            portfolio_symbols, model, max_tokens, temperature,
+        )
+        now = time.monotonic()
+        with _cache_lock:
+            hit = _analysis_cache.get(cache_key)
+            if hit is not None and now - hit[0] < _ANALYSIS_TTL:
+                _analysis_cache.move_to_end(cache_key)
+                cached = hit[1]
+                yield ("meta", {
+                    "symbol": cached.symbol,
+                    "timeframe": cached.timeframe,
+                    "track_record": getattr(cached, "track_record", {}) or {},
+                    "model": getattr(cached, "model", None),
+                })
+                yield ("delta", cached.summary or "")
+                yield ("final", _result_to_dict(cached))
+                return
+    else:
+        cache_key = None
+
+    # --- build context ---
+    try:
+        ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
+    except InsufficientDataError as e:
+        logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
+        result = _uncertainty(f"Quantitative data not available: {e}")
+        _cache_result(cache_key, result)
+        yield ("meta", {
+            "symbol": symbol.upper(),
+            "timeframe": timeframe,
+            "track_record": {},
+            "model": model,
+        })
+        yield ("final", _result_to_dict(result))
+        return
+
+    system_prompt, final_temperature, response_format = _build_request(
+        ctx, system_prompt_override, advisory, temperature,
+    )
+
+    yield ("meta", {
+        "symbol": ctx.symbol,
+        "timeframe": ctx.timeframe,
+        "track_record": ctx.track_record or {},
+        "model": model,
+    })
+
+    # --- stream the LLM ---
+    accumulated: list[str] = []
+    try:
+        async for piece in ai_manager.stream(
+            prompt=build_user_prompt(summarize_context(ctx.compact())),
+            system=system_prompt,
+            max_tokens=max_tokens,
+            temperature=final_temperature,
+            response_format=response_format,
+            model=model,
+        ):
+            accumulated.append(piece)
+            yield ("delta", piece)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI stream failed for %s: %s", symbol, e)
+        if not accumulated:
+            # Nothing was emitted — the stream couldn't start. Surface an
+            # error frame rather than silently returning nothing.
+            yield ("error", "The analysis stream could not be started; retry, or use POST /api/ai/analyze for a blocking reply.")
+            return
+        # Partial text already shown — fall through and finalize what we have.
+
+    text = "".join(accumulated) if accumulated else None
+    if text is None:
+        # Disabled, or every provider was unavailable before first chunk.
+        if not ai_manager.enabled:
+            ai_resp = AIResponse(text=None, provider="disabled", model=model or ai_manager.settings.model, structured=False)
+        else:
+            last = ai_manager.last_answered()
+            prov = last["provider"] if last else ai_manager.settings.provider
+            ai_resp = AIResponse(text=None, provider=prov, model=model or ai_manager.settings.model, structured=False)
+    else:
+        last = ai_manager.last_answered()
+        prov = last["provider"] if last else (ai_manager.settings.provider if ai_manager.enabled else "disabled")
+        mod = last["model"] if last else (model or ai_manager.settings.model)
+        # structured only if we asked for it: the answering provider's
+        # capability is implied by response_format being non-None (chain
+        # supported it) on the uniform-settings path. parse_ai_reply
+        # degrades safely to regex if the reply wasn't actually JSON.
+        structured = bool(response_format is not None)
+        ai_resp = AIResponse(text=text, provider=prov, model=mod, structured=structured)
+
+    result = _finalize_analysis(symbol, ctx, ai_resp, cache_key)
+    yield ("final", _result_to_dict(result))
 
 
 # --- Internals -------------------------------------------------------

@@ -1433,6 +1433,117 @@ class TestAnalyzeStructuredOutput(unittest.TestCase):
             self.assertEqual(args.kwargs.get("structured"), True)
 
 
+# --- O13: streaming analysis ----------------------------------------------
+
+
+class TestAnalyzeSymbolStream(unittest.TestCase):
+    """analyze_symbol_stream() emits meta/delta/final SSE-style frames and
+    reuses the same finalize pipeline as the blocking analyze_symbol()."""
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_stream_emits_meta_delta_final(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.enabled = True
+        mock_ai.chain_supports_structured_output.return_value = True
+        mock_ai.settings.provider = "openrouter"
+        mock_ai.settings.model = "gpt-4o"
+        mock_ai.last_answered.return_value = {"provider": "ollama", "model": "llama3.2"}
+
+        payload = json.dumps({
+            "summary": "AAPL is up on volume and breadth.",
+            "trend": "bullish",
+            "confidence": 0.8,
+            "supporting_factors": ["above SMA 50"],
+            "risk_factors": [],
+            "timeframe_conflicts": [],
+            "key_levels": [],
+        })
+
+        async def _gen():
+            yield "```json\n"
+            yield payload
+            yield "\n```"
+
+        # ai_manager.stream() is an async *generator function* (calling it
+        # returns an async generator, not a coroutine), so mock it with a
+        # plain callable that returns an async generator object.
+        mock_ai.stream = lambda **kw: _gen()
+
+        frames = []
+        asyncio.run(self._collect(mock_ai, frames))
+        kinds = [k for k, _ in frames]
+
+        self.assertEqual(kinds[0], "meta")
+        self.assertIn("delta", kinds)
+        self.assertIn("final", kinds)
+        meta = frames[0][1]
+        self.assertEqual(meta["symbol"], "AAPL")
+        self.assertEqual(meta["timeframe"], "1d")
+        final = next(p for k, p in frames if k == "final")
+        self.assertEqual(final["trend"], "bullish")
+        self.assertEqual(final["provider"], "ollama")
+        self.assertEqual(final["model"], "llama3.2")
+        self.assertIn("market_regime", final)
+        self.assertIn("track_record", final)
+
+    async def _collect(self, mock_ai, frames):
+        from backend.ai.analyze import analyze_symbol_stream
+        async for kind, payload in analyze_symbol_stream("AAPL", "1d"):
+            frames.append((kind, payload))
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_stream_disabled_yields_final_uncertainty(self, mock_ctx, mock_ai):
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.enabled = False
+        mock_ai.chain_supports_structured_output.return_value = True
+        mock_ai.settings.provider = "ollama"
+        mock_ai.settings.model = "llama3.2"
+        mock_ai.stream = lambda **kw: self._empty()
+
+        frames = []
+        asyncio.run(self._collect(mock_ai, frames))
+        kinds = [k for k, _ in frames]
+        self.assertEqual(kinds, ["meta", "final"])
+        final = frames[-1][1]
+        self.assertEqual(final["trend"], "uncertain")
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_stream_unknown_provider_yields_error(self, mock_ctx, mock_ai):
+        """An exception before any chunk is emitted surfaces as an error
+        frame, not a silent empty stream."""
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live",
+        )
+        mock_ai.enabled = True
+        mock_ai.chain_supports_structured_output.return_value = True
+
+        async def _boom():
+            raise RuntimeError("connection refused")
+            yield  # pragma: no cover - async generator
+
+        mock_ai.stream = lambda **kw: _boom()
+
+        frames = []
+        asyncio.run(self._collect(mock_ai, frames))
+        self.assertEqual(frames[0][0], "meta")
+        self.assertEqual(frames[-1][0], "error")
+
+    @staticmethod
+    def _empty():
+        async def _gen():
+            return
+            yield  # pragma: no cover
+        return _gen()
+
+
+
 # --- O10: multi-symbol correlation context -------------------------------
 
 

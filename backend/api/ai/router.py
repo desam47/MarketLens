@@ -23,9 +23,12 @@ Query parameters:
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -33,13 +36,19 @@ from ...ai import (
     UncertaintyResponse,
     ai_manager,
 )
-from ...ai.analyze import analyze_symbol
+from ...ai.analyze import analyze_symbol, analyze_symbol_stream
 from ...ai.prompt import TradePlan
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
 from ..rate_limit import _ai_limiter, check_rate_limit
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+logger = logging.getLogger(__name__)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 def _parse_portfolio_symbols(raw: str | None) -> list[str] | None:
@@ -260,6 +269,92 @@ async def analyze(
         timeframe_scores=getattr(result, "timeframe_scores", {}) or {},
         track_record=getattr(result, "track_record", {}) or {},
         correlation_context=getattr(result, "correlation_context", {}) or {},
+    )
+
+
+@router.post("/analyze/stream")
+async def analyze_stream(
+    symbol: str = Query(..., min_length=1, max_length=10),
+    timeframe: str = Query(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$"),
+    max_tokens: int | None = Query(default=None, ge=100, le=8192),
+    temperature: float | None = Query(default=None, ge=0.0, le=2.0),
+    template_id: int | None = Query(
+        default=None, ge=1,
+    ),
+    portfolio_symbols: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
+) -> StreamingResponse:
+    """Stream an AI market analysis for ``symbol`` over SSE.
+
+    Frames (``text/event-stream``):
+      ``meta``  — ``{symbol, timeframe, track_record, model}``, up front
+      ``delta`` — ``{text}``, the summary as it's generated
+      ``final`` — the full finalized ``AnalyzeResponse`` dict (identical
+                  shape to ``POST /analyze``), once, after parse + cache
+      ``error`` — ``{message}`` if the stream can't start
+
+    Only the summary is streamed token-by-token; trend, confidence,
+    trade_plan, regime, MTF scores, track record, and peer alignment
+    arrive in the single ``final`` frame. The ``final`` frame is
+    authoritative — clients should replace any partial summary with the
+    parsed one (the same note as chat streaming). Never 500s for
+    expected failure modes (no data, AI off, provider down, parse
+    failure) — those surface as ``final`` uncertainty or ``error``.
+    """
+    resolved_template_id, tmpl_obj = await asyncio.to_thread(
+        _sync_resolve_template, db, template_id
+    )
+    rendered_system: str | None = None
+    if tmpl_obj is not None:
+        rendered_system = await asyncio.to_thread(
+            resolve_and_render,
+            db,
+            resolved_template_id,
+            {"symbol": symbol.upper(), "timeframe": timeframe},
+        )
+
+    async def event_stream():
+        try:
+            async for kind, payload in analyze_symbol_stream(
+                symbol=symbol.upper(),
+                timeframe=timeframe,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system_prompt_override=rendered_system,
+                portfolio_symbols=_parse_portfolio_symbols(portfolio_symbols),
+                model=model,
+            ):
+                if kind == "delta":
+                    yield _sse("delta", {"text": payload})
+                elif kind == "final":
+                    # Stamp the resolved template on the final response,
+                    # matching the blocking endpoint's shape.
+                    payload.setdefault("template_id", resolved_template_id)
+                    payload.setdefault(
+                        "template_name", tmpl_obj.name if tmpl_obj else None
+                    )
+                    yield _sse("final", payload)
+                elif kind == "error":
+                    yield _sse("error", {"message": payload})
+                else:
+                    yield _sse(kind, payload)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("analyze stream failed for %s: %s", symbol, e)
+            yield _sse(
+                "error",
+                {"message": "The analysis stream failed unexpectedly; retry, or use POST /api/ai/analyze."},
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -1,5 +1,6 @@
 """Phase 16 — API router tests for /api/ai/* endpoints."""
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -153,6 +154,53 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         # uncertainty (no build_context() ran).
         self.assertEqual(data["market_regime"], {})
         self.assertEqual(data["correlation_context"], {})
+
+    @patch("backend.api.ai.router.analyze_symbol_stream")
+    @patch("backend.api.ai.router.ai_manager")
+    def test_analyze_stream_endpoint_emits_sse_frames(self, mock_ai_mgr, mock_stream):
+        async def _gen():
+            yield ("meta", {"symbol": "AAPL", "timeframe": "1d", "track_record": {}, "model": None})
+            yield ("delta", "AAPL looks")
+            yield ("delta", " bullish.")
+            yield ("final", {
+                "summary": "AAPL looks bullish.", "trend": "bullish", "confidence": 0.9,
+                "supporting_factors": ["Above SMA 50"], "risk_factors": ["RSI overbought"],
+                "key_levels": ["$200"], "trade_plan": None,
+                "provider": "ollama", "model": "llama3.2", "is_uncertain": False,
+                "market_regime": {"regime": "risk_on"},
+                "timeframe_scores": {}, "track_record": {}, "correlation_context": {},
+            })
+
+        mock_stream.return_value = _gen()
+        mock_ai_mgr.settings.provider = "ollama"
+        mock_ai_mgr.settings.model = "llama3.2"
+
+        with client.stream("POST", "/api/ai/analyze/stream?symbol=AAPL&timeframe=1d") as resp:
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn("text/event-stream", resp.headers["content-type"])
+            resp.read()
+            body = resp.text
+
+        frames = [f for f in body.split("\n\n") if f.strip()]
+        events = []
+        for f in frames:
+            lines = f.splitlines()
+            ev = next((ln[len("event: "):] for ln in lines if ln.startswith("event: ")), None)
+            data_line = next((ln for ln in lines if ln.startswith("data: ")), None)
+            if ev and data_line:
+                events.append((ev, data_line[len("data: "):]))
+        kinds = [ev for ev, _ in events]
+        self.assertEqual(kinds[0], "meta")
+        self.assertEqual(kinds[-1], "final")
+        self.assertEqual(kinds.count("delta"), 2)
+        delta_text = "".join(json.loads(d)["text"] for ev, d in events if ev == "delta")
+        self.assertEqual(delta_text, "AAPL looks bullish.")
+        final = json.loads(next(d for ev, d in events if ev == "final"))
+        self.assertEqual(final["trend"], "bullish")
+        self.assertEqual(final["provider"], "ollama")
+        self.assertEqual(final["market_regime"], {"regime": "risk_on"})
+        self.assertEqual(final["template_id"], None)
+        self.assertEqual(final["template_name"], None)
 
     @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")

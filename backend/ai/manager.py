@@ -378,6 +378,17 @@ class AIManager:
         )
         return AIResponse(text=None, provider="none", model=self.settings.model)
 
+    def last_answered(self) -> dict[str, str] | None:
+        """``{"provider", "model"}`` of the most recent successful
+        ``complete()``/``stream()`` call, or None if AI has never answered.
+
+        Exposed so analyze_symbol_stream() can stamp the answering
+        provider/model onto the streamed AnalysisResponse — previously a
+        streamed analysis could only carry the configured primary.
+        """
+        last = dict(self._last_success) if self._last_success else None
+        return last
+
     async def stream(
         self,
         prompt: str,
@@ -438,6 +449,11 @@ class AIManager:
                 ):
                     started = True
                     yield piece
+                with self._lock:
+                    self._last_success = {
+                        "provider": provider.name,
+                        "model": provider._model,
+                    }
                 return
             except ProviderUnavailable as e:
                 if started:
