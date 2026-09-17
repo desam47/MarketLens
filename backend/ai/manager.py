@@ -317,18 +317,24 @@ class AIManager:
 
         ``model`` (O12): when provided, try this specific chain entry
         first — e.g. ``model="openai:gpt-4o-mini"`` for a quick chat
-        turn, ``model="openai:gpt-4o"`` for a formal analysis. The
-        entry is tried before the default chain; if it fails, the
-        manager falls through to the standard fallback chain as usual.
-        This lets callers pick a cheaper/faster model for low-stakes
-        requests without reconfiguring the whole provider chain.
+        turn, ``model="openai:gpt-4o"`` for a formal analysis. May
+        also be a comma-separated list of entries (e.g.
+        ``"openai_compatible:auto/best-free,openai_compatible:Best_Free"``)
+        to try several before falling through to the standard chain —
+        the same comma-list convention ``fallback_providers`` already
+        uses. Every named entry is tried before the default chain; if
+        all fail, the manager falls through to the standard fallback
+        chain as usual. This lets callers pick a cheaper/faster model
+        (or a short private fallback list) for low-stakes requests
+        without reconfiguring the whole provider chain.
         """
         if not self.enabled:
             return AIResponse(text=None, provider="disabled", model=self.settings.model)
 
-        # O12: optional model-specific routing — try the named entry
-        # first, then fall through to the standard chain.
-        chain = [model] + self._all_providers() if model else self._all_providers()
+        # O12: optional model-specific routing — try the named entry/
+        # entries first, then fall through to the standard chain.
+        model_entries = [m.strip() for m in model.split(",") if m.strip()] if model else []
+        chain = model_entries + self._all_providers()
         # Dedupe while preserving order (the named entry may already be
         # the primary — we don't want to try it twice).
         seen: set[str] = set()
@@ -403,7 +409,8 @@ class AIManager:
         """Stream a completion, walking the fallback chain.
 
         ``model`` (O12): when provided, try this specific chain entry
-        first — see ``complete()`` for the full rationale.
+        (or comma-separated list of entries) first — see ``complete()``
+        for the full rationale.
 
         ``attribution`` (2026-09-16): pass a fresh ``StreamAttribution``
         to learn which provider/model actually produced the text after
@@ -428,7 +435,8 @@ class AIManager:
         if not self.enabled:
             return
 
-        chain = [model] + self._all_providers() if model else self._all_providers()
+        model_entries = [m.strip() for m in model.split(",") if m.strip()] if model else []
+        chain = model_entries + self._all_providers()
         seen: set[str] = set()
         deduped_chain: list[str] = []
         for n in chain:

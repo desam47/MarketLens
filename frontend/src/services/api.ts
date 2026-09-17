@@ -2063,7 +2063,10 @@ export interface AITemplatePreview {
 
 export interface AIDigestMover {
   symbol: string;
-  score: number;
+  // Optional: older, already-persisted digests were generated before
+  // change_pct replaced the old momentum/RSI score field, so their
+  // stored payload predates this field.
+  change_pct?: number;
   blurb?: string;
 }
 

@@ -457,12 +457,15 @@ class AnthropicProvider(AIProvider):
         if response_format is not None:
             schema = response_format.get("json_schema", response_format)
             tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
-            tool_schema = schema if isinstance(schema.get("parameters"), dict) else schema
+            # "schema" is the spec-compliant OpenAI json_schema key name;
+            # "parameters" is kept for back-compat with the older shape
+            # this adapter originally read.
+            input_schema = schema.get("schema") or schema.get("parameters") or schema
             body["tools"] = [
                 {
                     "name": tool_name,
-                    "description": tool_schema.get("description", "Return the JSON result."),
-                    "input_schema": tool_schema.get("parameters") or tool_schema,
+                    "description": schema.get("description", "Return the JSON result."),
+                    "input_schema": input_schema,
                 }
             ]
             body["tool_choice"] = {"type": "tool", "name": tool_name}
@@ -557,12 +560,15 @@ class AnthropicProvider(AIProvider):
         if response_format is not None:
             schema = response_format.get("json_schema", response_format)
             tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
-            tool_schema = schema if isinstance(schema.get("parameters"), dict) else schema
+            # "schema" is the spec-compliant OpenAI json_schema key name;
+            # "parameters" is kept for back-compat with the older shape
+            # this adapter originally read.
+            input_schema = schema.get("schema") or schema.get("parameters") or schema
             body["tools"] = [
                 {
                     "name": tool_name,
-                    "description": tool_schema.get("description", "Return the JSON result."),
-                    "input_schema": tool_schema.get("parameters") or tool_schema,
+                    "description": schema.get("description", "Return the JSON result."),
+                    "input_schema": input_schema,
                 }
             ]
             body["tool_choice"] = {"type": "tool", "name": tool_name}

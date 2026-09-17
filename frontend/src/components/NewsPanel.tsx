@@ -74,16 +74,26 @@ export function NewsPanel({ symbol }: NewsPanelProps) {
     );
   }
 
+// Show every article the provider returned; the list is capped in
+  // height and scrollable so a long news feed doesn't push the rest of
+  // the symbol page off screen.
   return (
     <div className="card analysis-card">
       <div className="card-header-row">
         <h2>📰 News</h2>
-        {provider && <span className="provider-badge" style={{ color: unusualColors[provider] || '#6b7280' }}>{provider}</span>}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {provider && <span className="provider-badge" style={{ color: unusualColors[provider] || '#6b7280' }}>{provider}</span>}
+          {items.length > 0 && (
+            <span className="news-count" title={`${items.length} articles`}>
+              {items.length}
+            </span>
+          )}
+        </span>
       </div>
       {items.length === 0 ? (
         <p className="empty-state">No recent news</p>
       ) : (
-        <div className="news-list">
+        <div className="news-list-scroll">
           {items.map((item, i) => (
             <div key={i} className="news-item">
               <div className="news-header-row">

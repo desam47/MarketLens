@@ -93,24 +93,29 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
         if s in market_scanner.scan_results
     }
 
-    # Descending by signed score: strongest bullish first, strongest
-    # bearish last.
+    # Descending by live price change % — actual price direction, not
+    # the momentum/RSI directional score (a contrarian/oversold-bounce
+    # composite that can disagree sharply with where price is actually
+    # moving — e.g. a crashing penny stock reading "bullish" because
+    # deeply-oversold RSI plus a lagging-positive, clamped-to-ceiling
+    # MACD outweigh the real price collapse; the digest narrative once
+    # described a stock down ~35% as a "leading bullish mover" as a
+    # result). Mirrors the same fix already applied to
+    # backend.scanner.ranking's strongest_bullish/strongest_bearish.
+    # Symbols with no live change_pct (quote unavailable) can't be
+    # placed on either side.
     ranked = sorted(
-        cache.values(),
-        key=lambda r: _safe_call(r.calculate_signed_total_score, default=0.0),
+        (r for r in cache.values() if r.change_pct is not None),
+        key=lambda r: r.change_pct if r.change_pct is not None else 0.0,
         reverse=True,
     )
-    # Split into genuinely bullish (score > 0) and genuinely bearish
-    # (score < 0) candidate pools *before* taking the top N — taking
-    # "first N regardless of sign" from a small watchlist can consume
-    # every symbol (bullish AND bearish) into top_bullish alone,
-    # leaving nothing for top_bearish once same-symbol dedup runs.
-    bullish_candidates = [
-        r for r in ranked if _safe_call(r.calculate_signed_total_score, default=0.0) > 0
-    ]
-    bearish_candidates = [
-        r for r in ranked if _safe_call(r.calculate_signed_total_score, default=0.0) < 0
-    ]
+    # Split into genuinely bullish (change_pct > 0) and genuinely
+    # bearish (change_pct < 0) candidate pools *before* taking the top
+    # N — taking "first N regardless of sign" from a small watchlist
+    # can consume every symbol (bullish AND bearish) into top_bullish
+    # alone, leaving nothing for top_bearish once same-symbol dedup runs.
+    bullish_candidates = [r for r in ranked if (r.change_pct or 0.0) > 0]
+    bearish_candidates = [r for r in ranked if (r.change_pct or 0.0) < 0]
     top_bullish = bullish_candidates[:top_movers_count]
     # bearish_candidates is still in descending order (weakest-bearish
     # first, strongest-bearish last) since it's a filtered slice of
@@ -139,7 +144,7 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
     def _mover_dict(r) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "symbol": r.symbol,
-            "score": round(_safe_call(r.calculate_signed_total_score, default=0.0), 2),
+            "change_pct": round(r.change_pct, 2) if r.change_pct is not None else 0.0,
         }
         # advisory=False: the digest is a descriptive read, not a place
         # for per-mover trade plans. ``analyze_symbol`` is async and
@@ -162,8 +167,8 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
     # N × per-call-latency to ~⌈N/4⌉ × per-call-latency.
     # Results are collected by submission index (not completion order) to
     # preserve the ranked ordering from above. A single failed analysis
-    # degrades to a symbol+score entry (no blurb) instead of aborting the
-    # whole digest.
+    # degrades to a symbol+change_pct entry (no blurb) instead of
+    # aborting the whole digest.
     all_movers = list(top_bullish) + list(top_bearish)
     bullish_count = len(top_bullish)
     mover_results: list[dict[str, Any]] = [{}] * len(all_movers)
@@ -183,9 +188,7 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
                     )
                     mover_results[i] = {
                         "symbol": symbol,
-                        "score": round(
-                            _safe_call(r.calculate_signed_total_score, default=0.0), 2,
-                        ),
+                        "change_pct": round(r.change_pct, 2) if r.change_pct is not None else 0.0,
                     }
         movers = {
             "top_bullish": mover_results[:bullish_count],

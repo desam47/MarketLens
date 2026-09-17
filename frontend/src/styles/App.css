@@ -4749,10 +4749,30 @@ h4 {
 }
 
 /* ---- Phase 18: News Panel ---- */
+.news-list-scroll {
+  max-height: 560px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+.news-list-scroll::-webkit-scrollbar { width: 6px; }
+.news-list-scroll::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+.news-list-scroll::-webkit-scrollbar-track { background: transparent; }
+
 .news-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.news-count {
+  font-size: 11px;
+  color: #6b7280;
+  background: #1f2937;
+  border-radius: 10px;
+  padding: 1px 7px;
 }
 
 .news-item {

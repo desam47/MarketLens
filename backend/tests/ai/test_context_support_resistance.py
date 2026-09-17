@@ -13,10 +13,11 @@ ImportError/AttributeError every time, so `support_resistance` had been
 an empty dict in every AI context ever built.
 
 Fixed by calling the engine the way the existing, working
-`/api/analysis/{symbol}/price-range` endpoint does
-(backend/api/analysis/router.py) — same bar source, same engine
-construction — then bucketing the flat level list into supports/
-resistances by price relative to the latest close.
+    `/api/analysis/{symbol}/price-range` endpoint does
+    (backend/api/analysis/router.py) — same bar source, same engine
+    construction — then bucketing the flat level list into supports/
+    resistances by SRType semantics (a swing_high is resistance by
+    definition, regardless of where the latest close sits).
 """
 import unittest
 from datetime import UTC, datetime
@@ -82,25 +83,40 @@ class TestBuildContextSupportResistance(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_supports_are_at_or_below_latest_close_resistances_above(
+    def test_supports_are_structural_supports_resistances_structural_resistances(
         self, mock_scanner, mock_get_engine
     ):
-        """The bucketing itself: a support level's price must never
-        exceed the latest close, and a resistance must never be below
-        it — this is the part the old (broken) code never actually
-        did, since it always returned {}."""
+        """Bucketing is by TYPE semantics, not by price vs close.
+
+        Found live 2026-09-16: the old `price <= latest_close → support`
+        rule mislabeled swing highs as support whenever the close sat
+        just below one (NVDA close 213.90 vs swing high 213.75 → reported
+        as a "213.75 support" level, which is backwards). A swing_high
+        is resistance by definition — price was rejected there — so the
+        bucket now keys off SRType. The old price invariant is only
+        retained for consolidation_zone, which has no inherent side.
+        """
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
         bars = _fake_bars()
-        latest_close = bars[0]["close"]
 
         with patch("backend.analysis.series.load_bars", return_value=bars):
             ctx = build_context("AAPL", "1d")
 
+        structural_supports = {
+            "today_low", "prev_day_low", "this_week_low", "prev_week_low",
+            "week_52_low", "pivot_pp", "pivot_s1", "pivot_s2", "pivot_s3",
+            "swing_low",
+        }
+        structural_resistances = {
+            "today_high", "prev_day_high", "this_week_high", "prev_week_high",
+            "week_52_high", "pivot_r1", "pivot_r2", "pivot_r3",
+            "swing_high",
+        }
         for level in ctx.support_resistance["supports"]:
-            self.assertLessEqual(level["price"], latest_close)
+            self.assertIn(level["type"], structural_supports | {"consolidation_zone"})
         for level in ctx.support_resistance["resistances"]:
-            self.assertGreater(level["price"], latest_close)
+            self.assertIn(level["type"], structural_resistances | {"consolidation_zone"})
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")

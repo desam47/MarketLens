@@ -16,9 +16,14 @@ from backend.scanner.scanner import ScanResult
 
 
 def _fake_result(symbol: str, score: float, signals: list[str] | None = None, rsi: float | None = None) -> ScanResult:
+    """``score`` doubles as both the (legacy) directional score and the
+    live change_pct — build_digest_payload's movers now rank by
+    change_pct, so every existing caller's sign/magnitude still drives
+    bullish/bearish placement the same way it always did."""
     r = ScanResult(symbol, datetime.now(UTC))
     r.quote = MagicMock()
     r.quote.price = 100.0
+    r.change_pct = score
     r.indicator_values = {"rsi": rsi} if rsi is not None else {}
     r.signals = signals or []
     r._score = score
@@ -56,6 +61,41 @@ class TestBuildDigestPayload(unittest.TestCase):
         self.assertEqual(bullish_symbols[0], "A")
         self.assertIn("B", bearish_symbols)
         self.assertEqual(payload["watchlist_size"], 4)
+
+    @patch("backend.ai.digest.analyze_symbol")
+    @patch("backend.nl_search.executor._resolve_watchlist_symbols")
+    @patch("backend.scanner.scanner.market_scanner")
+    @patch("backend.api.market_context.router.get_engine")
+    def test_movers_rank_by_change_pct_not_directional_score(
+        self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
+    ):
+        """Regression for a live bug (2026-09-16, CTNT): movers used to
+        rank by calculate_signed_total_score (a momentum/RSI contrarian
+        composite) instead of live price change — a crashing stock could
+        show up as a "leading bullish mover" in the AI narrative. A
+        symbol with a bullish-looking directional score but a genuinely
+        negative change_pct must land on the bearish side, and its
+        reported change_pct (not the old score) is what's exposed."""
+        mock_get_engine.return_value = MagicMock(
+            get_current_context=MagicMock(return_value=None)
+        )
+        symbols = ["CRASHING", "RISING"]
+        mock_resolve.return_value = symbols
+        crashing = _fake_result("CRASHING", score=44.0)  # bullish-looking score...
+        crashing.change_pct = -35.0  # ...but price is actually crashing.
+        rising = _fake_result("RISING", score=-10.0)  # bearish-looking score...
+        rising.change_pct = 5.0  # ...but price is actually up.
+        mock_scanner.scan_results = {"CRASHING": crashing, "RISING": rising}
+        mock_analyze.return_value = MagicMock(is_uncertain=True)
+
+        payload = build_digest_payload()
+
+        bullish_symbols = [m["symbol"] for m in payload["movers"]["top_bullish"]]
+        bearish_symbols = [m["symbol"] for m in payload["movers"]["top_bearish"]]
+        self.assertEqual(bullish_symbols, ["RISING"])
+        self.assertEqual(bearish_symbols, ["CRASHING"])
+        crashing_entry = payload["movers"]["top_bearish"][0]
+        self.assertEqual(crashing_entry["change_pct"], -35.0)
 
     @patch("backend.ai.digest.analyze_symbol")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")

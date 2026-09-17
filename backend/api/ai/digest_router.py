@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ...repositories.ai_digest_repository import AIDigestRepository
+from ...utils.timezone import format_edt_iso
 
 router = APIRouter(prefix="/api/ai/digest", tags=["ai-digest"])
 
@@ -44,7 +45,7 @@ def _to_response(row) -> DigestResponse:
     return DigestResponse(
         id=row.id,
         session=row.session,
-        generated_at=row.generated_at.isoformat(),
+        generated_at=format_edt_iso(row.generated_at) or "",
         market_regime=row.market_regime,
         narrative=row.narrative,
         payload=payload,
@@ -93,7 +94,7 @@ async def generate_digest_now(
     return DigestResponse(
         id=result["id"],
         session=result["session"],
-        generated_at=result["generated_at"].isoformat(),
+        generated_at=format_edt_iso(result["generated_at"]) or "",
         market_regime=result["market_regime"],
         narrative=result["narrative"],
         payload=result["payload"],

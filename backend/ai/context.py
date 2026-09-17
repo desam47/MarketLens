@@ -387,14 +387,49 @@ def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
             )
             latest_close = sr_result.latest_close
             if latest_close is not None:
+                # Bucket by TYPE semantics, not by price vs close. Found
+                # live 2026-09-16: a `swing_high` is resistance by
+                # definition — price was rejected there — but NVDA's close
+                # (213.90) sat just below its 213.75 swing high, so the
+                # old `price <= latest_close → support` rule mislabeled
+                # every swing high under the close as "support". The AI
+                # then reported 213.75 as a support level, which is
+                # backwards. The analysis router never had this problem
+                # because it only emits pivots with an explicit
+                # is_resistance flag; mirror that here by mapping each
+                # SRType to its structural side. `consolidation_zone`
+                # has no inherent side, so it falls back to the price-vs-
+                # close rule (a zone straddling the close is ambiguous
+                # either way).
+                resistance_types = {
+                    "today_high", "prev_day_high", "this_week_high",
+                    "prev_week_high", "week_52_high",
+                    "pivot_r1", "pivot_r2", "pivot_r3",
+                    "swing_high",
+                }
+                support_types = {
+                    "today_low", "prev_day_low", "this_week_low",
+                    "prev_week_low", "week_52_low",
+                    "pivot_pp", "pivot_s1", "pivot_s2", "pivot_s3",
+                    "swing_low",
+                }
                 supports: list[dict[str, Any]] = []
                 resistances: list[dict[str, Any]] = []
                 for level in sr_result.levels:
                     entry = {
                         "price": round(level.price, 2),
+                        "type": level.type.value,
                         "strength": round(float(level.strength), 2),
                     }
-                    (supports if level.price <= latest_close else resistances).append(entry)
+                    ltype = level.type.value
+                    if ltype in resistance_types:
+                        bucket = resistances
+                    elif ltype in support_types:
+                        bucket = supports
+                    else:
+                        # consolidation_zone — no structural side
+                        bucket = supports if level.price <= latest_close else resistances
+                    bucket.append(entry)
                 sr = {
                     "supports": supports[:3],
                     "resistances": resistances[:3],
@@ -771,7 +806,16 @@ def build_context(
     trend signal — the caller should return an uncertainty response.
     """
     sym = symbol.upper()
-    tf = timeframe.upper()
+    # The bar table stores timeframes lowercase (1m/1h/1d/1wk — see
+    # backend/repositories/bar_repository.py's _ALL_TIMEFRAMES), and
+    # load_bars / get_bars match the column value exactly, so the
+    # DB-facing helpers below (S/R, divergence, signal stats) need the
+    # lowercase form. Upper-casing it here ("1D") silently returned 0
+    # bars for every symbol — found live 2026-09-16: "Calculate S/R
+    # for SPY" came back with an empty support_resistance dict and the
+    # AI honestly replied it had no live levels, when the engine
+    # produces 50 real levels the moment you pass "1d".
+    tf = timeframe.lower()
 
     # --- 1. Single-symbol scan (complete snapshot including MTF scores) ---
     # Runs on the caller's thread: every other sub-engine derives from it,

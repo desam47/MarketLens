@@ -27,10 +27,20 @@ const regimeColors: Record<string, string> = {
   unknown: '#9ca3af',
 };
 
-function scoreColor(score: number): string {
-  if (score >= 30) return '#10b981';
-  if (score <= -30) return '#ef4444';
+function changeColor(changePct: number | null | undefined): string {
+  if (changePct == null) return '#9ca3af';
+  if (changePct > 0) return '#10b981';
+  if (changePct < 0) return '#ef4444';
   return '#9ca3af';
+}
+
+// Older, already-persisted digests were generated before change_pct
+// replaced the old momentum/RSI score field — their stored payload
+// still has that shape, so change_pct is undefined for them. Render
+// "—" instead of crashing on `.toFixed()` of undefined.
+function formatChangePct(changePct: number | null | undefined): string {
+  if (changePct == null) return '—';
+  return `${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}%`;
 }
 
 export function DigestCard() {
@@ -159,8 +169,8 @@ export function DigestCard() {
                   movers.top_bullish.map(m => (
                     <div key={m.symbol} className="digest-mover-row">
                       <span className="digest-mover-symbol">{m.symbol}</span>
-                      <span className="digest-mover-score" style={{ color: scoreColor(m.score) }}>
-                        {m.score > 0 ? '+' : ''}{m.score.toFixed(1)}
+                      <span className="digest-mover-score" style={{ color: changeColor(m.change_pct) }}>
+                        {formatChangePct(m.change_pct)}
                       </span>
                       {m.blurb && <p className="digest-mover-blurb">{m.blurb}</p>}
                     </div>
@@ -175,8 +185,8 @@ export function DigestCard() {
                   movers.top_bearish.map(m => (
                     <div key={m.symbol} className="digest-mover-row">
                       <span className="digest-mover-symbol">{m.symbol}</span>
-                      <span className="digest-mover-score" style={{ color: scoreColor(m.score) }}>
-                        {m.score > 0 ? '+' : ''}{m.score.toFixed(1)}
+                      <span className="digest-mover-score" style={{ color: changeColor(m.change_pct) }}>
+                        {formatChangePct(m.change_pct)}
                       </span>
                       {m.blurb && <p className="digest-mover-blurb">{m.blurb}</p>}
                     </div>

@@ -1324,12 +1324,19 @@ ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
 def make_analysis_response_format() -> dict[str, Any]:
     """Return the ``response_format`` dict for the OpenAI-compatible channel.
 
-    OpenAI-compatible endpoints expect ``response_format={"type": "json_object"}``
-    to enable JSON mode. We embed the ANALYSIS_JSON_SCHEMA inside the
-    ``json_schema`` key so providers that support schema validation use it;
-    the Anthropic adapter ignores the wrapper and reads from ``json_schema``.
+    OpenAI-compatible endpoints that support schema-validated JSON mode
+    expect ``{"type": "json_schema", "json_schema": {"name", "schema", ...}}``.
+    Some strict implementations (e.g. Groq) reject ``json_schema`` as a
+    sibling key when ``type`` is ``json_object`` — found live 2026-09-16
+    when the gateway's ``auto/best-free`` alias routed to Groq and 400'd
+    on exactly that shape. The Anthropic adapter ignores ``type`` and
+    reads straight from ``json_schema``.
     """
     return {
-        "type": "json_object",
-        "json_schema": ANALYSIS_JSON_SCHEMA,
+        "type": "json_schema",
+        "json_schema": {
+            "name": ANALYSIS_JSON_SCHEMA["name"],
+            "description": ANALYSIS_JSON_SCHEMA["description"],
+            "schema": ANALYSIS_JSON_SCHEMA["parameters"],
+        },
     }

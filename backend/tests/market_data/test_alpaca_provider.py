@@ -144,6 +144,29 @@ class TestAlpacaProviderQuote(unittest.TestCase):
         q = self.provider.get_quote("SPY")
         self.assertEqual(q.price, 761.85)
 
+    def test_get_quote_rejects_implausible_spread(self):
+        """Regression for a live bug (2026-09-16): CTNT (trading ~$0.04)
+        got bid=0.04 (correct) but ask=200.0 (garbage — presumably a
+        stale/foreign print from Alpaca's IEX feed), and the old
+        "always prefer ask when non-zero" logic took the $200 print as
+        the quote price, producing a false +322,480% change downstream.
+        A >3x spread is never a real NBBO — prefer the smaller side."""
+        self._mock_data_client.get_stock_latest_quote.return_value = {
+            "CTNT": _sdk_quote(symbol="CTNT", bid=0.04, ask=200.0),
+        }
+        q = self.provider.get_quote("CTNT")
+        self.assertEqual(q.price, 0.04)
+
+    def test_get_quote_accepts_normal_wide_spread(self):
+        """A genuinely wide (but plausible) spread on a thin symbol must
+        still prefer ask, matching the existing default — only a >3x
+        ratio is treated as bad data."""
+        self._mock_data_client.get_stock_latest_quote.return_value = {
+            "THIN": _sdk_quote(symbol="THIN", bid=1.00, ask=2.50),
+        }
+        q = self.provider.get_quote("THIN")
+        self.assertEqual(q.price, 2.50)
+
     def test_get_quote_raises_on_missing_symbol(self):
         self._mock_data_client.get_stock_latest_quote.return_value = {}
         with self.assertRaises(ValueError):
@@ -254,6 +277,15 @@ class TestAlpacaProviderBatchAndStatus(unittest.TestCase):
         self.assertEqual(result["AAPL"].price, 150.0)
         self.assertEqual(result["INVALID"].data_status, DataStatus.ERROR)
         self.assertEqual(result["INVALID"].price, 0.0)
+
+    def test_get_batch_quotes_rejects_implausible_spread(self):
+        """Same bad-spread guard as get_quote — see
+        test_get_quote_rejects_implausible_spread's docstring."""
+        self._mock_data_client.get_stock_latest_quote.return_value = {
+            "CTNT": _sdk_quote(symbol="CTNT", bid=0.04, ask=200.0),
+        }
+        result = self.provider.get_batch_quotes(["CTNT"])
+        self.assertEqual(result["CTNT"].price, 0.04)
 
     def test_get_market_status_returns_open_status(self):
         clock = SimpleNamespace(

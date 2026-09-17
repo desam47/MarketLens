@@ -122,6 +122,37 @@ def _ts_to_ny(dt: datetime) -> datetime:
     return dt.astimezone(NY).replace(tzinfo=None)
 
 
+# Alpaca's IEX feed (free tier) occasionally returns a wildly bad bid or ask
+# for thin/illiquid symbols — found live 2026-09-16: CTNT (trading ~$0.04)
+# got bid=0.04 (correct) but ask=200.0 (garbage, presumably a stale/foreign
+# print), and the naive "prefer ask whenever non-zero" logic below took it
+# as the quote price, producing a false +322,480% change downstream. A
+# spread this disproportionate (>3x) is never a real NBBO — one side is bad
+# data, not a genuinely wide market. Preferring the smaller side is a
+# heuristic, not a guarantee (either side could in principle be the bad
+# one), but a spurious print is far more often anomalously LARGE (extra
+# digits, wrong decimal point, cross-venue contamination) than anomalously
+# small, matching what was actually observed here.
+_MAX_SANE_SPREAD_RATIO = 3.0
+
+
+def _sane_quote_price(bid: float, ask: float) -> float:
+    """Pick a quote price from ``bid``/``ask``, rejecting an implausible spread.
+
+    Mirrors the existing "prefer the non-zero side" rule for off-hours
+    quotes (one side legitimately 0), but adds a sanity check for the case
+    where BOTH sides are non-zero yet wildly inconsistent with each other.
+    """
+    if bid > 0 and ask > 0:
+        lo, hi = (bid, ask) if bid <= ask else (ask, bid)
+        if hi / lo > _MAX_SANE_SPREAD_RATIO:
+            return lo
+        return ask
+    if ask > 0:
+        return ask
+    return bid  # may be 0.0; caller treats that as "no quote data"
+
+
 # ---------------------------------------------------------------------------
 # AlpacaWebSocket client (wraps StockDataStream for our lifecycle)
 # ---------------------------------------------------------------------------
@@ -419,14 +450,13 @@ class AlpacaProvider(BaseMarketDataProvider):
                 raise ValueError(f"No quote data for {symbol}")
 
             # One side (bid or ask) is often 0 in off-hours quotes; prefer the
-            # non-zero side as the "last" price.
+            # non-zero side as the "last" price — unless both sides are
+            # present but implausibly far apart, in which case one of them
+            # is bad data (see _sane_quote_price's docstring).
             bp = float(sdk_quote.bid_price or 0.0)
             ap = float(sdk_quote.ask_price or 0.0)
-            if ap > 0:
-                price = ap
-            elif bp > 0:
-                price = bp
-            else:
+            price = _sane_quote_price(bp, ap)
+            if price <= 0:
                 raise ValueError(f"No quote data for {symbol}")
 
             quote = Quote(
@@ -604,11 +634,8 @@ class AlpacaProvider(BaseMarketDataProvider):
                     continue
                 bp = float(sdk_q.bid_price or 0.0)
                 ap = float(sdk_q.ask_price or 0.0)
-                if ap > 0:
-                    price = ap
-                elif bp > 0:
-                    price = bp
-                else:
+                price = _sane_quote_price(bp, ap)
+                if price <= 0:
                     results[sym] = Quote(
                         symbol=sym,
                         price=0.0,
