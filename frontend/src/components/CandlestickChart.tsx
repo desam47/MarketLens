@@ -41,6 +41,7 @@ interface CandlestickChartProps {
   timeframeOptions?: { value: string; label: string }[];
   chartMode?: 'single' | 'multi';
   onChartModeChange?: (mode: 'single' | 'multi') => void;
+  tickerSearch?: React.ReactNode;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -60,6 +61,7 @@ function CandlestickChartImpl({
   timeframeOptions,
   chartMode,
   onChartModeChange,
+  tickerSearch,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -334,7 +336,7 @@ function CandlestickChartImpl({
     <div className="card analysis-card candlestick-card">
       <div className="card-header-row">
         <h2>{symbol} Price Chart</h2>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span className="bar-count">{bars.length} bars</span>
           {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
             <select
@@ -368,6 +370,7 @@ function CandlestickChartImpl({
               </button>
             </div>
           )}
+          {tickerSearch}
         </span>
       </div>
       <div className="chart-type-toolbar">
@@ -430,7 +433,8 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.timeframe === next.timeframe &&
     prev.onTimeframeChange === next.onTimeframeChange &&
     prev.chartMode === next.chartMode &&
-    prev.onChartModeChange === next.onChartModeChange
+    prev.onChartModeChange === next.onChartModeChange &&
+    prev.tickerSearch === next.tickerSearch
   );
 });
 

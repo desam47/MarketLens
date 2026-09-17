@@ -14,7 +14,7 @@ import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
-import { SymbolInput } from '../components/SymbolInput';
+import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
@@ -530,6 +530,9 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
+  // Ticker search lives inside the chart card header now, so it needs a
+  // ref to reach the input from the page-level Refresh button.
+  const tickerSearchRef = useRef<SymbolInputHandle | null>(null);
 
   const fetchQuote = useCallback(async () => {
     try {
@@ -736,16 +739,6 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           </p>
         </div>
         <div className="header-actions">
-          <select
-            className="timeframe-select"
-            value={timeframe}
-            onChange={e => setTimeframe(e.target.value)}
-          >
-            {TIMEFRAMES.map(tf => (
-              <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
-            ))}
-          </select>
-          <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={handleRefresh} />
           <button className="btn" onClick={handleRefresh}>↻ Refresh</button>
         </div>
       </div>
@@ -813,6 +806,14 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             timeframeOptions={TIMEFRAMES.map(tf => ({ value: tf, label: TIMEFRAME_LABELS[tf] || tf }))}
             chartMode={chartMode}
             onChartModeChange={setChartMode}
+            tickerSearch={(
+              <SymbolInput
+                ref={tickerSearchRef}
+                symbol={symbol}
+                onChange={onSymbolChange}
+                onSubmit={handleRefresh}
+              />
+            )}
           />
         ) : (
           <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />

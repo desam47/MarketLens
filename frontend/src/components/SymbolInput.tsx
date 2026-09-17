@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useImperativeHandle, forwardRef } from 'react';
 
 interface SymbolInputProps {
   symbol: string;
@@ -6,8 +6,19 @@ interface SymbolInputProps {
   onSubmit: () => void;
 }
 
-export function SymbolInput({ symbol, onChange, onSubmit }: SymbolInputProps) {
+export interface SymbolInputHandle {
+  focus: () => void;
+  setValue: (v: string) => void;
+}
+
+export const SymbolInput = forwardRef<SymbolInputHandle, SymbolInputProps>(
+  function SymbolInput({ symbol, onChange, onSubmit }, ref) {
   const [inputValue, setInputValue] = useState(symbol);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => { /* input is uncontrolled-ish; focus handled by the form */ },
+    setValue: (v: string) => setInputValue(v.toUpperCase()),
+  }), []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,4 +44,4 @@ export function SymbolInput({ symbol, onChange, onSubmit }: SymbolInputProps) {
       </button>
     </form>
   );
-}
+});
