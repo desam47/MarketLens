@@ -28,15 +28,12 @@ const NewsPanel = lazy(() =>
 const FundamentalsPanel = lazy(() =>
   import('../components/FundamentalsPanel').then(m => ({ default: m.FundamentalsPanel })),
 );
-const OptionsPanel = lazy(() =>
-  import('../components/OptionsPanel').then(m => ({ default: m.OptionsPanel })),
-);
 const CustomIndicatorsPanel = lazy(() =>
   import('../components/CustomIndicatorsPanel').then(m => ({ default: m.CustomIndicatorsPanel })),
 );
-const DrawingToolsPanel = lazy(() =>
-  import('../components/DrawingToolsPanel').then(m => ({ default: m.DrawingToolsPanel })),
-);
+// OptionsPanel and DrawingToolsPanel removed from the Symbol page
+// (2026-09-17); the components still exist under src/components/ if
+// they're ever needed again.
 // AITemplatesPanel and ChatPanel moved to the AI Hub page (2026-09-10).
 
 interface SymbolPageProps {
@@ -814,14 +811,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         <Suspense fallback={<div className="panel-skeleton">Loading fundamentals…</div>}>
           <FundamentalsPanel symbol={symbol} />
         </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading options…</div>}>
-          <OptionsPanel symbol={symbol} />
-        </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
           <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading drawings…</div>}>
-          <DrawingToolsPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>
         <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
           <MTFScoreGrid
