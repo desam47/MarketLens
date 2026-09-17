@@ -92,4 +92,30 @@ describe('ApiService request timeout/cancellation', () => {
 
     await expect(api.getRegime('AAPL')).rejects.toThrow(/500/);
   });
+
+  // Regression: analyzeSymbol/generateDigest/sendChatMessage/nlSearch
+  // route through backend.ai.manager, whose own per-provider timeout is
+  // 30s (backend/config/settings.py), and a fallback chain can exceed
+  // that. Shipping the blanket 15s DEFAULT_TIMEOUT_MS for these made
+  // every one of them fail almost immediately on a normal, in-progress
+  // AI call ("Request timed out after 15000ms" — found live 2026-09-17
+  // on AI Analysis re-run). They must still be alive well past 15s.
+  it('AI-backed endpoints outlive the default 15s timeout', async () => {
+    jest.useFakeTimers();
+    const mock = hangingFetchMock();
+    global.fetch = mock as any;
+
+    const promise = api.analyzeSymbol('AAPL', '1d');
+
+    jest.advanceTimersByTime(15000);
+    await Promise.resolve();
+    // Not aborted at the point the old blanket 15s default would have
+    // fired — this is the exact regression: every AI-backed call used
+    // to die here.
+    const [, init] = mock.mock.calls[0];
+    expect((init.signal as AbortSignal).aborted).toBe(false);
+
+    jest.advanceTimersByTime(135000); // total 150s — AI_TIMEOUT_MS
+    await expect(promise).rejects.toThrow(/timed out/i);
+  });
 });

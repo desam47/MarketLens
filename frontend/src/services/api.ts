@@ -1087,6 +1087,26 @@ export interface OptionsResponse {
 // no timeout of its own.
 const DEFAULT_TIMEOUT_MS = 15000;
 
+// LLM-backed endpoints (AI analysis, digest generation, chat, NL search
+// with AI translation) route through backend.ai.manager, whose own
+// per-provider call timeout defaults to 30s (backend/config/settings.py)
+// but is user-configurable — GET /api/ai/config showed 60s in this
+// environment — and a configured multi-provider fallback chain tries
+// each provider in turn on failure (this environment has 4: a primary
+// plus 3 fallbacks, one of them local Ollama), so the total can run to
+// several times a single provider's timeout. The blanket
+// DEFAULT_TIMEOUT_MS (15s) fired before the backend's own per-provider
+// timeout even had a chance to complete or fail over, so every one of
+// these calls went from "no timeout at all" (before this file had one)
+// straight to "times out constantly" — found live 2026-09-17 (AI
+// Analysis erroring "Request timed out after 15000ms" on a normal,
+// in-progress analysis). 150s comfortably covers a realistic single
+// failover (60s primary + 60s fallback) with headroom; it's a
+// hardcoded client-side ceiling, not derived from the live config, so a
+// deployment configured with a much longer per-provider timeout than
+// this would need this constant raised too.
+const AI_TIMEOUT_MS = 150000;
+
 class ApiService {
   private baseUrl: string;
 
@@ -1180,8 +1200,8 @@ class ApiService {
     return `${wsBase}/realtime/ws`;
   }
 
-  private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const { signal, clear } = this.withTimeout(options?.signal);
+  private async fetch<T>(endpoint: string, options?: RequestInit, timeoutMs?: number): Promise<T> {
+    const { signal, clear } = this.withTimeout(options?.signal, timeoutMs);
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
@@ -1209,8 +1229,8 @@ class ApiService {
    * Used by the watchlist export endpoint, which can return either JSON
    * or CSV depending on the ``format`` query param.
    */
-  private async fetchRaw(endpoint: string, options?: RequestInit): Promise<string> {
-    const { signal, clear } = this.withTimeout(options?.signal);
+  private async fetchRaw(endpoint: string, options?: RequestInit, timeoutMs?: number): Promise<string> {
+    const { signal, clear } = this.withTimeout(options?.signal, timeoutMs);
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, { ...options, signal });
       if (!response.ok) {
@@ -1229,8 +1249,8 @@ class ApiService {
    * ``response.json()`` which would throw on 204, so deletes go
    * through this helper instead.
    */
-  private async del(endpoint: string, options?: RequestInit): Promise<void> {
-    const { signal, clear } = this.withTimeout(options?.signal);
+  private async del(endpoint: string, options?: RequestInit, timeoutMs?: number): Promise<void> {
+    const { signal, clear } = this.withTimeout(options?.signal, timeoutMs);
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
@@ -1772,11 +1792,14 @@ class ApiService {
     },
     signal?: AbortSignal,
   ): Promise<NLSearchResponse> {
+    // AI-timeout, not the default: `explain: true` can route through the
+    // AI translation/explanation path (same backend.ai.manager call chain
+    // as analyzeSymbol), not just the fast rule-based parser.
     return this.fetch<NLSearchResponse>('/nl-search', {
       method: 'POST',
       body: JSON.stringify(payload),
       signal,
-    });
+    }, AI_TIMEOUT_MS);
   }
 
 // Phase 16: AI symbol analysis (extended in Phase 2.4.5 for template_id)
@@ -1803,7 +1826,7 @@ class ApiService {
         // defaults to GET when no method is given, which 405s. Found live
         // 2026-09-09 clicking "Re-run" in AIAnalysisPanel with AI actually
         // enabled for the first time.
-        return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' });
+        return this.fetch<AIAnalysisResult>(`/ai/analyze?${params}`, { method: 'POST' }, AI_TIMEOUT_MS);
     }
 
   // Phase 16: AI provider config
@@ -2013,7 +2036,7 @@ class ApiService {
   }
 
   async generateDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
-    return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' });
+    return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' }, AI_TIMEOUT_MS);
   }
 
   // ── Version 4 AI feature 4: conversational chat panel ───────────────
@@ -2058,7 +2081,7 @@ class ApiService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
-    });
+    }, AI_TIMEOUT_MS);
   }
 
   /**
