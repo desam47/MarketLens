@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import unittest
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
@@ -121,6 +122,8 @@ class TestParseAIReply(unittest.TestCase):
         result = parse_ai_reply(text)
         self.assertEqual(result.key_levels, [])
         self.assertEqual(result.supporting_factors, [])
+        self.assertIsNotNone(result.trade_plan)
+        assert result.trade_plan is not None
         self.assertEqual(result.trade_plan.targets, [])
 
     def test_parses_balanced_json_with_prose(self):
@@ -267,9 +270,9 @@ class TestUncertaintyResponse(unittest.TestCase):
 
 class TestTradePlan(unittest.TestCase):
 
-    def _base(self, **over):
+    def _base(self, **over: Any):
         from backend.ai.prompt import TradePlan
-        kw = dict(
+        kw: dict[str, Any] = dict(
             recommendation="buy", conviction="medium", time_horizon="swing",
             entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=96.0,
             targets=[108.0, 115.0], risk_reward=99.0,
@@ -987,6 +990,8 @@ class TestAnalyzeSymbol(unittest.TestCase):
             provider="ollama", model="llama3.2",
         )
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertIsInstance(result, AnalysisResponse)
+        assert isinstance(result, AnalysisResponse)
         self.assertLess(result.confidence, 0.85)
         self.assertAlmostEqual(result.confidence, 0.675)
         self.assertEqual(result.confidence_declared, 0.85)
@@ -1025,6 +1030,8 @@ class TestAnalyzeSymbol(unittest.TestCase):
             provider="ollama", model="llama3.2",
         )
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
+        self.assertIsInstance(result, AnalysisResponse)
+        assert isinstance(result, AnalysisResponse)
         self.assertEqual(result.confidence, 0.95)  # still hard-capped for display
         self.assertEqual(result.confidence_declared, 1.0)  # but provenance shows the TRUE 1.0
 
@@ -1374,21 +1381,24 @@ class TestNoIndicatorRecalculation(unittest.TestCase):
 class TestStructuredOutputSchema(unittest.TestCase):
     """O11: make_analysis_response_format() returns a valid OpenAI response_format."""
 
-    def test_returns_json_object_type(self):
+    def test_returns_json_schema_type(self):
+        # Spec-compliant OpenAI response_format: {"type": "json_schema", ...}.
+        # "json_object" with a sibling "json_schema" key is rejected by
+        # strict backends (e.g. Groq 400'd on it live 2026-09-16).
         fmt = make_analysis_response_format()
-        self.assertEqual(fmt["type"], "json_object")
+        self.assertEqual(fmt["type"], "json_schema")
 
     def test_includes_schema_with_required_fields(self):
         fmt = make_analysis_response_format()
-        schema = fmt["json_schema"]
-        self.assertIn("required", schema["parameters"])
-        self.assertIn("summary", schema["parameters"]["required"])
-        self.assertIn("trend", schema["parameters"]["required"])
-        self.assertIn("confidence", schema["parameters"]["required"])
+        schema = fmt["json_schema"]["schema"]
+        self.assertIn("required", schema)
+        self.assertIn("summary", schema["required"])
+        self.assertIn("trend", schema["required"])
+        self.assertIn("confidence", schema["required"])
 
     def test_schema_properties_match_analysis_response(self):
         fmt = make_analysis_response_format()
-        props = fmt["json_schema"]["parameters"]["properties"]
+        props = fmt["json_schema"]["schema"]["properties"]
         self.assertIn("summary", props)
         self.assertIn("trend", props)
         self.assertIn("confidence", props)
@@ -1399,7 +1409,7 @@ class TestStructuredOutputSchema(unittest.TestCase):
 
     def test_trend_enum_matches_trend_label(self):
         fmt = make_analysis_response_format()
-        trend_values = set(fmt["json_schema"]["parameters"]["properties"]["trend"]["enum"])
+        trend_values = set(fmt["json_schema"]["schema"]["properties"]["trend"]["enum"])
         # At minimum the basic trend labels must be present
         for basic in ("bullish", "bearish", "mixed", "uncertain"):
             self.assertIn(basic, trend_values)
@@ -1554,7 +1564,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         mock_ai.stream = _stream
 
         frames = []
-        asyncio.run(self._collect(mock_ai, frames))
+        asyncio.run(self._collect(frames))
         kinds = [k for k, _ in frames]
 
         self.assertEqual(kinds[0], "meta")
@@ -1576,7 +1586,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         self.assertIn("is_uncertain", final)
         self.assertFalse(final["is_uncertain"])
 
-    async def _collect(self, mock_ai, frames):
+    async def _collect(self, frames):
         from backend.ai.analyze import analyze_symbol_stream
         async for kind, payload in analyze_symbol_stream("AAPL", "1d"):
             frames.append((kind, payload))
@@ -1594,7 +1604,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         mock_ai.stream = lambda **kw: self._empty()
 
         frames = []
-        asyncio.run(self._collect(mock_ai, frames))
+        asyncio.run(self._collect(frames))
         kinds = [k for k, _ in frames]
         self.assertEqual(kinds, ["meta", "final"])
         final = frames[-1][1]
@@ -1620,7 +1630,7 @@ class TestAnalyzeSymbolStream(unittest.TestCase):
         mock_ai.stream = lambda **kw: _boom()
 
         frames = []
-        asyncio.run(self._collect(mock_ai, frames))
+        asyncio.run(self._collect(frames))
         self.assertEqual(frames[0][0], "meta")
         self.assertEqual(frames[-1][0], "error")
 
