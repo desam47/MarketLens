@@ -121,17 +121,35 @@ class FinnhubService:
         )
 
     def get_company_financials(self, symbol: str) -> CompanyFinancials:
-        """Fetch financials from /stock/financials."""
-        data = self._get("stock/financials", {"symbol": symbol, "statement": "ic"})
-        # ic = income statement; bs = balance sheet; cf = cash flow
-        if not data or not data.get("data"):
-            # Try the other statements if income statement is missing
-            bs_data = self._safe_get("stock/financials", {"symbol": symbol, "statement": "bs"})
-            cf_data = self._safe_get("stock/financials", {"symbol": symbol, "statement": "cf"})
-            return self._build_financials(symbol, {}, bs_data, cf_data)
-        income_rows = data.get("data", [])
-        bs_data = self._safe_get("stock/financials", {"symbol": symbol, "statement": "bs"})
-        cf_data = self._safe_get("stock/financials", {"symbol": symbol, "statement": "cf"})
+        """Fetch financials from /stock/financials.
+
+        ic = income statement; bs = balance sheet; cf = cash flow. The
+        three statements are independent Finnhub GETs, previously issued
+        sequentially (tripling this endpoint's latency for no reason —
+        _get() opens a fresh connection per call via module-level
+        ``requests.get``, no shared session state, so concurrent calls
+        are safe). Run on a small thread pool instead; ic still uses
+        ``_get`` (raises on failure) while bs/cf use ``_safe_get``
+        (swallow failures), matching the original per-statement error
+        handling exactly.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            ic_future = pool.submit(
+                self._get, "stock/financials", {"symbol": symbol, "statement": "ic"}
+            )
+            bs_future = pool.submit(
+                self._safe_get, "stock/financials", {"symbol": symbol, "statement": "bs"}
+            )
+            cf_future = pool.submit(
+                self._safe_get, "stock/financials", {"symbol": symbol, "statement": "cf"}
+            )
+            data = ic_future.result()
+            bs_data = bs_future.result()
+            cf_data = cf_future.result()
+
+        income_rows = data.get("data", []) if data and data.get("data") else []
         return self._build_financials(symbol, income_rows, bs_data, cf_data)
 
     def _safe_get(self, endpoint: str, params: dict) -> dict:

@@ -153,6 +153,45 @@ class TestAlertsEngineDedup(unittest.TestCase):
         self.assertTrue(fired)
 
 
+class TestAlertsEngineQuoteDispatchIntegration(unittest.TestCase):
+    """End-to-end regression for the 2026-09-09 incident: EngineRegistry.
+    dispatch_quote() never passed ``symbol`` through to callbacks, so
+    AlertsEngine._on_quote(self, symbol, price, ...) crashed on every
+    live quote tick with "missing 1 required positional argument:
+    'symbol'" — silently swallowed by dispatch_quote's own except block,
+    meaning every price-based alert (price_above/price_below/
+    pct_change_above) never actually fired from live quotes.
+
+    test_engine_seeding.py's TestEngineRegistry.test_callback_receives_symbol
+    already regression-tests the dispatch layer in isolation (a generic
+    ``**kw``-capturing callback). This test wires the REAL AlertsEngine
+    callback through a REAL EngineRegistry and confirms an alert fires,
+    closing the loop the review flagged as worth verifying end-to-end
+    rather than trusting the dispatch-layer test alone.
+    """
+
+    def test_price_above_alert_fires_from_dispatched_quote(self):
+        from backend.market_data.services.engine_seeder import EngineRegistry
+
+        registry = EngineRegistry()
+        engine = AlertsEngine()
+        engine._started = True
+        alert = _make_alert(id=1, condition_type="price_above", parameter="100.0")
+        engine._alerts_cache = {1: alert}
+        engine._price_alert_ids["AAPL"] = [1]
+
+        registry.register("quote", "AAPL", engine._on_quote)
+
+        with patch.object(engine, "_persist_trigger") as mock_persist:
+            notified = registry.dispatch_quote(
+                symbol="AAPL", price=150.0, volume=1000, timestamp=time.time(),
+            )
+
+        self.assertEqual(notified, 1, "AlertsEngine callback should have been invoked")
+        mock_persist.assert_called_once()
+        self.assertIn((1, "AAPL"), engine._fired_at)
+
+
 class TestAlertsEngineStartup(unittest.TestCase):
     """Test _reload and callback registration."""
 

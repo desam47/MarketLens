@@ -22,9 +22,9 @@ from backend.models import (
     MarketStatusModel,
     ProviderStatusModel,
     Quote,
-    QuoteModel,
 )
 from backend.observability import record_bar, record_bars, set_ingestion_running
+from backend.repositories import quote_repository
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
 
@@ -2068,16 +2068,7 @@ class MarketDataIngestionService:
 
             for quote in quotes_map.values():
                 try:
-                    db.add(QuoteModel(
-                        symbol=quote.symbol,
-                        price=quote.price,
-                        bid=quote.bid,
-                        ask=quote.ask,
-                        volume=quote.volume,
-                        timestamp=quote.timestamp,
-                        provider=quote.provider,
-                        data_status=quote.data_status.value,
-                    ))
+                    quote_repository.add_quote(db, quote)
                     self.last_quote_update[quote.symbol.upper()] = now
                     fresh_quotes.append(quote)
                 except Exception as e:
@@ -2204,36 +2195,7 @@ class MarketDataIngestionService:
 
     def get_latest_quote(self, symbol: str) -> Quote | None:
         """Get the latest quote for a symbol from database"""
-        db: Session = SessionLocal()
-        try:
-            db_quote = db.query(QuoteModel)\
-                .filter(QuoteModel.symbol == symbol)\
-                .order_by(QuoteModel.timestamp.desc())\
-                .first()
-
-            if db_quote:
-                try:
-                    status = DataStatus(db_quote.data_status)
-                except ValueError:
-                    # Defensive: handle legacy data written with non-enum values (e.g. 'ok').
-                    logger.warning(
-                        "Unknown data_status '%s' for %s quote; treating as LIVE",
-                        db_quote.data_status, symbol
-                    )
-                    status = DataStatus.LIVE
-                return Quote(
-                    symbol=db_quote.symbol,
-                    price=db_quote.price,
-                    timestamp=db_quote.timestamp,
-                    provider=db_quote.provider,
-                    data_status=status,
-                    bid=db_quote.bid,
-                    ask=db_quote.ask,
-                    volume=db_quote.volume
-                )
-            return None
-        finally:
-            db.close()
+        return quote_repository.get_latest_quote(symbol)
 
     def get_latest_bar(self, symbol: str, timeframe: str) -> Bar | None:
         """Get the latest bar for a symbol and timeframe from database"""
@@ -2271,34 +2233,7 @@ class MarketDataIngestionService:
 
     def get_quote_history(self, symbol: str, limit: int = 100) -> list[Quote]:
         """Get historical quotes for a symbol"""
-        db: Session = SessionLocal()
-        try:
-            db_quotes = db.query(QuoteModel)\
-                .filter(QuoteModel.symbol == symbol)\
-                .order_by(QuoteModel.timestamp.desc())\
-                .limit(limit)\
-                .all()
-
-            quotes = []
-            for db_quote in db_quotes:
-                try:
-                    status = DataStatus(db_quote.data_status)
-                except ValueError:
-                    status = DataStatus.LIVE
-                quotes.append(Quote(
-                    symbol=db_quote.symbol,
-                    price=db_quote.price,
-                    timestamp=db_quote.timestamp,
-                    provider=db_quote.provider,
-                    data_status=status,
-                    bid=db_quote.bid,
-                    ask=db_quote.ask,
-                    volume=db_quote.volume
-                ))
-
-            return quotes
-        finally:
-            db.close()
+        return quote_repository.get_quote_history(symbol, limit)
 
 # Global instance for easy access
 ingestion_service = MarketDataIngestionService()
