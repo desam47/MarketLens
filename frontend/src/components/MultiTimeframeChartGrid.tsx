@@ -55,7 +55,7 @@ export function MultiTimeframeChartGrid({
   // every panel's indicators at once instead of each panel managing its
   // own (which would let them drift apart).
   const [activeOverlays, setActiveOverlays] = useState<Set<OverlayKey>>(
-    () => new Set<OverlayKey>(['ema9', 'ema21', 'supertrend']),
+    () => new Set<OverlayKey>(['supertrend']),
   );
   const [panels, setPanels] = useState<PanelState[]>(() =>
     timeframes.map(tf => ({ timeframe: tf, bars: [], loading: true, error: null })),
