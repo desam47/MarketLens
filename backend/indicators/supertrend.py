@@ -21,6 +21,11 @@ class SuperTrendIndicator(BaseIndicator):
     whipsaw flips in choppy/range-bound markets. ``confirmation=0`` (default)
     preserves the original immediate-flip behaviour (flips on the first
     breaching bar).
+
+    ``band_distance_atr`` exposes how many ATRs of cushion price has over the
+    active band (0 right after a flip, growing as the trend extends) so
+    callers can weight this signal by conviction instead of treating a
+    day-old flip the same as a month-old, well-confirmed trend.
     """
 
     def __init__(self, atr_period: int = 10, multiplier: float = 3.0,
@@ -35,6 +40,11 @@ class SuperTrendIndicator(BaseIndicator):
         self.prev_direction: bool | None = None  # True for uptrend, False for downtrend
         # True until the first full bar is available.
         self.is_uptrend: bool | None = None
+        # How many ATRs of cushion price has over the active band — 0 right
+        # after a flip (close just barely broke the band), growing as the
+        # trend extends. Lets callers weight this signal by conviction
+        # instead of treating every flip as equally strong.
+        self.band_distance_atr: float | None = None
         # Phase 20 perf: the online path uses an ATRIndicator that maintains
         # its own Wilder-smoothed ATR in O(1) per bar.
         self._atr_indicator = ATRIndicator(period=atr_period)
@@ -150,6 +160,11 @@ class SuperTrendIndicator(BaseIndicator):
                     self.prev_direction = True
                     self.prev_supertrend = basic_lb
 
+                self.band_distance_atr = (
+                    (closes[i] - self.prev_supertrend) / atr if self.prev_direction
+                    else (self.prev_supertrend - closes[i]) / atr
+                ) if atr > 0 else 0.0
+
                 supertrend_values.append(self.prev_supertrend)
             else:
                 # ---- Goessman band adjustment (track both bands) ----
@@ -199,6 +214,11 @@ class SuperTrendIndicator(BaseIndicator):
                 # Persist final bands for next iteration
                 self._prev_final_ub = final_ub
                 self._prev_final_lb = final_lb
+
+                self.band_distance_atr = (
+                    (closes[i] - self.prev_supertrend) / atr if self.prev_direction
+                    else (self.prev_supertrend - closes[i]) / atr
+                ) if atr > 0 else 0.0
 
                 supertrend_values.append(self.prev_supertrend)
 
@@ -250,6 +270,10 @@ class SuperTrendIndicator(BaseIndicator):
             self._prev_final_lb = basic_lb
             self.prev_direction = not (close < basic_lb)
             self.prev_supertrend = basic_lb if self.prev_direction else basic_ub
+            self.band_distance_atr = (
+                (close - self.prev_supertrend) / atr if self.prev_direction
+                else (self.prev_supertrend - close) / atr
+            ) if atr > 0 else 0.0
             self.values.append(self.prev_supertrend)
             self.is_uptrend = self.prev_direction
             return self.prev_supertrend
@@ -295,6 +319,11 @@ class SuperTrendIndicator(BaseIndicator):
         self._prev_final_ub = final_ub
         self._prev_final_lb = final_lb
 
+        self.band_distance_atr = (
+            (close - self.prev_supertrend) / atr if self.prev_direction
+            else (self.prev_supertrend - close) / atr
+        ) if atr > 0 else 0.0
+
         self.values.append(self.prev_supertrend)
         self.is_uptrend = self.prev_direction
         return self.prev_supertrend
@@ -305,6 +334,7 @@ class SuperTrendIndicator(BaseIndicator):
         self.prev_supertrend = None
         self.prev_direction = None
         self.is_uptrend = None
+        self.band_distance_atr = None
         self._confirm_count = 0
         self._prev_final_ub = None
         self._prev_final_lb = None

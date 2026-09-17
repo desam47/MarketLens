@@ -646,11 +646,21 @@ class TrendEngine:
                     trend_strength = TrendStrength.WEAK
 
         # --- Component 5: SuperTrend direction ---
+        # Unlike every other component here, this used to be a flat ±1 no
+        # matter how fresh the flip was. Scale it by band_distance_atr (ATRs
+        # of cushion over the active band) instead, so a signal that just
+        # flipped counts as a weak vote and a well-established trend counts
+        # as a strong one — 3+ ATRs of cushion is treated as full conviction.
         if supertrend_ind is not None:
             st_is_up = getattr(supertrend_ind, "is_uptrend", None)
             if st_is_up is not None:
+                band_dist = getattr(supertrend_ind, "band_distance_atr", None)
+                if band_dist is not None:
+                    magnitude = max(0.2, min(1.0, band_dist / 3.0))
+                else:
+                    magnitude = 1.0
                 components.append(
-                    (1.0 if st_is_up else -1.0, weights_cfg.supertrend)
+                    (magnitude if st_is_up else -magnitude, weights_cfg.supertrend)
                 )
 
         # --- Component 6: Bollinger Bands market structure ---

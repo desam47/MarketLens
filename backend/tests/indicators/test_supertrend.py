@@ -80,6 +80,34 @@ class TestSuperTrendIndicator(unittest.TestCase):
         self.assertTrue(calc.is_uptrend)
         self.assertTrue(self.indicator.is_uptrend)
 
+    def test_band_distance_grows_as_trend_extends(self):
+        """band_distance_atr should be small right after warm-up (the trend
+        has barely "flipped" relative to the very first seeded bar) and
+        larger later on as the uptrend extends further from the band."""
+        data = self._make_trending_data(60)
+        distances = []
+        for bar in data:
+            self.indicator.update(bar)
+            if self.indicator.band_distance_atr is not None:
+                distances.append(self.indicator.band_distance_atr)
+        self.assertGreater(len(distances), 0)
+        # All positive: an intact uptrend should always have positive
+        # cushion over its own active (lower) band.
+        for d in distances:
+            self.assertGreaterEqual(d, 0.0)
+        # A sustained trend should end up with more cushion than it
+        # started with, not less.
+        self.assertGreater(distances[-1], distances[0])
+
+    def test_band_distance_resets_to_none(self):
+        """reset() must clear band_distance_atr, not leave stale state."""
+        data = self._make_trending_data(20)
+        for bar in data:
+            self.indicator.update(bar)
+        self.assertIsNotNone(self.indicator.band_distance_atr)
+        self.indicator.reset()
+        self.assertIsNone(self.indicator.band_distance_atr)
+
 
 if __name__ == "__main__":
     unittest.main()
