@@ -50,8 +50,11 @@ interface CandlestickChartProps {
   activeOverlays?: Set<OverlayKey>;
   onToggleOverlay?: (key: OverlayKey) => void;
   /** Hide the card header entirely — used by the multi-TF grid, which
-  renders one shared header instead of a per-panel one. */
+  # renders one shared header instead of a per-panel one. */
   hideHeader?: boolean;
+  /** Render only the chart canvas, no card/header/toolbar wrapper.
+  Used by the multi-TF grid so each panel is just the container. */
+  bare?: boolean;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -76,6 +79,7 @@ function CandlestickChartImpl({
   activeOverlays: activeOverlaysProp,
   onToggleOverlay,
   hideHeader = false,
+  bare = false,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -355,6 +359,16 @@ function CandlestickChartImpl({
     );
   }
 
+  if (bare) {
+    return (
+      <div
+        ref={containerRef}
+        className="candlestick-container"
+        style={{ width: '100%', height: `${height}px` }}
+      />
+    );
+  }
+
   return (
     <div className="card analysis-card candlestick-card">
       {hideHeader ? null : (
@@ -467,7 +481,8 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.showOverlayToolbar === next.showOverlayToolbar &&
     prev.activeOverlays === next.activeOverlays &&
     prev.onToggleOverlay === next.onToggleOverlay &&
-    prev.hideHeader === next.hideHeader
+    prev.hideHeader === next.hideHeader &&
+    prev.bare === next.bare
   );
 });
 

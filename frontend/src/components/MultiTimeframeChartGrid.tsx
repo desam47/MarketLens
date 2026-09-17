@@ -248,7 +248,7 @@ export function MultiTimeframeChartGrid({
                 showOverlayToolbar={false}
                 activeOverlays={activeOverlays}
                 onToggleOverlay={handleToggleOverlay}
-                hideHeader
+                bare
               />
             )}
           </div>
