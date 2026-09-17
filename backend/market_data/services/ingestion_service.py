@@ -509,8 +509,25 @@ class MarketDataIngestionService:
     # 1h → 4h aggregation (aligned to NY market-hour boundaries)
     # ------------------------------------------------------------------
 
-    async def _resample_1h_to_4h_and_upsert(self, _symbol: str | None = None) -> int:
-        """Read all 1h bars → aggregate to 4h (NY market hours) → upsert.
+    # How far back to look when resampling 1h→4h / 1d→1wk on the live,
+    # frequently-run path (full_history=False). Once a bucket closes it
+    # never needs to be revisited — these only need to cover however far
+    # back a late-arriving bar could plausibly land. _gapfill_1h_once
+    # fetches at most the last 5 days of 1h bars, so 10 days gives that
+    # comfortable headroom; _write_1d_bars fetches at most 30 days, so 60
+    # days does the same for 1d→1wk. Without this cap, both functions
+    # re-scanned EVERY stored 1h/1d row for every symbol on every ~2 min
+    # tick — unlike the sub-hour resampler, which was already windowed —
+    # so the scan cost grew unbounded with total retained history instead
+    # of staying flat. full_history=True (startup / explicit backfill
+    # calls only) restores the unwindowed full scan.
+    _4H_RESAMPLE_WINDOW_DAYS = 10
+    _1WK_RESAMPLE_WINDOW_DAYS = 60
+
+    async def _resample_1h_to_4h_and_upsert(
+        self, _symbol: str | None = None, full_history: bool = False
+    ) -> int:
+        """Read 1h bars → aggregate to 4h (NY market hours) → upsert.
 
         4h buckets: 00:00-03:59, 04:00-07:59, 08:00-11:59, 12:00-15:59,
         16:00-19:59, 20:00-23:59 ET.  Only confirmed-closed buckets
@@ -518,6 +535,10 @@ class MarketDataIngestionService:
 
         If ``_symbol`` is provided, resample only that symbol instead of
         ``self.symbols`` (used by backfill_service for newly added symbols).
+
+        By default only the last ``_4H_RESAMPLE_WINDOW_DAYS`` of 1h bars
+        are scanned (see the class-level comment above); pass
+        ``full_history=True`` for a one-time full backfill (startup).
         """
         from backend.repositories.bar_repository import upsert_bars
 
@@ -526,17 +547,18 @@ class MarketDataIngestionService:
         db = SessionLocal()
         try:
             for symbol in symbols_to_process:
-                rows = (
-                    db.query(BarModel)
-                    .filter(
-                        and_(
-                            BarModel.symbol == symbol.upper(),
-                            BarModel.timeframe == "1h",
-                        )
+                query = db.query(BarModel).filter(
+                    and_(
+                        BarModel.symbol == symbol.upper(),
+                        BarModel.timeframe == "1h",
                     )
-                    .order_by(BarModel.timestamp.asc())
-                    .all()
                 )
+                if not full_history:
+                    cutoff = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(
+                        days=self._4H_RESAMPLE_WINDOW_DAYS
+                    )
+                    query = query.filter(BarModel.timestamp >= cutoff)
+                rows = query.order_by(BarModel.timestamp.asc()).all()
                 if len(rows) < 4:
                     continue
 
@@ -614,14 +636,21 @@ class MarketDataIngestionService:
     # 1d → 1wk aggregation (week closes Saturday 00:00 ET)
     # ------------------------------------------------------------------
 
-    async def _resample_1d_to_1wk_and_upsert(self, _symbol: str | None = None) -> int:
-        """Read all 1d bars → aggregate to 1wk → upsert.
+    async def _resample_1d_to_1wk_and_upsert(
+        self, _symbol: str | None = None, full_history: bool = False
+    ) -> int:
+        """Read 1d bars → aggregate to 1wk → upsert.
 
         1wk buckets are Monday 00:00 UTC.  A week is closed (written) when
         Saturday 00:00 ET of that week has passed.
 
         If ``_symbol`` is provided, resample only that symbol instead of
         ``self.symbols`` (used by backfill_service for newly added symbols).
+
+        By default only the last ``_1WK_RESAMPLE_WINDOW_DAYS`` of 1d bars
+        are scanned (see the class-level comment on
+        ``_resample_1h_to_4h_and_upsert``); pass ``full_history=True`` for
+        a one-time full backfill (startup).
         """
         from backend.repositories.bar_repository import upsert_bars
 
@@ -631,17 +660,18 @@ class MarketDataIngestionService:
         db = SessionLocal()
         try:
             for symbol in symbols_to_process:
-                rows = (
-                    db.query(BarModel)
-                    .filter(
-                        and_(
-                            BarModel.symbol == symbol.upper(),
-                            BarModel.timeframe == "1d",
-                        )
+                query = db.query(BarModel).filter(
+                    and_(
+                        BarModel.symbol == symbol.upper(),
+                        BarModel.timeframe == "1d",
                     )
-                    .order_by(BarModel.timestamp.asc())
-                    .all()
                 )
+                if not full_history:
+                    cutoff = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(
+                        days=self._1WK_RESAMPLE_WINDOW_DAYS
+                    )
+                    query = query.filter(BarModel.timestamp >= cutoff)
+                rows = query.order_by(BarModel.timestamp.asc()).all()
                 if len(rows) < 5:
                     continue
 
@@ -1069,16 +1099,9 @@ class MarketDataIngestionService:
                                 await self._resample_and_upsert(tf, source_tf="1m", _symbol=sym)
                             except Exception as e:
                                 logger.debug(f"immediate resample failed for {sym}/{tf}: {e}")
-                    # Rolling retention prune — per-timeframe windows
-                    # (settings.retention), not one global cutoff. See
-                    # RetentionSettings' docstring: 1m/2m/3m/5m/15m/30m
-                    # (high-volume, especially with extended-hours
-                    # ingestion) get a short window; 1h/4h/1d/1wk
-                    # (compact regardless) get a much longer one.
-                    from backend.repositories.bar_repository import prune_bars_by_retention
-                    deleted_by_tf = prune_bars_by_retention(db)
-                    if deleted_by_tf:
-                        logger.info(f"Rolling retention: pruned {deleted_by_tf}")
+                    # Retention pruning runs on its own slower loop
+                    # (_retention_prune_loop) instead of here — see that
+                    # method's docstring for why.
                 record_bars(len(fresh_bars))
         except Exception as e:
             logger.error(f"Error in 1m recent window ingest: {e}")
@@ -1159,7 +1182,19 @@ class MarketDataIngestionService:
         provider = get_backfill_primary_provider(timeframe)
         raw_bars: list[Bar] = []
         if provider is not None:
-            raw_bars = provider.get_historical_bars(symbol, timeframe, range_=range_)
+            # to_thread: provider.get_historical_bars is a synchronous
+            # (blocking) network call. Called directly it would block this
+            # coroutine's event loop — the SAME loop the 1m/quote/resample
+            # ingestion loops run on — for the full HTTP round-trip, once
+            # per symbol per call. That's the identical class of bug
+            # documented on the process-lifetime provider cache above
+            # (WebullProvider() construction blocking the shared loop for
+            # hundreds of ms to seconds, delaying bars by 1-2+ minutes) —
+            # this is the same failure mode, just from the fetch call
+            # instead of the constructor.
+            raw_bars = await asyncio.to_thread(
+                provider.get_historical_bars, symbol, timeframe, range_=range_
+            )
         primary_name = provider.__class__.__name__ if provider else "primary"
         bars = [
             n for n in (normalize_fn(b, primary_name) for b in raw_bars)
@@ -1175,7 +1210,9 @@ class MarketDataIngestionService:
                 fb = _instantiate_backfill_provider(fb_name)
                 if fb is None:
                     continue
-                fb_raw = fb.get_historical_bars(symbol, timeframe, range_=range_)
+                fb_raw = await asyncio.to_thread(
+                    fb.get_historical_bars, symbol, timeframe, range_=range_
+                )
                 fb_bars = [
                     n for n in (normalize_fn(b, fb_name) for b in fb_raw)
                     if n is not None
@@ -1371,7 +1408,7 @@ class MarketDataIngestionService:
             ny = datetime.now(_NY_TZ)
             if ny.hour % 4 != 0 or ny.minute > 2:
                 return 0
-        return await self._resample_1h_to_4h_and_upsert()
+        return await self._resample_1h_to_4h_and_upsert(full_history=force)
 
     async def _4h_write_loop(self, initial_delay: float = 0.0):
         """At :02 ET every 4h (00:02, 04:02, 08:02, 12:02, 16:02, 20:02):
@@ -1594,6 +1631,40 @@ class MarketDataIngestionService:
 
         return written_total
 
+    async def _retention_prune_loop(self, initial_delay: float = 0.0):
+        """Every hour: prune every stored timeframe to its own retention window.
+
+        Previously this ran inline inside ``_ingest_1m_recent_window``
+        (i.e. on essentially every ~60s tick that wrote new 1m bars) even
+        though retention windows are configured in days — thousands of
+        no-op prune queries a day for the same result a much slower
+        cadence gives. Hourly is still far more often than the data
+        actually needs pruning; it just keeps the DB from growing
+        noticeably past its retention window between passes.
+        """
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+        while self.is_running:
+            try:
+                from backend.repositories.bar_repository import prune_bars_by_retention
+
+                db = SessionLocal()
+                try:
+                    # Rolling retention prune — per-timeframe windows
+                    # (settings.retention), not one global cutoff. See
+                    # RetentionSettings' docstring: 1m/2m/3m/5m/15m/30m
+                    # (high-volume, especially with extended-hours
+                    # ingestion) get a short window; 1h/4h/1d/1wk
+                    # (compact regardless) get a much longer one.
+                    deleted_by_tf = prune_bars_by_retention(db)
+                    if deleted_by_tf:
+                        logger.info(f"Rolling retention: pruned {deleted_by_tf}")
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.error(f"Error in retention prune loop: {e}")
+            await self._jittered_sleep(3600, jitter=60.0)
+
     async def _run_loops(self):
         """Run all ingestion loops until stop() is called.
 
@@ -1608,6 +1679,7 @@ class MarketDataIngestionService:
             asyncio.create_task(self._status_ingestion_loop(initial_delay=10.0)),
             asyncio.create_task(self._provider_health_loop(initial_delay=15.0)),
             asyncio.create_task(self._signal_recording_loop(initial_delay=20.0)),
+            asyncio.create_task(self._signal_outcome_backfill_loop(initial_delay=23.0)),
             # Phase 3.7 — multi-timeframe live ingestion + resample-at-write
             asyncio.create_task(self._resample_write_loop(initial_delay=25.0)),
             asyncio.create_task(self._1h_write_loop(initial_delay=28.0)),
@@ -1616,6 +1688,7 @@ class MarketDataIngestionService:
             # Phase 3.8 — auto gap-fill every 5 min during RTH
             asyncio.create_task(self._gapfill_1m_loop(initial_delay=37.0)),
             asyncio.create_task(self._gapfill_1h_loop(initial_delay=39.0)),
+            asyncio.create_task(self._retention_prune_loop(initial_delay=42.0)),
         ]
         try:
             await asyncio.gather(*tasks)
@@ -1785,7 +1858,7 @@ class MarketDataIngestionService:
 
         # 1wk: aggregate from 1d using dedicated method.
         try:
-            written_1wk = await self._resample_1d_to_1wk_and_upsert()
+            written_1wk = await self._resample_1d_to_1wk_and_upsert(full_history=True)
             logger.info(f"startup 1wk aggregation: wrote {written_1wk} bars")
         except Exception as e:
             logger.error(f"startup 1wk aggregation failed: {e}", exc_info=True)
@@ -1889,11 +1962,10 @@ class MarketDataIngestionService:
                 await asyncio.sleep(10)
 
     async def _signal_recording_loop(self, initial_delay: float = 0.0):
-        """Record HistoricalSignal rows + backfill forward outcomes.
+        """Record one HistoricalSignal row per (symbol, timeframe) per bar.
 
-        Two responsibilities, running on independent intervals:
-          - Record one signal per (symbol, timeframe) per bar (90s)
-          - Backfill forward outcomes for old signals (300s)
+        90s cadence — independent of ``_signal_outcome_backfill_loop``'s
+        300s cadence (see that method's docstring for why they're split).
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
@@ -1908,6 +1980,21 @@ class MarketDataIngestionService:
             except Exception as e:
                 logger.error(f"Error in signal recording loop: {e}")
 
+            await self._jittered_sleep(90, jitter=5.0)
+
+    async def _signal_outcome_backfill_loop(self, initial_delay: float = 0.0):
+        """Backfill forward outcomes for old signals.
+
+        300s cadence. Was previously fired from the same loop iteration as
+        ``_signal_recording_loop`` (both sharing one 60s±5s sleep at the
+        end) even though the docstring documented 90s/300s as independent
+        intervals — meaning ``backfill_outcomes(1000)`` actually ran ~5x
+        more often than intended. Split into its own loop so each task
+        runs on its documented cadence.
+        """
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+        while self.is_running:
             try:
                 backfilled = await asyncio.to_thread(
                     signal_recorder.backfill_outcomes, 1000
@@ -1917,7 +2004,7 @@ class MarketDataIngestionService:
             except Exception as e:
                 logger.error(f"Error in signal backfill loop: {e}")
 
-            await self._jittered_sleep(60, jitter=5.0)
+            await self._jittered_sleep(300, jitter=15.0)
 
     async def _status_ingestion_loop(self, initial_delay: float = 0.0):
         """Continuously ingest market status data"""
@@ -1966,7 +2053,15 @@ class MarketDataIngestionService:
                 return
 
             try:
-                quotes_map = self.manager.get_batch_quotes(wanted)
+                # to_thread: get_batch_quotes is fully synchronous — the
+                # provider batch call plus, on partial failure, a serial
+                # per-symbol fallback loop (each going through the full
+                # rate-limiter/circuit-breaker/retry stack). Called
+                # directly it would block this coroutine's event loop —
+                # shared with every other ingestion loop — for the whole
+                # duration; a few consistently-failing symbols could stall
+                # quote ingestion for everything else on a 30s cadence.
+                quotes_map = await asyncio.to_thread(self.manager.get_batch_quotes, wanted)
             except Exception as e:
                 logger.warning(f"Batch quote fetch failed: {e}")
                 quotes_map = {}
@@ -2042,7 +2137,13 @@ class MarketDataIngestionService:
                     continue
 
                 try:
-                    status: MarketStatus = self.manager.get_market_status(symbol)
+                    # to_thread: get_market_status makes a blocking
+                    # provider network call on a miss — same event-loop-
+                    # blocking risk as the other manager calls fixed
+                    # nearby (get_batch_quotes, get_historical_bars).
+                    status: MarketStatus = await asyncio.to_thread(
+                        self.manager.get_market_status, symbol
+                    )
 
                     # Store in database
                     db_status = MarketStatusModel(

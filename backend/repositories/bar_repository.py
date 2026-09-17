@@ -438,9 +438,13 @@ def prune_bars_older_than(
     commits after each chunk so progress is durable if the process is
     killed mid-run.
 
-    Phase 3.3.9: runs on every ingestion tick. We rely on the
-    ``(symbol, timeframe, timestamp)`` unique index for cheap row lookup;
-    for SQLite the index keeps the DELETE plan index-driven.
+    Phase 3.3.9 originally ran this on every ingestion tick (~60s);
+    ``prune_bars_by_retention`` is now called from a dedicated hourly loop
+    (``MarketDataIngestionService._retention_prune_loop``) instead, since
+    retention windows are configured in days and don't need re-checking
+    every tick. We rely on the ``(symbol, timeframe, timestamp)`` unique
+    index for cheap row lookup; for SQLite the index keeps the DELETE plan
+    index-driven.
     """
     if chunk_size <= 0:
         raise ValueError(f"chunk_size must be > 0, got {chunk_size}")

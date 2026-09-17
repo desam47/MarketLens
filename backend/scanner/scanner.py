@@ -507,7 +507,17 @@ class Scanner:
                     use_cache=True,
                     db=db,
                 )
-                batch_quotes = market_data_manager.get_batch_quotes(symbols)
+                # to_thread: get_batch_quotes is synchronous (provider
+                # batch call + serial per-symbol fallback on partial
+                # failure) — called directly it would block this
+                # coroutine's event loop, same class of bug
+                # scan_symbols_async's _prefetch() docstring already
+                # documents ("a blocking call here previously froze every
+                # other in-flight request on the server, not just this
+                # one").
+                batch_quotes = await asyncio.to_thread(
+                    market_data_manager.get_batch_quotes, symbols
+                )
         except Exception as e:
             logger.warning(f"Batch lookup failed: {e}")
             # Fall back to individual calls if batch fails

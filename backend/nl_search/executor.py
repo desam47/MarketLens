@@ -368,11 +368,23 @@ def execute_query(
         symbols = []
 
     # --- Warm the scanner cache ---
-    # scan_symbols is async; this runs in a loop-less worker thread
+    # scan_symbols_async is async; this runs in a loop-less worker thread
     # (the nl-search router pushes execute_query through
-    # asyncio.to_thread) — bridge with run_sync.
+    # asyncio.to_thread) — bridge with run_sync. run_sync itself runs the
+    # coroutine on ONE dedicated background event loop shared
+    # process-wide by every AI call (analyze/digest/chat/NL search — see
+    # backend.ai.sync_bridge's module docstring), so anything scheduled
+    # here that blocks that loop stalls every other concurrent AI call in
+    # the app, not just this request. scan_symbols_async (not the plain
+    # scan_symbols) is required for that reason: it runs its batch
+    # pre-fetch and every per-symbol scan via asyncio.to_thread, so
+    # nothing here executes synchronously on the bridge loop. scan_symbols
+    # still has residual blocking calls for symbols missing from the
+    # batch pre-fetch (see market_data_manager.get_quote /
+    # get_historical_bars call sites in scan_symbol) and must not be used
+    # from this bridge.
     if symbols:
-        run_sync(market_scanner.scan_symbols(symbols))
+        run_sync(market_scanner.scan_symbols_async(symbols))
 
     cache = list(market_scanner.scan_results.values())
 

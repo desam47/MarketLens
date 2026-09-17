@@ -2,6 +2,7 @@
 Market Data API Routes
 Endpoints for controlling data ingestion and accessing historical data
 """
+import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -191,7 +192,15 @@ async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_
 
     # 3. Provider chain (last resort — also populates the cache).
     try:
-        return market_data_manager.get_latest_bar(symbol.upper(), timeframe)
+        # to_thread: get_latest_bar can make a blocking provider network
+        # call here. This is an ``async def`` route handler running
+        # directly on the server's event loop (unlike a plain ``def``
+        # route, which FastAPI would offload to a thread pool
+        # automatically) — a blocking call here stalls every other
+        # concurrent request the server is handling, not just this one.
+        return await asyncio.to_thread(
+            market_data_manager.get_latest_bar, symbol.upper(), timeframe
+        )
     except Exception as e:
         raise HTTPException(
             status_code=404,
@@ -220,9 +229,13 @@ async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
             bars[timeframe] = bar
             continue
 
-        # 3. Provider chain.
+        # 3. Provider chain. to_thread: see get_latest_bar's comment above
+        # — this is an async route handler, so a blocking provider call
+        # here stalls every other concurrent request on the server.
         try:
-            bars[timeframe] = market_data_manager.get_latest_bar(symbol, timeframe)
+            bars[timeframe] = await asyncio.to_thread(
+                market_data_manager.get_latest_bar, symbol, timeframe
+            )
         except Exception:
             # Don't fail the whole request if one timeframe is missing.
             pass
@@ -232,7 +245,10 @@ async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
 async def get_market_status(symbol: str, db: Session = Depends(get_db)):
     """Get market status for a symbol"""
     try:
-        status = market_data_manager.get_market_status(symbol.upper())
+        # to_thread: get_market_status makes a blocking provider network
+        # call — see get_latest_bar's comment above for why that matters
+        # in an async route handler.
+        status = await asyncio.to_thread(market_data_manager.get_market_status, symbol.upper())
         return status
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get market status: {e!s}") from e

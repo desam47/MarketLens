@@ -11,11 +11,13 @@ The function is idempotent: a second call after a clean DB is a no-op.
 
 Retention enforcement (formerly also here, as a startup-only 1h-specific
 365-day prune) moved out 2026-09-09: the rolling retention prune
-(ingestion_service._ingest_1m_recent_window ->
-bar_repository.prune_bars_by_retention) now runs continuously — every
-~60s ingestion tick, not just at startup — and covers all 10 timeframes
-via their own configured windows (RetentionSettings), not just 1h. That
-supersedes what this module used to do.
+(ingestion_service._retention_prune_loop -> bar_repository.
+prune_bars_by_retention) now runs on its own hourly loop, not just at
+startup, and covers all 10 timeframes via their own configured windows
+(RetentionSettings), not just 1h. That supersedes what this module used
+to do. (Originally the prune ran inline on every ~60s 1m-ingestion tick;
+moved to a dedicated hourly loop 2026-09-17 since day-granularity
+retention windows don't need re-checking every tick.)
 """
 from __future__ import annotations
 

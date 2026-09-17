@@ -580,7 +580,19 @@ class MarketDataManager:
                 for symbol in symbols_to_fetch:
                     if symbol not in results or not results[symbol]:
                         try:
-                            bars = self.get_historical_bars(
+                            # to_thread: get_historical_bars is a blocking
+                            # call (DB read, and on a cache miss a
+                            # synchronous provider HTTP request) executed
+                            # directly inside this async method would
+                            # freeze the caller's event loop for every
+                            # remaining missing symbol in sequence — the
+                            # same class of bug scan_symbols_async's own
+                            # _prefetch() docstring describes ("a blocking
+                            # call here previously froze every other
+                            # in-flight request on the server, not just
+                            # this one").
+                            bars = await asyncio.to_thread(
+                                self.get_historical_bars,
                                 symbol, timeframe=timeframe, range_=range_,
                                 use_cache=use_cache, db=db,
                             )

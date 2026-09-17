@@ -12,6 +12,7 @@ moderately expensive. There is no background cache — the scanner's
 internal ``scan_results`` dict holds the last result per symbol for
 subsequent quick reads.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -521,17 +522,27 @@ async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
     2026-09-16 (CTNT).
     """
     symbol = symbol.upper()
+    # to_thread: get_historical_bars / get_quote / scan_symbol are all
+    # blocking (DB + provider network calls). This is an ``async def``
+    # route handler, running directly on the server's event loop — a
+    # blocking call here would stall every other concurrent request, not
+    # just this one (the same class of bug documented on
+    # scan_symbols_async's _prefetch()).
     try:
-        historical_bars = market_data_manager.get_historical_bars(
+        historical_bars = await asyncio.to_thread(
+            market_data_manager.get_historical_bars,
             symbol, timeframe="1d", range_="3mo",
         )
     except Exception:
         historical_bars = None
     try:
-        quote = market_data_manager.get_quote(symbol)
+        quote = await asyncio.to_thread(market_data_manager.get_quote, symbol)
     except Exception:
         quote = None
-    result = market_scanner.scan_symbol(symbol, historical_bars=historical_bars, quote=quote)
+    result = await asyncio.to_thread(
+        market_scanner.scan_symbol, symbol,
+        historical_bars=historical_bars, quote=quote,
+    )
     from backend.alerts.engine import alerts_engine
     alerts_engine.evaluate_scan_result(result)
     return _result_to_dict(result)
