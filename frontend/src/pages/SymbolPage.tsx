@@ -821,7 +821,15 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
           />
         </div>
         {chartMode === 'single' ? (
-          <CandlestickChart bars={bars} symbol={symbol} transitions={transitions} initialActiveOverlays={['supertrend']} />
+          <CandlestickChart
+            bars={bars}
+            symbol={symbol}
+            transitions={transitions}
+            initialActiveOverlays={['supertrend']}
+            timeframe={timeframe}
+            onTimeframeChange={setTimeframe}
+            timeframeOptions={TIMEFRAMES.map(tf => ({ value: tf, label: TIMEFRAME_LABELS[tf] || tf }))}
+          />
         ) : (
           <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
         )}

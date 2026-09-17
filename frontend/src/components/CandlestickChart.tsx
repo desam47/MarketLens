@@ -36,6 +36,9 @@ interface CandlestickChartProps {
   initialActiveOverlays?: OverlayKey[];
   showVolume?: boolean;
   showMarkers?: boolean;
+  timeframe?: string;
+  onTimeframeChange?: (tf: string) => void;
+  timeframeOptions?: { value: string; label: string }[];
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -50,6 +53,9 @@ function CandlestickChartImpl({
   initialActiveOverlays = ['ema9', 'ema21'],
   showVolume = true,
   showMarkers = false,
+  timeframe,
+  onTimeframeChange,
+  timeframeOptions,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -324,7 +330,21 @@ function CandlestickChartImpl({
     <div className="card analysis-card candlestick-card">
       <div className="card-header-row">
         <h2>{symbol} Price Chart</h2>
-        <span className="bar-count">{bars.length} bars</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="bar-count">{bars.length} bars</span>
+          {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
+            <select
+              className="timeframe-select chart-timeframe-select"
+              value={timeframe}
+              onChange={e => onTimeframeChange(e.target.value)}
+              title="Chart timeframe"
+            >
+              {timeframeOptions.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          )}
+        </span>
       </div>
       <div className="chart-type-toolbar">
         {CHART_TYPES.map(def => {
@@ -382,7 +402,9 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.onError === next.onError &&
     prev.initialChartType === next.initialChartType &&
     prev.showVolume === next.showVolume &&
-    prev.showMarkers === next.showMarkers
+    prev.showMarkers === next.showMarkers &&
+    prev.timeframe === next.timeframe &&
+    prev.onTimeframeChange === next.onTimeframeChange
   );
 });
 
