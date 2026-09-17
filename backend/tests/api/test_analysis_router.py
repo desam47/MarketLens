@@ -9,7 +9,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-from backend.api.analysis.router import _transitions_cache
+from backend.api.analysis.router import _to_dashboard_tz, _transitions_cache
 
 
 def _make_bar(close: float, ts: datetime) -> dict:
@@ -165,7 +165,7 @@ class TestPriceRangeEndpoint(unittest.TestCase):
             )
             for i in range(30)
         ]
-        mock_repo.get_bars.return_value = mock_bars
+        mock_repo.get_bars.return_value = list(reversed(mock_bars))
 
         client = TestClient(app)
         resp = client.get("/api/analysis/AAPL/price-range?timeframe=1d")
@@ -174,6 +174,11 @@ class TestPriceRangeEndpoint(unittest.TestCase):
         self.assertEqual(data["symbol"], "AAPL")
         self.assertIn("levels", data)
         self.assertIn("count", data)
+        self.assertEqual(
+            data["latest_close_timestamp"],
+            _to_dashboard_tz(mock_bars[-1].timestamp),
+        )
+        self.assertIsNotNone(data["fetched_at"])
 
     @patch("backend.analysis.series.bar_repository")
     def test_insufficient_bars_returns_empty(self, mock_repo):
@@ -192,6 +197,8 @@ class TestPriceRangeEndpoint(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["levels"], [])
         self.assertEqual(data["count"], 0)
+        self.assertIsNotNone(data["latest_close_timestamp"])
+        self.assertIsNotNone(data["fetched_at"])
 
 
 class TestDivergencesEndpoint(unittest.TestCase):

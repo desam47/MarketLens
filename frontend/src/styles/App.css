@@ -2378,6 +2378,11 @@ h4 {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
+.price-timestamp {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* Divergences */
 .divergences-list {
   display: flex;

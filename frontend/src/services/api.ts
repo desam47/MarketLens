@@ -303,6 +303,8 @@ export interface SRResult {
   count: number;
   price_history: PriceHistoryItem[];
   latest_close: number | null;
+  latest_close_timestamp: string | null;
+  fetched_at: string | null;
   last_index: number;
 }
 

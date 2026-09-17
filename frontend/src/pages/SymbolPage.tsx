@@ -8,7 +8,7 @@ import api, {
   TapeSnapshot,
   Transition,
 } from '../services/api';
-import { parseET, formatETDate, formatETDateTime } from '../components/chartMath';
+import { parseET, formatETDate, formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -280,11 +280,15 @@ const SRPanel = memo(function SRPanel({
 const PriceHistoryPanel = memo(function PriceHistoryPanel({
   history,
   latestClose,
+  latestCloseTimestamp,
+  fetchedAt,
   change,
   changePercent,
 }: {
   history: PriceHistoryItem[];
   latestClose: number | null;
+  latestCloseTimestamp: string | null;
+  fetchedAt: string | null;
   change?: number | null;
   changePercent?: number | null;
 }) {
@@ -332,6 +336,11 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
               {formatChange(change)} ({changePercent != null
                 ? `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`
                 : '—'})
+            </span>
+          )}
+          {latestCloseTimestamp != null && (
+            <span className="price-timestamp">
+              Fetched {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
             </span>
           )}
         </div>
@@ -504,6 +513,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [srLevels, setSrLevels] = useState<SRLevel[]>([]);
   const [priceHistory, setPriceHistory] = useState<PriceHistoryItem[]>([]);
   const [latestClose, setLatestClose] = useState<number | null>(null);
+  const [latestCloseTimestamp, setLatestCloseTimestamp] = useState<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
   const [srLoading, setSrLoading] = useState(true);
 
   const [divergences, setDivergences] = useState<Divergence[]>([]);
@@ -566,6 +577,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       setSrLevels(data?.levels || []);
       setPriceHistory(data?.price_history || []);
       setLatestClose(data?.latest_close ?? null);
+      setLatestCloseTimestamp(data?.latest_close_timestamp ?? null);
+      setFetchedAt(data?.fetched_at ?? null);
     } catch (err: any) {
       console.error('Failed to load price-range levels:', err);
     } finally {
@@ -768,6 +781,8 @@ const fetchBars = useCallback(async () => {
         <PriceHistoryPanel
           history={priceHistory}
           latestClose={latestClose}
+          latestCloseTimestamp={latestCloseTimestamp}
+          fetchedAt={fetchedAt}
           change={barsChange}
           changePercent={barsChangePct}
         />

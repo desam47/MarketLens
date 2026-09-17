@@ -167,6 +167,24 @@ export function formatETDateTime(ts: string | null | undefined): string {
   return `${formatted} ET`;
 }
 
+export function formatETDateTime24Hour(ts: string | null | undefined): string {
+  const d = parseET(ts);
+  if (isNaN(d.getTime())) return '—';
+  const date = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+  const time = new Intl.DateTimeFormat('en-US', {
+    timeZone: ET_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d);
+  return `${date} ${time}`;
+}
+
 /** ET date only (no time) — for transition/divergence/backtest date columns. */
 export function formatETDate(ts: string | null | undefined): string {
   const d = parseET(ts);

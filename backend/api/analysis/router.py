@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
+from backend.api.ttl_cache import _transitions_cache
+
 from ...analysis.series import bar_dicts_to_arrays as _bar_dicts_to_arrays
 from ...analysis.series import load_bars as _load_bars
 from ...analysis.series import load_reference_bars as _load_reference_bars
@@ -21,7 +23,6 @@ from ...analysis.series import rsi_series as _rsi_series
 from ...divergence import DivergenceEngine
 from ...support_resistance import SupportResistanceEngine
 from ...transitions import TrendTransitionEngine
-from backend.api.ttl_cache import _transitions_cache
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +341,7 @@ async def get_price_range(
     panel "Price Range").
     """
     symbol = symbol.upper()
+    fetched_at = _to_dashboard_tz(datetime.now(_DASHBOARD_TZ))
     try:
         bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
         if len(bars) < 20:
@@ -349,6 +351,10 @@ async def get_price_range(
                 "levels": [],
                 "count": 0,
                 "latest_close": None,
+                "latest_close_timestamp": (
+                    _to_dashboard_tz(bars[0].get("timestamp")) if bars else None
+                ),
+                "fetched_at": fetched_at,
                 "last_index": 0,
             }
         # Calendar-anchored levels (today/prev day/this week/prev week/
@@ -385,7 +391,7 @@ async def get_price_range(
             t = lvl.type.value if hasattr(lvl.type, "value") else str(lvl.type)
             if t in PIVOT_TABLE_TYPES:
                 pivot_levels.append(lvl)
-        pivot_levels.sort(key=lambda l: PIVOT_TABLE_ORDER.get(l.type.value, 99))
+        pivot_levels.sort(key=lambda level: PIVOT_TABLE_ORDER.get(level.type.value, 99))
         levels = pivot_levels[:max_levels]
         price_history = _extract_price_history(result, reference_bars)
         return {
@@ -395,6 +401,10 @@ async def get_price_range(
             "count": len(levels),
             "price_history": price_history,
             "latest_close": result.latest_close,
+            "latest_close_timestamp": (
+                _to_dashboard_tz(bars[0].get("timestamp")) if bars else None
+            ),
+            "fetched_at": fetched_at,
             "last_index": result.last_index,
         }
     except HTTPException:
