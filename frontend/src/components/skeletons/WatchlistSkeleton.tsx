@@ -29,7 +29,6 @@ function TableSkeleton() {
           <thead>
             <tr>
               <th>Symbol</th>
-              <th>Score</th>
               <th>Regime</th>
               <th>Last Updated</th>
               <th></th>
@@ -39,7 +38,6 @@ function TableSkeleton() {
             {Array.from({ length: 6 }).map((_, i) => (
               <tr key={i}>
                 <td><SkeletonBlock width="60px" height="0.9rem" /></td>
-                <td><SkeletonBlock width="100px" height="0.85rem" /></td>
                 <td><SkeletonBlock width="80px" height="0.85rem" /></td>
                 <td><SkeletonBlock width="120px" height="0.85rem" /></td>
                 <td><SkeletonBlock width="60px" height="0.8rem" /></td>

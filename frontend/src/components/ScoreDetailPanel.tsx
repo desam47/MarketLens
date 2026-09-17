@@ -7,8 +7,7 @@ interface ScoreDetailPanelProps {
   symbol: string;
 }
 
-// Estimate confidence from score magnitude (0-100), same heuristic
-// used in WatchlistTable to keep values consistent across the UI.
+// Estimate confidence from score magnitude (0-100).
 function estimateConfidence(score: number): number {
   const abs = Math.abs(score);
   if (abs >= 70) return 90;

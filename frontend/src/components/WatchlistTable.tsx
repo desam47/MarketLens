@@ -14,7 +14,7 @@ import {
 interface WatchlistTableProps {
   watchlistId: number;
   onSelectSymbol: (symbol: string) => void;
-  sortColumn?: 'symbol' | 'price' | 'change' | 'score' | 'rs';
+  sortColumn?: 'symbol' | 'price' | 'change' | 'rs';
   sortDirection?: 'asc' | 'desc';
 }
 
@@ -24,7 +24,6 @@ interface RowData {
   price: number | null;
   change: number | null;
   changePct: number | null;
-  score: number;
   rs: RelativeStrengthSignal | null;
   raw: WatchlistScanResult;
 }
@@ -94,9 +93,6 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
       </div>
-      <div className={`virt-cell td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
-        {row.score > 0 ? '+' : ''}{fmt(row.score)}
-      </div>
       <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
@@ -160,7 +156,6 @@ export function WatchlistTable({
         price: r.quote?.price ?? null,
         change: r.change ?? null,
         changePct: r.change_pct ?? null,
-        score: r.total_score,
         rs: null,
         raw: r,
       }));
@@ -201,7 +196,7 @@ export function WatchlistTable({
     fetchData();
   }, [fetchData]);
 
-  // Keep prices/scores/change% current without a manual reload — the
+  // Keep prices/change% current without a manual reload — the
   // backend scan is always live (no TTL cache on this endpoint), so a
   // stale table here is purely a frontend polling gap. Mirrors
   // AlertsCard's 30s trigger refresh; `refresh=true` uses the small
@@ -277,7 +272,6 @@ export function WatchlistTable({
         case 'symbol': cmp = a.symbol.localeCompare(b.symbol); break;
         case 'price': cmp = (a.price ?? -Infinity) - (b.price ?? -Infinity); break;
         case 'change': cmp = (a.changePct ?? -Infinity) - (b.changePct ?? -Infinity); break;
-        case 'score': cmp = a.score - b.score; break;
         case 'rs': cmp = (a.rs?.rs_pct ?? 0) - (b.rs?.rs_pct ?? 0); break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
@@ -364,9 +358,6 @@ export function WatchlistTable({
             <div className={`virt-cell th ${thClass('change')}`} onClick={() => toggleSort('change')}>
               Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
             </div>
-            <div className={`virt-cell th ${thClass('score')}`} onClick={() => toggleSort('score')}>
-              Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
-            </div>
             <div className={`virt-cell th ${thClass('rs')}`} onClick={() => toggleSort('rs')}>
               Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
             </div>
@@ -399,9 +390,6 @@ export function WatchlistTable({
                 </th>
                 <th className={thClass('change')} onClick={() => toggleSort('change')}>
                   Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className={thClass('score')} onClick={() => toggleSort('score')}>
-                  Score <SortIcon column="score" sortCol={sortCol} sortDir={sortDir} />
                 </th>
                 <th className={thClass('rs')} onClick={() => toggleSort('rs')}>
                   Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
@@ -478,9 +466,6 @@ const WatchlistRow = React.memo(function WatchlistRow({
         {row.changePct != null
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
-      </td>
-      <td className={`td-score ${row.score > 0 ? 'score-pos' : row.score < 0 ? 'score-neg' : ''}`}>
-        {row.score > 0 ? '+' : ''}{fmt(row.score)}
       </td>
       <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
