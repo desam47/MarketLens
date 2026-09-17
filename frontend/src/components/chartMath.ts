@@ -203,11 +203,19 @@ const sortedBarsCache = new WeakMap<Bar[], { sorted: Bar[]; times: number[] }>()
 function sortedBarsImpl(bars: Bar[]): { sorted: Bar[]; times: number[] } {
   let cached = sortedBarsCache.get(bars);
   if (!cached) {
+    // times are computed from the ORIGINAL order, so sort the index
+    // array by them and then map both `sorted` and `times` through the
+    // same permutation — otherwise sorted[i] and times[i] would be
+    // paired across different bars and every overlay consumer (chart
+    // data, HA, EMA, SuperTrend, SMA) would emit out-of-order
+    // timestamps, which lightweight-charts rejects as "data must be
+    // asc ordered by time".
     const times = bars.map(b => Math.floor(parseET(b.timestamp).getTime() / 1000));
     const idx = bars.map((_, i) => i);
     idx.sort((a, b) => times[a] - times[b]);
     const sorted = idx.map(i => bars[i]);
-    cached = { sorted, times };
+    const sortedTimes = idx.map(i => times[i]);
+    cached = { sorted, times: sortedTimes };
     sortedBarsCache.set(bars, cached);
   }
   return cached;
