@@ -13,6 +13,7 @@
   --warning: #f59e0b;
   --info: #06b6d4;
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
 
   /* Shared scrollbar theme — applied to every scrollable container in
   # the app (sidebar, transitions, divergences, bars table, top movers,
@@ -38,8 +39,6 @@
 }
 *::-webkit-scrollbar-thumb:hover {
   background: #4b5563;
-}
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
 }
 
 * {
