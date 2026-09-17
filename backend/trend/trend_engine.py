@@ -33,6 +33,37 @@ _TF_ATR_PERIOD: dict[Timeframe, int] = {
     Timeframe.ONE_WEEK: 10,
 }
 
+# A single fixed SuperTrend multiplier (band width) for every timeframe
+# under-serves both ends: short/noisy timeframes still whipsaw even with a
+# longer ATR period, while long timeframes hug price too loosely and lag
+# real reversals. Widen the band on short timeframes (fewer false flips)
+# and tighten it on long timeframes (faster reaction) instead of one
+# constant. ``ONE_DAY`` keeps the settings-configured default since it is
+# the most-used/most-tested timeframe and the existing default already
+# works reasonably there.
+_TF_ST_MULTIPLIER: dict[Timeframe, float] = {
+    Timeframe.ONE_MINUTE: 4.0,
+    Timeframe.TWO_MINUTE: 4.0,
+    Timeframe.THREE_MINUTE: 3.5,
+    Timeframe.FIVE_MINUTE: 3.5,
+    Timeframe.FIFTEEN_MINUTE: 3.0,
+    Timeframe.THIRTY_MINUTE: 3.0,
+    Timeframe.ONE_HOUR: 3.0,
+    Timeframe.FOUR_HOUR: 2.75,
+    Timeframe.ONE_WEEK: 2.5,
+}
+
+# Require N consecutive closes beyond the active band before accepting a
+# trend flip (see ``SuperTrendIndicator.confirmation``). Only worth paying
+# the extra lag for on the noisiest short timeframes — longer timeframes
+# already lag from the tighter multiplier above and don't need it.
+_TF_ST_CONFIRMATION: dict[Timeframe, int] = {
+    Timeframe.ONE_MINUTE: 2,
+    Timeframe.TWO_MINUTE: 2,
+    Timeframe.THREE_MINUTE: 1,
+    Timeframe.FIVE_MINUTE: 1,
+}
+
 # Per-timeframe EMA fast/slow periods — kept here (not in settings) because
 # they are a per-timeframe lookup, not a single configurable default. The
 # actual indicator default *parameters* (RSI period, MACD, etc.) live in
@@ -268,17 +299,23 @@ class TrendEngine:
         defaults = _settings.trend.indicators
         for timeframe, (ema_fast, ema_slow) in _TIMEFRAME_EMA.items():
             stack = IndicatorEngine.build_timeframe_stack(ema_fast, ema_slow, defaults)
-            # Phase 6.1: tune the SuperTrend ATR period per timeframe.
+            # Tune the SuperTrend ATR period, band multiplier, and flip
+            # confirmation per timeframe (see the maps above) so short
+            # timeframes don't whipsaw and long timeframes don't lag behind
+            # a single one-size-fits-all multiplier.
             st = stack.get("supertrend")
             if st is not None:
                 st_period = _TF_ATR_PERIOD.get(timeframe, defaults.supertrend_atr_period)
-                # Rebuild the SuperTrend with the right ATR period so the
+                st_multiplier = _TF_ST_MULTIPLIER.get(timeframe, defaults.supertrend_multiplier)
+                st_confirmation = _TF_ST_CONFIRMATION.get(timeframe, 0)
+                # Rebuild the SuperTrend with the tuned params so the
                 # underlying ATRIndicator also uses the tuned period.
                 stack["supertrend"] = IndicatorEngine.create_indicator(
                     "supertrend",
                     {
                         "atr_period": st_period,
-                        "multiplier": defaults.supertrend_multiplier,
+                        "multiplier": st_multiplier,
+                        "confirmation": st_confirmation,
                     },
                 )
             # Phase 6.1: add a standalone ATR indicator so MACD and ROC can

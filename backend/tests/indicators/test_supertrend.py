@@ -57,10 +57,9 @@ class TestSuperTrendIndicator(unittest.TestCase):
     def test_update_matches_calculate_direction(self):
         """O(1) update() must agree with offline calculate() on the final
         trend direction (uptrend/downtrend) and on the sign of the value
-        (above/below close). Exact decimal equivalence isn't possible
-        because the offline path uses a simple MA over TRs while the
-        online path uses Wilder smoothing — but the sign of the
-        SuperTrend vs. close should match."""
+        (above/below close). Both paths use Wilder-smoothed ATR, but exact
+        decimal equivalence still isn't asserted here — just that the sign
+        of the SuperTrend vs. close should match."""
         data = self._make_trending_data(50)
         # Offline path
         calc = SuperTrendIndicator(atr_period=10, multiplier=3.0)
