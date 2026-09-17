@@ -130,7 +130,11 @@ export function MultiTimeframeChartGrid({
       p.timeframe === tf ? { ...p, loading: true, error: null } : p,
     ));
     try {
-      const res: BarsResult = await api.getAnalysisBars(symbol, tf, 10000);
+      // Per-timeframe cap — 1m alone is 10000+ rows and ~1.5MB of JSON,
+      // which took 2-40s on the wire. Cap each panel so the grid of 6
+      // loads fast instead of one slow 1m panel blocking everything.
+      const LIMITS: Record<string, number> = { '1m': 2000, '5m': 3000, '15m': 4000, '30m': 4000, '1h': 4000, '4h': 3000, '1d': 2000 };
+      const res: BarsResult = await api.getAnalysisBars(symbol, tf, LIMITS[tf] ?? 5000);
       const bars = res?.bars ?? [];
       setPanels(prev => prev.map(p =>
         p.timeframe === tf

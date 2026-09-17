@@ -585,7 +585,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
     }
   }, [symbol, timeframe]);
 
-  const fetchBars = useCallback(async () => {
+const fetchBars = useCallback(async () => {
     setBarsLoading(true);
     try {
       // `bars` feeds both CandlestickChart (a canvas-based lightweight-
@@ -595,7 +595,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       // history for the chart; the table takes its own bounded slice
       // rather than limiting this fetch itself, which previously starved
       // the chart down to the table's row cap.
-      const data = await api.getAnalysisBars(symbol, timeframe, 10000);
+      // Per-timeframe cap: 1m has 10000+ rows and the JSON response alone
+      // is ~1.5MB, which took 2-40s on the wire. 1m is capped at 2000
+      // (~1.4 trading days) — plenty for a chart and far cheaper to ship.
+      const LIMITS: Record<string, number> = { '1m': 2000, '5m': 3000, '15m': 4000, '30m': 4000, '1h': 4000, '4h': 3000, '1d': 2000 };
+      const data = await api.getAnalysisBars(symbol, timeframe, LIMITS[timeframe] ?? 5000);
       setBars(data?.bars || []);
     } catch (err: any) {
       console.error('Failed to load bars:', err);
