@@ -316,8 +316,10 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
     timeframes were extended to carry the full session too — the filter
     was removed, and upsert_bars now tags each resulting bar's session
     from its own timestamp (bucket boundaries never straddle a session,
-    so this is always unambiguous). 1h/4h/1d/1wk are untouched — they
-    aren't resampled through this function.
+    so this is always unambiguous). 1d/1wk are untouched — they aren't
+    resampled through this function. 1h/4h aren't either (see
+    _resample_1h_from_1m_and_upsert / _resample_1h_to_4h_and_upsert), but
+    as of 2026-09-17 they get the same full-session treatment there too.
     """
 
     SYMBOL = "ZZTESTEXTHRS"
@@ -544,10 +546,12 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.data_status, "INCOMPLETE")
         self.assertEqual(row.provider, "live_from_1m")
 
-    async def test_extended_hours_1m_bars_are_excluded(self):
-        """Regular-session-only, matching every other 1h source query —
-        this must not become the one place extended-hours data leaks
-        into 1h."""
+    async def test_extended_hours_1m_bars_are_included(self):
+        """Changed 2026-09-17 at the user's request: 1h/4h now span
+        premarket/regular/after-hours, matching 1d's live pre-close bar,
+        instead of staying regular-session-only like every other 1h/4h/1d/
+        1wk source query in this codebase (see BarModel.session's
+        docstring, still accurate for those)."""
         from datetime import timedelta
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.models.market_data_sql import BarModel
@@ -558,14 +562,17 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
-        await service._resample_1h_from_1m_and_upsert()
+        written = await service._resample_1h_from_1m_and_upsert()
+        self.assertGreaterEqual(written, 1)
 
         row = self.db.query(BarModel).filter(
             BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
             BarModel.timestamp == hour_start,
         ).first()
-        # Fewer than 2 *regular*-session rows in the bucket -> nothing written.
-        self.assertIsNone(row)
+        self.assertIsNotNone(row)
+        self.assertEqual(row.open, 100.0)
+        self.assertEqual(row.high, 999.0)
+        self.assertEqual(row.close, 999.0)
 
     async def test_skips_when_fewer_than_two_bars_this_hour(self):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService

@@ -565,14 +565,18 @@ class MarketDataIngestionService:
                     # Only write if the bucket has at least 2 bars (prevents
                     # fake bars from a single sparse/gappy 1h bar being
                     # incorrectly floored into a lone "4h bar") — EXCEPT the
-                    # 16:00-19:59 bucket, which structurally can never have
-                    # more than 1 member: this pipeline only ever produces
-                    # 1h bars for regular trading hours (~8:00/9:00-16:00),
-                    # so the single 16:00 close bar IS the bucket's maximum
-                    # possible content, not a sign of unreliable data. The
-                    # flat >=2 guard silently discarded this bucket every
-                    # single day for every symbol until this fix — found
-                    # live via "why do 4h bars only show 08:00/12:00?".
+                    # 16:00-19:59 bucket, kept at a 1-bar minimum for
+                    # backwards compatibility with days ingested before
+                    # 2026-09-17: back when 1h was regular-session-only, the
+                    # single 16:00 close bar WAS that bucket's maximum
+                    # possible content, and the flat >=2 guard silently
+                    # discarded it every day for every symbol until this
+                    # fix — found live via "why do 4h bars only show
+                    # 08:00/12:00?". Now that 1h also covers after-hours
+                    # (see _resample_1h_from_1m_and_upsert), this bucket can
+                    # have up to 4 members (16/17/18/19) on newer days; the
+                    # lower minimum is still safe since it only relaxes,
+                    # never tightens, the requirement.
                     min_required = 1 if bucket_ts.hour == 16 else 2
                     if len(member_bars) < min_required:
                         continue
@@ -890,10 +894,16 @@ class MarketDataIngestionService:
         correction case, THIS call is the one doing the overwriting, and
         that's the point.
 
-        Regular-session only, matching every other 1h/4h/1d/1wk source
-        query in this codebase (see BarModel.session's docstring) — 1h
-        has never included extended-hours data, and this must not become
-        the one place that quietly changes that.
+        Spans premarket/regular/after-hours 1m data, matching 1d's live
+        pre-close bar (``_resample_1d_live_and_upsert``) — changed
+        2026-09-17 at the user's request so 1h/4h behave like 1d instead
+        of only ever reflecting the 9:30-16:00 regular session. This is a
+        deliberate departure from every OTHER 1h/4h/1d/1wk source query in
+        this codebase (see BarModel.session's docstring, still accurate
+        for those) — only this live/current-bucket builder spans all
+        sessions now. Pre-existing HISTORICAL 1h rows from before this
+        change stay regular-session-only; only today (and any symbol
+        backfilled after this change) gets the wider session coverage.
         """
         from backend.repositories.bar_repository import upsert_bars
 
@@ -920,7 +930,6 @@ class MarketDataIngestionService:
                                 BarModel.timeframe == "1m",
                                 BarModel.timestamp >= hour_start,
                                 BarModel.timestamp < hour_end,
-                                BarModel.session == "regular",
                             )
                         )
                         .order_by(BarModel.timestamp.asc())

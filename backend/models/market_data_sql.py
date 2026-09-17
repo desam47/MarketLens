@@ -57,8 +57,13 @@ class BarModel(Base):
     # other row defaults to 'regular', which matches actual historical
     # behavior (all ingestion was RTH-only before extended-hours support was
     # added). Sub-hour resampling (_resample_and_upsert) filters on this so
-    # 2m/3m/5m/15m/30m/1h/4h/1d/1wk stay regular-session-only even once
-    # premarket/after-hours 1m rows exist in the table.
+    # 2m/3m/5m/15m/30m stay regular-session-only even once premarket/
+    # after-hours 1m rows exist in the table. 1d/1wk were never filtered
+    # this way (1d has always spanned the full session in its live
+    # pre-close bar). 1h/4h used to be regular-session-only too, via a
+    # separate filter in _resample_1h_from_1m_and_upsert, but as of
+    # 2026-09-17 that filter was removed at the user's request so 1h/4h
+    # match 1d's full-session convention instead.
     session = Column(String(20), nullable=False, server_default="regular")
 
     # Composite indexes for common queries.
