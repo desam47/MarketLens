@@ -395,7 +395,7 @@ const DivergencesPanel = memo(function DivergencesPanel({ divergences }: { diver
         <p className="empty-state">No divergences detected</p>
       ) : (
         <div className="divergences-list">
-          {divergences.slice(0, 15).map((d, i) => {
+          {divergences.slice(0, 20).map((d, i) => {
             const color = d.direction === 'bullish' ? '#10b981' : '#ef4444';
             return (
               <div key={i} className="divergence-item" style={{ borderLeftColor: color }}>
