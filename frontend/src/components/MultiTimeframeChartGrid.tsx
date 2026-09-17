@@ -153,18 +153,9 @@ export function MultiTimeframeChartGrid({
     timeframes.forEach(tf => { fetchPanel(tf); });
   }, [symbol, timeframes, fetchPanel]);
 
-  // Determine grid layout: 1 panel = full width, 2 = side-by-side,
-  // 3 = 3 across, 4/5 = 2x2/2x3, 6 = 3x2.
-  const layoutClass = useMemo(() => {
-    switch (panels.length) {
-      case 1: return 'mtf-grid mtf-grid-1';
-      case 2: return 'mtf-grid mtf-grid-2';
-      case 3: return 'mtf-grid mtf-grid-3';
-      case 4: return 'mtf-grid mtf-grid-4';
-      case 5: return 'mtf-grid mtf-grid-5';
-      default: return 'mtf-grid mtf-grid-6';
-    }
-  }, [panels.length]);
+  // Always 2 columns — 6 timeframes stack as 3 rows of 2. The grid
+  // reflows on its own as the browser resizes.
+  const layoutClass = 'mtf-grid mtf-grid-2';
 
   return (
     <div className="card analysis-card mtf-card">
