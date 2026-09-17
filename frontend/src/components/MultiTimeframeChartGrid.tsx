@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import api, { Bar, BarsResult } from '../services/api';
 import { CandlestickChart, ChartType } from './CandlestickChart';
+import { OVERLAYS, type OverlayKey } from './chartMath';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -50,9 +51,26 @@ export function MultiTimeframeChartGrid({
   onChartModeChange,
 }: MultiTimeframeChartGridProps) {
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
+  // Shared overlay state — one toolbar at the top of the grid toggles
+  // every panel's indicators at once instead of each panel managing its
+  // own (which would let them drift apart).
+  const [activeOverlays, setActiveOverlays] = useState<Set<OverlayKey>>(
+    () => new Set<OverlayKey>(['ema9', 'ema21', 'supertrend']),
+  );
   const [panels, setPanels] = useState<PanelState[]>(() =>
     timeframes.map(tf => ({ timeframe: tf, bars: [], loading: true, error: null })),
   );
+
+  const handleToggleOverlay = useCallback((key: OverlayKey) => {
+    setActiveOverlays(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const handleChartTypeChange = useCallback((next: ChartType) => setChartType(next), []);
 
   // ── Live bar updates via WebSocket ──────────────────────────────────────
   const subscriptions: MarketSub[] = useMemo(
@@ -135,8 +153,6 @@ export function MultiTimeframeChartGrid({
     timeframes.forEach(tf => { fetchPanel(tf); });
   }, [symbol, timeframes, fetchPanel]);
 
-  const handleChartTypeChange = useCallback((next: ChartType) => setChartType(next), []);
-
   // Determine grid layout: 1 panel = full width, 2 = side-by-side, 4 = 2x2.
   const layoutClass = useMemo(() => {
     switch (panels.length) {
@@ -176,18 +192,37 @@ export function MultiTimeframeChartGrid({
           {tickerSearch}
         </span>
       </div>
-      <div className="chart-type-toolbar">
-        <span className="mtf-shared-label">All panels:</span>
-        {(['candlestick', 'bar', 'line', 'area', 'heikin-ashi'] as ChartType[]).map(t => (
-          <button
-            key={t}
-            type="button"
-            className={`chart-type-btn${chartType === t ? ' active' : ''}`}
-            onClick={() => handleChartTypeChange(t)}
-          >
-            {t === 'heikin-ashi' ? 'HA' : t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
+      <div className="mtf-shared-toolbars">
+        <div className="chart-type-toolbar">
+          <span className="mtf-shared-label">All panels:</span>
+          {(['candlestick', 'bar', 'line', 'area', 'heikin-ashi'] as ChartType[]).map(t => (
+            <button
+              key={t}
+              type="button"
+              className={`chart-type-btn${chartType === t ? ' active' : ''}`}
+              onClick={() => handleChartTypeChange(t)}
+            >
+              {t === 'heikin-ashi' ? 'HA' : t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="chart-overlay-toolbar">
+          {OVERLAYS.map(def => {
+            const active = activeOverlays.has(def.key);
+            return (
+              <button
+                key={def.key}
+                type="button"
+                className={`overlay-btn${active ? ' active' : ''}`}
+                style={{ borderColor: active ? def.color : 'transparent' }}
+                onClick={() => handleToggleOverlay(def.key)}
+              >
+                <span className="overlay-dot" style={{ backgroundColor: def.color }} />
+                {def.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div className={layoutClass}>
         {panels.map(panel => (
@@ -208,8 +243,11 @@ export function MultiTimeframeChartGrid({
                 symbol={symbol}
                 height={panelHeight}
                 initialChartType={chartType}
-                initialActiveOverlays={['supertrend']}
+                initialActiveOverlays={['ema9', 'ema21', 'supertrend']}
                 showVolume={false}
+                showOverlayToolbar={false}
+                activeOverlays={activeOverlays}
+                onToggleOverlay={handleToggleOverlay}
               />
             )}
           </div>

@@ -42,6 +42,13 @@ interface CandlestickChartProps {
   chartMode?: 'single' | 'multi';
   onChartModeChange?: (mode: 'single' | 'multi') => void;
   tickerSearch?: React.ReactNode;
+  /** When false, hide this card's own overlay toolbar (used by the
+  multi-TF grid, which renders one shared toolbar instead). */
+  showOverlayToolbar?: boolean;
+  /** Controlled overlay set — when provided, the card doesn't manage
+  its own overlay state and just renders the given set. */
+  activeOverlays?: Set<OverlayKey>;
+  onToggleOverlay?: (key: OverlayKey) => void;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -62,6 +69,9 @@ function CandlestickChartImpl({
   chartMode,
   onChartModeChange,
   tickerSearch,
+  showOverlayToolbar = true,
+  activeOverlays: activeOverlaysProp,
+  onToggleOverlay,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -70,24 +80,33 @@ function CandlestickChartImpl({
   const overlaySeriesRef = useRef<Map<OverlayKey, SeriesLike>>(new Map());
   const [err, setErr] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [activeOverlays, setActiveOverlays] = useState<Set<OverlayKey>>(
+  const [internalOverlays, setInternalOverlays] = useState<Set<OverlayKey>>(
     () => new Set<OverlayKey>(initialActiveOverlays),
   );
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
 
-  // Stable callbacks — these are passed as props and would otherwise create
-  // new function identities on every render.
-  const handleChartTypeChange = useCallback((next: ChartType) => {
-    setChartType(next);
-  }, []);
-
+  // Controlled vs uncontrolled overlay mode. When the parent (the
+  // multi-TF grid) passes activeOverlays + onToggleOverlay, the grid owns
+  // the set and every panel reflects the same toggles; otherwise this card
+  // manages its own state like the single-chart card does.
+  const activeOverlays = activeOverlaysProp ?? internalOverlays;
   const toggleOverlay = useCallback((key: OverlayKey) => {
-    setActiveOverlays(prev => {
+    if (onToggleOverlay) {
+      onToggleOverlay(key);
+      return;
+    }
+    setInternalOverlays(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
+  }, [onToggleOverlay]);
+
+  // Stable callbacks — these are passed as props and would otherwise create
+  // new function identities on every render.
+  const handleChartTypeChange = useCallback((next: ChartType) => {
+    setChartType(next);
   }, []);
 
   // Build the chart once.
@@ -373,39 +392,43 @@ function CandlestickChartImpl({
           {tickerSearch}
         </span>
       </div>
-      <div className="chart-type-toolbar">
-        {CHART_TYPES.map(def => {
-          const active = chartType === def.key;
-          return (
-            <button
-              key={def.key}
-              type="button"
-              className={`chart-type-btn${active ? ' active' : ''}`}
-              onClick={() => handleChartTypeChange(def.key)}
-              title={def.label}
-            >
-              {def.shortLabel}
-            </button>
-          );
-        })}
-      </div>
-      <div className="chart-overlay-toolbar">
-        {OVERLAYS.map(def => {
-          const active = activeOverlays.has(def.key);
-          return (
-            <button
-              key={def.key}
-              type="button"
-              className={`overlay-btn${active ? ' active' : ''}`}
-              style={{ borderColor: active ? def.color : 'transparent' }}
-              onClick={() => toggleOverlay(def.key)}
-            >
-              <span className="overlay-dot" style={{ backgroundColor: def.color }} />
-              {def.label}
-            </button>
-          );
-        })}
-      </div>
+      {showOverlayToolbar && (
+        <>
+          <div className="chart-type-toolbar">
+            {CHART_TYPES.map(def => {
+              const active = chartType === def.key;
+              return (
+                <button
+                  key={def.key}
+                  type="button"
+                  className={`chart-type-btn${active ? ' active' : ''}`}
+                  onClick={() => handleChartTypeChange(def.key)}
+                  title={def.label}
+                >
+                  {def.shortLabel}
+                </button>
+              );
+            })}
+          </div>
+          <div className="chart-overlay-toolbar">
+            {OVERLAYS.map(def => {
+              const active = activeOverlays.has(def.key);
+              return (
+                <button
+                  key={def.key}
+                  type="button"
+                  className={`overlay-btn${active ? ' active' : ''}`}
+                  style={{ borderColor: active ? def.color : 'transparent' }}
+                  onClick={() => toggleOverlay(def.key)}
+                >
+                  <span className="overlay-dot" style={{ backgroundColor: def.color }} />
+                  {def.label}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
       <div
         ref={containerRef}
         className="candlestick-container"
@@ -434,7 +457,10 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.onTimeframeChange === next.onTimeframeChange &&
     prev.chartMode === next.chartMode &&
     prev.onChartModeChange === next.onChartModeChange &&
-    prev.tickerSearch === next.tickerSearch
+    prev.tickerSearch === next.tickerSearch &&
+    prev.showOverlayToolbar === next.showOverlayToolbar &&
+    prev.activeOverlays === next.activeOverlays &&
+    prev.onToggleOverlay === next.onToggleOverlay
   );
 });
 
