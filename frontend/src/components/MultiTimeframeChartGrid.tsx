@@ -14,6 +14,13 @@ interface MultiTimeframeChartGridProps {
   panelHeight?: number;
   /** Enable live bar updates via WebSocket. Default: true. */
   liveUpdate?: boolean;
+  /** Ticker search box rendered in this card's header (same as the
+  single-chart card). */
+  tickerSearch?: React.ReactNode;
+  /** Current chart layout mode, for the Single/Multi-TF toggle. */
+  chartMode?: 'single' | 'multi';
+  /** Switch back to the single-chart card. */
+  onChartModeChange?: (mode: 'single' | 'multi') => void;
 }
 
 const DEFAULT_TIMEFRAMES = DEFAULT_GRID_TIMEFRAMES;
@@ -38,6 +45,9 @@ export function MultiTimeframeChartGrid({
   initialChartType = 'heikin-ashi',
   panelHeight = 320,
   liveUpdate = true,
+  tickerSearch,
+  chartMode,
+  onChartModeChange,
 }: MultiTimeframeChartGridProps) {
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
   const [panels, setPanels] = useState<PanelState[]>(() =>
@@ -141,7 +151,30 @@ export function MultiTimeframeChartGrid({
     <div className="card analysis-card mtf-card">
       <div className="card-header-row">
         <h2>{symbol} — Multi-Timeframe</h2>
-        <span className="bar-count">{panels.length} charts</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span className="bar-count">{panels.length} charts</span>
+          {chartMode && onChartModeChange && (
+            <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
+              <button
+                type="button"
+                className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
+                onClick={() => onChartModeChange('single')}
+                title="Single timeframe chart"
+              >
+                Single
+              </button>
+              <button
+                type="button"
+                className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
+                onClick={() => onChartModeChange('multi')}
+                title="Multi-timeframe grid (4 charts side by side)"
+              >
+                Multi-TF
+              </button>
+            </div>
+          )}
+          {tickerSearch}
+        </span>
       </div>
       <div className="chart-type-toolbar">
         <span className="mtf-shared-label">All panels:</span>

@@ -816,7 +816,20 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             )}
           />
         ) : (
-          <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
+          <MultiTimeframeChartGrid
+            symbol={symbol}
+            timeframes={DEFAULT_GRID_TIMEFRAMES}
+            chartMode={chartMode}
+            onChartModeChange={setChartMode}
+            tickerSearch={(
+              <SymbolInput
+                ref={tickerSearchRef}
+                symbol={symbol}
+                onChange={onSymbolChange}
+                onSubmit={handleRefresh}
+              />
+            )}
+          />
         )}
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
           {/* Table stays bounded to the most recent rows (plain HTML
