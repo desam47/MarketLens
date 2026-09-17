@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { ConfluenceData } from '../services/api';
 import { formatETDateTime } from './chartMath';
 
@@ -36,6 +36,18 @@ const PRESET_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
+  // Hooks must run unconditionally on every render of this component
+  // instance, so this has to sit above the early returns below (a
+  // conditional useMemo would change hook count between a null and a
+  // populated confluence prop, which React disallows outright).
+  const timeframeSignals = confluence?.timeframe_signals;
+  const signalEntries = useMemo(
+    () => Object.entries(timeframeSignals || {}).sort(
+      ([a], [b]) => (TF_ORDER[a] ?? 99) - (TF_ORDER[b] ?? 99)
+    ),
+    [timeframeSignals]
+  );
+
   if (error) {
     return (
       <div className="card confluence-card card-error">
@@ -62,11 +74,6 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
   const color = directionColors[confluence.direction] || '#9ca3af';
   const alignmentPct = (confluence.alignment_score * 100).toFixed(0);
   const strengthPct = (confluence.strength * 100).toFixed(0);
-
-  const timeframeSignals = confluence.timeframe_signals || {};
-  const signalEntries = Object.entries(timeframeSignals).sort(
-    ([a], [b]) => (TF_ORDER[a] ?? 99) - (TF_ORDER[b] ?? 99)
-  );
 
   // Phase 7: alignment breakdown + horizon directions.
   const bullishPct = ((confluence.bullish_alignment ?? 0) * 100).toFixed(0);

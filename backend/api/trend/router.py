@@ -34,6 +34,56 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
     return format_edt_iso(value)
 
 
+def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
+    trend_signal = engine.get_current_trend(tf)
+    if trend_signal is None:
+        return {
+            "symbol": sym,
+            "timeframe": timeframe,
+            "direction": "unknown",
+            "strength": "unknown",
+            "confidence": 0.0,
+            "score": None,
+            "classification": None,
+            "timestamp": None,
+        }
+    return {
+        "symbol": trend_signal.symbol,
+        "timeframe": trend_signal.timeframe.value,
+        "direction": trend_signal.direction.value,
+        "strength": trend_signal.strength.value,
+        "confidence": trend_signal.confidence,
+        "score": trend_signal.score,
+        "classification": trend_signal.classification.value
+            if hasattr(trend_signal.classification, "value")
+            else trend_signal.classification,
+        "timestamp": _to_dashboard_tz(trend_signal.timestamp),
+    }
+
+
+def _get_cached_trend(sym: str, timeframe: str, engine) -> dict:
+    """Read-or-compute a single (symbol, timeframe) trend payload, TTL-cached.
+
+    Shared by the single-timeframe and batch endpoints so both hit the
+    same 30s cache keyed by ``symbol:timeframe`` — a timeframe fetched via
+    one path is warm for the other.
+    """
+    from backend.engines.timeframe import Timeframe
+
+    try:
+        tf = Timeframe(timeframe)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
+
+    cache_key = f"{sym}:{timeframe}"
+    cached = _trend_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    payload = _build_trend_payload(engine, sym, timeframe, tf)
+    _trend_cache[cache_key] = payload
+    return payload
+
+
 @router.get("/{symbol}/current/{timeframe}")
 async def get_current_trend(symbol: str, timeframe: str):
     """Get current trend for symbol and timeframe.
@@ -42,54 +92,40 @@ async def get_current_trend(symbol: str, timeframe: str):
     ``symbol:timeframe`` so different timeframes don't share entries.
     """
     try:
-        # Validate timeframe
-        from backend.engines.timeframe import Timeframe
-
-        try:
-            tf = Timeframe(timeframe)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}") from None
-
         sym = symbol.upper()
-        cache_key = f"{sym}:{timeframe}"
-        cached = _trend_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
         # Reuse the shared, pre-warmed TrendEngine from the registry.
         engine = get_engine(sym)
-        trend_signal = engine.get_current_trend(tf)
-
-        if trend_signal is None:
-            payload = {
-                "symbol": sym,
-                "timeframe": timeframe,
-                "direction": "unknown",
-                "strength": "unknown",
-                "confidence": 0.0,
-                "score": None,
-                "classification": None,
-                "timestamp": None,
-            }
-        else:
-            payload = {
-                "symbol": trend_signal.symbol,
-                "timeframe": trend_signal.timeframe.value,
-                "direction": trend_signal.direction.value,
-                "strength": trend_signal.strength.value,
-                "confidence": trend_signal.confidence,
-                "score": trend_signal.score,
-                "classification": trend_signal.classification.value
-                    if hasattr(trend_signal.classification, "value")
-                    else trend_signal.classification,
-                "timestamp": _to_dashboard_tz(trend_signal.timestamp),
-            }
-        _trend_cache[cache_key] = payload
-        return payload
+        return _get_cached_trend(sym, timeframe, engine)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting trend for {symbol} {timeframe}: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/{symbol}/batch")
+async def get_trend_batch(symbol: str, timeframes: str):
+    """Get current trend for multiple timeframes in a single request.
+
+    Replaces N separate ``GET /current/{tf}`` calls with one round trip —
+    the dashboard's Multi-Timeframe Trend section fetches up to 10
+    timeframes per load, which used to mean 10 separate GETs.
+    ``timeframes`` is a comma-separated list (e.g. ``1m,5m,1h``). Each
+    entry is read through the same 30s TTL cache as the single-timeframe
+    endpoint, so results are identical and either endpoint warms the
+    other's cache.
+    """
+    sym = symbol.upper()
+    requested = [t.strip() for t in timeframes.split(",") if t.strip()]
+    if not requested:
+        raise HTTPException(status_code=400, detail="timeframes must not be empty")
+    try:
+        engine = get_engine(sym)
+        return [_get_cached_trend(sym, tf, engine) for tf in requested]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting trend batch for {symbol} ({timeframes}): {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

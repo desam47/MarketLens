@@ -1081,11 +1081,80 @@ export interface OptionsResponse {
   timestamp: string;
 }
 
+// Default per-request timeout. Without this, a hung backend call (dead
+// connection, stuck server-side computation) never resolved — the
+// caller's loading state just spun forever, since a plain `fetch()` has
+// no timeout of its own.
+const DEFAULT_TIMEOUT_MS = 15000;
+
 class ApiService {
   private baseUrl: string;
 
   constructor(baseUrl: string = API_BASE) {
     this.baseUrl = baseUrl;
+  }
+
+  /**
+   * Combines a per-request timeout with any AbortSignal the caller
+   * passed in `options.signal` — whichever fires first aborts the
+   * request. Callers that want their own cancellation (e.g. a
+   * stale-response guard) can pass a signal through `options` as usual;
+   * this only adds the timeout on top, it never replaces an explicit
+   * caller signal.
+   */
+  private withTimeout(
+    callerSignal?: AbortSignal | null,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ): { signal: AbortSignal; clear: () => void } {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      // A plain Error rather than `new DOMException(...)` — DOMException
+      // isn't a reliable global across every JS runtime this code can
+      // run under, and a plain Error with `.name` set works identically.
+      const timeoutError = new Error(`Request timed out after ${timeoutMs}ms`);
+      timeoutError.name = 'TimeoutError';
+      controller.abort(timeoutError);
+    }, timeoutMs);
+
+    const onCallerAbort = () => controller.abort(callerSignal!.reason);
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort(callerSignal.reason);
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+
+    return {
+      signal: controller.signal,
+      clear: () => {
+        clearTimeout(timeoutId);
+        callerSignal?.removeEventListener('abort', onCallerAbort);
+      },
+    };
+  }
+
+  /**
+   * Normalizes a rejection into an Error. A timeout (`err.name ===
+   * 'TimeoutError'`) and a caller-initiated cancellation (`err.name ===
+   * 'AbortError'`, from the caller's own AbortSignal — see
+   * `withTimeout`) are both already well-formed Errors at this point,
+   * so they pass through unchanged; callers can still switch on
+   * `err.name` to treat a cancellation as an intentional supersede
+   * rather than a real failure. Only a non-Error thrown value (rare) is
+   * wrapped.
+   */
+  private normalizeAbortError(err: unknown): Error {
+    if (err instanceof Error) return err;
+    // Duck-type as a fallback: an AbortSignal's `reason` can be an
+    // Error-like object that fails `instanceof Error` despite having the
+    // right shape, if it was constructed in a different realm than this
+    // code (e.g. Node's internal AbortController machinery vs. a
+    // sandboxed test VM context). Preserve its name/message rather than
+    // collapsing it to an opaque wrapped string.
+    if (err && typeof err === 'object' && 'message' in err) {
+      const wrapped = new Error(String((err as { message: unknown }).message));
+      if ('name' in err) wrapped.name = String((err as { name: unknown }).name);
+      return wrapped;
+    }
+    return new Error(String(err));
   }
 
   /**
@@ -1112,19 +1181,27 @@ class ApiService {
   }
 
   private async fetch<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
+    const { signal, clear } = this.withTimeout(options?.signal);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        ...options,
+        signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (err) {
+      throw this.normalizeAbortError(err);
+    } finally {
+      clear();
     }
-
-    return response.json();
   }
 
   /**
@@ -1133,11 +1210,18 @@ class ApiService {
    * or CSV depending on the ``format`` query param.
    */
   private async fetchRaw(endpoint: string, options?: RequestInit): Promise<string> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, options);
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+    const { signal, clear } = this.withTimeout(options?.signal);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, { ...options, signal });
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+      return await response.text();
+    } catch (err) {
+      throw this.normalizeAbortError(err);
+    } finally {
+      clear();
     }
-    return response.text();
   }
 
   /**
@@ -1146,17 +1230,25 @@ class ApiService {
    * through this helper instead.
    */
   private async del(endpoint: string, options?: RequestInit): Promise<void> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      ...options,
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-    });
+    const { signal, clear } = this.withTimeout(options?.signal);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        ...options,
+        method: 'DELETE',
+        signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+      });
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      }
+    } catch (err) {
+      throw this.normalizeAbortError(err);
+    } finally {
+      clear();
     }
   }
 
@@ -1234,11 +1326,12 @@ class ApiService {
     return this.fetch<TrendData>(`/trend/${symbol}/current/${timeframe}`);
   }
 
+  // One round trip for all requested timeframes instead of N parallel
+  // GETs — the Dashboard's Trends section requests up to 10 at once.
   async getTrends(symbol: string, timeframes: string[] = ['1h', '4h', '1d']): Promise<TrendData[]> {
-    const results = await Promise.all(
-      timeframes.map(tf => this.getTrend(symbol, tf).catch(() => null))
+    return this.fetch<TrendData[]>(
+      `/trend/${symbol}/batch?timeframes=${timeframes.map(encodeURIComponent).join(',')}`
     );
-    return results.filter((r): r is TrendData => r !== null);
   }
 
   async getTrendHistory(symbol: string, timeframe: string, limit: number = 10): Promise<any> {
@@ -1602,6 +1695,19 @@ class ApiService {
     return this.fetch<TopMoverResult[]>(`/scanner/top-movers?${params}`);
   }
 
+  // Scans the watchlist once and returns both directions — prefer this
+  // over two getTopMovers() calls, which scan the same watchlist twice.
+  async getTopMoversCombined(
+    limit = 10,
+    watchlistId?: number,
+  ): Promise<{ bullish: TopMoverResult[]; bearish: TopMoverResult[] }> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
+    return this.fetch<{ bullish: TopMoverResult[]; bearish: TopMoverResult[] }>(
+      `/scanner/top-movers/combined?${params}`
+    );
+  }
+
   // Phase 10: composable filters + named rankings
   async getFilterTypes(): Promise<string[]> {
     return this.fetch<string[]>('/scanner/filter-types');
@@ -1655,17 +1761,21 @@ class ApiService {
   }
 
   // Phase 17: Natural-language search
-  async nlSearch(payload: {
-    query: string;
-    explain?: boolean;
-    top_n?: number;
-    watchlist_id?: number | null;
-    scope?: 'watchlist' | 'market';
-    ranking?: string;
-  }): Promise<NLSearchResponse> {
+  async nlSearch(
+    payload: {
+      query: string;
+      explain?: boolean;
+      top_n?: number;
+      watchlist_id?: number | null;
+      scope?: 'watchlist' | 'market';
+      ranking?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<NLSearchResponse> {
     return this.fetch<NLSearchResponse>('/nl-search', {
       method: 'POST',
       body: JSON.stringify(payload),
+      signal,
     });
   }
 
@@ -2072,16 +2182,22 @@ export interface AIDigestMover {
 
 export interface AIDigestRsiExtreme {
   symbol: string;
-  rsi: number;
+  // Optional for the same reason as AIDigestMover.change_pct — a
+  // persisted digest's payload reflects whatever the backend computed
+  // at generation time, which can predate a field or omit it.
+  rsi?: number;
   signal: 'oversold' | 'overbought';
 }
 
 export interface AIDigestPayload {
   watchlist_size: number;
   market_regime: Record<string, unknown>;
-  movers: {
-    top_bullish: AIDigestMover[];
-    top_bearish: AIDigestMover[];
+  // Optional/partial: a persisted digest's JSON payload isn't
+  // schema-validated on read, so an older or partially-generated one can
+  // be missing `movers` entirely, or have only one of the two arrays.
+  movers?: {
+    top_bullish?: AIDigestMover[];
+    top_bearish?: AIDigestMover[];
   };
   rsi_extremes: AIDigestRsiExtreme[];
   mtf_alignment_counts: { bullish: number; bearish: number };

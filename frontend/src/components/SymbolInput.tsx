@@ -23,10 +23,15 @@ export const SymbolInput = forwardRef<SymbolInputHandle, SymbolInputProps>(
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const normalized = inputValue.toUpperCase().trim();
-    if (normalized && normalized !== symbol) {
+    if (!normalized) return;
+    if (normalized !== symbol) {
+      // Parent's effect on `symbol` will fetch the new symbol once its
+      // state updates — calling onSubmit here too would fetch the old
+      // symbol first, then the new one, as a duplicate request.
       onChange(normalized);
+    } else {
+      onSubmit();
     }
-    onSubmit();
   };
 
   return (

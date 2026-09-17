@@ -206,23 +206,8 @@ h4 {
   opacity: 0.7;
 }
 
-.card {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 1.5rem;
-  box-shadow: var(--shadow);
-}
-
 .card-error {
   border-left: 3px solid #ef4444;
-}
-
-.empty-state {
-  color: var(--text-muted);
-  text-align: center;
-  padding: 2rem;
-  font-style: italic;
 }
 
 .error-text {
@@ -365,7 +350,10 @@ h4 {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* min(100%, 320px) instead of a flat 320px — a fixed minimum can
+     overflow the viewport width on screens narrower than 320px
+     (e.g. an iPhone SE in portrait at 375px minus padding). */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 1.5rem;
 }
 
@@ -576,10 +564,6 @@ h4 {
   padding-top: 1rem;
   border-top: 1px solid var(--border);
   font-size: 0.9rem;
-}
-
-.dashboard-header {
-  margin-bottom: 1.5rem;
 }
 
 .dashboard-header h1 {
@@ -1305,7 +1289,8 @@ h4 {
 
 .health-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* Same narrow-viewport overflow fix as .dashboard-grid above. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 1.5rem;
   margin-bottom: 1.5rem;
 }
@@ -1902,21 +1887,29 @@ h4 {
   align-self: end;
 }
 
-.summary-grid {
+/* Renamed from the generic .summary-grid (2026-09-17): that class was
+   also defined near the signals table (fixed 150px auto-fit columns,
+   for HistoricalSignalCard's 3 data-items) and, since both rules had
+   equal specificity, this later fixed-4-column definition silently won
+   the cascade everywhere — including for HistoricalSignalCard, which
+   got a rigid 4-column grid with an empty trailing cell instead of its
+   intended responsive layout. Scoping this to Backtest's own class
+   fixes that collision instead of just reordering which one wins. */
+.backtest-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   margin-top: 12px;
 }
 
-.summary-grid .data-item {
+.backtest-summary-grid .data-item {
   background: var(--bg-tertiary);
   padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
 
-.summary-grid .data-item h3 {
+.backtest-summary-grid .data-item h3 {
   margin: 0 0 4px 0;
   font-size: 0.8em;
   color: var(--text-muted);
@@ -1925,7 +1918,7 @@ h4 {
   letter-spacing: 0.5px;
 }
 
-.summary-grid .data-item .value {
+.backtest-summary-grid .data-item .value {
   font-size: 1.4em;
   font-weight: 600;
   color: var(--text-primary);

@@ -218,7 +218,7 @@ export function BacktestCard({ defaultSymbol = '' }: BacktestCardProps) {
             {fmtDate(currentRun.start_date)} → {fmtDate(currentRun.end_date)}
             {' '}— {currentRun.total_signals ?? 0} signals over {currentRun.total_bars ?? 0} bars.
           </div>
-          <div className="summary-grid">
+          <div className="backtest-summary-grid">
             <div className="data-item">
               <h3>Win Rate (1d)</h3>
               <div className="value">

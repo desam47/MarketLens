@@ -5,6 +5,10 @@ import { formatETDateTime } from './chartMath';
 
 interface TopMoversCardProps {
   onSelectSymbol?: (symbol: string) => void;
+  // Gates the visibility-regain refetch below — mirrors the "Auto (30s)"
+  // toggle the five core Dashboard sections already respect, so turning
+  // that off also stops this card's background catch-up fetch.
+  autoRefresh?: boolean;
 }
 
 function changeBadge(changePct: number | null): { label: string; color: string } {
@@ -54,6 +58,7 @@ function MoverPanel({
               className={`mover-pill ${variant}`}
               onClick={() => onSelectSymbol?.(m.symbol)}
               role={onSelectSymbol ? 'button' : undefined}
+              aria-label={onSelectSymbol ? `View ${m.symbol}, ${badge.label} change` : undefined}
               tabIndex={onSelectSymbol ? 0 : undefined}
               onKeyDown={(e) => {
                 if (onSelectSymbol && (e.key === 'Enter' || e.key === ' ')) {
@@ -74,7 +79,7 @@ function MoverPanel({
   );
 }
 
-export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
+export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversCardProps) {
   const [bullish, setBullish] = useState<TopMoverResult[]>([]);
   const [bearish, setBearish] = useState<TopMoverResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,21 +91,6 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
     if (refresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
-
-    // Use safeCall for independent failure handling.
-    const safeCall = async <T,>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> => {
-      try {
-        const data = await fn();
-        return { data, error: null };
-      } catch (e: any) {
-        return { data: null, error: e?.message || 'Request failed' };
-      }
-    };
-
-    const [bullResult, bearResult] = await Promise.all([
-      safeCall(() => api.getTopMovers('bullish', 20)),
-      safeCall(() => api.getTopMovers('bearish', 20)),
-    ]);
 
     // The backend ranks strongest_bullish/strongest_bearish by live
     // change_pct now (real price direction, not the momentum/RSI
@@ -114,18 +104,24 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
     // (isBullish() said true) without ever qualifying for the bullish
     // list either (its change_pct ranked it last there) — vanishing
     // from Top Movers entirely. Found live 2026-09-16 (CTNT).
-    // Defensive: the API may return an object (e.g. 404 error body) if
-    // a route is misconfigured — guard against that so the dashboard
-    // still renders instead of throwing.
+    //
+    // A single combined call replaced two getTopMovers() calls (bullish,
+    // bearish) that each scanned the same watchlist independently —
+    // getTopMoversCombined scans it once on the backend.
     const asArray = <T,>(v: unknown): T[] => Array.isArray(v) ? (v as T[]) : [];
-    const bullData = asArray<TopMoverResult>(bullResult.data);
-    const bearData = asArray<TopMoverResult>(bearResult.data);
-
-    setBullish(bullData);
-    setBearish(bearData);
-    if (bullResult.error && bearResult.error) {
-      setError(`Top movers unavailable: ${bullResult.error}`);
+    try {
+      const data = await api.getTopMoversCombined(20);
+      // Defensive: the API may return an unexpected shape (e.g. a 404
+      // error body) if a route is misconfigured — guard against that so
+      // the dashboard still renders instead of throwing.
+      setBullish(asArray<TopMoverResult>(data?.bullish));
+      setBearish(asArray<TopMoverResult>(data?.bearish));
+    } catch (e: any) {
+      setBullish([]);
+      setBearish([]);
+      setError(`Top movers unavailable: ${e?.message || 'Request failed'}`);
     }
+
     setLastUpdated(new Date());
     setLoading(false);
     setRefreshing(false);
@@ -134,6 +130,20 @@ export function TopMoversCard({ onSelectSymbol }: TopMoversCardProps) {
   useEffect(() => {
     fetchMovers();
   }, [fetchMovers]);
+
+  // Browsers throttle setInterval heavily in backgrounded tabs, so a tab
+  // left open sits on an increasingly stale mover list until it's
+  // refocused — same root cause as the Regime freshness-pill bug fixed
+  // 2026-09-16. Refetch quietly (the "refreshing" spinner, not the
+  // full loading text) on tab-focus-regain.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchMovers(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [autoRefresh, fetchMovers]);
 
   return (
     <div className="card top-movers-card">

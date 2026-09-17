@@ -364,6 +364,47 @@ async def list_ranking_categories():
     return default_ranking_engine.CATEGORIES
 
 
+def _resolve_watchlist_symbols(
+    repo: WatchlistRepository, watchlist_id: int | None
+) -> list[str]:
+    """Resolve the symbol scope for a top-movers scan.
+
+    Shared by ``/top-movers`` and ``/top-movers/combined`` so both scan
+    the exact same watchlist scope. Raises 404 for an unknown
+    ``watchlist_id``; returns an empty list (not a 404) when
+    ``watchlist_id`` is omitted/0 and there are no active watchlists.
+    """
+    if watchlist_id is None or watchlist_id == 0:
+        # Scan across **all** active watchlists
+        all_wls = repo.get_watchlists(active_only=True)
+        symbols_set: set[str] = set()
+        for wl in all_wls:
+            symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+            # each element in `symbols` is a WatchlistSymbol instance
+            symbols_set.update(ws.symbol for ws in symbols)
+        return list(symbols_set)
+
+    watchlist = repo.get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+    return [ws if isinstance(ws, str) else str(ws.symbol) for ws in watchlist_symbols]
+
+
+def _rank_entries(
+    named: dict, by_symbol: dict[str, ScanResult], ranking_key: str
+) -> list[_ScanResultResponse]:
+    target = named.get(ranking_key)
+    if not target:
+        return []
+    out: list[_ScanResultResponse] = []
+    for entry in target.entries:
+        result = by_symbol.get(entry.symbol.upper())
+        if result is not None:
+            out.append(_result_to_dict(result))
+    return out
+
+
 @router.get("/top-movers", response_model=list[_ScanResultResponse])
 async def get_top_movers(
     direction: str = Query("bullish", pattern="^(bullish|bearish)$"),
@@ -375,45 +416,58 @@ async def get_top_movers(
 
     Used by the dashboard's "Top Bullish" and "Top Bearish" cards. When
     ``watchlist_id`` is omitted, scans the first active watchlist.
+
+    Prefer ``/top-movers/combined`` when both directions are needed —
+    calling this endpoint twice (once per direction) scans the same
+    watchlist twice for no benefit, since ``default_ranking_engine.rank()``
+    already computes both directions in a single pass.
     """
     repo = WatchlistRepository(db)
-    if watchlist_id is None or watchlist_id == 0:
-        # Scan across **all** active watchlists
-        all_wls = repo.get_watchlists(active_only=True)
-        symbols_set: set[str] = set()
-        for wl in all_wls:
-            symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
-            # each element in `symbols` is a WatchlistSymbol instance
-            symbols_set.update(ws.symbol for ws in symbols)
-        if not symbols_set:
-            return []
-        watchlist_symbols = list(symbols_set)
-    else:
-        # Existing behavior for a specific watchlist
-        watchlist = repo.get_watchlist(watchlist_id)
-        if watchlist is None:
-            raise HTTPException(status_code=404, detail="Watchlist not found")
-        watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
-        if not watchlist_symbols:
-            return []
+    symbols = _resolve_watchlist_symbols(repo, watchlist_id)
+    if not symbols:
+        return []
 
-    symbols = [ws if isinstance(ws, str) else str(ws.symbol) for ws in watchlist_symbols]
     await market_scanner.scan_symbols_async(symbols)
 
     cache = _scoped_cache(symbols)
     ranking_key = "strongest_bullish" if direction == "bullish" else "strongest_bearish"
     named = default_ranking_engine.rank(cache, top_n=limit)
-    target = named.get(ranking_key)
-    if not target:
-        return []
-
     by_symbol = {r.symbol.upper(): r for r in cache}
-    out: list[_ScanResultResponse] = []
-    for entry in target.entries:
-        result = by_symbol.get(entry.symbol.upper())
-        if result is not None:
-            out.append(_result_to_dict(result))
-    return out
+    return _rank_entries(named, by_symbol, ranking_key)
+
+
+class _TopMoversCombinedResponse(BaseModel):
+    bullish: list[_ScanResultResponse]
+    bearish: list[_ScanResultResponse]
+
+
+@router.get("/top-movers/combined", response_model=_TopMoversCombinedResponse)
+async def get_top_movers_combined(
+    limit: int = Query(10, ge=0, le=50),
+    watchlist_id: int | None = Query(None, description="Watchlist to scan (defaults to first active)"),
+    db: Session = Depends(get_db),
+):
+    """Return strongest-bullish and strongest-bearish symbols from one scan.
+
+    Scans the watchlist once and ranks once, then reads both directions
+    out of that single ranking pass — replaces two ``/top-movers`` calls
+    (one per direction) from the dashboard's Top Movers card, which scanned
+    the same watchlist twice.
+    """
+    repo = WatchlistRepository(db)
+    symbols = _resolve_watchlist_symbols(repo, watchlist_id)
+    if not symbols:
+        return _TopMoversCombinedResponse(bullish=[], bearish=[])
+
+    await market_scanner.scan_symbols_async(symbols)
+
+    cache = _scoped_cache(symbols)
+    named = default_ranking_engine.rank(cache, top_n=limit)
+    by_symbol = {r.symbol.upper(): r for r in cache}
+    return _TopMoversCombinedResponse(
+        bullish=_rank_entries(named, by_symbol, "strongest_bullish"),
+        bearish=_rank_entries(named, by_symbol, "strongest_bearish"),
+    )
 
 
 @router.get("/watchlist/{watchlist_id}/rankings", response_model=list[_NamedRankingResponse])

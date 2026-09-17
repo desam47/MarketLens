@@ -6,6 +6,9 @@ interface TransitionsMiniCardProps {
   symbol: string;
   onSelectSymbol?: (symbol: string) => void;
   limit?: number;
+  // Gates the visibility-regain refetch below — see the matching comment
+  // in TopMoversCard.tsx.
+  autoRefresh?: boolean;
 }
 
 const transitionColors: Record<string, string> = {
@@ -32,6 +35,7 @@ export function TransitionsMiniCard({
   symbol,
   onSelectSymbol,
   limit = 5,
+  autoRefresh = true,
 }: TransitionsMiniCardProps) {
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [latestScore, setLatestScore] = useState(0);
@@ -59,6 +63,19 @@ export function TransitionsMiniCard({
     fetchTransitions();
   }, [fetchTransitions]);
 
+  // Same background-tab staleness fix as the Regime card (2026-09-16):
+  // this card had no periodic or visibility-driven refresh at all before,
+  // so a tab left open just froze on whatever transitions existed at
+  // mount/last symbol change.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchTransitions();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [autoRefresh, fetchTransitions]);
+
   const recent = transitions.slice(-limit).reverse();
   const scoreColor = latestScore > 0 ? '#10b981' : latestScore < 0 ? '#ef4444' : '#9ca3af';
 
@@ -70,6 +87,13 @@ export function TransitionsMiniCard({
           className="transitions-mini-symbol"
           onClick={() => onSelectSymbol?.(symbol)}
           role={onSelectSymbol ? 'button' : undefined}
+          tabIndex={onSelectSymbol ? 0 : undefined}
+          onKeyDown={(e) => {
+            if (onSelectSymbol && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              onSelectSymbol(symbol);
+            }
+          }}
         >
           {symbol}
         </span>
@@ -99,11 +123,11 @@ export function TransitionsMiniCard({
         <p className="empty-state">No recent transitions for {symbol}</p>
       ) : (
         <div className="transitions-mini-list">
-          {recent.map((t, i) => {
+          {recent.map((t) => {
             const color = transitionColors[t.type] || '#9ca3af';
             return (
               <div
-                key={i}
+                key={t.index}
                 className="transition-mini-item"
                 style={{ borderLeftColor: color }}
               >

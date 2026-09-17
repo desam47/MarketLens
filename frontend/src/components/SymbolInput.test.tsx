@@ -8,7 +8,7 @@ describe('SymbolInput', () => {
     expect(input.value).toBe('SPY');
   });
 
-  it('calls onChange and onSubmit when the form is submitted with a changed symbol', () => {
+  it('calls only onChange (not onSubmit) when the form is submitted with a changed symbol', () => {
     const onChange = jest.fn();
     const onSubmit = jest.fn();
     render(<SymbolInput symbol="AAPL" onChange={onChange} onSubmit={onSubmit} />);
@@ -16,7 +16,10 @@ describe('SymbolInput', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'msft' } });
     fireEvent.click(screen.getByRole('button', { name: /analyze/i }));
     expect(onChange).toHaveBeenCalledWith('MSFT');
-    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // onSubmit must NOT fire here — the parent's effect on the changed
+    // `symbol` prop is responsible for fetching. Calling onSubmit too
+    // would fetch the old symbol, then the new one, as a duplicate request.
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it('calls onSubmit even when the symbol has not changed (onChange is not called)', () => {

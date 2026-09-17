@@ -740,6 +740,35 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         self.assertNotIn("GOOG", symbols)
         self.assertTrue(symbols <= {"AAPL", "MSFT"})
 
+    def test_top_movers_combined_scans_watchlist_once(self):
+        """The dashboard used to call /top-movers twice (bullish, bearish),
+        scanning the same watchlist twice. /top-movers/combined must scan
+        it exactly once and still split results correctly by direction."""
+        self.mock_scanner.scan_results = {
+            "AAPL": _make_result("AAPL", change_pct=3.0),
+            "MSFT": _make_result("MSFT", change_pct=-1.5),
+            "GOOG": _make_result("GOOG", change_pct=5.0),  # not in watchlist
+        }
+        self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        with patch('backend.api.scanner.router.WatchlistRepository') as repo_class:
+            repo = MagicMock()
+            repo_class.return_value = repo
+            repo.get_watchlists.return_value = [MagicMock(id=1)]
+            repo.get_watchlist.return_value = MagicMock(id=1)
+            repo.get_watchlist_symbols.return_value = [
+                MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT"),
+            ]
+
+            response = self.client.get("/api/scanner/top-movers/combined")
+
+        self.assertEqual(response.status_code, 200)
+        self.mock_scanner.scan_symbols_async.assert_awaited_once()
+
+        body = response.json()
+        self.assertEqual({r["symbol"] for r in body["bullish"]}, {"AAPL"})
+        self.assertEqual({r["symbol"] for r in body["bearish"]}, {"MSFT"})
+
 
 if __name__ == '__main__':
     unittest.main()

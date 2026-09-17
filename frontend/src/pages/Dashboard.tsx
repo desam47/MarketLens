@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData } from '../services/api';
 import { RegimeCard } from '../components/RegimeCard';
 import { TrendCard } from '../components/TrendCard';
@@ -10,9 +10,46 @@ import { TransitionsMiniCard } from '../components/TransitionsMiniCard';
 import { SymbolInput } from '../components/SymbolInput';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
-import { ErrorBanner } from '../components/ErrorBanner';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
 import { formatETDateTime } from '../components/chartMath';
+import { SkeletonBlock } from '../components/SkeletonBlock';
+
+// Per-card skeletons rather than the page-level DashboardSkeleton
+// component (components/skeletons/DashboardSkeleton.tsx): that one
+// blocks on the whole page loading at once and hardcodes a stale layout
+// (4 trend cards, no Digest card) from before this page grew to 10
+// trend cards + 4 bottom cards. Dashboard deliberately renders each
+// section as soon as its own data arrives — these mirror that, so the
+// loading state doesn't regress into "nothing renders until everything
+// is ready."
+function SkeletonCard({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="card">
+      <SkeletonBlock width="50%" height="1.1rem" />
+      <div className="skeleton-rows">
+        {Array.from({ length: rows }).map((_, i) => (
+          <SkeletonBlock key={i} width={i === rows - 1 ? '70%' : '100%'} height="0.85rem" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TrendCardSkeleton() {
+  return (
+    <div className="card trend-card">
+      <div className="trend-header">
+        <SkeletonBlock width="45%" height="0.9rem" />
+        <SkeletonBlock width="1.1rem" height="1.1rem" radius={999} />
+      </div>
+      <SkeletonBlock width="65%" height="1rem" />
+      <div className="skeleton-rows">
+        <SkeletonBlock width="80%" height="0.75rem" />
+        <SkeletonBlock width="60%" height="0.75rem" />
+      </div>
+    </div>
+  );
+}
 
 interface DashboardProps {
   symbol: string;
@@ -26,8 +63,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   // Confirmed live: AAPL's regime engine was current server-side, but a
   // Dashboard tab with this off showed "Stuck · 2d ago" the whole time.
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(new Date());
-  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Individual card states
   const [regime, setRegime] = useState<RegimeData | null>(null);
@@ -51,61 +87,99 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const [marketContextError, setMarketContextError] = useState<string | null>(null);
 
   const [sectorData, setSectorData] = useState<SectorData | null>(null);
+  const [sectorLoading, setSectorLoading] = useState(true);
+
+  // Kept in sync with the latest props on every render (not just on commit
+  // via an effect) so in-flight fetches below can tell, the moment they
+  // resolve, whether the symbol/preset they were issued for is still the
+  // one the user is looking at. A slow response for a since-abandoned
+  // symbol/preset is dropped instead of overwriting newer data.
+  const symbolRef = useRef(symbol);
+  symbolRef.current = symbol;
+  const presetRef = useRef(selectedPreset);
+  presetRef.current = selectedPreset;
 
   // Fetch individual sections independently for progressive rendering
   const fetchRegime = useCallback(async () => {
+    const requestSymbol = symbol;
     setRegimeLoading(true);
     setRegimeError(null);
     try {
-      const [regRes, secRes] = await Promise.all([
-        api.getRegime(symbol),
-        api.getSector(symbol)
-      ]);
-      setRegime(regRes);
-      setSectorData(secRes);
+      const data = await api.getRegime(requestSymbol);
+      if (symbolRef.current !== requestSymbol) return;
+      setRegime(data);
     } catch (err: any) {
+      if (symbolRef.current !== requestSymbol) return;
       setRegimeError(err?.message || 'Failed to load regime');
     } finally {
-      setRegimeLoading(false);
+      if (symbolRef.current === requestSymbol) setRegimeLoading(false);
+    }
+  }, [symbol]);
+
+  // Split out from fetchRegime: sector data is supplementary (rendered as
+  // an optional footer on the Regime card), so a sector failure shouldn't
+  // blank out an otherwise-successful regime fetch, or vice versa.
+  const fetchSector = useCallback(async () => {
+    const requestSymbol = symbol;
+    setSectorLoading(true);
+    try {
+      const data = await api.getSector(requestSymbol);
+      if (symbolRef.current !== requestSymbol) return;
+      setSectorData(data);
+    } catch {
+      if (symbolRef.current !== requestSymbol) return;
+      setSectorData(null);
+    } finally {
+      if (symbolRef.current === requestSymbol) setSectorLoading(false);
     }
   }, [symbol]);
 
   const fetchTrends = useCallback(async () => {
+    const requestSymbol = symbol;
     setTrendsLoading(true);
     setTrendsError(null);
     try {
-      const data = await api.getTrends(symbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk']);
+      const data = await api.getTrends(requestSymbol, ['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk']);
+      if (symbolRef.current !== requestSymbol) return;
       setTrends(data || []);
     } catch (err: any) {
+      if (symbolRef.current !== requestSymbol) return;
       setTrendsError(err?.message || 'Failed to load trends');
     } finally {
-      setTrendsLoading(false);
+      if (symbolRef.current === requestSymbol) setTrendsLoading(false);
     }
   }, [symbol]);
 
   const fetchConfluence = useCallback(async () => {
+    const requestSymbol = symbol;
+    const requestPreset = selectedPreset;
     setConfluenceLoading(true);
     setConfluenceError(null);
     try {
-      const data = await api.getConfluence(symbol, selectedPreset);
+      const data = await api.getConfluence(requestSymbol, requestPreset);
+      if (symbolRef.current !== requestSymbol || presetRef.current !== requestPreset) return;
       setConfluence(data);
     } catch (err: any) {
+      if (symbolRef.current !== requestSymbol || presetRef.current !== requestPreset) return;
       setConfluenceError(err?.message || 'Failed to load confluence');
     } finally {
-      setConfluenceLoading(false);
+      if (symbolRef.current === requestSymbol && presetRef.current === requestPreset) setConfluenceLoading(false);
     }
   }, [symbol, selectedPreset]);
 
   const fetchStrategy = useCallback(async () => {
+    const requestSymbol = symbol;
     setStrategyLoading(true);
     setStrategyError(null);
     try {
-      const data = await api.getStrategy(symbol);
+      const data = await api.getStrategy(requestSymbol);
+      if (symbolRef.current !== requestSymbol) return;
       setStrategy(data);
     } catch (err: any) {
+      if (symbolRef.current !== requestSymbol) return;
       setStrategyError(err?.message || 'Failed to load strategy');
     } finally {
-      setStrategyLoading(false);
+      if (symbolRef.current === requestSymbol) setStrategyLoading(false);
     }
   }, [symbol]);
 
@@ -122,26 +196,68 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     }
   }, []);
 
-  const fetchAll = useCallback(() => {
-    fetchRegime();
-    fetchTrends();
-    fetchConfluence();
-    fetchStrategy();
-    fetchMarketContext();
-    setLastUpdated(new Date());
-  }, [fetchRegime, fetchTrends, fetchConfluence, fetchStrategy, fetchMarketContext]);
+  // Tracks whether a fetchSymbolSections cycle is in flight so the
+  // interval and visibility-regain triggers below can skip firing a
+  // redundant, overlapping cycle on top of one still resolving. Only
+  // those two are gated on it — fetchSymbolSections itself always runs
+  // unconditionally, since the mount/symbol-change effect and a manual
+  // click represent real new intent (a new symbol to load) rather than a
+  // passive re-poll, and must never be silently dropped just because the
+  // previous symbol's requests hadn't resolved yet.
+  const isFetchingAllRef = useRef(false);
 
-  useEffect(() => {
+  // The five symbol/preset-scoped sections — kept separate from
+  // fetchMarketContext (below) since market context doesn't depend on
+  // the selected symbol. Bundling it into this used to mean switching
+  // symbols refetched the market-wide SPY/QQQ/IWM/VIX aggregate for no
+  // reason.
+  const fetchSymbolSections = useCallback(() => {
+    isFetchingAllRef.current = true;
+    const pending = [
+      fetchRegime(),
+      fetchSector(),
+      fetchTrends(),
+      fetchConfluence(),
+      fetchStrategy(),
+    ];
+    Promise.all(pending).finally(() => {
+      isFetchingAllRef.current = false;
+      setLastUpdated(new Date());
+    });
+  }, [fetchRegime, fetchSector, fetchTrends, fetchConfluence, fetchStrategy]);
+
+  // Used by the interval/visibility/manual-refresh triggers, which should
+  // still catch up market context on their own cadence — just not on
+  // every symbol change.
+  const fetchAll = useCallback(() => {
+    fetchSymbolSections();
+    fetchMarketContext();
+  }, [fetchSymbolSections, fetchMarketContext]);
+
+  const fetchAllIfIdle = useCallback(() => {
+    if (isFetchingAllRef.current) return;
     fetchAll();
   }, [fetchAll]);
 
   useEffect(() => {
+    fetchSymbolSections();
+  }, [fetchSymbolSections]);
+
+  // fetchMarketContext has no dependencies (it's symbol-independent), so
+  // this effect fires exactly once, on mount — never again on a symbol
+  // change. The interval/visibility/manual paths above still refresh it
+  // via fetchAll.
+  useEffect(() => {
+    fetchMarketContext();
+  }, [fetchMarketContext]);
+
+  useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      fetchAll();
+      fetchAllIfIdle();
     }, 30000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchAll]);
+  }, [autoRefresh, fetchAllIfIdle]);
 
   // Browsers throttle setInterval heavily in backgrounded/inactive tabs
   // (Chrome can drop a 30s timer to firing once a minute or less), and
@@ -157,13 +273,13 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   useEffect(() => {
     if (!autoRefresh) return;
     const onVisible = () => {
-      if (document.visibilityState === 'visible') fetchAll();
+      if (document.visibilityState === 'visible') fetchAllIfIdle();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [autoRefresh, fetchAll]);
+  }, [autoRefresh, fetchAllIfIdle]);
 
-  const isRefreshing = regimeLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
+  const isRefreshing = regimeLoading || sectorLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
 
   return (
     <div className="dashboard">
@@ -202,39 +318,52 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
         </div>
       )}
 
-      {globalError && <ErrorBanner message={globalError} onDismiss={() => setGlobalError(null)} />}
-
       <div className="dashboard-grid">
-        {/* Regime Card with Skeleton/Loading state */}
-        <div className={regimeLoading && !regime ? 'card-loading-skeleton' : ''}>
+        {/* Regime Card */}
+        {regimeLoading && !regime ? (
+          <SkeletonCard rows={4} />
+        ) : (
           <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />
-        </div>
+        )}
 
         {/* Market Context Card */}
-        <div className={marketContextLoading && !marketContext ? 'card-loading-skeleton' : ''}>
+        {marketContextLoading && !marketContext ? (
+          <SkeletonCard rows={3} />
+        ) : (
           <MarketContextCard context={marketContext} error={marketContextError} />
-        </div>
+        )}
 
         {/* Confluence Card */}
-        <div className={confluenceLoading && !confluence ? 'card-loading-skeleton' : ''}>
+        {confluenceLoading && !confluence ? (
+          <SkeletonCard rows={5} />
+        ) : (
           <ConfluenceCard
             confluence={confluence}
             error={confluenceError}
             selectedPreset={selectedPreset}
             onPresetChange={setSelectedPreset}
           />
-        </div>
+        )}
 
         {/* Strategy Card */}
-        <div className={strategyLoading && !strategy ? 'card-loading-skeleton' : ''}>
+        {strategyLoading && !strategy ? (
+          <SkeletonCard rows={3} />
+        ) : (
           <StrategyCard strategy={strategy} error={strategyError} />
-        </div>
+        )}
 
         {/* Trends Section */}
         <div className="trends-section">
           <h2>Multi-Timeframe Trend</h2>
           {trendsLoading && trends.length === 0 ? (
-            <div className="card-loading-skeleton" style={{ height: '150px' }} />
+            <>
+              <div className="trend-grid">
+                {Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}
+              </div>
+              <div className="trend-grid">
+                {Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}
+              </div>
+            </>
           ) : (
             <>
               <div className="trend-grid">
@@ -257,10 +386,14 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           )}
         </div>
 
-        <TopMoversCard onSelectSymbol={onSymbolChange} />
+        <TopMoversCard onSelectSymbol={onSymbolChange} autoRefresh={autoRefresh} />
         <NLSearchBar onSelectSymbol={onSymbolChange} />
         <DigestCard />
-        <TransitionsMiniCard symbol={symbol} onSelectSymbol={onSymbolChange} />
+        <TransitionsMiniCard
+          symbol={symbol}
+          onSelectSymbol={onSymbolChange}
+          autoRefresh={autoRefresh}
+        />
       </div>
     </div>
   );

@@ -43,6 +43,13 @@ function formatChangePct(changePct: number | null | undefined): string {
   return `${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}%`;
 }
 
+// Same rationale as formatChangePct — an older/partial digest payload
+// can have a missing rsi_extremes[].rsi. Render "—" instead of crashing
+// on `.toFixed()` of undefined.
+function formatRsi(rsi: number | null | undefined): string {
+  return rsi == null ? '—' : rsi.toFixed(0);
+}
+
 export function DigestCard() {
   const [session, setSession] = useState<Session>('close');
   const [digest, setDigest] = useState<AIDigest | null>(null);
@@ -88,7 +95,11 @@ export function DigestCard() {
 
   const regime = digest?.market_regime;
   const regimeColor = regime ? regimeColors[regime] || regimeColors.unknown : regimeColors.unknown;
-  const movers = digest?.payload?.movers;
+  // Default each sub-array independently rather than the whole `movers`
+  // object — a partial payload with only one of the two arrays present
+  // must not crash on the missing one.
+  const topBullish = digest?.payload?.movers?.top_bullish ?? [];
+  const topBearish = digest?.payload?.movers?.top_bearish ?? [];
   const rsiExtremes = digest?.payload?.rsi_extremes || [];
   const mtf = digest?.payload?.mtf_alignment_counts;
 
@@ -159,14 +170,14 @@ export function DigestCard() {
             <p className="digest-narrative">{digest.narrative}</p>
           )}
 
-          {movers && (movers.top_bullish.length > 0 || movers.top_bearish.length > 0) && (
+          {(topBullish.length > 0 || topBearish.length > 0) && (
             <div className="digest-movers">
               <div className="digest-movers-col">
                 <h4>🐂 Top Bullish</h4>
-                {movers.top_bullish.length === 0 ? (
+                {topBullish.length === 0 ? (
                   <p className="info-text">None</p>
                 ) : (
-                  movers.top_bullish.map(m => (
+                  topBullish.map(m => (
                     <div key={m.symbol} className="digest-mover-row">
                       <span className="digest-mover-symbol">{m.symbol}</span>
                       <span className="digest-mover-score" style={{ color: changeColor(m.change_pct) }}>
@@ -179,10 +190,10 @@ export function DigestCard() {
               </div>
               <div className="digest-movers-col">
                 <h4>🐻 Top Bearish</h4>
-                {movers.top_bearish.length === 0 ? (
+                {topBearish.length === 0 ? (
                   <p className="info-text">None</p>
                 ) : (
-                  movers.top_bearish.map(m => (
+                  topBearish.map(m => (
                     <div key={m.symbol} className="digest-mover-row">
                       <span className="digest-mover-symbol">{m.symbol}</span>
                       <span className="digest-mover-score" style={{ color: changeColor(m.change_pct) }}>
@@ -200,7 +211,7 @@ export function DigestCard() {
             <div className="digest-footer-stats">
               {rsiExtremes.slice(0, 6).map(r => (
                 <span key={r.symbol} className="signal-chip">
-                  {r.symbol} RSI {r.rsi.toFixed(0)} ({r.signal})
+                  {r.symbol} RSI {formatRsi(r.rsi)} ({r.signal})
                 </span>
               ))}
               {mtf && (mtf.bullish > 0 || mtf.bearish > 0) && (

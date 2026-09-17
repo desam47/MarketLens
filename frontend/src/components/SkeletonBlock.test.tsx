@@ -23,12 +23,6 @@ describe('SkeletonBlock', () => {
     expect(container.firstChild).toHaveClass('my-class');
   });
 
-  it('renders without crashing in a DashboardSkeleton', () => {
-    // Smoke test — just ensure the import and render chain works.
-    const { DashboardSkeleton } = require('./skeletons/DashboardSkeleton');
-    expect(() => render(<DashboardSkeleton />)).not.toThrow();
-  });
-
   it('renders without crashing in a WatchlistSkeleton', () => {
     const { WatchlistSkeleton } = require('./skeletons/WatchlistSkeleton');
     expect(() => render(<WatchlistSkeleton />)).not.toThrow();

@@ -26,24 +26,24 @@ const strengthColors: Record<string, string> = {
   very_strong: '#22c55e',
 };
 
+const timeframeLabels: Record<string, string> = {
+  '1m': '1 Min',
+  '2m': '2 Min',
+  '3m': '3 Min',
+  '5m': '5 Min',
+  '15m': '15 Min',
+  '30m': '30 Min',
+  '1h': '1 Hour',
+  '4h': '4 Hour',
+  '1d': 'Daily',
+  '1wk': 'Weekly',
+};
+
 export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
-
-  const timeframeLabels: Record<string, string> = {
-    '1m': '1 Min',
-    '2m': '2 Min',
-    '3m': '3 Min',
-    '5m': '5 Min',
-    '15m': '15 Min',
-    '30m': '30 Min',
-    '1h': '1 Hour',
-    '4h': '4 Hour',
-    '1d': 'Daily',
-    '1wk': 'Weekly',
-  };
 
   return (
     <div className="card trend-card" style={{ borderLeftColor: color }}>

@@ -90,7 +90,18 @@ function ResultRow({
   const color = scoreColor(item.total_score);
   const sign = item.total_score > 0 ? '+' : '';
   return (
-    <tr className="nl-result-row" onClick={onClick}>
+    <tr
+      className="nl-result-row"
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+    >
       <td className="nl-symbol">{item.symbol}</td>
       <td className="nl-score" style={{ color }}>
         {sign}{item.total_score.toFixed(1)}
@@ -136,7 +147,8 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
   const search = useCallback(async (q: string) => {
     if (!q.trim()) return;
     if (abortRef.current) abortRef.current.abort();
-    abortRef.current = new AbortController();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setLoading(true);
     setError(null);
@@ -156,7 +168,7 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
         query: q.trim(),
         explain: true,
         top_n: 15,
-      });
+      }, controller.signal);
       setResults(resp.results);
       setMeta({
         filter_description: resp.filter_description,
@@ -171,7 +183,15 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
         setError(e.message || 'Search failed');
       }
     } finally {
-      setLoading(false);
+      // Only the still-current request clears loading — a superseded
+      // (aborted) request's finally must not clobber the loading state
+      // a newer, in-flight search already set. This only matters now
+      // that abortRef.current.signal is actually wired into the fetch
+      // (below) — previously .abort() was a no-op, so this race could
+      // never happen; now that cancellation is real, an older request's
+      // finally landing after a newer one starts would otherwise flip
+      // loading back off while the new search is still running.
+      if (abortRef.current === controller) setLoading(false);
     }
   }, []);
 
