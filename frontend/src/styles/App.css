@@ -2114,12 +2114,6 @@ h4 {
   overflow: hidden;
 }
 
-.chart-section-controls {
-  display: flex;
-  justify-content: flex-end;
-  margin: 8px 0 16px;
-}
-
 .chart-mode-btn {
   font-size: 12px;
   font-family: inherit;

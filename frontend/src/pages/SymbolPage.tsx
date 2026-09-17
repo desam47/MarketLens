@@ -811,30 +811,12 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             timeframe={timeframe}
             onTimeframeChange={setTimeframe}
             timeframeOptions={TIMEFRAMES.map(tf => ({ value: tf, label: TIMEFRAME_LABELS[tf] || tf }))}
+            chartMode={chartMode}
+            onChartModeChange={setChartMode}
           />
         ) : (
           <MultiTimeframeChartGrid symbol={symbol} timeframes={DEFAULT_GRID_TIMEFRAMES} />
         )}
-        <div className="chart-section-controls">
-          <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
-            <button
-              type="button"
-              className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
-              onClick={() => setChartMode('single')}
-              title="Single timeframe chart"
-            >
-              Single
-            </button>
-            <button
-              type="button"
-              className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
-              onClick={() => setChartMode('multi')}
-              title="Multi-timeframe grid (4 charts side by side)"
-            >
-              Multi-TF
-            </button>
-          </div>
-        </div>
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
           {/* Table stays bounded to the most recent rows (plain HTML
               table, not virtualized) — the chart above gets the full

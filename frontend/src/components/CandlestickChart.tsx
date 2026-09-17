@@ -39,6 +39,8 @@ interface CandlestickChartProps {
   timeframe?: string;
   onTimeframeChange?: (tf: string) => void;
   timeframeOptions?: { value: string; label: string }[];
+  chartMode?: 'single' | 'multi';
+  onChartModeChange?: (mode: 'single' | 'multi') => void;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -56,6 +58,8 @@ function CandlestickChartImpl({
   timeframe,
   onTimeframeChange,
   timeframeOptions,
+  chartMode,
+  onChartModeChange,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -344,6 +348,26 @@ function CandlestickChartImpl({
               ))}
             </select>
           )}
+          {chartMode && onChartModeChange && (
+            <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
+              <button
+                type="button"
+                className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
+                onClick={() => onChartModeChange('single')}
+                title="Single timeframe chart"
+              >
+                Single
+              </button>
+              <button
+                type="button"
+                className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
+                onClick={() => onChartModeChange('multi')}
+                title="Multi-timeframe grid (4 charts side by side)"
+              >
+                Multi-TF
+              </button>
+            </div>
+          )}
         </span>
       </div>
       <div className="chart-type-toolbar">
@@ -404,7 +428,9 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.showVolume === next.showVolume &&
     prev.showMarkers === next.showMarkers &&
     prev.timeframe === next.timeframe &&
-    prev.onTimeframeChange === next.onTimeframeChange
+    prev.onTimeframeChange === next.onTimeframeChange &&
+    prev.chartMode === next.chartMode &&
+    prev.onChartModeChange === next.onChartModeChange
   );
 });
 
