@@ -281,8 +281,11 @@ function CandlestickChartImpl({
 
     if (volumeRef.current) {
       const sorted = sortedBars(bars);
+      // O(n) lookup instead of sorted.find() per point (was O(n²)).
+      const byTime = new Map<number, Bar>();
+      for (const b of sorted) byTime.set(toTime(b), b);
       const volData = dedupedAsc.map(d => {
-        const matching = sorted.find(b => toTime(b) === d.time);
+        const matching = byTime.get(d.time);
         return {
           time: d.time,
           value: matching?.volume ?? 0,
@@ -296,6 +299,7 @@ function CandlestickChartImpl({
 
     // Markers — only shown when showMarkers is true
     if (showMarkers && transitions.length > 0) {
+      const seen = new Set<number>();
       const markers = transitions
         .filter(t => t.timestamp)
         .map(t => {
@@ -309,8 +313,12 @@ function CandlestickChartImpl({
             text: t.type.replace(/_/g, ' '),
           };
         })
-        .sort((a, b) => a.time - b.time)
-        .filter((m, i, arr) => i === arr.findIndex(x => x.time === m.time));
+        .filter(m => {
+          if (seen.has(m.time)) return false;
+          seen.add(m.time);
+          return true;
+        })
+        .sort((a, b) => a.time - b.time);
       try {
         seriesRef.current.setMarkers(markers);
       } catch {

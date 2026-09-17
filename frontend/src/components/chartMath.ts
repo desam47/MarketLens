@@ -193,17 +193,40 @@ export function formatETTime(ts: string | null | undefined): string {
 
 /**
  * Sort bars ascending by timestamp. Memoized by input array identity.
+ *
+ * Sorting used to call parseET() inside the comparator, which is O(n log n)
+ * Date parses per sort — and sortedBars() is called from every overlay
+ * compute (chart data, HA, EMA, SuperTrend) on every bars change. Precompute
+ * the Unix-second times once per bar array and sort by that instead.
  */
-const sortedBarsCache = new WeakMap<Bar[], Bar[]>();
-export function sortedBars(bars: Bar[]): Bar[] {
+const sortedBarsCache = new WeakMap<Bar[], { sorted: Bar[]; times: number[] }>();
+function sortedBarsImpl(bars: Bar[]): { sorted: Bar[]; times: number[] } {
   let cached = sortedBarsCache.get(bars);
   if (!cached) {
-    cached = [...bars].sort(
-      (a, b) => parseET(a.timestamp).getTime() - parseET(b.timestamp).getTime(),
-    );
+    const times = bars.map(b => Math.floor(parseET(b.timestamp).getTime() / 1000));
+    const idx = bars.map((_, i) => i);
+    idx.sort((a, b) => times[a] - times[b]);
+    const sorted = idx.map(i => bars[i]);
+    cached = { sorted, times };
     sortedBarsCache.set(bars, cached);
   }
   return cached;
+}
+/**
+ * Sort bars ascending by timestamp. Memoized by input array identity.
+ */
+export function sortedBars(bars: Bar[]): Bar[] {
+  return sortedBarsImpl(bars).sorted;
+}
+/**
+ * Sort bars ascending by timestamp and return them alongside their
+ * precomputed Unix-second times. The times are shared by every overlay
+ * compute on the same bar array, so each bar's timestamp is parsed once
+ * instead of once per overlay (chart data, HA, EMA, SuperTrend all used
+ * to re-parse it).
+ */
+export function sortedBarsWithTimes(bars: Bar[]): { sorted: Bar[]; times: number[] } {
+  return sortedBarsImpl(bars);
 }
 
 /**
@@ -226,13 +249,14 @@ export function dedupByTime<T extends { time: number }>(data: T[]): T[] {
 
 /** Standard OHLC transform. Returns ascending, deduped ChartPoints. */
 export function toChartData(bars: Bar[]): ChartPoint[] {
-  const sorted = sortedBars(bars);
+  const { sorted, times } = sortedBarsWithTimes(bars);
   const out: ChartPoint[] = [];
   let lastTime: number | null = null;
-  for (const b of sorted) {
-    const t = toTime(b);
+  for (let i = 0; i < sorted.length; i++) {
+    const t = times[i];
     if (t === lastTime) continue;
     lastTime = t;
+    const b = sorted[i];
     out.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close });
   }
   return out;
@@ -243,15 +267,16 @@ export function toChartData(bars: Bar[]): ChartPoint[] {
  * prior HA candle; the close is the average of the raw OHLC.
  */
 export function toHeikinAshi(bars: Bar[]): ChartPoint[] {
-  const sorted = sortedBars(bars);
+  const { sorted, times } = sortedBarsWithTimes(bars);
   if (sorted.length === 0) return [];
   let haOpen = (sorted[0].open + sorted[0].close) / 2;
   const out: ChartPoint[] = [];
-  for (const b of sorted) {
+  for (let i = 0; i < sorted.length; i++) {
+    const b = sorted[i];
     const haClose = (b.open + b.high + b.low + b.close) / 4;
     const haHigh = Math.max(b.high, haOpen, haClose);
     const haLow = Math.min(b.low, haOpen, haClose);
-    out.push({ time: toTime(b), open: haOpen, high: haHigh, low: haLow, close: haClose });
+    out.push({ time: times[i], open: haOpen, high: haHigh, low: haLow, close: haClose });
     haOpen = (haOpen + haClose) / 2;
   }
   return out;
@@ -262,31 +287,34 @@ export function toHeikinAshi(bars: Bar[]): ChartPoint[] {
 /** EMA with standard `2/(period+1)` smoothing, seeded by SMA. */
 export function computeEMA(bars: Bar[], period: number): OverlayPoint[] {
   if (bars.length < period) return [];
-  const sorted = sortedBars(bars);
+  const { sorted, times } = sortedBarsWithTimes(bars);
   const closes = sorted.map(b => b.close);
   const multiplier = 2 / (period + 1);
   let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
   const result: OverlayPoint[] = [];
   for (let i = period - 1; i < closes.length; i++) {
     ema = closes[i] * multiplier + ema * (1 - multiplier);
-    result.push({ time: toTime(sorted[i]), value: ema });
+    result.push({ time: times[i], value: ema });
   }
   return result;
 }
 
-/** Simple moving average over `period` closes. */
-export function computeSMA(bars: Bar[], period: number): OverlayPoint[] {
-  if (bars.length < period) return [];
-  const sorted = sortedBars(bars);
-  const result: OverlayPoint[] = [];
-  for (let i = period - 1; i < sorted.length; i++) {
-    const window = sorted.slice(i - period + 1, i + 1);
-    if (window.length < period) continue;
-    const sum = window.reduce((a, b) => a + b.close, 0);
-    result.push({ time: toTime(sorted[i]), value: sum / period });
+/** Simple moving average over `period` closes. Uses a running sum so
+  it's O(n) instead of O(n·period) from slicing a window per bar. */
+  export function computeSMA(bars: Bar[], period: number): OverlayPoint[] {
+    if (bars.length < period) return [];
+    const { sorted, times } = sortedBarsWithTimes(bars);
+    const result: OverlayPoint[] = [];
+    let sum = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      sum += sorted[i].close;
+      if (i >= period) sum -= sorted[i - period].close;
+      if (i >= period - 1) {
+        result.push({ time: times[i], value: sum / period });
+      }
+    }
+    return result;
   }
-  return result;
-}
 
 /**
  * ATR-based SuperTrend. Returns the final SuperTrend line as a sequence of
@@ -299,7 +327,7 @@ export function computeSuperTrend(
   multiplier = 3,
 ): OverlayPoint[] {
   if (bars.length < period + 1) return [];
-  const sorted = sortedBars(bars);
+  const { sorted, times } = sortedBarsWithTimes(bars);
   const n = sorted.length;
   const highs = sorted.map(b => b.high);
   const lows = sorted.map(b => b.low);
@@ -357,10 +385,10 @@ export function computeSuperTrend(
       const last = result[result.length - 1];
       if (last.color !== color) {
         // emit duplicate point at the previous value with the new color, then advance.
-        result.push({ time: toTime(sorted[i]), value: prevFinal, color });
+        result.push({ time: times[i - 1], value: prevFinal, color });
       }
     }
-    result.push({ time: toTime(sorted[i]), value: finalValue, color });
+    result.push({ time: times[i], value: finalValue, color });
   }
   return result;
 }
