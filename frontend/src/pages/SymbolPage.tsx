@@ -530,9 +530,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
-  // Ticker search lives inside the chart card header now, so it needs a
-  // ref to reach the input from the page-level Refresh button.
+  // Ticker search lives in both the page header and the chart card
+  // header, so it needs two refs to reach the input from the page-level
+  // Refresh button.
   const tickerSearchRef = useRef<SymbolInputHandle | null>(null);
+  const chartTickerSearchRef = useRef<SymbolInputHandle | null>(null);
 
   const fetchQuote = useCallback(async () => {
     try {
@@ -816,8 +818,19 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             symbol={symbol}
             transitions={transitions}
             initialActiveOverlays={['supertrend']}
+            timeframe={timeframe}
+            onTimeframeChange={setTimeframe}
+            timeframeOptions={TIMEFRAMES.map(tf => ({ value: tf, label: TIMEFRAME_LABELS[tf] || tf }))}
             chartMode={chartMode}
             onChartModeChange={setChartMode}
+            tickerSearch={(
+              <SymbolInput
+                ref={chartTickerSearchRef}
+                symbol={symbol}
+                onChange={onSymbolChange}
+                onSubmit={handleRefresh}
+              />
+            )}
           />
         ) : (
           <MultiTimeframeChartGrid
@@ -825,6 +838,14 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
             timeframes={DEFAULT_GRID_TIMEFRAMES}
             chartMode={chartMode}
             onChartModeChange={setChartMode}
+            tickerSearch={(
+              <SymbolInput
+                ref={chartTickerSearchRef}
+                symbol={symbol}
+                onChange={onSymbolChange}
+                onSubmit={handleRefresh}
+              />
+            )}
           />
         )}
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
