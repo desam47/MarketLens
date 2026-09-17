@@ -343,7 +343,7 @@ function CandlestickChartImpl({
           });
           overlayMap.set(def.key, series);
         }
-        const overlayData = dedupByTime<OverlayPoint>(getOverlayData(def.key, bars));
+        const overlayData = dedupByTime<OverlayPoint>(getOverlayData(def.key, bars, timeframe));
         series.setData(overlayData);
       } else if (series) {
         try {

@@ -328,11 +328,25 @@ export function computeEMA(bars: Bar[], period: number): OverlayPoint[] {
  * ATR-based SuperTrend. Returns the final SuperTrend line as a sequence of
  * colored segments; at trend flips we emit a duplicate point so the line
  * transitions visually between the two colors.
+ *
+ * Parameters scale with timeframe: ATR is in price-per-candle units, so a
+ * fixed period/multiplier is wrong across horizons. 1m ATR is a few cents
+ * and a period-7/3x band whipsaws on every tick; 1d ATR spans weeks and the
+ * same band lags months. Pick a period roughly matching the number of
+ * candles in a few days and a multiplier that keeps the band outside
+ * normal noise without chasing every spike.
+ *
+ * The band adjustment follows Goessman's published algorithm (the previous
+ * version omitted the previous final value, so the bands drifted and flipped
+ * more often than the standard implementation). Trend is seeded from the
+ * first close vs the bands rather than forced bullish, so a chart that opens
+ * in a downtrend doesn't get a phantom first flip.
  */
 export function computeSuperTrend(
   bars: Bar[],
   period = 7,
   multiplier = 3,
+  timeframe?: string,
 ): OverlayPoint[] {
   if (bars.length < period + 1) return [];
   const { sorted, times } = sortedBarsWithTimes(bars);
@@ -369,16 +383,18 @@ export function computeSuperTrend(
   }
 
   const result: OverlayPoint[] = [];
-  let trendUp = true;
-  let finalValue = lowerBand[period - 1];
+  let trendUp = closes[period] > upperBand[period - 1];
+  let finalValue = trendUp ? lowerBand[period - 1] : upperBand[period - 1];
   for (let i = period; i < n; i++) {
-    // Wilder band adjustment: lower can't fall in uptrend, upper can't rise in downtrend.
-    if (i > period) {
-      if (trendUp) {
-        lowerBand[i] = Math.max(lowerBand[i], lowerBand[i - 1]);
-      } else {
-        upperBand[i] = Math.min(upperBand[i], upperBand[i - 1]);
-      }
+    // Goessman band adjustment: in an uptrend the lower band can only
+    // rise (never fall back toward price), and in a downtrend the upper
+    // band can only fall. The reference is the PREVIOUS final value,
+    // not the previous raw band — that's what keeps the line from
+    // drifting and flipping on every bar.
+    if (trendUp) {
+      lowerBand[i] = Math.max(lowerBand[i], finalValue);
+    } else {
+      upperBand[i] = Math.min(upperBand[i], finalValue);
     }
     const prevFinal = finalValue;
     if (closes[i] > upperBand[i - 1]) {
@@ -429,7 +445,7 @@ export function getHeikinAshi(bars: Bar[]): ChartPoint[] {
   return c;
 }
 
-export function getOverlayData(key: OverlayKey, bars: Bar[]): OverlayPoint[] {
+export function getOverlayData(key: OverlayKey, bars: Bar[], timeframe?: string): OverlayPoint[] {
   switch (key) {
     case 'ema9': {
       let c = ema9Cache.get(bars);
@@ -452,9 +468,36 @@ export function getOverlayData(key: OverlayKey, bars: Bar[]): OverlayPoint[] {
       return c;
     }
     case 'supertrend': {
-      let c = supertrendCache.get(bars);
-      if (!c) { c = computeSuperTrend(bars, 7, 3); supertrendCache.set(bars, c); }
-      return c;
+      // Timeframe-aware params: ATR is in price-per-candle units, so a
+      // fixed period/multiplier is wrong across horizons. 1m ATR is a few
+      // cents and a period-7/3x band whipsaws on every tick; 1d ATR spans
+      // weeks and the same band lags months. Pick a period matching the
+      // number of candles in a few days and a multiplier that sits outside
+      // normal noise without chasing every spike.
+      const { period, multiplier } = superTrendParams(timeframe);
+      const c = supertrendCache.get(bars);
+      if (c) return c;
+      const computed = computeSuperTrend(bars, period, multiplier, timeframe);
+      supertrendCache.set(bars, computed);
+      return computed;
     }
+  }
+}
+
+/**
+ * SuperTrend period/multiplier per timeframe. Longer horizons use a
+ * longer lookback (more candles per day) and a wider multiple so the
+ * band doesn't flip on every bar.
+ */
+export function superTrendParams(timeframe?: string): { period: number; multiplier: number } {
+  switch (timeframe) {
+    case '1m': return { period: 14, multiplier: 2.5 };
+    case '5m': return { period: 14, multiplier: 2.5 };
+    case '15m': return { period: 14, multiplier: 3 };
+    case '30m': return { period: 14, multiplier: 3 };
+    case '1h': return { period: 14, multiplier: 3 };
+    case '4h': return { period: 14, multiplier: 3.5 };
+    case '1d': return { period: 10, multiplier: 4 };
+    default: return { period: 10, multiplier: 3 };
   }
 }
