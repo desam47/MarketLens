@@ -23,4 +23,4 @@ export const TIMEFRAME_LABELS: Record<string, string> = {
 };
 
 /** Default timeframes shown in the multi-chart grid. */
-export const DEFAULT_GRID_TIMEFRAMES = ['1m', '5m', '15m', '1h'];
+export const DEFAULT_GRID_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];

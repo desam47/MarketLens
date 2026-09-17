@@ -3527,6 +3527,8 @@ h4 {
 .mtf-grid-2 { grid-template-columns: 1fr 1fr; }
 .mtf-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
 .mtf-grid-4 { grid-template-columns: 1fr 1fr; }
+.mtf-grid-5 { grid-template-columns: 1fr 1fr 1fr; }
+.mtf-grid-6 { grid-template-columns: 1fr 1fr 1fr; }
 
 .mtf-panel {
   display: flex;
