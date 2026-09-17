@@ -49,6 +49,9 @@ interface CandlestickChartProps {
   its own overlay state and just renders the given set. */
   activeOverlays?: Set<OverlayKey>;
   onToggleOverlay?: (key: OverlayKey) => void;
+  /** Hide the card header entirely — used by the multi-TF grid, which
+  renders one shared header instead of a per-panel one. */
+  hideHeader?: boolean;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -72,6 +75,7 @@ function CandlestickChartImpl({
   showOverlayToolbar = true,
   activeOverlays: activeOverlaysProp,
   onToggleOverlay,
+  hideHeader = false,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -353,45 +357,47 @@ function CandlestickChartImpl({
 
   return (
     <div className="card analysis-card candlestick-card">
-      <div className="card-header-row">
-        <h2>{symbol} Price Chart</h2>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="bar-count">{bars.length} bars</span>
-          {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
-            <select
-              className="timeframe-select chart-timeframe-select"
-              value={timeframe}
-              onChange={e => onTimeframeChange(e.target.value)}
-              title="Chart timeframe"
-            >
-              {timeframeOptions.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          )}
-          {chartMode && onChartModeChange && (
-            <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
-              <button
-                type="button"
-                className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
-                onClick={() => onChartModeChange('single')}
-                title="Single timeframe chart"
+      {hideHeader ? null : (
+        <div className="card-header-row">
+          <h2>{symbol} Price Chart</h2>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="bar-count">{bars.length} bars</span>
+            {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
+              <select
+                className="timeframe-select chart-timeframe-select"
+                value={timeframe}
+                onChange={e => onTimeframeChange(e.target.value)}
+                title="Chart timeframe"
               >
-                Single
-              </button>
-              <button
-                type="button"
-                className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
-                onClick={() => onChartModeChange('multi')}
-                title="Multi-timeframe grid (4 charts side by side)"
-              >
-                Multi-TF
-              </button>
-            </div>
-          )}
-          {tickerSearch}
-        </span>
-      </div>
+                {timeframeOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            )}
+            {chartMode && onChartModeChange && (
+              <div className="chart-mode-toggle" role="group" aria-label="Chart layout">
+                <button
+                  type="button"
+                  className={`chart-mode-btn${chartMode === 'single' ? ' active' : ''}`}
+                  onClick={() => onChartModeChange('single')}
+                  title="Single timeframe chart"
+                >
+                  Single
+                </button>
+                <button
+                  type="button"
+                  className={`chart-mode-btn${chartMode === 'multi' ? ' active' : ''}`}
+                  onClick={() => onChartModeChange('multi')}
+                  title="Multi-timeframe grid (4 charts side by side)"
+                >
+                  Multi-TF
+                </button>
+              </div>
+            )}
+            {tickerSearch}
+          </span>
+        </div>
+      )}
       {showOverlayToolbar && (
         <>
           <div className="chart-type-toolbar">
@@ -460,7 +466,8 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.tickerSearch === next.tickerSearch &&
     prev.showOverlayToolbar === next.showOverlayToolbar &&
     prev.activeOverlays === next.activeOverlays &&
-    prev.onToggleOverlay === next.onToggleOverlay
+    prev.onToggleOverlay === next.onToggleOverlay &&
+    prev.hideHeader === next.hideHeader
   );
 });
 
