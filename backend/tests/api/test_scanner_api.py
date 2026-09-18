@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.api import ttl_cache as _ttl_cache_module
+from backend.api.scanner import router as scanner_router
 from backend.models.market_data import DataStatus, Quote
 from backend.scanner.scanner import ScanResult
 
@@ -197,6 +198,16 @@ class TestScannerAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.json()["quote"])
+
+    def test_lite_result_includes_change_fields(self):
+        result = _make_result("AAPL")
+        result.change = 2.5
+        result.change_pct = 1.6666666667
+
+        data = scanner_router._result_to_lite_dict(result).model_dump(mode="json")
+
+        self.assertEqual(data["change"], 2.5)
+        self.assertAlmostEqual(data["change_pct"], 1.6666666667)
 
     # --- /api/scanner/{symbol}/cached -------------------------------------
 

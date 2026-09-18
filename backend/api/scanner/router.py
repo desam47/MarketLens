@@ -188,6 +188,8 @@ def _result_to_lite_dict(result: ScanResult) -> _ScanResultResponse:
         symbol=result.symbol,
         timestamp=_to_dashboard_tz(result.timestamp),
         quote=_quote_to_dict(result.quote),
+        change=result.change,
+        change_pct=result.change_pct,
         indicator_values={},
         scores={},
         total_score=result.calculate_signed_total_score(),
