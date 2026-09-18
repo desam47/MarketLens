@@ -104,6 +104,13 @@ class Scanner:
         self.rankings: list[tuple[str, float]] = []  # (symbol, score)
         self.last_scan_time: datetime | None = None
 
+        # Tape snapshot cache per symbol — tape data updates slowly
+        # and get_snapshot() drains the repository on every call,
+        # so re-fetching it for every scan tick wastes resources.
+        # TTL: 10 seconds.
+        self._tape_cache: dict[str, tuple[float, dict]] = {}
+        self._tape_cache_ttl: float = 10.0
+
         # Scoring weights for different factors
         self.score_weights = {
             "trend_strength": 0.25,
@@ -472,12 +479,21 @@ class Scanner:
             # Tape (Time & Sales) order-flow signals — only when the tape
             # subsystem is enabled and streaming (best-effort; a cold
             # engine just returns neutral / zero counts).
+            # Tape snapshot is cached per symbol for 10s — get_snapshot()
+            # drains the repository on every call so repeated fetches waste
+            # resources and can starve the live stream.
             from backend.config.settings import settings as _settings
             if _settings.tape.enabled:
                 try:
                     from backend.api.tape.registry import get_tape_engine
-
-                    snap = get_tape_engine(result.symbol).get_snapshot()
+                    import time as _time
+                    now = _time.monotonic()
+                    cached = self._tape_cache.get(result.symbol)
+                    if cached is not None and (now - cached[0]) < self._tape_cache_ttl:
+                        snap = cached[1]
+                    else:
+                        snap = get_tape_engine(result.symbol).get_snapshot()
+                        self._tape_cache[result.symbol] = (now, snap)
                     if snap["pressure"] == "heavy_buy":
                         signals.append("HEAVY_BUY_PRESSURE")
                     elif snap["pressure"] == "heavy_sell":

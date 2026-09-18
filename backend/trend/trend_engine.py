@@ -12,7 +12,7 @@ from ..engines.timeframe import (
     Timeframe,
     multi_symbol_timeframe_engine,
 )
-from ..indicators.base_indicator import IndicatorEngine
+from ..indicators.base_indicator import BaseIndicator, IndicatorEngine
 from ..utils.timezone import ny_to_utc
 
 logger = logging.getLogger(__name__)
@@ -539,25 +539,35 @@ class TrendEngine:
                 logger.error(f"Error generating trend signal for {timeframe}: {e}")
 
     def _analyze_timeframe_trend(self, timeframe: Timeframe,
-                                indicators: dict[str, Any],
-                                timestamp: datetime) -> TrendSignal | None:
+                                    indicators: dict[str, Any],
+                                    timestamp: datetime) -> TrendSignal | None:
         """Analyze trend for a specific timeframe"""
-        # Get latest indicator values
-        indicator_values = {}
-        for name, indicator in indicators.items():
+        # Single pass: collect all indicator latest values AND
+        # locate ATR/ADX/SuperTrend by name simultaneously.
+        indicator_values: dict[str, float | None] = {}
+        atr_ind: BaseIndicator | None = None
+        adx_ind: BaseIndicator | None = None
+        supertrend_ind: BaseIndicator | None = None
+        for name, ind in indicators.items():
             try:
-                value = indicator.get_latest()
-                indicator_values[name] = value
+                indicator_values[name] = ind.get_latest()
             except Exception as e:
                 logger.debug(f"Error getting value for {name} indicator: {e}")
                 indicator_values[name] = None
+            n = getattr(ind, "name", "")
+            if n == "ATR":
+                atr_ind = ind
+            elif n == "ADX":
+                adx_ind = ind
+            elif n == "SuperTrend":
+                supertrend_ind = ind
 
         # Skip if we don't have enough data
         if all(v is None for v in indicator_values.values()):
             return None
 
         # Analyze trend based on available indicators
-        result = self._calculate_trend(timeframe, indicator_values)
+        result = self._calculate_trend(timeframe, indicator_values, atr_ind, adx_ind, supertrend_ind)
         direction, strength, confidence, raw_score, classification = result
 
         return TrendSignal(
@@ -572,33 +582,22 @@ class TrendEngine:
         )
 
     def _calculate_trend(self, timeframe: Timeframe,
-                        indicator_values: dict[str, float | None]
-                        ) -> tuple:
+                         indicator_values: dict[str, float | None],
+                         atr_ind: BaseIndicator | None = None,
+                         adx_ind: BaseIndicator | None = None,
+                         supertrend_ind: BaseIndicator | None = None,
+                         ) -> tuple:
         """Calculate trend direction, strength, and confidence from indicators."""
         weights_cfg = _settings.trend.signal_weights
-        tf_indicators = self.indicators.get(timeframe, {})
 
-        # Pre-fetch key indicators once
-        atr_ind = None
-        adx_ind = None
-        supertrend_ind = None
-        for ind in tf_indicators.values():
-            name = getattr(ind, "name", "")
-            if name == "ATR":
-                atr_ind = ind
-            elif name == "ADX":
-                adx_ind = ind
-            elif name == "SuperTrend":
-                supertrend_ind = ind
+        # Pre-fetch key indicators (passed in; no second lookup)
+        atr_value: float | None = None
+        if atr_ind is not None:
+            atr_value = atr_ind.get_latest()
 
         components: list[tuple[float, float]] = []
         trend_strength = TrendStrength.MODERATE
         adx_value: float | None = indicator_values.get("adx")
-        atr_value: float | None = None
-
-        if atr_ind is not None:
-            atr_vals = atr_ind.get_values()
-            atr_value = atr_vals[-1] if atr_vals else None
 
         # --- Component 1: EMA crossover ---
         ema_fast = indicator_values.get("ema_fast")
