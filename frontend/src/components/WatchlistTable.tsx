@@ -72,7 +72,7 @@ interface RowData {
 // Threshold: above this row count, switch to a virtualized list. Below, a
 // regular table renders more cleanly (sticky header, full column widths).
 const VIRT_THRESHOLD = 30;
-const VIRT_ROW_HEIGHT = 44;
+const VIRT_ROW_HEIGHT = 56;
 const VIRT_HEIGHT = 480;
 
 const SortIcon = React.memo(function SortIcon({ column, sortCol, sortDir }: {
