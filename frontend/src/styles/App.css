@@ -2856,6 +2856,65 @@ h4 {
   color: #eab308 !important;
 }
 
+/* Watchlist table trend column - same styles as scanner page */
+.td-trend .trend-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0;
+  border-radius: 0;
+  line-height: 1.1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  border: none;
+  background: transparent !important;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+}
+
+.td-trend .trend-badge.trend-up,
+.td-trend .trend-badge.trend-down,
+.td-trend .trend-badge.trend-neutral {
+  background: transparent !important;
+  border: none;
+}
+
+.td-trend .trend-arrow {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.td-trend .trend-label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  display: inline;
+  color: inherit;
+  line-height: 1;
+}
+
+/* Directional colors apply to both arrow and label. */
+.td-trend .trend-badge.trend-up,
+.td-trend .trend-badge.trend-up .trend-label,
+.td-trend .trend-badge.trend-up .trend-arrow {
+  color: #22c55e !important;
+}
+.td-trend .trend-badge.trend-down,
+.td-trend .trend-badge.trend-down .trend-label,
+.td-trend .trend-badge.trend-down .trend-arrow {
+  color: #ef4444 !important;
+}
+.td-trend .trend-badge.trend-neutral,
+.td-trend .trend-badge.trend-neutral .trend-label,
+.td-trend .trend-badge.trend-neutral .trend-arrow {
+  color: #eab308 !important;
+}
+
 .trend-up {
   background-color: rgba(34, 197, 94, 0.15);
   color: #22c55e;
@@ -3137,7 +3196,8 @@ h4 {
 .watchlist-table thead th:nth-child(1) { width: 80px; }  /* Symbol */
 .watchlist-table thead th:nth-child(2) { width: 64px; }  /* Type */
 .watchlist-table thead th:nth-child(4) { width: 80px; }  /* Change % */
-.watchlist-table thead th:nth-child(6) { width: 70px; }
+.watchlist-table thead th:nth-child(5) { width: 180px; } /* Trend */
+.watchlist-table thead th:nth-child(7) { width: 70px; }
 
 .watchlist-table tbody tr {
   cursor: pointer;
@@ -3298,6 +3358,13 @@ h4 {
   color: var(--danger);
 }
 
+.td-trend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
 .td-price .price-chg {
   display: block;
   font-size: 0.7rem;
@@ -3335,7 +3402,7 @@ h4 {
 
 .watchlist-virt-header {
   display: grid;
-  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px minmax(180px, 1fr) 1fr 70px;
   align-items: center;
   padding: 0 12px;
   height: 36px;
@@ -3353,7 +3420,7 @@ h4 {
 /* Each cell in the virtualized row uses the same column grid as the header. */
 .virt-row {
   display: grid;
-  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px 1fr 70px;
+  grid-template-columns: 80px 64px minmax(110px, 1fr) 80px minmax(180px, 1fr) 1fr 70px;
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);

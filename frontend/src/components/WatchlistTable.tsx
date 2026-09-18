@@ -11,6 +11,46 @@ import {
   isRowEnabled,
 } from './watchlistUtils';
 
+const TREND_TFS = [
+  { key: 'ONE_MINUTE', short: '1m' },
+  { key: 'FIVE_MINUTE', short: '5m' },
+  { key: 'FIFTEEN_MINUTE', short: '15m' },
+  { key: 'ONE_HOUR', short: '1h' },
+  { key: 'FOUR_HOUR', short: '4h' },
+  { key: 'ONE_DAY', short: '1d' },
+];
+
+function trendBadge(direction: string | undefined): { className: string; arrow: string; title: string } {
+  const arrow = direction === 'uptrend' ? '▲'
+             : direction === 'downtrend' ? '▼'
+             : '◆';
+  const cls = direction === 'uptrend'   ? 'trend-badge trend-up'
+            : direction === 'downtrend' ? 'trend-badge trend-down'
+            : 'trend-badge trend-neutral';
+  return { className: cls, arrow, title: direction ?? 'unknown' };
+}
+
+function TrendColumn({ trendSignals }: { trendSignals: Record<string, any> }) {
+  return (
+    <div className="td-trend">
+      {TREND_TFS.map(({ key, short }) => {
+        const sig = trendSignals?.[key];
+        const b = trendBadge(sig?.direction);
+        return (
+          <span
+            key={key}
+            className={b.className}
+            title={sig ? `${short}: ${b.title} (conf ${(sig.confidence * 100).toFixed(0)}%)` : `${short}: no data`}
+          >
+            <span className="trend-arrow">{b.arrow}</span>
+            <span className="trend-label">{short}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 interface WatchlistTableProps {
   watchlistId: number;
   onSelectSymbol: (symbol: string) => void;
@@ -25,6 +65,7 @@ interface RowData {
   change: number | null;
   changePct: number | null;
   rs: RelativeStrengthSignal | null;
+  trendSignals: Record<string, any>;
   raw: WatchlistScanResult;
 }
 
@@ -93,6 +134,7 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
       </div>
+      <TrendColumn trendSignals={row.trendSignals} />
       <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
@@ -157,6 +199,7 @@ export function WatchlistTable({
         change: r.change ?? null,
         changePct: r.change_pct ?? null,
         rs: null,
+        trendSignals: r.trend_signals ?? {},
         raw: r,
       }));
 
@@ -358,6 +401,7 @@ export function WatchlistTable({
             <div className={`virt-cell th ${thClass('change')}`} onClick={() => toggleSort('change')}>
               Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
             </div>
+            <div className="virt-cell th">Trend</div>
             <div className={`virt-cell th ${thClass('rs')}`} onClick={() => toggleSort('rs')}>
               Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
             </div>
@@ -391,6 +435,7 @@ export function WatchlistTable({
                 <th className={thClass('change')} onClick={() => toggleSort('change')}>
                   Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
                 </th>
+                <th>Trend</th>
                 <th className={thClass('rs')} onClick={() => toggleSort('rs')}>
                   Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
                 </th>
@@ -467,6 +512,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
       </td>
+      <td><TrendColumn trendSignals={row.trendSignals} /></td>
       <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
         <div className="actions-inner">
