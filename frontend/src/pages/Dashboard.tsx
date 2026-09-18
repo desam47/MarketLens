@@ -11,7 +11,7 @@ import { SymbolInput } from '../components/SymbolInput';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
-import { formatETDateTime } from '../components/chartMath';
+import { formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 
 // Per-card skeletons rather than the page-level DashboardSkeleton
@@ -64,6 +64,23 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   // Dashboard tab with this off showed "Stuck · 2d ago" the whole time.
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Last close data from price-range endpoint
+  const [lastClose, setLastClose] = useState<{
+    latest_close: number | null;
+    latest_close_timestamp: string | null;
+    fetched_at: string | null;
+    change: number | null;
+    change_pct: number | null;
+  } | null>(null);
+
+  // Latest quote (for current price)
+  const [latestQuote, setLatestQuote] = useState<{
+    price: number | null;
+    timestamp: string | null;
+    change: number | null;
+    change_pct: number | null;
+  } | null>(null);
 
   // Individual card states
   const [regime, setRegime] = useState<RegimeData | null>(null);
@@ -196,6 +213,55 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     }
   }, []);
 
+  const fetchLastClose = useCallback(async () => {
+    const requestSymbol = symbol;
+    try {
+      const data = await api.getPriceRange(requestSymbol, '1d');
+      if (symbolRef.current !== requestSymbol) return;
+      // Find today's period entry in price_history for change/change_pct
+      // Uses "today_high" or "today_low" type; the period key is "today"
+      let change: number | null = null;
+      let change_pct: number | null = null;
+      if (data.price_history && Array.isArray(data.price_history)) {
+        const todayEntry = data.price_history.find((entry: any) => 
+          entry.type === 'today_high' || entry.type === 'today_low'
+        );
+        if (todayEntry) {
+          change = todayEntry.change ?? null;
+          change_pct = todayEntry.change_pct ?? null;
+        }
+      }
+      setLastClose({
+        latest_close: data.latest_close ?? null,
+        latest_close_timestamp: data.latest_close_timestamp ?? null,
+        fetched_at: data.fetched_at ?? null,
+        change,
+        change_pct,
+      });
+    } catch (err: any) {
+      if (symbolRef.current !== requestSymbol) return;
+      console.error('Failed to load last close:', err?.message);
+    }
+  }, [symbol]);
+
+  const fetchQuote = useCallback(async () => {
+    const requestSymbol = symbol;
+    try {
+      const data = await api.getQuote(requestSymbol);
+      if (symbolRef.current !== requestSymbol) return;
+      // The quote has price, timestamp, and we can calculate change/change_pct from lastClose if available
+      setLatestQuote({
+        price: data.price ?? null,
+        timestamp: data.timestamp ?? null,
+        change: null, // We don't have change in the quote directly
+        change_pct: null,
+      });
+    } catch (err: any) {
+      if (symbolRef.current !== requestSymbol) return;
+      console.error('Failed to load quote:', err?.message);
+    }
+  }, [symbol]);
+
   // Tracks whether a fetchSymbolSections cycle is in flight so the
   // interval and visibility-regain triggers below can skip firing a
   // redundant, overlapping cycle on top of one still resolving. Only
@@ -219,12 +285,14 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       fetchTrends(),
       fetchConfluence(),
       fetchStrategy(),
+      fetchLastClose(),
+      fetchQuote(),
     ];
     Promise.all(pending).finally(() => {
       isFetchingAllRef.current = false;
       setLastUpdated(new Date());
     });
-  }, [fetchRegime, fetchSector, fetchTrends, fetchConfluence, fetchStrategy]);
+  }, [fetchRegime, fetchSector, fetchTrends, fetchConfluence, fetchStrategy, fetchLastClose, fetchQuote]);
 
   // Used by the interval/visibility/manual-refresh triggers, which should
   // still catch up market context on their own cadence — just not on
@@ -279,6 +347,17 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [autoRefresh, fetchAllIfIdle]);
 
+  // Separate faster polling for quote (5s) to keep price updated in real-time
+  useEffect(() => {
+    if (!autoRefresh) return;
+    // Initial fetch
+    fetchQuote();
+    const interval = setInterval(() => {
+      fetchQuote();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchQuote]);
+
   const isRefreshing = regimeLoading || sectorLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
 
   return (
@@ -291,6 +370,27 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
             {' · '}
             <FreshnessIndicator regime={regime} />
           </p>
+          {(latestQuote && latestQuote.price != null) && (
+            <div className="last-close-info">
+              <span className="last-close-label">Price</span>
+              <span className="last-close-price">${latestQuote.price.toFixed(4)}</span>
+              {lastClose && lastClose.change != null && lastClose.change_pct != null && (
+                <>
+                  <span className={`last-close-change ${lastClose.change >= 0 ? 'positive' : 'negative'}`}>
+                    {lastClose.change >= 0 ? '+' : ''}{lastClose.change.toFixed(4)}
+                  </span>
+                  <span className={`last-close-change-pct ${lastClose.change_pct >= 0 ? 'positive' : 'negative'}`}>
+                    ({lastClose.change_pct >= 0 ? '+' : ''}{lastClose.change_pct.toFixed(2)}%)
+                  </span>
+                </>
+              )}
+              {latestQuote.timestamp && (
+                <span className="last-close-fetched">
+                  {formatETDateTime24Hour(latestQuote.timestamp)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="header-actions">
           <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={fetchAll} />
