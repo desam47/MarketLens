@@ -134,7 +134,7 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
       </div>
-      <TrendColumn trendSignals={row.trendSignals} />
+      <div className="virt-cell td-trend"><TrendColumn trendSignals={row.trendSignals} /></div>
       <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
       <div
         className="virt-cell td-actions"
