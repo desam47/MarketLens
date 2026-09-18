@@ -1089,7 +1089,7 @@ export interface OptionsResponse {
 // connection, stuck server-side computation) never resolved — the
 // caller's loading state just spun forever, since a plain `fetch()` has
 // no timeout of its own.
-const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_TIMEOUT_MS = 30000;
 
 // LLM-backed endpoints (AI analysis, digest generation, chat, NL search
 // with AI translation) route through backend.ai.manager, whose own
@@ -1099,11 +1099,11 @@ const DEFAULT_TIMEOUT_MS = 15000;
 // each provider in turn on failure (this environment has 4: a primary
 // plus 3 fallbacks, one of them local Ollama), so the total can run to
 // several times a single provider's timeout. The blanket
-// DEFAULT_TIMEOUT_MS (15s) fired before the backend's own per-provider
+// DEFAULT_TIMEOUT_MS (30s) fired before the backend's own per-provider
 // timeout even had a chance to complete or fail over, so every one of
 // these calls went from "no timeout at all" (before this file had one)
 // straight to "times out constantly" — found live 2026-09-17 (AI
-// Analysis erroring "Request timed out after 15000ms" on a normal,
+// Analysis erroring "Request timed out after 30000ms" on a normal,
 // in-progress analysis). 150s comfortably covers a realistic single
 // failover (60s primary + 60s fallback) with headroom; it's a
 // hardcoded client-side ceiling, not derived from the live config, so a
