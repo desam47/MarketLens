@@ -512,7 +512,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
           ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
           : '—'}
       </td>
-      <td><TrendColumn trendSignals={row.trendSignals} /></td>
+      <td className="td-trend"><TrendColumn trendSignals={row.trendSignals} /></td>
       <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
       <td className="td-actions" onClick={(e) => e.stopPropagation()}>
         <div className="actions-inner">

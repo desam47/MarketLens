@@ -2954,9 +2954,11 @@ h4 {
 
 .watchlist-table thead th:nth-child(1) { width: 80px; }  /* Symbol */
 .watchlist-table thead th:nth-child(2) { width: 64px; }  /* Type */
+.watchlist-table thead th:nth-child(3) { width: 110px; } /* Price */
 .watchlist-table thead th:nth-child(4) { width: 80px; }  /* Change % */
 .watchlist-table thead th:nth-child(5) { width: 320px; } /* Trend */
-.watchlist-table thead th:nth-child(7) { width: 70px; }
+.watchlist-table thead th:nth-child(6) { width: 1fr; }   /* Rel. Strength */
+.watchlist-table thead th:nth-child(7) { width: 70px; }  /* Actions */
 
 .watchlist-table tbody tr {
   cursor: pointer;
