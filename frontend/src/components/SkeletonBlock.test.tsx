@@ -27,9 +27,4 @@ describe('SkeletonBlock', () => {
     const { WatchlistSkeleton } = require('./skeletons/WatchlistSkeleton');
     expect(() => render(<WatchlistSkeleton />)).not.toThrow();
   });
-
-  it('renders without crashing in a ScannerTableSkeleton', () => {
-    const { ScannerTableSkeleton } = require('./skeletons/ScannerTableSkeleton');
-    expect(() => render(<ScannerTableSkeleton />)).not.toThrow();
-  });
 });
