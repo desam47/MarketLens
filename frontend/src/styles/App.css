@@ -2963,6 +2963,7 @@ h4 {
 .watchlist-table tbody tr {
   cursor: pointer;
   transition: background-color 0.08s ease;
+  height: 56px;
 }
 
 .watchlist-table tbody tr:hover {
@@ -3124,6 +3125,7 @@ h4 {
   flex-wrap: wrap;
   gap: 0.3rem;
   align-items: center;
+  align-self: center;
 }
 
 .td-price .price-chg {
@@ -3183,7 +3185,8 @@ h4 {
   display: grid;
   grid-template-columns: 80px 64px minmax(110px, 1fr) 80px minmax(320px, 1fr) 1fr 70px;
   align-items: center;
-  padding: 0.4rem 12px;
+  height: 56px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background-color 0.08s ease;
