@@ -6,8 +6,9 @@
  * (ScannerPage) receives results via onResults and can display
  * them however it wants.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import api, { FilterSpec } from '../services/api';
+import { useDebounce } from '../hooks/useDebounce';
 
 // ---------------------------------------------------------------------------
 // Filter definitions — what each filter type needs as input
@@ -193,6 +194,33 @@ export function FilterBuilder({ symbols, onResults, onClear }: FilterBuilderProp
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeFilterType, setActiveFilterType] = useState<string>('daily_bullish');
+  const hasAutoApplied = useRef(false);
+
+  // Auto-apply filters after a short debounce so rapid tweaks
+  // (param changes, add/remove) don't require manual Apply clicks.
+  // The manual Apply button is still available for explicit re-runs.
+  const debouncedFilters = useDebounce(filters, 600);
+  const debouncedMatch = useDebounce(match, 600);
+
+  useEffect(() => {
+    // Skip the initial mount — no filters to apply yet.
+    if (debouncedFilters.length === 0 && debouncedMatch === 'AND') return;
+    const run = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const result = await api.applyFilter({ filters: debouncedFilters, match: debouncedMatch }, symbols);
+        onResults(result);
+        hasAutoApplied.current = true;
+        if (result.length === 0) setError('No symbols matched the filter.');
+      } catch (e: any) {
+        setError(e.message || 'Filter request failed');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    run();
+  }, [debouncedFilters, debouncedMatch, symbols, onResults]);
 
   // Build a default FilterSpec from the selected type
   const buildDefault = useCallback((type: string): FilterSpec => {

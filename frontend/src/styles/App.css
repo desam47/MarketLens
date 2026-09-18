@@ -2630,6 +2630,9 @@ h4 {
   min-width: 0;
   border-bottom: 1px solid var(--border);
   background-color: var(--bg-tertiary, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .scanner-vheader-cell {

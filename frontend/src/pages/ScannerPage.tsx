@@ -166,13 +166,14 @@ const ScannerRow = React.memo(function ScannerRow({
   );
 });
 
-// Virtualized row renderer for react-window FixedSizeList.
+// Virtualized row renderer for react-window FixedSizeList. Memoized so
+// react-window only re-renders rows whose item data actually changed.
 const ROW_HEIGHT = 56;
 
 type RowItem = { sym: string; result: ScanResult | null };
 type VirtualRowData = { rows: RowItem[]; errors: Record<string, string>; onSelectSymbol: (s: string) => void };
 
-function VirtualRow({ index, style, data }: ListChildComponentProps<VirtualRowData>) {
+const VirtualRow = React.memo(function VirtualRow({ index, style, data }: ListChildComponentProps<VirtualRowData>) {
   const { rows, errors, onSelectSymbol } = data;
   const { sym, result } = rows[index];
   return (
@@ -185,7 +186,7 @@ function VirtualRow({ index, style, data }: ListChildComponentProps<VirtualRowDa
       />
     </div>
   );
-}
+});
 
 type SidebarTab = 'filters' | 'rankings';
 
@@ -346,6 +347,10 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const handleSelectSymbol = useCallback((s: string) => {
     onSelectSymbol(s);
   }, [onSelectSymbol]);
+
+  // Memoize the table item data so react-window doesn't re-render
+  // all visible rows when the parent re-renders but the data hasn't changed.
+  const tableItemData = useMemo<VirtualRowData>(() => ({ rows, errors, onSelectSymbol: handleSelectSymbol }), [rows, errors, handleSelectSymbol]);
 
   if (loadingWatchlists) {
     return <LoadingSpinner message="Loading watchlists…" />;
@@ -514,7 +519,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                   itemCount={rows.length}
                   itemSize={ROW_HEIGHT}
                   width="100%"
-                  itemData={{ rows, errors, onSelectSymbol: handleSelectSymbol }}
+                  itemData={tableItemData}
                 >
                   {VirtualRow}
                 </FixedSizeList>

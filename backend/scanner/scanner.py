@@ -533,7 +533,7 @@ class Scanner:
         self.last_scan_time = datetime.now()
         return results
 
-    async def scan_symbols_async(self, symbols: list[str]) -> list[ScanResult]:
+    async def scan_symbols_async(self, symbols: list[str], max_concurrent: int = 8) -> list[ScanResult]:
         """Scan multiple symbols concurrently via asyncio.to_thread + asyncio.gather.
 
         Each :meth:`scan_symbol` is a blocking call (HTTP, DB read) so it is run on
@@ -541,6 +541,12 @@ class Scanner:
         (5*cpu_count on Python 3.12+), this turns N serial HTTP round-trips into
         roughly ``ceil(N / workers)`` round-trips of wall time. Useful for batch
         scan endpoints that are already ``async def``.
+
+        ``max_concurrent`` caps the number of symbols scanned in parallel
+        (default 8) — without it, scanning 50+ symbols spawns 50 threads
+        simultaneously, which can overwhelm provider rate limits and the DB
+        connection pool. The semaphore bounds in-flight ``asyncio.to_thread``
+        calls regardless of the executor's max_workers.
 
         Bars and quotes are batch pre-fetched before spawning threads — the same
         pattern used by :meth:`scan_symbols` — so each thread
@@ -560,8 +566,8 @@ class Scanner:
         # HTTP requests (yfinance/webull/alpaca) — and Alpaca in particular
         # can take 15-20s to time out. Run on a worker thread so a slow
         # provider call stalls this scan, not the entire event loop (a
-        # blocking call here previously froze every other in-flight
-        # request on the server, not just this one).
+        # blocking call here previously froze every other in-flight request
+        # on the server, not just this one).
         #
         # No ``db`` session is passed to ``get_batch_historical_bars``: that
         # parameter only enables a secondary DB-backed cache read *below*
@@ -597,16 +603,21 @@ class Scanner:
         except Exception as e:
             logger.warning(f"Async scan batch pre-fetch failed, falling back to per-symbol: {e}")
 
-        # Each thread receives pre-fetched data — no DB session opened inside the thread.
-        tasks = [
-            asyncio.to_thread(
-                self.scan_symbol,
-                symbol,
-                batch_bars.get(symbol),
-                batch_quotes.get(symbol),
-            )
-            for symbol in symbols
-        ]
+        # Semaphore caps concurrent in-flight scans regardless of the
+        # default executor's worker count — prevents overwhelming providers
+        # and the DB pool when scanning a large watchlist.
+        sem = asyncio.Semaphore(max_concurrent)
+
+        async def _throttled_scan(symbol: str) -> ScanResult:
+            async with sem:
+                return await asyncio.to_thread(
+                    self.scan_symbol,
+                    symbol,
+                    batch_bars.get(symbol),
+                    batch_quotes.get(symbol),
+                )
+
+        tasks = [_throttled_scan(s) for s in symbols]
         results = await asyncio.gather(*tasks)
         duration_ms = (time.monotonic() - start) * 1000
         record_scan(duration_ms)
