@@ -119,6 +119,26 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
         db.close()
 
 
+def _create_and_register_engine(symbol: str) -> TrendEngine:
+    """Construct a bare (unseeded) TrendEngine, register it in the shared
+    registry, and subscribe it to live-tick updates.
+
+    Seeding is the caller's responsibility. Split out so
+    ``_batch_seed_engines`` can create-then-seed-from-its-own-already-fetched
+    rows instead of going through ``get_engine()``, which used to run its
+    own per-symbol ``_seed_from_bar_model`` query and apply those bars
+    immediately — doubling every bar applied to the engine's indicators
+    when the batch path then applied its own shared-query rows on top
+    (found live 2026-09-18; see backend/tests/api/test_trend_registry.py).
+    """
+    symbol = symbol.upper()
+    engine = TrendEngine(symbol)
+    _engines[symbol] = engine
+    for tf in _TREND_TIMEFRAMES:
+        engine_registry.register(f"bar:{tf}", symbol, engine.update)
+    return engine
+
+
 def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
     """Seed multiple trend engines from a single ``IN (...)`` query.
 
@@ -168,9 +188,18 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
     results: dict[str, int] = {}
     for symbol in symbols:
         try:
-            engine = get_engine(symbol)
+            symbol_u = symbol.upper()
+            already_existed = symbol_u in _engines
+            if already_existed:
+                # Already seeded — either by an earlier get_engine() call
+                # or an earlier batch. Applying these rows on top would
+                # double-count every bar in the engine's indicators.
+                results[symbol] = 0
+                continue
+
+            engine = _create_and_register_engine(symbol)
             seeded = 0
-            tf_buckets = grouped.get(symbol.upper(), {})
+            tf_buckets = grouped.get(symbol_u, {})
             for tf_str, bars in tf_buckets.items():
                 try:
                     tf = Timeframe(tf_str)
@@ -187,6 +216,20 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
                         seeded += 1
                     except Exception:
                         pass  # Warmup errors are non-fatal
+
+            if seeded == 0:
+                # No BarModel rows for this symbol in the batch's shared
+                # query (e.g. a freshly-added watchlist symbol with no
+                # bars ingested yet) — fall back to quote seeding, same as
+                # get_engine()'s own lazy-create path, so the engine isn't
+                # left permanently cold now that it's registered here.
+                quote_count = seed_engine_from_quotes(symbol, engine.update)
+                if quote_count > 0:
+                    logger.info(
+                        f"Seeded trend engine for {symbol} with {quote_count} quotes "
+                        "(BarModel empty, quote fallback)"
+                    )
+
             results[symbol] = seeded
             if seeded:
                 logger.info(
@@ -221,8 +264,6 @@ def warmup_engines() -> dict[str, int]:
         symbols = _WARMUP_SYMBOLS
 
     # Phase 3.9.3: single batched query instead of N per-symbol queries.
-    # Engines are still created lazily via get_engine() so the per-symbol
-    # seed loop only adds bars, not extra DB hits.
     results = _batch_seed_engines(symbols)
     for sym, count in results.items():
         if count:
@@ -245,8 +286,7 @@ def get_engine(symbol: str) -> TrendEngine:
     """
     symbol = symbol.upper()
     if symbol not in _engines:
-        engine = TrendEngine(symbol)
-        _engines[symbol] = engine
+        engine = _create_and_register_engine(symbol)
 
         # Seed with bar OHLCV for full indicator warmup.
         bar_count = _seed_from_bar_model(symbol, engine)
@@ -270,10 +310,5 @@ def get_engine(symbol: str) -> TrendEngine:
                 f"Seeded trend engine for {symbol} with {bar_count} bars "
                 "(full OHLCV)"
             )
-
-        # Register for live-tick updates per timeframe so the engine
-        # stays current as the ingestion service publishes new bars.
-        for tf in _TREND_TIMEFRAMES:
-            engine_registry.register(f"bar:{tf}", symbol, engine.update)
 
     return _engines[symbol]
