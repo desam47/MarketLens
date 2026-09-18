@@ -1040,6 +1040,23 @@ h4 {
   margin-bottom: 1.5rem;
 }
 
+.watchlist-title-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.watchlist-selector {
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  min-width: 200px;
+}
+
 .watchlist-actions {
   display: flex;
   align-items: center;
@@ -1607,7 +1624,19 @@ h4 {
     justify-content: flex-start;
   }
 
-  .watchlist-layout {
+.watchlist-layout-full {
+  width: 100%;
+}
+
+.watchlist-content-full {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  width: 100%;
+}
+
+.watchlist-layout {
     grid-template-columns: 1fr;
   }
 }

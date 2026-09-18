@@ -258,49 +258,24 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
         </div>
       )}
 
-      <div className="watchlist-layout">
-        <aside className="watchlist-sidebar">
-          {watchlists.length === 0 ? (
-            <p className="empty-state">No watchlists yet. Create one to get started.</p>
-          ) : (
-            <ul>
-              {watchlists.map(w => (
-                <li
-                  key={w.id}
-                  className={selectedId === w.id ? `active${w.is_active === false ? ' sidebar-disabled' : ''}` : (w.is_active === false ? 'sidebar-disabled' : '')}
-                  onClick={() => setSelectedId(w.id)}
-                >
-                  <span className="wl-sidebar-name">{w.name}</span>
-                  {w.is_active === false && <span className="wl-sidebar-tag">off</span>}
-                  <span className="symbol-count">{symbolCounts[w.id] ?? '…'}</span>
-                  <button
-                    className="wl-sidebar-toggle"
-                    title={w.is_active === false ? 'Enable watchlist' : 'Disable watchlist'}
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      const next = !(w.is_active ?? true);
-                      try {
-                        const updated = await api.updateWatchlist(w.id, { is_active: next } as any);
-                        setWatchlists(watchlists.map(x => x.id === updated.id ? updated : x));
-                        setInfo(next ? `Enabled "${updated.name}"` : `Disabled "${updated.name}"`);
-                      } catch (err: any) {
-                        setError(err.message);
-                      }
-                    }}
-                  >
-                    {w.is_active === false ? '⏵' : '⏸'}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </aside>
-
-        <div className="watchlist-content">
+      <div className="watchlist-layout-full">
           {selectedWatchlist ? (
             <>
               <div className="watchlist-title-bar">
-                <h2>{selectedWatchlist.name}{selectedWatchlist.is_active === false && <span className="wl-disabled-badge">Disabled</span>}</h2>
+                <div className="watchlist-title-left">
+                  <select
+                    className="watchlist-selector"
+                    value={selectedId ?? ''}
+                    onChange={(e) => setSelectedId(Number(e.target.value))}
+                  >
+                    {watchlists.map((wl) => (
+                      <option key={wl.id} value={wl.id} disabled={wl.is_active === false}>
+                        {wl.name}{wl.is_active === false && ' (disabled)'}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedWatchlist.is_active === false && <span className="wl-disabled-badge">Disabled</span>}
+                </div>
                 <div className="watchlist-actions">
                   <button
                     className="btn"
@@ -368,7 +343,6 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
           ) : (
             <p className="empty-state">Select or create a watchlist to view symbols</p>
           )}
-        </div>
       </div>
     </div>
   );
