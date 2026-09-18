@@ -2555,6 +2555,9 @@ h4 {
   contain: layout;
 }
 
+/* Trend column badges - shared by scanner, watchlist, and virtualized table */
+.trend-column .trend-badge,
+.td-trend .trend-badge,
 .cell-trend .trend-badge {
   display: inline-flex;
   flex-direction: column;
@@ -2575,20 +2578,30 @@ h4 {
   max-width: none;
 }
 
+.trend-column .trend-badge.trend-up,
+.td-trend .trend-badge.trend-up,
 .cell-trend .trend-badge.trend-up,
+.trend-column .trend-badge.trend-down,
+.td-trend .trend-badge.trend-down,
 .cell-trend .trend-badge.trend-down,
+.trend-column .trend-badge.trend-neutral,
+.td-trend .trend-badge.trend-neutral,
 .cell-trend .trend-badge.trend-neutral,
-.cell-trend .trend-badge.trend-bullish,
-.cell-trend .trend-badge.trend-bearish {
+.trend-badge.trend-bullish,
+.trend-badge.trend-bearish {
   background: transparent !important;
   border: none;
 }
 
+.trend-column .trend-arrow,
+.td-trend .trend-arrow,
 .cell-trend .trend-arrow {
   font-size: 1.05rem;
   line-height: 1;
 }
 
+.trend-column .trend-label,
+.td-trend .trend-label,
 .cell-trend .trend-label {
   font-size: 0.72rem;
   font-weight: 500;
@@ -2598,79 +2611,28 @@ h4 {
   line-height: 1;
 }
 
-/* Directional colors apply to both arrow and label. */
+.trend-column .trend-badge.trend-up,
+.td-trend .trend-badge.trend-up,
 .cell-trend .trend-badge.trend-up,
-.cell-trend .trend-badge.trend-up .trend-label,
-.cell-trend .trend-badge.trend-up .trend-arrow {
+.trend-badge.trend-up,
+.trend-badge.trend-up .trend-label,
+.trend-badge.trend-up .trend-arrow {
   color: #22c55e !important;
 }
+.trend-column .trend-badge.trend-down,
+.td-trend .trend-badge.trend-down,
 .cell-trend .trend-badge.trend-down,
-.cell-trend .trend-badge.trend-down .trend-label,
-.cell-trend .trend-badge.trend-down .trend-arrow {
+.trend-badge.trend-down,
+.trend-badge.trend-down .trend-label,
+.trend-badge.trend-down .trend-arrow {
   color: #ef4444 !important;
 }
-.cell-trend .trend-badge.trend-neutral,
-.cell-trend .trend-badge.trend-neutral .trend-label,
-.cell-trend .trend-badge.trend-neutral .trend-arrow {
-  color: #eab308 !important;
-}
-
-/* Watchlist table trend column - same styles as scanner page */
-.td-trend .trend-badge {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.05rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: 0;
-  border-radius: 0;
-  line-height: 1.1;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  border: none;
-  background: transparent !important;
-  min-width: 0;
-  width: auto;
-  max-width: none;
-}
-
-.td-trend .trend-badge.trend-up,
-.td-trend .trend-badge.trend-down,
-.td-trend .trend-badge.trend-neutral {
-  background: transparent !important;
-  border: none;
-}
-
-.td-trend .trend-arrow {
-  font-size: 1.05rem;
-  line-height: 1;
-}
-
-.td-trend .trend-label {
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0;
-  display: inline;
-  color: inherit;
-  line-height: 1;
-}
-
-/* Directional colors apply to both arrow and label. */
-.td-trend .trend-badge.trend-up,
-.td-trend .trend-badge.trend-up .trend-label,
-.td-trend .trend-badge.trend-up .trend-arrow {
-  color: #22c55e !important;
-}
-.td-trend .trend-badge.trend-down,
-.td-trend .trend-badge.trend-down .trend-label,
-.td-trend .trend-badge.trend-down .trend-arrow {
-  color: #ef4444 !important;
-}
+.trend-column .trend-badge.trend-neutral,
 .td-trend .trend-badge.trend-neutral,
-.td-trend .trend-badge.trend-neutral .trend-label,
-.td-trend .trend-badge.trend-neutral .trend-arrow {
+.cell-trend .trend-badge.trend-neutral,
+.trend-badge.trend-neutral,
+.trend-badge.trend-neutral .trend-label,
+.trend-badge.trend-neutral .trend-arrow {
   color: #eab308 !important;
 }
 
@@ -2952,13 +2914,8 @@ h4 {
   letter-spacing: 0.04em;
 }
 
-.watchlist-table thead th:nth-child(1) { width: 80px; }  /* Symbol */
-.watchlist-table thead th:nth-child(2) { width: 64px; }  /* Type */
-.watchlist-table thead th:nth-child(3) { width: 110px; } /* Price */
-.watchlist-table thead th:nth-child(4) { width: 80px; }  /* Change % */
-.watchlist-table thead th:nth-child(5) { width: 320px; } /* Trend */
-.watchlist-table thead th:nth-child(6) { width: 1fr; }   /* Rel. Strength */
-.watchlist-table thead th:nth-child(7) { width: 70px; }  /* Actions */
+/* Column widths are set inline on each <th> from watchlistColumns.ts, so they
+   follow the column (not its position) when columns are toggled. */
 
 .watchlist-table tbody tr {
   cursor: pointer;
@@ -3169,6 +3126,7 @@ div.td-trend {
 
 .watchlist-virt-header {
   display: grid;
+  /* Default only: overridden inline from watchlistColumns.ts (column toggle). */
   grid-template-columns: 80px 64px minmax(110px, 1fr) 80px minmax(320px, 1fr) 1fr 70px;
   align-items: center;
   padding: 0.4rem 12px;
@@ -3187,6 +3145,7 @@ div.td-trend {
 /* Each cell in the virtualized row uses the same column grid as the header. */
 .virt-row {
   display: grid;
+  /* Default only: overridden inline from watchlistColumns.ts (column toggle). */
   grid-template-columns: 80px 64px minmax(110px, 1fr) 80px minmax(320px, 1fr) 1fr 70px;
   align-items: center;
   height: 56px;
@@ -3194,10 +3153,16 @@ div.td-trend {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background-color 0.08s ease;
+  outline: none;
 }
 
 .virt-row:hover {
   background: rgba(59, 130, 246, 0.08);
+}
+
+.virt-row:focus-visible {
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: inset 0 0 0 2px var(--accent-primary);
 }
 
 .virt-row.row-disabled {
@@ -3206,6 +3171,10 @@ div.td-trend {
 
 .virt-row.row-disabled:hover {
   background: rgba(107, 114, 128, 0.1);
+}
+
+.virt-row.row-disabled:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--text-muted);
 }
 
 .virt-cell {
@@ -5963,4 +5932,87 @@ div.td-trend {
 .btn-ghost:hover {
   background: var(--bg-hover, #2a2f45) !important;
   color: var(--text, #e5e7eb) !important;
+}
+
+/* ------------------------------------------------------------
+   Watchlist: Column visibility toggle dropdown
+   ------------------------------------------------------------ */
+.wl-col-toggle-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.wl-col-toggle-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.wl-col-toggle-btn:hover {
+  background: var(--border);
+  color: var(--text-primary);
+}
+
+.wl-col-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+  min-width: 160px;
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+}
+
+.wl-col-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.wl-col-option:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.wl-col-option input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+/* RS benchmark selector */
+.rs-benchmark-select {
+  padding: 0.2rem 0.4rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  outline: none;
+}
+
+.rs-benchmark-select:hover {
+  border-color: var(--text-muted);
+}
+
+.rs-benchmark-select:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }

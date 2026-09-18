@@ -10,6 +10,11 @@ import {
   rsCellLabel,
   isRowEnabled,
 } from './watchlistUtils';
+import {
+  WATCHLIST_COLUMNS,
+  getVisibleColumns,
+  buildVirtGridTemplateColumns,
+} from './watchlistColumns';
 
 const TREND_TFS = [
   { key: 'ONE_MINUTE', short: '1m' },
@@ -65,6 +70,8 @@ interface RowData {
   change: number | null;
   changePct: number | null;
   rs: RelativeStrengthSignal | null;
+  // All benchmarks' signals; `rs` is picked from these for the selected benchmark.
+  rsSignals: RelativeStrengthSignal[];
   trendSignals: Record<string, any>;
   raw: WatchlistScanResult;
 }
@@ -74,6 +81,25 @@ interface RowData {
 const VIRT_THRESHOLD = 30;
 const VIRT_ROW_HEIGHT = 56;
 const VIRT_HEIGHT = 480;
+
+// Trend is the widest column; below this width it is dropped so the rest of
+// the table stays usable. Done in JS (not CSS display:none) so the virtualized
+// grid template and the header/cells stay in sync.
+const NARROW_QUERY = '(max-width: 1100px)';
+
+function useMediaQuery(query: string): boolean {
+  const supported = typeof window !== 'undefined' && typeof window.matchMedia === 'function';
+  const [matches, setMatches] = useState(() => supported && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (!supported) return;
+    const mql = window.matchMedia(query);
+    const onChange = () => setMatches(mql.matches);
+    onChange();
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, [query, supported]);
+  return matches;
+}
 
 const SortIcon = React.memo(function SortIcon({ column, sortCol, sortDir }: {
   column: string;
@@ -99,9 +125,11 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
   togglingSymbol: string | null;
   pendingSymbol: string | null;
   pendingAction: 'delete' | null;
+  visibleColKeys: Set<string>;
+  gridTemplate: string;
 }>) {
   const { rows, onSelectSymbol, onToggleSymbol, onDeleteSymbol,
-    togglingSymbol, pendingSymbol, pendingAction } = data;
+    togglingSymbol, pendingSymbol, pendingAction, visibleColKeys, gridTemplate } = data;
   const row = rows[index];
 
   const isPending = pendingSymbol === row.symbol;
@@ -109,56 +137,81 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
   const isToggling = togglingSymbol === row.symbol;
   const rowEnabled = isRowEnabled(row.raw);
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore keys bubbling up from the row's buttons (toggle/delete).
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSelectSymbol(row.symbol);
+    }
+  };
+
   return (
     <div
-      style={style}
+      style={{ ...style, gridTemplateColumns: gridTemplate }}
       className={`virt-row watchlist-table-row${rowEnabled ? '' : ' row-disabled'}`}
       onClick={() => onSelectSymbol(row.symbol)}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
     >
-      <div className="virt-cell td-symbol">
-        {row.symbol}
-        {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
-      </div>
-      <div className="virt-cell td-type">
-        {row.entityType === 'etf' ? (
-          <span className="entity-tag entity-tag-etf">ETF</span>
-        ) : (
-          <span className="entity-tag entity-tag-stock">Stock</span>
-        )}
-      </div>
-      <div className="virt-cell td-price">
-        {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
-      </div>
-      <div className={`virt-cell td-change ${changeCellClass(row.changePct)}`}>
-        {row.changePct != null
-          ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
-          : '—'}
-      </div>
-      <div className="virt-cell td-trend"><TrendColumn trendSignals={row.trendSignals} /></div>
-      <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
-      <div
-        className="virt-cell td-actions"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="actions-inner">
-          <button
-            className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
-            title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
-            disabled={isToggling}
-            onClick={() => onToggleSymbol(row.symbol)}
-          >
-            {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
-          </button>
-          <button
-            className="row-action-btn row-action-danger"
-            title="Remove from watchlist"
-            disabled={isDeleting}
-            onClick={() => onDeleteSymbol(row.symbol)}
-          >
-            {isDeleting ? '…' : '×'}
-          </button>
+      {visibleColKeys.has('symbol') && (
+        <div className="virt-cell td-symbol">
+          {row.symbol}
+          {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
         </div>
-      </div>
+      )}
+      {visibleColKeys.has('type') && (
+        <div className="virt-cell td-type">
+          {row.entityType === 'etf' ? (
+            <span className="entity-tag entity-tag-etf">ETF</span>
+          ) : (
+            <span className="entity-tag entity-tag-stock">Stock</span>
+          )}
+        </div>
+      )}
+      {visibleColKeys.has('price') && (
+        <div className="virt-cell td-price">
+          {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
+        </div>
+      )}
+      {visibleColKeys.has('change') && (
+        <div className={`virt-cell td-change ${changeCellClass(row.changePct)}`}>
+          {row.changePct != null
+            ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
+            : '—'}
+        </div>
+      )}
+      {visibleColKeys.has('trend') && (
+        <div className="virt-cell td-trend"><TrendColumn trendSignals={row.trendSignals} /></div>
+      )}
+      {visibleColKeys.has('rs') && (
+        <div className={`virt-cell td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</div>
+      )}
+      {visibleColKeys.has('actions') && (
+        <div
+          className="virt-cell td-actions"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="actions-inner">
+            <button
+              className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
+              title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+              disabled={isToggling}
+              onClick={() => onToggleSymbol(row.symbol)}
+            >
+              {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
+            </button>
+            <button
+              className="row-action-btn row-action-danger"
+              title="Remove from watchlist"
+              disabled={isDeleting}
+              onClick={() => onDeleteSymbol(row.symbol)}
+            >
+              {isDeleting ? '…' : '×'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -179,7 +232,41 @@ export function WatchlistTable({
   const [pendingSymbol, setPendingSymbol] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<'delete' | null>(null);
   const [togglingSymbol, setTogglingSymbol] = useState<string | null>(null);
+  const [rsBenchmark, setRsBenchmark] = useState('SPY');
+  const [showColToggle, setShowColToggle] = useState(false);
+  const [visibleColKeys, setVisibleColKeys] = useState<Set<string>>(() => {
+    return new Set(WATCHLIST_COLUMNS.map(c => c.key));
+  });
   const listRef = useRef<FixedSizeList>(null);
+
+  const isNarrow = useMediaQuery(NARROW_QUERY);
+  const effectiveColKeys = useMemo(() => {
+    if (!isNarrow) return visibleColKeys;
+    const next = new Set(visibleColKeys);
+    next.delete('trend');
+    return next;
+  }, [visibleColKeys, isNarrow]);
+  const shownColumns = useMemo(
+    () => getVisibleColumns().filter(c => effectiveColKeys.has(c.key)),
+    [effectiveColKeys],
+  );
+  const virtGridTemplate = useMemo(
+    () => buildVirtGridTemplateColumns(effectiveColKeys),
+    [effectiveColKeys],
+  );
+
+  const colToggleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showColToggle) return;
+    const onClick = (e: MouseEvent) => {
+      if (colToggleRef.current && !colToggleRef.current.contains(e.target as Node)) {
+        setShowColToggle(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [showColToggle]);
 
   const fetchData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -199,6 +286,7 @@ export function WatchlistTable({
         change: r.change ?? null,
         changePct: r.change_pct ?? null,
         rs: null,
+        rsSignals: [],
         trendSignals: r.trend_signals ?? {},
         raw: r,
       }));
@@ -218,12 +306,7 @@ export function WatchlistTable({
 
       const finalRows = baseRows.map((row) => {
         const data = rsLookup[row.symbol];
-        if (data) {
-          // Pick the SPY benchmark for display.
-          const spySignal = data.signals.find(s => s.benchmark === 'SPY') ?? data.signals[0] ?? null;
-          return { ...row, rs: spySignal };
-        }
-        return row;
+        return data ? { ...row, rsSignals: data.signals } : row;
       });
 
       setRows(finalRows);
@@ -307,8 +390,18 @@ export function WatchlistTable({
 
   // Sorting. Memoized so the virtualized list reuses the same array
   // reference when the underlying rows + sort haven't changed.
+  // Resolve the displayed RS signal from the selected benchmark here (not in
+  // fetchData) so switching benchmarks is instant and needs no re-fetch.
+  const displayRows = useMemo(
+    () => rows.map((r): RowData => ({
+      ...r,
+      rs: r.rsSignals.find(s => s.benchmark === rsBenchmark) ?? r.rsSignals[0] ?? null,
+    })),
+    [rows, rsBenchmark],
+  );
+
   const sorted = useMemo(() => {
-    const copy = [...rows];
+    const copy = [...displayRows];
     copy.sort((a, b) => {
       let cmp = 0;
       switch (sortCol) {
@@ -320,7 +413,7 @@ export function WatchlistTable({
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return copy;
-  }, [rows, sortCol, sortDir]);
+  }, [displayRows, sortCol, sortDir]);
 
   // Stable callback for the virtualized list. Without this, every parent
   // re-render would create a new function identity, forcing react-window
@@ -334,8 +427,10 @@ export function WatchlistTable({
       togglingSymbol,
       pendingSymbol,
       pendingAction,
+      visibleColKeys: effectiveColKeys,
+      gridTemplate: virtGridTemplate,
     }),
-    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction],
+    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction, effectiveColKeys, virtGridTemplate],
   );
 
   const toggleSort = (col: typeof sortCol) => {
@@ -349,6 +444,10 @@ export function WatchlistTable({
 
   const thClass = (col: typeof sortCol) =>
     `sortable-th${sortCol === col ? ' sorted' : ''}`;
+
+  const isSortableCol = (key: string): key is typeof sortCol => {
+    return ['symbol', 'price', 'change', 'rs'].includes(key);
+  };
 
   if (loading) {
     return (
@@ -377,6 +476,50 @@ export function WatchlistTable({
             Scanned {formatETTime(scanTimestamp)}
           </span>
         )}
+        <select
+          className="rs-benchmark-select"
+          value={rsBenchmark}
+          onChange={e => setRsBenchmark(e.target.value)}
+          title="Relative Strength benchmark"
+        >
+          <option value="SPY">RS vs SPY</option>
+          <option value="QQQ">RS vs QQQ</option>
+          <option value="IWM">RS vs IWM</option>
+          <option value="DIA">RS vs DIA</option>
+        </select>
+        <div className="wl-col-toggle-wrap" ref={colToggleRef}>
+          <button
+            className="wl-col-toggle-btn"
+            onClick={() => setShowColToggle(v => !v)}
+            title="Toggle columns"
+          >
+            ⚙ Columns
+          </button>
+          {showColToggle && (
+            <div className="wl-col-dropdown">
+              {WATCHLIST_COLUMNS.map(col => (
+                <label key={col.key} className="wl-col-option">
+                  <input
+                    type="checkbox"
+                    checked={visibleColKeys.has(col.key)}
+                    onChange={() => {
+                      setVisibleColKeys(prev => {
+                        const next = new Set(prev);
+                        if (next.has(col.key)) {
+                          next.delete(col.key);
+                        } else {
+                          next.add(col.key);
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                  {col.header}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           className={`btn btn-small ${refreshing ? 'btn-loading' : ''}`}
           onClick={() => fetchData(true)}
@@ -390,22 +533,18 @@ export function WatchlistTable({
         <p className="empty-state">No symbols in this watchlist.</p>
       ) : useVirtual ? (
         <div className="watchlist-virt">
-          <div className="watchlist-virt-header">
-            <div className="virt-cell th" onClick={() => toggleSort('symbol')}>
-              Symbol <SortIcon column="symbol" sortCol={sortCol} sortDir={sortDir} />
-            </div>
-            <div className="virt-cell th">Type</div>
-            <div className={`virt-cell th ${thClass('price')}`} onClick={() => toggleSort('price')}>
-              Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
-            </div>
-            <div className={`virt-cell th ${thClass('change')}`} onClick={() => toggleSort('change')}>
-              Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
-            </div>
-            <div className="virt-cell th">Trend</div>
-            <div className={`virt-cell th ${thClass('rs')}`} onClick={() => toggleSort('rs')}>
-              Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
-            </div>
-            <div className="virt-cell th">Actions</div>
+          <div className="watchlist-virt-header" style={{ gridTemplateColumns: virtGridTemplate }}>
+            {shownColumns.map((col) => (
+              <div
+                key={col.key}
+                className={`virt-cell th ${col.sortable && isSortableCol(col.key) ? thClass(col.key) : ''}`}
+                onClick={col.sortable ? () => toggleSort(col.key as typeof sortCol) : undefined}
+                style={{ cursor: col.sortable ? 'pointer' : 'default' }}
+              >
+                {col.header}
+                {col.sortable && <SortIcon column={col.key} sortCol={sortCol} sortDir={sortDir} />}
+              </div>
+            ))}
           </div>
           <FixedSizeList
             ref={listRef}
@@ -425,21 +564,21 @@ export function WatchlistTable({
           <table className="watchlist-table">
             <thead>
               <tr>
-                <th className={thClass('symbol')} onClick={() => toggleSort('symbol')}>
-                  Symbol <SortIcon column="symbol" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th>Type</th>
-                <th className={thClass('price')} onClick={() => toggleSort('price')}>
-                  Price <SortIcon column="price" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th className={thClass('change')} onClick={() => toggleSort('change')}>
-                  Change % <SortIcon column="change" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th>Trend</th>
-                <th className={thClass('rs')} onClick={() => toggleSort('rs')}>
-                  Rel. Strength <SortIcon column="rs" sortCol={sortCol} sortDir={sortDir} />
-                </th>
-                <th>Actions</th>
+                {shownColumns.map((col) => (
+                  <th
+                    key={col.key}
+                    className={col.sortable && isSortableCol(col.key) ? thClass(col.key) : ''}
+                    onClick={col.sortable ? () => toggleSort(col.key as typeof sortCol) : undefined}
+                    style={{
+                      // 'fr' widths are only meaningful in the virtualized grid.
+                      width: col.width.endsWith('fr') ? undefined : col.width,
+                      cursor: col.sortable ? 'pointer' : undefined,
+                    }}
+                  >
+                    {col.header}
+                    {col.sortable && <SortIcon column={col.key} sortCol={sortCol} sortDir={sortDir} />}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -453,6 +592,7 @@ export function WatchlistTable({
                   togglingSymbol={togglingSymbol}
                   pendingSymbol={pendingSymbol}
                   pendingAction={pendingAction}
+                  visibleColKeys={effectiveColKeys}
                 />
               ))}
             </tbody>
@@ -474,6 +614,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
   togglingSymbol,
   pendingSymbol,
   pendingAction,
+  visibleColKeys,
 }: {
   row: RowData;
   onSelectSymbol: (symbol: string) => void;
@@ -482,58 +623,84 @@ const WatchlistRow = React.memo(function WatchlistRow({
   togglingSymbol: string | null;
   pendingSymbol: string | null;
   pendingAction: 'delete' | null;
+  visibleColKeys: Set<string>;
 }) {
   const rowEnabled = isRowEnabled(row.raw);
   const isPending = pendingSymbol === row.symbol;
   const isDeleting = isPending && pendingAction === 'delete';
   const isToggling = togglingSymbol === row.symbol;
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore keys bubbling up from the row's buttons (toggle/delete).
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSelectSymbol(row.symbol);
+    }
+  };
+
   return (
     <tr
       onClick={() => onSelectSymbol(row.symbol)}
+      onKeyDown={handleKeyDown}
       className={`watchlist-table-row${rowEnabled ? '' : ' row-disabled'}`}
+      tabIndex={0}
     >
-      <td className="td-symbol">
-        {row.symbol}
-        {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
-      </td>
-      <td className="td-type">
-        {row.entityType === 'etf' ? (
-          <span className="entity-tag entity-tag-etf">ETF</span>
-        ) : (
-          <span className="entity-tag entity-tag-stock">Stock</span>
-        )}
-      </td>
-      <td className="td-price">
-        {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
-      </td>
-      <td className={`td-change ${changeCellClass(row.changePct)}`}>
-        {row.changePct != null
-          ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
-          : '—'}
-      </td>
-      <td className="td-trend"><TrendColumn trendSignals={row.trendSignals} /></td>
-      <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
-      <td className="td-actions" onClick={(e) => e.stopPropagation()}>
-        <div className="actions-inner">
-          <button
-            className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
-            title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
-            disabled={isToggling}
-            onClick={() => onToggleSymbol(row.symbol)}
-          >
-            {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
-          </button>
-          <button
-            className="row-action-btn row-action-danger"
-            title="Remove from watchlist"
-            disabled={isDeleting}
-            onClick={() => onDeleteSymbol(row.symbol)}
-          >
-            {isDeleting ? '…' : '×'}
-          </button>
-        </div>
-      </td>
+      {visibleColKeys.has('symbol') && (
+        <td className="td-symbol">
+          {row.symbol}
+          {!rowEnabled && <span className="row-disabled-badge" title="Disabled">⏸</span>}
+        </td>
+      )}
+      {visibleColKeys.has('type') && (
+        <td className="td-type">
+          {row.entityType === 'etf' ? (
+            <span className="entity-tag entity-tag-etf">ETF</span>
+          ) : (
+            <span className="entity-tag entity-tag-stock">Stock</span>
+          )}
+        </td>
+      )}
+      {visibleColKeys.has('price') && (
+        <td className="td-price">
+          {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
+        </td>
+      )}
+      {visibleColKeys.has('change') && (
+        <td className={`td-change ${changeCellClass(row.changePct)}`}>
+          {row.changePct != null
+            ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
+            : '—'}
+        </td>
+      )}
+      {visibleColKeys.has('trend') && (
+        <td className="td-trend"><TrendColumn trendSignals={row.trendSignals} /></td>
+      )}
+      {visibleColKeys.has('rs') && (
+        <td className={`td-rs ${rsCellClass(row.rs)}`}>{rsCellLabel(row.rs)}</td>
+      )}
+      {visibleColKeys.has('actions') && (
+        <td className="td-actions" onClick={(e) => e.stopPropagation()}>
+          <div className="actions-inner">
+            <button
+              className={`row-action-btn${rowEnabled ? ' row-action-toggle-active' : ''}`}
+              title={rowEnabled ? 'Disable symbol' : 'Enable symbol'}
+              disabled={isToggling}
+              onClick={() => onToggleSymbol(row.symbol)}
+            >
+              {isToggling ? '…' : rowEnabled ? '⏸' : '▶'}
+            </button>
+            <button
+              className="row-action-btn row-action-danger"
+              title="Remove from watchlist"
+              disabled={isDeleting}
+              onClick={() => onDeleteSymbol(row.symbol)}
+            >
+              {isDeleting ? '…' : '×'}
+            </button>
+          </div>
+        </td>
+      )}
     </tr>
   );
 });
