@@ -2999,17 +2999,19 @@ h4 {
 }
 
 /* Actions column */
+/* Keep the <td> a real table-cell (display: flex on a <td> drops it out of the
+   row's height, so its border-bottom no longer lines up with the other cells).
+   The flex layout lives on the inner wrapper instead. */
 .td-actions {
   white-space: nowrap;
   text-align: center;
+}
+
+.actions-inner {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
-}
-
-.actions-inner {
-  display: contents;
 }
 
 /* Row disabled state */
@@ -3120,7 +3122,9 @@ h4 {
   color: var(--danger);
 }
 
-.td-trend {
+/* div only: the <td class="td-trend"> must stay display: table-cell; the flex
+   row is the TrendColumn <div> inside it. */
+div.td-trend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
