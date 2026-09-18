@@ -6,7 +6,7 @@
  * (ScannerPage) receives results via onResults and can display
  * them however it wants.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import api, { FilterSpec } from '../services/api';
 import { useDebounce } from '../hooks/useDebounce';
 
@@ -194,7 +194,6 @@ export function FilterBuilder({ symbols, onResults, onClear }: FilterBuilderProp
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeFilterType, setActiveFilterType] = useState<string>('daily_bullish');
-  const hasAutoApplied = useRef(false);
 
   // Auto-apply filters after a short debounce so rapid tweaks
   // (param changes, add/remove) don't require manual Apply clicks.
@@ -203,15 +202,19 @@ export function FilterBuilder({ symbols, onResults, onClear }: FilterBuilderProp
   const debouncedMatch = useDebounce(match, 600);
 
   useEffect(() => {
-    // Skip the initial mount — no filters to apply yet.
-    if (debouncedFilters.length === 0 && debouncedMatch === 'AND') return;
+    // Skip whenever there are no filters — this covers both the initial
+    // mount AND the user clearing/removing the last filter. Regardless of
+    // match (AND/OR), an empty filter list always resolves to TrueFilter
+    // on the backend (matches every symbol), so firing here would
+    // silently re-activate filter mode ~600ms after Clear/remove-last
+    // with match='OR', undoing it (found live 2026-09-18).
+    if (debouncedFilters.length === 0) return;
     const run = async () => {
       setIsLoading(true);
       setError(null);
       try {
         const result = await api.applyFilter({ filters: debouncedFilters, match: debouncedMatch }, symbols);
         onResults(result);
-        hasAutoApplied.current = true;
         if (result.length === 0) setError('No symbols matched the filter.');
       } catch (e: any) {
         setError(e.message || 'Filter request failed');
