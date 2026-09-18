@@ -3,8 +3,8 @@
  *
  * Renders an add/remove list of filter expressions and fires
  * POST /api/scanner/filter when the user applies.  The parent
- * (ScannerPage) receives results via onResults and can display
- * them however it wants.
+ * receives results via onResults and can display them however
+ * it wants.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { FilterSpec } from '../services/api';

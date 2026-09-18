@@ -12,7 +12,6 @@ const SystemHealth = lazy(() => import('./pages/SystemHealth').then(m => ({ defa
 const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default: m.AlertsPage })));
 const BacktestPage = lazy(() => import('./pages/BacktestPage').then(m => ({ default: m.BacktestPage })));
 const SymbolPage = lazy(() => import('./pages/SymbolPage').then(m => ({ default: m.SymbolPage })));
-const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
 const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage').then(m => ({ default: m.HistoricalSignalsPage })));
 const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
 
@@ -23,7 +22,7 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'scanner' | 'signals' | 'hub';
+type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'hub';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -64,8 +63,6 @@ export default function App() {
         return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'watchlist':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
-      case 'scanner':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Live Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'hub':
@@ -125,15 +122,6 @@ export default function App() {
             >
               <span className="nav-icon">📋</span>
               Watchlist
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'scanner' ? 'active' : ''}
-              onClick={() => setCurrentPage('scanner')}
-            >
-              <span className="nav-icon">🔴</span>
-              Live Scanner
             </button>
           </li>
           <li>
