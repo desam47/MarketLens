@@ -445,6 +445,8 @@ export interface ScanResult {
   symbol: string;
   timestamp: string;
   quote: ScanQuote | null;
+  change: number | null;
+  change_pct: number | null;
   indicator_values: Record<string, any>;
   scores: Record<string, number>;
   total_score: number;
@@ -1769,7 +1771,7 @@ class ApiService {
 
   // Phase 12: scan an entire watchlist (for the watchlist table)
   async getWatchlistScan(watchlistId: number): Promise<WatchlistScanResponse> {
-    return this.fetch<WatchlistScanResponse>(`/scanner/watchlist/${watchlistId}`);
+    return this.fetch<WatchlistScanResponse>(`/scanner/watchlist/${watchlistId}`, undefined, 60000);
   }
 
   // Phase 12: scan a single symbol (for SymbolPage MTF grid + score panel)
