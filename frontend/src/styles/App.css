@@ -2624,7 +2624,7 @@ h4 {
   display: grid;
   /* Symbol | Price | Score | Trend | Signals | Last Update */
   /* column-gap creates the visible spacing between columns. */
-  grid-template-columns: 80px 80px 64px 240px minmax(280px, 1fr) 100px;
+  grid-template-columns: 80px 80px 96px 240px minmax(280px, 1fr) 100px;
   column-gap: 1.25rem;
   width: 100%;
   min-width: 0;
@@ -2651,7 +2651,7 @@ h4 {
 /* Virtualized scanner row. */
 .scanner-vrow {
   display: grid;
-  grid-template-columns: 80px 80px 64px 240px minmax(280px, 1fr) 100px;
+  grid-template-columns: 80px 80px 96px 240px minmax(280px, 1fr) 100px;
   column-gap: 1.25rem;
   align-items: center;
   min-width: 0;

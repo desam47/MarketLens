@@ -4,7 +4,7 @@
  * Subscribes to every enabled symbol in the selected watchlist via the
  * WebSocket stream at /api/scanner-stream/ws. The page re-renders when
  * any subscribed symbol's scan_result arrives, replacing the row with the
- * fresh score/signals.
+ * fresh change%/signals.
  *
  * Phase 10 adds a composable filter builder and named rankings panel
  * in a collapsible sidebar.
@@ -80,11 +80,11 @@ function TrendColumn({ trendSignals }: { trendSignals: Record<string, any> }) {
 }
 
 // ---------------------------------------------------------------------------
-// Score / freshness helpers
+// Change % / freshness helpers
 // ---------------------------------------------------------------------------
-function scoreClass(score: number): string {
-  if (score >= 30) return 'score-bullish';
-  if (score <= -30) return 'score-bearish';
+function changePctClass(changePct: number | null | undefined): string {
+  if (changePct !== null && changePct !== undefined && changePct > 0) return 'score-bullish';
+  if (changePct !== null && changePct !== undefined && changePct < 0) return 'score-bearish';
   return 'score-neutral';
 }
 
@@ -138,8 +138,8 @@ const ScannerRow = React.memo(function ScannerRow({
     >
       <div className="scanner-vcell cell-symbol">{sym}</div>
       <div className="scanner-vcell cell-price">{result?.quote?.price != null ? strPrice(result.quote.price) : '—'}</div>
-      <div className={`scanner-vcell cell-score ${result ? scoreClass(result.total_score) : ''}`}>
-        {result ? result.total_score.toFixed(1) : '…'}
+      <div className={`scanner-vcell cell-score ${result ? changePctClass(result.change_pct) : ''}`}>
+        {result && result.change_pct != null ? `${result.change_pct >= 0 ? '+' : ''}${result.change_pct.toFixed(2)}%` : result ? '—' : '…'}
       </div>
       <TrendColumn trendSignals={result?.trend_signals ?? {}} />
       <div className="scanner-vcell cell-signals">
@@ -287,12 +287,12 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   // Build the visible rows — filter results override live results when active
   const rows = useMemo(() => {
     if (filterResults !== null) {
-      // Filter mode: show filtered results sorted by total_score desc
+      // Filter mode: show filtered results sorted by change_pct desc
       const out = filterResults.map(r => ({ sym: r.symbol, result: r }));
       if (sortBy === 'symbol') {
         out.sort((a, b) => a.sym.localeCompare(b.sym));
       } else {
-        out.sort((a, b) => (b.result?.total_score ?? -Infinity) - (a.result?.total_score ?? -Infinity));
+        out.sort((a, b) => (b.result?.change_pct ?? 0) - (a.result?.change_pct ?? 0));
       }
       return out;
     }
@@ -302,13 +302,13 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
       const result = liveResults[sym];
       return { sym, result };
     });
-    if (sortBy === 'symbol') {
-      out.sort((a, b) => a.sym.localeCompare(b.sym));
-    } else {
-      out.sort((a, b) => (b.result?.total_score ?? -Infinity) - (a.result?.total_score ?? -Infinity));
-    }
-    return out;
-  }, [subscribedSymbols, liveResults, sortBy, filterResults]);
+      if (sortBy === 'symbol') {
+        out.sort((a, b) => a.sym.localeCompare(b.sym));
+      } else {
+        out.sort((a, b) => (b.result?.change_pct ?? 0) - (a.result?.change_pct ?? 0));
+      }
+      return out;
+    }, [subscribedSymbols, liveResults, sortBy, filterResults]);
 
   const connectionDot = connectionStatus === 'open' ? 'dot-green'
     : connectionStatus === 'connecting' ? 'dot-amber'
@@ -319,14 +319,15 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     : 'Disconnected';
 
   const stats = useMemo(() => {
+    const getChangePct = (r: ScanResult) => r.change_pct ?? 0;
     if (filterResults !== null) {
-      const bullish = filterResults.filter((r) => r.total_score >= 30).length;
-      const bearish = filterResults.filter((r) => r.total_score <= -30).length;
+      const bullish = filterResults.filter((r) => getChangePct(r) > 0).length;
+      const bearish = filterResults.filter((r) => getChangePct(r) < 0).length;
       return { total: filterResults.length, scanned: filterResults.length, bullish, bearish, neutral: filterResults.length - bullish - bearish };
     }
     const all = Object.values(liveResults);
-    const bullish = all.filter((r) => r.total_score >= 30).length;
-    const bearish = all.filter((r) => r.total_score <= -30).length;
+    const bullish = all.filter((r) => getChangePct(r) > 0).length;
+    const bearish = all.filter((r) => getChangePct(r) < 0).length;
     const neutral = all.length - bullish - bearish;
     return { total: subscribedSymbols.length, scanned: all.length, bullish, bearish, neutral };
   }, [liveResults, subscribedSymbols, filterResults]);
@@ -456,7 +457,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                 onChange={(e) => setSortBy(e.target.value as 'score' | 'symbol')}
                 title="Sort order"
               >
-                <option value="score">Sort: Score</option>
+                <option value="score">Sort: Change %</option>
                 <option value="symbol">Sort: Symbol</option>
               </select>
               <button className="btn btn-primary" onClick={refresh}>Refresh</button>
@@ -507,7 +508,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
               <div className="scanner-vheader">
                 <div className="scanner-vheader-cell">Symbol</div>
                 <div className="scanner-vheader-cell">Price</div>
-                <div className="scanner-vheader-cell">Score</div>
+                <div className="scanner-vheader-cell">Change %</div>
                 <div className="scanner-vheader-cell">Trend</div>
                 <div className="scanner-vheader-cell">Signals</div>
                 <div className="scanner-vheader-cell">Captured</div>
