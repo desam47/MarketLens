@@ -509,6 +509,8 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [latestClose, setLatestClose] = useState<number | null>(null);
   const [latestCloseTimestamp, setLatestCloseTimestamp] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
+  const [todayChange, setTodayChange] = useState<number | null>(null);
+  const [todayChangePct, setTodayChangePct] = useState<number | null>(null);
   const [srLoading, setSrLoading] = useState(true);
 
   const [divergences, setDivergences] = useState<Divergence[]>([]);
@@ -573,6 +575,16 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       setLatestClose(data?.latest_close ?? null);
       setLatestCloseTimestamp(data?.latest_close_timestamp ?? null);
       setFetchedAt(data?.fetched_at ?? null);
+      // Extract today's change/change_pct from price_history (today_high/today_low)
+      if (data?.price_history && Array.isArray(data.price_history)) {
+        const todayEntry = data.price_history.find((entry: any) =>
+          entry.type === 'today_high' || entry.type === 'today_low'
+        );
+        if (todayEntry) {
+          setTodayChange(todayEntry.change ?? null);
+          setTodayChangePct(todayEntry.change_pct ?? null);
+        }
+      }
     } catch (err: any) {
       console.error('Failed to load price-range levels:', err);
     } finally {
@@ -744,19 +756,19 @@ const fetchBars = useCallback(async () => {
               <>
                 <span className="price-label">Latest Price</span>{' '}
                 <span>${quote.price.toFixed(4)}</span>
-                {barsChange != null && (
-                  <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
-                    {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(4)}
+                {todayChange != null && (
+                  <span style={{ color: todayChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
+                    {todayChange >= 0 ? '+' : ''}{todayChange.toFixed(4)}
                   </span>
                 )}
-                {barsChangePct != null && (
-                  <span style={{ color: barsChangePct >= 0 ? '#10b981' : '#ef4444', marginLeft: 4 }}>
-                    ({barsChangePct >= 0 ? '+' : ''}{barsChangePct.toFixed(2)}%)
+                {todayChangePct != null && (
+                  <span style={{ color: todayChangePct >= 0 ? '#10b981' : '#ef4444', marginLeft: 4 }}>
+                    ({todayChangePct >= 0 ? '+' : ''}{todayChangePct.toFixed(2)}%)
                   </span>
                 )}
-                {(fetchedAt || latestCloseTimestamp) && (
+                {quote.timestamp && (
                   <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
-                    {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
+                    {formatETDateTime24Hour(quote.timestamp)}
                   </span>
                 )}
               </>
