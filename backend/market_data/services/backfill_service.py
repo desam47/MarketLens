@@ -65,7 +65,7 @@ from backend.repositories.bar_repository import (
     prune_bars_older_than,
     upsert_bars,
 )
-from backend.market_data.services.manager_class import MarketDataManager
+from backend.market_data.services.manager_class import MarketDataManager, market_data_manager
 
 logger = logging.getLogger(__name__)
 
@@ -734,7 +734,12 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
 
     db = SessionLocal()
     try:
-        manager = MarketDataManager()
+        # Reuse the process-wide manager. This used to build a fresh
+        # MarketDataManager() per job, which constructs and authenticates every
+        # provider (Webull's signed handshake included) — for an argument that
+        # _fetch_tier1_1m_bars never reads. Every ticker added to a watchlist and
+        # every RQ backfill job paid that, on the event loop.
+        manager = market_data_manager
         tier1_written = 0
         tier2_written = 0
         tier3_written = 0

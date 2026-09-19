@@ -425,3 +425,33 @@ class TestBackfillSymbolTask(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBackfillReusesTheSharedManager(unittest.IsolatedAsyncioTestCase):
+    """backfill_symbol_history used to build a fresh MarketDataManager() per job.
+
+    That constructs and authenticates every provider (Webull's signed handshake
+    included) on each ticker add / RQ backfill job — for an argument
+    _fetch_tier1_1m_bars never reads.
+    """
+
+    async def test_no_manager_is_constructed_and_the_shared_one_is_passed(self):
+        from backend.market_data.services import backfill_service as bs
+        from backend.market_data.services.manager import market_data_manager
+
+        ing = MagicMock()
+        for name in ("_resample_and_upsert", "_resample_1h_from_1m_and_upsert",
+                     "_resample_1h_to_4h_and_upsert", "_resample_1d_to_1wk_and_upsert"):
+            setattr(ing, name, AsyncMock(return_value=0))
+        fetch1 = AsyncMock(return_value=[])
+        with patch.object(bs, "MarketDataManager", side_effect=AssertionError("built a manager")), \
+                patch.object(bs, "SessionLocal", MagicMock()), \
+                patch.object(bs, "_fetch_tier1_1m_bars", fetch1), \
+                patch.object(bs, "_fetch_tier2_1h_bars", AsyncMock(return_value=[])), \
+                patch.object(bs, "_fetch_tier2_1d_bars", AsyncMock(return_value=[])), \
+                patch("backend.market_data.services.ingestion_service.ingestion_service", ing):
+            result = await bs.backfill_symbol_history("AAPL")
+
+        self.assertIsInstance(result, dict)
+        fetch1.assert_awaited_once()
+        self.assertIs(fetch1.await_args.args[2], market_data_manager)

@@ -30,7 +30,7 @@ from backend.services.signal_recorder import signal_recorder
 
 from .engine_seeder import engine_registry
 from .engine_seeder import _ensure_aware
-from .manager import MarketDataManager
+from .manager import MarketDataManager, market_data_manager
 
 logger = logging.getLogger(__name__)
 
@@ -176,20 +176,33 @@ def _newest_bars(bars: list, limit: int = _RECENT_WINDOW_MAX_BARS) -> list:
 class MarketDataIngestionService:
     """Service for automatically ingesting and storing market data"""
 
-    def __init__(self, symbols: list[str] = None, timeframes: list[str] = None):
+    def __init__(
+        self,
+        symbols: list[str] = None,
+        timeframes: list[str] = None,
+        manager: MarketDataManager | None = None,
+    ):
         """
         Initialize the ingestion service
 
         Args:
             symbols: List of symbols to track (default: loaded from active watchlist on start)
             timeframes: List of timeframes to track (default: common timeframes)
+            manager: Market-data manager to use (default: the process-wide one)
         """
         # Defer watchlist loading until start() — DB may not be ready at __init__ time.
         self.symbols = symbols or []
         # Phase 3.1: store only 1m bars. Higher timeframes are derived at
         # read time by resample_ohlcv() in bar_repository.get_bars().
         self.timeframes = timeframes or ["1m"]
-        self.manager = MarketDataManager()
+        # Share the process-wide manager instead of building a private one. Every
+        # MarketDataManager() constructs — and authenticates — each provider, and
+        # WebullProvider.__init__ does a signed multi-call handshake, so a second
+        # manager doubled the Webull calls at every start (each dev-server reload
+        # is a start; bursts of them drew 429s that dropped Webull from the
+        # provider list until the next restart). It also shared no health /
+        # circuit-breaker state with the manager /api/system/performance reports.
+        self.manager = manager if manager is not None else market_data_manager
         self.is_running = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None

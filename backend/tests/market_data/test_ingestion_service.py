@@ -1195,3 +1195,34 @@ class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
                 patch("backend.market_data.services.cache._redis_cache"):
             await svc._ingest_1m_recent_window()
         self.assertEqual(len(up.call_args.args[1]), 60)  # 2 symbols x 30
+
+
+class TestSharedManager(unittest.TestCase):
+    """The service must reuse the process-wide MarketDataManager.
+
+    Each MarketDataManager() authenticates every provider, and WebullProvider's
+    handshake makes several signed calls, so private managers multiplied the
+    Webull calls at every start (each dev-server reload) and drew 429s.
+    """
+
+    def test_default_manager_is_the_process_wide_one(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.market_data.services.manager import market_data_manager
+
+        self.assertIs(MarketDataIngestionService(symbols=["AAPL"]).manager, market_data_manager)
+
+    def test_an_explicit_manager_can_still_be_injected(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        mine = MagicMock()
+        self.assertIs(MarketDataIngestionService(symbols=["AAPL"], manager=mine).manager, mine)
+
+    def test_constructing_services_builds_no_new_manager_or_providers(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.market_data.services.manager_class import MarketDataManager
+
+        with patch.object(MarketDataManager, "__init__", side_effect=AssertionError("built a manager")), \
+                patch.object(MarketDataManager, "_initialize_providers",
+                             side_effect=AssertionError("constructed providers")):
+            for _ in range(3):
+                MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
