@@ -17,8 +17,9 @@ def start_backend():
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.api.main:app",
          "--host", "0.0.0.0", "--port", "5001", "--reload",
-         # editing a test must not restart the server and re-run its whole lifespan
-         "--reload-exclude", "backend/tests/*"],
+         # editing a test must not restart the server and re-run its whole lifespan. Absolute:
+         # the relative "backend/tests/*" misses everything below backend/tests/<pkg>/.
+         "--reload-exclude", str(ROOT / "backend" / "tests")],
         cwd=ROOT
     )
 

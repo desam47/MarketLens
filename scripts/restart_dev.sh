@@ -64,9 +64,11 @@ sleep 1
 
 # --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
 # lifespan: migrations, cache flush, provider handshakes, engine seeding). Keep in sync with
-# start.sh and scripts/run.py.
+# start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
+# only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
+# the suite) still reloaded the server.
 nohup python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
-    --reload-exclude "backend/tests/*" \
+    --reload-exclude "$SCRIPT_DIR/backend/tests" \
     >> logs/backend.log 2>&1 &
 disown
 
