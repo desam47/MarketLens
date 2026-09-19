@@ -751,6 +751,11 @@ const fetchBars = useCallback(async () => {
                     ({barsChangePct >= 0 ? '+' : ''}{barsChangePct.toFixed(2)}%)
                   </span>
                 )}
+                {(fetchedAt || latestCloseTimestamp) && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
+                    {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
+                  </span>
+                )}
               </>
             ) : '—'}
           </p>
