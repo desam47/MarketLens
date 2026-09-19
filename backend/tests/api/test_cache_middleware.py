@@ -4,21 +4,19 @@ Tests for backend/api/cache.py - CacheMiddleware
 Tests ETag generation, conditional request handling, and per-path
 cache duration behavior.
 
-CacheMiddleware is a ``BaseHTTPMiddleware`` subclass. Tests drive it
-via the standard ``middleware.dispatch(request, call_next)`` pattern.
+CacheMiddleware is a plain ASGI middleware. The unit tests drive it as an ASGI app
+(``await middleware(scope, receive, send)``) and inspect the messages it sends.
 """
 import asyncio
 import hashlib
 import unittest
 
-from starlette.requests import Request
-from starlette.responses import Response
 
 from backend.api.cache import CacheMiddleware
 
 
 class TestCacheMiddlewareETagGeneration(unittest.TestCase):
-    """Unit tests driven through dispatch()."""
+    """Unit tests driving the middleware as a raw ASGI app."""
 
     def setUp(self):
         self.loop = asyncio.new_event_loop()
@@ -40,121 +38,78 @@ class TestCacheMiddlewareETagGeneration(unittest.TestCase):
 
         return CacheMiddleware(app)
 
-    def test_non_get_passes_through(self):
-        """POST/PUT/DELETE should not be cached."""
-        middleware = self._make_middleware()
+    def _call(self, middleware, method="GET", path="/api/market-data/quote/AAPL", headers=()):
+        """Run the middleware as an ASGI app; return an object with .status_code / .headers / .body."""
         scope = {
             "type": "http",
-            "method": "POST",
-            "path": "/api/data",
-            "headers": [],
+            "method": method,
+            "path": path,
+            "headers": list(headers),
             "query_string": b"",
         }
-        request = Request(scope, None)
+        sent = []
 
-        async def call_next(req):
-            return Response(b'{"ok": true}', media_type="application/json")
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
 
-        response = self._run(middleware.dispatch(request, call_next))
-        # Non-GET pass through unchanged (call_next returned a response)
+        async def send(message):
+            sent.append(message)
+
+        self._run(middleware(scope, receive, send))
+        start = next(m for m in sent if m["type"] == "http.response.start")
+
+        class _Response:
+            status_code = start["status"]
+            headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+            body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+
+        return _Response
+
+    def test_non_get_passes_through(self):
+        """POST/PUT/DELETE should not be cached."""
+        response = self._call(self._make_middleware(), method="POST", path="/api/data")
+        # Non-GET pass through unchanged
         self.assertEqual(response.status_code, 200)
+        self.assertNotIn("etag", response.headers)
 
     def test_exempt_path_passes_through(self):
         """Health check and docs paths are exempt."""
-        middleware = self._make_middleware()
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/health",
-            "headers": [],
-            "query_string": b"",
-        }
-        request = Request(scope, None)
-
-        async def call_next(req):
-            return Response(b'{"ok": true}', media_type="application/json")
-
-        response = self._run(middleware.dispatch(request, call_next))
+        response = self._call(self._make_middleware(), path="/api/health")
         self.assertEqual(response.status_code, 200)
+        self.assertNotIn("etag", response.headers)
 
     def test_get_response_gets_etag(self):
         """GET responses should have ETag header."""
         body = b'{"price": 150}'
-        middleware = self._make_middleware(body=body)
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/market-data/quote/AAPL",
-            "headers": [],
-            "query_string": b"",
-        }
-        request = Request(scope, None)
-
-        async def call_next(req):
-            return Response(content=body, media_type="application/json")
-
-        response = self._run(middleware.dispatch(request, call_next))
+        response = self._call(self._make_middleware(body=body))
         self.assertEqual(response.status_code, 200)
         self.assertIn("etag", response.headers)
         self.assertIn("cache-control", response.headers)
+        self.assertEqual(response.body, body)
 
     def test_304_on_matching_etag(self):
         """Should return 304 when If-None-Match matches."""
         body = b'{"price": 150}'
         etag = f'"{hashlib.md5(body).hexdigest()}"'
-        middleware = self._make_middleware(body=body)
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/market-data/quote/AAPL",
-            "headers": [(b"if-none-match", etag.encode())],
-            "query_string": b"",
-        }
-        request = Request(scope, None)
-
-        async def call_next(req):
-            return Response(content=body, media_type="application/json")
-
-        response = self._run(middleware.dispatch(request, call_next))
+        response = self._call(
+            self._make_middleware(body=body), headers=[(b"if-none-match", etag.encode())]
+        )
         self.assertEqual(response.status_code, 304)
         self.assertIn("etag", response.headers)
 
     def test_non_200_responses_not_cached(self):
         """Non-200 responses should not get cache headers."""
-        middleware = self._make_middleware(status_code=404, body=b'{"error": "not found"}')
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/market-data/quote/AAPL",
-            "headers": [],
-            "query_string": b"",
-        }
-        request = Request(scope, None)
-
-        async def call_next(req):
-            return Response(b'{"error": "not found"}', status_code=404)
-
-        response = self._run(middleware.dispatch(request, call_next))
+        response = self._call(
+            self._make_middleware(status_code=404, body=b'{"error": "not found"}')
+        )
         self.assertEqual(response.status_code, 404)
         self.assertNotIn("etag", response.headers)
 
     def test_per_path_cache_duration(self):
         """Market data paths should get 300s cache."""
-        body = b'{"price": 150}'
-        middleware = self._make_middleware(body=body)
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/market-data/bars/AAPL",
-            "headers": [],
-            "query_string": b"",
-        }
-        request = Request(scope, None)
-
-        async def call_next(req):
-            return Response(content=body, media_type="application/json")
-
-        response = self._run(middleware.dispatch(request, call_next))
+        response = self._call(
+            self._make_middleware(body=b'{"price": 150}'), path="/api/market-data/bars/AAPL"
+        )
         self.assertIn("max-age=300", response.headers["cache-control"])
 
     def test_live_quote_is_revalidated_every_request(self):

@@ -16,9 +16,9 @@ import hashlib
 import logging
 from typing import Set
 
-from fastapi import Request
-from fastapi.responses import Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.api.security_headers import SecurityHeadersMiddleware
 
@@ -60,17 +60,24 @@ _CACHE_DURATIONS = {
 }
 
 
-class CacheMiddleware(BaseHTTPMiddleware):
-    """Add caching headers and ETag support to GET endpoints."""
+class CacheMiddleware:
+    """Add caching headers and ETag support to GET endpoints.
+
+    A plain ASGI middleware (not ``BaseHTTPMiddleware``, which cost ~190 us per
+    request for a task group + streams + a response wrapper on EVERY request — the
+    largest fixed cost left in the stack once the others were converted). Only a
+    cacheable response is buffered: non-GETs, exempt paths and non-200 responses
+    stream straight through untouched, chunk boundaries and all.
+    """
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
         exempt_paths: Set[str] | None = None,
         cache_durations: dict[str, int] | None = None,
     ):
-        super().__init__(app)
+        self.app = app
         self.cache_seconds = cache_seconds
         self.exempt_paths = exempt_paths or set(_EXEMPT_PATH_PREFIXES)
         # Per-path cache duration overrides for smarter caching
@@ -100,92 +107,78 @@ class CacheMiddleware(BaseHTTPMiddleware):
     def _is_exempt(self, path: str) -> bool:
         return any(path.startswith(prefix) for prefix in self.exempt_paths)
 
-    async def _read_body(self, response) -> bytes:
-        """Extract body bytes from a response, handling streaming and static types.
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Compute an ETag for cacheable GET responses and short-circuit on a match.
 
-        ``BaseHTTPMiddleware.call_next`` returns a ``_StreamingResponse`` whose
-        ``body_iterator`` is an *async* generator. Joining it with ``b"".join()``
-        raises ``TypeError`` (you can't join an async iterator) and the empty
-        body propagates to clients as a truncated response. We must consume
-        async iterators with ``async for`` — sync iterables with ``b"".join``.
+        Non-GETs and exempt paths pass through unchanged. A 200 response is buffered,
+        hashed, and re-emitted with ``ETag`` + ``Cache-Control``; when the request's
+        ``If-None-Match`` matches, a bodiless 304 is sent instead.
         """
-        # Async body iterator (e.g. _StreamingResponse from BaseHTTPMiddleware).
-        # Has ``__aiter__`` but not ``__iter__`` consumed by b"".join.
-        if (
-            hasattr(response, "body_iterator")
-            and response.body_iterator is not None
-            and hasattr(response.body_iterator, "__aiter__")
-        ):
-            chunks = []
-            async for chunk in response.body_iterator:
-                if isinstance(chunk, str):
-                    chunks.append(chunk.encode("utf-8"))
-                else:
-                    chunks.append(chunk)
-            return b"".join(chunks)
-        # Sync body iterator (plain iterable, e.g. test mocks).
-        if hasattr(response, "body_iterator") and response.body_iterator is not None:
-            try:
-                body = b"".join(response.body_iterator)
-                return body if isinstance(body, bytes) else body.encode()
-            except Exception:
-                return b""
-        # Plain Response / JSONResponse have .body as bytes.
-        if hasattr(response, "body"):
-            body = response.body
-            return body if isinstance(body, bytes) else (
-                body.encode() if isinstance(body, str) else b""
-            )
-        return b""
+        if scope["type"] != "http" or scope["method"] != "GET" or self._is_exempt(scope["path"]):
+            await self.app(scope, receive, send)
+            return
 
-    async def dispatch(self, request: Request, call_next):
-        """Compute ETag for GET requests and short-circuit on match.
+        held_start: Message | None = None
+        chunks: list[bytes] = []
+        buffering = False
+        passthrough = False
 
-        Non-GETs and exempt paths pass through unchanged. For cacheable
-        responses we hash the body and emit ``ETag`` + ``Cache-Control``
-        headers. When the request includes a matching ``If-None-Match``
-        we return 304 with no body.
-        """
-        if request.method != "GET" or self._is_exempt(request.url.path):
-            return await call_next(request)
+        async def buffer_or_pass(message: Message) -> None:
+            nonlocal held_start, buffering, passthrough
+            if passthrough:
+                await send(message)
+                return
+            kind = message["type"]
+            if kind == "http.response.start":
+                if message["status"] != 200:
+                    # Only successful responses are cached: stream everything else as-is.
+                    passthrough = True
+                    await send(message)
+                    return
+                held_start, buffering = message, True
+                return
+            if buffering and kind == "http.response.body":
+                chunks.append(message.get("body", b""))
+                if message.get("more_body", False):
+                    return
+                buffering, passthrough = False, True
+                await self._respond(scope, receive, send, held_start, b"".join(chunks))
+                return
+            # Anything else mid-response (e.g. an extension message): stop buffering,
+            # flush what was held, in order, and pass the rest through untouched.
+            if buffering:
+                buffering, passthrough = False, True
+                await send(held_start)
+                for chunk in chunks:
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+            await send(message)
 
-        response = await call_next(request)
+        await self.app(scope, receive, buffer_or_pass)
 
-        # Only cache successful responses
-        if response.status_code != 200:
-            return response
-
-        body = await self._read_body(response)
-
-        etag = hashlib.md5(body).hexdigest()
-        etag_header = f'"{etag}"'
+    async def _respond(
+        self, scope: Scope, receive: Receive, send: Send, start: Message, body: bytes
+    ) -> None:
+        etag_header = f'"{hashlib.md5(body).hexdigest()}"'
+        cache_seconds = self._get_cache_seconds(scope["path"])
 
         # Check if client has a matching cached version
-        if_none_match = request.headers.get("if-none-match")
+        if_none_match = Headers(scope=scope).get("if-none-match")
         if if_none_match and if_none_match == etag_header:
-            cache_seconds = self._get_cache_seconds(request.url.path)
-            # Inline security headers: FastAPI's ExceptionMiddleware
-            # intercepts short-circuit responses before outer
-            # BaseHTTPMiddleware instances (SecurityHeadersMiddleware)
-            # can attach them.
+            # Inline security headers: this short-circuit response is built here, so
+            # the inner SecurityHeadersMiddleware never sees it.
             headers = {
                 "etag": etag_header,
                 "cache-control": f"public, max-age={cache_seconds}",
             }
             headers.update(SecurityHeadersMiddleware._static_headers())
-            return Response(
-                status_code=304,
-                headers=headers,
-            )
+            await Response(status_code=304, headers=headers)(scope, receive, send)
+            return
 
-        # Set caching headers on the response and re-emit the body
-        cache_seconds = self._get_cache_seconds(request.url.path)
-        new_response = Response(
-            content=body,
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=response.headers.get("content-type"),
-        )
-        new_response.headers["cache-control"] = f"public, max-age={cache_seconds}"
-        new_response.headers["etag"] = etag_header
-        return new_response
+        # Set caching headers on the response and re-emit the body in one piece.
+        start.setdefault("headers", [])
+        headers = MutableHeaders(scope=start)
+        headers["cache-control"] = f"public, max-age={cache_seconds}"
+        headers["etag"] = etag_header
+        headers["content-length"] = str(len(body))
+        await send(start)
+        await send({"type": "http.response.body", "body": body})
