@@ -326,21 +326,24 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
       <h2>Price History</h2>
       {latestClose != null && (
         <div className="current-price">
-          <span className="price-label">Last Close</span>
-          <span className="price-value">${strPrice(latestClose)}</span>
+          <span className="price-label">Latest Price</span>
+          <span className="price-value">${latestClose.toFixed(4)}</span>
           {change != null && (
             <span
               className="price-change"
               style={{ color: change >= 0 ? '#10b981' : '#ef4444' }}
             >
-              {formatChange(change)} ({changePercent != null
-                ? `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`
-                : '—'})
+              {change >= 0 ? '+' : ''}{change.toFixed(4)}
+            </span>
+          )}
+          {changePercent != null && (
+            <span className="price-change-pct" style={{ color: changePercent >= 0 ? '#10b981' : '#ef4444' }}>
+              ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
             </span>
           )}
           {latestCloseTimestamp != null && (
             <span className="price-timestamp">
-              Fetched {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
+              {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
             </span>
           )}
         </div>
@@ -720,7 +723,6 @@ const fetchBars = useCallback(async () => {
   }, [handleRefresh]);
 
   const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
-  const priceDisplay = currentPrice != null ? `$${strPrice(currentPrice)}` : '—';
 
   // Period-over-period change for the S/R panel: compare the latest bar's
   // close to the prior bar's close (bars arrive newest→oldest). The backend
@@ -738,14 +740,21 @@ const fetchBars = useCallback(async () => {
         <div>
           <h1>{symbol} Analysis</h1>
           <p className="subtitle">
-            {priceDisplay}
-            {barsChange != null && (
-              <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
-                {formatChange(barsChange)} ({barsChangePct != null
-                  ? `${barsChangePct >= 0 ? '+' : ''}${barsChangePct.toFixed(2)}%`
-                  : '—'})
-              </span>
-            )}
+            {currentPrice != null ? (
+              <>
+                <span>${currentPrice.toFixed(4)}</span>
+                {barsChange != null && (
+                  <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
+                    {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(4)}
+                  </span>
+                )}
+                {barsChangePct != null && (
+                  <span style={{ color: barsChangePct >= 0 ? '#10b981' : '#ef4444', marginLeft: 4 }}>
+                    ({barsChangePct >= 0 ? '+' : ''}{barsChangePct.toFixed(2)}%)
+                  </span>
+                )}
+              </>
+            ) : '—'}
           </p>
         </div>
         <div className="header-actions">
