@@ -7,6 +7,9 @@ tests check the property that matters: a stall produces a report naming the
 blocking function, on the right thread, and healthy loops produce nothing.
 """
 import asyncio
+import os
+import re
+import tempfile
 import threading
 import time
 import unittest
@@ -19,6 +22,20 @@ from backend.observability.loop_lag_watchdog import LoopLagWatchdog
 
 def _block_the_loop(seconds: float) -> None:
     time.sleep(seconds)  # deliberately synchronous, on the event-loop thread
+
+
+def _regex_gil_hog(n: int) -> None:
+    """Catastrophic backtracking: pure C, never releases the GIL, ~2x slower per extra char."""
+    re.match(r"(a+)+$", "a" * n + "b")
+
+
+def _calibrate_hog(min_seconds: float = 0.25) -> int:
+    for n in range(18, 34):
+        t = time.perf_counter()
+        _regex_gil_hog(n)
+        if time.perf_counter() - t >= min_seconds:
+            return n
+    raise unittest.SkipTest("could not build a GIL-holding call long enough on this machine")
 
 
 def _other_thread_work(stop: threading.Event) -> None:
@@ -86,6 +103,57 @@ class TestWatchdogDetection(unittest.IsolatedAsyncioTestCase):
         wd.stop()
         wd.stop()
         self.assertFalse(wd.running)
+
+
+class TestFaulthandlerDumps(unittest.IsolatedAsyncioTestCase):
+    """The Python sampler needs the GIL, so it is blind while another thread sits in
+    a long C call. faulthandler's timer thread does not need it."""
+
+    async def test_dump_names_the_thread_holding_the_gil_in_a_c_call(self):
+        n = _calibrate_hog()
+        path = os.path.join(tempfile.mkdtemp(), "fh.log")
+        wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=40.0, faulthandler_path=path)
+        wd.start()
+        self.addCleanup(wd.stop)
+        await asyncio.sleep(0.1)                      # loop ticking, timer armed
+        hog = threading.Thread(target=_regex_gil_hog, args=(n,), name="gil-hog")
+        hog.start()
+        await asyncio.sleep(0.05)                     # the hog now starves the loop of the GIL
+        hog.join()
+        await asyncio.sleep(0.2)
+        wd.stop()
+        text = open(path).read()
+        self.assertIn("_regex_gil_hog", text)
+        self.assertIn("Timeout (", text)              # faulthandler's dump header
+
+    async def test_no_dump_while_the_loop_is_healthy(self):
+        path = os.path.join(tempfile.mkdtemp(), "fh.log")
+        wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=60.0, faulthandler_path=path)
+        wd.start()
+        for _ in range(30):
+            await asyncio.sleep(0.02)
+        wd.stop()
+        self.assertNotIn("Timeout (", open(path).read())
+
+    async def test_stop_cancels_the_pending_dump_and_closes_the_file(self):
+        path = os.path.join(tempfile.mkdtemp(), "fh.log")
+        wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=40.0, faulthandler_path=path)
+        wd.start()
+        await asyncio.sleep(0.05)
+        wd.stop()
+        time.sleep(0.2)                               # a leaked timer would fire here and write
+        size = os.path.getsize(path)
+        time.sleep(0.2)
+        self.assertEqual(os.path.getsize(path), size)
+        self.assertNotIn("Timeout (", open(path).read())
+
+    async def test_status_reports_the_dump_file_only_while_running(self):
+        path = os.path.join(tempfile.mkdtemp(), "fh.log")
+        wd_mod.enable(asyncio.get_running_loop(), 40.0, path)
+        self.addCleanup(wd_mod.disable)
+        self.assertEqual(wd_mod.status()["faulthandler_log"], path)
+        wd_mod.disable()
+        self.assertIsNone(wd_mod.status()["faulthandler_log"])
 
 
 class TestWatcherLifecycle(unittest.TestCase):
@@ -161,7 +229,7 @@ class TestEndpointValidation(unittest.TestCase):
 
         wd_mod.disable()
         body = TestClient(app).get("/api/system/loop_lag_watchdog").json()
-        self.assertEqual(set(body), {"enabled", "threshold_ms", "stall_count", "recent_stalls"})
+        self.assertEqual(set(body), {"enabled", "threshold_ms", "faulthandler_log", "stall_count", "recent_stalls"})
         self.assertFalse(body["enabled"])
 
 

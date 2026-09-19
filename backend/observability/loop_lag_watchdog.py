@@ -24,6 +24,17 @@ thread itself is flagged ``is_event_loop``: if it is stuck in one frame, sync
 code is running on the loop; if it is varying while the loop is stalled, another
 thread is starving it of the GIL.
 
+Blind spot, and the complement: the sampler thread needs the GIL, so while ONE
+thread sits inside a long C call that never releases it (a big regex, a large
+parse or row conversion...) it cannot run either — it gets a single sample after
+the fact. That signature (a long stall with ~1 sample) is itself the diagnosis. To
+name the culprit anyway, ``faulthandler.dump_traceback_later`` is re-armed from
+every loop tick: its timer thread runs WITHOUT the GIL, so if the loop stops
+ticking it dumps every thread's Python stack (the culprit shows the Python line
+that called the long C function) to ``faulthandler_path``. Re-arming spawns a
+short-lived thread each tick, so this costs a few % CPU — fine for a diagnosis
+session, which is why the whole tool is off by default.
+
 Off by default and zero-cost while off: nothing runs until ``enable()`` is called
 (``POST /api/system/loop_lag_watchdog``).
 """
@@ -31,12 +42,14 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import faulthandler
 import logging
 import sys
 import threading
 import time
 import traceback
 from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger("marketlens.loop_lag")
 
@@ -71,8 +84,11 @@ class LoopLagWatchdog:
         stack_depth: int = 8,
         max_samples_per_stall: int = 400,
         max_reports: int = 200,
+        faulthandler_path: str | None = None,
     ) -> None:
         self._loop = loop
+        self.faulthandler_path = faulthandler_path
+        self._fh = None
         self.threshold_ms = threshold_ms
         self._sample_s = sample_ms / 1000.0
         self._tick_s = tick_ms / 1000.0
@@ -91,6 +107,10 @@ class LoopLagWatchdog:
         if self._thread is not None:
             return
         self._stop.clear()
+        if self.faulthandler_path:
+            self._fh = open(self.faulthandler_path, "a", buffering=1)  # noqa: SIM115 - needs a real fd
+            self._fh.write(f"\n### watchdog enabled {datetime.now(UTC).isoformat(timespec='seconds')} "
+                           f"(dump after {self.threshold_ms:.0f} ms without a loop tick)\n")
         self._last_tick = time.monotonic()
         self._loop.call_soon_threadsafe(self._tick)
         self._thread = threading.Thread(target=self._run, name="loop-lag-watchdog", daemon=True)
@@ -98,6 +118,12 @@ class LoopLagWatchdog:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._fh is not None:
+            faulthandler.cancel_dump_traceback_later()
+            try:
+                self._fh.close()
+            finally:
+                self._fh = None
         thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
@@ -111,6 +137,10 @@ class LoopLagWatchdog:
         self._last_tick = time.monotonic()
         self._loop_tid = threading.get_ident()
         if not self._stop.is_set():
+            fh = self._fh
+            if fh is not None:
+                # Re-arm: only fires if the loop fails to get back here in time.
+                faulthandler.dump_traceback_later(self.threshold_ms / 1000.0, repeat=True, file=fh)
             self._loop.call_later(self._tick_s, self._tick)
 
     # ------------------------------------------------------ the watcher thread
@@ -156,7 +186,7 @@ class LoopLagWatchdog:
             for name, tid, stack in snap:
                 per_thread[name].append(stack)
                 tids[name] = tid
-        threads = []
+        threads: list[dict[str, Any]] = []
         for name, stacks in per_thread.items():
             innermost = collections.Counter(s[-1] if s else "?" for s in stacks)
             idle = all(
@@ -185,6 +215,13 @@ class LoopLagWatchdog:
         }
         self.stall_count += 1
         self.reports.append(report)
+        fh = self._fh
+        if fh is not None:
+            try:
+                fh.write(f"### stall {report['stall_ms']} ms ended {report['at']} "
+                         f"({report['samples']} python samples)\n")
+            except (ValueError, OSError):
+                pass
         busy = [t for t in threads if not t["idle"]][:3]
         logger.warning(
             "event loop stalled %.0f ms (%d stack samples); busiest: %s",
@@ -203,16 +240,21 @@ _watchdog: LoopLagWatchdog | None = None
 _lock = threading.Lock()
 
 
-def enable(loop: asyncio.AbstractEventLoop, threshold_ms: float = 50.0) -> LoopLagWatchdog:
+def enable(
+    loop: asyncio.AbstractEventLoop,
+    threshold_ms: float = 50.0,
+    faulthandler_path: str | None = None,
+) -> LoopLagWatchdog:
     """Start watching ``loop`` (idempotent: an existing watchdog just gets the new threshold)."""
     global _watchdog
     with _lock:
-        if _watchdog is not None and _watchdog.running and _watchdog._loop is loop:
+        if (_watchdog is not None and _watchdog.running and _watchdog._loop is loop
+                and _watchdog.faulthandler_path == faulthandler_path):
             _watchdog.threshold_ms = threshold_ms
             return _watchdog
         if _watchdog is not None:
             _watchdog.stop()
-        _watchdog = LoopLagWatchdog(loop, threshold_ms=threshold_ms)
+        _watchdog = LoopLagWatchdog(loop, threshold_ms=threshold_ms, faulthandler_path=faulthandler_path)
         _watchdog.start()
         return _watchdog
 
@@ -229,6 +271,7 @@ def status() -> dict:
     return {
         "enabled": bool(wd and wd.running),
         "threshold_ms": wd.threshold_ms if wd else None,
+        "faulthandler_log": wd.faulthandler_path if wd and wd.running else None,
         "stall_count": wd.stall_count if wd else 0,
         "recent_stalls": list(wd.reports) if wd else [],
     }

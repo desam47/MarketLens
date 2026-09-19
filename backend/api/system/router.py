@@ -285,6 +285,9 @@ async def toggle_memory_profiling(payload: MemoryProfileToggle) -> dict:
 class LoopLagWatchdogToggle(BaseModel):
     enabled: bool
     threshold_ms: float = Field(50.0, ge=10.0, le=5000.0)
+    # Also dump every thread's stack via faulthandler (works while the GIL is
+    # held by a C call, which the Python sampler cannot see). Costs a few % CPU.
+    faulthandler_dumps: bool = True
 
 
 @router.post("/loop_lag_watchdog")
@@ -299,7 +302,13 @@ async def toggle_loop_lag_watchdog(payload: LoopLagWatchdogToggle) -> dict:
     from ...observability import loop_lag_watchdog
 
     if payload.enabled:
-        loop_lag_watchdog.enable(asyncio.get_running_loop(), payload.threshold_ms)
+        from ...config.settings import _PROJECT_ROOT
+
+        fh_path = (
+            str(_PROJECT_ROOT / "logs" / "loop_lag_faulthandler.log")
+            if payload.faulthandler_dumps else None
+        )
+        loop_lag_watchdog.enable(asyncio.get_running_loop(), payload.threshold_ms, fh_path)
     else:
         loop_lag_watchdog.disable()
     return loop_lag_watchdog.status()
