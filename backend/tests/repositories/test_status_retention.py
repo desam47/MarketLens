@@ -137,8 +137,9 @@ class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
         with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
              patch("backend.repositories.bar_repository.prune_bars_by_retention", bar_prune), \
              patch("backend.repositories.status_retention.prune_status_tables", status_prune), \
-             patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", return_value=0):
-            # The reaper is patched too: unpatched it runs against the real database and Redis.
+             patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", return_value=0), \
+             patch("backend.repositories.signal_repository.prune_signals_by_retention", return_value={}):
+            # The reaper and the signal prune are patched too: unpatched they run for real.
             await svc._retention_prune_loop()
 
     async def test_both_prunes_run_each_pass(self):

@@ -292,6 +292,20 @@ class SignalRecorder:
             buckets[(bar.symbol, bar.timeframe)].append(bar)
         return buckets
 
+    def get_stats(self, symbol: str, timeframe: str | None = None) -> dict:
+        """Track-record statistics for ``symbol`` (optionally one ``timeframe``).
+
+        See ``SignalRepository.get_stats`` for the fields. This is what the AI context's
+        ``historical_signal_stats`` section reads; the method did not exist, so the call raised
+        ``AttributeError`` into a swallow-everything ``except`` and that section was silently
+        empty on every request.
+        """
+        db = SessionLocal()
+        try:
+            return SignalRepository(db).get_stats(symbol, timeframe)
+        finally:
+            db.close()
+
     def record_from_recent_bars(
         self, symbols: list[str]
     ) -> int:

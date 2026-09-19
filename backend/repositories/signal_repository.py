@@ -4,7 +4,7 @@ Repository for historical signal storage and research queries.
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import desc, func
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.models import HistoricalSignal
@@ -260,6 +260,98 @@ class SignalRepository:
     def get_signal_count(self) -> int:
         """Total count of historical signals."""
         return self.db.query(func.count(HistoricalSignal.id)).scalar() or 0
+
+    def get_stats(self, symbol: str, timeframe: str | None = None) -> dict[str, Any]:
+        """Track-record statistics for one symbol (optionally one timeframe).
+
+        ``total``            every stored signal.
+        ``with_outcomes``    those whose forward outcome has been computed.
+        ``avg_return_5b`` / ``avg_return_10b``   mean raw forward return (percent price change
+                             over the next 5 / 10 bars of that timeframe), None if none computed.
+        ``win_rate``         share of DIRECTIONAL signals that called it right: a bullish one wins
+                             when its 5-bar return is positive, a bearish one when it is negative.
+                             Neutral signals carry no call and are excluded; None if there are none.
+
+        Returns are stored raw (not direction-adjusted), so the win rate has to be computed
+        against each signal's own ``trend_state`` rather than as "return > 0".
+        """
+        q = self.db.query(HistoricalSignal).filter(HistoricalSignal.symbol == symbol.upper())
+        if timeframe:
+            q = q.filter(HistoricalSignal.timeframe == timeframe)
+        with_outcome = HistoricalSignal.return_5b.isnot(None)
+        directional = with_outcome & HistoricalSignal.trend_state.in_(("bullish", "bearish"))
+        called_it = (
+            ((HistoricalSignal.trend_state == "bullish") & (HistoricalSignal.return_5b > 0))
+            | ((HistoricalSignal.trend_state == "bearish") & (HistoricalSignal.return_5b < 0))
+        )
+        row = q.with_entities(
+            func.count(HistoricalSignal.id),
+            func.sum(case((with_outcome, 1), else_=0)),
+            func.avg(HistoricalSignal.return_5b),
+            func.avg(HistoricalSignal.return_10b),
+            func.sum(case((directional, 1), else_=0)),
+            func.sum(case((directional & called_it, 1), else_=0)),
+        ).one()
+        total, with_outcomes, avg5, avg10, n_directional, n_wins = row
+        return {
+            "total": int(total or 0),
+            "with_outcomes": int(with_outcomes or 0),
+            "avg_return_5b": round(float(avg5), 4) if avg5 is not None else None,
+            "avg_return_10b": round(float(avg10), 4) if avg10 is not None else None,
+            "win_rate": round(int(n_wins or 0) / int(n_directional), 4) if n_directional else None,
+        }
+
+
+# Signals are derived from bars, and startup "signal hygiene" (backend/api/main_helpers.py) compares
+# each timeframe's bar count with its signal count and regenerates signals whenever bars outnumber
+# them. So a timeframe's signals must outlive its bars by a margin: pruned to the bar window
+# exactly, ordinary clock skew between the two hourly prunes would open a small gap and trigger a
+# full re-backfill.
+SIGNAL_RETENTION_MARGIN_DAYS = 2
+
+
+def prune_signals_by_retention(
+    db: Session, chunk_size: int = 5000, now: datetime | None = None,
+) -> dict[str, int]:
+    """Delete each timeframe's signals once they are older than that timeframe's BAR retention
+    window (``settings.retention``: 16 days for 1m-30m, 366 for 1h/4h, 1096 for 1d/1wk) plus
+    ``SIGNAL_RETENTION_MARGIN_DAYS``.
+
+    Before this, signals had no retention at all: about 47,000 rows a day (roughly 30 MB), so
+    ~10 GB a year, and intraday signals outlived the bars they were computed from by months.
+    Deletes in short chunked transactions so the SQLite write lock is never held for long.
+    Returns ``{timeframe: rows_deleted}`` for timeframes that lost rows.
+    """
+    from backend.config.settings import settings
+    from backend.utils.timezone import now_ny
+
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+    now = now or now_ny()
+    timeframes = [row[0] for row in db.query(HistoricalSignal.timeframe).distinct().all()]
+    deleted_by_tf: dict[str, int] = {}
+    for tf in timeframes:
+        days = settings.retention.days_for(tf) + SIGNAL_RETENTION_MARGIN_DAYS
+        cutoff = now - timedelta(days=days)
+        total = 0
+        while True:
+            ids = (
+                select(HistoricalSignal.id)
+                .where(HistoricalSignal.timeframe == tf, HistoricalSignal.timestamp < cutoff)
+                .limit(chunk_size)
+            )
+            deleted = (
+                db.query(HistoricalSignal)
+                .filter(HistoricalSignal.id.in_(ids))
+                .delete(synchronize_session=False)
+            )
+            db.commit()
+            total += deleted
+            if deleted < chunk_size:
+                break
+        if total:
+            deleted_by_tf[tf] = total
+    return deleted_by_tf
 
 
 def delete_signals_for_symbol(symbol: str) -> int:

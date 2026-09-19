@@ -1822,6 +1822,23 @@ class MarketDataIngestionService:
             except Exception as e:
                 logger.error(f"Error in status-table retention prune: {e}")
             try:
+                from backend.repositories.signal_repository import prune_signals_by_retention
+
+                def _prune_signals() -> dict[str, int]:
+                    signals_db = SessionLocal()
+                    try:
+                        return prune_signals_by_retention(signals_db)
+                    finally:
+                        signals_db.close()
+
+                # to_thread: the first pass deletes ~300k rows (in chunked transactions); keep the
+                # other ingestion loops running while it works.
+                deleted_signals = await asyncio.to_thread(_prune_signals)
+                if deleted_signals:
+                    logger.info(f"Signal retention: pruned {deleted_signals}")
+            except Exception as e:
+                logger.error(f"Error in signal retention prune: {e}")
+            try:
                 from backend.market_data.services.backfill_queue import reap_orphaned_jobs
 
                 reaped = await asyncio.to_thread(reap_orphaned_jobs)

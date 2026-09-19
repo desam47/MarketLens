@@ -133,6 +133,7 @@ class TestReaperWiring(unittest.IsolatedAsyncioTestCase):
              patch("backend.repositories.bar_repository.prune_bars_by_retention", return_value={}), \
              patch("backend.repositories.status_retention.prune_status_tables", return_value={}), \
              patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", reaper), \
+             patch("backend.repositories.signal_repository.prune_signals_by_retention", return_value={}), \
              self.assertLogs("backend.market_data.services.ingestion_service", "ERROR") as cm:
             await svc._retention_prune_loop()
         reaper.assert_called_once()
