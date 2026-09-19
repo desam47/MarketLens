@@ -740,6 +740,7 @@ const fetchBars = useCallback(async () => {
           <p className="subtitle">
             {latestClose != null ? (
               <>
+                <span className="price-label">Latest Price</span>{' '}
                 <span>${latestClose.toFixed(4)}</span>
                 {barsChange != null && (
                   <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
