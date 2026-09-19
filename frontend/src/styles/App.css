@@ -1000,11 +1000,28 @@ h4 {
   align-items: center;
   gap: 0.25rem;
   flex: 1;
-  padding: 0.5rem;
-  background-color: var(--bg-primary);
-  border-radius: 0.375rem;
-  border: 1px solid var(--border);
+  padding: 0.75rem 0.5rem;
+  background-color: var(--bg-secondary);
+  border-radius: 0.5rem;
+  border: 2px solid var(--border);
   min-width: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Horizon column variants for visual distinction */
+.horizon-column.higher {
+  border-color: #ef4444;
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.08) 0%, var(--bg-secondary) 100%);
+}
+
+.horizon-column.intermediate {
+  border-color: #f59e0b;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08) 0%, var(--bg-secondary) 100%);
+}
+
+.horizon-column.lower {
+  border-color: #10b981;
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, var(--bg-secondary) 100%);
 }
 
 .horizon-label {

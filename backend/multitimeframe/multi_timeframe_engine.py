@@ -33,7 +33,7 @@ class ConfluenceDirection(StrEnum):
 
 class TrendState(StrEnum):
     """Trend state per horizon for narrative display.
-    
+
     - CONTINUATION: Trend continuing in same direction, score magnitude increasing
     - PULLBACK: Counter-trend move on lower TF, higher TF unchanged
     - TRANSITION: Higher TF direction changing, needs 2-3 closed bars confirmation
@@ -428,7 +428,7 @@ class MultiTimeframeEngine:
             valid_snaps = [s for s in tf_snapshots.values() if s.valid]
             if not valid_snaps:
                 return 0.0
-            
+
             bullish_weight = sum(s.quality_weight for s in valid_snaps
                                 if s.direction in (TrendClassification.STRONG_BULLISH,
                                                   TrendClassification.BULLISH,
@@ -439,7 +439,7 @@ class MultiTimeframeEngine:
                                                     TrendClassification.WEAK_BEARISH))
             neutral_weight = sum(s.quality_weight for s in valid_snaps
                                  if s.direction == TrendClassification.NEUTRAL)
-            
+
             total_weight = bullish_weight + bearish_weight + neutral_weight
             if total_weight == 0:
                 return 0.0
@@ -534,72 +534,79 @@ class MultiTimeframeEngine:
 
         Rules:
         - CONTINUATION: Same direction as previous, score magnitude stable/increasing
-        - PULLBACK: Lower TF opposite to higher TF (counter-trend)
+        - PULLBACK: Lower TF opposite to higher TF's ESTABLISHED trend (UPTREND/DOWNTREND)
         - TRANSITION: Higher TF direction changed vs previous signal
         - REVERSAL_CONFIRMED: TRANSITION persisted 3+ signals
-        - NEUTRAL: No clear state
+        - NEUTRAL: No clear state (higher TF is SIDEWAYS/UNKNOWN)
         """
         if not self.confluence_history:
             return (TrendState.NEUTRAL, TrendState.NEUTRAL, TrendState.NEUTRAL)
 
         prev = self.confluence_history[-1]
-        
-        def get_state(current_dir: TrendDirection, prev_dir: TrendDirection, 
-                      is_higher: bool = False) -> TrendState:
+
+        def is_established_trend(d: TrendDirection) -> bool:
+            """Check if direction is an established trend (not sideways/unknown)"""
+            return d in (TrendDirection.UPTREND, TrendDirection.DOWNTREND)
+
+        def is_opposite(d1: TrendDirection, d2: TrendDirection) -> bool:
+            """Check if two directions are opposite trends"""
+            return (d1 == TrendDirection.UPTREND and d2 == TrendDirection.DOWNTREND) or \
+                   (d1 == TrendDirection.DOWNTREND and d2 == TrendDirection.UPTREND)
+
+        def get_transition_state(current_dir: TrendDirection, prev_dir: TrendDirection) -> TrendState:
+            """Check for transition/reversal based on direction change vs history"""
             if current_dir == TrendDirection.UNKNOWN:
                 return TrendState.NEUTRAL
-            
+
             # Check if direction changed (transition)
             if prev_dir != TrendDirection.UNKNOWN and current_dir != prev_dir:
                 # Count consecutive signals with new direction
                 transition_count = 1
                 for h in reversed(self.confluence_history[:-1]):
-                    h_dir = getattr(h, 'higher_direction' if is_higher else 
-                                  ('intermediate_direction' if not is_higher and 'intermediate' in str(h) 
-                                   else 'short_term_direction'), None)
-                    # Simplified: just check higher direction for all horizons
                     if h.higher_direction == current_dir:
                         transition_count += 1
                     else:
                         break
-                
+
                 if transition_count >= 3:
                     return TrendState.REVERSAL_CONFIRMED
                 return TrendState.TRANSITION
-            
-            # Same direction - check if it's a pullback (lower TF vs higher TF)
-            # This is handled at the caller level by comparing horizons
-            
+
             return TrendState.CONTINUATION
 
-        # Simplified logic for now - just compare current vs previous direction
-        # Higher TF state
-        higher_state = get_state(higher_dir, prev.higher_direction, is_higher=True)
-        
-        # Intermediate state - check if it's a pullback vs higher TF
-        if intermediate_dir != TrendDirection.UNKNOWN and higher_dir != TrendDirection.UNKNOWN:
-            if intermediate_dir != higher_dir:
+        # Higher TF state: only transition/reversal check
+        higher_state = get_transition_state(higher_dir, prev.higher_direction)
+
+        # Intermediate state: check pullback vs higher TF's established trend
+        if is_established_trend(higher_dir) and is_established_trend(intermediate_dir):
+            if is_opposite(intermediate_dir, higher_dir):
                 intermediate_state = TrendState.PULLBACK
             else:
-                intermediate_state = get_state(intermediate_dir, prev.intermediate_direction)
-        else:
+                intermediate_state = get_transition_state(intermediate_dir, prev.intermediate_direction)
+        elif higher_dir == TrendDirection.UNKNOWN:
             intermediate_state = TrendState.NEUTRAL
-            
-        # Short state - check if pullback vs intermediate
-        if short_dir != TrendDirection.UNKNOWN and intermediate_dir != TrendDirection.UNKNOWN:
-            if short_dir != intermediate_dir:
+        else:
+            # Higher is SIDEWAYS - no established trend to pull back from
+            intermediate_state = get_transition_state(intermediate_dir, prev.intermediate_direction)
+
+        # Short state: check pullback vs intermediate TF's established trend
+        if is_established_trend(intermediate_dir) and is_established_trend(short_dir):
+            if is_opposite(short_dir, intermediate_dir):
                 short_state = TrendState.PULLBACK
             else:
-                short_state = get_state(short_dir, prev.short_term_direction)
-        else:
+                short_state = get_transition_state(short_dir, prev.short_term_direction)
+        elif intermediate_dir == TrendDirection.UNKNOWN:
             short_state = TrendState.NEUTRAL
+        else:
+            # Intermediate is SIDEWAYS - no established trend to pull back from
+            short_state = get_transition_state(short_dir, prev.short_term_direction)
 
         return (short_state, intermediate_state, higher_state)
 
     # ------------------------------------------------------------------
     # Existing overall-direction calculation (preserved verbatim logic
     # but now reading weights from settings instead of a hard-coded
-    # dict — the only change is the source of the weight value).
+    # dict - the only change is the source of the weight value).
     # ------------------------------------------------------------------
 
     def _calculate_overall_direction(
@@ -746,15 +753,15 @@ class MultiTimeframeEngine:
             # Only use valid TFs for the aggregate
             if not snap.valid:
                 continue
-            
+
             preset_weight = self.timeframe_weights.get(tf.value, 0.05)
             hierarchy_weight = hierarchy_weights.get(tf, 0.05)
             # Combine preset weight with hierarchy weight (equal mix)
             combined_weight = (preset_weight + hierarchy_weight) / 2.0
-            
+
             # Quality weight already incorporates confidence, freshness, warmup, bar_closed
             effective_weight = combined_weight * snap.quality_weight
-            
+
             total_weighted_score += snap.score * effective_weight
             total_quality_weight += effective_weight
 
@@ -789,7 +796,7 @@ class MultiTimeframeEngine:
         for tf, sig in timeframe_signals.items():
             # Compute quality metrics
             data_age_seconds = (ts - sig.timestamp).total_seconds() if sig.timestamp else 0.0
-            
+
             # Check bar closed status and warmup from timeframe engine
             bar_closed = False
             is_warmed_up = False
@@ -801,19 +808,19 @@ class MultiTimeframeEngine:
                     # Consider warmed up if we have at least 50 closed bars (arbitrary threshold)
                     closed_count = len(tf_engine.get_closed_candles(tf))
                     is_warmed_up = closed_count >= 50
-            
+
             # Valid if: has signal + data_quality ok + warmed up + fresh (< 2x timeframe period)
             tf_seconds = _timeframe_seconds(tf)
             fresh_enough = data_age_seconds <= (tf_seconds * 2) if tf_seconds > 0 else True
             valid = (sig.data_quality == "ok" and is_warmed_up and fresh_enough)
-            
+
             # Quality weight: confidence * freshness * warmup * (1.0 if closed else 0.5)
             freshness_factor = max(0.1, 1.0 - (data_age_seconds / (tf_seconds * 4))) if tf_seconds > 0 else 1.0
             freshness_factor = min(1.0, freshness_factor)
             warmup_factor = 1.0 if is_warmed_up else 0.3
             closed_factor = 1.0 if bar_closed else 0.5
             quality_weight = sig.confidence * freshness_factor * warmup_factor * closed_factor
-            
+
             tf_snapshots[tf] = TimeframeTrendSnapshot(
                 symbol=self.symbol,
                 timeframe=tf,
