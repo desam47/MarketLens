@@ -132,6 +132,12 @@ body {
   min-height: 100vh;
 }
 
+@media (max-width: 768px) {
+  .main-content {
+    padding: 1rem;
+  }
+}
+
 h1 {
   font-size: 1.75rem;
   font-weight: 700;
@@ -274,8 +280,8 @@ h4 {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  margin-bottom: 2rem;
-  padding-bottom: 1.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   gap: 1rem;
   flex-wrap: wrap;
@@ -416,7 +422,7 @@ h4 {
      overflow the viewport width on screens narrower than 320px
      (e.g. an iPhone SE in portrait at 375px minus padding). */
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-  gap: 1.5rem;
+  gap: 1rem;
   align-items: stretch;
 }
 
@@ -599,9 +605,8 @@ h4 {
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
-  padding: 1.75rem;
+  padding: 1.25rem;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  margin-bottom: 1.5rem;
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   display: flex;
   flex-direction: column;
