@@ -75,6 +75,168 @@ def _redirect_test_logs() -> None:
 _redirect_test_logs()
 
 
+# ── Never touch the developer's live database or live Redis ─────────────────────
+#
+# The suite used to run against ``marketlens.db`` and Redis logical DB 0, the same ones the
+# running dev server uses. Every "tests polluted live data" incident traced back to that: digest
+# rows written on each reload, real backfill jobs, watchlist/experiment rows, cache keys flushed
+# by a lifespan startup. Patching each symptom left the next careless test free to do it again.
+#
+# So the whole session gets its own database and Redis logical DB, before anything imports the app:
+#   * MARKETLENS_DB_OVERRIDE -> a fresh SQLite file under <project>/data (backend/database/db.py
+#     refuses paths outside the project root), built with the real migrations plus create_all
+#     (a few tables have models but no migration);
+#   * REDIS_URL -> logical DB 15, flushed at start;
+#   * two guards that FAIL any test that still opens the live database file or connects to Redis
+#     DB 0 (a test that reaches around the settings, e.g. a hardcoded redis://localhost:6379).
+# Set MARKETLENS_TEST_USE_LIVE_DATA=1 to run against live data on purpose (the old behaviour).
+_LIVE_TOUCHES: list[str] = []
+_TEST_REDIS_DB = 15
+
+
+def _isolate_databases() -> None:
+    if os.environ.get("MARKETLENS_TEST_USE_LIVE_DATA") == "1":
+        return
+    import atexit
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    live_db = (root / "marketlens.db").resolve()
+    data_dir = root / "data"
+    data_dir.mkdir(exist_ok=True)
+    run_dir = Path(tempfile.mkdtemp(prefix="pytest-", dir=data_dir))
+    atexit.register(shutil.rmtree, run_dir, ignore_errors=True)
+
+    os.environ["MARKETLENS_DB_OVERRIDE"] = f"sqlite:///{run_dir / 'marketlens-test.db'}"
+    os.environ["REDIS_URL"] = f"redis://localhost:6379/{_TEST_REDIS_DB}"
+
+    # Schema: the real migrations (this is what the app runs at startup), then create_all for the
+    # models that have no migration. Both are pointed at the test database by the env above.
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+        cwd=root, env=os.environ, check=True, capture_output=True,
+    )
+    import backend.models  # noqa: F401  (registers every table on Base.metadata)
+    from backend.database import Base, engine
+
+    Base.metadata.create_all(bind=engine)
+
+    _flush_test_redis_db()
+    _install_live_resource_guards(live_db)
+
+
+def _flush_test_redis_db() -> None:
+    try:
+        import redis
+
+        client = redis.Redis.from_url(os.environ["REDIS_URL"])
+        if client.connection_pool.connection_kwargs.get("db") == _TEST_REDIS_DB:
+            client.flushdb()
+        client.close()
+    except Exception:  # noqa: BLE001  (no Redis: tests degrade the same way the app does)
+        pass
+
+
+def _install_live_resource_guards(live_db) -> None:
+    from pathlib import Path
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    @event.listens_for(Engine, "connect")
+    def _refuse_live_sqlite(dbapi_connection, _record):  # noqa: ANN001
+        try:
+            rows = dbapi_connection.execute("PRAGMA database_list").fetchall()
+        except Exception:  # noqa: BLE001  (not SQLite)
+            return
+        for row in rows:
+            if row[2] and Path(row[2]).resolve() == live_db:
+                message = f"a test opened the LIVE database {live_db}"
+                _LIVE_TOUCHES.append(message)
+                raise RuntimeError(message)
+
+    try:
+        import redis.connection as redis_connection
+        import redis.exceptions as redis_exceptions
+    except ImportError:
+        return
+    real_connect = redis_connection.AbstractConnection.connect
+
+    def _refuse_live_redis(self):  # noqa: ANN001
+        if getattr(self, "db", None) == 0 and getattr(self, "host", None) in ("localhost", "127.0.0.1"):
+            message = "a test connected to the LIVE Redis (logical DB 0)"
+            _LIVE_TOUCHES.append(message)
+            # redis-py's own error type, so components that tolerate a Redis outage degrade exactly
+            # as they do in production (the autouse fixture still fails the test that did this).
+            raise redis_exceptions.ConnectionError(message)
+        return real_connect(self)
+
+    redis_connection.AbstractConnection.connect = _refuse_live_redis
+
+
+_isolate_databases()
+
+
+# ── Never let a test reach the internet ─────────────────────────────────────────
+#
+# Webull is blocked above, but Alpaca / Finnhub / Yahoo / the AI providers were not: an audit
+# of the suite found 14 outbound connections from 5 tests (build-context and ingestion-lifecycle
+# tests, and an AI-manager health check), burning API quota and making the suite slow and flaky
+# offline. Non-loopback connects are refused with the error a dead network gives, so components
+# degrade exactly as they do when a provider is down. Attempts are listed at the end of the run.
+# MARKETLENS_TEST_ALLOW_NETWORK=1 (the same switch as the Webull guard) allows live calls.
+_NETWORK_ATTEMPTS: list[str] = []
+
+
+def _block_external_network() -> None:
+    if os.environ.get("MARKETLENS_TEST_ALLOW_NETWORK") == "1":
+        return
+    import socket
+
+    real_connect = socket.socket.connect
+
+    def _guarded_connect(self, address):  # noqa: ANN001
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(address, tuple) and str(host) not in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+            test = os.environ.get("PYTEST_CURRENT_TEST", "<collection>").split(" ")[0]
+            _NETWORK_ATTEMPTS.append(f"{test} -> {host}:{address[1] if len(address) > 1 else ''}")
+            raise ConnectionRefusedError(
+                f"outbound network is disabled under pytest ({host}); "
+                "set MARKETLENS_TEST_ALLOW_NETWORK=1 to allow live calls"
+            )
+        return real_connect(self, address)
+
+    socket.socket.connect = _guarded_connect
+
+
+_block_external_network()
+
+
+def pytest_terminal_summary(terminalreporter):
+    """List the tests that tried to reach the internet (refused), so new offenders stay visible."""
+    if not _NETWORK_ATTEMPTS:
+        return
+    terminalreporter.section("blocked outbound network attempts")
+    for line in sorted(set(_NETWORK_ATTEMPTS)):
+        terminalreporter.write_line(line)
+
+
+@pytest.fixture(autouse=True)
+def _fail_if_live_resources_touched():
+    """Fail the test that reached for the live database or live Redis, even if the code under
+    test swallowed the resulting error (many components degrade silently when a store is down)."""
+    _LIVE_TOUCHES.clear()
+    yield
+    if _LIVE_TOUCHES:
+        touched = sorted(set(_LIVE_TOUCHES))
+        _LIVE_TOUCHES.clear()
+        pytest.fail("this test touched live resources: " + "; ".join(touched), pytrace=False)
+
+
 @pytest.fixture(autouse=True)
 def _no_real_backfill_jobs(request):
     """Tests must never enqueue a REAL backfill.
