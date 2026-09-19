@@ -373,7 +373,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           </p>
           {(latestQuote && latestQuote.price != null) && (
             <div className="last-close-info">
-              <span className="last-close-label">Latest Price</span>
+              <span className="last-close-label">Last Price</span>
               <span className="last-close-price">${latestQuote.price.toFixed(4)}</span>
               {liveChange != null && liveChangePct != null && (
                 <>

@@ -326,7 +326,7 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
       <h2>Price History</h2>
       {latestClose != null && (
         <div className="current-price">
-          <span className="price-label">Latest Price</span>
+          <span className="price-label">Last Price</span>
           <span className="price-value">${latestClose.toFixed(4)}</span>
           {change != null && (
             <span
