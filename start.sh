@@ -13,7 +13,9 @@ echo "📁 Working directory: $(pwd)"
 
 # Start the backend on port 5001
 echo "🚀 Starting backend on http://127.0.0.1:5001 ..."
-python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001 --reload &
+# --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
+# lifespan: migrations, cache flush, provider handshakes, engine seeding).
+python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001 --reload --reload-exclude "backend/tests/*" &
 
 BACKEND_PID=$!
 echo "Backend PID: $BACKEND_PID"

@@ -16,7 +16,9 @@ def start_backend():
     print("🚀 Starting backend on http://localhost:5001")
     return subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.api.main:app",
-         "--host", "0.0.0.0", "--port", "5001", "--reload"],
+         "--host", "0.0.0.0", "--port", "5001", "--reload",
+         # editing a test must not restart the server and re-run its whole lifespan
+         "--reload-exclude", "backend/tests/*"],
         cwd=ROOT
     )
 
