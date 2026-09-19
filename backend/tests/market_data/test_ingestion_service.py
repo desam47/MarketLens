@@ -1226,3 +1226,109 @@ class TestSharedManager(unittest.TestCase):
                              side_effect=AssertionError("constructed providers")):
             for _ in range(3):
                 MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
+
+
+class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase):
+    """Each cycle re-fetches ~30 bars per symbol (so the DB write can heal gaps) but
+    the engines already saw all but the newest 1-2.
+
+    TimeframeEngine.update_tick drops any timestamp it has seen, so re-dispatching
+    them changed no engine state — it only cost ~0.16 ms apiece (721 per cycle,
+    ~110 ms of GIL-bound Python that starved the API event loop) and made
+    TrendEngine.update emit spurious stale/gap warnings before that dedupe.
+    """
+
+    def _bars(self, symbol: str, n: int):
+        from backend.models.market_data import Bar, DataStatus
+
+        base = datetime(2026, 9, 18, 10, 0)
+        return [
+            Bar(symbol=symbol, timestamp=base + timedelta(minutes=i), open=1.0, high=1.0,
+                low=1.0, close=1.0, volume=1, timeframe="1m", provider="webull",
+                data_status=DataStatus.LIVE)
+            for i in range(n)
+        ]
+
+    def _service(self, fetch):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        svc = MarketDataIngestionService(symbols=["AAPL", "MSFT"], timeframes=["1m"])
+        svc.manager = MagicMock()
+        svc.manager.get_historical_bars_batch.side_effect = lambda *a, **k: fetch()
+        svc._resample_and_upsert = MagicMock(side_effect=lambda *a, **k: asyncio.sleep(0))
+        return svc
+
+    async def _cycle(self, svc, registry):
+        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
+                patch("backend.market_data.services.ingestion_service.engine_registry", registry), \
+                patch("backend.repositories.bar_repository.upsert_bars", return_value=0), \
+                patch("backend.market_data.services.cache._redis_cache"):
+            await svc._ingest_1m_recent_window()
+
+    @staticmethod
+    def _dispatched(registry):
+        out = {}
+        for c in registry.dispatch_bar.call_args_list:
+            out.setdefault(c.kwargs["symbol"], []).append(c.kwargs["timestamp"])
+        return out
+
+    async def test_repeat_cycles_only_resend_the_newest_bar(self):
+        window = {"n": 30}
+        svc = self._service(lambda: {"AAPL": self._bars("AAPL", window["n"]),
+                                     "MSFT": self._bars("MSFT", window["n"])})
+        registry = MagicMock()
+
+        await self._cycle(svc, registry)                       # first sight: everything is new
+        self.assertEqual({k: len(v) for k, v in self._dispatched(registry).items()},
+                         {"AAPL": 30, "MSFT": 30})
+
+        registry.reset_mock()
+        await self._cycle(svc, registry)                       # identical window again
+        got = self._dispatched(registry)
+        self.assertEqual({k: len(v) for k, v in got.items()}, {"AAPL": 1, "MSFT": 1})
+        newest = max(b.timestamp for b in self._bars("AAPL", 30))
+        self.assertEqual(got["AAPL"], [newest])                # the (possibly forming) newest bar
+
+        registry.reset_mock()
+        window["n"] = 31                                       # a new minute closes
+        await self._cycle(svc, registry)
+        got = self._dispatched(registry)
+        self.assertEqual({k: len(v) for k, v in got.items()}, {"AAPL": 2, "MSFT": 2})
+        self.assertEqual(sorted(got["AAPL"])[-1], max(b.timestamp for b in self._bars("AAPL", 31)))
+
+    async def test_watermark_is_per_symbol(self):
+        fetched = {"AAPL": self._bars("AAPL", 5), "MSFT": []}
+        svc = self._service(lambda: fetched)
+        registry = MagicMock()
+        await self._cycle(svc, registry)
+        registry.reset_mock()
+        fetched["MSFT"] = self._bars("MSFT", 5)                # MSFT appears late
+        await self._cycle(svc, registry)
+        got = self._dispatched(registry)
+        self.assertEqual(len(got["MSFT"]), 5, "a symbol with no watermark dispatches everything")
+        self.assertEqual(len(got["AAPL"]), 1)
+
+    async def test_failed_dispatch_does_not_advance_the_watermark(self):
+        svc = self._service(lambda: {"AAPL": self._bars("AAPL", 3), "MSFT": []})
+        registry = MagicMock()
+        registry.dispatch_bar.side_effect = RuntimeError("engine down")
+        await self._cycle(svc, registry)                       # every dispatch fails
+        registry.reset_mock(side_effect=True)
+        await self._cycle(svc, registry)                       # so all 3 must be retried
+        self.assertEqual(len(self._dispatched(registry)["AAPL"]), 3)
+
+    def test_naive_vs_aware_timestamps_fail_open(self):
+        from datetime import timezone
+
+        svc = self._service(lambda: {})
+        svc._mark_bar_dispatched("AAPL", datetime(2026, 9, 18, 10, 0))
+        self.assertTrue(svc._should_dispatch_bar("AAPL", datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)))
+
+    def test_older_bar_is_skipped_equal_and_newer_are_sent(self):
+        svc = self._service(lambda: {})
+        t = datetime(2026, 9, 18, 10, 0)
+        svc._mark_bar_dispatched("AAPL", t)
+        self.assertFalse(svc._should_dispatch_bar("aapl", t - timedelta(minutes=1)))
+        self.assertTrue(svc._should_dispatch_bar("AAPL", t))
+        self.assertTrue(svc._should_dispatch_bar("AAPL", t + timedelta(minutes=1)))
+        self.assertTrue(svc._should_dispatch_bar("NVDA", t - timedelta(days=9)))   # unseen symbol

@@ -209,6 +209,9 @@ class MarketDataIngestionService:
         self.last_quote_update: dict[str, datetime] = {}
         self.last_bar_update: dict[str, dict[str, datetime]] = {}
         self.last_status_update: dict[str, datetime] = {}
+        # Newest 1m bar timestamp already dispatched to the engines, per symbol
+        # (see _ingest_1m_recent_window).
+        self._last_dispatched_bar_ts: dict[str, datetime] = {}
 
         # Initialize tracking dictionaries
         for symbol in self.symbols:
@@ -1143,9 +1146,18 @@ class MarketDataIngestionService:
         finally:
             db.close()
 
-        # Dispatch to in-memory engines
+        # Dispatch to in-memory engines. Each cycle re-fetches ~30 bars per symbol
+        # so the DB write can heal gaps, but the engines already saw all but the
+        # newest 1-2 of them: TimeframeEngine.update_tick drops any timestamp it
+        # has seen, so re-dispatching them changed no engine state — it only cost
+        # ~0.16 ms each (721 per cycle = ~110 ms of GIL-bound Python that starved
+        # the API's event loop) and made TrendEngine.update emit spurious
+        # "stale"/"gap" data-quality warnings before that dedupe. ``>=`` (not
+        # ``>``) keeps re-sending the newest bar, which may still be forming.
         from backend.models.market_data_sql import BarModel as _BM2
         for sym, tf, bar, ts in fresh_bars:
+            if not self._should_dispatch_bar(sym, ts):
+                continue
             try:
                 engine_registry.dispatch_bar(
                     symbol=sym,
@@ -1157,9 +1169,29 @@ class MarketDataIngestionService:
                     low=getattr(bar, "low", None),
                     open_price=getattr(bar, "open", None),
                 )
+                self._mark_bar_dispatched(sym, ts)
             except Exception as e:
                 logger.debug(f"dispatch_bar failed for {sym}/{tf}: {e}")
         return len(bars_to_upsert)
+
+    def _should_dispatch_bar(self, symbol: str, ts) -> bool:
+        """False only for a bar older than the newest one already dispatched."""
+        last = self._last_dispatched_bar_ts.get(symbol.upper())
+        if last is None:
+            return True
+        try:
+            return ts >= last
+        except TypeError:  # naive vs aware mix from a provider switch: fail open
+            return True
+
+    def _mark_bar_dispatched(self, symbol: str, ts) -> None:
+        key = symbol.upper()
+        last = self._last_dispatched_bar_ts.get(key)
+        try:
+            if last is None or ts > last:
+                self._last_dispatched_bar_ts[key] = ts
+        except TypeError:
+            self._last_dispatched_bar_ts[key] = ts
 
     async def _fetch_bars_with_fallback(
         self,
