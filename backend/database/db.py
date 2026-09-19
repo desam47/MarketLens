@@ -33,7 +33,9 @@ if _db_url.startswith("sqlite:///"):
         )
     _db_canonical = _db_path.resolve()
     _root_canonical = _PROJECT_ROOT.resolve()
-    if not str(_db_canonical).startswith(str(_root_canonical)):
+    # ``is_relative_to`` compares whole path components. The previous string
+    # ``startswith`` also accepted a sibling like ``<root>-old/marketlens.db``.
+    if not _db_canonical.is_relative_to(_root_canonical):
         raise RuntimeError(
             f"SQLite DB must be inside project root {_root_canonical}. "
             f"Currently configured as: {_db_canonical}. "
@@ -107,11 +109,22 @@ def _register_sqlite_pragmas(engine: Engine) -> None:
             cursor.close()
 
 
-# Create engine
+# Create engine.
+#
+# SQLAlchemy's default pool (5 + 10 overflow) is sized for a network DB. Here
+# a dashboard refresh fans out to many parallel requests while ingestion, the
+# alerts engine, the tape flusher and RQ threads also hold sessions, so the
+# default can run dry and make callers block for the pool timeout (30 s) —
+# which looks like a hung API. SQLite connections are just file handles, so
+# a larger pool is cheap; real write contention is handled by busy_timeout.
+_engine_kwargs: dict = {}
+if _is_sqlite_url(_db_url):
+    _engine_kwargs.update(pool_size=20, max_overflow=30)
 engine = create_engine(
     _db_url,
     connect_args={"check_same_thread": False} if _is_sqlite_url(_db_url) else {},
-    echo=settings.database.echo
+    echo=settings.database.echo,
+    **_engine_kwargs,
 )
 
 # Apply WAL + perf PRAGMAs to every connection from the pool.
@@ -174,7 +187,10 @@ def vacuum_into(snapshot_path: str | Path) -> Path:
             # pass the path as a quoted SQL literal. Use the
             # SQLAlchemy text() builder for safe escaping.
             from sqlalchemy import text
-            conn.execute(text(f"VACUUM INTO '{snapshot.as_posix()}'"))
+            # VACUUM INTO takes no bind parameters, so the path is inlined as
+            # a SQL string literal — double any embedded single quote.
+            quoted = snapshot.as_posix().replace("'", "''")
+            conn.execute(text(f"VACUUM INTO '{quoted}'"))
     finally:
         raw_engine.dispose()
 

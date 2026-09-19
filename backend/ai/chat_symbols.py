@@ -53,9 +53,9 @@ _CHAT_STOPWORDS = {
     "ATH", "ATL", "DCA", "FUD", "IMO", "FYI", "WSB", "DD", "TA", "FA", "PE", "PEG",
     "EPS", "FCF", "ROE", "ROI", "P/E", "RSI", "MACD", "ADX", "EMA", "SMA", "VWAP",
     "CPI", "PPI", "GDP", "PCE", "FOMC", "FED", "ECB", "BOJ", "IRA", "IPO", "ETF",
-    "CEO", "CFO", "COO", "CTO", "USD", "EUR", "GBP", "JPY", "USA", "UK", "EU", "OK",
+    "CEO", "CFO", "COO", "CTO", "USD", "EUR", "GBP", "JPY", "USA", "UK", "EU",
     "Q1", "Q2", "Q3", "Q4", "FY", "H1", "H2", "TTM", "MRQ",
-    "BUY", "SELL", "HOLD", "LONG", "CALL", "PUT", "BID", "ASK", "GAP", "RUN",
+    "BUY", "SELL", "HOLD", "LONG", "CALL", "BID", "ASK", "GAP", "RUN",
     "EV", "ESG", "AUM", "NAV", "OTC", "SEC", "IRS", "GAAP", "DIP", "PDT",
     # conversational filler — blocks a needless AI name->ticker lookup on
     # a message that names no company (still forced through by a cashtag).

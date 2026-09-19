@@ -21,7 +21,8 @@ Concurrency model
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -38,6 +39,23 @@ router = APIRouter(prefix="/api/realtime", tags=["realtime-ws"])
 
 # All timestamps in responses → America/New_York (EST/EDT auto-handled).
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
+
+# A client that stops reading must not be able to hold up delivery to everyone
+# else, so each send is bounded and a socket that exceeds it is dropped.
+_SEND_TIMEOUT_SECONDS = 5.0
+# Bounds per-connection state: without a cap a single client could register
+# unlimited (symbol, timeframe) keys and grow the process-wide registry.
+_MAX_SUBSCRIPTIONS_PER_SOCKET = 200
+# Client-supplied values are used as registry keys and forwarded to provider
+# streams, so they are validated instead of trusted.
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-^=/]{1,20}$")
+_TIMEFRAME_RE = re.compile(r"^\d{1,3}(?:m|h|d|wk)$")
+# Providers whose live stream can be started on a client's behalf.
+_SUPPORTED_STREAM_PROVIDERS = frozenset({"alpaca"})
+
+# Strong references to in-flight broadcast tasks (the loop only keeps weak
+# ones, so an unreferenced task can be garbage-collected mid-send).
+_broadcast_tasks: set[asyncio.Task] = set()
 
 
 def _to_dashboard_tz(value: datetime | None) -> str | None:
@@ -62,6 +80,10 @@ class RealtimeBroadcastManager:
         self._subs: dict[str, set[int]] = {}
         # id(websocket) -> websocket
         self._sockets: dict[int, WebSocket] = {}
+        # id(websocket) -> the "SYMBOL:TF" keys it is subscribed to. The
+        # reverse index makes disconnect cleanup and the per-socket cap
+        # O(subscriptions of that socket) instead of a scan of every key.
+        self._socket_keys: dict[int, set[str]] = {}
         self._lock = asyncio.Lock()
         self._connections_total: int = 0
         self._disconnections_total: int = 0
@@ -70,12 +92,18 @@ class RealtimeBroadcastManager:
 
     # ── subscription management ────────────────────────────────────────────
 
-    async def subscribe(self, ws: WebSocket, symbol: str, timeframe: str) -> None:
+    async def subscribe(self, ws: WebSocket, symbol: str, timeframe: str) -> bool:
+        """Subscribe ``ws``; return True only if this is a *new* subscription."""
         async with self._lock:
             key = self._make_key(symbol, timeframe)
             ws_id = id(ws)
             self._sockets.setdefault(ws_id, ws)
-            self._subs.setdefault(key, set()).add(ws_id)
+            ids = self._subs.setdefault(key, set())
+            if ws_id in ids:
+                return False
+            ids.add(ws_id)
+            self._socket_keys.setdefault(ws_id, set()).add(key)
+            return True
 
     async def unsubscribe(self, ws: WebSocket, symbol: str, timeframe: str) -> None:
         async with self._lock:
@@ -85,20 +113,34 @@ class RealtimeBroadcastManager:
                 self._subs[key].discard(ws_id)
                 if not self._subs[key]:
                     del self._subs[key]
+            keys = self._socket_keys.get(ws_id)
+            if keys is not None:
+                keys.discard(key)
 
-    async def remove_socket(self, ws: WebSocket) -> None:
-        """Drop ``ws`` from every subscription it was in."""
+    async def remove_socket(self, ws: WebSocket) -> list[str]:
+        """Drop ``ws`` from every subscription it was in.
+
+        Returns the keys that were left with no subscribers, so the caller
+        can tear down any provider stream that only existed for them.
+        """
         async with self._lock:
-            ws_id = id(ws)
-            self._sockets.pop(ws_id, None)
-            empty_keys: list[str] = []
-            for key, ids in self._subs.items():
-                if ws_id in ids:
-                    ids.discard(ws_id)
-                    if not ids:
-                        empty_keys.append(key)
-            for key in empty_keys:
+            return self._drop_socket_locked(id(ws))
+
+    def _drop_socket_locked(self, ws_id: int) -> list[str]:
+        self._sockets.pop(ws_id, None)
+        orphaned: list[str] = []
+        for key in self._socket_keys.pop(ws_id, ()):
+            ids = self._subs.get(key)
+            if ids is None:
+                continue
+            ids.discard(ws_id)
+            if not ids:
                 del self._subs[key]
+                orphaned.append(key)
+        return orphaned
+
+    def subscription_count(self, ws: WebSocket) -> int:
+        return len(self._socket_keys.get(id(ws), ()))
 
     def has_subscribers(self, symbol: str, timeframe: str) -> bool:
         """Cheap read used by the dispatcher (no lock). Best-effort."""
@@ -124,31 +166,40 @@ class RealtimeBroadcastManager:
     # ── broadcast ─────────────────────────────────────────────────────────
 
     async def broadcast(self, key: str, payload: dict[str, Any]) -> None:
-        """Send ``payload`` to every socket subscribed to ``key``."""
+        """Send ``payload`` to every socket subscribed to ``key``.
+
+        Sends run concurrently, each bounded by ``_SEND_TIMEOUT_SECONDS``.
+        Sequential, unbounded sends let one client with a full TCP buffer
+        stall delivery to every other subscriber (and back up the ingestion
+        callbacks feeding this method); a socket that times out or errors is
+        dropped instead.
+        """
         async with self._lock:
             ws_ids = list(self._subs.get(key, ()))
             sockets = [self._sockets[ws_id] for ws_id in ws_ids if ws_id in self._sockets]
 
         self._broadcasts_total += 1
-        dead: list[int] = []
-        for ws in sockets:
+        if not sockets:
+            return
+
+        async def _send(ws: WebSocket) -> int | None:
             try:
-                await ws.send_json(payload)
-                self._messages_sent += 1
-            except Exception as e:
-                logger.debug(f"Realtime broadcast send failed for {key}: {e}")
-                dead.append(id(ws))
+                await asyncio.wait_for(ws.send_json(payload), _SEND_TIMEOUT_SECONDS)
+                return None
+            except Exception as e:  # includes TimeoutError
+                logger.debug(f"Realtime broadcast send failed for {key}: {e!r}")
+                return id(ws)
+
+        results = await asyncio.gather(*(_send(ws) for ws in sockets))
+        dead = [ws_id for ws_id in results if ws_id is not None]
+        self._messages_sent += len(sockets) - len(dead)
 
         if dead:
+            orphaned: list[str] = []
             async with self._lock:
                 for ws_id in dead:
-                    self._sockets.pop(ws_id, None)
-                    for _, ids in self._subs.items():
-                        if ws_id in ids:
-                            ids.discard(ws_id)
-                empty = [k for k, v in self._subs.items() if not v]
-                for k in empty:
-                    del self._subs[k]
+                    orphaned.extend(self._drop_socket_locked(ws_id))
+            await _release_provider_streams(orphaned)
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -159,7 +210,9 @@ class RealtimeBroadcastManager:
     @staticmethod
     def _split_key(key: str) -> tuple[str, str]:
         parts = key.rsplit(":", 1)
-        return parts[0], parts[1] if len(parts) == 2 else ("", "")
+        # Parenthesised: unparenthesised, the conditional bound only to
+        # ``parts[1]`` and the fallback returned ``(key, ("", ""))``.
+        return (parts[0], parts[1]) if len(parts) == 2 else (key, "")
 
 
 # Process-wide singleton.
@@ -275,11 +328,16 @@ class RealtimeDispatcher:
             return
         if not self._manager.has_subscribers(symbol, timeframe):
             return
+        def _schedule() -> None:
+            # Runs on the loop thread. Creating the coroutine here (not in
+            # the caller's thread) means a closed loop can't leave behind a
+            # coroutine object that was never awaited.
+            task = asyncio.ensure_future(self._broadcast_bar(symbol, timeframe, kwargs))
+            _broadcast_tasks.add(task)
+            task.add_done_callback(_broadcast_tasks.discard)
+
         try:
-            self._loop.call_soon_threadsafe(
-                asyncio.ensure_future,
-                self._broadcast_bar(symbol, timeframe, kwargs),
-            )
+            self._loop.call_soon_threadsafe(_schedule)
         except RuntimeError as e:
             logger.debug(f"RealtimeDispatcher could not schedule: {e}")
 
@@ -308,7 +366,7 @@ _dispatcher: RealtimeDispatcher | None = None
 def install(loop: asyncio.AbstractEventLoop | None = None) -> RealtimeDispatcher:
     global _dispatcher
     if _dispatcher is None:
-        from backend.api.trend.router import _TREND_TIMEFRAMES
+        from backend.api.trend.registry import _TREND_TIMEFRAMES
 
         target_loop = loop or asyncio.get_running_loop()
         _dispatcher = RealtimeDispatcher(broadcast_manager, target_loop)
@@ -326,69 +384,58 @@ def reset() -> None:
 # Provider stream management (v3.6)
 # ---------------------------------------------------------------------------
 
-# Tracks per-provider subscription state to avoid duplicate connections.
-# provider name → {symbol → count of subscribers}
-_provider_subscription_counts: dict[str, dict[str, int]] = {}
-_provider_subscription_lock = asyncio.Lock()
+def _call_provider(provider: str, method: str, symbol: str, timeframe: str) -> None:
+    """Invoke ``subscribe``/``unsubscribe`` on a provider instance, if it has one."""
+    try:
+        from backend.market_data.services.manager import market_data_manager
+
+        provider_instance = market_data_manager.providers.get(provider)
+        if provider_instance and hasattr(provider_instance, method):
+            getattr(provider_instance, method)(symbol, timeframe)
+            logger.info("%s stream %s for %s (%s)", provider, method, symbol, timeframe)
+    except Exception:
+        logger.exception("Failed to %s %s stream for %s", method, provider, symbol)
 
 
 async def _maybe_start_provider_stream(provider: str, symbol: str, timeframe: str) -> None:
-    """Start a provider's stream for ``symbol`` if this is the first subscription.
+    """Start ``provider``'s stream for (symbol, tf) unless it is already running.
 
-    Idempotent — safe to call on every subscribe message.
+    ``_provider_stream_registry`` is the single source of truth for "which
+    keys have a live provider stream", so this is idempotent no matter how
+    many sockets (or repeated subscribe messages) ask for the same key.
     """
-    if provider != "alpaca":
+    if provider not in _SUPPORTED_STREAM_PROVIDERS:
         return
-
     sym_upper = symbol.upper()
-    async with _provider_subscription_lock:
-        _provider_subscription_counts.setdefault(provider, {})
-        _provider_subscription_counts[provider].setdefault(sym_upper, 0)
-        _provider_subscription_counts[provider][sym_upper] += 1
-
-    # Already subscribed — no need to start.
-    if _provider_subscription_counts.get(provider, {}).get(sym_upper, 0) > 1:
-        return
-
-    # Start the Alpaca stream.
-    try:
-        from backend.market_data.services.manager import market_data_manager
-
-        provider_instance = market_data_manager.providers.get(provider)
-        if provider_instance and hasattr(provider_instance, "subscribe"):
-            provider_instance.subscribe(sym_upper, timeframe)
-            logger.info("Alpaca stream started for %s (%s)", sym_upper, timeframe)
-    except Exception:
-        logger.exception("Failed to start Alpaca stream for %s", sym_upper)
+    key = RealtimeBroadcastManager._make_key(sym_upper, timeframe)
+    async with _provider_stream_lock:
+        if _provider_stream_registry.get(key) == provider:
+            return
+        _provider_stream_registry[key] = provider
+    _call_provider(provider, "subscribe", sym_upper, timeframe)
 
 
 async def _maybe_stop_provider_stream(provider: str, symbol: str, timeframe: str) -> None:
-    """Stop a provider's stream for ``symbol`` if this was the last subscriber.
+    """Stop ``provider``'s stream for (symbol, tf) if one is running.
 
-    Idempotent — safe to call on every unsubscribe message.
+    Callers invoke this once the key has no local subscribers left.
     """
-    if provider != "alpaca":
-        return
-
     sym_upper = symbol.upper()
-    async with _provider_subscription_lock:
-        counts = _provider_subscription_counts.setdefault(provider, {})
-        counts[sym_upper] = max(0, counts.get(sym_upper, 0) - 1)
-        still_subscribed = counts.get(sym_upper, 0) > 0
+    key = RealtimeBroadcastManager._make_key(sym_upper, timeframe)
+    async with _provider_stream_lock:
+        if _provider_stream_registry.get(key) != provider:
+            return
+        del _provider_stream_registry[key]
+    _call_provider(provider, "unsubscribe", sym_upper, timeframe)
 
-    if still_subscribed:
-        return
 
-    # Last subscriber gone — stop the stream.
-    try:
-        from backend.market_data.services.manager import market_data_manager
-
-        provider_instance = market_data_manager.providers.get(provider)
-        if provider_instance and hasattr(provider_instance, "unsubscribe"):
-            provider_instance.unsubscribe(sym_upper, timeframe)
-            logger.info("Alpaca stream stopped for %s (%s)", sym_upper, timeframe)
-    except Exception:
-        logger.exception("Failed to stop Alpaca stream for %s", sym_upper)
+async def _release_provider_streams(orphaned_keys: list[str]) -> None:
+    """Stop the provider streams for keys that just lost their last subscriber."""
+    for key in orphaned_keys:
+        provider = _provider_stream_registry.get(key)
+        if provider:
+            symbol, timeframe = RealtimeBroadcastManager._split_key(key)
+            await _maybe_stop_provider_stream(provider, symbol, timeframe)
 
 
 # ---------------------------------------------------------------------------
@@ -433,38 +480,67 @@ async def realtime_websocket(websocket: WebSocket):
                     break
                 continue
 
-            action = msg.get("action") if isinstance(msg, dict) else None
-            symbol = msg.get("symbol") if isinstance(msg, dict) else None
-            timeframe = msg.get("timeframe") if isinstance(msg, dict) else None
-            provider = msg.get("provider") if isinstance(msg, dict) else None
+            if not isinstance(msg, dict):
+                await websocket.send_json(
+                    {"type": "error", "message": "Frame must be a JSON object"}
+                )
+                continue
 
-            if action == "subscribe" and isinstance(symbol, str) and symbol:
-                tf = (timeframe or "1m") if isinstance(timeframe, str) else "1m"
-                await broadcast_manager.subscribe(websocket, symbol, tf)
-                # If client requested a specific provider, route the stream
-                # through it (v3.6 — currently supports "alpaca").
-                if provider and isinstance(provider, str) and provider != "local":
-                    await set_provider_stream(symbol, tf, provider)
-                    await _maybe_start_provider_stream(provider, symbol, tf)
+            action = msg.get("action")
+            symbol = msg.get("symbol")
+            timeframe = msg.get("timeframe")
+            provider = msg.get("provider")
+
+            if action in ("subscribe", "unsubscribe"):
+                sym = symbol.strip().upper() if isinstance(symbol, str) else ""
+                tf = timeframe.strip().lower() if isinstance(timeframe, str) and timeframe else "1m"
+                if not _SYMBOL_RE.match(sym):
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Invalid symbol: {symbol!r}"}
+                    )
+                    continue
+                if not _TIMEFRAME_RE.match(tf):
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Invalid timeframe: {timeframe!r}"}
+                    )
+                    continue
+
+            if action == "subscribe":
+                if (
+                    broadcast_manager.subscription_count(websocket) >= _MAX_SUBSCRIPTIONS_PER_SOCKET
+                    and not broadcast_manager.has_subscribers(sym, tf)
+                ):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Subscription limit reached ({_MAX_SUBSCRIPTIONS_PER_SOCKET})",
+                    })
+                    continue
+                await broadcast_manager.subscribe(websocket, sym, tf)
+                # If client requested a supported provider, route the stream
+                # through it (v3.6 — currently "alpaca"). Idempotent: repeated
+                # subscribes, or several sockets on one key, start it once.
+                stream_provider = (
+                    provider
+                    if isinstance(provider, str) and provider in _SUPPORTED_STREAM_PROVIDERS
+                    else None
+                )
+                if stream_provider:
+                    await _maybe_start_provider_stream(stream_provider, sym, tf)
                 await websocket.send_json({
                     "type": "subscribed",
-                    "symbol": symbol.upper(),
+                    "symbol": sym,
                     "timeframe": tf,
-                    "provider": provider or "local",
+                    "provider": stream_provider or "local",
                 })
-            elif action == "unsubscribe" and isinstance(symbol, str) and symbol:
-                tf = (timeframe or "1m") if isinstance(timeframe, str) else "1m"
-                await broadcast_manager.unsubscribe(websocket, symbol, tf)
+            elif action == "unsubscribe":
+                await broadcast_manager.unsubscribe(websocket, sym, tf)
                 # If no more local subscribers and a provider stream is active,
                 # tear it down.
-                if not broadcast_manager.has_subscribers(symbol, tf):
-                    active = get_provider_stream(symbol, tf)
-                    if active:
-                        await _maybe_stop_provider_stream(active, symbol, tf)
-                        await set_provider_stream(symbol, tf, "local")
+                if not broadcast_manager.has_subscribers(sym, tf):
+                    await _release_provider_streams([broadcast_manager._make_key(sym, tf)])
                 await websocket.send_json({
                     "type": "unsubscribed",
-                    "symbol": symbol.upper(),
+                    "symbol": sym,
                     "timeframe": tf,
                 })
             elif action == "ping":
@@ -480,5 +556,8 @@ async def realtime_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        await broadcast_manager.remove_socket(websocket)
+        # A disconnect used to leave provider streams running for symbols
+        # nobody watches any more; release the ones this socket held last.
+        orphaned = await broadcast_manager.remove_socket(websocket)
+        await _release_provider_streams(orphaned)
         broadcast_manager._disconnections_total += 1

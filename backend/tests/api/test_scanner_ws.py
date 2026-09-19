@@ -284,14 +284,16 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbol.return_value = _make_scan_result("AAPL")
+            mock_scanner.scan_symbols_async = AsyncMock(
+                return_value=[_make_scan_result("AAPL")]
+            )
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Drive the full flow directly.
             await dispatcher._scan_and_broadcast_all()
 
-        # The scan ran for AAPL...
-        mock_scanner.scan_symbol.assert_called_with("AAPL")
+        # The batch scan ran for AAPL...
+        mock_scanner.scan_symbols_async.assert_awaited_once_with(["AAPL"])
         # ...and the result was pushed to the subscriber.
         ws.send_json.assert_awaited_once()
         sent = ws.send_json.await_args.args[0]
@@ -305,7 +307,9 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbol.side_effect = RuntimeError("upstream down")
+            mock_scanner.scan_symbols_async = AsyncMock(
+                side_effect=RuntimeError("upstream down")
+            )
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             await dispatcher._scan_and_broadcast_all()
@@ -330,7 +334,9 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbol.return_value = _make_scan_result("AAPL")
+            mock_scanner.scan_symbols_async = AsyncMock(
+                return_value=[_make_scan_result("AAPL")]
+            )
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Make the cooldown effectively infinite so the second
@@ -339,13 +345,13 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
 
             # First call: scan runs, broadcast happens.
             await dispatcher._scan_and_broadcast_all()
-            self.assertEqual(mock_scanner.scan_symbol.call_count, 1)
+            self.assertEqual(mock_scanner.scan_symbols_async.await_count, 1)
             self.assertEqual(ws.send_json.await_count, 1)
 
             # Second call (still inside the cooldown): scan is skipped
             # and the subscriber receives no new push.
             await dispatcher._scan_and_broadcast_all()
-            self.assertEqual(mock_scanner.scan_symbol.call_count, 1)  # unchanged
+            self.assertEqual(mock_scanner.scan_symbols_async.await_count, 1)  # unchanged
             self.assertEqual(ws.send_json.await_count, 1)  # unchanged
 
     async def test_dispatcher_cooldown_expires_for_next_call(self):
@@ -355,7 +361,9 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbol.return_value = _make_scan_result("AAPL")
+            mock_scanner.scan_symbols_async = AsyncMock(
+                return_value=[_make_scan_result("AAPL")]
+            )
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Zero cooldown means every call is allowed through.
@@ -365,7 +373,7 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
             await dispatcher._scan_and_broadcast_all()
             await dispatcher._scan_and_broadcast_all()
 
-            self.assertEqual(mock_scanner.scan_symbol.call_count, 3)
+            self.assertEqual(mock_scanner.scan_symbols_async.await_count, 3)
             self.assertEqual(ws.send_json.await_count, 3)
 
 

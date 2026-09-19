@@ -426,7 +426,7 @@ async def get_top_movers(
     already computes both directions in a single pass.
     """
     repo = WatchlistRepository(db)
-    symbols = _resolve_watchlist_symbols(repo, watchlist_id)
+    symbols = await asyncio.to_thread(_resolve_watchlist_symbols, repo, watchlist_id)
     if not symbols:
         return []
 
@@ -458,7 +458,7 @@ async def get_top_movers_combined(
     the same watchlist twice.
     """
     repo = WatchlistRepository(db)
-    symbols = _resolve_watchlist_symbols(repo, watchlist_id)
+    symbols = await asyncio.to_thread(_resolve_watchlist_symbols, repo, watchlist_id)
     if not symbols:
         return _TopMoversCombinedResponse(bullish=[], bearish=[])
 
@@ -487,11 +487,11 @@ async def get_watchlist_rankings(
     Today" cards.
     """
     repo = WatchlistRepository(db)
-    watchlist = repo.get_watchlist(watchlist_id)
+    watchlist = await asyncio.to_thread(repo.get_watchlist, watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+    watchlist_symbols = await asyncio.to_thread(repo.get_watchlist_symbols, watchlist_id, enabled_only=True)
     if not watchlist_symbols:
         return _empty_rankings(engine)
 
@@ -619,12 +619,12 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     HTTP round-trips.
     """
     repo = WatchlistRepository(db)
-    watchlist = repo.get_watchlist(watchlist_id)
+    watchlist = await asyncio.to_thread(repo.get_watchlist, watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
     # Pull BOTH enabled and disabled rows so the UI can manage them.
-    all_rows = repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+    all_rows = await asyncio.to_thread(repo.get_all_watchlist_symbols, watchlist_id, include_disabled=True)
     if not all_rows:
         return _RankedResponse(
             timestamp="", count=0, results=[]
@@ -700,11 +700,11 @@ async def scan_watchlist_top(
     only need a leaderboard view.
     """
     repo = WatchlistRepository(db)
-    watchlist = repo.get_watchlist(watchlist_id)
+    watchlist = await asyncio.to_thread(repo.get_watchlist, watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    watchlist_symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=True)
+    watchlist_symbols = await asyncio.to_thread(repo.get_watchlist_symbols, watchlist_id, enabled_only=True)
     if not watchlist_symbols:
         return []
 

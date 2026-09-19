@@ -322,12 +322,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(prefix) for prefix in _EXEMPT_PATH_PREFIXES):
             return await call_next(request)
 
-        # X-Forwarded-For first hop is the real client when behind a proxy.
-        # Otherwise fall back to the direct connection's client.
-        client_ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        client_ip = _client_ip(request)
 
         allowed, remaining = self.limiter.is_allowed(client_ip)
         if not allowed:
@@ -392,15 +387,20 @@ _backtest_limiter = RedisRateLimiter(max_requests=5, window_seconds=60, name="ba
 
 
 def _client_ip(request: Request) -> str:
-    """Extract the real client IP, honoring X-Forwarded-For.
+    """Identify the client for rate limiting: the connection's peer address.
 
-    Mirrors the logic in ``RateLimitMiddleware.dispatch`` so per-endpoint
-    limiters and the global middleware share the same client identification.
+    Deliberately does NOT read ``X-Forwarded-For`` itself. That header is
+    client-controlled, so trusting it here let any caller dodge the limit
+    by sending a different value on every request (and mint unlimited
+    limiter keys). Behind a reverse proxy, run uvicorn with
+    ``--proxy-headers --forwarded-allow-ips=<proxy ip>``: it then rewrites
+    ``request.client`` from the header, but only for requests that really
+    arrived from a trusted proxy.
+
+    Shared by ``RateLimitMiddleware`` and ``check_rate_limit`` so the
+    global and per-endpoint limiters identify clients identically.
     """
-    return (
-        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        or (request.client.host if request.client else "unknown")
-    )
+    return request.client.host if request.client else "unknown"
 
 
 def check_rate_limit(limiter: RedisRateLimiter):

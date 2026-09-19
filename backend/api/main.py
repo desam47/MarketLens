@@ -1,22 +1,24 @@
 """
 Main API application for MarketLens
 """
+import asyncio
 import logging
+import subprocess
+import sys
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.ai.digest_service import digest_service
 from backend.alerts.engine import alerts_engine
-from backend.config.settings import settings
+from backend.config.settings import _PROJECT_ROOT, settings
 from backend.observability.correlation_id import CorrelationIdMiddleware
-from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
-from backend.observability.metrics import start_memory_profiling
+from backend.observability.logging_enhanced import get_correlation_id
 from backend.observability.tracing import initialize_tracing, shutdown_tracing
 from backend.api import analysis, market_context, multitimeframe, regime, strategy, trend
 from backend.api.ai.router import router as ai_router
@@ -72,19 +74,24 @@ async def lifespan(app: FastAPI):
     # Run Alembic migrations at startup so schema is always current.
     # Alembic reads the DB URL directly from ``backend.config.settings``,
     # which hard-codes the path to ``<project_root>/marketlens.db``.
+    #
+    # Run it as ``sys.executable -m alembic`` against an explicit config and
+    # cwd rather than a bare ``alembic`` on PATH: a bare call silently
+    # no-ops (just a warning below) whenever the server is started from
+    # another directory or an interpreter whose shims aren't on PATH,
+    # leaving the schema behind the code.
     try:
-        import subprocess
-        completed = subprocess.run(
-            ["alembic", "upgrade", "head"],
-            capture_output=True, text=True,
-            # DATABASE_URL is intentionally omitted — alembic/env.py now imports
-            # the URL directly from backend.config.settings, ignoring the env var.
+        completed = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-m", "alembic", "-c", str(_PROJECT_ROOT / "alembic.ini"),
+             "upgrade", "head"],
+            capture_output=True, text=True, cwd=_PROJECT_ROOT, timeout=300,
         )
-        if completed.returncode == 0 and completed.stdout.strip():
-            for line in completed.stdout.strip().splitlines():
-                if line.strip():
+        if completed.returncode == 0:
+            for line in (completed.stdout + completed.stderr).strip().splitlines():
+                if line.strip() and "Running upgrade" in line:
                     logger.info("[alembic] %s", line.strip())
-        elif completed.returncode != 0:
+        else:
             logger.warning("[alembic] upgrade failed: %s", completed.stderr.strip())
     except Exception:
         logger.warning("Alembic migration failed; continuing", exc_info=True)
@@ -270,6 +277,27 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Stop the background services startup launched. The threads are daemons
+    # so the process exits regardless, but stopping them lets in-flight DB
+    # writes finish instead of being cut off mid-transaction. Each stop is
+    # isolated so one failure can't skip the rest. ``stop()`` joins its
+    # thread, so run it off the event loop.
+    try:
+        from backend.market_data.services.ingestion_service import ingestion_service
+        await asyncio.to_thread(ingestion_service.stop)
+    except Exception as e:
+        logger.warning(f"Ingestion shutdown failed: {e}")
+    try:
+        digest_service.stop()
+    except Exception as e:
+        logger.warning(f"Digest service shutdown failed: {e}")
+    if settings.ai_nudges.enabled:
+        try:
+            from backend.ai.nudges import nudge_service
+            nudge_service.stop()
+        except Exception as e:
+            logger.warning(f"Nudge service shutdown failed: {e}")
+
     _stream = getattr(app.state, "webull_stream", None)
     if _stream is not None:
         try:
@@ -373,14 +401,6 @@ if "*" in allow_origins:
         "(e.g. https://app.example.com) before deploying."
     )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
-
 # Correlation ID middleware runs first so every subsequent middleware and
 # endpoint can include the ID in logs and traces.
 app.add_middleware(CorrelationIdMiddleware)
@@ -406,6 +426,18 @@ _write_limiter = RedisRateLimiter(
 app.add_middleware(RateLimitMiddleware, limiter=_write_limiter)
 app.add_middleware(CacheMiddleware)
 app.add_middleware(RequestCounterMiddleware)
+
+# CORS goes on LAST so it is the outermost layer (Starlette wraps in reverse
+# registration order). Registered first, it sat innermost, so the 429s the
+# rate limiter short-circuits never received Access-Control-Allow-Origin and
+# the browser reported an opaque network error instead of a readable 429.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # Include API routers
 # Additional API routers will be included here as phases progress
@@ -471,7 +503,6 @@ async def system_config():
     haven't triggered a server restart yet. Falls back to cached settings
     for fields that can't be read from the env file.
     """
-    import os
     from pathlib import Path
     from datetime import datetime
 

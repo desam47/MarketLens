@@ -33,7 +33,10 @@ class HistoricalSignal(Base):
     """
     __tablename__ = "historical_signals"
 
-    id = Column(Integer, primary_key=True, index=True)
+    # ``id`` needs no ``index=True``: SQLite indexes the INTEGER PRIMARY KEY
+    # natively, so it only created a redundant second copy. See alembic
+    # 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
     symbol = Column(String(20), nullable=False, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
     timeframe = Column(String(10), nullable=False, index=True)

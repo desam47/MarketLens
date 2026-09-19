@@ -11,8 +11,12 @@ class QuoteModel(Base):
     """SQLAlchemy model for storing market quotes"""
     __tablename__ = "quotes"
 
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), index=True, nullable=False)
+    # No ``index=True`` on ``id`` or on a column that already leads a composite
+    # index below: SQLite indexes the INTEGER PRIMARY KEY (rowid) natively, and a
+    # leading-column prefix is served by the composite. Each redundant index is
+    # pure write amplification. See alembic 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
     price = Column(Float, nullable=False)
     bid = Column(Float, nullable=True)
     ask = Column(Float, nullable=True)
@@ -35,9 +39,13 @@ class BarModel(Base):
     """SQLAlchemy model for storing OHLCV bars/candles"""
     __tablename__ = "bars"
 
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), index=True, nullable=False)
-    timeframe = Column(String(10), nullable=False, index=True)  # 1m, 5m, 1h, 1d, etc.
+    # No ``index=True`` on ``id`` or on a column that already leads a composite
+    # index below: SQLite indexes the INTEGER PRIMARY KEY (rowid) natively, and a
+    # leading-column prefix is served by the composite. Each redundant index is
+    # pure write amplification. See alembic 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
+    timeframe = Column(String(10), nullable=False)  # 1m, 5m, 1h, 1d, etc.
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
     low = Column(Float, nullable=False)
@@ -95,8 +103,12 @@ class TapeBarModel(Base):
     """
     __tablename__ = "tape_bars"
 
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), index=True, nullable=False)
+    # No ``index=True`` on ``id`` or on a column that already leads a composite
+    # index below: SQLite indexes the INTEGER PRIMARY KEY (rowid) natively, and a
+    # leading-column prefix is served by the composite. Each redundant index is
+    # pure write amplification. See alembic 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
     timestamp = Column(DateTime, nullable=False, index=True)  # 1s bucket start, naive NY
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
@@ -124,8 +136,12 @@ class MarketStatusModel(Base):
     """SQLAlchemy model for storing market status information"""
     __tablename__ = "market_status"
 
-    id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), index=True, nullable=False)
+    # No ``index=True`` on ``id`` or on a column that already leads a composite
+    # index below: SQLite indexes the INTEGER PRIMARY KEY (rowid) natively, and a
+    # leading-column prefix is served by the composite. Each redundant index is
+    # pure write amplification. See alembic 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
     is_open = Column(Boolean, nullable=False)
     next_open = Column(DateTime, nullable=True)
     next_close = Column(DateTime, nullable=True)
@@ -146,8 +162,12 @@ class ProviderStatusModel(Base):
     """SQLAlchemy model for storing provider health/status information"""
     __tablename__ = "provider_status"
 
-    id = Column(Integer, primary_key=True, index=True)
-    provider_name = Column(String(50), nullable=False, index=True)
+    # No ``index=True`` on ``id`` or on a column that already leads a composite
+    # index below: SQLite indexes the INTEGER PRIMARY KEY (rowid) natively, and a
+    # leading-column prefix is served by the composite. Each redundant index is
+    # pure write amplification. See alembic 20260919_index_tuning.
+    id = Column(Integer, primary_key=True)
+    provider_name = Column(String(50), nullable=False)
     is_healthy = Column(Boolean, nullable=False)
     latency_ms = Column(Float, nullable=True)
     rate_limit_remaining = Column(Integer, nullable=True)

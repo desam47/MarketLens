@@ -310,10 +310,23 @@ class ScannerDispatcher:
             results = await market_scanner.scan_symbols_async(to_scan)
         except Exception as e:
             logger.error(f"Batch scan failed for {len(to_scan)} symbols: {e}")
+            # Tell subscribers instead of leaving them on "waiting": the
+            # protocol documents a ``scan_error`` frame (and the client types
+            # it), and the pre-batch dispatcher sent one per failed symbol.
+            # The scan timestamps recorded above keep this bounded by the
+            # cooldown, so a persistent failure isn't re-pushed per quote tick.
+            for symbol in to_scan:
+                if self._manager.has_subscribers(symbol):
+                    await self._manager.broadcast(
+                        symbol,
+                        {"type": "scan_error", "symbol": symbol, "error": str(e)},
+                    )
             return
 
         # Broadcast each result to its subscribers.
-        for symbol, result in zip(to_scan, results):
+        # strict: scan_symbols_async returns one result per symbol, in order. If
+        # that ever broke, a silent zip would pair symbols with the wrong results.
+        for symbol, result in zip(to_scan, results, strict=True):
             if not self._manager.has_subscribers(symbol):
                 continue
 

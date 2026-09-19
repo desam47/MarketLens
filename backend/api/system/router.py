@@ -13,6 +13,7 @@ The actual counters live in ``backend/observability/metrics.py`` so the
 scanner, ingestion, and bar repository can import them without pulling
 in FastAPI (avoids circular imports).
 """
+import asyncio
 from datetime import UTC, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -328,15 +329,16 @@ def prometheus_metrics() -> Response:
 # Phase 3.3.3 — Backup / WAL health
 # ---------------------------------------------------------------------------
 
-BackupStatusResponse: type = None  # defined after the helper
-
-
 def _safe_backup_status() -> dict | None:
     """Return WAL checkpoint + Litestream health snapshot.
 
-    ``PRAGMA wal_checkpoint(TRUNCATE)`` does a passive checkpoint then
-    truncates the WAL file to zero bytes if all frames were committed —
-    it is always safe to call and never blocks readers or writers.
+    ``PRAGMA wal_checkpoint(PASSIVE)`` checkpoints as many frames as it
+    can without waiting on any reader or writer, and reports how many it
+    could not. It is deliberately NOT ``TRUNCATE``: that mode blocks
+    writers (and waits on readers) until the WAL is empty — on a busy
+    database that stalls ingestion for every status poll — and it also
+    zeroes the very ``wal_size_bytes`` this endpoint exists to report, so
+    a WAL that was growing unchecked could never show up here.
 
     Litestream exposes its health via HTTP GET to
     ``http://localhost:9090`` (default port when running
@@ -356,8 +358,8 @@ def _safe_backup_status() -> dict | None:
         db_path = Path(str(engine.url).replace("sqlite:///", ""))
 
         with engine.connect() as conn:
-            # Checkpoint: returns (checkpointed_pages, wal_frames, end_page)
-            checkpoint_result = conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            # Checkpoint: returns (busy, wal_frames, checkpointed_frames)
+            checkpoint_result = conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)")).fetchone()
             journal_mode = conn.execute(text("PRAGMA journal_mode")).scalar()
 
             # WAL file size (may be 0 if no writes have happened since last checkpoint)
@@ -425,7 +427,7 @@ async def get_backup_status() -> BackupStatusResponse:
     streaming state so the SystemHealth DB tab can show at-a-glance backup
     health without requiring CLI access.
     """
-    status = _safe_backup_status()
+    status = await asyncio.to_thread(_safe_backup_status)
     if status is None:
         # Degrade gracefully — return a known-unhealthy shape.
         return BackupStatusResponse(
@@ -444,7 +446,7 @@ async def get_backup_status() -> BackupStatusResponse:
 
 
 @router.get("/data-quality")
-async def get_data_quality() -> dict:
+def get_data_quality() -> dict:
     """Audit for duplicate calendar-day bars (1d/1wk).
 
     2026-09-09: webull stamps 1d bars at 00:00, yahoo_finance at 09:30 —

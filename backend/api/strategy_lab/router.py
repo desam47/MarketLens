@@ -308,7 +308,7 @@ async def create_experiment(body: ExperimentCreate) -> ExperimentResponse:
 
 
 @router.get("/", response_model=list[ExperimentResponse])
-async def list_experiments(
+def list_experiments(
     limit: int = 20,
     status: str | None = None,
 ) -> list[ExperimentResponse]:
@@ -322,7 +322,7 @@ async def list_experiments(
 
 
 @router.get("/{experiment_id}", response_model=ExperimentResponse)
-async def get_experiment(experiment_id: int) -> ExperimentResponse:
+def get_experiment(experiment_id: int) -> ExperimentResponse:
     """Get a single experiment with all aggregated IS/Val/OOS metrics."""
     repo = ExperimentRepository()
     try:
@@ -336,7 +336,7 @@ async def get_experiment(experiment_id: int) -> ExperimentResponse:
 
 
 @router.get("/{experiment_id}/runs")
-async def get_experiment_runs(experiment_id: int) -> dict:
+def get_experiment_runs(experiment_id: int) -> dict:
     """Get all BacktestRun rows for this experiment, with regime breakdown."""
     repo = ExperimentRepository()
     try:
@@ -378,7 +378,7 @@ async def get_experiment_runs(experiment_id: int) -> dict:
 
 
 @router.post("/compare", response_model=ExperimentCompareResponse)
-async def compare_experiments(body: ExperimentCompare) -> ExperimentCompareResponse:
+def compare_experiments(body: ExperimentCompare) -> ExperimentCompareResponse:
     """Compare two or more experiments side-by-side.
 
     Returns all experiments plus a combined regime breakdown across
@@ -456,7 +456,7 @@ async def compare_experiments(body: ExperimentCompare) -> ExperimentCompareRespo
 
 
 @router.delete("/{experiment_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_experiment(experiment_id: int) -> None:
+def delete_experiment(experiment_id: int) -> None:
     """Delete an experiment and all its child BacktestRun rows."""
     repo = ExperimentRepository()
     try:

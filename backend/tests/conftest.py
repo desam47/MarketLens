@@ -12,7 +12,45 @@ their own test.
 A session-scoped fixture would also work, but function-scoped ensures
 complete isolation when tests run in random order.
 """
+import os
+
 import pytest
+
+
+# ── Never call the real Webull API from the test suite ──────────────────────
+#
+# Importing ``backend.api.main`` (which most API tests do, at collection time)
+# builds the market-data manager, which constructs ``WebullProvider``. Its
+# ``__init__`` makes a REAL signed request to api.webull.com. A batch of test
+# runs therefore burned Webull's rate limit (429 TOO_MANY_REQUESTS): the
+# provider then failed to register in the *live dev server* too after its next
+# reload (logs held hundreds of such failures across earlier sessions).
+#
+# ``ApiClient.get_response`` is the SDK's single HTTP funnel, so replacing it
+# with an offline error makes provider construction fail fast and locally —
+# the same "provider absent" state the suite already passes under whenever
+# Webull is unreachable. Tests that patch higher up (``WebullProvider.__init__``,
+# ``_TradeClient`` ...) are unaffected. This must run at conftest import time:
+# the app is imported during collection, before any fixture would execute.
+# Set MARKETLENS_TEST_ALLOW_NETWORK=1 to allow live calls on purpose.
+def _block_webull_network() -> None:
+    if os.environ.get("MARKETLENS_TEST_ALLOW_NETWORK") == "1":
+        return
+    try:
+        import webull.core.client as _wb_client
+    except ImportError:  # SDK not installed -> nothing to guard
+        return
+
+    def _offline_get_response(self, api_request):  # noqa: ANN001
+        raise ConnectionError(
+            "Webull network access is disabled under pytest "
+            "(set MARKETLENS_TEST_ALLOW_NETWORK=1 to allow live calls)"
+        )
+
+    _wb_client.ApiClient.get_response = _offline_get_response
+
+
+_block_webull_network()
 
 
 @pytest.fixture(autouse=True)
