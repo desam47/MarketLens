@@ -15,7 +15,7 @@ is still converging and its score there depends on where the replay happened to 
 """
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -68,54 +68,126 @@ def label_columns(score: float | None) -> dict[str, Any]:
     }
 
 
+# What a replay engine keeps, so that one held per (symbol, timeframe) stays small. All three cuts
+# leave every score bit-for-bit unchanged (checked on daily, hourly, 5m and 1m bars): the
+# indicators are updated incrementally and never re-read old candles or old values.
+#   * the aggregator appends every candle it builds and never trims (~6 KB per bar);
+_CANDLES_KEPT = 100
+#   * every indicator appends every value it computes and never trims;
+_VALUES_KEPT = 500
+#   * the engine builds an indicator stack for ALL ten timeframes and updates each from the
+#     candles of its own timeframe, but a replay only ever reads one. Dropping the other nine
+#     takes a daily engine from 41 MB to 1 MB and halves the time per bar.
+
+# How long a bar's candle is open, by timeframe. Bars are stamped with their OPEN time.
+_BAR_MINUTES = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120,
+                "4h": 240, "1d": 1440, "1wk": 10080}
+
+
+def bar_length(timeframe: str) -> timedelta:
+    """How long a candle of ``timeframe`` is open; zero for a timeframe of unknown length, whose
+    bars are taken to have closed the moment they opened."""
+    return timedelta(minutes=_BAR_MINUTES.get(timeframe, 0))
+
+
+def bar_end(bar_ts: datetime, timeframe: str) -> datetime:
+    """When the candle stamped ``bar_ts`` (naive New York open time) closes."""
+    return bar_ts + bar_length(timeframe)
+
+
+def is_closed(bar_ts: datetime, timeframe: str, now: datetime | None = None) -> bool:
+    """Whether the bar can no longer change.
+
+    The engine cannot un-see a tick, so a still-forming bar must never be fed to it: every score
+    after that would carry a half-finished candle.
+    """
+    if now is None:
+        from backend.utils.timezone import now_ny
+        now = now_ny()
+    return bar_end(bar_ts, timeframe) <= now
+
+
+class BarReplay:
+    """One private ``TrendEngine`` fed closed bars, oldest first, one at a time.
+
+    ``feed`` returns the score after that bar. Feeding the whole history in one go
+    (``replay_trend_scores``) and feeding it bar by bar as bars close (the live recorder) run
+    the same code, so a stored signal means the same thing whichever way it was written.
+    """
+
+    def __init__(self, symbol: str, timeframe: str, warmup: int = REPLAY_WARMUP_BARS) -> None:
+        from backend.engines.timeframe import (
+            Timeframe,
+            TimeframeEngine,
+            multi_symbol_timeframe_engine,
+        )
+        from backend.trend.trend_engine import TrendEngine
+
+        self.symbol, self.timeframe, self.warmup = symbol, timeframe, warmup
+        self.fed = 0
+        self.last_ts: datetime | None = None
+        self._engine = None
+        try:
+            self._tf = Timeframe(timeframe)
+        except ValueError:
+            return  # a timeframe the engine does not support: every bar scores None
+        # TrendEngine attaches to the PROCESS-WIDE per-symbol candle aggregator, and resets its
+        # candle bookkeeping. Under the real symbol, years of old ticks would land in the live
+        # engine's candles. So build it under a throwaway name whose aggregator is created here
+        # (empty: TrendEngine would otherwise seed a new one with a price-0 tick at "now").
+        # The engine keeps its own reference, so the registry entry is dropped straight away.
+        scratch = f"__replay__{symbol}_{timeframe}_{uuid4().hex[:8]}"
+        multi_symbol_timeframe_engine.engines[scratch] = TimeframeEngine(scratch)
+        try:
+            self._engine = TrendEngine(scratch)
+        finally:
+            multi_symbol_timeframe_engine.engines.pop(scratch, None)
+        self._engine.indicators = {self._tf: self._engine.indicators[self._tf]}
+
+    def feed(self, bar: Any) -> float | None:
+        """Feed one closed bar (``timestamp``, ``close``, ``volume``); its score, or None."""
+        from backend.utils.timezone import ny_to_utc
+
+        index = self.fed
+        self.fed += 1
+        self.last_ts = bar.timestamp
+        if self._engine is None:
+            return None
+        score = None
+        try:
+            self._engine.update(
+                price=float(bar.close or 0.0), volume=int(bar.volume or 0),
+                timestamp=bar.timestamp, only_timeframe=self._tf,
+            )
+            signal = self._engine.get_current_trend(self._tf)
+            # ``get_current_trend`` is the LAST signal ever emitted: unless it is this bar's,
+            # the engine produced nothing for it and the score belongs to an earlier bar.
+            if (signal is not None and signal.score is not None and index >= self.warmup
+                    and signal.timestamp == ny_to_utc(bar.timestamp)):
+                score = float(signal.score)
+        except Exception:  # noqa: BLE001 - one unscorable bar must not sink the replay
+            logger.debug("replay %s/%s: bar %s unscorable", self.symbol, self.timeframe,
+                         bar.timestamp, exc_info=True)
+        for candles in self._engine.timeframe_engine.candles.values():
+            if len(candles) > _CANDLES_KEPT:
+                del candles[:-_CANDLES_KEPT]
+        for indicator in self._engine.indicators[self._tf].values():
+            if len(indicator.values) > _VALUES_KEPT:
+                del indicator.values[:-_VALUES_KEPT]
+            if len(indicator.timestamps) > _VALUES_KEPT:
+                del indicator.timestamps[:-_VALUES_KEPT]
+        return score
+
+
 def replay_trend_scores(
     symbol: str, timeframe: str, bars: Iterable[Any], warmup: int = REPLAY_WARMUP_BARS,
 ) -> dict[datetime, float | None]:
-    """``{bar timestamp: trend score}`` for ``bars`` (oldest first, each with ``timestamp``,
-    ``close`` and ``volume``). The score is None for warm-up bars, for bars the engine could not
-    score, and for every bar of a timeframe the engine does not support.
+    """``{bar timestamp: trend score}`` for ``bars`` (oldest first, closed, each with
+    ``timestamp``, ``close`` and ``volume``). The score is None for warm-up bars, for bars the
+    engine could not score, and for every bar of a timeframe the engine does not support.
     """
-    from backend.engines.timeframe import Timeframe, TimeframeEngine, multi_symbol_timeframe_engine
-    from backend.trend.trend_engine import TrendEngine
-    from backend.utils.timezone import ny_to_utc
-
-    bars = list(bars)
-    try:
-        tf = Timeframe(timeframe)
-    except ValueError:
-        return {b.timestamp: None for b in bars}
-
-    # TrendEngine attaches to the PROCESS-WIDE per-symbol candle aggregator, and resets its
-    # candle bookkeeping. Replaying under the real symbol would feed years of old ticks into
-    # the live engine's candles. So run under a throwaway name whose aggregator is created here
-    # (empty: TrendEngine would otherwise seed a new one with a price-0 tick at "now") and
-    # dropped afterwards.
-    scratch = f"__replay__{symbol}_{timeframe}_{uuid4().hex[:8]}"
-    multi_symbol_timeframe_engine.engines[scratch] = TimeframeEngine(scratch)
-    scores: dict[datetime, float | None] = {}
-    try:
-        engine = TrendEngine(scratch)
-        for i, bar in enumerate(bars):
-            score = None
-            try:
-                engine.update(
-                    price=float(bar.close or 0.0), volume=int(bar.volume or 0),
-                    timestamp=bar.timestamp, only_timeframe=tf,
-                )
-                signal = engine.get_current_trend(tf)
-                # ``get_current_trend`` is the LAST signal ever emitted: unless it is this
-                # bar's, the engine produced nothing for it and the score belongs to an
-                # earlier bar.
-                if (signal is not None and signal.score is not None and i >= warmup
-                        and signal.timestamp == ny_to_utc(bar.timestamp)):
-                    score = float(signal.score)
-            except Exception:  # noqa: BLE001 - one unscorable bar must not sink the replay
-                logger.debug("replay %s/%s: bar %s unscorable", symbol, timeframe,
-                             bar.timestamp, exc_info=True)
-            scores[bar.timestamp] = score
-    finally:
-        multi_symbol_timeframe_engine.engines.pop(scratch, None)
-    return scores
+    replay = BarReplay(symbol, timeframe, warmup)
+    return {bar.timestamp: replay.feed(bar) for bar in bars}
 
 
 _LABEL_FIELDS = ("trend_score", "trend_state", "strength", "momentum", "structure", "market_regime")

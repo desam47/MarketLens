@@ -18,16 +18,28 @@ yet, the function leaves the row alone and returns it to the queue.
 import bisect
 import json
 import logging
-from datetime import datetime, timezone
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func
 
 from backend.database import SessionLocal
 from backend.models import BarModel, HistoricalSignal
 from backend.repositories.signal_repository import SignalRepository
-from backend.services.signal_replay import label_columns, replay_trend_scores
+from backend.services.signal_replay import BarReplay, bar_end, is_closed, label_columns
+from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
+
+# Seeding a pair replays its whole stored history (~0.15 ms a bar, pure Python, so it competes
+# with the event loop for the GIL). Each recording cycle seeds for at most this long.
+SEED_BUDGET_SECONDS = 3.0
+SEED_MAX_BARS = 50000
+# Cheapest first: the coarse timeframes have the fewest bars and the most durable signals.
+_SEED_ORDER = {tf: i for i, tf in enumerate(["1wk", "1d", "4h", "1h", "30m", "15m", "5m", "3m", "2m", "1m"])}
+# A row written this soon after its bar closed may carry today's market regime.
+_FRESH = timedelta(minutes=15)
 
 # How many bars of forward data we need before computing outcomes.
 # Per spec: 5/10/20-bar returns + MFE/MAE.
@@ -39,6 +51,11 @@ class SignalRecorder:
 
     def __init__(self) -> None:
         self._last_recorded: dict[tuple[str, str, datetime], datetime] = {}
+        # One replay engine per (symbol, timeframe), seeded from stored bars and then advanced a
+        # closed bar at a time. Guarded by ``_lock``: the recording loop, startup hygiene and
+        # POST /api/signals/record all reach it from different threads.
+        self._replays: dict[tuple[str, str], BarReplay] = {}
+        self._lock = threading.RLock()
 
     # --- Public API ----------------------------------------------------------
 
@@ -307,63 +324,76 @@ class SignalRecorder:
         finally:
             db.close()
 
-    def record_from_recent_bars(
-        self, symbols: list[str]
-    ) -> int:
-        """Walk the latest stored bar per (symbol, timeframe) and record signals.
+    # --- Recording --------------------------------------------------------------------
+    #
+    # Every row's label comes from a ``BarReplay`` of the pair's stored bars, so a row means the
+    # same thing whether it was written by a backfill or bar by bar as bars close. Only CLOSED
+    # bars are fed to the engine or recorded: a forming bar's row would carry a half-finished
+    # candle, and the engine cannot take a tick back. A bar is therefore recorded once it closes,
+    # at most one cycle after (the 90 s loop), never before.
 
-        Phase 3.1 note: the bars table only stores 1m bars. The subquery
-        queries all ``timeframe`` values that have rows for the given symbols,
-        so signals are recorded for whatever timeframes are available — not
-        just the ingestion timeframes. If higher-TF bars are backfilled later
-        (e.g. via ``backfill_1m.py`` and provider fetch at 1d), signals for
-        those timeframes will automatically appear.
+    def record_from_recent_bars(
+        self,
+        symbols: list[str],
+        budget_seconds: float = SEED_BUDGET_SECONDS,
+        now: datetime | None = None,
+    ) -> int:
+        """Record a signal for every newly CLOSED bar of every (symbol, timeframe) of ``symbols``.
+
+        A pair not seen since startup is first seeded: its stored history is replayed to build
+        the engine, and any bar without a row gets one. Seeding is CPU-bound, so at most
+        ``budget_seconds`` of it (and always at least one pair) happens per call, cheapest
+        timeframes first; the rest wait for the next cycle. Pairs already seeded only feed the
+        bars that closed since.
 
         Returns the count of new signals written.
         """
         if not symbols:
             return 0
+        now = now or now_ny()
+        deadline = time.monotonic() + budget_seconds
         recorded = 0
         db = SessionLocal()
         try:
-            # Find the most recent bar per (symbol, timeframe) in one query.
-            # Note: ``BarModel.timeframe`` is included in the GROUP BY so we
-            # get one row per (symbol, timeframe) pair — not just one per symbol.
-            # Before Phase 3.1: the table had 1m/5m/15m/30m/1h/1d/1wk bars.
-            # After Phase 3.1: only 1m bars exist; higher-TF signals are only
-            # recorded once backfill_1m.py + provider fetch adds those bars.
-            subq = (
-                db.query(
-                    BarModel.symbol,
-                    BarModel.timeframe,
-                    func.max(BarModel.timestamp).label("ts"),
-                )
+            latest = (
+                db.query(BarModel.symbol, BarModel.timeframe, func.max(BarModel.timestamp))
                 .filter(BarModel.symbol.in_([s.upper() for s in symbols]))
                 .group_by(BarModel.symbol, BarModel.timeframe)
-            ).subquery()
-
-            rows = (
-                db.query(BarModel)
-                .join(
-                    subq,
-                    and_(
-                        BarModel.symbol == subq.c.symbol,
-                        BarModel.timeframe == subq.c.timeframe,
-                        BarModel.timestamp == subq.c.ts,
-                    ),
-                )
                 .all()
             )
-
-            for bar in rows:
-                if self._record_from_bar(bar, db):
-                    recorded += 1
+            with self._lock:
+                unseeded = []
+                for symbol, timeframe, last_bar in latest:
+                    replay = self._replays.get((symbol, timeframe))
+                    if replay is None:
+                        unseeded.append((symbol, timeframe))
+                    elif replay.last_ts is None or last_bar > replay.last_ts:
+                        recorded += self._guarded(db, symbol, timeframe, self._advance_pair,
+                                                  replay, now)
+                unseeded.sort(key=lambda p: _SEED_ORDER.get(p[1], len(_SEED_ORDER)))
+                for n, (symbol, timeframe) in enumerate(unseeded):
+                    if n and time.monotonic() >= deadline:
+                        logger.debug("signal recorder: %d pairs wait for the next cycle",
+                                     len(unseeded) - n)
+                        break
+                    recorded += self._guarded(db, symbol, timeframe, self._seed_pair,
+                                              SEED_MAX_BARS, now)
         except Exception as e:
             logger.error(f"record_from_recent_bars failed: {e}")
             db.rollback()
         finally:
             db.close()
         return recorded
+
+    def _guarded(self, db, symbol: str, timeframe: str, step, *args) -> int:
+        """Run one pair's step; one pair's failure must not stop the others."""
+        try:
+            return step(db, symbol, timeframe, *args)
+        except Exception as e:
+            db.rollback()
+            logger.error(f"signal recorder: {symbol}/{timeframe} failed: {e}")
+            return 0
+
 
     def backfill_signals_for_symbol(
         self,
@@ -439,241 +469,110 @@ class SignalRecorder:
         symbol: str,
         timeframe: str,
         max_bars: int,
+        now: datetime | None = None,
     ) -> int:
-        """Bulk-record signals for one (symbol, timeframe) using dedup set + bulk insert.
+        """Record every closed bar of one (symbol, timeframe) that has no signal yet (the gap
+        fill and new-symbol backfill path). Replays the pair's stored bars, newest ``max_bars``,
+        from the start, so a late bar is labelled from all the history before it. Returns the
+        number of new signals written."""
+        with self._lock:
+            return self._seed_pair(db, symbol, timeframe, max_bars, now or now_ny())
 
-        Strategy (Phase 3.x optimization):
-          1. Fetch the (symbol, timeframe) bars (capped at max_bars).
-          2. Fetch the existing signal timestamps for that pair in one
-             ``IN()``-style query and build an O(1) dedup set.
-          3. For each bar not in the set, build the signal record and
-             collect into a list. No DB I/O in the loop.
-          4. Single ``bulk_save_objects()`` + single ``db.commit()`` for
-             the whole batch. In-process dedup cache is populated
-             post-commit so subsequent live ingestion also sees them.
-
-        Returns the number of new signals written.
-        """
-        bars = (
-            db.query(BarModel)
+    def _seed_pair(self, db, symbol: str, timeframe: str, max_bars: int, now: datetime) -> int:
+        """Replay the pair's closed bars, write the ones without a row, keep the engine so
+        ``_advance_pair`` can carry on from the last bar."""
+        rows = (
+            db.query(BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low,
+                     BarModel.volume)
             .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
             .order_by(BarModel.timestamp.desc())
             .limit(max_bars)
             .all()
         )
-        if not bars:
+        rows.reverse()  # the query is newest-first; the replay must run oldest-first
+        closed = [r for r in rows if is_closed(r.timestamp, timeframe, now)]
+        if not closed:
             return 0
-
-        # Step 1: bulk-fetch existing signal timestamps for this pair.
-        # Note: the bars query is desc; we need an asc-ordered list of
-        # timestamps for the dedup set. Pull only the timestamp column.
-        existing_ts = {
+        existing = {
             ts for (ts,) in db.query(HistoricalSignal.timestamp)
-            .filter(
-                HistoricalSignal.symbol == symbol,
-                HistoricalSignal.timeframe == timeframe,
-            )
+            .filter(HistoricalSignal.symbol == symbol, HistoricalSignal.timeframe == timeframe,
+                    HistoricalSignal.timestamp >= closed[0].timestamp)
             .all()
         }
+        replay = BarReplay(symbol, timeframe)
+        scored = [(bar, replay.feed(bar)) for bar in closed]
+        written = self._insert_rows(
+            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now)
+        self._replays[(symbol, timeframe)] = replay
+        return written
 
-        # Step 2: build the per-bar signal records in Python (no DB I/O).
-        #
-        # Each bar's label comes from REPLAYING the stored bars through a private trend engine
-        # (see ``signal_replay``), so it is what the trend was at that bar. It used to be the live
-        # engine's current score, stamped identically on every row of the backfill.
-        bars.reverse()  # the query above is newest-first; the replay must run oldest-first
-        missing = [b for b in bars if b.timestamp not in existing_ts]
-        if not missing:
+    def _advance_pair(self, db, symbol: str, timeframe: str, replay: BarReplay, now: datetime) -> int:
+        """Feed the bars that closed since the last cycle and write their rows."""
+        q = (
+            db.query(BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low,
+                     BarModel.volume)
+            .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
+        )
+        if replay.last_ts is not None:
+            q = q.filter(BarModel.timestamp > replay.last_ts)
+        new = []
+        for row in q.order_by(BarModel.timestamp.asc()).all():
+            if not is_closed(row.timestamp, timeframe, now):
+                break  # later bars close later still
+            new.append(row)
+        if not new:
             return 0
-        scores = replay_trend_scores(symbol, timeframe, bars)
+        existing = {
+            ts for (ts,) in db.query(HistoricalSignal.timestamp)
+            .filter(HistoricalSignal.symbol == symbol, HistoricalSignal.timeframe == timeframe,
+                    HistoricalSignal.timestamp.in_([r.timestamp for r in new]))
+            .all()
+        }
+        scored = [(bar, replay.feed(bar)) for bar in new]
+        return self._insert_rows(
+            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now)
 
-        new_records: list[dict] = []
-        for bar in missing:
-            ts = bar.timestamp
-            # The in-process cache guards against rapid duplicate calls
-            # within a single process (e.g. two concurrent ingestion
-            # ticks). On a hot reload it can be stale, so the DB dedup
-            # above is the source of truth.
-            cache_key = (symbol, timeframe, ts)
-            if cache_key in self._last_recorded:
-                continue
-
-            new_records.append({
-                "symbol": symbol,
-                "timestamp": ts,
-                "timeframe": timeframe,
-                "price": float(bar.close or 0),
-                **label_columns(scores.get(ts)),
-                "relative_strength": None,
-                "sector_alignment": None,
-                "volume_state": self._classify_volume(bar),
-                "confidence_inputs": json.dumps({
+    def _insert_rows(self, db, symbol: str, timeframe: str, scored, now: datetime) -> int:
+        """Bulk-insert one signal per ``(bar, score)``. A row written within
+        ``FRESH_MINUTES`` of its bar closing also records the current market regime; an older
+        one leaves it empty, because the regime engine only knows the present."""
+        if not scored:
+            return 0
+        regime, regime_loaded = None, False
+        objects = []
+        for bar, score in scored:
+            label = label_columns(score)
+            if score is not None and now - bar_end(bar.timestamp, timeframe) <= _FRESH:
+                if not regime_loaded:
+                    regime, regime_loaded = self._get_market_regime(), True
+                label["market_regime"] = regime
+            objects.append(HistoricalSignal(
+                symbol=symbol,
+                timestamp=bar.timestamp,
+                timeframe=timeframe,
+                price=float(bar.close or 0),
+                **label,
+                relative_strength=None,
+                sector_alignment=None,
+                volume_state=self._classify_volume(bar),
+                confidence_inputs=json.dumps({
                     "bar_close": float(bar.close or 0),
                     "bar_high": float(bar.high or 0),
                     "bar_low": float(bar.low or 0),
                 }),
-                "strategy_version": "v1",
-                "data_quality": "good",
-                "_outcome_missing": True,
-            })
-            # Mark in the cache so the post-commit in-process cache
-            # can be populated without an extra query.
-            self._last_recorded[cache_key] = ts
-
-        if not new_records:
-            return 0
-
-        # Step 3: bulk insert. SQLAlchemy's bulk_save_objects skips the
-        # unit-of-work per-row overhead, and we commit once at the end.
-        # We pass return_defaults=False because the autoincrement PK
-        # isn't needed by the caller (we return count).
-        objects = [HistoricalSignal(**r) for r in new_records]
+                strategy_version="v1",
+                data_quality="good",
+                _outcome_missing=True,
+            ))
         try:
             db.bulk_save_objects(objects, return_defaults=False)
             db.commit()
         except Exception as e:
             db.rollback()
-            # Roll back the in-process cache so a retry can repopulate.
-            for r in new_records:
-                self._last_recorded.pop(
-                    (r["symbol"], r["timeframe"], r["timestamp"]), None
-                )
-            logger.error(
-                f"_bulk_record_bars({symbol}, {timeframe}, n={len(new_records)}) "
-                f"failed: {e}"
-            )
+            logger.error(f"_insert_rows({symbol}, {timeframe}, n={len(objects)}) failed: {e}")
             raise
-        return len(new_records)
+        return len(objects)
 
-    def _record_from_bar(self, bar, db) -> bool:
-        """Build a snapshot for a single bar and write a signal row.
-
-        Returns True if a new signal was persisted.
-        """
-        # Skip webull :30 noise in 1h — Webull returns 1h bars at :30 offsets
-        # (09:30, 10:30...) instead of the standard :00 boundaries. These
-        # are not valid hour-close bars.
-        if bar.timeframe == "1h" and bar.timestamp.minute == 30:
-            return False
-
-        key = (bar.symbol.upper(), bar.timeframe, bar.timestamp)
-        if key in self._last_recorded:
-            return False
-
-        # Skip if a row already exists for this (symbol, timeframe, ts).
-        existing = (
-            db.query(HistoricalSignal.id)
-            .filter(
-                HistoricalSignal.symbol == bar.symbol.upper(),
-                HistoricalSignal.timeframe == bar.timeframe,
-                HistoricalSignal.timestamp == bar.timestamp,
-            )
-            .first()
-        )
-        if existing is not None:
-            self._last_recorded[key] = bar.timestamp
-            return False
-
-        # Build the trend snapshot. Lazy-import the MTF router to avoid
-        # pulling the API surface into the service layer.
-        trend_state = self._classify_trend_from_bar(bar)
-        trend_score = self._score_from_bar(bar)
-        volume_state = self._classify_volume(bar)
-
-        # Try to fetch market regime from the global market context engine.
-        market_regime = self._get_market_regime()
-        sector_alignment = None  # Phase 8 sector engine alignment — future hook
-
-        self.record_signal(
-            symbol=bar.symbol,
-            timeframe=bar.timeframe,
-            trend_score=trend_score,
-            trend_state=trend_state,
-            strength=min(abs(trend_score) / 100.0, 1.0) if trend_score is not None else None,
-            market_regime=market_regime,
-            relative_strength=None,
-            sector_alignment=sector_alignment,
-            volume_state=volume_state,
-            momentum=trend_score,
-            structure=trend_state,
-            confidence_inputs={"bar_close": bar.close, "bar_high": bar.high, "bar_low": bar.low},
-            strategy_version="v1",
-            data_quality="good",
-            price=bar.close,
-            timestamp=bar.timestamp,
-        )
-        return True
-
-    def _classify_trend_from_bar(self, bar) -> str:
-        """Classify a bar as bullish/bearish/neutral.
-
-        Primary path: read the in-process trend engine's current signal for
-        (symbol, timeframe). The engine has 200 bars of seeded history plus
-        live ticks, so EMA/RSI/MACD/ADX/SuperTrend/Bollinger/ROC all
-        contribute — far more reliable than a 1-bar heuristic.
-
-        Fallback: close-vs-open when the engine is unavailable (e.g. for
-        timeframes not registered in the trend engine, or during the
-        very first bars before the engine has any signals).
-        """
-        engine_signal = self._get_trend_signal(bar.symbol, bar.timeframe)
-        if engine_signal is not None and engine_signal.score is not None:
-            score = engine_signal.score
-            if score >= 30:
-                return "bullish"
-            if score <= -30:
-                return "bearish"
-            return "neutral"
-        try:
-            close = float(bar.close or 0)
-            open_ = float(bar.open or close)
-            if close > open_ * 1.005:
-                return "bullish"
-            if close < open_ * 0.995:
-                return "bearish"
-            return "neutral"
-        except Exception:
-            return "neutral"
-
-    def _score_from_bar(self, bar) -> float:
-        """Build a -100..+100 score.
-
-        Primary path: read from the in-process trend engine's current
-        signal (weighted EMA+RSI+MACD+ADX+SuperTrend+BB+ROC composite).
-
-        Fallback: pct move from open to close, scaled 5× (so 0.2% move
-        → ±1 score).
-        """
-        engine_signal = self._get_trend_signal(bar.symbol, bar.timeframe)
-        if engine_signal is not None and engine_signal.score is not None:
-            return float(engine_signal.score)
-        try:
-            close = float(bar.close or 0)
-            open_ = float(bar.open or close)
-            if open_ <= 0:
-                return 0.0
-            pct = (close - open_) / open_ * 100.0
-            return max(min(pct * 5.0, 100.0), -100.0)
-        except Exception:
-            return 0.0
-
-    def _get_trend_signal(self, symbol: str, timeframe: str):
-        """Look up the current trend signal from the in-process registry.
-
-        Returns ``None`` if the engine isn't initialized or has no signal
-        yet for the requested (symbol, timeframe). Lazy-imports the
-        registry to avoid a circular import at module load.
-        """
-        try:
-            from backend.api.trend.registry import get_engine
-            from backend.engines.timeframe import Timeframe
-
-            tf = Timeframe(timeframe)
-            engine = get_engine(symbol)
-            return engine.get_current_trend(tf)
-        except Exception:
-            logger.debug("signal recorder: trend for %s/%s unavailable", symbol, timeframe, exc_info=True)
-            return None
 
     def _classify_volume(self, bar) -> str:
         """Crude volume classification — no historical baseline here."""

@@ -226,10 +226,10 @@ def record_signal(
       * **Single record** — pass ``symbol`` and ``timeframe``: records one
         signal via ``signal_recorder.record_signal`` and returns
         ``{"status": "recorded", ...}`` or ``{"status": "duplicate_or_skipped"}``.
-      * **Bulk from recent bars** — omit both: walks the most recent stored
-        bar for every (symbol, timeframe) in the ingestion service and records
-        signals for each. Returns ``{"recorded": N}`` where ``N`` is the
-        count of new rows written.
+      * **Bulk from recent bars** — omit both: records a signal for every
+        newly closed bar of every (symbol, timeframe) in the ingestion
+        service (a bar still forming is left for a later call). Returns
+        ``{"recorded": N}`` where ``N`` is the count of new rows written.
 
     The bulk mode is what the ingestion loop uses internally; the test
     suite validates it via ``record_from_recent_bars`` to ensure the

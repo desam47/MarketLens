@@ -138,12 +138,6 @@ class TestSignalRecorderHelpers(unittest.TestCase):
             self.assertIsNone(self.recorder._get_market_regime())
         self.assertTrue(any("market regime" in r.getMessage() for r in cm.records))
 
-    def test_trend_unavailable_is_logged_and_none(self):
-        with patch("backend.api.trend.registry.get_engine", side_effect=RuntimeError("cold")), \
-             self.assertLogs("backend.services.signal_recorder", "DEBUG") as cm:
-            self.assertIsNone(self.recorder._get_trend_signal("AAPL", "1m"))
-        self.assertTrue(any("AAPL/1m" in r.getMessage() for r in cm.records))
-
 
 class TestIngestionStreamSubscription(unittest.TestCase):
     def test_register_symbol_survives_and_logs_a_stream_failure(self):

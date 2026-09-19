@@ -23,8 +23,13 @@ from backend.repositories.signal_repository import SignalRepository
 from backend.services import signal_recorder as rec_mod
 from backend.services.signal_recorder import SignalRecorder
 from backend.services.signal_replay import (
+    _CANDLES_KEPT,
+    _VALUES_KEPT,
     REPLAY_WARMUP_BARS,
+    BarReplay,
+    bar_end,
     export_labels,
+    is_closed,
     label_columns,
     relabel_signals,
     replay_trend_scores,
@@ -209,17 +214,17 @@ class TestBulkRecorderUsesTheReplay(_Db):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_backfilled_rows_do_not_share_the_live_engines_current_score(self):
-        self._store_bars("BULKA", "1d", _bars())
-        stamp = SimpleNamespace(score=-5.0)          # what the live engine reports "now"
-        with patch.object(SignalRecorder, "_get_trend_signal", return_value=stamp), \
-             patch.object(SignalRecorder, "_get_market_regime", return_value="risk_on"):
+    def test_backfilled_rows_carry_their_own_replayed_score(self):
+        bars = _bars()
+        self._store_bars("BULKA", "1d", bars)
+        with patch.object(SignalRecorder, "_get_market_regime", return_value="risk_on"):
             self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKA", timeframe="1d"), 450)
 
         rows = self._signals("BULKA", "1d")
+        expected = replay_trend_scores("BULKA", "1d", bars)
+        self.assertEqual({r.timestamp: r.trend_score for r in rows}, expected)
         scores = [r.trend_score for r in rows if r.trend_score is not None]
-        self.assertNotIn(-5.0, scores)
-        self.assertGreater(len({round(s, 3) for s in scores}), 100)
+        self.assertGreater(len({round(s, 3) for s in scores}), 100, "one stamped score")
         self.assertGreaterEqual(len({r.trend_state for r in rows if r.trend_state}), 2)
         self.assertEqual({r.market_regime for r in rows}, {None}, "today's regime on old bars")
 
@@ -249,12 +254,265 @@ class TestBulkRecorderUsesTheReplay(_Db):
         refilled = {r.timestamp: r.trend_score for r in self._signals("BULKC", "1d")}
         self.assertEqual(refilled, full)
 
-    def test_nothing_to_record_does_not_replay(self):
+    def test_a_second_pass_records_nothing(self):
         self._store_bars("BULKD", "1d", _bars(230))
-        self.recorder.backfill_signals_for_symbol("BULKD", timeframe="1d")
-        self.recorder._last_recorded.clear()
-        with patch.object(rec_mod, "replay_trend_scores", side_effect=AssertionError("replayed")):
-            self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKD", timeframe="1d"), 0)
+        self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKD", timeframe="1d"), 230)
+        self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKD", timeframe="1d"), 0)
+
+
+def _hourly_bars(n: int = 300) -> list[SimpleNamespace]:
+    return [
+        SimpleNamespace(timestamp=datetime(2024, 1, 2, 8) + timedelta(hours=i), close=_price(i, 200),
+                        volume=1_000_000 + (i % 5) * 20_000)
+        for i in range(n)
+    ]
+
+
+def _daily_close(bar) -> datetime:
+    return bar_end(bar.timestamp, "1d")
+
+
+class TestClosedBars(unittest.TestCase):
+    def test_a_candle_closes_one_timeframe_after_its_open_time(self):
+        t = datetime(2026, 9, 18, 10, 0)
+        for tf, minutes in (("1m", 1), ("5m", 5), ("30m", 30), ("1h", 60), ("4h", 240)):
+            self.assertEqual(bar_end(t, tf), t + timedelta(minutes=minutes), tf)
+        self.assertEqual(bar_end(datetime(2026, 9, 18), "1d"), datetime(2026, 9, 19))
+        self.assertEqual(bar_end(datetime(2026, 9, 14), "1wk"), datetime(2026, 9, 21))
+
+    def test_closed_exactly_at_its_end_and_not_a_second_before(self):
+        t = datetime(2026, 9, 18, 10, 0)
+        self.assertFalse(is_closed(t, "1m", datetime(2026, 9, 18, 10, 0, 59)))
+        self.assertTrue(is_closed(t, "1m", datetime(2026, 9, 18, 10, 1)))
+
+    def test_an_unknown_timeframe_is_never_held_back(self):
+        self.assertTrue(is_closed(datetime(2026, 9, 18, 10, 0), "7m", datetime(2026, 9, 18, 10, 0)))
+
+
+class TestBarReplayIsBoundedAndIncremental(unittest.TestCase):
+    def test_the_candle_history_does_not_grow_with_the_bars_fed(self):
+        replay = BarReplay("BOUNDED", "1d")
+        for bar in _bars(450):
+            replay.feed(bar)
+        kept = max(len(c) for c in replay._engine.timeframe_engine.candles.values())
+        self.assertLessEqual(kept, _CANDLES_KEPT)
+
+    def test_the_indicator_histories_stay_bounded_and_only_the_target_stack_is_kept(self):
+        replay = BarReplay("BOUNDED2", "1d")
+        for bar in _bars(900):
+            replay.feed(bar)
+        stacks = replay._engine.indicators
+        self.assertEqual(list(stacks), [replay._tf])
+        for indicator in stacks[replay._tf].values():
+            self.assertLessEqual(len(indicator.values), _VALUES_KEPT)
+            self.assertLessEqual(len(indicator.timestamps), _VALUES_KEPT)
+
+    def test_trimming_and_pruning_change_no_score(self):
+        """Compared with an engine left exactly as the live seeder builds it."""
+        from backend.engines.timeframe import (
+            Timeframe,
+            TimeframeEngine,
+            multi_symbol_timeframe_engine,
+        )
+        from backend.trend.trend_engine import TrendEngine
+        from backend.utils.timezone import ny_to_utc
+
+        bars = _bars(900)
+        replay = BarReplay("PLAINA", "1d")
+        got = [replay.feed(b) for b in bars]
+
+        multi_symbol_timeframe_engine.engines["__plain__"] = TimeframeEngine("__plain__")
+        try:
+            engine = TrendEngine("__plain__")
+        finally:
+            multi_symbol_timeframe_engine.engines.pop("__plain__", None)
+        want = []
+        for i, b in enumerate(bars):
+            engine.update(price=b.close, volume=int(b.volume), timestamp=b.timestamp,
+                          only_timeframe=Timeframe.ONE_DAY)
+            sig = engine.get_current_trend(Timeframe.ONE_DAY)
+            ok = (sig is not None and sig.score is not None and i >= REPLAY_WARMUP_BARS
+                  and sig.timestamp == ny_to_utc(b.timestamp))
+            want.append(float(sig.score) if ok else None)
+        self.assertEqual(got, want)
+
+    def test_feeding_bar_by_bar_equals_replaying_the_lot(self):
+        bars = _bars(350)
+        replay = BarReplay("STEPPED", "1d")
+        stepped = {b.timestamp: replay.feed(b) for b in bars}
+        self.assertEqual(stepped, replay_trend_scores("STEPPED", "1d", bars))
+        self.assertEqual(replay.last_ts, bars[-1].timestamp)
+
+
+class TestLiveRecording(_Db):
+    """Bars are recorded as they CLOSE, from the same replay that labels a backfill."""
+
+    def setUp(self):
+        super().setUp()
+        self.recorder = SignalRecorder()
+        patcher = patch.object(rec_mod, "SessionLocal", lambda: self.Session())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        regime = patch.object(SignalRecorder, "_get_market_regime", return_value="risk_on")
+        regime.start()
+        self.addCleanup(regime.stop)
+
+    def _scores(self, symbol, timeframe="1d"):
+        return {r.timestamp: r.trend_score for r in self._signals(symbol, timeframe)}
+
+    def test_every_closed_bar_gets_the_replayed_score(self):
+        bars = _bars(300)
+        self._store_bars("LIVEA", "1d", bars)
+        n = self.recorder.record_from_recent_bars(["LIVEA"], now=_daily_close(bars[-1]) + timedelta(hours=1))
+        self.assertEqual(n, 300)
+        self.assertEqual(self._scores("LIVEA"), replay_trend_scores("LIVEA", "1d", bars))
+
+    def test_a_forming_bar_is_held_back_until_it_closes(self):
+        bars = _bars(300)
+        self._store_bars("LIVEB", "1d", bars)
+        mid_bar = bars[-1].timestamp + timedelta(hours=6)
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEB"], now=mid_bar), 299)
+        self.assertNotIn(bars[-1].timestamp, self._scores("LIVEB"))
+
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEB"], now=mid_bar), 0)
+        after = _daily_close(bars[-1]) + timedelta(minutes=1)
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEB"], now=after), 1)
+        self.assertEqual(self._scores("LIVEB"), replay_trend_scores("LIVEB", "1d", bars))
+
+    def test_the_forming_bar_never_reaches_the_engine(self):
+        """Its close moves while it forms; a tick the engine has seen cannot be taken back."""
+        bars = _bars(300)
+        self._store_bars("LIVEC", "1d", bars)
+        self.recorder.record_from_recent_bars(["LIVEC"], now=bars[-1].timestamp + timedelta(hours=6))
+        self.assertEqual(self.recorder._replays[("LIVEC", "1d")].last_ts, bars[-2].timestamp)
+
+    def test_bar_by_bar_recording_equals_one_batch_replay(self):
+        bars = _bars(330)
+        self._store_bars("LIVED", "1d", bars[:250])
+        self.recorder.record_from_recent_bars(["LIVED"], now=_daily_close(bars[249]) + timedelta(hours=1))
+        for lo in range(250, 330, 9):
+            chunk = bars[lo:lo + 9]
+            self._store_bars("LIVED", "1d", chunk)
+            self.recorder.record_from_recent_bars(["LIVED"], now=_daily_close(chunk[-1]) + timedelta(hours=1))
+        self.assertEqual(self._scores("LIVED"), replay_trend_scores("LIVED", "1d", bars))
+        self.assertEqual(len(self._signals("LIVED", "1d")), 330)
+
+    def test_a_restart_finds_the_rows_and_writes_nothing_new(self):
+        bars = _bars(300)
+        self._store_bars("LIVEE", "1d", bars)
+        now = _daily_close(bars[-1]) + timedelta(hours=1)
+        self.recorder.record_from_recent_bars(["LIVEE"], now=now)
+        before = self._scores("LIVEE")
+        restarted = SignalRecorder()
+        self.assertEqual(restarted.record_from_recent_bars(["LIVEE"], now=now), 0)
+        self.assertEqual(self._scores("LIVEE"), before)
+
+    def test_only_a_fresh_row_records_the_regime(self):
+        bars = _bars(260)
+        self._store_bars("LIVEF", "1d", bars)
+        self.recorder.record_from_recent_bars(["LIVEF"], now=_daily_close(bars[-1]) + timedelta(minutes=5))
+        rows = self._signals("LIVEF", "1d")
+        self.assertEqual(rows[-1].market_regime, "risk_on")
+        self.assertEqual({r.market_regime for r in rows[:-1]}, {None}, "today's regime on old bars")
+
+        self._store_bars("LIVEG", "1d", bars)
+        self.recorder.record_from_recent_bars(["LIVEG"], now=_daily_close(bars[-1]) + timedelta(hours=3))
+        self.assertEqual({r.market_regime for r in self._signals("LIVEG", "1d")}, {None})
+
+    def test_the_seeding_budget_seeds_one_pair_a_cycle_cheapest_timeframe_first(self):
+        daily, hourly = _bars(260), _hourly_bars(260)
+        self._store_bars("LIVEH", "1d", daily)
+        self._store_bars("LIVEH", "1h", hourly)
+        now = datetime(2026, 1, 1)
+        counts = lambda: (len(self._signals("LIVEH", "1d")), len(self._signals("LIVEH", "1h")))  # noqa: E731
+
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260)
+        self.assertEqual(counts(), (260, 0), "the daily pair is cheaper and goes first")
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260)
+        self.assertEqual(counts(), (260, 260))
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 0)
+
+    def test_one_pairs_failure_does_not_stop_the_others_and_is_retried(self):
+        bars = _bars(260)
+        self._store_bars("FAILA", "1d", bars)
+        self._store_bars("FAILB", "1d", bars)
+        now = _daily_close(bars[-1]) + timedelta(hours=1)
+        real = SignalRecorder._insert_rows
+
+        def flaky(rec, db, symbol, *a, **k):
+            if symbol == "FAILA":
+                raise RuntimeError("database is locked")
+            return real(rec, db, symbol, *a, **k)
+
+        with patch.object(SignalRecorder, "_insert_rows", flaky), \
+             self.assertLogs("backend.services.signal_recorder", "ERROR"):
+            self.assertEqual(self.recorder.record_from_recent_bars(["FAILA", "FAILB"], now=now), 260)
+        self.assertEqual(len(self._signals("FAILA", "1d")), 0)
+        self.assertEqual(len(self._signals("FAILB", "1d")), 260)
+
+        self.assertEqual(self.recorder.record_from_recent_bars(["FAILA", "FAILB"], now=now), 260)
+        self.assertEqual(self._scores("FAILA"), self._scores("FAILB"))
+
+    def test_a_late_arriving_older_bar_is_left_to_the_gap_fill(self):
+        bars = _bars(300)
+        late = bars[100]
+        self._store_bars("LIVEI", "1d", bars[:100] + bars[101:])
+        now = _daily_close(bars[-1]) + timedelta(hours=1)
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEI"], now=now), 299)
+
+        self._store_bars("LIVEI", "1d", [late])
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEI"], now=now), 0)
+        with patch.object(rec_mod, "now_ny", return_value=now):
+            self.assertEqual(self.recorder.backfill_signals_for_symbol("LIVEI", timeframe="1d"), 1)
+
+    def test_a_pair_whose_only_bar_is_still_forming_writes_nothing(self):
+        bar = _bars(1)[0]
+        self._store_bars("LIVEJ", "1d", [bar])
+        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEJ"], now=bar.timestamp + timedelta(hours=1)), 0)
+        self.assertEqual(self._signals("LIVEJ", "1d"), [])
+
+    def test_no_symbols_is_a_no_op(self):
+        self.assertEqual(self.recorder.record_from_recent_bars([]), 0)
+
+
+class TestHygieneIgnoresAFormingBar(_Db):
+    """A forming bar has no signal yet by design; startup must not replay every pair for it."""
+
+    def _minute_bars(self, now):
+        last_open = now.replace(second=0, microsecond=0)
+        return [SimpleNamespace(timestamp=last_open - timedelta(minutes=i), close=100.0 + i * 0.01,
+                                volume=1000) for i in range(30, -1, -1)]
+
+    def _sign(self, symbol, bars):
+        with self.Session() as db:
+            db.add_all([HistoricalSignal(symbol=symbol, timeframe="1m", timestamp=b.timestamp,
+                                         price=b.close, strategy_version="v1", data_quality="good")
+                        for b in bars])
+            db.commit()
+
+    def _run(self, symbol):
+        from backend.api import main_helpers
+
+        with patch.object(main_helpers, "SessionLocal", lambda: self.Session()), \
+             patch.object(main_helpers.signal_recorder, "backfill_signals_for_symbol", return_value=0) as bf:
+            main_helpers._fill_signal_gaps(symbol)
+        return bf
+
+    def test_the_forming_bar_is_not_a_gap(self):
+        from backend.utils.timezone import now_ny
+
+        bars = self._minute_bars(now_ny())
+        self._store_bars("HYGA", "1m", bars)
+        self._sign("HYGA", bars[:-1])                   # every closed bar signed, the forming one not
+        self._run("HYGA").assert_not_called()
+
+    def test_a_closed_bar_without_a_signal_still_is(self):
+        from backend.utils.timezone import now_ny
+
+        bars = self._minute_bars(now_ny())
+        self._store_bars("HYGB", "1m", bars)
+        self._sign("HYGB", bars[:-6] + bars[-5:-1])     # one closed bar (bars[-6]) is missing
+        self._run("HYGB").assert_called_once()
 
 
 class TestRelabelSignals(_Db):

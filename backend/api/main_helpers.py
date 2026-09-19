@@ -22,6 +22,7 @@ retention windows don't need re-checking every tick.)
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import func
 
@@ -29,6 +30,8 @@ from backend.database import SessionLocal
 from backend.models import HistoricalSignal
 from backend.models.market_data_sql import BarModel
 from backend.services.signal_recorder import signal_recorder
+from backend.services.signal_replay import bar_length
+from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,20 @@ def _watched_symbols() -> list[str]:
             .all()
         )
         return [s[0].upper() for s in rows]
+    finally:
+        db.close()
+
+
+def _open_bars(symbol: str, timeframe: str, now: datetime) -> int:
+    """How many of the pair's stored bars are still forming (see ``signal_replay.is_closed``)."""
+    db = SessionLocal()
+    try:
+        return (
+            db.query(func.count(BarModel.id))
+            .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe,
+                    BarModel.timestamp > now - bar_length(timeframe))
+            .scalar()
+        ) or 0
     finally:
         db.close()
 
@@ -73,9 +90,12 @@ def _fill_signal_gaps(symbol: str) -> dict[str, int]:
         db.close()
 
     filled: dict[str, int] = {}
+    now = now_ny()
     for tf, bar_n in bar_counts.items():
         sig_n = sig_counts.get(tf, 0)
-        gap = bar_n - sig_n
+        # A bar that is still forming has no signal yet, by design (it is recorded once it
+        # closes), so it is not a gap: counting it would replay every pair on every startup.
+        gap = bar_n - _open_bars(symbol, tf, now) - sig_n
         if gap > 0:
             # Re-run the per-timeframe backfill with the high cap.
             n = signal_recorder.backfill_signals_for_symbol(

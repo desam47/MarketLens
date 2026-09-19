@@ -2164,10 +2164,13 @@ class MarketDataIngestionService:
                 await asyncio.sleep(10)
 
     async def _signal_recording_loop(self, initial_delay: float = 0.0):
-        """Record one HistoricalSignal row per (symbol, timeframe) per bar.
+        """Record one HistoricalSignal row per (symbol, timeframe) per CLOSED bar.
 
         90s cadence — independent of ``_signal_outcome_backfill_loop``'s
-        300s cadence (see that method's docstring for why they're split).
+        300s cadence (see that method's docstring for why they're split). A bar is
+        recorded once it has closed (never while it forms), labelled by the same replay
+        as a backfill; after a restart the pairs are re-seeded a few seconds' worth per
+        cycle, see ``SignalRecorder.record_from_recent_bars``.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)

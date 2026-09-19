@@ -549,47 +549,5 @@ class TestSignalRecorderHelpers(unittest.TestCase):
         self.assertIsNone(mae)
 
 
-class TestSignalRecorderClassifyHelpers(unittest.TestCase):
-
-    def setUp(self):
-        self.recorder = SignalRecorder()
-
-    def test_classify_trend_from_bar_bullish(self):
-        # close > open * 1.005 → bullish
-        # Use a symbol that doesn't have a seeded trend engine
-        bar = _make_bar_row("ZZTESTBULL", datetime(2025, 1, 1), 105.0, 106.0, 100.0, open_=100.0)
-        result = self.recorder._classify_trend_from_bar(bar)
-        self.assertEqual(result, "bullish")
-
-    def test_classify_trend_from_bar_bearish(self):
-        # close < open * 0.995 → bearish
-        # Use a symbol that doesn't have a seeded trend engine
-        bar = _make_bar_row("ZZTESTBEAR", datetime(2025, 1, 1), 95.0, 100.0, 94.0, open_=100.0)
-        result = self.recorder._classify_trend_from_bar(bar)
-        self.assertEqual(result, "bearish")
-
-    def test_classify_trend_from_bar_neutral(self):
-        # close within 0.5% of open → neutral
-        # Use close=100.2, open=100.0: 100.2/100.0=1.002 (in the 0.995..1.005 band)
-        # Use a symbol that doesn't have a seeded trend engine
-        bar = _make_bar_row("ZZTESTNEUT", datetime(2025, 1, 1), 100.2, 101.0, 99.5, open_=100.0)
-        result = self.recorder._classify_trend_from_bar(bar)
-        self.assertEqual(result, "neutral")
-
-    def test_score_from_bar_positive(self):
-        # Use a symbol that doesn't have a seeded trend engine
-        bar = _make_bar_row("ZZTESTSCOREP", datetime(2025, 1, 1), 105.0, 106.0, 100.0, open_=100.0)
-        score = self.recorder._score_from_bar(bar)
-        self.assertGreater(score, 0)
-        self.assertLessEqual(score, 100)
-
-    def test_score_from_bar_negative(self):
-        # Use a symbol that doesn't have a seeded trend engine
-        bar = _make_bar_row("ZZTESTSCOREN", datetime(2025, 1, 1), 95.0, 100.0, 94.0, open_=100.0)
-        score = self.recorder._score_from_bar(bar)
-        self.assertLess(score, 0)
-        self.assertGreaterEqual(score, -100)
-
-
 if __name__ == "__main__":
     unittest.main()
