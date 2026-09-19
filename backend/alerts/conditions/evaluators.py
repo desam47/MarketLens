@@ -242,7 +242,7 @@ def _eval_volume_expansion(parameter: str, value: object) -> bool:
         symbol = value.get("symbol")
         if not symbol:
             return False
-        avg_volume = _compute_avg_volume(symbol, lookback=20)
+        avg_volume = _compute_avg_volume(symbol, lookback=20, timeframe=value.get("timeframe", "1d"))
         if avg_volume is None or avg_volume <= 0:
             return False
 

@@ -2,69 +2,57 @@
 DB-backed helper computations for alert condition evaluators and payload builders.
 
 These functions open their own short-lived SQLAlchemy sessions, run small
-bounded queries (LIMIT 50-100), and return primitive values. They're called
+bounded queries, and return primitive values. They're called
 inline from the evaluator/payload functions when the alert engine hasn't
 pre-computed a value.
 """
-from sqlalchemy import func
+import logging
 
 from backend.database import SessionLocal
 
+logger = logging.getLogger(__name__)
 
-def _compute_avg_volume(symbol: str, lookback: int = 20) -> float | None:
-    """Return average volume over the last ``lookback`` bars (excluding current)."""
-    try:
-        from backend.models import BarModel
-        db = SessionLocal()
-        try:
-            avg = db.query(func.avg(BarModel.volume)).filter(
-                BarModel.symbol == symbol.upper(),
-            ).order_by(
-                BarModel.timestamp.desc()
-            ).limit(lookback + 1).scalar()
-            return float(avg) if avg else None
-        finally:
-            db.close()
-    except Exception:
+
+def _previous_bars(symbol: str, timeframe: str, lookback: int) -> list:
+    """The ``lookback`` closed bars BEFORE the current one, oldest first.
+
+    Fetches ``lookback + 1`` bars and drops the newest, exactly as the payload builders
+    in ``payloads.py`` do — the single correct definition of "the last N bars, excluding
+    the current one".
+    """
+    return _get_recent_bars(symbol, timeframe, lookback + 1)[:-1]
+
+
+def _compute_avg_volume(symbol: str, lookback: int = 20, timeframe: str = "1d") -> float | None:
+    """Return average volume over the last ``lookback`` bars (excluding current).
+
+    Fixed: this used ``func.avg(volume)`` with ``ORDER BY ... LIMIT``, but an aggregate
+    yields ONE row, so the ORDER BY/LIMIT never restricted what it averaged — it was the
+    mean volume of EVERY stored bar for the symbol, across all timeframes mixed together
+    (1m volumes with daily volumes). It also had no timeframe filter.
+    """
+    past = _previous_bars(symbol, timeframe, lookback)
+    if not past:
         return None
+    avg = sum(float(b.volume or 0) for b in past) / len(past)
+    return avg if avg else None
 
 
 def _compute_highest_high(symbol: str, timeframe: str, lookback: int) -> float | None:
-    """Return the highest high over the last ``lookback`` closed bars."""
-    try:
-        from backend.models import BarModel
-        db = SessionLocal()
-        try:
-            result = db.query(func.max(BarModel.high)).filter(
-                BarModel.symbol == symbol.upper(),
-                BarModel.timeframe == timeframe,
-            ).order_by(
-                BarModel.timestamp.desc()
-            ).limit(lookback + 1).scalar()
-            return float(result) if result else None
-        finally:
-            db.close()
-    except Exception:
-        return None
+    """Return the highest high over the last ``lookback`` closed bars (excluding current).
+
+    Fixed for the same reason as ``_compute_avg_volume``: ``func.max(high)`` with
+    ``ORDER BY ... LIMIT`` returned the highest high in the ENTIRE stored history, so a
+    breakout alert evaluated through this path would only fire on a multi-year high.
+    """
+    past = _previous_bars(symbol, timeframe, lookback)
+    return max(float(b.high) for b in past) if past else None
 
 
 def _compute_lowest_low(symbol: str, timeframe: str, lookback: int) -> float | None:
-    """Return the lowest low over the last ``lookback`` closed bars."""
-    try:
-        from backend.models import BarModel
-        db = SessionLocal()
-        try:
-            result = db.query(func.min(BarModel.low)).filter(
-                BarModel.symbol == symbol.upper(),
-                BarModel.timeframe == timeframe,
-            ).order_by(
-                BarModel.timestamp.desc()
-            ).limit(lookback + 1).scalar()
-            return float(result) if result else None
-        finally:
-            db.close()
-    except Exception:
-        return None
+    """Return the lowest low over the last ``lookback`` closed bars (excluding current)."""
+    past = _previous_bars(symbol, timeframe, lookback)
+    return min(float(b.low) for b in past) if past else None
 
 
 def _get_recent_bars(symbol: str, timeframe: str, limit: int) -> list:
@@ -81,6 +69,9 @@ def _get_recent_bars(symbol: str, timeframe: str, limit: int) -> list:
         finally:
             db.close()
     except Exception:
+        # Still degrades to "no data" (an alert simply doesn't fire), but no longer
+        # silently: a failing query used to look identical to "no bars yet".
+        logger.warning("alert helper could not load %s/%s bars", symbol, timeframe, exc_info=True)
         return []
 
 
