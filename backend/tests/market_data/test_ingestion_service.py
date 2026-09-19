@@ -59,6 +59,19 @@ class TestIngestionServiceLifecycle(unittest.TestCase):
 
         self.service = MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
 
+        # These are lifecycle tests. Starting the REAL loops made the ingestion thread call the
+        # live providers (the first quote cycle runs immediately) and hit the database, racing
+        # the test's own teardown. Keep the thread and event loop real; idle the work.
+        async def _noop(*_a, **_k):
+            return None
+
+        async def _idle(*_a, **_k):
+            await asyncio.sleep(3600)          # until stop() cancels it
+
+        self.service._seed_check = _noop
+        self.service._startup_resample_tiers = _noop
+        self.service._run_loops = _idle
+
     def tearDown(self):
         if self.service.is_running:
             self.service.stop()

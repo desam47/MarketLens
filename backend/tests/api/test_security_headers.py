@@ -70,9 +70,15 @@ class TestSecurityHeadersPresent(unittest.TestCase):
         """Rate-limited responses also receive security headers."""
         from backend.api.main import _write_limiter
         _write_limiter.reset()
-        # Exhaust the write-rate-limit window with POST requests.
-        for _ in range(_write_limiter.max_requests + 2):
-            r = self.client.post("/api/market-data/ingestion/start", json={})
+        # Exhaust the write-rate-limit window with POST requests. Stub start(): a real one left the
+        # shared ingestion service's daemon thread running for the rest of the session.
+        from unittest.mock import patch
+
+        from backend.market_data.services.ingestion_service import ingestion_service
+
+        with patch.object(ingestion_service, "start"):
+            for _ in range(_write_limiter.max_requests + 2):
+                r = self.client.post("/api/market-data/ingestion/start", json={})
         # At least one response should be 429.
         h = self._headers_lower(r)
         self.assertIn("content-security-policy", h)

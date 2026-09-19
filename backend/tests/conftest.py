@@ -202,8 +202,17 @@ def _block_external_network() -> None:
     def _guarded_connect(self, address):  # noqa: ANN001
         host = address[0] if isinstance(address, tuple) else address
         if isinstance(address, tuple) and str(host) not in ("127.0.0.1", "::1", "localhost", "0.0.0.0"):
+            import traceback
+
             test = os.environ.get("PYTEST_CURRENT_TEST", "<collection>").split(" ")[0]
-            _NETWORK_ATTEMPTS.append(f"{test} -> {host}:{address[1] if len(address) > 1 else ''}")
+            # The innermost APPLICATION frame (not a test, not a library) names what asked for the
+            # connection, which is what you need to find the provider that must be mocked.
+            app_frames = [
+                f for f in traceback.extract_stack()
+                if "/backend/" in f.filename and "/backend/tests/" not in f.filename
+            ]
+            origin = f"{app_frames[-1].filename.split('/backend/', 1)[1]}:{app_frames[-1].lineno} {app_frames[-1].name}" if app_frames else "?"
+            _NETWORK_ATTEMPTS.append(f"{test} -> {host}:{address[1] if len(address) > 1 else ''}  [{origin}]")
             raise ConnectionRefusedError(
                 f"outbound network is disabled under pytest ({host}); "
                 "set MARKETLENS_TEST_ALLOW_NETWORK=1 to allow live calls"

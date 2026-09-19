@@ -52,12 +52,12 @@ from backend.ai.provider import AIResponse
 from backend.scanner.scanner import ScanResult
 
 
-def _fake_scan_result() -> ScanResult:
+def _fake_scan_result(symbol: str = "AAPL") -> ScanResult:
     """Return a ScanResult with enough populated fields for build_context tests."""
     from datetime import datetime
 
 
-    result = ScanResult("AAPL", datetime.now(UTC))
+    result = ScanResult(symbol, datetime.now(UTC))
     result.quote = MagicMock()
     result.quote.price = 185.0
     result.quote.timestamp = datetime.now(UTC)
@@ -382,9 +382,43 @@ class TestBuildUserPrompt(unittest.TestCase):
 # --- build_context (smoke test) -------------------------------------
 
 
+_module_scanner_patcher = None
+
+
+def setUpModule():
+    """No test in this file may reach the data providers.
+
+    Many tests call the REAL ``build_context()`` (directly, or as the value they hand a mocked
+    ``analyze_symbol``); the scanner is where it fetches a live quote (Finnhub / Alpaca). Serve every
+    scan from a fake result instead, so results do not depend on network or provider state either.
+    """
+    global _module_scanner_patcher
+    _module_scanner_patcher = patch("backend.ai.context.market_scanner")
+    scanner = _module_scanner_patcher.start()
+    scanner.get_scan_result.return_value = None
+    scanner.scan_symbol.side_effect = _fake_scan_result
+
+
+def tearDownModule():
+    _module_scanner_patcher.stop()
+
+
 class TestBuildContext(unittest.TestCase):
 
+    def setUp(self):
+        # The scanner is where build_context reaches the data providers (a live quote per call:
+        # Finnhub / Alpaca). These tests used to hit them for real, and one only passed because
+        # the developer's live database happened to hold data for AAPL.
+        patcher = patch("backend.ai.context.market_scanner")
+        self.scanner = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.scanner.get_scan_result.return_value = None            # nothing cached: force a scan
+
     def test_insufficient_data_for_unknown_symbol_raises(self):
+        from datetime import datetime
+
+        no_quote = ScanResult("ZZZZZZ", datetime.now(UTC))          # what a scan of an unknown symbol yields
+        self.scanner.scan_symbol.return_value = no_quote
         with self.assertRaises(InsufficientDataError):
             build_context("ZZZZZZ", "1d")
 
@@ -411,8 +445,10 @@ class TestBuildContext(unittest.TestCase):
             self.assertIn(k, d)
 
     def test_context_symbol_uppercased(self):
+        self.scanner.scan_symbol.return_value = _fake_scan_result()
         ctx = build_context("aapl", "1d")
         self.assertEqual(ctx.symbol, "AAPL")
+        self.scanner.scan_symbol.assert_called_once_with("AAPL")   # the symbol is normalised BEFORE it is used
 
     def test_compact_drops_empty_fields(self):
         ctx = AnalysisContext(

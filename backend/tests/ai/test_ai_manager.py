@@ -558,14 +558,19 @@ class TestAIManager(unittest.TestCase):
         # health_check is no longer called from complete() at all
         mock_hc.assert_not_called()
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False)
-    def test_complete_returns_none_when_all_unhealthy(self, _hc):
+    @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock,
+                  side_effect=ProviderUnavailable("connection refused"))
+    def test_complete_returns_none_when_all_unhealthy(self, mock_complete):
+        # complete() no longer pre-checks health_check() (O4): a provider that is down raises
+        # ProviderUnavailable from complete() itself. This test used to patch health_check, which
+        # nothing calls any more, so the fallback provider made a REAL request to api.openai.com.
         m = self._make_manager(
             provider="ollama", fallback_providers="openai",
         )
         resp = asyncio.run(m.complete("hi"))
         self.assertIsNone(resp.text)
         self.assertEqual(resp.provider, "none")
+        self.assertEqual(mock_complete.await_count, 2, "both chain entries were tried before giving up")
 
     @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)

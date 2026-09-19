@@ -526,9 +526,16 @@ class TestRateLimitMiddlewareIntegration(unittest.TestCase):
         from backend.api.main import _write_limiter
         _write_limiter.reset()
 
-        # Exhaust the write-rate-limit window.
-        for _ in range(_write_limiter.max_requests + 2):
-            r = self.client.post("/api/market-data/ingestion/start", json={})
+        # Exhaust the write-rate-limit window. /ingestion/start is only a convenient write endpoint
+        # here; started for real, it left the shared ingestion service's daemon thread (and its live
+        # loops) running for the rest of the session, so stub start().
+        from unittest.mock import patch
+
+        from backend.market_data.services.ingestion_service import ingestion_service
+
+        with patch.object(ingestion_service, "start"):
+            for _ in range(_write_limiter.max_requests + 2):
+                r = self.client.post("/api/market-data/ingestion/start", json={})
 
         h = self._headers_lower(r)
         self.assertEqual(r.status_code, 429)
