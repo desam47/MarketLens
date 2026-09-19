@@ -7,15 +7,13 @@ Tests the Redis-backed and in-memory rate limiters with focus on:
 - IP-based rate limiting
 - Header correctness on allowed/rejected requests
 
-RateLimitMiddleware is a ``BaseHTTPMiddleware`` subclass. Tests drive it
-via the standard ``middleware.dispatch(request, call_next)`` pattern.
+RateLimitMiddleware is a plain ASGI middleware. Tests drive it as an ASGI app
+(``await middleware(scope, receive, send)``) and inspect the messages it sends.
 """
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
 
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from backend.api import rate_limit as rl
 from backend.api.rate_limit import (
@@ -407,7 +405,7 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
 
 
 class TestRateLimitMiddleware(unittest.TestCase):
-    """Tests for RateLimitMiddleware as a BaseHTTPMiddleware subclass."""
+    """Tests for RateLimitMiddleware driven as a raw ASGI app."""
 
     def setUp(self):
         self.loop = asyncio.new_event_loop()
@@ -435,7 +433,7 @@ class TestRateLimitMiddleware(unittest.TestCase):
         return app
 
     def _dispatch(self, method="POST", path="/api/data", ip="127.0.0.1"):
-        """Build a Request and call middleware.dispatch()."""
+        """Run the middleware as an ASGI app; return an object with .status_code / .headers."""
         scope = {
             "type": "http",
             "method": method,
@@ -444,12 +442,22 @@ class TestRateLimitMiddleware(unittest.TestCase):
             "query_string": b"",
             "client": (ip, 0),
         }
-        request = Request(scope, None)
+        sent = []
 
-        async def call_next(req):
-            return JSONResponse({"ok": True})
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
 
-        return self._run(self.middleware.dispatch(request, call_next))
+        async def send(message):
+            sent.append(message)
+
+        self._run(self.middleware(scope, receive, send))
+        start = next(m for m in sent if m["type"] == "http.response.start")
+
+        class _Response:
+            status_code = start["status"]
+            headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+
+        return _Response
 
     def test_read_methods_not_rate_limited(self):
         """GET/HEAD/OPTIONS should pass through without rate limiting."""

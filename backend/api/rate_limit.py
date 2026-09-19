@@ -23,7 +23,8 @@ from typing import Optional
 import redis
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.api.security_headers import SecurityHeadersMiddleware
 from ..config.settings import settings as _settings
@@ -322,7 +323,7 @@ class InMemoryRateLimiter:
         }
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
+class RateLimitMiddleware:
     """Apply the limiter to write/mutation requests on all paths.
 
     Exempt paths (health, docs) are skipped. Read methods (GET) are skipped.
@@ -338,19 +339,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     we inline them here rather than relying on the middleware chain.
     """
 
-    def __init__(self, app, limiter: RedisRateLimiter) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, limiter: RedisRateLimiter) -> None:
+        # A plain ASGI middleware (not BaseHTTPMiddleware, ~180 us per request): the
+        # overwhelming majority of traffic is GET, which just passes straight through.
+        self.app = app
         self.limiter = limiter
 
-    async def dispatch(self, request: Request, call_next):
-        if request.method not in _WRITE_METHODS:
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] not in _WRITE_METHODS:
+            await self.app(scope, receive, send)
+            return
 
-        path = request.url.path
+        path = scope["path"]
         if any(path.startswith(prefix) for prefix in _EXEMPT_PATH_PREFIXES):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        client_ip = _client_ip(request)
+        client = scope.get("client")
+        client_ip = client[0] if client else "unknown"
 
         allowed, remaining = self.limiter.is_allowed(client_ip)
         if not allowed:
@@ -359,31 +365,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 extra={
                     "client_ip": client_ip,
                     "path": path,
-                    "method": request.method,
+                    "method": scope["method"],
                 },
             )
             # Inline security headers so 429 responses carry the full
-            # security baseline (bypasses FastAPI's ExceptionMiddleware
-            # which sits outside the BaseHTTPMiddleware chain).
+            # security baseline (this short-circuit never reaches the inner
+            # SecurityHeadersMiddleware).
             headers = {
                 "Retry-After": str(self.limiter.window_seconds),
                 "X-RateLimit-Limit": str(self.limiter.max_requests),
                 "X-RateLimit-Remaining": "0",
             }
             headers.update(SecurityHeadersMiddleware._static_headers())
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=429,
                 content={
                     "detail": "Too many requests. Please slow down and try again later."
                 },
                 headers=headers,
             )
+            await response(scope, receive, send)
+            return
 
-        response = await call_next(request)
-        # Inform well-behaved clients of their remaining budget.
-        response.headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        return response
+        async def send_with_limit_headers(message: Message) -> None:
+            # Inform well-behaved clients of their remaining budget.
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                headers = MutableHeaders(scope=message)
+                headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
+                headers["X-RateLimit-Remaining"] = str(remaining)
+            await send(message)
+
+        await self.app(scope, receive, send_with_limit_headers)
 
 
 # ----------------------------------------------------------------------

@@ -56,10 +56,12 @@ def set_correlation_id(correlation_id: str | None) -> None:
     correlation ID at the start of each request. Subsequent log calls
     will automatically include it.
     """
-    if correlation_id:
-        _correlation_id_ctx.set(correlation_id)
-    else:
-        _correlation_id_ctx.reset(_correlation_id_ctx.set(None))  # clear
+    # ``None``/empty CLEARS the id. This used to be
+    # ``ctx.reset(ctx.set(None))``, which sets None and then immediately resets the
+    # token — restoring the previous value, i.e. a no-op. It was invisible in
+    # production only because uvicorn runs each request in its own task, whose context
+    # dies with it; in any shared-task context the id leaked into whatever came next.
+    _correlation_id_ctx.set(correlation_id or None)
 
 
 def get_correlation_id() -> str | None:

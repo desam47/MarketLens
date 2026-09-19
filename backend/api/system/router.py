@@ -21,7 +21,6 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from ...observability import (
     get_snapshot,
@@ -71,12 +70,20 @@ class PerformanceResponse(BaseModel):
         arbitrary_types_allowed = True
 
 
-class RequestCounterMiddleware(BaseHTTPMiddleware):
-    """Count every incoming request. Exposed via /api/system/performance."""
+class RequestCounterMiddleware:
+    """Count every incoming HTTP request. Exposed via /api/system/performance.
 
-    async def dispatch(self, request: Request, call_next):
-        record_http_request()
-        return await call_next(request)
+    A plain ASGI middleware: as a BaseHTTPMiddleware this one-line counter cost ~180 us
+    per request. WebSocket and lifespan scopes pass through uncounted, as before.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            record_http_request()
+        await self.app(scope, receive, send)
 
 
 def _safe_bar_counts() -> dict | None:

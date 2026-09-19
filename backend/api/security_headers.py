@@ -24,16 +24,20 @@ Header reference:
 """
 import logging
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware:
     """Attach a baseline of security headers to every outgoing response.
+
+    A plain ASGI middleware, not ``BaseHTTPMiddleware``: each BaseHTTPMiddleware layer
+    costs ~180-190 us per request (measured: a task group + memory streams + a response
+    wrapper) for what is a header-list edit, and it re-buffers streaming bodies.
 
     Existing headers (e.g. set by the application or another middleware)
     are preserved — we only add what's missing. This means the order in
@@ -41,8 +45,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     set; the *last* writer wins, and we never overwrite.
     """
 
-    def __init__(self, app, settings_obj=None) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, settings_obj=None) -> None:
+        self.app = app
         # ``settings_obj`` is captured for tests. When it's None we read
         # ``settings.security`` lazily on every request so changes to
         # the global settings (e.g. via env-var override) are picked up
@@ -107,14 +111,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         return h
 
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        for header, value in self._extra_headers().items():
-            # Don't clobber headers already set by the application or
-            # another middleware.
-            if header not in response.headers:
-                response.headers[header] = value
-        return response
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                headers = MutableHeaders(scope=message)
+                for header, value in self._extra_headers().items():
+                    # Don't clobber headers already set by the application or
+                    # another middleware.
+                    if header not in headers:
+                        headers[header] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
     @classmethod
     def _static_headers(cls, settings_obj=None) -> dict[str, str]:

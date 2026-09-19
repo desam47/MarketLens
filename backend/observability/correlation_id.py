@@ -10,9 +10,8 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Callable
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Defer the context-var import so the module can be imported safely even
 # when logging_enhanced hasn't been imported yet (e.g. during startup).
@@ -32,8 +31,12 @@ def _get_set_correlation_id():
     return _logging_ctx
 
 
-class CorrelationIdMiddleware(BaseHTTPMiddleware):
+class CorrelationIdMiddleware:
     """Middleware that adds correlation ID to requests for tracking.
+
+    A plain ASGI middleware (see SecurityHeadersMiddleware for why): the downstream app
+    now runs in the same task, so the logging context var set here is visible to it
+    directly instead of via BaseHTTPMiddleware's copied context.
 
     Each request gets a correlation ID (from the ``X-Correlation-ID`` header
     if present, otherwise a new UUID). The ID is:
@@ -50,34 +53,39 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         update_request_header: bool = True,
         generator: Callable[[], str] | None = None,
     ):
-        super().__init__(app)
+        self.app = app
         self.header_name = header_name
         self.update_request_header = update_request_header
         self.generator = generator or (lambda: str(uuid.uuid4()))
 
-    async def dispatch(self, request: Request, call_next):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         # Extract or generate correlation ID
-        correlation_id = request.headers.get(self.header_name)
+        correlation_id = Headers(scope=scope).get(self.header_name)
         if not correlation_id:
             correlation_id = self.generator()
 
-        # Make it available on the request state
-        request.state.correlation_id = correlation_id
+        # Make it available on the request state (``request.state`` reads scope["state"]).
+        scope.setdefault("state", {})["correlation_id"] = correlation_id
 
         # Set it in the logging context for this async task
         set_corr = _get_set_correlation_id()
         set_corr(correlation_id)
 
+        async def send_with_id(message: Message) -> None:
+            # Add correlation ID to response headers for client tracking
+            if self.update_request_header and message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                MutableHeaders(scope=message)[self.header_name] = correlation_id
+            await send(message)
+
         try:
             # Process the request — all log lines inside here include the ID
-            response = await call_next(request)
+            await self.app(scope, receive, send_with_id)
         finally:
             # Reset the context variable when the request ends so it doesn't
             # leak into concurrent or subsequent tasks
             set_corr(None)
-
-        # Add correlation ID to response headers for client tracking
-        if self.update_request_header:
-            response.headers[self.header_name] = correlation_id
-
-        return response
