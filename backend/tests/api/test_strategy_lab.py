@@ -86,12 +86,15 @@ import backend.repositories.experiment_repository as _exp_repo
 # ``.start()`` to a no-op for the same setUpModule/tearDownModule-scoped
 # reason as above.
 from unittest.mock import patch as _patch
+from backend.ai.digest_service import digest_service as _digest_service
+from backend.ai.nudges import nudge_service as _nudge_service
 from backend.market_data.services.ingestion_service import ingestion_service as _ingestion_service
 
 _orig_engine = None
 _orig_session_local = None
 _orig_exp_repo_session_local = None
 _ingestion_start_patch = None
+_scheduler_start_patches: list = []
 
 
 def setUpModule():
@@ -114,6 +117,16 @@ def setUpModule():
 
     _ingestion_start_patch = _patch.object(_ingestion_service, "start", lambda: None)
     _ingestion_start_patch.start()
+
+    # The lifespan also starts the digest / nudge schedulers. The digest scheduler
+    # fires a REAL AI narration call in a worker thread as soon as its premarket /
+    # close time gate has opened (any time after ~08:00 NY on a fresh process); that
+    # call hung, and tearDownModule then waited Python's 300 s executor-join timeout
+    # for it (300 of the suite's ~360 s), and spent real AI quota on every run.
+    for _svc in (_digest_service, _nudge_service):
+        _p = _patch.object(_svc, "start", lambda: None)
+        _p.start()
+        _scheduler_start_patches.append(_p)
 
     # Build a fresh schema on the temp DB before any tests run.
     Base.metadata.create_all(bind=engine)
@@ -144,6 +157,8 @@ def tearDownModule():
         _mod.SessionLocal = _orig_session_local
     _exp_repo.SessionLocal = _orig_exp_repo_session_local
     _ingestion_start_patch.stop()
+    while _scheduler_start_patches:
+        _scheduler_start_patches.pop().stop()
 
 
 # One lifespan startup for the whole module instead of one per test.
