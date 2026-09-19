@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api, { NewsItem } from '../services/api';
-import { parseET } from './chartMath';
+import { parseET, formatETDateTime24Hour } from './chartMath';
 
 interface NewsPanelProps {
   symbol: string;
@@ -12,17 +12,7 @@ const unusualColors: Record<string, string> = {
 
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
-  try {
-    // Explicit timeZone — without it, toLocaleDateString formats using the
-    // viewer's browser/OS zone instead of ET (parseET only resolves the
-    // correct absolute instant; it doesn't affect how it's displayed).
-    return parseET(ts).toLocaleDateString('en-US', {
-      timeZone: 'America/New_York',
-      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  } catch {
-    return ts;
-  }
+  return formatETDateTime24Hour(ts);
 }
 
 function RelevanceBar({ value }: { value: number }) {

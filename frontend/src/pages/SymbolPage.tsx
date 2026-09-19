@@ -8,7 +8,7 @@ import api, {
   TapeSnapshot,
   Transition,
 } from '../services/api';
-import { parseET, formatETDate, formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
+import { formatETDate, formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -469,16 +469,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     : null;
                 return (
                   <tr key={i}>
-                    <td>{b.timestamp ? (() => {
-                        // Explicit timeZone — without it these format using
-                        // the viewer's browser/OS zone instead of ET.
-                        const d = parseET(b.timestamp);
-                        const date = d.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-                        const time = d.toLocaleTimeString('en-US', {
-                          timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-                        });
-                        return `${date} ${time}`;
-                      })() : '—'}</td>
+                    <td>{b.timestamp ? formatETDateTime24Hour(b.timestamp) : '—'}</td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
