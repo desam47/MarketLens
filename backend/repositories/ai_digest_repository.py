@@ -53,6 +53,15 @@ class AIDigestRepository:
             .first()
         )
 
+    def exists_since(self, session: str, since: datetime) -> bool:
+        """True if a ``session`` digest was generated at or after ``since`` (naive NY time)."""
+        return (
+            self.db.query(AIDigest.id)
+            .filter(AIDigest.session == session, AIDigest.generated_at >= since)
+            .first()
+            is not None
+        )
+
     def get_history(self, session: str | None = None, limit: int = 10) -> list[AIDigest]:
         q = self.db.query(AIDigest)
         if session is not None:

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from backend.config.settings import settings
 from backend.utils.timezone import now_ny
@@ -77,7 +77,36 @@ class DigestService:
             target = ny.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if ny >= target and self._last_fired.get(session) != today:
                 self._last_fired[session] = today
+                # ``_last_fired`` lives in memory, so every process start (each dev reload,
+                # each deploy) used to regenerate the slot: 76 digests in a day instead of 2,
+                # each one a real AI call. The DB is the durable record of "already done".
+                if await self._already_generated(session, target):
+                    logger.info("%s digest already generated today; not regenerating", session)
+                    continue
                 await self._fire(session)
+
+    async def _already_generated(self, session: str, target: datetime) -> bool:
+        """Has a ``session`` digest been stored since today's slot time?
+
+        Counting only rows at/after the slot time means a manual run earlier in the day
+        does not suppress the scheduled one. Fails open: if the check itself errors,
+        generate (the old behaviour) rather than skip the day's digest.
+        """
+        try:
+            return await asyncio.to_thread(self._digest_exists_since, session, target)
+        except Exception:  # noqa: BLE001
+            logger.warning("digest dedupe check failed; generating anyway", exc_info=True)
+            return False
+
+    @staticmethod
+    def _digest_exists_since(session: str, since: datetime) -> bool:
+        from backend.repositories.ai_digest_repository import AIDigestRepository
+
+        repo = AIDigestRepository()
+        try:
+            return repo.exists_since(session, since)
+        finally:
+            repo.close()
 
     async def _fire(self, session: str) -> None:
         from backend.ai.digest import generate_and_store_digest
