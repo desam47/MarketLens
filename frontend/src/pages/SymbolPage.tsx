@@ -509,8 +509,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [latestClose, setLatestClose] = useState<number | null>(null);
   const [latestCloseTimestamp, setLatestCloseTimestamp] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  const [todayChange, setTodayChange] = useState<number | null>(null);
-  const [todayChangePct, setTodayChangePct] = useState<number | null>(null);
+  const [prevClose, setPrevClose] = useState<number | null>(null);
   const [srLoading, setSrLoading] = useState(true);
 
   const [divergences, setDivergences] = useState<Divergence[]>([]);
@@ -575,14 +574,14 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       setLatestClose(data?.latest_close ?? null);
       setLatestCloseTimestamp(data?.latest_close_timestamp ?? null);
       setFetchedAt(data?.fetched_at ?? null);
-      // Extract today's change/change_pct from price_history (today_high/today_low)
+      // Compute prev_close from today's bar close and change (same as Dashboard)
+      // prev_close = today_close - today_change (i.e., yesterday's close)
       if (data?.price_history && Array.isArray(data.price_history)) {
         const todayEntry = data.price_history.find((entry: any) =>
           entry.type === 'today_high' || entry.type === 'today_low'
         );
-        if (todayEntry) {
-          setTodayChange(todayEntry.change ?? null);
-          setTodayChangePct(todayEntry.change_pct ?? null);
+        if (todayEntry && todayEntry.close != null && todayEntry.change != null) {
+          setPrevClose(todayEntry.close - todayEntry.change);
         }
       }
     } catch (err: any) {
@@ -746,6 +745,14 @@ const fetchBars = useCallback(async () => {
       : null;
   const barsChangePct = barsChange != null ? (barsChange / bars[1].close) * 100 : null;
 
+  // Live change from quote price vs prev_close (matches Dashboard)
+  const liveChange = quote?.price != null && prevClose != null
+    ? quote.price - prevClose
+    : null;
+  const liveChangePct = liveChange != null && prevClose != null
+    ? (liveChange / prevClose) * 100
+    : null;
+
   return (
     <div className="symbol-page">
       <div className="dashboard-header">
@@ -756,14 +763,14 @@ const fetchBars = useCallback(async () => {
               <>
                 <span className="price-label">Latest Price</span>{' '}
                 <span>${quote.price.toFixed(4)}</span>
-                {todayChange != null && (
-                  <span style={{ color: todayChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
-                    {todayChange >= 0 ? '+' : ''}{todayChange.toFixed(4)}
+                {liveChange != null && (
+                  <span style={{ color: liveChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
+                    {liveChange >= 0 ? '+' : ''}{liveChange.toFixed(4)}
                   </span>
                 )}
-                {todayChangePct != null && (
-                  <span style={{ color: todayChangePct >= 0 ? '#10b981' : '#ef4444', marginLeft: 4 }}>
-                    ({todayChangePct >= 0 ? '+' : ''}{todayChangePct.toFixed(2)}%)
+                {liveChangePct != null && (
+                  <span style={{ color: liveChangePct >= 0 ? '#10b981' : '#ef4444', marginLeft: 4 }}>
+                    ({liveChangePct >= 0 ? '+' : ''}{liveChangePct.toFixed(2)}%)
                   </span>
                 )}
                 {quote.timestamp && (
