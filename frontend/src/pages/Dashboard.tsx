@@ -70,16 +70,16 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     latest_close: number | null;
     latest_close_timestamp: string | null;
     fetched_at: string | null;
-    change: number | null;
-    change_pct: number | null;
+    // Prior session's close — the baseline the live quote's change/change_pct
+    // are computed against, so they tick with the price instead of waiting
+    // on the 30s price-range refetch.
+    prev_close: number | null;
   } | null>(null);
 
   // Latest quote (for current price)
   const [latestQuote, setLatestQuote] = useState<{
     price: number | null;
     timestamp: string | null;
-    change: number | null;
-    change_pct: number | null;
   } | null>(null);
 
   // Individual card states
@@ -218,25 +218,23 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     try {
       const data = await api.getPriceRange(requestSymbol, '1d');
       if (symbolRef.current !== requestSymbol) return;
-      // Find today's period entry in price_history for change/change_pct
+      // Today's period entry in price_history carries close and
+      // change (vs. the prior close), so prev_close = close - change.
       // Uses "today_high" or "today_low" type; the period key is "today"
-      let change: number | null = null;
-      let change_pct: number | null = null;
+      let prev_close: number | null = null;
       if (data.price_history && Array.isArray(data.price_history)) {
-        const todayEntry = data.price_history.find((entry: any) => 
+        const todayEntry = data.price_history.find((entry: any) =>
           entry.type === 'today_high' || entry.type === 'today_low'
         );
-        if (todayEntry) {
-          change = todayEntry.change ?? null;
-          change_pct = todayEntry.change_pct ?? null;
+        if (todayEntry && todayEntry.close != null && todayEntry.change != null) {
+          prev_close = todayEntry.close - todayEntry.change;
         }
       }
       setLastClose({
         latest_close: data.latest_close ?? null,
         latest_close_timestamp: data.latest_close_timestamp ?? null,
         fetched_at: data.fetched_at ?? null,
-        change,
-        change_pct,
+        prev_close,
       });
     } catch (err: any) {
       if (symbolRef.current !== requestSymbol) return;
@@ -249,12 +247,11 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     try {
       const data = await api.getQuote(requestSymbol);
       if (symbolRef.current !== requestSymbol) return;
-      // The quote has price, timestamp, and we can calculate change/change_pct from lastClose if available
+      // The quote has no change fields; change/change_pct are derived at
+      // render time from this price and lastClose.prev_close.
       setLatestQuote({
         price: data.price ?? null,
         timestamp: data.timestamp ?? null,
-        change: null, // We don't have change in the quote directly
-        change_pct: null,
       });
     } catch (err: any) {
       if (symbolRef.current !== requestSymbol) return;
@@ -358,6 +355,12 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     return () => clearInterval(interval);
   }, [autoRefresh, fetchQuote]);
 
+  const prevClose = lastClose?.prev_close ?? null;
+  const liveChange =
+    latestQuote?.price != null && prevClose ? latestQuote.price - prevClose : null;
+  const liveChangePct =
+    liveChange != null && prevClose ? (liveChange / prevClose) * 100 : null;
+
   const isRefreshing = regimeLoading || sectorLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
 
   return (
@@ -372,15 +375,15 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           </p>
           {(latestQuote && latestQuote.price != null) && (
             <div className="last-close-info">
-              <span className="last-close-label">Price</span>
+              <span className="last-close-label">Latest Price</span>
               <span className="last-close-price">${latestQuote.price.toFixed(4)}</span>
-              {lastClose && lastClose.change != null && lastClose.change_pct != null && (
+              {liveChange != null && liveChangePct != null && (
                 <>
-                  <span className={`last-close-change ${lastClose.change >= 0 ? 'positive' : 'negative'}`}>
-                    {lastClose.change >= 0 ? '+' : ''}{lastClose.change.toFixed(4)}
+                  <span className={`last-close-change ${liveChange >= 0 ? 'positive' : 'negative'}`}>
+                    {liveChange >= 0 ? '+' : ''}{liveChange.toFixed(4)}
                   </span>
-                  <span className={`last-close-change-pct ${lastClose.change_pct >= 0 ? 'positive' : 'negative'}`}>
-                    ({lastClose.change_pct >= 0 ? '+' : ''}{lastClose.change_pct.toFixed(2)}%)
+                  <span className={`last-close-change-pct ${liveChangePct >= 0 ? 'positive' : 'negative'}`}>
+                    ({liveChangePct >= 0 ? '+' : ''}{liveChangePct.toFixed(2)}%)
                   </span>
                 </>
               )}
