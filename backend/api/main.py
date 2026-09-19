@@ -449,25 +449,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routers
-# Additional API routers will be included here as phases progress
-app.include_router(regime.router)
+# Include API routers.
+#
+# ORDER IS MATCH ORDER: Starlette scans the top-level routers linearly on every
+# request (~3.4 us per router scanned, measured), so the busiest go first. The
+# ranking is each router's share of real frontend traffic in the Sep 17-18 access
+# logs (16k requests): trend 21%, analysis 17%, regime 15%, scanner 7%,
+# multitimeframe 7%, strategy 6%, market-context 6%, market-data 5%, tape 3%,
+# watchlists 3%, ai 3%. Traffic-weighted routing cost went ~38 -> ~26 us/request
+# (analysis alone was 17th: ~57 us on 17% of all requests).
+#
+# Reordering is only safe while no two routers can match the same request (the
+# first match wins). None do today, and tests/api/test_route_order.py enforces it,
+# so a future overlap fails a test instead of silently changing which handler runs.
 app.include_router(trend.router)
+app.include_router(analysis.router)
+app.include_router(regime.router)
+app.include_router(scanner_router)
 app.include_router(multitimeframe.router)
 app.include_router(strategy.router)
+app.include_router(market_context.router)
 app.include_router(market_data_routes_router)
+app.include_router(tape_router)
 app.include_router(watchlist_router)
+app.include_router(ai_router)
+# Less frequently hit, in their original relative order:
 app.include_router(alerts_router)
 app.include_router(backtest_router)
 app.include_router(finnhub_router)
-app.include_router(scanner_router)
 app.include_router(scanner_ws_router)
-app.include_router(tape_router)
 app.include_router(realtime_router)
-app.include_router(analysis.router)
-app.include_router(market_context.router)
 app.include_router(signals_router)
-app.include_router(ai_router)
 app.include_router(nl_search_router)
 app.include_router(aux_data_router)
 app.include_router(strategy_lab_router)
