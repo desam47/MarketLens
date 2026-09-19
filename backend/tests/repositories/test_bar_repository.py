@@ -9,9 +9,12 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
-from sqlalchemy import create_engine
+import sqlite3
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
@@ -839,3 +842,100 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUpsertBarsChunking(unittest.TestCase):
+    """upsert_bars writes in bounded chunks.
+
+    One statement for a big batch binds rows x 12 variables; past SQLite's
+    limit it fails with "too many SQL variables" and the whole ingest cycle is
+    lost (44 such failures in the live logs), and compiling a 200k+ parameter
+    statement holds the GIL for seconds.
+    """
+
+    def setUp(self):
+        # _has_unique_constraint caches its answer process-wide; an earlier test
+        # can leave False behind, which would silently route these tests through
+        # the per-row fallback instead of the bulk path under test.
+        patcher = patch.dict(bar_repository._UNIQUE_CONSTRAINT_CACHE, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _engine(self, variable_limit=None):
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        if variable_limit is not None:
+            @event.listens_for(engine, "connect")
+            def _lower_limit(dbapi_conn, _record):
+                dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, variable_limit)
+        BarModel.__table__.create(engine, checkfirst=True)
+        self.addCleanup(engine.dispose)
+        return engine, sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    @staticmethod
+    def _bars(n, close=100.0):
+        base = datetime(2025, 1, 1, 9, 30)
+        return [_make_bar("AAPL", base + timedelta(minutes=i), close + i) for i in range(n)]
+
+    def test_default_chunk_stays_under_sqlites_default_variable_limit(self):
+        self.assertLess(12 * bar_repository._UPSERT_CHUNK_ROWS, 32766)
+
+    def test_uses_one_statement_per_chunk_and_writes_everything(self):
+        engine, Session = self._engine()
+        statements = []
+        event.listen(engine, "before_cursor_execute",
+                     lambda conn, cur, stmt, params, ctx, many: statements.append(stmt)
+                     if stmt.lstrip().upper().startswith("INSERT") else None)
+        with patch.object(bar_repository, "_UPSERT_CHUNK_ROWS", 10):
+            with Session() as db:
+                written = bar_repository.upsert_bars(db, self._bars(25))
+        self.assertEqual(written, 25)
+        self.assertEqual(len(statements), 3)  # 10 + 10 + 5
+        with Session() as db:
+            self.assertEqual(len(bar_repository.get_bars(db, "AAPL", "1m")), 25)
+
+    def test_updates_existing_rows_across_chunk_boundaries(self):
+        _, Session = self._engine()
+        with patch.object(bar_repository, "_UPSERT_CHUNK_ROWS", 7):
+            with Session() as db:
+                bar_repository.upsert_bars(db, self._bars(20, close=100.0))
+            with Session() as db:
+                written = bar_repository.upsert_bars(db, self._bars(20, close=500.0))
+        self.assertEqual(written, 20)
+        with Session() as db:
+            stored = bar_repository.get_bars(db, "AAPL", "1m")
+        self.assertEqual(len(stored), 20)
+        self.assertEqual(sorted(b.close for b in stored), [500.0 + i for i in range(20)])
+
+    def test_reproduces_the_production_failure_and_chunking_fixes_it(self):
+        """Emulate the real failure at small scale by lowering SQLite's own
+        variable limit: 200 rows x 12 = 2400 variables vs a limit of 1200."""
+        _, Session = self._engine(variable_limit=1200)
+        # Old behaviour = one statement for the whole batch.
+        with patch.object(bar_repository, "_UPSERT_CHUNK_ROWS", 10_000):
+            with Session() as db:
+                with self.assertRaises(OperationalError) as ctx:
+                    bar_repository.upsert_bars(db, self._bars(200))
+        self.assertIn("too many SQL variables", str(ctx.exception))
+        # Chunked (50 rows x 12 = 600 variables per statement) succeeds.
+        with patch.object(bar_repository, "_UPSERT_CHUNK_ROWS", 50):
+            with Session() as db:
+                self.assertEqual(bar_repository.upsert_bars(db, self._bars(200)), 200)
+
+    def test_batch_is_all_or_nothing_if_a_later_chunk_fails(self):
+        _, Session = self._engine()
+        with patch.object(bar_repository, "_UPSERT_CHUNK_ROWS", 10):
+            with Session() as db:
+                real_execute, calls = db.execute, {"n": 0}
+
+                def flaky(stmt, *a, **kw):
+                    calls["n"] += 1
+                    if calls["n"] == 3:
+                        raise RuntimeError("disk I/O error")
+                    return real_execute(stmt, *a, **kw)
+
+                with patch.object(db, "execute", flaky):
+                    with self.assertRaises(RuntimeError):
+                        bar_repository.upsert_bars(db, self._bars(25))
+                db.rollback()
+        with Session() as db:
+            self.assertEqual(bar_repository.get_bars(db, "AAPL", "1m"), [])

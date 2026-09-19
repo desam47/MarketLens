@@ -155,6 +155,24 @@ def _normalize_1d_bar(b: Bar, provider_name: str) -> Bar | None:
     return None
 
 
+# The 1m recent-window loop only needs the newest few bars: it runs every ~60s,
+# and _gapfill_1m_loop / the backfill jobs own gap healing. Not every provider
+# honours ``range_="15m"``: Webull treated it as a whole trading day (891 bars
+# per symbol) and Yahoo's range table maps "15m" to 5 days (~1,900 bars per
+# symbol), which had this loop upserting 22,000-46,000 rows a minute — ~2-4 s of
+# GIL-bound work that starved the API's event loop, and past SQLite's
+# bound-variable limit the whole cycle was lost. 30 = the "15m" lookback doubled
+# for safety (webull_provider._RANGE_TO_COUNT).
+_RECENT_WINDOW_MAX_BARS = 30
+
+
+def _newest_bars(bars: list, limit: int = _RECENT_WINDOW_MAX_BARS) -> list:
+    """Return at most the ``limit`` newest bars, in chronological order."""
+    if len(bars) <= limit:
+        return bars
+    return sorted(bars, key=lambda b: b.timestamp)[-limit:]
+
+
 class MarketDataIngestionService:
     """Service for automatically ingesting and storing market data"""
 
@@ -1036,6 +1054,7 @@ class MarketDataIngestionService:
                 )
                 for symbol, bars in batch_bars.items():
                     if bars:
+                        bars = _newest_bars(bars)
                         for bar in bars:
                             bar.timeframe = "1m"
                         bars_to_upsert.extend(bars)
@@ -1056,6 +1075,7 @@ class MarketDataIngestionService:
                             include_extended_hours=True,
                         )
                         if bars:
+                            bars = _newest_bars(bars)
                             for bar in bars:
                                 bar.timeframe = "1m"
                             bars_to_upsert.extend(bars)

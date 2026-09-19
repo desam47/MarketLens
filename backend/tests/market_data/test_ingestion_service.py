@@ -1122,3 +1122,76 @@ class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
+    """The 1m recent-window loop must never write more than the newest bars.
+
+    Providers don't all honour range_="15m": Webull fetched a whole trading day
+    (891 bars/symbol) and Yahoo maps "15m" to 5 days (~1,900 bars/symbol), so
+    the loop upserted 22,000-46,000 rows every minute (GIL-bound seconds that
+    starved the API event loop) and lost the entire cycle once the batch
+    exceeded SQLite's bound-variable limit.
+    """
+
+    def _bars(self, symbol: str, n: int):
+        from backend.models.market_data import Bar, DataStatus
+
+        base = datetime(2026, 9, 18, 4, 0)
+        return [
+            Bar(symbol=symbol, timestamp=base + timedelta(minutes=i), open=1.0, high=1.0,
+                low=1.0, close=1.0, volume=1, timeframe="1m", provider="yahoo_finance",
+                data_status=DataStatus.LIVE)
+            for i in range(n)
+        ]
+
+    def _service(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+
+        svc = MarketDataIngestionService(symbols=["AAPL", "MSFT"], timeframes=["1m"])
+        svc.manager = MagicMock()
+        svc._resample_and_upsert = MagicMock(side_effect=lambda *a, **k: asyncio.sleep(0))
+        return svc
+
+    def test_newest_bars_helper(self):
+        from backend.market_data.services.ingestion_service import _newest_bars
+
+        bars = self._bars("AAPL", 100)
+        short = bars[:30]
+        self.assertIs(_newest_bars(short), short)          # at/under the cap: untouched
+        out = _newest_bars(list(reversed(bars)))          # unsorted input
+        self.assertEqual(len(out), 30)
+        self.assertEqual([b.timestamp for b in out], [b.timestamp for b in bars[-30:]])
+        self.assertEqual(len(_newest_bars(self._bars("AAPL", 5))), 5)  # short lists untouched
+        self.assertEqual(len(_newest_bars(bars, limit=7)), 7)
+
+    async def test_batch_path_writes_only_the_newest_bars_per_symbol(self):
+        svc = self._service()
+        svc.manager.get_historical_bars_batch.return_value = {
+            "AAPL": self._bars("AAPL", 1900),   # what Yahoo returned for "15m"
+            "MSFT": self._bars("MSFT", 891),    # what Webull returned for "15m"
+        }
+        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
+                patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up, \
+                patch("backend.market_data.services.cache._redis_cache"):
+            await svc._ingest_1m_recent_window()
+
+        written = up.call_args.args[1]
+        by_symbol = {s: [b for b in written if b.symbol == s] for s in ("AAPL", "MSFT")}
+        self.assertEqual({k: len(v) for k, v in by_symbol.items()}, {"AAPL": 30, "MSFT": 30})
+        # ...and they are the NEWEST bars, not the oldest.
+        newest_ts = max(b.timestamp for b in self._bars("AAPL", 1900))
+        self.assertEqual(max(b.timestamp for b in by_symbol["AAPL"]), newest_ts)
+        self.assertTrue(all(b.timeframe == "1m" for b in written))
+
+    async def test_per_symbol_fallback_path_is_bounded_too(self):
+        svc = self._service()
+        svc.manager.get_historical_bars_batch.side_effect = RuntimeError("batch endpoint down")
+        svc.manager.get_historical_bars.side_effect = lambda sym, *a, **k: self._bars(sym, 1900)
+        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
+                patch("backend.market_data.services.ingestion_service.asyncio.sleep",
+                      new=lambda *_a, **_k: asyncio.sleep(0)), \
+                patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up, \
+                patch("backend.market_data.services.cache._redis_cache"):
+            await svc._ingest_1m_recent_window()
+        self.assertEqual(len(up.call_args.args[1]), 60)  # 2 symbols x 30

@@ -652,6 +652,75 @@ class TestExtendedHoursBars(unittest.TestCase):
         self.assertEqual(bars[0].session, "regular")
 
 
+class TestRecentWindowBarCount(unittest.TestCase):
+    """A "15m" range is a 15-MINUTE lookback (30 bars), not a trading day.
+
+    ``_RANGE_DAYS["15m"] == 1`` made every 60s 1m-ingest tick request a whole
+    extended-hours day: 891 bars per symbol, ~22,000 rows upserted per cycle
+    (measured in the logs), ~99% of them unchanged.
+    """
+
+    def _provider(self, response) -> WebullProvider:
+        mock_data = MagicMock()
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = response
+        resp.text = json.dumps(response)
+        mock_data.market_data.get_history_bar.return_value = resp
+        mock_data.market_data.get_batch_history_bar.return_value = resp
+        return _make_provider(mock_data)
+
+    def test_target_bars_helper(self):
+        from backend.market_data.providers.webull_provider import _m1_target_bars
+
+        # Recent-window ranges are an explicit bar count, session-independent.
+        self.assertEqual(_m1_target_bars("15m", True), 30)
+        self.assertEqual(_m1_target_bars("15m", False), 30)
+        # Day-based ranges are unchanged.
+        self.assertEqual(_m1_target_bars("1d", False), 390)
+        self.assertEqual(_m1_target_bars("1d", True), 891)
+        self.assertEqual(_m1_target_bars("5d", True), 5 * 390 * 16 // 7)
+        self.assertEqual(_m1_target_bars("1mo", False), 22 * 390)
+        self.assertEqual(_m1_target_bars("no-such-range", False), 65 * 390)  # legacy default
+
+    def test_batch_15m_requests_30_bars_not_a_full_day(self):
+        p = self._provider({"result": []})
+        p.get_historical_bars_batch(["AAPL", "MSFT"], "1m", range_="15m",
+                                    include_extended_hours=True)
+        _, kwargs = p._data_client.market_data.get_batch_history_bar.call_args
+        self.assertEqual(kwargs["count"], "30")
+        self.assertEqual(kwargs["trading_sessions"], ["PRE", "RTH", "ATH"])
+
+    def test_batch_day_range_still_requests_a_full_day(self):
+        p = self._provider({"result": []})
+        p.get_historical_bars_batch(["AAPL"], "1m", range_="1d", include_extended_hours=True)
+        _, kwargs = p._data_client.market_data.get_batch_history_bar.call_args
+        self.assertEqual(kwargs["count"], "891")
+
+    def test_single_symbol_paginated_path_honours_15m(self):
+        """_fetch_1m_paginated used to ignore its ``count`` and recompute the
+        target from _RANGE_DAYS, so fixing only the batch path was not enough."""
+        p = self._provider([])
+        p.get_historical_bars("aapl", timeframe="1m", range_="15m",
+                              include_extended_hours=True)
+        self.assertEqual(p._data_client.market_data.get_history_bar.call_count, 1)
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertEqual(kwargs["count"], "30")
+
+    def test_single_symbol_rth_only_15m(self):
+        p = self._provider([])
+        p.get_historical_bars("aapl", timeframe="1m", range_="15m")
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertEqual(kwargs["count"], "30")  # was 390
+
+    def test_multi_day_pagination_is_unchanged(self):
+        p = self._provider([])
+        p.get_historical_bars("aapl", timeframe="1m", range_="5d",
+                              include_extended_hours=True)
+        _, kwargs = p._data_client.market_data.get_history_bar.call_args
+        self.assertEqual(kwargs["count"], "1200")  # page size cap, as before
+
+
 class TestExtendedHoursQuotes(unittest.TestCase):
     def _make_snapshot_provider(self, field: dict) -> WebullProvider:
         mock_data = MagicMock()

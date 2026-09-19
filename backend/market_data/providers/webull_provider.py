@@ -239,6 +239,33 @@ _RANGE_TO_COUNT: dict[str, int] = {
     "3h":  30,      # Phase 3.8: 30 × 1h bars (3-hour lookback, conservative)
 }
 
+# Ranges that name a short lookback WINDOW rather than a number of trading
+# days. ``_RANGE_DAYS`` maps "15m" to 1 (a whole trading day), so the multi-day
+# 1m arithmetic would treat a 15-MINUTE lookback as a full extended-hours day —
+# 891 bars per symbol on every 60s ingest tick (measured in the logs: ~22,000
+# rows upserted per cycle, ~99% of them unchanged). ``_RANGE_TO_COUNT`` holds
+# the intended bar count for these.
+_RECENT_WINDOW_RANGES = frozenset({"15m"})
+
+
+def _m1_target_bars(range_: str, ext_hours: bool) -> int:
+    """Number of 1m bars a fetch for ``range_`` should cover (uncapped).
+
+    Single source of truth for ``get_historical_bars``, ``_fetch_1m_paginated``
+    and ``get_historical_bars_batch``: the paginator used to recompute this from
+    ``_RANGE_DAYS`` and ignore the count it was handed, so a fix in only one of
+    them left the others fetching a whole day.
+    """
+    if range_ in _RECENT_WINDOW_RANGES:
+        return _RANGE_TO_COUNT[range_]
+    target = _RANGE_DAYS.get(range_, 65) * _BARS_PER_DAY["1m"]
+    if ext_hours:
+        # PRE (5.5h) + RTH (6.5h) + ATH (4h) = 16h vs RTH-only's 6.5h — scale
+        # the per-day bar budget so a multi-day range still requests enough
+        # bars to cover all three sessions instead of being capped mid-day.
+        target = target * 16 // 7
+    return target
+
 
 def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
     """Convert a Webull timestamp to a naive NY datetime.
@@ -601,14 +628,7 @@ class WebullProvider(BaseMarketDataProvider):
             ext_hours = include_extended_hours and timeframe == "1m"
             if timeframe == "1m":
                 days_per_range = _RANGE_DAYS.get(range_, 65)
-                count = days_per_range * _BARS_PER_DAY["1m"]
-                if ext_hours:
-                    # PRE (5.5h) + RTH (6.5h) + ATH (4h) = 16h vs RTH-only's
-                    # 6.5h — scale the per-day bar budget accordingly so a
-                    # multi-day range still requests enough bars to cover
-                    # all three sessions instead of being capped mid-day.
-                    count = count * 16 // 7
-                count = min(count, 1200)  # Webull M1 API limit (official cap)
+                count = min(_m1_target_bars(range_, ext_hours), 1200)  # Webull M1 API cap
             else:
                 count = _RANGE_TO_COUNT.get(range_, 200)
                 count = min(count, 1200)  # Webull D/H API limit
@@ -679,13 +699,7 @@ class WebullProvider(BaseMarketDataProvider):
         start_ts = _start_ts  # informational only; not passed to Webull
 
         # How many total bars do we need?
-        days_per_range = _RANGE_DAYS.get(range_, 65)
-        target_bars = days_per_range * _BARS_PER_DAY["1m"]
-        if trading_sessions:
-            # PRE+RTH+ATH = 16h/day vs RTH-only's 6.5h — same scaling as
-            # get_historical_bars so pagination requests enough bars to
-            # actually cover all three sessions per day.
-            target_bars = target_bars * 16 // 7
+        target_bars = _m1_target_bars(range_, bool(trading_sessions))
         # Each page returns up to 1,200 bars (≈ 3 trading days).
         BARS_PER_PAGE_CAP = 1200
         bars_per_page = min(target_bars, BARS_PER_PAGE_CAP)
@@ -836,12 +850,8 @@ class WebullProvider(BaseMarketDataProvider):
             timespan = _TIMEFRAME_TO_TIMESPAN.get(timeframe, "D")
             ext_hours = include_extended_hours and timeframe == "1m"
             if timeframe == "1m":
-                days_per_range = _RANGE_DAYS.get(range_, 65)
-                count = days_per_range * _BARS_PER_DAY["1m"]
-                if ext_hours:
-                    count = count * 16 // 7
                 # Webull M1 API limit (official cap) — matches get_historical_bars.
-                count = min(count, 1200)
+                count = min(_m1_target_bars(range_, ext_hours), 1200)
             else:
                 count = min(_RANGE_TO_COUNT.get(range_, 200), 1200)
 

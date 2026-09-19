@@ -68,6 +68,12 @@ def _bar_to_model(bar: Bar) -> BarModel:
     )
 
 
+# Rows per INSERT ... ON CONFLICT statement in ``upsert_bars``. Each bar binds
+# 12 variables, so 1000 rows = 12,000 — safely under SQLite's default limit of
+# 32,766 bound variables per statement.
+_UPSERT_CHUNK_ROWS = 1000
+
+
 def upsert_bars(db: Session, bars: list[Bar]) -> int:
     """Bulk-insert or update a list of bars.
 
@@ -121,7 +127,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
         # Fast bulk upsert via ON CONFLICT DO UPDATE.
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        stmt = sqlite_insert(BarModel).values([
+        rows = [
             {
                 "symbol": b.symbol.upper(),
                 "timeframe": b.timeframe,
@@ -141,23 +147,31 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                 "session": b.session,
             }
             for b in bars
-        ])
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "timeframe", "timestamp"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-                "provider": stmt.excluded.provider,
-                "data_status": stmt.excluded.data_status,
-                "session": stmt.excluded.session,
-            },
-        )
-        result = db.execute(stmt)
+        ]
+        # One statement per chunk, all in the same transaction (committed once
+        # below, so the batch stays all-or-nothing). A single statement for a
+        # big batch binds rows x 12 variables and SQLite rejects it with
+        # "too many SQL variables" past SQLITE_MAX_VARIABLE_NUMBER — that lost
+        # whole 1m-ingest cycles in production — and compiling/binding a
+        # 200k+ parameter statement holds the GIL for seconds, starving the
+        # API's event loop.
+        for i in range(0, len(rows), _UPSERT_CHUNK_ROWS):
+            stmt = sqlite_insert(BarModel).values(rows[i:i + _UPSERT_CHUNK_ROWS])
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "timeframe", "timestamp"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "provider": stmt.excluded.provider,
+                    "data_status": stmt.excluded.data_status,
+                    "session": stmt.excluded.session,
+                },
+            )
+            written += db.execute(stmt).rowcount
         db.commit()
-        written = result.rowcount
     else:
         # Per-row merge fallback (SQLAlchemy 2.0 ORM style).
         for bar in bars:
