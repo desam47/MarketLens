@@ -659,6 +659,7 @@ class SignalRecorder:
             engine = get_engine(symbol)
             return engine.get_current_trend(tf)
         except Exception:
+            logger.debug("signal recorder: trend for %s/%s unavailable", symbol, timeframe, exc_info=True)
             return None
 
     def _classify_volume(self, bar) -> str:
@@ -685,6 +686,7 @@ class SignalRecorder:
                 return None
             return snap.regime.value if hasattr(snap.regime, "value") else str(snap.regime)
         except Exception:
+            logger.debug("signal recorder: market regime unavailable", exc_info=True)
             return None
 
     # --- Internal helpers ---------------------------------------------------

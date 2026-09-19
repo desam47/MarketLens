@@ -40,12 +40,15 @@ call.
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from backend.scanner.scanner import ScanResult, market_scanner
+
+logger = logging.getLogger(__name__)
 
 # Sized for TWO things sharing this one pool (2026-09-16, be59abd made
 # it process-wide instead of per-call — see _CONTEXT_EXECUTOR below):
@@ -271,7 +274,7 @@ def _regime_context(sym: str) -> dict[str, Any]:
         if regime_sig is not None:
             market_regime = _sig_to_dict(regime_sig)
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: regime_context unavailable; section omitted", exc_info=True)
     return market_regime
 
 
@@ -292,7 +295,7 @@ def _rs_context(sym: str) -> list[dict[str, Any]]:
         signals = rs_engine.get_signals()
         rs_list = [_sig_to_dict(s) for s in signals]
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: rs_context unavailable; section omitted", exc_info=True)
     return rs_list
 
 
@@ -338,7 +341,7 @@ def _sector_context(
         if sector_sig is not None:
             sector_alignment = _sig_to_dict(sector_sig)
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: sector_context unavailable; section omitted", exc_info=True)
     return sector_alignment
 
 
@@ -435,7 +438,7 @@ def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
                     "resistances": resistances[:3],
                 }
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: sr_context unavailable; section omitted", exc_info=True)
     return sr
 
 
@@ -482,7 +485,7 @@ def _transition_context(
             if t is not None:
                 transition = t.to_dict()
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: transition_context unavailable; section omitted", exc_info=True)
     return transition
 
 
@@ -501,7 +504,7 @@ def _signal_stats_context(sym: str, timeframe: str) -> dict[str, Any]:
                 "win_rate": stats.get("win_rate"),
             }
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: signal_stats_context unavailable; section omitted", exc_info=True)
     return signal_stats
 
 
@@ -547,7 +550,7 @@ def _news_context(sym: str, include: bool) -> list[dict[str, Any]]:
                 }
             )
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: news_context unavailable; section omitted", exc_info=True)
     return news
 
 
@@ -577,7 +580,7 @@ def _fundamentals_context(sym: str, include: bool) -> dict[str, Any]:
             if v is not None
         }
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: fundamentals_context unavailable; section omitted", exc_info=True)
     return fundamentals
 
 
@@ -628,7 +631,7 @@ def _divergence_context(sym: str, timeframe: str, include: bool) -> dict[str, An
             if found:
                 divergence = found[-1].to_dict()
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: divergence_context unavailable; section omitted", exc_info=True)
     return divergence
 
 
@@ -654,7 +657,7 @@ def _tape_context(sym: str) -> dict[str, Any]:
                     "block_count_5m": s["block_count_5m"],
                 }
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: tape_context unavailable; section omitted", exc_info=True)
     return tape
 
 
@@ -673,7 +676,7 @@ def _track_record_context(sym: str) -> dict[str, Any]:
 
             track_record = get_track_record(sym)
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: track_record_context unavailable; section omitted", exc_info=True)
     return track_record
 
 
@@ -752,7 +755,7 @@ def _correlation_context(
         if primary_sector != "Unknown":
             summary["primary_sector"] = primary_sector
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("AI context: correlation_context unavailable; section omitted", exc_info=True)
     return summary
 
 

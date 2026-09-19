@@ -115,9 +115,11 @@ class TestLatestBars(_RouteTestCase):
             _bar(s, tf, 1.0, "redis") if tf in ("1m", "1h") else None
         )
         self.mgr.get_latest_bar.side_effect = RuntimeError("provider down for 5m")
-        r = self.client.get("/api/market-data/bars/AAPL")
+        with self.assertLogs("backend.api.market_data_routes", "DEBUG") as logs:
+            r = self.client.get("/api/market-data/bars/AAPL")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(list(r.json()), ["1m", "1h"])
+        self.assertTrue(any(rec.exc_info for rec in logs.records), "the skipped timeframe is logged")
 
     def test_no_timeframes_returns_empty(self):
         self.svc.timeframes = []

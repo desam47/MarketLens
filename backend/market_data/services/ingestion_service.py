@@ -1839,7 +1839,7 @@ class MarketDataIngestionService:
             if _stream is not None:
                 _stream.subscribe([symbol])
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Webull stream subscription change failed in register_symbol", exc_info=True)
 
         if symbol in self.symbols:
             return
@@ -1889,7 +1889,7 @@ class MarketDataIngestionService:
                 if removed:
                     _stream.unsubscribe(removed)
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("Webull stream subscription change failed in refresh_symbols_from_watchlist", exc_info=True)
         logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
         return self.symbols
 

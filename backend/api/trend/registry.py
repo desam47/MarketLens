@@ -53,6 +53,35 @@ except Exception:
     _WARMUP_SYMBOLS = ("SPY", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX")
 
 
+def _feed_warmup_bars(engine: TrendEngine, symbol: str, tf: Timeframe, bars) -> int:
+    """Feed stored bars into ``engine`` for warmup; return how many it accepted.
+
+    A rejected bar must not abort warmup (one bad row shouldn't leave the engine cold),
+    but it used to vanish without a trace. Failures are now counted and reported once
+    per (symbol, timeframe).
+    """
+    seeded = failed = 0
+    last_error: Exception | None = None
+    for bar in bars:
+        try:
+            engine.update(
+                price=float(bar.close or 0.0),
+                volume=int(bar.volume or 0),
+                timestamp=bar.timestamp,
+                only_timeframe=tf,
+            )
+            seeded += 1
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            last_error = e
+    if failed:
+        logger.warning(
+            "Trend warmup %s/%s: engine rejected %d of %d bars (last error: %r)",
+            symbol, tf.value, failed, len(bars), last_error,
+        )
+    return seeded
+
+
 def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
     """Seed a TrendEngine from historical BarModel rows with full OHLCV.
 
@@ -98,17 +127,7 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
                 tf = Timeframe(tf_str)
             except ValueError:
                 continue
-            for bar in bars:
-                try:
-                    engine.update(
-                        price=float(bar.close or 0.0),
-                        volume=int(bar.volume or 0),
-                        timestamp=bar.timestamp,
-                        only_timeframe=tf,
-                    )
-                    seeded += 1
-                except Exception:
-                    pass  # Warmup errors are non-fatal
+            seeded += _feed_warmup_bars(engine, symbol, tf, bars)
             if bars:
                 logger.debug(
                     f"Seeded {symbol}/{tf_str} with {len(bars)} bars "
@@ -205,17 +224,7 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
                     tf = Timeframe(tf_str)
                 except ValueError:
                     continue
-                for bar in bars:
-                    try:
-                        engine.update(
-                            price=float(bar.close or 0.0),
-                            volume=int(bar.volume or 0),
-                            timestamp=bar.timestamp,
-                            only_timeframe=tf,
-                        )
-                        seeded += 1
-                    except Exception:
-                        pass  # Warmup errors are non-fatal
+                seeded += _feed_warmup_bars(engine, symbol, tf, bars)
 
             if seeded == 0:
                 # No BarModel rows for this symbol in the batch's shared

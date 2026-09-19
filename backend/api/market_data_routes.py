@@ -2,6 +2,7 @@
 Market Data API Routes
 Endpoints for controlling data ingestion and accessing historical data
 """
+import logging
 import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -15,6 +16,8 @@ from backend.models.market_data import Bar, MarketStatus, Quote
 from backend.market_data.services.ingestion_service import ingestion_service
 from backend.market_data.services.manager import _rate_limiter, _redis_cache, market_data_manager
 from backend.api.ttl_cache import _quote_cache
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/market-data",
@@ -265,7 +268,7 @@ async def get_latest_bars(symbol: str):
             )
         except Exception:
             # Don't fail the whole request if one timeframe is missing.
-            pass
+            logger.debug("latest bar unavailable from the provider chain; omitted", exc_info=True)
     # Keep the response in timeframe order, as the sequential loop produced.
     return {tf: bars[tf] for tf in timeframes if tf in bars}
 

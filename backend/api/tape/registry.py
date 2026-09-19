@@ -140,11 +140,12 @@ def all_tape_engines() -> dict[str, TapeEngine]:
 def _persist_once() -> int:
     """Drain + upsert every engine's pending 1-second bars. Never raises."""
     rows: list[dict] = []
-    for eng in list(_engines.values()):
+    for sym, eng in list(_engines.items()):
         try:
             rows.extend(eng.drain_pending())
         except Exception:  # noqa: BLE001
-            pass
+            # That engine's pending 1-second bars are lost for this tick: say so.
+            logger.warning("tape: draining pending bars for %s failed", sym, exc_info=True)
     if not rows:
         return 0
     try:

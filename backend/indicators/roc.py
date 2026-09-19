@@ -1,9 +1,12 @@
 """
 Rate of Change (ROC) indicator
 """
+import logging
 from typing import Any, cast
 
 from .base_indicator import BaseIndicator
+
+logger = logging.getLogger(__name__)
 
 
 class ROCIndicator(BaseIndicator):
@@ -63,6 +66,6 @@ class ROCIndicator(BaseIndicator):
                 self.values.append(latest_value)
                 return latest_value
         except Exception:
-            pass
+            logger.debug("ROC update failed; value skipped", exc_info=True)
 
         return None
