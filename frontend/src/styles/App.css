@@ -418,10 +418,9 @@ h4 {
 
 .dashboard-grid {
   display: grid;
-  /* min(100%, 320px) instead of a flat 320px — a fixed minimum can
-     overflow the viewport width on screens narrower than 320px
-     (e.g. an iPhone SE in portrait at 375px minus padding). */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  /* Increased min from 320px → 400px for wider cards;
+     still responsive — drops to 100% below 400px viewport. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
   gap: 1rem;
   align-items: stretch;
 }
