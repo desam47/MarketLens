@@ -63,7 +63,6 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   // Confirmed live: AAPL's regime engine was current server-side, but a
   // Dashboard tab with this off showed "Stuck · 2d ago" the whole time.
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Last close data from price-range endpoint
   const [lastClose, setLastClose] = useState<{
@@ -287,7 +286,6 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     ];
     Promise.all(pending).finally(() => {
       isFetchingAllRef.current = false;
-      setLastUpdated(new Date());
     });
   }, [fetchRegime, fetchSector, fetchTrends, fetchConfluence, fetchStrategy, fetchLastClose, fetchQuote]);
 
@@ -414,12 +412,6 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           </label>
         </div>
       </div>
-
-      {lastUpdated && (
-        <div className="last-updated">
-          Last updated: {formatETDateTime(lastUpdated.toISOString())}
-        </div>
-      )}
 
       <div className="dashboard-grid">
         {/* Regime Card */}
