@@ -24,16 +24,20 @@ thread itself is flagged ``is_event_loop``: if it is stuck in one frame, sync
 code is running on the loop; if it is varying while the loop is stalled, another
 thread is starving it of the GIL.
 
-Blind spot, and the complement: the sampler thread needs the GIL, so while ONE
-thread sits inside a long C call that never releases it (a big regex, a large
-parse or row conversion...) it cannot run either — it gets a single sample after
-the fact. That signature (a long stall with ~1 sample) is itself the diagnosis. To
-name the culprit anyway, ``faulthandler.dump_traceback_later`` is re-armed from
-every loop tick: its timer thread runs WITHOUT the GIL, so if the loop stops
-ticking it dumps every thread's Python stack (the culprit shows the Python line
-that called the long C function) to ``faulthandler_path``. Re-arming spawns a
-short-lived thread each tick, so this costs a few % CPU — fine for a diagnosis
-session, which is why the whole tool is off by default.
+Blind spot: the sampler thread needs the GIL, so while ONE thread sits inside a
+long C call that never releases it (a full garbage collection, a big regex, a large
+parse...) the sampler cannot run either and gets a single sample after the fact.
+That signature — a long stall with ~1 sample — is itself a diagnosis. Do NOT try to
+see through it with ``faulthandler.dump_traceback_later`` re-armed from the loop:
+that was tried, and its timer thread walks interpreter state without the GIL; it
+intermittently spun at 100% CPU and hung the process (and its shutdown), taking the
+API down. The GC hook below is the safe way to attribute GIL-holding collections.
+
+Garbage collection is the classic silent GIL holder: a full (generation-2)
+collection walks every tracked object, never releases the GIL, and runs in
+whichever thread happened to allocate — so the "current line" it shows is just
+where the allocation landed. A ``gc.callbacks`` hook records every collection's
+generation and duration, and a stall report notes any collection overlapping it.
 
 Off by default and zero-cost while off: nothing runs until ``enable()`` is called
 (``POST /api/system/loop_lag_watchdog``).
@@ -42,7 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import faulthandler
+import gc
 import logging
 import sys
 import threading
@@ -84,11 +88,9 @@ class LoopLagWatchdog:
         stack_depth: int = 8,
         max_samples_per_stall: int = 400,
         max_reports: int = 200,
-        faulthandler_path: str | None = None,
+        gc_report_ms: float = 10.0,
     ) -> None:
         self._loop = loop
-        self.faulthandler_path = faulthandler_path
-        self._fh = None
         self.threshold_ms = threshold_ms
         self._sample_s = sample_ms / 1000.0
         self._tick_s = tick_ms / 1000.0
@@ -101,16 +103,17 @@ class LoopLagWatchdog:
         self._loop_tid: int | None = None
         self.stall_count = 0
         self.reports: collections.deque[dict] = collections.deque(maxlen=50)
+        self._gc_report_ms = gc_report_ms
+        self._gc_t0 = 0.0
+        self.gc_counts: collections.Counter[int] = collections.Counter()
+        self.gc_events: collections.deque[dict] = collections.deque(maxlen=50)
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
         if self._thread is not None:
             return
         self._stop.clear()
-        if self.faulthandler_path:
-            self._fh = open(self.faulthandler_path, "a", buffering=1)  # noqa: SIM115 - needs a real fd
-            self._fh.write(f"\n### watchdog enabled {datetime.now(UTC).isoformat(timespec='seconds')} "
-                           f"(dump after {self.threshold_ms:.0f} ms without a loop tick)\n")
+        gc.callbacks.append(self._gc_callback)
         self._last_tick = time.monotonic()
         self._loop.call_soon_threadsafe(self._tick)
         self._thread = threading.Thread(target=self._run, name="loop-lag-watchdog", daemon=True)
@@ -118,12 +121,8 @@ class LoopLagWatchdog:
 
     def stop(self) -> None:
         self._stop.set()
-        if self._fh is not None:
-            faulthandler.cancel_dump_traceback_later()
-            try:
-                self._fh.close()
-            finally:
-                self._fh = None
+        if self._gc_callback in gc.callbacks:
+            gc.callbacks.remove(self._gc_callback)
         thread, self._thread = self._thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
@@ -132,15 +131,36 @@ class LoopLagWatchdog:
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    # ------------------------------------------------------------ gc timing
+    def _gc_callback(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self._gc_t0 = time.perf_counter()
+            return
+        end = time.monotonic()
+        ms = (time.perf_counter() - self._gc_t0) * 1000.0
+        gen = info.get("generation", -1)
+        self.gc_counts[gen] += 1
+        if ms >= self._gc_report_ms:
+            self.gc_events.append({
+                "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                "generation": gen,
+                "ms": round(ms, 1),
+                "collected": info.get("collected", 0),
+                "_end_mono": end,
+            })
+
+    def _gc_overlapping(self, start: float, end: float) -> list[dict]:
+        return [
+            {k: v for k, v in e.items() if not k.startswith("_")}
+            for e in list(self.gc_events)
+            if e["_end_mono"] >= start and e["_end_mono"] - e["ms"] / 1000.0 <= end
+        ]
+
     # --------------------------------------------------------------- the loop
     def _tick(self) -> None:  # runs ON the event loop
         self._last_tick = time.monotonic()
         self._loop_tid = threading.get_ident()
         if not self._stop.is_set():
-            fh = self._fh
-            if fh is not None:
-                # Re-arm: only fires if the loop fails to get back here in time.
-                faulthandler.dump_traceback_later(self.threshold_ms / 1000.0, repeat=True, file=fh)
             self._loop.call_later(self._tick_s, self._tick)
 
     # ------------------------------------------------------ the watcher thread
@@ -161,7 +181,7 @@ class LoopLagWatchdog:
                     samples.append(self._snapshot(me))
             elif stalled:
                 stalled = False
-                self._report((self._last_tick - stall_from) * 1000.0, samples)
+                self._report((self._last_tick - stall_from) * 1000.0, samples, stall_from, self._last_tick)
                 samples = []
 
     def _snapshot(self, my_tid: int) -> list[tuple[str, int, tuple[str, ...]]]:
@@ -177,7 +197,7 @@ class LoopLagWatchdog:
             ))
         return out
 
-    def _report(self, stall_ms: float, samples: list) -> None:
+    def _report(self, stall_ms: float, samples: list, stall_from: float = 0.0, stall_to: float = 0.0) -> None:
         if not samples or self.stall_count >= self._max_reports:  # bound log volume if it goes pathological
             return
         per_thread: dict[str, list[tuple[str, ...]]] = collections.defaultdict(list)
@@ -211,21 +231,17 @@ class LoopLagWatchdog:
             "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
             "stall_ms": round(stall_ms, 1),
             "samples": len(samples),
+            "gc_overlap": self._gc_overlapping(stall_from, stall_to),
             "threads": threads,
         }
         self.stall_count += 1
         self.reports.append(report)
-        fh = self._fh
-        if fh is not None:
-            try:
-                fh.write(f"### stall {report['stall_ms']} ms ended {report['at']} "
-                         f"({report['samples']} python samples)\n")
-            except (ValueError, OSError):
-                pass
         busy = [t for t in threads if not t["idle"]][:3]
         logger.warning(
-            "event loop stalled %.0f ms (%d stack samples); busiest: %s",
+            "event loop stalled %.0f ms (%d stack samples)%s; busiest: %s",
             stall_ms, len(samples),
+            (" — overlaps GC gen%d %.0f ms" % (report["gc_overlap"][0]["generation"], report["gc_overlap"][0]["ms"]))
+            if report["gc_overlap"] else "",
             " | ".join(
                 f"{t['thread']}{'[loop]' if t['is_event_loop'] else ''}"
                 f" x{t['distinct_innermost_frames']}: "
@@ -240,21 +256,16 @@ _watchdog: LoopLagWatchdog | None = None
 _lock = threading.Lock()
 
 
-def enable(
-    loop: asyncio.AbstractEventLoop,
-    threshold_ms: float = 50.0,
-    faulthandler_path: str | None = None,
-) -> LoopLagWatchdog:
+def enable(loop: asyncio.AbstractEventLoop, threshold_ms: float = 50.0) -> LoopLagWatchdog:
     """Start watching ``loop`` (idempotent: an existing watchdog just gets the new threshold)."""
     global _watchdog
     with _lock:
-        if (_watchdog is not None and _watchdog.running and _watchdog._loop is loop
-                and _watchdog.faulthandler_path == faulthandler_path):
+        if _watchdog is not None and _watchdog.running and _watchdog._loop is loop:
             _watchdog.threshold_ms = threshold_ms
             return _watchdog
         if _watchdog is not None:
             _watchdog.stop()
-        _watchdog = LoopLagWatchdog(loop, threshold_ms=threshold_ms, faulthandler_path=faulthandler_path)
+        _watchdog = LoopLagWatchdog(loop, threshold_ms=threshold_ms)
         _watchdog.start()
         return _watchdog
 
@@ -271,7 +282,10 @@ def status() -> dict:
     return {
         "enabled": bool(wd and wd.running),
         "threshold_ms": wd.threshold_ms if wd else None,
-        "faulthandler_log": wd.faulthandler_path if wd and wd.running else None,
         "stall_count": wd.stall_count if wd else 0,
+        "gc": {
+            "collections_by_generation": dict(wd.gc_counts) if wd else {},
+            "slow_collections": [{k: v for k, v in e.items() if not k.startswith("_")} for e in wd.gc_events] if wd else [],
+        },
         "recent_stalls": list(wd.reports) if wd else [],
     }
