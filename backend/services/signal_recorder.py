@@ -25,6 +25,7 @@ from sqlalchemy import and_, func
 from backend.database import SessionLocal
 from backend.models import BarModel, HistoricalSignal
 from backend.repositories.signal_repository import SignalRepository
+from backend.services.signal_replay import label_columns, replay_trend_scores
 
 logger = logging.getLogger(__name__)
 
@@ -476,11 +477,19 @@ class SignalRecorder:
         }
 
         # Step 2: build the per-bar signal records in Python (no DB I/O).
+        #
+        # Each bar's label comes from REPLAYING the stored bars through a private trend engine
+        # (see ``signal_replay``), so it is what the trend was at that bar. It used to be the live
+        # engine's current score, stamped identically on every row of the backfill.
+        bars.reverse()  # the query above is newest-first; the replay must run oldest-first
+        missing = [b for b in bars if b.timestamp not in existing_ts]
+        if not missing:
+            return 0
+        scores = replay_trend_scores(symbol, timeframe, bars)
+
         new_records: list[dict] = []
-        for bar in bars:
+        for bar in missing:
             ts = bar.timestamp
-            if ts in existing_ts:
-                continue
             # The in-process cache guards against rapid duplicate calls
             # within a single process (e.g. two concurrent ingestion
             # ticks). On a hot reload it can be stale, so the DB dedup
@@ -489,25 +498,15 @@ class SignalRecorder:
             if cache_key in self._last_recorded:
                 continue
 
-            trend_state = self._classify_trend_from_bar(bar)
-            trend_score = self._score_from_bar(bar)
-            volume_state = self._classify_volume(bar)
-            market_regime = self._get_market_regime()
-
             new_records.append({
                 "symbol": symbol,
                 "timestamp": ts,
                 "timeframe": timeframe,
                 "price": float(bar.close or 0),
-                "trend_score": trend_score,
-                "trend_state": trend_state,
-                "strength": min(abs(trend_score) / 100.0, 1.0) if trend_score is not None else None,
-                "market_regime": market_regime,
+                **label_columns(scores.get(ts)),
                 "relative_strength": None,
                 "sector_alignment": None,
-                "volume_state": volume_state,
-                "momentum": trend_score,
-                "structure": trend_state,
+                "volume_state": self._classify_volume(bar),
                 "confidence_inputs": json.dumps({
                     "bar_close": float(bar.close or 0),
                     "bar_high": float(bar.high or 0),

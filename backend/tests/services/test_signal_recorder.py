@@ -423,14 +423,14 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
                 low=99.5 + i * 0.1, close=100.2 + i * 0.1,
                 volume=10_000, provider="test", data_status="historical",
             )
-            for i in range(100)
+            for i in range(300)
         ]
         with self.Session() as db:
             db.bulk_save_objects(bars)
             db.commit()
 
         recorded = self.recorder.backfill_signals_for_symbol(sym, timeframe=tf)
-        self.assertEqual(recorded, 100)
+        self.assertEqual(recorded, 300)
 
         with self.Session() as db:
             signals = (
@@ -439,13 +439,17 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
                 .order_by(HistoricalSignal.timestamp.asc())
                 .all()
             )
-        self.assertEqual(len(signals), 100)
+        self.assertEqual(len(signals), 300)
         # Spot-check fields
         self.assertEqual(signals[0].symbol, sym)
         self.assertEqual(signals[0].timeframe, tf)
-        self.assertIsNotNone(signals[0].trend_state)
         self.assertIsNotNone(signals[0].price)
-        self.assertIsNotNone(signals[0].trend_score)
+        # The first bars are the trend engine's warm-up: a row exists, its label is "unknown".
+        # Once warmed up, every bar is labelled from a replay of the bars before it.
+        self.assertIsNone(signals[0].trend_score)
+        self.assertIsNone(signals[0].trend_state)
+        self.assertIsNotNone(signals[-1].trend_state)
+        self.assertIsNotNone(signals[-1].trend_score)
 
     def test_backfill_signals_for_symbol_dedup_skips_existing(self):
         """Second call records 0 new signals (DB dedup + in-process cache)."""
