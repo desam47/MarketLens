@@ -38,7 +38,10 @@ sleep "${RESTART_DELAY:-1}"
 echo "$(date): restart_dev.sh starting" >> logs/restart_dev.log
 
 for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
-    pids=$(lsof -ti:"$port" 2>/dev/null || true)
+    # -sTCP:LISTEN: only the process SERVING the port. A bare `lsof -ti:PORT` also returns every
+    # CLIENT with a socket on it (a browser or IDE tab talking to the dev server), and those got
+    # `kill -9`'d too (an Electron app's network helper died on every restart).
+    pids=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null || true)
     if [ -n "$pids" ]; then
         echo "$(date): killing PIDs on port $port: $pids" >> logs/restart_dev.log
         # shellcheck disable=SC2086
@@ -59,7 +62,11 @@ fi
 # Let the OS actually release the ports before rebinding.
 sleep 1
 
+# --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
+# lifespan: migrations, cache flush, provider handshakes, engine seeding). Keep in sync with
+# start.sh and scripts/run.py.
 nohup python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
+    --reload-exclude "backend/tests/*" \
     >> logs/backend.log 2>&1 &
 disown
 
