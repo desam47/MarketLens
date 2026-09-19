@@ -1809,6 +1809,18 @@ class MarketDataIngestionService:
                     db.close()
             except Exception as e:
                 logger.error(f"Error in retention prune loop: {e}")
+            try:
+                from backend.repositories.status_retention import prune_status_tables
+
+                db = SessionLocal()
+                try:
+                    deleted_status = prune_status_tables(db)
+                    if deleted_status:
+                        logger.info(f"Status-table retention: pruned {deleted_status}")
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.error(f"Error in status-table retention prune: {e}")
             await self._jittered_sleep(3600, jitter=60.0)
 
     async def _run_loops(self):

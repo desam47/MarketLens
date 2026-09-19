@@ -255,6 +255,14 @@ class RetentionSettings(BaseSettings):
     tf_1d_days: int = Field(default=1096)
     tf_1wk_days: int = Field(default=1096)
 
+    # Append-only tables written on every ingestion tick and never read beyond the latest
+    # rows (engine seeding, a limit-100 quote history, the current provider health): quotes
+    # (~15k rows/day), provider_status (~2.7k/day) and market_status (~2k/day). Nothing
+    # pruned them, so they just grew. A month is far more history than any reader uses.
+    quotes_days: int = Field(default=30, ge=1)
+    provider_status_days: int = Field(default=30, ge=1)
+    market_status_days: int = Field(default=30, ge=1)
+
     def days_for(self, timeframe: str) -> int:
         """Retention window in days for ``timeframe``. Unknown timeframes
         fall back to the longest window (1096d) — safer to under-prune an
