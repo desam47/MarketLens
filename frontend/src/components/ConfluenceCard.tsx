@@ -20,6 +20,22 @@ const directionColors: Record<string, string> = {
   strong_downtrend: '#dc2626',
 };
 
+const stateColors: Record<string, string> = {
+  continuation: '#10b981',
+  pullback: '#f59e0b',
+  transition: '#ef4444',
+  reversal_confirmed: '#dc2626',
+  neutral: '#9ca3af',
+};
+
+const stateIcons: Record<string, string> = {
+  continuation: '→',
+  pullback: '↩',
+  transition: '⇄',
+  reversal_confirmed: '↻',
+  neutral: '•',
+};
+
 // Canonical sort order for timeframe strings (shortest → longest).
 const TF_ORDER: Record<string, number> = {
   '1m': 1, '2m': 2, '3m': 3, '5m': 4,
@@ -34,6 +50,36 @@ const PRESET_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'swing', label: 'Swing Trading' },
   { value: 'all', label: 'All Timeframes' },
 ];
+
+function formatStateLabel(state: string): string {
+  return state.replace(/_/g, ' ').toUpperCase();
+}
+
+function getNarrative(confluence: ConfluenceData): string {
+  const shortState = confluence.short_term_state || 'neutral';
+  const interState = confluence.intermediate_state || 'neutral';
+  const higherState = confluence.higher_state || 'neutral';
+  const shortDir = confluence.short_term_direction || 'neutral';
+  const higherDir = confluence.higher_direction || 'neutral';
+  
+  // Build narrative based on trend states
+  if (higherState === 'reversal_confirmed') {
+    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} reversal confirmed`;
+  }
+  if (higherState === 'transition') {
+    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} transition — ${interState === 'pullback' ? 'pullback' : 'early stage'}`;
+  }
+  if (interState === 'pullback' && higherState === 'continuation') {
+    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} trend, short-term pullback`;
+  }
+  if (shortState === 'pullback' && interState === 'continuation') {
+    return `${interState === 'continuation' ? 'Trend continuing' : 'Mixed'}, lower TF counter-trend`;
+  }
+  if (shortState === 'continuation' && interState === 'continuation' && higherState === 'continuation') {
+    return `Strong ${shortDir === 'uptrend' ? 'bullish' : shortDir === 'downtrend' ? 'bearish' : 'neutral'} alignment`;
+  }
+  return `${higherDir === 'uptrend' ? 'Bullish' : higherDir === 'downtrend' ? 'Bearish' : 'Neutral'} bias`;
+}
 
 export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
   // Hooks must run unconditionally on every render of this component
@@ -80,13 +126,14 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
   const bearishPct = ((confluence.bearish_alignment ?? 0) * 100).toFixed(0);
   const conflicts = confluence.conflicting ?? 0;
 
-  // TrendDirection-style strings (e.g. "uptrend", "downtrend", "sideways")
-  // share the same color map as ConfluenceDirection.
-  const horizonChips: Array<{ label: string; value: string | undefined }> = [
-    { label: 'Short', value: confluence.short_term_direction },
-    { label: 'Intermediate', value: confluence.intermediate_direction },
-    { label: 'Higher', value: confluence.higher_direction },
+  // Horizon chips with direction + state
+  const horizonChips: Array<{ label: string; direction: string | undefined; state: string | undefined }> = [
+    { label: 'Higher', direction: confluence.higher_direction, state: confluence.higher_state },
+    { label: 'Intermediate', direction: confluence.intermediate_direction, state: confluence.intermediate_state },
+    { label: 'Lower', direction: confluence.short_term_direction, state: confluence.short_term_state },
   ];
+
+  const narrative = getNarrative(confluence);
 
   return (
     <div className="card confluence-card">
@@ -94,6 +141,34 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
         <h2>Multi-Timeframe Confluence</h2>
         <PresetSelector selectedPreset={selectedPreset} onPresetChange={onPresetChange} />
       </div>
+      
+      {/* Trend Map - Horizon Narrative */}
+      <div className="trend-map">
+        <div className="trend-narrative">
+          <span className="narrative-label">Trend Map:</span>
+          <span className="narrative-text">{narrative}</span>
+        </div>
+        <div className="horizon-row">
+          {horizonChips.map((chip) => {
+            const dir = chip.direction || 'neutral';
+            const state = chip.state || 'neutral';
+            return (
+              <div key={chip.label} className="horizon-column">
+                <span className="horizon-label">{chip.label}</span>
+                <div className="horizon-content">
+                  <span className="horizon-direction" style={{ color: directionColors[dir] || '#9ca3af' }}>
+                    {dir.replace(/_/g, ' ').toUpperCase()}
+                  </span>
+                  <span className="horizon-state" style={{ color: stateColors[state] || '#9ca3af' }}>
+                    {stateIcons[state]} {formatStateLabel(state)}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="confluence-main">
         <div className="confluence-direction" style={{ color }}>
           <span className="direction-arrow">{confluence.direction.includes('up') ? '↑' : confluence.direction.includes('down') ? '↓' : '→'}</span>
@@ -115,6 +190,13 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           </div>
           <span className="metric-value">{strengthPct}%</span>
         </div>
+        <div className="metric">
+          <span className="metric-label">Valid Coverage</span>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%`, backgroundColor: '#06b6d4' }} />
+          </div>
+          <span className="metric-value">{((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
+        </div>
       </div>
       {/* Phase 7: alignment breakdown chips + conflict badge. */}
       <div className="confluence-phase7">
@@ -130,19 +212,6 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
               ⚠ {conflicts} conflict{conflicts === 1 ? '' : 's'}
             </span>
           )}
-        </div>
-        <div className="horizon-chips">
-          {horizonChips.map((chip) => {
-            const dir = chip.value || 'neutral';
-            return (
-              <span key={chip.label} className="horizon-chip" title={`${chip.label}-term direction`}>
-                <span className="horizon-label">{chip.label}:</span>{' '}
-                <span style={{ color: directionColors[dir] || '#9ca3af', fontWeight: 600 }}>
-                  {dir.replace(/_/g, ' ')}
-                </span>
-              </span>
-            );
-          })}
         </div>
       </div>
       {signalEntries.length > 0 && (

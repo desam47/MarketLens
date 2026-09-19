@@ -82,6 +82,13 @@ export interface ConfluenceData {
   intermediate_direction?: string;
   higher_direction?: string;
   preset?: string;
+  // Phase 8: trend states per horizon
+  short_term_state?: string;
+  intermediate_state?: string;
+  higher_state?: string;
+  // Quality metrics
+  valid_coverage?: number;
+  quality_weighted_score?: number;
 }
 
 // Phase 7: per-timeframe trend snapshot (inside MultiTimeframeSnapshot).
@@ -95,6 +102,12 @@ export interface TimeframeTrendSnapshot {
   confidence: number;
   data_quality: string;
   strategy_version: string;
+  // Phase 7+: quality metrics
+  data_age_seconds: number;
+  bar_closed: boolean;
+  is_warmed_up: boolean;
+  valid: boolean;
+  quality_weight: number;
 }
 
 // Phase 7: multi-timeframe snapshot.
@@ -111,8 +124,13 @@ export interface MultiTimeframeSnapshot {
   short_term_direction: string;
   intermediate_direction: string;
   higher_direction: string;
+  short_term_state: string;
+  intermediate_state: string;
+  higher_state: string;
   timeframe_snapshots: Record<string, TimeframeTrendSnapshot>;
   strategy_version: string;
+  valid_coverage: number;
+  quality_weighted_score: number;
 }
 
 export interface StrategyData {

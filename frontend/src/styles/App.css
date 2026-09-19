@@ -955,6 +955,86 @@ h4 {
   letter-spacing: 0.04em;
 }
 
+/* Phase 8: Trend Map - Horizon Narrative */
+.trend-map {
+  margin: 0.75rem 0 1rem 0;
+  padding: 0.75rem;
+  background-color: var(--bg-tertiary);
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+}
+
+.trend-narrative {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.narrative-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.narrative-text {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.horizon-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.horizon-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  padding: 0.5rem;
+  background-color: var(--bg-primary);
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+
+.horizon-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.horizon-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.horizon-direction {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.horizon-state {
+  font-size: 0.7rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 /* Strategy Card */
 .strategy-card {
   border-top: 3px solid var(--accent-primary);

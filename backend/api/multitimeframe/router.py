@@ -141,6 +141,9 @@ def _serialize_snapshot(snap: MultiTimeframeSnapshot) -> dict:
         "short_term_direction": snap.short_term_direction.value,
         "intermediate_direction": snap.intermediate_direction.value,
         "higher_direction": snap.higher_direction.value,
+        "short_term_state": snap.short_term_state.value,
+        "intermediate_state": snap.intermediate_state.value,
+        "higher_state": snap.higher_state.value,
         "timeframe_snapshots": {
             tf.value: _serialize_timeframe_snapshot(tf_snap)
             for tf, tf_snap in snap.timeframe_snapshots.items()
@@ -186,6 +189,9 @@ async def get_current_confluence(
                 "short_term_direction": "no_signal",
                 "intermediate_direction": "no_signal",
                 "higher_direction": "no_signal",
+                "short_term_state": "neutral",
+                "intermediate_state": "neutral",
+                "higher_state": "neutral",
                 "preset": engine.preset_name,
             }
         else:
@@ -211,6 +217,9 @@ async def get_current_confluence(
                 "short_term_direction": confluence_signal.short_term_direction.value,
                 "intermediate_direction": confluence_signal.intermediate_direction.value,
                 "higher_direction": confluence_signal.higher_direction.value,
+                "short_term_state": getattr(confluence_signal, "short_term_state", "neutral").value,
+                "intermediate_state": getattr(confluence_signal, "intermediate_state", "neutral").value,
+                "higher_state": getattr(confluence_signal, "higher_state", "neutral").value,
                 "preset": getattr(confluence_signal, "preset", engine.preset_name),
             }
         _confluence_cache[key] = payload
