@@ -389,21 +389,21 @@ class MultiTimeframeEngine:
             if not valid_snaps:
                 return 0.0
             
-            uptrend_weight = sum(s.quality_weight for s in valid_snaps
-                                if s.direction == TrendClassification.STRONG_UPTREND
-                                or s.direction == TrendClassification.UPTREND
-                                or s.direction == TrendClassification.WEAK_UPTREND)
-            downtrend_weight = sum(s.quality_weight for s in valid_snaps
-                                  if s.direction == TrendClassification.STRONG_DOWNTREND
-                                  or s.direction == TrendClassification.DOWNTREND
-                                  or s.direction == TrendClassification.WEAK_DOWNTREND)
-            sideways_weight = sum(s.quality_weight for s in valid_snaps
+            bullish_weight = sum(s.quality_weight for s in valid_snaps
+                                if s.direction in (TrendClassification.STRONG_BULLISH,
+                                                  TrendClassification.BULLISH,
+                                                  TrendClassification.WEAK_BULLISH))
+            bearish_weight = sum(s.quality_weight for s in valid_snaps
+                                  if s.direction in (TrendClassification.STRONG_BEARISH,
+                                                    TrendClassification.BEARISH,
+                                                    TrendClassification.WEAK_BEARISH))
+            neutral_weight = sum(s.quality_weight for s in valid_snaps
                                  if s.direction == TrendClassification.NEUTRAL)
             
-            total_weight = uptrend_weight + downtrend_weight + sideways_weight
+            total_weight = bullish_weight + bearish_weight + neutral_weight
             if total_weight == 0:
                 return 0.0
-            max_weight = max(uptrend_weight, downtrend_weight, sideways_weight)
+            max_weight = max(bullish_weight, bearish_weight, neutral_weight)
             return max_weight / total_weight
 
         # Legacy equal-count alignment
