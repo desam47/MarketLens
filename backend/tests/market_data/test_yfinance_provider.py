@@ -1,11 +1,15 @@
 """
 Tests for Yahoo Finance market data provider
 """
+import json
 import os
 import sys
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
@@ -301,6 +305,136 @@ class TestYFinanceProvider(unittest.TestCase):
             # Test when provider fails
             mock_get_quote.side_effect = Exception("API error")
             self.assertFalse(self.provider.is_available())
+
+# ---------------------------------------------------------------------------
+# Batch quotes: Yahoo's v7 endpoint needs a session cookie + crumb
+# ---------------------------------------------------------------------------
+_MOD = "backend.market_data.providers.yfinance_provider"
+
+
+def _resp(status=200, body=None, text=None):
+    return SimpleNamespace(status_code=status, text=text if text is not None else json.dumps(body or {}))
+
+
+def _quote_body(*symbols):
+    return {"quoteResponse": {"result": [
+        {"symbol": s, "regularMarketPrice": 100.0 + i, "regularMarketTime": 1789761600,
+         "bid": 99.0, "ask": 101.0, "regularMarketVolume": 1000}
+        for i, s in enumerate(symbols)]}}
+
+
+class TestBatchQuotesAuth(unittest.TestCase):
+    """The batch-quote call used to be anonymous and got HTTP 401 on every cycle
+    (the live quote loop failed every ~30 s); it was also completely untested."""
+
+    def setUp(self):
+        self.provider = YFinanceProvider()
+        self.crumb_fetches = 0
+        self.quote_calls = []
+        self.quote_status = [200]           # popped per quote call; the last one repeats
+        self.crumb_response = lambda: _resp(200, text="crumb-123")
+        patcher = patch(f"{_MOD}.curl_requests")
+        self.cr = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        def make_session(**kw):
+            session = MagicMock()
+            session.cookies.items.return_value = [("A3", "cookie-value")]
+
+            def sget(url, **k):
+                if "getcrumb" in url:
+                    self.crumb_fetches += 1
+                    return self.crumb_response()
+                return _resp(404, text="")   # fc.yahoo.com
+            session.get.side_effect = sget
+            return session
+
+        self.cr.Session.side_effect = make_session
+
+        def qget(url, **k):
+            self.quote_calls.append((url, k))
+            status = self.quote_status.pop(0) if len(self.quote_status) > 1 else self.quote_status[0]
+            if status != 200:
+                return _resp(status, text='{"finance":{"error":{"code":"Unauthorized"}}}')
+            return _resp(200, _quote_body(*k["params"]["symbols"].split(",")))
+        self.cr.get.side_effect = qget
+
+    def test_sends_the_crumb_and_cookie_and_parses_the_quotes(self):
+        out = self.provider.get_batch_quotes(["AAPL", "MSFT"])
+        _, kwargs = self.quote_calls[0]
+        self.assertEqual(kwargs["params"], {"symbols": "AAPL,MSFT", "crumb": "crumb-123"})
+        self.assertEqual(kwargs["cookies"], {"A3": "cookie-value"})
+        self.assertEqual(set(out), {"AAPL", "MSFT"})
+        self.assertEqual(out["AAPL"].price, 100.0)
+        self.assertEqual(out["AAPL"].provider, "yahoo_finance")
+        self.assertEqual(out["AAPL"].data_status, DataStatus.DELAYED)
+
+    def test_crumb_is_cached_across_calls(self):
+        self.provider.get_batch_quotes(["AAPL"])
+        self.provider.get_batch_quotes(["MSFT"])
+        self.assertEqual(self.crumb_fetches, 1)
+        self.assertEqual(len(self.quote_calls), 2)
+
+    def test_crumb_is_refetched_after_its_ttl(self):
+        self.provider.get_batch_quotes(["AAPL"])
+        self.provider._crumb_at -= 3601          # an hour and a second ago
+        self.provider.get_batch_quotes(["AAPL"])
+        self.assertEqual(self.crumb_fetches, 2)
+
+    def test_a_401_refreshes_the_crumb_once_and_retries(self):
+        self.quote_status = [401, 200]
+        out = self.provider.get_batch_quotes(["AAPL"])
+        self.assertEqual(out["AAPL"].price, 100.0)
+        self.assertEqual(len(self.quote_calls), 2)
+        self.assertEqual(self.crumb_fetches, 2)  # initial + the forced refresh
+
+    def test_a_persistent_401_raises_after_exactly_one_retry(self):
+        self.quote_status = [401]
+        with self.assertRaises(RuntimeError) as ctx:
+            self.provider.get_batch_quotes(["AAPL"])
+        self.assertIn("HTTP 401", str(ctx.exception))
+        self.assertEqual(len(self.quote_calls), 2)   # not an endless loop
+
+    def test_a_failed_crumb_fetch_raises_a_clear_error(self):
+        for bad in (lambda: _resp(429, text="Too Many Requests"),
+                    lambda: _resp(200, text="<html>consent</html>"),
+                    lambda: _resp(200, text="")):
+            self.provider._crumb = None
+            self.crumb_response = bad
+            with self.assertRaises(RuntimeError) as ctx:
+                self.provider.get_batch_quotes(["AAPL"])
+            self.assertIn("crumb", str(ctx.exception).lower())
+        self.assertEqual(self.quote_calls, [], "must not call the quote endpoint without a crumb")
+
+    def test_special_symbols_are_passed_via_params_not_string_concatenation(self):
+        self.provider.get_batch_quotes(["^VIX", "BRK-B", "BRK.B"])
+        url, kwargs = self.quote_calls[0]
+        self.assertNotIn("?", url)
+        self.assertEqual(kwargs["params"]["symbols"], "^VIX,BRK-B,BRK.B")
+
+    def test_a_symbol_missing_from_the_response_becomes_an_error_quote(self):
+        self.cr.get.side_effect = lambda url, **k: _resp(200, _quote_body("AAPL"))
+        out = self.provider.get_batch_quotes(["AAPL", "ZZZZ"])
+        self.assertEqual(out["ZZZZ"].data_status, DataStatus.ERROR)
+        self.assertEqual(out["ZZZZ"].price, 0.0)
+
+    def test_empty_input_makes_no_network_calls(self):
+        self.assertEqual(self.provider.get_batch_quotes([]), {})
+        self.cr.get.assert_not_called()
+        self.cr.Session.assert_not_called()
+
+    def test_concurrent_callers_share_one_crumb_fetch(self):
+        barrier = threading.Barrier(8)
+
+        def call(_):
+            barrier.wait()
+            return self.provider.get_batch_quotes(["AAPL"])
+
+        with ThreadPoolExecutor(8) as pool:
+            results = list(pool.map(call, range(8)))
+        self.assertTrue(all("AAPL" in r for r in results))
+        self.assertEqual(self.crumb_fetches, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

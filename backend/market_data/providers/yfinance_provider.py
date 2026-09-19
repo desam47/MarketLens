@@ -14,6 +14,8 @@ real browser (Chrome 120), bypassing the anti-bot protection.
 """
 import logging
 import asyncio
+import threading
+import time
 from datetime import datetime, timezone
 
 from curl_cffi import requests as curl_requests
@@ -32,6 +34,13 @@ from ..provider import BaseMarketDataProvider, safe_json
 logger = logging.getLogger(__name__)
 
 _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+# Yahoo's v7 batch-quote endpoint rejects anonymous calls with HTTP 401 ("User is unable
+# to access this feature"): it needs a session cookie plus a "crumb" token. The cookie
+# comes from fc.yahoo.com (which answers 404 but sets it), the crumb from getcrumb.
+_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
+_COOKIE_URL = "https://fc.yahoo.com"
+_CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+_CRUMB_TTL_SECONDS = 3600.0
 _INTERVAL_MAP = {
     "1m": "1m", "2m": "2m", "5m": "5m", "15m": "15m", "30m": "30m",
     "60m": "60m", "90m": "90m", "1h": "60m",
@@ -49,6 +58,52 @@ class YFinanceProvider(BaseMarketDataProvider):
 
     def __init__(self):
         super().__init__("yahoo_finance")
+        # Cached Yahoo session credentials for the batch-quote endpoint. Only the
+        # cookies + crumb are shared (each request is otherwise stateless): this
+        # provider is called from several threads and a curl_cffi Session is not
+        # guaranteed thread-safe.
+        self._auth_lock = threading.Lock()
+        self._cookies: dict[str, str] = {}
+        self._crumb: str | None = None
+        self._crumb_at = 0.0
+
+    def _get_auth(self, *, force: bool = False) -> tuple[dict[str, str], str]:
+        """Return ``(cookies, crumb)`` for the v7 quote endpoint, fetching when stale.
+
+        Refreshed hourly, or immediately with ``force`` (after a 401/403). The lock
+        makes concurrent callers share ONE fetch instead of each hitting Yahoo.
+        """
+        with self._auth_lock:
+            fresh = self._crumb is not None and (time.monotonic() - self._crumb_at) < _CRUMB_TTL_SECONDS
+            if force or not fresh:
+                session = curl_requests.Session(impersonate="chrome120")
+                session.get(_COOKIE_URL, timeout=10)  # 404 is expected; only the cookie matters
+                r = session.get(_CRUMB_URL, timeout=10)
+                crumb = (r.text or "").strip()
+                if r.status_code != 200 or not crumb or "<" in crumb:  # "<" = an HTML error page
+                    raise RuntimeError(
+                        f"Yahoo Finance crumb fetch failed: HTTP {r.status_code} {crumb[:80]!r}"
+                    )
+                self._cookies = dict(session.cookies.items())
+                self._crumb, self._crumb_at = crumb, time.monotonic()
+            return dict(self._cookies), self._crumb
+
+    def _batch_quote_response(self, symbols: list[str]):
+        """GET the batch quote, refreshing the cookie/crumb once if Yahoo rejects them."""
+        for attempt in (0, 1):
+            cookies, crumb = self._get_auth(force=attempt == 1)
+            r = curl_requests.get(
+                _QUOTE_URL,
+                # ``params`` so symbols like ^VIX / BRK-B are URL-encoded correctly.
+                params={"symbols": ",".join(symbols), "crumb": crumb},
+                cookies=cookies,
+                impersonate="chrome120",
+                timeout=15,
+            )
+            if r.status_code in (401, 403) and attempt == 0:
+                continue  # stale crumb/cookie: refresh once and retry
+            return r
+        return r
 
     # ---------------------------------------------------------------- helpers
     def _fetch_chart(self, symbol: str, interval: str, range_: str) -> dict:
@@ -306,14 +361,10 @@ class YFinanceProvider(BaseMarketDataProvider):
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
         if not symbols:
             return {}
-        # Use the quote endpoint for batch
-        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={','.join(symbols)}"
+        # Use the quote endpoint for batch (needs a cookie + crumb — see _get_auth).
+        url = _QUOTE_URL
         try:
-            r = curl_requests.get(
-                url,
-                impersonate="chrome120",
-                timeout=15,
-            )
+            r = self._batch_quote_response(symbols)
             if r.status_code != 200:
                 raise RuntimeError(
                     f"Yahoo Finance HTTP {r.status_code} for batch quote: {r.text[:200]}"
