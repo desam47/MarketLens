@@ -275,6 +275,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Data-quality audit failed: {e}")
 
+    # Take the ~540k long-lived objects built during startup (engines + candle
+    # history, caches, provider clients) out of the cyclic GC's view. A full
+    # collection over them cost ~100-160 ms and, holding the GIL the whole time,
+    # stalled every API request once every few minutes. See backend/utils/gc_tuning.py.
+    try:
+        from backend.utils.gc_tuning import freeze_startup_heap
+        freeze_startup_heap()
+    except Exception as e:
+        logger.warning(f"GC freeze failed: {e}")
+
     yield
 
     # Stop the background services startup launched. The threads are daemons
