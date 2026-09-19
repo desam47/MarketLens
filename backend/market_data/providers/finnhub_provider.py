@@ -193,7 +193,6 @@ class FinnhubProvider(BaseMarketDataProvider):
         """Get historical bar closest to the given timestamp."""
         try:
             resolution = _resolve_resolution(timeframe)
-            now = int(datetime.now(timezone.utc).timestamp())
             from_ts = int(timestamp.timestamp())
             to_ts = from_ts + _range_to_seconds("1mo")  # ~1 month window
 

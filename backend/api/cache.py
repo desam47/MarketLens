@@ -41,6 +41,12 @@ _DEFAULT_CACHE_SECONDS = 30
 # Keys are checked as case-insensitive substrings of the URL path, so
 # "market_data" matches both "/api/market_data/..." and "/api/market-data/...".
 _CACHE_DURATIONS = {
+    # Live quotes: 0 (must revalidate every request). Has to come before the
+    # broader "market_data" key since the first substring match wins. With
+    # max-age=300 the browser served the Dashboard's 5s price poll from its
+    # own cache, freezing the price for up to 5 minutes. max-age=0 still
+    # lets the ETag answer unchanged quotes with a cheap 304.
+    "market_data/quote": 0,
     # Market data endpoints: 5 minutes (data changes quickly but frequent polling)
     "market_data": 300,
     # System status: 30 seconds (changes very quickly)

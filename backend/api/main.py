@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
             if cursor == 0:
                 break
         logger.info(f"Redis bar/quote cache cleared on startup ({cleared} keys)")
-    except Exception as e:
+    except Exception:
         logger.warning("Redis cache clear failed; continuing", exc_info=True)
 
     alerts_engine.startup()
@@ -377,7 +377,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

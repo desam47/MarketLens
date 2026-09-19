@@ -145,7 +145,7 @@ class TestCacheMiddlewareETagGeneration(unittest.TestCase):
         scope = {
             "type": "http",
             "method": "GET",
-            "path": "/api/market-data/quote/AAPL",
+            "path": "/api/market-data/bars/AAPL",
             "headers": [],
             "query_string": b"",
         }
@@ -156,6 +156,15 @@ class TestCacheMiddlewareETagGeneration(unittest.TestCase):
 
         response = self._run(middleware.dispatch(request, call_next))
         self.assertIn("max-age=300", response.headers["cache-control"])
+
+    def test_live_quote_is_revalidated_every_request(self):
+        """Quote paths must not be browser-cached: the Dashboard polls them
+        every 5s and a max-age would freeze the displayed price."""
+        middleware = self._make_middleware()
+        for path in ("/api/market-data/quote/AAPL", "/api/market_data/quote/AAPL"):
+            self.assertEqual(middleware._get_cache_seconds(path), 0, path)
+        # Other market-data paths keep the 5-minute TTL.
+        self.assertEqual(middleware._get_cache_seconds("/api/market-data/bars/AAPL"), 300)
 
 
 class TestCacheMiddlewareIntegration(unittest.TestCase):

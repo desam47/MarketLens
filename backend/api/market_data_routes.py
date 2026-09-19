@@ -87,18 +87,27 @@ async def toggle_ingestion(background_tasks: BackgroundTasks):
 @router.get("/ingestion/status", response_model=IngestionStatusResponse)
 async def get_ingestion_status():
     """Get the status of the ingestion service"""
+    # get_tracking_watchlists() reads the DB — keep it off the event loop.
+    watchlists = await asyncio.to_thread(ingestion_service.get_tracking_watchlists)
+    # The ingestion thread mutates these dicts while it runs; iterating a
+    # live dict from here can raise "dictionary changed size during
+    # iteration". dict()/list() copy in a single C-level call, so snapshot
+    # first and iterate the snapshot.
+    quote_updates = dict(ingestion_service.last_quote_update)
+    bar_updates = {sym: dict(tfs) for sym, tfs in list(ingestion_service.last_bar_update.items())}
+    status_updates = dict(ingestion_service.last_status_update)
     return IngestionStatusResponse(
         is_running=ingestion_service.is_running,
-        symbols=ingestion_service.symbols,
-        watchlists=ingestion_service.get_tracking_watchlists(),
-        timeframes=ingestion_service.timeframes,
+        symbols=list(ingestion_service.symbols),
+        watchlists=watchlists,
+        timeframes=list(ingestion_service.timeframes),
         last_quote_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
-                          for k, v in ingestion_service.last_quote_update.items()},
+                          for k, v in quote_updates.items()},
         last_bar_updates={symbol: {tf: _to_dashboard_tz(ts) if ts != datetime.min else ""
                                  for tf, ts in timeframes.items()}
-                         for symbol, timeframes in ingestion_service.last_bar_update.items()},
+                         for symbol, timeframes in bar_updates.items()},
         last_status_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
-                           for k, v in ingestion_service.last_status_update.items()}
+                           for k, v in status_updates.items()}
     )
 
 @router.post("/ingestion/symbols")
@@ -157,7 +166,9 @@ async def get_latest_quote(symbol: str, db: Session = Depends(get_db)):
     cached = _quote_cache.get(key)
     if cached is not None:
         return cached
-    quote = ingestion_service.get_latest_quote(key)
+    # Blocking SQLite read — run it in a worker thread so a cache miss
+    # doesn't stall every other in-flight request on the event loop.
+    quote = await asyncio.to_thread(ingestion_service.get_latest_quote, key)
     if quote is None:
         raise HTTPException(status_code=404, detail=f"No quote data found for {symbol}")
     _quote_cache[key] = quote
@@ -166,8 +177,7 @@ async def get_latest_quote(symbol: str, db: Session = Depends(get_db)):
 @router.get("/quote/{symbol}/history", response_model=list[Quote])
 async def get_quote_history(symbol: str, limit: int = 100, db: Session = Depends(get_db)):
     """Get historical quotes for a symbol"""
-    quotes = ingestion_service.get_quote_history(symbol.upper(), limit)
-    return quotes
+    return await asyncio.to_thread(ingestion_service.get_quote_history, symbol.upper(), limit)
 
 @router.get("/bar/{symbol}/{timeframe}", response_model=Bar)
 async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_db)):

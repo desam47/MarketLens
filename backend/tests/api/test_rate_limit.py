@@ -88,6 +88,24 @@ class TestInMemoryRateLimiter(unittest.TestCase):
         self.assertEqual(remaining, 4)
 
 
+    def test_idle_ips_are_pruned(self):
+        """IPs whose hits all aged out must not accumulate forever."""
+        limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60)
+        for i in range(50):
+            limiter.is_allowed(f"10.0.0.{i}", now=1000.0)
+        self.assertEqual(len(limiter._hits), 50)
+        # A later request, one full window on, sweeps the expired IPs.
+        limiter.is_allowed("192.168.0.1", now=1061.0)
+        self.assertEqual(list(limiter._hits), ["192.168.0.1"])
+
+    def test_total_ips_seen_counts_each_new_ip_once(self):
+        limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60)
+        limiter.is_allowed("a", now=1.0)
+        limiter.is_allowed("a", now=2.0)
+        limiter.is_allowed("b", now=3.0)
+        self.assertEqual(limiter._total_ips_seen, 2)
+
+
 class TestRedisRateLimiterFallback(unittest.TestCase):
     """Tests for RedisRateLimiter fallback behavior when Redis is unavailable."""
 
@@ -209,6 +227,42 @@ class TestRedisRateLimiterWithMockedRedis(unittest.TestCase):
             allowed, remaining = limiter.is_allowed("127.0.0.1")
             self.assertTrue(allowed)
             self.assertEqual(remaining, 4)
+
+    @patch("backend.api.rate_limit._settings")
+    def test_hot_path_does_not_ping_redis(self, mock_settings):
+        """is_allowed must cost one pipeline round-trip, not ping+ping+pipeline."""
+        mock_settings.redis.enabled = True
+        mock_settings.redis.url = "redis://localhost:6379"
+        mock_settings.redis.password = None
+
+        mock_redis = MagicMock()
+        mock_redis.pipeline.return_value.execute.return_value = [1, True]
+        with patch("backend.api.rate_limit.redis.Redis.from_url", return_value=mock_redis):
+            limiter = RedisRateLimiter(max_requests=10, window_seconds=60)
+        mock_redis.ping.reset_mock()
+
+        allowed, remaining = limiter.is_allowed("127.0.0.1")
+        self.assertTrue(allowed)
+        self.assertEqual(remaining, 9)
+        mock_redis.ping.assert_not_called()
+
+    @patch("backend.api.rate_limit._settings")
+    def test_redis_failure_opens_circuit_breaker(self, mock_settings):
+        """After a Redis failure, later calls skip Redis until the retry window passes."""
+        mock_settings.redis.enabled = True
+        mock_settings.redis.url = "redis://localhost:6379"
+        mock_settings.redis.password = None
+
+        mock_redis = MagicMock()
+        mock_redis.pipeline.return_value.execute.side_effect = ConnectionError("down")
+        with patch("backend.api.rate_limit.redis.Redis.from_url", return_value=mock_redis):
+            limiter = RedisRateLimiter(max_requests=5, window_seconds=60)
+
+        limiter.is_allowed("127.0.0.1")  # fails, falls back, opens the breaker
+        self.assertEqual(mock_redis.pipeline.call_count, 1)
+        allowed, _ = limiter.is_allowed("127.0.0.1")
+        self.assertTrue(allowed)
+        self.assertEqual(mock_redis.pipeline.call_count, 1)  # Redis skipped
 
 
 class TestRateLimitMiddleware(unittest.TestCase):

@@ -141,42 +141,76 @@ def get_cache_stats() -> dict[str, dict[str, int]]:
     }
 
 
+_MISSING = object()
+
+
 def ttl_cached(cache: TTLCache, key_fn: Callable[..., str]):
     """Decorator that caches the result of an async or sync callable.
 
     ``key_fn`` derives the cache key from the call args. The decorator
     supports both ``async def`` and ``def`` functions transparently.
 
-    A single ``KeyError`` from a missing key triggers re-computation;
-    if the wrapped function raises, the error propagates and the cache
-    is left untouched for that key.
+    If the wrapped function raises, the error propagates and the cache is
+    left untouched for that key.
+
+    Lookups use a single ``cache.get(key, sentinel)`` rather than
+    ``key in cache`` followed by ``cache[key]``: a TTL entry can expire
+    between those two calls, turning a hit into a ``KeyError`` (a 500).
+
+    The async wrapper also collapses concurrent misses for the same key
+    into one computation (single-flight): N simultaneous requests for a
+    cold key — e.g. several dashboard tabs polling on the same tick —
+    used to each run the full computation. The shared computation runs as
+    its own task, so one caller disconnecting (cancellation) doesn't
+    cancel it for the others still waiting on it.
     """
     def decorator(fn: Callable[P, T]) -> Callable[P, T]:
+        is_async = asyncio.iscoroutinefunction(fn)
+        # key -> in-flight computation task, for async single-flight.
+        inflight: dict[str, asyncio.Task] = {}
+
         @wraps(fn)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             key = key_fn(*args, **kwargs)
-            if key in cache:
-                return cache[key]
-            # ``asyncio.iscoroutinefunction`` would be more precise, but
-            # we only wrap async functions at the route layer, so the
-            # coroutine check is implicit.
-            if asyncio.iscoroutinefunction(fn):
-                result = await fn(*args, **kwargs)
-            else:
-                result = await asyncio.to_thread(fn, *args, **kwargs)
-            cache[key] = result
-            return result
+            hit = cache.get(key, _MISSING)
+            if hit is not _MISSING:
+                return hit
+
+            loop = asyncio.get_running_loop()
+            task = inflight.get(key)
+            # A task left over from a different (closed) event loop can't
+            # be awaited from this one — compute afresh instead.
+            if task is None or task.get_loop() is not loop:
+                async def compute() -> T:
+                    if is_async:
+                        return await fn(*args, **kwargs)
+                    return await asyncio.to_thread(fn, *args, **kwargs)
+
+                task = loop.create_task(compute())
+                inflight[key] = task
+
+                def _finish(t: asyncio.Task, key: str = key) -> None:
+                    if inflight.get(key) is t:
+                        del inflight[key]
+                    # Retrieve the exception so an abandoned failed task
+                    # doesn't log "Task exception was never retrieved".
+                    if not t.cancelled() and t.exception() is None:
+                        cache[key] = t.result()
+
+                task.add_done_callback(_finish)
+            return await asyncio.shield(task)
 
         @wraps(fn)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             key = key_fn(*args, **kwargs)
-            if key in cache:
-                return cache[key]
+            hit = cache.get(key, _MISSING)
+            if hit is not _MISSING:
+                return hit
             result = fn(*args, **kwargs)
             cache[key] = result
             return result
 
-        if asyncio.iscoroutinefunction(fn):
+        if is_async:
             return async_wrapper  # type: ignore[return-value]
         return sync_wrapper  # type: ignore[return-value]
     return decorator

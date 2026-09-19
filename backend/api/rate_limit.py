@@ -46,6 +46,12 @@ _EXEMPT_PATH_PREFIXES = (
 )
 
 
+# Socket timeout (seconds) for the limiter's Redis client, and how long the
+# limiter skips Redis entirely after a failure before trying it again.
+_REDIS_SOCKET_TIMEOUT = 0.25
+_REDIS_RETRY_AFTER_SECONDS = 5.0
+
+
 class RedisRateLimiter:
     """Redis-backed fixed window rate limiter keyed by client IP.
 
@@ -68,6 +74,10 @@ class RedisRateLimiter:
         self.name = name
         self._fallback_limiter = InMemoryRateLimiter(max_requests, window_seconds)
         self._redis_client: Optional[redis.Redis] = None
+        # Monotonic deadline before which Redis is skipped (circuit breaker
+        # opened by a failed call), so a dead Redis costs one short timeout
+        # per retry window rather than one per request.
+        self._redis_down_until = 0.0
         self._initialize_redis()
 
     def _initialize_redis(self):
@@ -77,18 +87,18 @@ class RedisRateLimiter:
             return
 
         try:
-            # Parse Redis URL to handle password if needed
+            # Short socket timeouts: this client is called synchronously
+            # from request handling (an async middleware), so an
+            # unresponsive Redis must fail fast instead of stalling the
+            # event loop for redis-py's default (no timeout at all).
+            kwargs: dict = {
+                "decode_responses": False,  # Keep as bytes for INCR operations
+                "socket_connect_timeout": _REDIS_SOCKET_TIMEOUT,
+                "socket_timeout": _REDIS_SOCKET_TIMEOUT,
+            }
             if _settings.redis.password:
-                self._redis_client = redis.Redis.from_url(
-                    _settings.redis.url,
-                    password=_settings.redis.password,
-                    decode_responses=False,  # Keep as bytes for INCR operations
-                )
-            else:
-                self._redis_client = redis.Redis.from_url(
-                    _settings.redis.url,
-                    decode_responses=False,
-                )
+                kwargs["password"] = _settings.redis.password
+            self._redis_client = redis.Redis.from_url(_settings.redis.url, **kwargs)
 
             # Test connection
             self._redis_client.ping()
@@ -114,23 +124,20 @@ class RedisRateLimiter:
         the client can still make in the current window — useful for the
         `X-RateLimit-Remaining` response header.
         """
-        # Use Redis if available, otherwise fall back to in-memory
-        if self._is_redis_available():
+        # Use Redis if configured and not in its post-failure cool-down,
+        # otherwise fall back to in-memory. No availability ping here: the
+        # pipeline call below already fails (and falls back) on its own,
+        # and pinging first cost two extra Redis round-trips on every
+        # write request.
+        if self._redis_client is not None and time.monotonic() >= self._redis_down_until:
             return self._is_allowed_redis(client_ip, now)
-        else:
-            return self._fallback_limiter.is_allowed(client_ip, now)
+        return self._fallback_limiter.is_allowed(client_ip, now)
 
     def _is_allowed_redis(self, client_ip: str, now: float | None = None) -> tuple[bool, int]:
         """Redis-backed rate limit check using fixed window algorithm."""
-        # Check if Redis is available before proceeding
-        if not self._is_redis_available():
-            logger.warning("Redis not available for rate limiting, falling back to in-memory")
-            return self._fallback_limiter.is_allowed(client_ip, now)
-
         # Get a local reference to avoid issues if self._redis_client changes
         redis_client = self._redis_client
         if redis_client is None:
-            logger.warning("Redis client is None, falling back to in-memory")
             return self._fallback_limiter.is_allowed(client_ip, now)
 
         ts = now if now is not None else time.time()
@@ -142,11 +149,6 @@ class RedisRateLimiter:
         redis_key = f"rate_limit:{self.name}:{client_ip}:{window_key}"
 
         try:
-            # Double-check redis_client is not None before using it
-            if redis_client is None:
-                logger.warning("Redis client became None before pipeline operation, falling back to in-memory")
-                return self._fallback_limiter.is_allowed(client_ip, now)
-
             # INCR the key and get the new value
             pipe = redis_client.pipeline()
             pipe.incr(redis_key)
@@ -164,6 +166,7 @@ class RedisRateLimiter:
 
         except Exception as e:
             logger.warning(f"Redis rate limiting failed, falling back to in-memory: {e}")
+            self._redis_down_until = time.monotonic() + _REDIS_RETRY_AFTER_SECONDS
             # Fall back to in-memory limiter on Redis failure
             return self._fallback_limiter.is_allowed(client_ip, now)
 
@@ -171,6 +174,7 @@ class RedisRateLimiter:
         """Clear all state. Useful for tests."""
         # Reset fallback limiter
         self._fallback_limiter.reset()
+        self._redis_down_until = 0.0
         # Note: We don't flush Redis keys as that could affect other clients
         # In a test environment, you might want to flush specific keys
 
@@ -214,6 +218,22 @@ class InMemoryRateLimiter:
         self._total_allowed: int = 0
         self._total_rejected: int = 0
         self._total_ips_seen: int = 0
+        self._last_prune: float | None = None
+
+    def _prune_idle_ips(self, ts: float) -> None:
+        """Drop IPs whose hits have all aged out of the window.
+
+        ``_hits`` otherwise keeps one entry per IP ever seen, forever — and
+        since the key can be an attacker-chosen X-Forwarded-For value, that
+        is an unbounded memory leak. Swept at most once per window so the
+        cost stays amortized-O(1) per request.
+        """
+        if self._last_prune is not None and ts - self._last_prune < self.window_seconds:
+            return
+        self._last_prune = ts
+        window_start = ts - self.window_seconds
+        for ip in [ip for ip, hits in self._hits.items() if not hits or hits[-1] < window_start]:
+            del self._hits[ip]
 
     def is_allowed(self, client_ip: str, now: float | None = None) -> tuple[bool, int]:
         """Check whether `client_ip` may make a request right now.
@@ -224,10 +244,14 @@ class InMemoryRateLimiter:
         """
         ts = now if now is not None else time.monotonic()
         window_start = ts - self.window_seconds
+        self._prune_idle_ips(ts)
 
-        hits = self._hits[client_ip]
+        # Membership must be checked before indexing: ``_hits`` is a
+        # defaultdict, so indexing first creates the key and the "new IP"
+        # counter below would never fire.
         if client_ip not in self._hits:
             self._total_ips_seen += 1
+        hits = self._hits[client_ip]
         # Evict timestamps that fell out of the window.
         while hits and hits[0] < window_start:
             hits.popleft()
@@ -248,6 +272,7 @@ class InMemoryRateLimiter:
         self._total_allowed = 0
         self._total_rejected = 0
         self._total_ips_seen = 0
+        self._last_prune = None
 
     def get_stats(self) -> dict:
         """Return observability counters for the metrics endpoint.
