@@ -4,8 +4,9 @@ US equity (NYSE/NASDAQ) market calendar.
 Single source of truth for trading-day and session classification logic. Uses
 stdlib ``zoneinfo`` for DST handling — no third-party calendar packages.
 
-The holiday list is hardcoded for 2024–2026 (the project's current date range);
-extend ``_NYSE_HOLIDAYS`` when the project needs further years.
+The holiday list is hardcoded for 2023–2027 (see ``_HOLIDAY_YEARS``); extend
+``_NYSE_HOLIDAYS`` when the project needs further years. Outside those years EVERY holiday reads
+as a trading day, so a warning is logged at import once the current year is no longer covered.
 
 Why hardcoded instead of ``exchange_calendars`` or ``pandas_market_calendars``:
 those are not installed in this project and would add a heavy dependency for a
@@ -35,10 +36,23 @@ class SessionType(StrEnum):
     CLOSED = "closed"            # weekend, holiday, or outside 04:00–20:00 ET
 
 
-# Hardcoded NYSE holidays for 2024, 2025, and 2026.
+# Hardcoded NYSE holidays for 2023 through 2027.
 # Sources: NYSE official trading-hours calendar for each year.
-# Includes observed-on-Monday / observed-on-Friday rules for weekend holidays.
+# Includes observed-on-Monday / observed-on-Friday rules for weekend holidays. 2023 covers
+# the stored daily history (which starts 2023-09-18); before it was added, Thanksgiving and
+# Christmas 2023 read as unfillable "missing bars" on every backfill's gap check.
 _NYSE_HOLIDAYS: frozenset[date] = frozenset({
+    # 2023
+    date(2023, 1, 2),    # New Year's Day (observed — 1/1 is Sunday)
+    date(2023, 1, 16),   # Martin Luther King Jr. Day
+    date(2023, 2, 20),   # Presidents' Day
+    date(2023, 4, 7),    # Good Friday
+    date(2023, 5, 29),   # Memorial Day
+    date(2023, 6, 19),   # Juneteenth
+    date(2023, 7, 4),    # Independence Day
+    date(2023, 9, 4),    # Labor Day
+    date(2023, 11, 23),  # Thanksgiving
+    date(2023, 12, 25),  # Christmas
     # 2024
     date(2024, 1, 1),    # New Year's Day (Mon)
     date(2024, 1, 15),   # Martin Luther King Jr. Day
@@ -52,6 +66,7 @@ _NYSE_HOLIDAYS: frozenset[date] = frozenset({
     date(2024, 12, 25),  # Christmas
     # 2025
     date(2025, 1, 1),    # New Year's Day
+    date(2025, 1, 9),    # National Day of Mourning (President Carter) — special full closure
     date(2025, 1, 20),   # MLK Day
     date(2025, 2, 17),   # Presidents' Day
     date(2025, 4, 18),   # Good Friday
@@ -72,7 +87,41 @@ _NYSE_HOLIDAYS: frozenset[date] = frozenset({
     date(2026, 9, 7),    # Labor Day
     date(2026, 11, 26),  # Thanksgiving
     date(2026, 12, 25),  # Christmas
+    # 2027
+    date(2027, 1, 1),    # New Year's Day
+    date(2027, 1, 18),   # MLK Day
+    date(2027, 2, 15),   # Presidents' Day
+    date(2027, 3, 26),   # Good Friday
+    date(2027, 5, 31),   # Memorial Day
+    date(2027, 6, 18),   # Juneteenth (observed — 6/19 is Saturday)
+    date(2027, 7, 5),    # Independence Day (observed — 7/4 is Sunday)
+    date(2027, 9, 6),    # Labor Day
+    date(2027, 11, 25),  # Thanksgiving
+    date(2027, 12, 24),  # Christmas (observed — 12/25 is Saturday)
 })
+
+# Years the table above is complete for.
+_HOLIDAY_YEARS: range = range(2023, 2028)
+
+
+def _warn_if_holiday_table_is_stale(today: date | None = None) -> bool:
+    """Log (and return True) when ``today`` is past the last year ``_NYSE_HOLIDAYS`` covers.
+
+    Past that year every holiday is silently treated as a trading day: sessions are
+    misclassified and every gap check reports the holiday as a missing bar.
+    """
+    today = today or date.today()
+    if today.year in _HOLIDAY_YEARS or today.year < _HOLIDAY_YEARS.start:
+        return False
+    logger.warning(
+        "NYSE holiday table covers %d-%d but it is %d: holidays are being treated as trading "
+        "days. Extend _NYSE_HOLIDAYS in backend/engines/market_calendar.py.",
+        _HOLIDAY_YEARS.start, _HOLIDAY_YEARS.stop - 1, today.year,
+    )
+    return True
+
+
+_warn_if_holiday_table_is_stale()
 
 
 # Session boundaries in US/Eastern local time. These are intentionally plain
