@@ -19,7 +19,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -280,6 +280,37 @@ async def toggle_memory_profiling(payload: MemoryProfileToggle) -> dict:
     else:
         stop_memory_profiling()
     return {"memory_profiling_enabled": payload.enabled}
+
+
+class LoopLagWatchdogToggle(BaseModel):
+    enabled: bool
+    threshold_ms: float = Field(50.0, ge=10.0, le=5000.0)
+
+
+@router.post("/loop_lag_watchdog")
+async def toggle_loop_lag_watchdog(payload: LoopLagWatchdogToggle) -> dict:
+    """Turn the event-loop stall watchdog on/off without restarting the API.
+
+    While on, any stretch longer than ``threshold_ms`` where the loop fails to
+    tick is captured with every thread's stack and logged under
+    ``marketlens.loop_lag``; the recent reports are returned here and by GET.
+    Off by default. Runs on the API's own loop (this handler is async).
+    """
+    from ...observability import loop_lag_watchdog
+
+    if payload.enabled:
+        loop_lag_watchdog.enable(asyncio.get_running_loop(), payload.threshold_ms)
+    else:
+        loop_lag_watchdog.disable()
+    return loop_lag_watchdog.status()
+
+
+@router.get("/loop_lag_watchdog")
+async def get_loop_lag_watchdog() -> dict:
+    """State of the stall watchdog plus the most recent stall reports."""
+    from ...observability import loop_lag_watchdog
+
+    return loop_lag_watchdog.status()
 
 
 @router.post("/restart")
