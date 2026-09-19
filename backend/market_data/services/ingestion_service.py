@@ -1821,6 +1821,14 @@ class MarketDataIngestionService:
                     db.close()
             except Exception as e:
                 logger.error(f"Error in status-table retention prune: {e}")
+            try:
+                from backend.market_data.services.backfill_queue import reap_orphaned_jobs
+
+                reaped = await asyncio.to_thread(reap_orphaned_jobs)
+                if reaped:
+                    logger.info(f"Marked {reaped} orphaned backfill job row(s) as failed")
+            except Exception as e:
+                logger.error(f"Error reaping orphaned backfill jobs: {e}")
             await self._jittered_sleep(3600, jitter=60.0)
 
     async def _run_loops(self):

@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from backend.config.settings import settings
@@ -228,6 +228,69 @@ def enqueue_backfill(symbol: str) -> str | None:
                 client.delete(lock_key)
             except Exception:
                 pass
+
+
+# A job may legitimately sit queued behind a backlog, or run for up to ``background.job_timeout``;
+# rows younger than this are never touched.
+_ORPHAN_MIN_AGE = timedelta(minutes=30)
+
+
+def _orphan_reason(client: Any, job_id: str) -> str | None:
+    """Why the DB row for ``job_id`` can never finish, or None if it still can (or we can't tell)."""
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job
+
+    try:
+        rq_job = Job.fetch(job_id, connection=client)
+    except NoSuchJobError:
+        return "backfill job lost from the queue (worker crash or a Redis flush) before it completed"
+    except Exception:  # noqa: BLE001
+        return None  # Redis unreachable etc.: absence of an answer is not proof the job is gone
+    status = rq_job.get_status()
+    status = getattr(status, "value", status)       # RQ 2.x returns a JobStatus enum
+    if status in _ACTIVE_RQ_STATUSES:
+        return None
+    detail = ((rq_job.exc_info or "").strip().splitlines() or [""])[-1][:300]
+    return f"RQ reports the job as {status} and it never updated its row" + (f": {detail}" if detail else "")
+
+
+def reap_orphaned_jobs(min_age: timedelta = _ORPHAN_MIN_AGE) -> int:
+    """Mark ``queued`` / ``started`` rows whose RQ job is gone or dead as ``failed``.
+
+    A worker killed mid-job (RQ: ``AbandonedJobError``) never reaches the code that writes the
+    terminal status, so its row stayed ``started`` forever: 17 such rows had piled up. Only the
+    single-flight check and a poll of that exact symbol ever noticed. Returns the number reaped.
+    Rows younger than ``min_age`` are left alone, and nothing is reaped when Redis can't answer.
+    """
+    from backend.ai.background import get_redis
+    from backend.database import SessionLocal
+    from backend.models import BackfillJob
+
+    client = get_redis()
+    if client is None:
+        return 0
+    cutoff = datetime.utcnow() - min_age
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(BackfillJob)
+            .filter(BackfillJob.status.in_(("queued", "started")), BackfillJob.created_at < cutoff)
+            .all()
+        )
+        reaped = 0
+        for row in rows:
+            reason = _orphan_reason(client, row.job_id)
+            if reason is None:
+                continue
+            row.status = "failed"
+            row.error = reason
+            row.completed_at = datetime.utcnow()
+            reaped += 1
+        if reaped:
+            db.commit()
+        return reaped
+    finally:
+        db.close()
 
 
 def cancel_backfill(symbol: str) -> bool:

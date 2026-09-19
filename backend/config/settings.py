@@ -262,6 +262,8 @@ class RetentionSettings(BaseSettings):
     quotes_days: int = Field(default=30, ge=1)
     provider_status_days: int = Field(default=30, ge=1)
     market_status_days: int = Field(default=30, ge=1)
+    # One BackfillJob row per enqueue; only the latest per symbol is ever read.
+    backfill_jobs_days: int = Field(default=30, ge=1)
 
     def days_for(self, timeframe: str) -> int:
         """Retention window in days for ``timeframe``. Unknown timeframes

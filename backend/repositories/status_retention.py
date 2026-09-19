@@ -1,5 +1,5 @@
 """
-Retention for the append-only quote / provider-status / market-status tables.
+Retention for the append-only quote / provider-status / market-status / backfill-job tables.
 
 The ingestion loops insert into these on every tick and nothing ever deleted from them
 (only ``bars`` had a retention prune). Windows come from ``settings.retention``.
@@ -10,20 +10,21 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.models import BackfillJob
 from backend.models.market_data_sql import MarketStatusModel, ProviderStatusModel, QuoteModel
 
 logger = logging.getLogger(__name__)
 
 
-def _prune_table(db: Session, model, cutoff: datetime, chunk_size: int) -> int:
-    """Delete rows of ``model`` older than ``cutoff`` in short transactions.
+def _prune_table(db: Session, model, cutoff: datetime, chunk_size: int, column: str = "timestamp") -> int:
+    """Delete rows of ``model`` whose ``column`` is older than ``cutoff`` in short transactions.
 
     One statement per chunk keeps SQLite's single write lock held briefly, so the ingestion
     and API writers are never blocked behind a large delete.
     """
     total = 0
     while True:
-        ids = select(model.id).where(model.timestamp < cutoff).limit(chunk_size)
+        ids = select(model.id).where(getattr(model, column) < cutoff).limit(chunk_size)
         deleted = db.query(model).filter(model.id.in_(ids)).delete(synchronize_session=False)
         db.commit()
         total += deleted
@@ -44,12 +45,13 @@ def prune_status_tables(db: Session, chunk_size: int = 5000, now: datetime | Non
     now = now or datetime.now()
     retention = settings.retention
     deleted: dict[str, int] = {}
-    for name, model, days in (
-        ("quotes", QuoteModel, retention.quotes_days),
-        ("provider_status", ProviderStatusModel, retention.provider_status_days),
-        ("market_status", MarketStatusModel, retention.market_status_days),
+    for name, model, days, column in (
+        ("quotes", QuoteModel, retention.quotes_days, "timestamp"),
+        ("provider_status", ProviderStatusModel, retention.provider_status_days, "timestamp"),
+        ("market_status", MarketStatusModel, retention.market_status_days, "timestamp"),
+        ("backfill_jobs", BackfillJob, retention.backfill_jobs_days, "created_at"),
     ):
-        count = _prune_table(db, model, now - timedelta(days=days), chunk_size)
+        count = _prune_table(db, model, now - timedelta(days=days), chunk_size, column)
         if count:
             deleted[name] = count
     return deleted

@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from backend.models import BackfillJob
 from backend.models.market_data_sql import MarketStatusModel, ProviderStatusModel, QuoteModel
 from backend.repositories.status_retention import prune_status_tables
 
@@ -27,6 +28,13 @@ def _provider(ts):
     return ProviderStatusModel(provider_name="webull", is_healthy=True, timestamp=ts)
 
 
+_job_seq = iter(range(1, 10**6))
+
+
+def _job(ts):
+    return BackfillJob(job_id=f"backfill-{next(_job_seq)}", symbol="AAPL", status="partial", created_at=ts)
+
+
 def _market(ts):
     return MarketStatusModel(symbol="AAPL", is_open=False, timezone="America/New_York",
                              provider="webull", timestamp=ts)
@@ -36,7 +44,7 @@ class _Db(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
                                     poolclass=StaticPool)
-        for model in (QuoteModel, ProviderStatusModel, MarketStatusModel):
+        for model in (QuoteModel, ProviderStatusModel, MarketStatusModel, BackfillJob):
             model.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.addCleanup(self.engine.dispose)
@@ -49,7 +57,7 @@ class _Db(unittest.TestCase):
         with self.Session() as db:
             for i in range(n):
                 ts = NOW - timedelta(days=days_old, minutes=i)
-                db.add_all([_quote(ts), _provider(ts), _market(ts)])
+                db.add_all([_quote(ts), _provider(ts), _market(ts), _job(ts)])
             db.commit()
 
 
@@ -59,8 +67,9 @@ class TestPruneStatusTables(_Db):
         self._seed(days_old=1, n=2)
         with self.Session() as db:
             deleted = prune_status_tables(db, now=NOW)
-        self.assertEqual(deleted, {"quotes": 3, "provider_status": 3, "market_status": 3})
-        for model in (QuoteModel, ProviderStatusModel, MarketStatusModel):
+        self.assertEqual(deleted, {"quotes": 3, "provider_status": 3, "market_status": 3,
+                                   "backfill_jobs": 3})
+        for model in (QuoteModel, ProviderStatusModel, MarketStatusModel, BackfillJob):
             self.assertEqual(self._count(model), 2, model.__tablename__)
 
     def test_a_no_op_returns_an_empty_dict(self):
@@ -85,12 +94,21 @@ class TestPruneStatusTables(_Db):
 
     def test_each_table_uses_its_own_window(self):
         self._seed(days_old=10, n=1)
-        retention = MagicMock(quotes_days=7, provider_status_days=30, market_status_days=30)
+        retention = MagicMock(quotes_days=7, provider_status_days=30, market_status_days=30,
+                              backfill_jobs_days=30)
         with patch("backend.config.settings.settings.retention", retention), self.Session() as db:
             deleted = prune_status_tables(db, now=NOW)
         self.assertEqual(deleted, {"quotes": 1})
         self.assertEqual(self._count(ProviderStatusModel), 1)
         self.assertEqual(self._count(MarketStatusModel), 1)
+
+    def test_backfill_jobs_are_pruned_by_created_at(self):
+        self._seed(days_old=45, n=2)
+        self._seed(days_old=3, n=1)
+        with self.Session() as db:
+            deleted = prune_status_tables(db, now=NOW)
+        self.assertEqual(deleted["backfill_jobs"], 2)
+        self.assertEqual(self._count(BackfillJob), 1)
 
     def test_rejects_a_non_positive_chunk_size(self):
         with self.Session() as db, self.assertRaises(ValueError):
@@ -100,7 +118,8 @@ class TestPruneStatusTables(_Db):
         from backend.config.settings import RetentionSettings
 
         r = RetentionSettings()
-        self.assertEqual((r.quotes_days, r.provider_status_days, r.market_status_days), (30, 30, 30))
+        self.assertEqual((r.quotes_days, r.provider_status_days, r.market_status_days,
+                          r.backfill_jobs_days), (30, 30, 30, 30))
 
 
 class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
@@ -117,7 +136,9 @@ class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
         svc.is_running = True
         with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
              patch("backend.repositories.bar_repository.prune_bars_by_retention", bar_prune), \
-             patch("backend.repositories.status_retention.prune_status_tables", status_prune):
+             patch("backend.repositories.status_retention.prune_status_tables", status_prune), \
+             patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", return_value=0):
+            # The reaper is patched too: unpatched it runs against the real database and Redis.
             await svc._retention_prune_loop()
 
     async def test_both_prunes_run_each_pass(self):
