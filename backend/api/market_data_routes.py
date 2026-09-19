@@ -6,12 +6,10 @@ import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from backend.config.settings import settings as _settings
-from backend.database import get_db
 from backend.models.market_data import Bar, MarketStatus, Quote
 
 from backend.market_data.services.ingestion_service import ingestion_service
@@ -155,7 +153,7 @@ async def update_timeframes(request: TimeframesRequest):
     return {"message": f"Updated timeframes to: {request.timeframes}"}
 
 @router.get("/quote/{symbol}", response_model=Quote)
-async def get_latest_quote(symbol: str, db: Session = Depends(get_db)):
+async def get_latest_quote(symbol: str):
     """Get the latest quote for a symbol.
 
     Wrapped in a 5s TTL cache (v2.1 Item 1.2) to reduce redundant
@@ -181,13 +179,36 @@ async def get_quote_history(
     # value returned a symbol's entire quote history (measured: ~6k rows,
     # 2.2 MB, up to ~0.5 s) to whoever asked.
     limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db),
 ):
     """Get historical quotes for a symbol (most recent ``limit``, max 1000)"""
     return await asyncio.to_thread(ingestion_service.get_quote_history, symbol.upper(), limit)
 
+def _local_latest_bar(symbol: str, timeframe: str) -> Bar | None:
+    """Tiers 1-2 of the latest-bar lookup: Redis cache, then the database.
+
+    Blocking I/O (Redis + SQLite) — call it via ``asyncio.to_thread``.
+    """
+    cached = _redis_cache.get_latest_bar(symbol, timeframe)
+    if cached is not None:
+        return cached
+    return ingestion_service.get_latest_bar(symbol, timeframe)
+
+
+def _local_latest_bars(symbol: str, timeframes: list[str]) -> tuple[dict[str, Bar], list[str]]:
+    """Tiers 1-2 for every timeframe: ``(found, timeframes still missing)``."""
+    found: dict[str, Bar] = {}
+    missing: list[str] = []
+    for timeframe in timeframes:
+        bar = _local_latest_bar(symbol, timeframe)
+        if bar is not None:
+            found[timeframe] = bar
+        else:
+            missing.append(timeframe)
+    return found, missing
+
+
 @router.get("/bar/{symbol}/{timeframe}", response_model=Bar)
-async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_db)):
+async def get_latest_bar(symbol: str, timeframe: str):
     """Get the latest bar for a symbol and timeframe.
 
     Reads the Redis cache first (populated by the ingestion service) so
@@ -197,13 +218,8 @@ async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_
     """
     from backend.market_data.services.manager import market_data_manager
 
-    # 1. Redis cache (fastest).
-    cached = _redis_cache.get_latest_bar(symbol.upper(), timeframe)
-    if cached is not None:
-        return cached
-
-    # 2. Database.
-    bar = ingestion_service.get_latest_bar(symbol.upper(), timeframe)
+    # 1+2. Redis cache, then database — both blocking I/O, so off the loop.
+    bar = await asyncio.to_thread(_local_latest_bar, symbol.upper(), timeframe)
     if bar is not None:
         return bar
 
@@ -225,30 +241,24 @@ async def get_latest_bar(symbol: str, timeframe: str, db: Session = Depends(get_
         )
 
 @router.get("/bars/{symbol}", response_model=dict[str, Bar])
-async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
+async def get_latest_bars(symbol: str):
     """Get latest bars for all timeframes for a symbol.
 
     Tries Redis cache first for each timeframe, then database, then provider
     chain — same three-tier fallback as the single-bar endpoint.
     """
     symbol = symbol.upper()
-    bars = {}
-    for timeframe in ingestion_service.timeframes:
-        # 1. Redis cache.
-        cached = _redis_cache.get_latest_bar(symbol, timeframe)
-        if cached is not None:
-            bars[timeframe] = cached
-            continue
+    timeframes = list(ingestion_service.timeframes)
 
-        # 2. Database.
-        bar = ingestion_service.get_latest_bar(symbol, timeframe)
-        if bar is not None:
-            bars[timeframe] = bar
-            continue
+    # 1+2. Redis then database for every timeframe, in ONE thread hop. This
+    # used to run 2 sync lookups per timeframe directly on the event loop
+    # (this route is polled by the frontend), stalling every other request.
+    bars, missing = await asyncio.to_thread(_local_latest_bars, symbol, timeframes)
 
-        # 3. Provider chain. to_thread: see get_latest_bar's comment above
-        # — this is an async route handler, so a blocking provider call
-        # here stalls every other concurrent request on the server.
+    # 3. Provider chain. to_thread: see get_latest_bar's comment above
+    # — this is an async route handler, so a blocking provider call
+    # here stalls every other concurrent request on the server.
+    for timeframe in missing:
         try:
             bars[timeframe] = await asyncio.to_thread(
                 market_data_manager.get_latest_bar, symbol, timeframe
@@ -256,10 +266,11 @@ async def get_latest_bars(symbol: str, db: Session = Depends(get_db)):
         except Exception:
             # Don't fail the whole request if one timeframe is missing.
             pass
-    return bars
+    # Keep the response in timeframe order, as the sequential loop produced.
+    return {tf: bars[tf] for tf in timeframes if tf in bars}
 
 @router.get("/status/{symbol}", response_model=MarketStatus)
-async def get_market_status(symbol: str, db: Session = Depends(get_db)):
+async def get_market_status(symbol: str):
     """Get market status for a symbol"""
     try:
         # to_thread: get_market_status makes a blocking provider network
