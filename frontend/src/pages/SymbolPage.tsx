@@ -722,8 +722,6 @@ const fetchBars = useCallback(async () => {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [handleRefresh]);
 
-  const currentPrice = quote?.price ?? quote?.currentPrice ?? null;
-
   // Period-over-period change for the S/R panel: compare the latest bar's
   // close to the prior bar's close (bars arrive newest→oldest). The backend
   // Quote model has no change field, so we derive it here — the same delta
@@ -740,9 +738,9 @@ const fetchBars = useCallback(async () => {
         <div>
           <h1>{symbol} Analysis</h1>
           <p className="subtitle">
-            {currentPrice != null ? (
+            {latestClose != null ? (
               <>
-                <span>${currentPrice.toFixed(4)}</span>
+                <span>${latestClose.toFixed(4)}</span>
                 {barsChange != null && (
                   <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
                     {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(4)}
