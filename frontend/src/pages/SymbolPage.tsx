@@ -669,6 +669,8 @@ const fetchBars = useCallback(async () => {
 
   useEffect(() => {
     fetchQuote();
+    const id = setInterval(fetchQuote, 5000);
+    return () => clearInterval(id);
   }, [fetchQuote]);
 
   useEffect(() => {
@@ -738,10 +740,10 @@ const fetchBars = useCallback(async () => {
         <div>
           <h1>{symbol} Analysis</h1>
           <p className="subtitle">
-            {latestClose != null ? (
+            {quote?.price != null ? (
               <>
                 <span className="price-label">Latest Price</span>{' '}
-                <span>${latestClose.toFixed(4)}</span>
+                <span>${quote.price.toFixed(4)}</span>
                 {barsChange != null && (
                   <span style={{ color: barsChange >= 0 ? '#10b981' : '#ef4444', marginLeft: 8 }}>
                     {barsChange >= 0 ? '+' : ''}{barsChange.toFixed(4)}
