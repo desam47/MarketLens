@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -175,8 +175,15 @@ async def get_latest_quote(symbol: str, db: Session = Depends(get_db)):
     return quote
 
 @router.get("/quote/{symbol}/history", response_model=list[Quote])
-async def get_quote_history(symbol: str, limit: int = 100, db: Session = Depends(get_db)):
-    """Get historical quotes for a symbol"""
+async def get_quote_history(
+    symbol: str,
+    # Bounded: SQLite treats a negative LIMIT as "no limit", so an unchecked
+    # value returned a symbol's entire quote history (measured: ~6k rows,
+    # 2.2 MB, up to ~0.5 s) to whoever asked.
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """Get historical quotes for a symbol (most recent ``limit``, max 1000)"""
     return await asyncio.to_thread(ingestion_service.get_quote_history, symbol.upper(), limit)
 
 @router.get("/bar/{symbol}/{timeframe}", response_model=Bar)

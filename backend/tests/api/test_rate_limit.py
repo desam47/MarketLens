@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from backend.api import rate_limit as rl
 from backend.api.rate_limit import (
     InMemoryRateLimiter,
     RateLimitMiddleware,
@@ -263,6 +264,146 @@ class TestRedisRateLimiterWithMockedRedis(unittest.TestCase):
         allowed, _ = limiter.is_allowed("127.0.0.1")
         self.assertTrue(allowed)
         self.assertEqual(mock_redis.pipeline.call_count, 1)  # Redis skipped
+
+
+class _FakeTime:
+    """Stand-in for the ``time`` module inside rate_limit: a manually advanced clock."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.now
+
+
+class TestRedisRateLimiterLifecycle(unittest.TestCase):
+    """Redis going down / coming back — startup failure and breaker recovery."""
+
+    def _limiter(self, mock_settings, fake_redis, clock, **kw):
+        mock_settings.redis.enabled = True
+        mock_settings.redis.url = "redis://localhost:6379"
+        mock_settings.redis.password = None
+        with patch("backend.api.rate_limit.redis.Redis.from_url", return_value=fake_redis), \
+                patch("backend.api.rate_limit.time", clock):
+            return RedisRateLimiter(max_requests=10, window_seconds=60, **kw)
+
+    @patch("backend.api.rate_limit._settings")
+    def test_failed_startup_ping_keeps_client_and_later_uses_redis(self, mock_settings):
+        """A slow/booting Redis at startup must not pin the limiter to the
+        in-memory fallback for the life of the process."""
+        clock = _FakeTime()
+        fake = MagicMock()
+        fake.ping.side_effect = TimeoutError("slower than the socket timeout")
+        fake.pipeline.return_value.execute.return_value = [1, True]
+        limiter = self._limiter(mock_settings, fake, clock)
+
+        self.assertIs(limiter._redis_client, fake, "client must survive a failed startup ping")
+
+        with patch("backend.api.rate_limit.time", clock):
+            # Breaker is open right after the failed probe: served in-memory.
+            allowed, _ = limiter.is_allowed("1.2.3.4")
+            self.assertTrue(allowed)
+            fake.pipeline.assert_not_called()
+
+            # Retry window elapses; Redis is healthy now -> it is used again.
+            clock.now += rl._REDIS_RETRY_AFTER_SECONDS + 1
+            allowed, remaining = limiter.is_allowed("1.2.3.4")
+            self.assertTrue(allowed)
+            self.assertEqual(remaining, 9)
+            fake.pipeline.assert_called_once()
+
+    @patch("backend.api.rate_limit._settings")
+    def test_client_construction_failure_still_falls_back(self, mock_settings):
+        mock_settings.redis.enabled = True
+        mock_settings.redis.url = "not-a-valid-url"
+        mock_settings.redis.password = None
+        with patch("backend.api.rate_limit.redis.Redis.from_url", side_effect=ValueError("bad url")):
+            limiter = RedisRateLimiter(max_requests=5, window_seconds=60)
+        self.assertIsNone(limiter._redis_client)
+        allowed, remaining = limiter.is_allowed("1.2.3.4")
+        self.assertTrue(allowed)
+        self.assertEqual(remaining, 4)
+
+    @patch("backend.api.rate_limit._settings")
+    def test_breaker_closes_after_retry_window(self, mock_settings):
+        clock = _FakeTime()
+        fake = MagicMock()
+        fake.ping.return_value = True
+        fake.pipeline.return_value.execute.side_effect = [ConnectionError("down"), [1, True]]
+        limiter = self._limiter(mock_settings, fake, clock)
+
+        with patch("backend.api.rate_limit.time", clock):
+            limiter.is_allowed("a")                      # fails -> breaker opens
+            limiter.is_allowed("a")                      # skipped
+            self.assertEqual(fake.pipeline.call_count, 1)
+
+            clock.now += rl._REDIS_RETRY_AFTER_SECONDS - 0.1
+            limiter.is_allowed("a")                      # still inside the window
+            self.assertEqual(fake.pipeline.call_count, 1)
+
+            clock.now += 0.2                             # window elapsed
+            allowed, remaining = limiter.is_allowed("a")
+            self.assertEqual(fake.pipeline.call_count, 2)
+            self.assertTrue(allowed)
+            self.assertEqual(remaining, 9)
+            self.assertFalse(limiter._redis_failing)
+
+    @patch("backend.api.rate_limit._settings")
+    def test_outage_warns_once_and_recovery_is_logged(self, mock_settings):
+        clock = _FakeTime()
+        fake = MagicMock()
+        fake.ping.return_value = True
+        fake.pipeline.return_value.execute.side_effect = [
+            ConnectionError("down"), ConnectionError("still down"), [1, True],
+        ]
+        limiter = self._limiter(mock_settings, fake, clock)
+
+        with patch("backend.api.rate_limit.time", clock), \
+                self.assertLogs("backend.api.rate_limit", level="INFO") as logs:
+            limiter.is_allowed("a")                      # 1st failure -> warn
+            clock.now += rl._REDIS_RETRY_AFTER_SECONDS + 1
+            limiter.is_allowed("a")                      # 2nd failure -> no new warning
+            clock.now += rl._REDIS_RETRY_AFTER_SECONDS + 1
+            limiter.is_allowed("a")                      # success -> recovery info
+
+        warnings = [r for r in logs.records if r.levelname == "WARNING"]
+        recovered = [r for r in logs.records if "recovered" in r.getMessage()]
+        self.assertEqual(len(warnings), 1, [r.getMessage() for r in warnings])
+        self.assertEqual(len(recovered), 1)
+
+    @patch("backend.api.rate_limit._settings")
+    def test_stats_do_not_ping_while_breaker_is_open(self, mock_settings):
+        """get_stats() must not spend a socket timeout probing a known-down Redis."""
+        clock = _FakeTime()
+        fake = MagicMock()
+        fake.ping.return_value = True
+        fake.pipeline.return_value.execute.side_effect = ConnectionError("down")
+        limiter = self._limiter(mock_settings, fake, clock)
+
+        with patch("backend.api.rate_limit.time", clock):
+            limiter.is_allowed("a")                      # opens the breaker
+            fake.ping.reset_mock()
+            stats = limiter.get_stats()
+        fake.ping.assert_not_called()
+        self.assertEqual(stats["backend"], "in_memory")
+        self.assertFalse(stats["redis_available"])
+
+    @patch("backend.api.rate_limit._settings")
+    def test_reset_clears_breaker_and_outage_flag(self, mock_settings):
+        clock = _FakeTime()
+        fake = MagicMock()
+        fake.ping.return_value = True
+        fake.pipeline.return_value.execute.side_effect = ConnectionError("down")
+        limiter = self._limiter(mock_settings, fake, clock)
+        with patch("backend.api.rate_limit.time", clock):
+            limiter.is_allowed("a")
+        self.assertTrue(limiter._redis_failing)
+        limiter.reset()
+        self.assertFalse(limiter._redis_failing)
+        self.assertEqual(limiter._redis_down_until, 0.0)
 
 
 class TestRateLimitMiddleware(unittest.TestCase):

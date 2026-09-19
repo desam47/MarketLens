@@ -78,6 +78,9 @@ class RedisRateLimiter:
         # opened by a failed call), so a dead Redis costs one short timeout
         # per retry window rather than one per request.
         self._redis_down_until = 0.0
+        # True while Redis is considered down; lets us warn once per outage
+        # (not on every retry) and log the recovery.
+        self._redis_failing = False
         self._initialize_redis()
 
     def _initialize_redis(self):
@@ -98,20 +101,42 @@ class RedisRateLimiter:
             }
             if _settings.redis.password:
                 kwargs["password"] = _settings.redis.password
+            # ``from_url`` is lazy — it builds a connection pool and does no I/O.
             self._redis_client = redis.Redis.from_url(_settings.redis.url, **kwargs)
+        except Exception as e:
+            logger.warning(f"Failed to create Redis client for rate limiting: {e}")
+            self._redis_client = None
+            return
 
-            # Test connection
+        # Startup probe. A failure here must NOT discard the client: with the
+        # short socket timeout above, a Redis that is merely slow or still
+        # booting (docker-compose start order) would otherwise pin this
+        # limiter to per-process counters for the life of the process, because
+        # nothing ever re-creates the client. Keep it and let the circuit
+        # breaker retry — the first requests use the in-memory fallback.
+        try:
             self._redis_client.ping()
             logger.info(f"Connected to Redis at {_settings.redis.url} for rate limiting")
-
         except Exception as e:
-            logger.warning(f"Failed to initialize Redis connection for rate limiting: {e}")
-            self._redis_client = None
+            self._mark_redis_down(e)
+
+    def _mark_redis_down(self, exc: Exception) -> None:
+        """Open the circuit breaker; warn only on the first failure of an outage."""
+        first_failure = not self._redis_failing
+        self._redis_failing = True
+        self._redis_down_until = time.monotonic() + _REDIS_RETRY_AFTER_SECONDS
+        if first_failure:
+            logger.warning(
+                f"Redis rate limiting unavailable, using in-memory fallback "
+                f"(retrying every {_REDIS_RETRY_AFTER_SECONDS:.0f}s): {exc}"
+            )
 
     def _is_redis_available(self) -> bool:
         """Check if Redis is available and connected."""
         if not self._redis_client:
             return False
+        if time.monotonic() < self._redis_down_until:
+            return False  # breaker open: don't spend a socket timeout probing
         try:
             return self._redis_client.ping()
         except Exception:
@@ -155,6 +180,9 @@ class RedisRateLimiter:
             pipe.expire(redis_key, self.window_seconds)
             results = pipe.execute()
             current_count = results[0]  # INCR result
+            if self._redis_failing:
+                self._redis_failing = False
+                logger.info("Redis rate limiting recovered")
 
             if current_count > self.max_requests:
                 # Reject. Don't reset the counter — client must wait for window to expire.
@@ -165,8 +193,7 @@ class RedisRateLimiter:
             return True, remaining
 
         except Exception as e:
-            logger.warning(f"Redis rate limiting failed, falling back to in-memory: {e}")
-            self._redis_down_until = time.monotonic() + _REDIS_RETRY_AFTER_SECONDS
+            self._mark_redis_down(e)
             # Fall back to in-memory limiter on Redis failure
             return self._fallback_limiter.is_allowed(client_ip, now)
 
@@ -175,6 +202,7 @@ class RedisRateLimiter:
         # Reset fallback limiter
         self._fallback_limiter.reset()
         self._redis_down_until = 0.0
+        self._redis_failing = False
         # Note: We don't flush Redis keys as that could affect other clients
         # In a test environment, you might want to flush specific keys
 
