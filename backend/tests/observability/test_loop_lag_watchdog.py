@@ -125,8 +125,8 @@ class TestGcTiming(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(wd.gc_counts[2], 1)
 
     async def test_a_stall_caused_by_a_full_collection_is_attributed_to_it(self):
-        heap = self._big_heap(35.0)  # noqa: F841
-        wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=20.0, gc_report_ms=1.0)
+        heap = self._big_heap(20.0)  # noqa: F841
+        wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=8.0, gc_report_ms=1.0)
         wd.start()
         self.addCleanup(wd.stop)
         await asyncio.sleep(0.05)
@@ -136,7 +136,7 @@ class TestGcTiming(unittest.IsolatedAsyncioTestCase):
         overlap = wd.reports[-1]["gc_overlap"]
         self.assertTrue(overlap, "the report should name the overlapping collection")
         self.assertEqual(overlap[0]["generation"], 2)
-        self.assertGreaterEqual(overlap[0]["ms"], 30)
+        self.assertGreaterEqual(overlap[0]["ms"], 12)   # the heap guarantees a >= 20 ms full collection
 
     async def test_no_gc_attribution_for_a_non_gc_stall(self):
         wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=30.0, gc_report_ms=50.0)

@@ -7,12 +7,23 @@ use a different DB is MARKETLENS_DB_OVERRIDE.
 """
 import os
 import unittest
+from unittest.mock import patch
 
 from backend.config.settings import DatabaseSettings, _DB_URL
 
 
 class TestDatabaseUrlNormalisation(unittest.TestCase):
     """DatabaseSettings always returns the hard-coded project-root DB path."""
+
+    def setUp(self):
+        # The suite runs with MARKETLENS_DB_OVERRIDE pointing at a throwaway database (see
+        # backend/tests/conftest.py). These tests are about the DEFAULT path, so run each without
+        # it and restore the environment afterwards. They used to ``del`` the variable in a
+        # ``finally``, which would have stripped the override for every later test.
+        patcher = patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("MARKETLENS_DB_OVERRIDE", None)
 
     def _project_root_path(self) -> str:
         """Return the expected hard-coded DB path."""

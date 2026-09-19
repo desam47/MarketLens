@@ -133,9 +133,42 @@ class TestCacheMiddlewareIntegration(unittest.TestCase):
     """
 
     def setUp(self):
+        from datetime import datetime
+
         from starlette.testclient import TestClient
         from backend.api.main import app
+        from backend.api.ttl_cache import _quote_cache
+        from backend.database import SessionLocal
+        from backend.models import DataStatus, Quote
+        from backend.models.market_data_sql import QuoteModel
+        from backend.repositories import quote_repository
+
         self.client = TestClient(app)
+        # The quote endpoint reads the database. This test used to depend on the developer's LIVE
+        # database happening to hold an AAPL quote (and skipped silently when it did not), so seed
+        # one into the isolated test database.
+        _quote_cache.clear()
+        db = SessionLocal()
+        try:
+            quote_repository.add_quote(db, Quote(
+                symbol="AAPL", price=190.25, bid=190.2, ask=190.3, volume=1000,
+                timestamp=datetime(2026, 9, 18, 15, 59), provider="test",
+                data_status=DataStatus.LIVE,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        def _cleanup():
+            _quote_cache.clear()
+            cleanup_db = SessionLocal()
+            try:
+                cleanup_db.query(QuoteModel).filter(QuoteModel.provider == "test").delete()
+                cleanup_db.commit()
+            finally:
+                cleanup_db.close()
+
+        self.addCleanup(_cleanup)
 
     def _headers_lower(self, response) -> dict:
         return {k.lower(): v for k, v in response.headers.items()}
@@ -157,11 +190,9 @@ class TestCacheMiddlewareIntegration(unittest.TestCase):
             r1 = self.client.get("/api/market-data/quote/AAPL?fallback=1")
         except Exception:
             self.skipTest("quote endpoint raised in this env")
-        if r1.status_code != 200:
-            self.skipTest(f"quote endpoint did not return 200 (got {r1.status_code})")
+        self.assertEqual(r1.status_code, 200, "the seeded quote must be served")
         etag = r1.headers.get("etag")
-        if not etag:
-            self.skipTest("quote endpoint did not emit an ETag")
+        self.assertTrue(etag, "the quote endpoint must emit an ETag")
 
         # Second request: send If-None-Match → should be a 304.
         r2 = self.client.get(
