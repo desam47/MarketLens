@@ -15,7 +15,12 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-os.environ.setdefault("MARKETLENS_DB_OVERRIDE", "sqlite:////tmp/test_strategy_lab.db")
+# NOTE: no MARKETLENS_DB_OVERRIDE here. It used to point at /tmp/test_strategy_lab.db, which only
+# took effect when this module was the FIRST to import the settings, i.e. when run on its own,
+# and then the project-root guard in backend/database/db.py rejected the path at collection. In a
+# full run it was ignored (see "Isolate this module" below), so the module could only pass when
+# another module happened to import the app first. Isolation does not depend on it: setUpModule
+# rebinds the engine to a private temp database either way.
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
