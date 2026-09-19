@@ -99,7 +99,18 @@ def _resolve_log_level(level_hint: str | None) -> int:
 
 
 def _get_log_dir() -> Path:
-    """Return the logs directory, creating it if needed."""
+    """Return the logs directory, creating it if needed.
+
+    ``MARKETLENS_LOG_DIR`` overrides the default ``<project>/logs``. The test suite sets it
+    (see ``backend/tests/conftest.py``): importing the app configures file logging, so every
+    test run used to append its deliberate failures and MagicMock errors to the live server's
+    ``logs/marketlens.log``.
+    """
+    override = os.environ.get("MARKETLENS_LOG_DIR")
+    if override:
+        log_dir = Path(override)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir
     # Work from the project root (one level up from the backend package).
     project_root = Path(__file__).parent.parent.parent
     log_dir = project_root / "logs"

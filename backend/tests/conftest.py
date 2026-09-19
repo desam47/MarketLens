@@ -53,6 +53,48 @@ def _block_webull_network() -> None:
 _block_webull_network()
 
 
+# ── Never write test logs into the live server's log file ────────────────────
+#
+# Importing ``backend.api.main`` calls ``configure_logging()``, which opens
+# ``logs/marketlens.log`` -- the file the running dev server writes. Test runs therefore
+# interleaved deliberate failures ("Failed to generate close digest", scanner "MagicMock"
+# errors) with real events, and "errors since the last restart" counts were meaningless.
+# Redirect to a throwaway directory; this must happen before the app is imported.
+def _redirect_test_logs() -> None:
+    if os.environ.get("MARKETLENS_LOG_DIR"):
+        return
+    import atexit
+    import shutil
+    import tempfile
+
+    log_dir = tempfile.mkdtemp(prefix="marketlens-test-logs-")
+    os.environ["MARKETLENS_LOG_DIR"] = log_dir
+    atexit.register(shutil.rmtree, log_dir, ignore_errors=True)
+
+
+_redirect_test_logs()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_backfill_jobs(request):
+    """Tests must never enqueue a REAL backfill.
+
+    ``enqueue_backfill`` talks to the live Redis, whose ``marketlens-backfill`` RQ worker runs the
+    job for real: it calls Webull/Alpaca/Yahoo and writes ~14,000 bars into the live database. The
+    watchlist add/import tests did exactly that on every run (AAPL, NVDA, TSLA), which contributed to
+    the backfill-job flood. With no queue, ``enqueue_backfill`` returns None, the same way it does
+    when Redis is down. ``test_backfill_queue`` is exempt: it tests the real functions and supplies
+    its own queue and Redis fakes.
+    """
+    if request.module.__name__.endswith("test_backfill_queue"):
+        yield
+        return
+    from unittest.mock import patch
+
+    with patch("backend.market_data.services.backfill_queue.get_backfill_queue", return_value=None):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Reset every known rate limiter (in-memory fallback + Redis) before each test."""
