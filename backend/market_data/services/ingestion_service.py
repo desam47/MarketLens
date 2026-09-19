@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
@@ -23,7 +23,7 @@ from backend.models import (
     ProviderStatusModel,
     Quote,
 )
-from backend.observability import record_bar, record_bars, set_ingestion_running
+from backend.observability import record_bars, set_ingestion_running
 from backend.repositories import quote_repository
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
@@ -165,6 +165,11 @@ def _normalize_1d_bar(b: Bar, provider_name: str) -> Bar | None:
 # for safety (webull_provider._RANGE_TO_COUNT).
 _RECENT_WINDOW_MAX_BARS = 30
 
+# _seed_check: a symbol holding less history than this (across all timeframes) is queued for a
+# backfill at startup, at most once per _SEED_RETRY_HOURS.
+_SEED_MIN_HISTORY_DAYS = 700
+_SEED_RETRY_HOURS = 24
+
 
 def _newest_bars(bars: list, limit: int = _RECENT_WINDOW_MAX_BARS) -> list:
     """Return at most the ``limit`` newest bars, in chronological order."""
@@ -239,37 +244,47 @@ class MarketDataIngestionService:
         least one enabled symbol.
         """
         try:
-            db = SessionLocal()
-            try:
-                repo = WatchlistRepository(db)
-                active_wls = repo.get_watchlists(active_only=True)
-                seen = set()
-                symbols: list[str] = []
-                watchlists: list[str] = []
-                for wl in active_wls:
-                    watchlist_symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
-                    if watchlist_symbols:
-                        watchlists.append(wl.name)
-                    if include_symbols:
-                        for ws in watchlist_symbols:
-                            sym = ws.symbol.upper()
-                            if sym not in seen:
-                                seen.add(sym)
-                                symbols.append(sym)
-                if include_symbols:
-                    if symbols:
-                        logger.info(f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}")
-                    else:
-                        if active_wls:
-                            logger.info("Active watchlists exist but all are empty — no symbols to ingest")
-                        else:
-                            logger.info("No active watchlist found — no symbols to ingest")
-                return (sorted(symbols), watchlists) if include_symbols else ([], watchlists)
-            finally:
-                db.close()
+            return self._query_active_watchlists(include_symbols)
         except Exception as e:
             logger.warning(f"Failed to load symbols from all active watchlists: {e}")
             return [], []
+
+    def _query_active_watchlists(self, include_symbols: bool = True) -> tuple[list[str], list[str]]:
+        """Same result as ``_load_symbols_and_watchlists_from_all_active_watchlists`` but a
+        database failure RAISES instead of collapsing into ``([], [])``.
+
+        The distinction matters to ``refresh_symbols_from_watchlist``: "the read failed"
+        (a locked DB) and "the watchlist is empty" are different facts, and only the second
+        may remove symbols.
+        """
+        db = SessionLocal()
+        try:
+            repo = WatchlistRepository(db)
+            active_wls = repo.get_watchlists(active_only=True)
+            seen = set()
+            symbols: list[str] = []
+            watchlists: list[str] = []
+            for wl in active_wls:
+                watchlist_symbols = repo.get_watchlist_symbols(wl.id, enabled_only=True)
+                if watchlist_symbols:
+                    watchlists.append(wl.name)
+                if include_symbols:
+                    for ws in watchlist_symbols:
+                        sym = ws.symbol.upper()
+                        if sym not in seen:
+                            seen.add(sym)
+                            symbols.append(sym)
+            if include_symbols:
+                if symbols:
+                    logger.info(f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}")
+                else:
+                    if active_wls:
+                        logger.info("Active watchlists exist but all are empty — no symbols to ingest")
+                    else:
+                        logger.info("No active watchlist found — no symbols to ingest")
+            return (sorted(symbols), watchlists) if include_symbols else ([], watchlists)
+        finally:
+            db.close()
 
     def get_tracking_watchlists(self) -> list[str]:
         """Return active watchlists that contribute enabled symbols."""
@@ -1061,11 +1076,14 @@ class MarketDataIngestionService:
                 # being updated, which meant every cycle re-fetched and
                 # re-wrote each symbol's full 1200-bar (Webull's hard
                 # cap) window just to catch the latest 1-2 bars.
-                batch_bars = self.manager.get_historical_bars_batch(
-                    self.symbols, "1m", range_="15m", use_cache=False,
+                # to_thread: a synchronous provider round trip (many seconds when rate
+                # limited) would otherwise freeze every other loop on this event loop.
+                batch_bars = await asyncio.to_thread(
+                    self.manager.get_historical_bars_batch,
+                    list(self.symbols), "1m", range_="15m", use_cache=False,
                     # Keep the live 1m feed flowing outside RTH (premarket /
-                    # after-hours). Sub-hour resampling still filters on
-                    # session='regular', so 2m+/1h/1d stay RTH-only.
+                    # after-hours). Sub-hour resampling spans all sessions too; only the
+                    # provider-sourced 1h/1d/1wk history stays RTH-only.
                     include_extended_hours=True,
                 )
                 for symbol, bars in batch_bars.items():
@@ -1086,7 +1104,8 @@ class MarketDataIngestionService:
                 # Fall back to per-symbol ingestion if batch fails
                 for symbol in self.symbols:
                     try:
-                        bars = self.manager.get_historical_bars(
+                        bars = await asyncio.to_thread(
+                            self.manager.get_historical_bars,
                             symbol, "1m", range_="15m", use_cache=False,
                             include_extended_hours=True,
                         )
@@ -1154,7 +1173,6 @@ class MarketDataIngestionService:
         # the API's event loop) and made TrendEngine.update emit spurious
         # "stale"/"gap" data-quality warnings before that dedupe. ``>=`` (not
         # ``>``) keeps re-sending the newest bar, which may still be forming.
-        from backend.models.market_data_sql import BarModel as _BM2
         for sym, tf, bar, ts in fresh_bars:
             if not self._should_dispatch_bar(sym, ts):
                 continue
@@ -1373,21 +1391,64 @@ class MarketDataIngestionService:
             db.close()
         return written
 
-    async def _1h_write_loop(self, initial_delay: float = 0.0):
-        """At :02 ET every hour: fetch 3h of 1h bars per symbol and write all.
+    # ------------------------------------------------------------------
+    # Scheduled writes: run once per SLOT, not "when a wake-up happens to land in a window"
+    #
+    # The 1h / 4h / daily-close loops used to wake every ~300 s and act only when
+    # ``minute == 2 and second < 10``: a 10-second window sampled every ~300 s, so a
+    # scheduled write ran on ~3% of its slots (the 16:02 authoritative daily write on
+    # roughly one day in thirty). Each loop now polls cheaply and runs once for every slot
+    # it has not yet handled; DigestService uses the same design.
+    # ------------------------------------------------------------------
 
-        Fires at :02 past each hour so the closed hour-bar has settled.
+    @staticmethod
+    def _hourly_slot(ny: datetime):
+        """The hour whose :02 settling point has passed (None before :02)."""
+        return (ny.date(), ny.hour) if ny.minute >= 2 else None
+
+    @staticmethod
+    def _four_hourly_slot(ny: datetime):
+        """The 4h bucket start (00/04/08/12/16/20) once its :02 has passed, else None."""
+        return (ny.date(), ny.hour) if ny.hour % 4 == 0 and ny.minute >= 2 else None
+
+    @staticmethod
+    def _daily_close_slot(ny: datetime):
+        """Today's date once a weekday's 16:02 ET close write is due, else None."""
+        return ny.date() if ny.weekday() < 5 and (ny.hour, ny.minute) >= (16, 2) else None
+
+    async def _slot_loop(self, name: str, slot_of, run, initial_delay: float = 0.0, catch_up=None):
+        """Call ``await run()`` once for every distinct non-None ``slot_of(now_ny)``.
+
+        A slot already under way when the loop (re)starts counts as handled, so a dev-server
+        reload does not refetch every symbol. ``catch_up`` is an async "is this slot's work
+        actually missing?" check that opts the current slot back in, so a restart AFTER the
+        slot time still does the work once, but only if it was never done.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
+        last = slot_of(datetime.now(_NY_TZ))
+        if last is not None and catch_up is not None:
+            try:
+                if await catch_up():
+                    last = None
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"{name} catch-up check failed: {e}")
         while self.is_running:
             try:
-                ny = datetime.now(_NY_TZ)
-                if ny.minute == 2 and ny.second < 10:
-                    await self._write_1h_recent_window()
+                slot = slot_of(datetime.now(_NY_TZ))
+                if slot is not None and slot != last:
+                    last = slot
+                    await run()
             except Exception as e:
-                logger.error(f"Error in 1h write loop: {e}")
-            await self._jittered_sleep(300, jitter=15.0)
+                logger.error(f"Error in {name} loop: {e}")
+            await self._jittered_sleep(30, jitter=3.0)
+
+    async def _1h_write_loop(self, initial_delay: float = 0.0):
+        """Every hour, once :02 ET has passed: fetch recent 1h bars per symbol and write all.
+
+        Waits for :02 past the hour so the closed hour-bar has settled.
+        """
+        await self._slot_loop("1h write", self._hourly_slot, self._write_1h_recent_window, initial_delay)
 
     async def _gapfill_1h_loop(self, initial_delay: float = 0.0):
         """Phase 3.8 — auto gap-fill for 1h bars.
@@ -1485,16 +1546,10 @@ class MarketDataIngestionService:
         is a redundant backstop at this point (harmless, same idempotent
         upsert key), kept as a second guarantee rather than removed.
         """
-        if initial_delay > 0:
-            await asyncio.sleep(initial_delay)
-        while self.is_running:
-            try:
-                ny = datetime.now(_NY_TZ)
-                if ny.hour % 4 == 0 and ny.minute == 2 and ny.second < 10:
-                    await self._write_4h_bars()
-            except Exception as e:
-                logger.error(f"Error in 4h write loop: {e}")
-            await self._jittered_sleep(300, jitter=15.0)
+        # Not ``_write_4h_bars``: its own "within 2 minutes of the boundary" guard would
+        # turn every poll after :02 into a no-op.
+        await self._slot_loop("4h write", self._four_hourly_slot,
+                              self._resample_1h_to_4h_and_upsert, initial_delay)
 
     async def _write_1d_bars(self) -> int:
         """Fetch recent 1d bars via BACKFILL_1D_* chain and write.
@@ -1537,19 +1592,45 @@ class MarketDataIngestionService:
             db.close()
         return written
 
+    async def _daily_close_write(self) -> None:
+        await self._write_1d_bars()
+        await self._resample_1d_to_1wk_and_upsert()
+
+    def _daily_close_bars_missing(self) -> bool:
+        """True if any tracked symbol has no provider-sourced 1d bar for today.
+
+        Until the 16:02 write runs, today's 1d bar is our own 1m aggregate
+        (``live_from_1m``), which spans extended hours; the provider's bar is the
+        authoritative one.
+        """
+        symbols = {s.upper() for s in self.symbols}
+        if not symbols:
+            return False
+        today = datetime.now(_NY_TZ).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        db = SessionLocal()
+        try:
+            have = {
+                sym for (sym,) in db.query(BarModel.symbol).filter(
+                    BarModel.timeframe == "1d",
+                    BarModel.timestamp == today,
+                    BarModel.provider != "live_from_1m",
+                    BarModel.symbol.in_(symbols),
+                )
+            }
+            return bool(symbols - have)
+        finally:
+            db.close()
+
     async def _daily_write_loop(self, initial_delay: float = 0.0):
-        """At 16:02 ET: write 1d bar + aggregate 1wk from 1d."""
-        if initial_delay > 0:
-            await asyncio.sleep(initial_delay)
-        while self.is_running:
-            try:
-                ny = datetime.now(_NY_TZ)
-                if ny.hour == 16 and ny.minute == 2 and ny.second < 10:
-                    await self._write_1d_bars()
-                    await self._resample_1d_to_1wk_and_upsert()
-            except Exception as e:
-                logger.error(f"Error in daily write loop: {e}")
-            await self._jittered_sleep(300, jitter=15.0)
+        """At 16:02 ET (weekdays): write the provider's 1d bar + aggregate 1wk from 1d.
+
+        A restart after 16:02 still does this once, if today's provider bar is missing.
+        """
+        async def missing() -> bool:
+            return await asyncio.to_thread(self._daily_close_bars_missing)
+
+        await self._slot_loop("daily write", self._daily_close_slot, self._daily_close_write,
+                              initial_delay, catch_up=missing)
 
     async def _gapfill_1m_loop(self, initial_delay: float = 0.0):
         """Phase 3.8 — auto gap-fill for 1m bars.
@@ -1870,7 +1951,14 @@ class MarketDataIngestionService:
         Returns the new (full) symbol list. If the service is not running,
         only updates ``self.symbols`` and the tracking dicts.
         """
-        new_symbols = self._load_symbols_and_watchlists_from_all_active_watchlists()[0]
+        try:
+            new_symbols = self._query_active_watchlists()[0]
+        except Exception:  # noqa: BLE001
+            # A transient DB error used to read as "the watchlist is empty": every symbol
+            # was dropped from ingestion and unsubscribed from the stream until the next
+            # refresh. Keep tracking what we have.
+            logger.warning("Watchlist refresh failed; keeping the current symbols", exc_info=True)
+            return self.symbols
         old_set = set(self.symbols)
         new_set = set(new_symbols)
         added = new_set - old_set
@@ -1956,7 +2044,10 @@ class MarketDataIngestionService:
         from backend.models.market_data_sql import BarModel as _BarModel
         from backend.market_data.services.backfill_queue import enqueue_backfill
 
-        threshold = datetime.now() - _td(days=700)
+        from backend.models import BackfillJob
+
+        threshold = datetime.now() - _td(days=_SEED_MIN_HISTORY_DAYS)
+        retry_after = datetime.now(timezone.utc).replace(tzinfo=None) - _td(hours=_SEED_RETRY_HOURS)
         symbols = list(self.symbols)
         if not symbols:
             return
@@ -1969,10 +2060,19 @@ class MarketDataIngestionService:
                         .filter(_BarModel.symbol == symbol.upper())
                         .scalar()
                     )
+                    attempted_recently = db.query(BackfillJob.id).filter(
+                        BackfillJob.symbol == symbol.upper(),
+                        BackfillJob.created_at >= retry_after,
+                    ).first() is not None
                 finally:
                     db.close()
-                # No data at all, or data older than the seed threshold.
-                if oldest is None or oldest < threshold:
+                # No data at all, or LESS than _SEED_MIN_HISTORY_DAYS of it (the oldest bar is
+                # more recent than the threshold). This used to read ``oldest < threshold``,
+                # i.e. it fired for every symbol whose history was already deep enough:
+                # ~24 backfill jobs at EVERY process start (6,766 in ten days), each one a
+                # full provider re-fetch. The retry guard keeps a young ticker whose provider
+                # genuinely has less history from being re-queued on every restart.
+                if (oldest is None or oldest > threshold) and not attempted_recently:
                     logger.info(
                         f"_seed_check: enqueueing backfill for {symbol} "
                         f"(oldest={oldest})"

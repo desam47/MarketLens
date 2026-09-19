@@ -296,9 +296,14 @@ class TestPhase31LastBarUpdate(unittest.TestCase):
         from unittest.mock import patch
 
         service = MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
-        # Simulate the watchlist gaining a new symbol.
+        # Simulate the watchlist gaining a new symbol. (This used to patch
+        # ``_load_symbols_from_watchlist``, which refresh never calls, so the test read the
+        # developer's live database and only passed because TSLA happens to be in it.)
         with patch.object(
-            service, "_load_symbols_from_watchlist", return_value=["AAPL", "TSLA"]
+            service, "_query_active_watchlists", return_value=(["AAPL", "TSLA"], ["wl"])
+        ), patch(
+            "backend.market_data.streaming.webull_stream.get_webull_stream_client",
+            return_value=MagicMock(),
         ):
             service.refresh_symbols_from_watchlist()
         self.assertIn("TSLA", service.last_bar_update)
