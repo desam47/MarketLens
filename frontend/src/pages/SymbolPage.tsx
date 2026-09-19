@@ -11,7 +11,8 @@ import api, {
 import { formatETDate, formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
-import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
+// import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
+import { ConfluenceCard } from '../components/ConfluenceCard';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
@@ -526,6 +527,15 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   // stale-response guard as tapeRequestSymbolRef below.
   const scanRequestSymbolRef = useRef<string>(symbol);
 
+  // MTF Confluence (replaces MTFScoreGrid - uses same snapshot as Dashboard)
+  const [mtfPreset, setMtfPreset] = useState<string>('day_trading');
+  const [mtfConfluence, setMtfConfluence] = useState<any>(null);
+  const [mtfLoading, setMtfLoading] = useState(true);
+  const [mtfError, setMtfError] = useState<string | null>(null);
+  const mtfRequestSymbolRef = useRef<string>(symbol);
+  const mtfPresetRef = useRef<string>('day_trading');
+  mtfPresetRef.current = mtfPreset;
+
   const [tape, setTape] = useState<TapeSnapshot | null>(null);
   const [tapeDisabled, setTapeDisabled] = useState(false);
   const [tapeError, setTapeError] = useState<string | null>(null);
@@ -668,6 +678,59 @@ const fetchBars = useCallback(async () => {
     }
   }, [symbol]);
 
+  const fetchMTF = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedPreset = mtfPreset;
+    mtfRequestSymbolRef.current = requestedSymbol;
+    mtfPresetRef.current = requestedPreset;
+    setMtfLoading(true);
+    setMtfError(null);
+    try {
+      const response = await api.getMTFSnapshot(requestedSymbol, requestedPreset);
+      if (mtfRequestSymbolRef.current !== requestedSymbol || mtfPresetRef.current !== requestedPreset) return;
+      const snap = response.snapshot;
+      if (snap) {
+        // Transform snapshot to ConfluenceData format
+        const data = {
+          symbol: snap.symbol,
+          direction: snap.direction,
+          strength: snap.strength,
+          alignment_score: snap.alignment_score,
+          timeframe_signals: Object.fromEntries(
+            Object.entries(snap.timeframe_snapshots).map(([tf, tfSnap]) => [
+              tf,
+              {
+                direction: tfSnap.direction,
+                strength: tfSnap.strength,
+                confidence: tfSnap.confidence,
+                timestamp: tfSnap.timestamp,
+              },
+            ])
+          ),
+          timestamp: snap.timestamp,
+          bullish_alignment: snap.bullish_alignment,
+          bearish_alignment: snap.bearish_alignment,
+          conflicting: snap.conflicting,
+          short_term_direction: snap.short_term_direction,
+          intermediate_direction: snap.intermediate_direction,
+          higher_direction: snap.higher_direction,
+          preset: snap.preset,
+          short_term_state: snap.short_term_state,
+          intermediate_state: snap.intermediate_state,
+          higher_state: snap.higher_state,
+        };
+        setMtfConfluence(data);
+      } else {
+        setMtfConfluence(null);
+      }
+    } catch (err: any) {
+      if (mtfRequestSymbolRef.current !== requestedSymbol || mtfPresetRef.current !== requestedPreset) return;
+      setMtfError(err?.message || 'Failed to load MTF confluence');
+    } finally {
+      if (mtfRequestSymbolRef.current === requestedSymbol && mtfPresetRef.current === requestedPreset) setMtfLoading(false);
+    }
+  }, [symbol, mtfPreset]);
+
   const handleRefresh = useCallback(() => {
     fetchQuote();
     fetchTransitions();
@@ -676,7 +739,8 @@ const fetchBars = useCallback(async () => {
     fetchBars();
     fetchScan();
     fetchTape();
-  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape]);
+    fetchMTF();
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
 
   useEffect(() => {
     fetchQuote();
@@ -703,6 +767,10 @@ const fetchBars = useCallback(async () => {
   useEffect(() => {
     fetchScan();
   }, [fetchScan]);
+
+  useEffect(() => {
+    fetchMTF();
+  }, [fetchMTF]);
 
   useEffect(() => {
     fetchTape();
@@ -850,10 +918,12 @@ const fetchBars = useCallback(async () => {
         <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
           <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
         </Suspense>
-        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
-          <MTFScoreGrid
-            trendSignals={(scanResult?.trend_signals ?? {}) as TrendSignalsMap}
-            symbol={symbol}
+        <div className={mtfLoading && !mtfConfluence ? 'card-loading-skeleton' : ''}>
+          <ConfluenceCard
+            confluence={mtfConfluence}
+            error={mtfError}
+            selectedPreset={mtfPreset}
+            onPresetChange={setMtfPreset}
           />
         </div>
         {chartMode === 'single' ? (

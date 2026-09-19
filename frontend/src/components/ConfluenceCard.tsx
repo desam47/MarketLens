@@ -60,25 +60,34 @@ function getNarrative(confluence: ConfluenceData): string {
   const interState = confluence.intermediate_state || 'neutral';
   const higherState = confluence.higher_state || 'neutral';
   const shortDir = confluence.short_term_direction || 'neutral';
+  const interDir = confluence.intermediate_direction || 'neutral';
   const higherDir = confluence.higher_direction || 'neutral';
+  
+  const isTrend = (d: string) => d === 'uptrend' || d === 'downtrend';
+  const trendLabel = (d: string) => d === 'uptrend' ? 'Bullish' : d === 'downtrend' ? 'Bearish' : 'Neutral';
   
   // Build narrative based on trend states
   if (higherState === 'reversal_confirmed') {
-    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} reversal confirmed`;
+    return `${trendLabel(higherDir)} reversal confirmed`;
   }
   if (higherState === 'transition') {
-    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} transition — ${interState === 'pullback' ? 'pullback' : 'early stage'}`;
+    return `${trendLabel(higherDir)} transition — ${interState === 'pullback' ? 'pullback' : 'early stage'}`;
   }
-  if (interState === 'pullback' && higherState === 'continuation') {
-    return `${higherDir === 'uptrend' ? 'Bullish' : 'Bearish'} trend, short-term pullback`;
+  // Pullback from established higher trend
+  if (interState === 'pullback' && higherState === 'continuation' && isTrend(higherDir)) {
+    return `${trendLabel(higherDir)} trend, short-term pullback`;
   }
-  if (shortState === 'pullback' && interState === 'continuation') {
-    return `${interState === 'continuation' ? 'Trend continuing' : 'Mixed'}, lower TF counter-trend`;
+  if (shortState === 'pullback' && interState === 'continuation' && isTrend(interDir)) {
+    return `${trendLabel(interDir)} trend, lower TF counter-trend`;
   }
-  if (shortState === 'continuation' && interState === 'continuation' && higherState === 'continuation') {
-    return `Strong ${shortDir === 'uptrend' ? 'bullish' : shortDir === 'downtrend' ? 'bearish' : 'neutral'} alignment`;
+  if (shortState === 'continuation' && interState === 'continuation' && higherState === 'continuation' && isTrend(higherDir)) {
+    return `Strong ${trendLabel(higherDir).toLowerCase()} alignment`;
   }
-  return `${higherDir === 'uptrend' ? 'Bullish' : higherDir === 'downtrend' ? 'Bearish' : 'Neutral'} bias`;
+  // Neutral/conflicting cases
+  if (!isTrend(higherDir)) {
+    return `No clear trend (${trendLabel(higherDir)})`;
+  }
+  return `${trendLabel(higherDir)} bias`;
 }
 
 export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
@@ -127,10 +136,10 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
   const conflicts = confluence.conflicting ?? 0;
 
   // Horizon chips with direction + state
-  const horizonChips: Array<{ label: string; direction: string | undefined; state: string | undefined }> = [
-    { label: 'Higher', direction: confluence.higher_direction, state: confluence.higher_state },
-    { label: 'Intermediate', direction: confluence.intermediate_direction, state: confluence.intermediate_state },
-    { label: 'Lower', direction: confluence.short_term_direction, state: confluence.short_term_state },
+  const horizonChips: Array<{ label: string; direction: string | undefined; state: string | undefined; variant: 'higher' | 'intermediate' | 'lower' }> = [
+    { label: 'Higher', direction: confluence.higher_direction, state: confluence.higher_state, variant: 'higher' },
+    { label: 'Intermediate', direction: confluence.intermediate_direction, state: confluence.intermediate_state, variant: 'intermediate' },
+    { label: 'Lower', direction: confluence.short_term_direction, state: confluence.short_term_state, variant: 'lower' },
   ];
 
   const narrative = getNarrative(confluence);
@@ -153,7 +162,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
             const dir = chip.direction || 'neutral';
             const state = chip.state || 'neutral';
             return (
-              <div key={chip.label} className="horizon-column">
+              <div key={chip.label} className={`horizon-column ${chip.variant}`}>
                 <span className="horizon-label">{chip.label}</span>
                 <div className="horizon-content">
                   <span className="horizon-direction" style={{ color: directionColors[dir] || '#9ca3af' }}>

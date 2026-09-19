@@ -172,9 +172,44 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     setConfluenceLoading(true);
     setConfluenceError(null);
     try {
-      const data = await api.getConfluence(requestSymbol, requestPreset);
+      // Use snapshot endpoint for richer data (trend states, quality metrics)
+      const response = await api.getMTFSnapshot(requestSymbol, requestPreset);
       if (symbolRef.current !== requestSymbol || presetRef.current !== requestPreset) return;
-      setConfluence(data);
+      const snap = response.snapshot;
+      if (snap) {
+        // Transform snapshot to ConfluenceData format
+        const data = {
+          symbol: snap.symbol,
+          direction: snap.direction,
+          strength: snap.strength,
+          alignment_score: snap.alignment_score,
+          timeframe_signals: Object.fromEntries(
+            Object.entries(snap.timeframe_snapshots).map(([tf, tfSnap]) => [
+              tf,
+              {
+                direction: tfSnap.direction,
+                strength: tfSnap.strength,
+                confidence: tfSnap.confidence,
+                timestamp: tfSnap.timestamp,
+              },
+            ])
+          ),
+          timestamp: snap.timestamp,
+          bullish_alignment: snap.bullish_alignment,
+          bearish_alignment: snap.bearish_alignment,
+          conflicting: snap.conflicting,
+          short_term_direction: snap.short_term_direction,
+          intermediate_direction: snap.intermediate_direction,
+          higher_direction: snap.higher_direction,
+          preset: snap.preset,
+          short_term_state: snap.short_term_state,
+          intermediate_state: snap.intermediate_state,
+          higher_state: snap.higher_state,
+        };
+        setConfluence(data);
+      } else {
+        setConfluence(null);
+      }
     } catch (err: any) {
       if (symbolRef.current !== requestSymbol || presetRef.current !== requestPreset) return;
       setConfluenceError(err?.message || 'Failed to load confluence');
