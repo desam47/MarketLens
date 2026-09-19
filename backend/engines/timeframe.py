@@ -2,6 +2,7 @@
 Timeframe/candle engine for aggregating market data
 """
 import logging
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
@@ -125,6 +126,41 @@ class Candle:
                 f"O:{self.open} H:{self.high} L:{self.low} C:{self.close} "
                 f"V:{self.volume} {'closed' if self.is_closed else 'open'})")
 
+# Most tick timestamps a TimeframeEngine remembers for duplicate detection. Each entry
+# costs ~90 bytes and the set used to grow forever: ~52k entries/day across 25 symbols
+# x 10 timeframe engines (~4.7 MB/day, ~140 MB/month of uptime). 5,000 covers ~5 days
+# of 1m bars including extended hours — far beyond the same-cycle re-delivery the
+# dedupe exists to catch — and bounds the worst case at ~45 MB.
+_SEEN_TIMESTAMPS_MAX = 5_000
+
+
+class _BoundedSeen:
+    """Insertion-ordered set of recently seen timestamps; the oldest is evicted past ``maxlen``."""
+
+    __slots__ = ("_items", "maxlen")
+
+    def __init__(self, maxlen: int) -> None:
+        self._items: OrderedDict[datetime, None] = OrderedDict()
+        self.maxlen = maxlen
+
+    def __contains__(self, timestamp: object) -> bool:
+        return timestamp in self._items
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def add(self, timestamp: datetime) -> None:
+        items = self._items
+        if timestamp in items:
+            return
+        items[timestamp] = None
+        if len(items) > self.maxlen:
+            items.popitem(last=False)   # O(1); a plain dict's "first key" degrades as it churns
+
+    def clear(self) -> None:
+        self._items.clear()
+
+
 class TimeframeEngine:
     """Engine for aggregating market data into multiple timeframes"""
 
@@ -143,10 +179,10 @@ class TimeframeEngine:
         # duplicate ticks within the same candle window (same (tf, candle_start)
         # but different tick timestamps — not a dup).
         self._seen_candle_starts: dict[Timeframe, set[datetime]] = {}
-        # All tick timestamps ever accepted. A tick with a previously-seen
-        # timestamp is a duplicate — counted once per tick regardless of how
-        # many timeframes it would update.
-        self._seen_timestamps: set[datetime] = set()
+        # Recently accepted tick timestamps (bounded — see _SEEN_TIMESTAMPS_MAX). A tick
+        # with a previously-seen timestamp is a duplicate — counted once per tick
+        # regardless of how many timeframes it would update.
+        self._seen_timestamps = _BoundedSeen(_SEEN_TIMESTAMPS_MAX)
         # Counters exposed for tests and ops visibility.
         self.duplicate_count = 0
         self.gap_count = 0
