@@ -157,6 +157,12 @@ class TimeframeTrendSnapshot:
     confidence: float                   # 0.0..1.0
     data_quality: str
     strategy_version: str
+    # Phase 7+: quality metrics for weighted aggregation
+    data_age_seconds: float = 0.0
+    bar_closed: bool = False
+    is_warmed_up: bool = False
+    valid: bool = False                 # has signal + warmed up + fresh enough
+    quality_weight: float = 0.0         # confidence * freshness * warmup * (1 if closed else 0.5)
 
 
 @dataclass
@@ -185,6 +191,9 @@ class MultiTimeframeSnapshot:
         default_factory=dict,
     )
     strategy_version: str = ""
+    # Phase 7+: quality metrics
+    valid_coverage: float = 0.0          # fraction of preset TFs with valid signals
+    quality_weighted_score: float = 0.0  # aggregate score using quality weights
 
 
 def _timeframe_seconds(tf: Timeframe) -> int:
@@ -363,11 +372,41 @@ class MultiTimeframeEngine:
     # Alignment calculations
     # ------------------------------------------------------------------
 
-    def _calculate_alignment(self, signals: dict[Timeframe, TrendSignal]) -> float:
-        """How aligned the timeframes are (0.0 = no alignment, 1.0 = perfect)."""
+    def _calculate_alignment(self, signals: dict[Timeframe, TrendSignal],
+                          tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] | None = None) -> float:
+        """How aligned the timeframes are (0.0 = no alignment, 1.0 = perfect).
+
+        If tf_snapshots provided, uses quality-weighted alignment based on valid TFs only.
+        """
+        if not signals:
+            return 0.0
         if len(signals) < 2:
             return 1.0
 
+        # Quality-weighted alignment (new)
+        if tf_snapshots is not None:
+            valid_snaps = [s for s in tf_snapshots.values() if s.valid]
+            if not valid_snaps:
+                return 0.0
+            
+            uptrend_weight = sum(s.quality_weight for s in valid_snaps
+                                if s.direction == TrendClassification.STRONG_UPTREND
+                                or s.direction == TrendClassification.UPTREND
+                                or s.direction == TrendClassification.WEAK_UPTREND)
+            downtrend_weight = sum(s.quality_weight for s in valid_snaps
+                                  if s.direction == TrendClassification.STRONG_DOWNTREND
+                                  or s.direction == TrendClassification.DOWNTREND
+                                  or s.direction == TrendClassification.WEAK_DOWNTREND)
+            sideways_weight = sum(s.quality_weight for s in valid_snaps
+                                 if s.direction == TrendClassification.NEUTRAL)
+            
+            total_weight = uptrend_weight + downtrend_weight + sideways_weight
+            if total_weight == 0:
+                return 0.0
+            max_weight = max(uptrend_weight, downtrend_weight, sideways_weight)
+            return max_weight / total_weight
+
+        # Legacy equal-count alignment
         uptrend_count = 0
         downtrend_count = 0
         sideways_count = 0
@@ -453,14 +492,59 @@ class MultiTimeframeEngine:
 
     def _calculate_overall_direction(
         self, signals: dict[Timeframe, TrendSignal],
+        tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] | None = None,
     ) -> tuple[ConfluenceDirection, float]:
-        """Calculate overall direction and strength from timeframe signals."""
+        """Calculate overall direction and strength from timeframe signals.
+
+        If tf_snapshots is provided, uses quality-weighted hierarchical aggregation
+        with raw scores (-100..+100). Otherwise falls back to legacy ternary scoring.
+        """
         if not signals:
             return ConfluenceDirection.NEUTRAL, 0.0
 
-        # Weights come from settings — Principle 11 compliance.
-        # Falls back to a small default for unknown timeframes so a
-        # caller adding a new TF to a preset doesn't silently get 0.0.
+        # Quality-weighted hierarchical aggregation (new)
+        if tf_snapshots is not None:
+            quality_score = self._calculate_quality_weighted_score(tf_snapshots)
+            avg_score = quality_score / 100.0  # normalize -100..+100 to -1..+1
+
+            # Strength from average quality-weighted strength
+            valid_snaps = [s for s in tf_snapshots.values() if s.valid]
+            avg_strength_raw = (
+                sum(s.strength for s in valid_snaps) / len(valid_snaps)
+                if valid_snaps else 0.5
+            )
+            avg_strength = avg_strength_raw  # already 0..1
+
+            # Alignment based on valid TFs only
+            valid_signals = {tf: sig for tf, sig in signals.items()
+                           if tf in tf_snapshots and tf_snapshots[tf].valid}
+            alignment = self._calculate_alignment(valid_signals) if valid_signals else 0.0
+
+            # Direction from quality-weighted score with hysteresis thresholds
+            if alignment > 0.6:
+                if avg_score > 0.3:
+                    direction = ConfluenceDirection.STRONG_UPTREND
+                elif avg_score > 0.1:
+                    direction = ConfluenceDirection.UPTREND
+                elif avg_score > -0.1:
+                    direction = ConfluenceDirection.NEUTRAL
+                elif avg_score > -0.3:
+                    direction = ConfluenceDirection.WEAK_DOWNTREND
+                else:
+                    direction = ConfluenceDirection.STRONG_DOWNTREND
+            else:
+                if avg_score > 0.2:
+                    direction = ConfluenceDirection.WEAK_UPTREND
+                elif avg_score < -0.2:
+                    direction = ConfluenceDirection.WEAK_DOWNTREND
+                else:
+                    direction = ConfluenceDirection.NEUTRAL
+
+            final_strength = (alignment * 0.5) + (avg_strength * 0.5)
+            final_strength = max(0.0, min(1.0, final_strength))
+            return direction, final_strength
+
+        # Legacy ternary scoring (fallback)
         weighted_score = 0.0
         total_weight = 0.0
         strength_values: list[int] = []
@@ -517,6 +601,53 @@ class MultiTimeframeEngine:
         final_strength = max(0.0, min(1.0, final_strength))
         return direction, final_strength
 
+    def _calculate_quality_weighted_score(
+        self, tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot],
+    ) -> float:
+        """Calculate quality-weighted aggregate score using raw scores and hierarchical weights.
+
+        Uses quality_weight per TF (confidence * freshness * warmup * bar_closed_factor)
+        and hierarchical timeframe weights (higher TFs = bias, intermediate = structure,
+        lower = timing).
+        """
+        if not tf_snapshots:
+            return 0.0
+
+        # Hierarchical weights by timeframe (higher = more weight for bias)
+        hierarchy_weights = {
+            Timeframe.ONE_WEEK: 0.25,
+            Timeframe.ONE_DAY: 0.20,
+            Timeframe.FOUR_HOUR: 0.15,
+            Timeframe.ONE_HOUR: 0.12,
+            Timeframe.THIRTY_MINUTE: 0.08,
+            Timeframe.FIFTEEN_MINUTE: 0.08,
+            Timeframe.FIVE_MINUTE: 0.06,
+            Timeframe.THREE_MINUTE: 0.03,
+            Timeframe.TWO_MINUTE: 0.02,
+            Timeframe.ONE_MINUTE: 0.01,
+        }
+
+        total_weighted_score = 0.0
+        total_quality_weight = 0.0
+
+        for tf, snap in tf_snapshots.items():
+            # Only use valid TFs for the aggregate
+            if not snap.valid:
+                continue
+            
+            preset_weight = self.timeframe_weights.get(tf.value, 0.05)
+            hierarchy_weight = hierarchy_weights.get(tf, 0.05)
+            # Combine preset weight with hierarchy weight (equal mix)
+            combined_weight = (preset_weight + hierarchy_weight) / 2.0
+            
+            # Quality weight already incorporates confidence, freshness, warmup, bar_closed
+            effective_weight = combined_weight * snap.quality_weight
+            
+            total_weighted_score += snap.score * effective_weight
+            total_quality_weight += effective_weight
+
+        return total_weighted_score / total_quality_weight if total_quality_weight > 0 else 0.0
+
     # ------------------------------------------------------------------
     # Snapshot builder (Phase 7 dataclass)
     # ------------------------------------------------------------------
@@ -537,9 +668,40 @@ class MultiTimeframeEngine:
         if not timeframe_signals:
             return None
 
-        # Per-TF snapshots
+        # Get timeframe engine for freshness/bar status
+        from ..engines.timeframe import multi_symbol_timeframe_engine
+        tf_engine = multi_symbol_timeframe_engine.get_engine_for_symbol(self.symbol)
+
+        # Per-TF snapshots with quality metrics
         tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] = {}
         for tf, sig in timeframe_signals.items():
+            # Compute quality metrics
+            data_age_seconds = (ts - sig.timestamp).total_seconds() if sig.timestamp else 0.0
+            
+            # Check bar closed status and warmup from timeframe engine
+            bar_closed = False
+            is_warmed_up = False
+            if tf_engine is not None:
+                latest_closed = tf_engine.get_latest_closed_candle(tf)
+                if latest_closed:
+                    # Bar is closed if latest closed candle matches signal timestamp
+                    bar_closed = latest_closed.close_time >= sig.timestamp
+                    # Consider warmed up if we have at least 50 closed bars (arbitrary threshold)
+                    closed_count = len(tf_engine.get_closed_candles(tf))
+                    is_warmed_up = closed_count >= 50
+            
+            # Valid if: has signal + data_quality ok + warmed up + fresh (< 2x timeframe period)
+            tf_seconds = _timeframe_seconds(tf)
+            fresh_enough = data_age_seconds <= (tf_seconds * 2) if tf_seconds > 0 else True
+            valid = (sig.data_quality == "ok" and is_warmed_up and fresh_enough)
+            
+            # Quality weight: confidence * freshness * warmup * (1.0 if closed else 0.5)
+            freshness_factor = max(0.1, 1.0 - (data_age_seconds / (tf_seconds * 4))) if tf_seconds > 0 else 1.0
+            freshness_factor = min(1.0, freshness_factor)
+            warmup_factor = 1.0 if is_warmed_up else 0.3
+            closed_factor = 1.0 if bar_closed else 0.5
+            quality_weight = sig.confidence * freshness_factor * warmup_factor * closed_factor
+            
             tf_snapshots[tf] = TimeframeTrendSnapshot(
                 symbol=self.symbol,
                 timeframe=tf,
@@ -550,19 +712,29 @@ class MultiTimeframeEngine:
                 confidence=sig.confidence,
                 data_quality=sig.data_quality,
                 strategy_version=settings.trend.strategy_version,
+                data_age_seconds=data_age_seconds,
+                bar_closed=bar_closed,
+                is_warmed_up=is_warmed_up,
+                valid=valid,
+                quality_weight=quality_weight,
             )
 
-        # Aggregate metrics (re-derive from the per-TF signals so this
-        # method is independent of the confluence signal having been
-        # generated in this same tick).
+        # Aggregate metrics
         bullish_align, bearish_align, conflicting = (
             self._calculate_directional_alignment(timeframe_signals)
         )
-        alignment_score = self._calculate_alignment(timeframe_signals)
+        alignment_score = self._calculate_alignment(timeframe_signals, tf_snapshots)
         short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
             timeframe_signals,
         )
-        direction, strength = self._calculate_overall_direction(timeframe_signals)
+        direction, strength = self._calculate_overall_direction(timeframe_signals, tf_snapshots)
+
+        # Compute valid coverage (fraction of preset TFs with valid signals)
+        valid_count = sum(1 for s in tf_snapshots.values() if s.valid)
+        valid_coverage = valid_count / len(self.analysis_timeframes) if self.analysis_timeframes else 0.0
+
+        # Compute quality-weighted aggregate score
+        quality_weighted_score = self._calculate_quality_weighted_score(tf_snapshots)
 
         return MultiTimeframeSnapshot(
             symbol=self.symbol,
@@ -579,6 +751,8 @@ class MultiTimeframeEngine:
             higher_direction=higher_dir,
             timeframe_snapshots=tf_snapshots,
             strategy_version=settings.trend.strategy_version,
+            valid_coverage=valid_coverage,
+            quality_weighted_score=quality_weighted_score,
         )
 
     # ------------------------------------------------------------------

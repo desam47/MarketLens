@@ -117,6 +117,12 @@ def _serialize_timeframe_snapshot(snap: TimeframeTrendSnapshot) -> dict:
         "confidence": snap.confidence,
         "data_quality": snap.data_quality,
         "strategy_version": snap.strategy_version,
+        # Phase 7+: quality metrics
+        "data_age_seconds": snap.data_age_seconds,
+        "bar_closed": snap.bar_closed,
+        "is_warmed_up": snap.is_warmed_up,
+        "valid": snap.valid,
+        "quality_weight": snap.quality_weight,
     }
 
 
@@ -140,6 +146,9 @@ def _serialize_snapshot(snap: MultiTimeframeSnapshot) -> dict:
             for tf, tf_snap in snap.timeframe_snapshots.items()
         },
         "strategy_version": snap.strategy_version,
+        # Phase 7+: quality metrics
+        "valid_coverage": snap.valid_coverage,
+        "quality_weighted_score": snap.quality_weighted_score,
     }
 
 
@@ -149,6 +158,12 @@ async def get_current_confluence(
     preset: str = Query(default="day_trading", description="Trading style preset: scalper, day_trading, swing, or all"),
 ):
     """Get current multi-timeframe confluence for symbol (30s TTL cache)."""
+    # Validate preset - reject unknown presets with 422
+    if preset not in PRESET_NAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid preset: '{preset}'. Valid presets: {', '.join(PRESET_NAMES)}",
+        )
     key = f"{symbol.upper()}:{preset}"
     cached = _confluence_cache.get(key)
     if cached is not None:
@@ -251,6 +266,12 @@ async def get_mtf_snapshot(
     snapshots, alignment scores, conflicting count, and short / intermediate /
     higher-timeframe directions.
     """
+    # Validate preset - reject unknown presets with 422
+    if preset not in PRESET_NAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid preset: '{preset}'. Valid presets: {', '.join(PRESET_NAMES)}",
+        )
     try:
         engine = get_engine(symbol.upper(), preset=preset)
         snap = engine.get_current_snapshot()
@@ -275,6 +296,12 @@ async def get_mtf_snapshot_history(
     preset: str = Query(default="day_trading", description="Trading style preset"),
 ):
     """Get multi-timeframe snapshot history for symbol."""
+    # Validate preset - reject unknown presets with 422
+    if preset not in PRESET_NAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid preset: '{preset}'. Valid presets: {', '.join(PRESET_NAMES)}",
+        )
     try:
         engine = get_engine(symbol.upper(), preset=preset)
         history = engine.get_snapshot_history(limit=limit)
