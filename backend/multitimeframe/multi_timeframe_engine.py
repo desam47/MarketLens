@@ -273,16 +273,6 @@ class MultiTimeframeEngine:
         for engine in self.trend_engines.values():
             engine.trend_history.clear()
 
-    def update(self, price: float, volume: float, timestamp: datetime,
-               provider: str = "", **_: object) -> None:
-        """Update all timeframe engines with new market data"""
-        # Update each trend engine
-        for _timeframe, engine in self.trend_engines.items():
-            engine.update(price, volume, timestamp, provider)
-
-        # Generate confluence signal + snapshot
-        self._generate_confluence_signal(timestamp)
-
     # ------------------------------------------------------------------
     # Confluence signal + snapshot
     # ------------------------------------------------------------------
@@ -596,7 +586,9 @@ class MultiTimeframeEngine:
     # ------------------------------------------------------------------
 
     def get_current_confluence(self) -> ConfluenceSignal | None:
-        """Get the current confluence signal"""
+        """Get the current confluence signal - generates fresh on demand"""
+        # Generate fresh confluence signal from current shared engine states
+        self._generate_confluence_signal(datetime.now(timezone.utc))
         if self.confluence_history:
             return self.confluence_history[-1]
         return None

@@ -86,23 +86,11 @@ def get_engine(symbol: str, preset: str = "day_trading") -> MultiTimeframeEngine
         # until the next bar of any registered TF arrives.
         engine._generate_confluence_signal(datetime.now(timezone.utc))
 
-        # Register this MTF engine with the engine registry so it receives
-        # bar dispatches from the ingestion service.  When ingestion calls
-        # ``engine_registry.dispatch_bar(symbol, timeframe, ...)``, the MTF
-        # engine's ``update()`` is invoked, which calls
-        # ``_generate_confluence_signal()`` to populate confluence_history.
-        # Without this, the MTF engine's confluence endpoint always returned
-        # empty signals because ``update()`` was never called.
-        #
-        # Register for ``bar:1m`` so the MTF engine receives every incoming
-        # 1m bar.  Its ``update()`` ignores the incoming timeframe (it fans
-        # out to each inner TrendEngine which handles its own resampling
-        # boundary).  The per-TF registrations below are unused by ingestion
-        # today (it only dispatches 1m bars) but kept so that if ingestion
-        # ever expands to dispatch multiple TFs, the MTF engine is ready.
-        engine_registry.register("bar:1m", symbol, engine.update)
-        for tf in engine.analysis_timeframes:
-            engine_registry.register(f"bar:{tf.value}", symbol, engine.update)
+        # MTF engine is now READ-ONLY: it does NOT register for bar updates.
+        # The shared TrendEngine(s) are already updated by the ingestion
+        # service directly. MTF only aggregates their current signals on demand.
+        # This avoids the bug where one bar would update the same shared
+        # engine N times (once per TF in the preset).
 
     return _engines[key]
 
@@ -319,14 +307,9 @@ async def update_mtf(
         # Parse timestamp if provided
         ts = datetime.fromisoformat(timestamp) if timestamp else datetime.now()
 
-        # The MTF engine's update() delegates to each per-TF TrendEngine.
-        # Those TrendEngines are shared with the trend API, so this single
-        # call updates both the trend endpoint and the confluence endpoint.
-        engine.update(
-            price=price,
-            volume=volume,
-            timestamp=ts,
-        )
+        # MTF engine is now read-only: just generate a fresh confluence signal
+        # from the current shared TrendEngine states.
+        engine._generate_confluence_signal(ts)
 
         return {
             "symbol": symbol.upper(),

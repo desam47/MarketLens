@@ -124,7 +124,6 @@ class MarketRegimeEngine:
 
         # Update component engines
         self.trend_engine.update(price, volume, timestamp, provider)
-        self.multitimeframe_engine.update(price, volume, timestamp, provider)
 
         # Update indicators
         # For simplicity, we'll use price as close, and approximate high/low/volume
