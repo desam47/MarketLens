@@ -44,9 +44,13 @@ class TestMTFConfluenceEndpoint:
         assert "intermediate_direction" in data
         assert "higher_direction" in data
         assert "preset" in data
+        assert "valid_coverage" in data
+        assert "quality_weighted_score" in data
         assert isinstance(data["conflicting"], int)
         assert isinstance(data["bullish_alignment"], float)
         assert isinstance(data["bearish_alignment"], float)
+        assert isinstance(data["valid_coverage"], float)
+        assert isinstance(data["quality_weighted_score"], float)
 
     def test_confluence_preset_field_is_string(self):
         """The preset field is always a string (engine preset name)."""

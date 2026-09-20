@@ -13,8 +13,14 @@ const directionColors: Record<string, string> = {
   strong_uptrend: '#10b981',
   uptrend: '#22c55e',
   weak_uptrend: '#84cc16',
+  strong_bullish: '#10b981',
+  bullish: '#22c55e',
+  weak_bullish: '#84cc16',
   neutral: '#f59e0b',
   sideways: '#f59e0b',
+  weak_bearish: '#f97316',
+  bearish: '#ef4444',
+  strong_bearish: '#dc2626',
   weak_downtrend: '#f97316',
   downtrend: '#ef4444',
   strong_downtrend: '#dc2626',
@@ -55,11 +61,17 @@ function formatStateLabel(state: string): string {
   return state.replace(/_/g, ' ').toUpperCase();
 }
 
+function directionIcon(direction: string): string {
+  if (direction.includes('up') || direction.includes('bullish')) return '↑';
+  if (direction.includes('down') || direction.includes('bearish')) return '↓';
+  if (direction === 'sideways') return '↔';
+  return '→';
+}
+
 function getNarrative(confluence: ConfluenceData): string {
   const shortState = confluence.short_term_state || 'neutral';
   const interState = confluence.intermediate_state || 'neutral';
   const higherState = confluence.higher_state || 'neutral';
-  const shortDir = confluence.short_term_direction || 'neutral';
   const interDir = confluence.intermediate_direction || 'neutral';
   const higherDir = confluence.higher_direction || 'neutral';
   
@@ -206,6 +218,14 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           </div>
           <span className="metric-value">{((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
         </div>
+        <div className="metric">
+          <span className="metric-label">Quality Score</span>
+          <span className="metric-value">
+            {typeof confluence.quality_weighted_score === 'number'
+              ? `${confluence.quality_weighted_score > 0 ? '+' : ''}${confluence.quality_weighted_score.toFixed(0)}`
+              : '0'}
+          </span>
+        </div>
       </div>
       {/* Phase 7: alignment breakdown chips + conflict badge. */}
       <div className="confluence-phase7">
@@ -234,8 +254,11 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
                   className="signal-dir"
                   style={{ color: directionColors[signal.direction] || '#9ca3af' }}
                 >
-                  {signal.direction === 'uptrend' ? '↑' : signal.direction === 'downtrend' ? '↓' : signal.direction === 'sideways' ? '↔' : '?'}
+                  {directionIcon(signal.direction)}
                 </span>
+                {typeof signal.score === 'number' && (
+                  <span className="signal-score">{signal.score > 0 ? '+' : ''}{signal.score.toFixed(0)}</span>
+                )}
               </div>
             ))}
           </div>

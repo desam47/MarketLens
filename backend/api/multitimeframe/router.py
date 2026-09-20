@@ -193,6 +193,8 @@ async def get_current_confluence(
                 "intermediate_state": "neutral",
                 "higher_state": "neutral",
                 "preset": engine.preset_name,
+                "valid_coverage": 0.0,
+                "quality_weighted_score": 0.0,
             }
         else:
             # Convert timeframe signals to serializable format
@@ -221,6 +223,8 @@ async def get_current_confluence(
                 "intermediate_state": getattr(confluence_signal, "intermediate_state", "neutral").value,
                 "higher_state": getattr(confluence_signal, "higher_state", "neutral").value,
                 "preset": getattr(confluence_signal, "preset", engine.preset_name),
+                "valid_coverage": getattr(confluence_signal, "valid_coverage", 0.0),
+                "quality_weighted_score": getattr(confluence_signal, "quality_weighted_score", 0.0),
             }
         _confluence_cache[key] = payload
         return payload

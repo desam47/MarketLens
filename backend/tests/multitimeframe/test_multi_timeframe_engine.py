@@ -201,11 +201,10 @@ class TestPhase7Presets(unittest.TestCase):
         self.assertEqual(len(engine.trend_engines), 8)
         self.assertEqual(engine.active_timeframes, ALL_TIMEFRAMES)
 
-    def test_unknown_preset_falls_back_to_day_trading(self):
-        """An unknown preset name falls back to day_trading (safe default)."""
-        engine = MultiTimeframeEngine("AAPL", preset="nonsense")
-        self.assertEqual(engine.preset_name, "nonsense")
-        self.assertEqual(engine.active_timeframes, PRESET_DAY_TRADING)
+    def test_unknown_preset_raises(self):
+        """An unknown preset name is rejected instead of mislabeled fallback."""
+        with self.assertRaisesRegex(ValueError, "Invalid preset"):
+            MultiTimeframeEngine("AAPL", preset="nonsense")
 
     def test_scalper_preset_includes_1m(self):
         """Scalper preset includes 1m, 2m, 3m, 5m, 15m."""
@@ -373,6 +372,23 @@ class TestPhase7Alignments(unittest.TestCase):
         self.assertGreaterEqual(signal.bullish_alignment, 0.0)
         self.assertLessEqual(signal.bullish_alignment, 1.0)
         self.assertGreaterEqual(signal.conflicting, 0)
+
+    def test_confluence_uses_snapshot_quality_metrics(self):
+        """Confluence mirrors the snapshot's quality-weighted aggregate fields."""
+        engine = MultiTimeframeEngine("AAPL", preset="day_trading")
+        prices = [100.0 + i * 0.5 for i in range(90)]
+        self._feed(engine, prices, datetime.now())
+
+        signal = engine.get_current_confluence()
+        snapshot = engine.get_current_snapshot()
+
+        self.assertIsNotNone(signal)
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(signal.direction, snapshot.direction)
+        self.assertEqual(signal.strength, snapshot.strength)
+        self.assertEqual(signal.alignment_score, snapshot.alignment_score)
+        self.assertEqual(signal.valid_coverage, snapshot.valid_coverage)
+        self.assertEqual(signal.quality_weighted_score, snapshot.quality_weighted_score)
 
 
 if __name__ == '__main__':

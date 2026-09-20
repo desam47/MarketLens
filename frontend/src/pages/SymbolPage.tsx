@@ -701,9 +701,16 @@ const fetchBars = useCallback(async () => {
               tf,
               {
                 direction: tfSnap.direction,
+                score: tfSnap.score,
                 strength: tfSnap.strength,
                 confidence: tfSnap.confidence,
                 timestamp: tfSnap.timestamp,
+                data_quality: tfSnap.data_quality,
+                data_age_seconds: tfSnap.data_age_seconds,
+                bar_closed: tfSnap.bar_closed,
+                is_warmed_up: tfSnap.is_warmed_up,
+                valid: tfSnap.valid,
+                quality_weight: tfSnap.quality_weight,
               },
             ])
           ),
@@ -718,6 +725,8 @@ const fetchBars = useCallback(async () => {
           short_term_state: snap.short_term_state,
           intermediate_state: snap.intermediate_state,
           higher_state: snap.higher_state,
+          valid_coverage: snap.valid_coverage,
+          quality_weighted_score: snap.quality_weighted_score,
         };
         setMtfConfluence(data);
       } else {

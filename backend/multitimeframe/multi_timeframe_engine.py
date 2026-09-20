@@ -134,7 +134,9 @@ class ConfluenceSignal:
                  short_term_state: TrendState = TrendState.NEUTRAL,
                  intermediate_state: TrendState = TrendState.NEUTRAL,
                  higher_state: TrendState = TrendState.NEUTRAL,
-                 preset: str = "day_trading"):
+                 preset: str = "day_trading",
+                 valid_coverage: float = 0.0,
+                 quality_weighted_score: float = 0.0):
         self.symbol = symbol
         self.direction = direction
         self.strength = strength
@@ -153,6 +155,8 @@ class ConfluenceSignal:
         self.intermediate_state = intermediate_state
         self.higher_state = higher_state
         self.preset = preset
+        self.valid_coverage = valid_coverage
+        self.quality_weighted_score = quality_weighted_score
 
     def __repr__(self):
         return (f"ConfluenceSignal({self.symbol} {self.direction.value} "
@@ -260,13 +264,12 @@ class MultiTimeframeEngine:
     def __init__(self, symbol: str, preset: str | None = None):
         self.symbol = symbol
         self.preset_name = preset or settings.multitimeframe.default_preset
-        # Resolve the preset. Unknown names fall back to day_trading
-        # for safety (the spec says "do not assume all timeframes are
-        # equally important" — silently using a superset would
-        # violate that intent).
-        self.active_timeframes: frozenset[Timeframe] = (
-            _PRESET_MAP.get(self.preset_name, PRESET_DAY_TRADING)
-        )
+        if self.preset_name not in _PRESET_MAP:
+            raise ValueError(
+                f"Invalid preset: {self.preset_name!r}. "
+                f"Valid presets: {', '.join(PRESET_NAMES)}"
+            )
+        self.active_timeframes: frozenset[Timeframe] = _PRESET_MAP[self.preset_name]
         # The legacy class advertised a single ordered `analysis_timeframes`
         # list for the API/tests to inspect. Keep the same shape, filtered
         # by the preset, ordered short → long.
@@ -290,9 +293,17 @@ class MultiTimeframeEngine:
         self._initialize_trend_engines()
 
     def _initialize_trend_engines(self):
-        """Initialize trend engines for each active timeframe."""
+        """Initialize trend engines for each active timeframe.
+
+        ``TrendEngine`` already maintains trend state for every timeframe for a
+        symbol, and its underlying ``TimeframeEngine`` is shared per symbol.
+        Use one shared instance across all MTF keys so a direct
+        ``MultiTimeframeEngine.update()`` call cannot feed the same symbol tick
+        once per active timeframe.
+        """
+        shared = TrendEngine(self.symbol)
         for timeframe in self.analysis_timeframes:
-            self.trend_engines[timeframe] = TrendEngine(self.symbol)
+            self.trend_engines[timeframe] = shared
 
     def reset(self) -> None:
         """Reset all per-symbol state so this engine instance is fresh.
@@ -308,8 +319,43 @@ class MultiTimeframeEngine:
             tf_engine.reset()
         self.confluence_history.clear()
         self.snapshot_history.clear()
+        seen: set[int] = set()
         for engine in self.trend_engines.values():
+            engine_id = id(engine)
+            if engine_id in seen:
+                continue
+            seen.add(engine_id)
             engine.trend_history.clear()
+
+    def update(
+        self,
+        price: float,
+        volume: float,
+        timestamp: datetime,
+        provider: str = "",
+        **kwargs: object,
+    ) -> None:
+        """Update the underlying trend state, then refresh MTF confluence.
+
+        The API router treats MTF as read-only and lets the shared
+        ``TrendEngine`` receive live bars directly. This method remains for
+        direct engine callers and tests. It de-duplicates by object identity so
+        a preset with five timeframe keys still applies the tick only once.
+        """
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+
+        seen: set[int] = set()
+        for engine in self.trend_engines.values():
+            engine_id = id(engine)
+            if engine_id in seen:
+                continue
+            seen.add(engine_id)
+            engine.update(price, volume, timestamp, provider=provider, **kwargs)
+
+        self._generate_confluence_signal(timestamp)
 
     # ------------------------------------------------------------------
     # Confluence signal + snapshot
@@ -349,32 +395,52 @@ class MultiTimeframeEngine:
                     intermediate_state=prev.intermediate_state,
                     higher_state=prev.higher_state,
                     preset=self.preset_name,
+                    valid_coverage=prev.valid_coverage,
+                    quality_weighted_score=prev.quality_weighted_score,
                 )
                 self.confluence_history.append(signal)
                 if len(self.confluence_history) > 1000:
                     self.confluence_history = self.confluence_history[-1000:]
             return
 
-        # Existing alignment score (dominant-direction fraction)
-        alignment_score = self._calculate_alignment(timeframe_signals)
+        # Build the richer snapshot first. When available, the confluence
+        # signal should use the same quality-weighted score, coverage, and
+        # validity logic as the snapshot endpoint.
+        snapshot = self.build_snapshot(timestamp)
 
-        # New (Phase 7) alignment metrics
-        bullish_align, bearish_align, conflicting_count = (
-            self._calculate_directional_alignment(timeframe_signals)
-        )
+        if snapshot is not None:
+            alignment_score = snapshot.alignment_score
+            bullish_align = snapshot.bullish_alignment
+            bearish_align = snapshot.bearish_alignment
+            conflicting_count = snapshot.conflicting
+            short_dir = snapshot.short_term_direction
+            inter_dir = snapshot.intermediate_direction
+            higher_dir = snapshot.higher_direction
+            short_state = snapshot.short_term_state
+            inter_state = snapshot.intermediate_state
+            higher_state = snapshot.higher_state
+            direction = snapshot.direction
+            strength = snapshot.strength
+            valid_coverage = snapshot.valid_coverage
+            quality_weighted_score = snapshot.quality_weighted_score
+        else:
+            alignment_score = self._calculate_alignment(timeframe_signals)
 
-        # Short / intermediate / higher-timeframe direction picks
-        short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
-            timeframe_signals,
-        )
+            bullish_align, bearish_align, conflicting_count = (
+                self._calculate_directional_alignment(timeframe_signals)
+            )
 
-        # Compute trend states per horizon
-        short_state, inter_state, higher_state = self._calculate_trend_states(
-            short_dir, inter_dir, higher_dir
-        )
+            short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
+                timeframe_signals,
+            )
 
-        # Existing overall direction + strength (unchanged logic)
-        direction, strength = self._calculate_overall_direction(timeframe_signals)
+            short_state, inter_state, higher_state = self._calculate_trend_states(
+                short_dir, inter_dir, higher_dir
+            )
+
+            direction, strength = self._calculate_overall_direction(timeframe_signals)
+            valid_coverage = 0.0
+            quality_weighted_score = 0.0
 
         # Build the ConfluenceSignal with the new fields layered on.
         signal = ConfluenceSignal(
@@ -394,6 +460,8 @@ class MultiTimeframeEngine:
             intermediate_state=inter_state,
             higher_state=higher_state,
             preset=self.preset_name,
+            valid_coverage=valid_coverage,
+            quality_weighted_score=quality_weighted_score,
         )
 
         # Store in history (capped at 1000)
@@ -401,8 +469,6 @@ class MultiTimeframeEngine:
         if len(self.confluence_history) > 1000:
             self.confluence_history = self.confluence_history[-1000:]
 
-        # Build the snapshot (Phase 7 dataclass) and append to history.
-        snapshot = self.build_snapshot(timestamp)
         if snapshot is not None:
             self.snapshot_history.append(snapshot)
             if len(self.snapshot_history) > 1000:
@@ -783,6 +849,10 @@ class MultiTimeframeEngine:
         calls for the more granular bucket.
         """
         ts = timestamp or datetime.now(timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            ts = ts.astimezone(timezone.utc)
         timeframe_signals = self.get_all_timeframe_trends()
         if not timeframe_signals:
             return None
