@@ -47,6 +47,9 @@ const ChatPanel = lazy(() =>
 const AITemplatesPanel = lazy(() =>
   import('../components/AITemplatesPanel').then(m => ({ default: m.AITemplatesPanel })),
 );
+const CatalystPanel = lazy(() =>
+  import('../components/CatalystPanel').then(m => ({ default: m.CatalystPanel })),
+);
 
 interface AIHubPageProps {
   symbol: string;
@@ -56,6 +59,7 @@ interface AIHubPageProps {
 const SECTIONS = [
   { id: 'chat', label: 'Chat' },
   { id: 'analysis', label: 'Analysis' },
+  { id: 'catalysts', label: 'Catalysts' },
   { id: 'templates', label: 'Templates' },
   { id: 'digest', label: 'Digest' },
   { id: 'search', label: 'Search' },
@@ -228,6 +232,18 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
           </PageErrorBoundary>
         ) : (
           <div className="panel-skeleton" style={{ minHeight: 240 }}>AI analysis</div>
+        )}
+      </section>
+
+      <section id="hub-catalysts" className="ai-hub-section">
+        {revealed.has('catalysts') ? (
+          <PageErrorBoundary pageName="Catalyst Snapshot">
+            <Suspense fallback={<div className="panel-skeleton">Loading catalysts…</div>}>
+              <CatalystPanel symbol={symbol} />
+            </Suspense>
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>Catalyst snapshot</div>
         )}
       </section>
 
