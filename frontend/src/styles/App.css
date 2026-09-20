@@ -2346,6 +2346,17 @@ h4 {
 
 .ai-hub-section {
   scroll-margin-top: 64px;
+  margin-bottom: 1.5rem;
+}
+
+.ai-hub-section:last-of-type {
+  margin-bottom: 0;
+}
+
+@media (max-width: 768px) {
+  .ai-hub-section {
+    margin-bottom: 1rem;
+  }
 }
 
 .chart-mode-toggle {
