@@ -10,6 +10,7 @@ The ``evaluate`` function is the public dispatcher that maps a
 logged and return False rather than raising — the engine shouldn't crash
 on a misconfigured alert.
 """
+import json
 import logging
 from collections.abc import Callable
 
@@ -42,6 +43,7 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "breakout",
     "breakdown",
     "market_regime_change",
+    "signal_profile",
 )
 
 
@@ -354,6 +356,51 @@ def _eval_market_regime_change(parameter: str, value: object) -> bool:
     return True
 
 
+def _eval_signal_profile(parameter: str, value: object) -> bool:
+    """Evaluate a configurable trend-signal profile.
+
+    ``parameter`` is JSON containing optional ``direction``, ``min_score``,
+    ``min_strength``, ``market_regime`` and ``timeframe`` filters. The engine
+    supplies the current trend payload plus the bar timeframe and current
+    market regime.
+    """
+    if not isinstance(value, dict):
+        return False
+    try:
+        profile = json.loads(parameter or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(profile, dict):
+        return False
+
+    timeframe = str(profile.get("timeframe") or "").strip().lower()
+    if timeframe and timeframe != str(value.get("timeframe") or "").lower():
+        return False
+    direction = str(profile.get("direction") or "any").strip().lower()
+    current_direction = str(value.get("current_direction") or "").lower()
+    if direction not in ("", "any") and current_direction != direction:
+        return False
+
+    score = value.get("current")
+    if not isinstance(score, (int, float)):
+        return False
+    try:
+        min_score = float(profile.get("min_score")) if profile.get("min_score") not in (None, "") else None
+        min_strength = float(profile.get("min_strength")) if profile.get("min_strength") not in (None, "") else None
+    except (TypeError, ValueError):
+        return False
+    if min_score is not None and abs(float(score)) < max(0.0, min_score):
+        return False
+    strength = value.get("strength")
+    if min_strength is not None and (not isinstance(strength, (int, float)) or float(strength) < max(0.0, min_strength)):
+        return False
+    regime = str(profile.get("market_regime") or "any").strip().lower()
+    current_regime = str(value.get("current_regime") or "").lower()
+    if regime not in ("", "any") and current_regime != regime:
+        return False
+    return True
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -373,6 +420,7 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "breakout": _eval_breakout,
     "breakdown": _eval_breakdown,
     "market_regime_change": _eval_market_regime_change,
+    "signal_profile": _eval_signal_profile,
 }
 
 

@@ -27,8 +27,8 @@ Adding a new condition:
      ``AlertsEngine`` and handle it in ``_on_quote``.
 """
 from .evaluators import (
-    VALID_CONDITION_TYPES,
     _EVALUATORS,
+    VALID_CONDITION_TYPES,
     _eval_breakdown,
     _eval_breakout,
     _eval_divergence,
@@ -38,6 +38,7 @@ from .evaluators import (
     _eval_price_above,
     _eval_price_below,
     _eval_signal_equals,
+    _eval_signal_profile,
     _eval_timeframe_conflict,
     _eval_trend_crosses_above_70,
     _eval_trend_crosses_below_70,
@@ -86,6 +87,7 @@ __all__ = [
     "_eval_breakout",
     "_eval_breakdown",
     "_eval_market_regime_change",
+    "_eval_signal_profile",
     # Payload builders
     "build_trend_payload",
     "build_alignment_payload",

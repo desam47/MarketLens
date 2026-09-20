@@ -2,6 +2,7 @@ import React from 'react';
 import { HistoricalReplayPanel } from '../components/HistoricalReplayPanel';
 import { HistoricalSignalCard } from '../components/HistoricalSignalCard';
 import { SignalResearchDashboard } from '../components/SignalResearchDashboard';
+import { SignalAlertCenter } from '../components/SignalAlertCenter';
 
 export function HistoricalSignalsPage() {
   return (
@@ -17,6 +18,7 @@ export function HistoricalSignalsPage() {
           </p>
         </div>
       </div>
+      <SignalAlertCenter />
       <HistoricalReplayPanel />
       <SignalResearchDashboard />
       <HistoricalSignalCard />

@@ -16,6 +16,7 @@ persists trigger events. Two activation paths:
 Both paths call ``_try_fire()`` which handles dedup, the trigger insert,
 and, later, notification dispatch.
 """
+import json
 import logging
 import threading
 import time
@@ -68,11 +69,12 @@ BREAKDOWN_CONDITIONS: tuple[str, ...] = ("breakdown",)
 # builder call per matching alert — not part of the eager-build groups.
 DIVERGENCE_CONDITIONS: tuple[str, ...] = ("divergence",)
 REGIME_CONDITIONS: tuple[str, ...] = ("market_regime_change",)
+SIGNAL_PROFILE_CONDITIONS: tuple[str, ...] = ("signal_profile",)
 
 BAR_CONDITIONS: tuple[str, ...] = (
     TREND_CONDITIONS + ALIGNMENT_CONDITIONS + VOLUME_CONDITIONS
     + BREAKOUT_CONDITIONS + BREAKDOWN_CONDITIONS
-    + DIVERGENCE_CONDITIONS + REGIME_CONDITIONS
+    + DIVERGENCE_CONDITIONS + REGIME_CONDITIONS + SIGNAL_PROFILE_CONDITIONS
 )
 
 
@@ -325,8 +327,18 @@ class AlertsEngine:
         # breakout alert and nothing else.
         condition_types = {a.condition_type for a in alerts.values()}
         trend_payload = (
-            build_trend_payload(sym, tf) if condition_types & set(TREND_CONDITIONS) else None
+            build_trend_payload(sym, tf)
+            if condition_types & (set(TREND_CONDITIONS) | set(SIGNAL_PROFILE_CONDITIONS))
+            else None
         )
+        signal_profile_payload = None
+        if SIGNAL_PROFILE_CONDITIONS[0] in condition_types and trend_payload is not None:
+            signal_profile_payload = dict(trend_payload)
+            signal_profile_payload["timeframe"] = tf
+            signal_profile_payload["symbol"] = sym
+            signal_profile_payload["strength"] = min(abs(float(trend_payload.get("current", 0.0))) / 100.0, 1.0)
+            from .conditions import build_regime_change_payload
+            signal_profile_payload.update(build_regime_change_payload(sym))
         alignment_payload = (
             build_alignment_payload(sym) if condition_types & set(ALIGNMENT_CONDITIONS) else None
         )
@@ -344,6 +356,8 @@ class AlertsEngine:
             ct = alert.condition_type
             if ct in TREND_CONDITIONS:
                 self._try_fire(alert, price, extra_value=trend_payload)
+            elif ct in SIGNAL_PROFILE_CONDITIONS:
+                self._try_fire(alert, price, extra_value=signal_profile_payload)
             elif ct in ALIGNMENT_CONDITIONS:
                 self._try_fire(alert, price, extra_value=alignment_payload)
             elif ct in VOLUME_CONDITIONS:
@@ -370,6 +384,22 @@ class AlertsEngine:
         Returns True if the alert fired, False otherwise.
         Dedup is applied per (alert_id, symbol) within DEDUP_WINDOW_SECONDS.
         """
+        if alert.condition_type == "signal_profile":
+            try:
+                profile = json.loads(alert.parameter or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                profile = {}
+            snoozed_until = profile.get("snoozed_until") if isinstance(profile, dict) else None
+            if snoozed_until:
+                try:
+                    until = datetime.fromisoformat(str(snoozed_until).replace("Z", "+00:00"))
+                    if until.tzinfo is None:
+                        until = until.replace(tzinfo=UTC)
+                    if until > datetime.now(UTC):
+                        return False
+                except (TypeError, ValueError):
+                    pass
+
         # Evaluate the condition.
         if not evaluate(alert.condition_type, alert.parameter, extra_value):
             return False
@@ -378,7 +408,14 @@ class AlertsEngine:
         key = (alert.id, alert.symbol.upper())
         with self._lock:
             last = self._fired_at.get(key, 0)
-            if time.time() - last < DEDUP_WINDOW_SECONDS:
+            window = DEDUP_WINDOW_SECONDS
+            if alert.condition_type == "signal_profile":
+                try:
+                    profile = json.loads(alert.parameter or "{}")
+                    window = max(60, int(profile.get("cooldown_minutes", 60)) * 60)
+                except (TypeError, ValueError, json.JSONDecodeError, AttributeError):
+                    pass
+            if time.time() - last < window:
                 return False
             self._fired_at[key] = time.time()
 
@@ -451,6 +488,13 @@ class AlertsEngine:
                 else:
                     observed = str(extra_value)
                 message = f"Market regime changed: {observed}"
+            elif alert.condition_type == "signal_profile":
+                observed = str(extra_value)
+                try:
+                    profile = json.loads(alert.parameter or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    profile = {}
+                message = f"{alert.symbol}: signal profile matched ({profile.get('direction', 'any')})"
             else:
                 observed = str(extra_value) if extra_value is not None else None
                 message = None

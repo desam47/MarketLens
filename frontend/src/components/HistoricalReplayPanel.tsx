@@ -164,7 +164,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   };
 
   return (
-    <div className="card historical-replay-card">
+    <div className="card historical-replay-card" id="historical-replay">
       <div className="replay-heading">
         <div>
           <h2>Historical Replay</h2>

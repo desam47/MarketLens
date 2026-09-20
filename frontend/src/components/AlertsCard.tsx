@@ -15,6 +15,7 @@ const CONDITIONS: { value: string; label: string; hint: string }[] = [
   { value: 'price_above', label: 'Price above', hint: 'price threshold (e.g. 150.00)' },
   { value: 'price_below', label: 'Price below', hint: 'price threshold (e.g. 140.00)' },
   { value: 'pct_change_above', label: 'Pct change above', hint: 'percent (e.g. 5 for 5%)' },
+  { value: 'signal_profile', label: 'Signal profile', hint: 'Use Signal Alert Center for guided filters' },
 ];
 
 // Every signal name the scanner can emit — mirrors
@@ -46,6 +47,8 @@ function conditionLabel(c: string, p: string): React.ReactNode {
       return <>price &lt; {p}</>;
     case 'pct_change_above':
       return <>Δ% &gt; {p}%</>;
+    case 'signal_profile':
+      return <>guided signal profile</>;
     default:
       return <>{c}({p})</>;
   }

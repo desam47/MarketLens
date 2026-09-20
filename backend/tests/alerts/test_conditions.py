@@ -1,6 +1,7 @@
 """
 Unit tests for the condition evaluator dispatcher.
 """
+import json
 import os
 import sys
 import unittest
@@ -359,7 +360,7 @@ class TestEvaluateDispatcher(unittest.TestCase):
             "trend_direction_changes", "trend_strengthens", "trend_weakens",
             "full_timeframe_alignment", "timeframe_conflict",
             "volume_expansion", "divergence", "breakout", "breakdown",
-            "market_regime_change",
+            "market_regime_change", "signal_profile",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 
@@ -378,6 +379,25 @@ class TestEvaluateDispatcher(unittest.TestCase):
     def test_dispatcher_pct_change_above(self):
         self.assertTrue(evaluate("pct_change_above", "3.0", 5.0))
         self.assertFalse(evaluate("pct_change_above", "3.0", 1.0))
+
+    def test_signal_profile_filters_direction_score_strength_regime_and_timeframe(self):
+        profile = json.dumps({
+            "direction": "bullish",
+            "min_score": 70,
+            "min_strength": 0.7,
+            "market_regime": "risk_on",
+            "timeframe": "1d",
+        })
+        value = {
+            "current": 80,
+            "current_direction": "bullish",
+            "strength": 0.8,
+            "current_regime": "risk_on",
+            "timeframe": "1d",
+        }
+        self.assertTrue(evaluate("signal_profile", profile, value))
+        self.assertFalse(evaluate("signal_profile", profile, {**value, "timeframe": "1h"}))
+        self.assertFalse(evaluate("signal_profile", profile, {**value, "strength": 0.6}))
 
     def test_dispatcher_trend_crosses_above_70(self):
         self.assertTrue(evaluate("trend_crosses_above_70", "", {"current": 72.0, "previous": 68.0}))

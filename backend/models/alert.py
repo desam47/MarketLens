@@ -20,7 +20,10 @@ class Alert(Base):
     name = Column(String(120), nullable=False)
     symbol = Column(String(20), nullable=False, index=True)
     condition_type = Column(String(40), nullable=False)
-    parameter = Column(String(120), nullable=False)
+    # Signal-profile alerts store a compact JSON rule (filters, cooldown,
+    # and optional snooze deadline); keep enough room for that payload while
+    # preserving the same column for the simpler legacy conditions.
+    parameter = Column(String(500), nullable=False)
     is_enabled = Column(Boolean, default=True, index=True)
     created_at = Column(DateTime, default=now_ny)
     updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)

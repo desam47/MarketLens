@@ -1,10 +1,12 @@
 """
 Unit tests for AlertsEngine.
 """
+import json
 import os
 import sys
 import time
 import unittest
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../"))
@@ -93,6 +95,30 @@ class TestAlertsEngineConditions(unittest.TestCase):
         result = _make_result(signals=["RSI_OVERSOLD"])
         fired = self.engine._try_fire(alert, 150.0, extra_value=result.signals)
         self.assertFalse(fired)
+
+    def test_signal_profile_fires_and_respects_snooze(self):
+        profile = {
+            "direction": "bullish",
+            "min_score": 70,
+            "min_strength": 0.7,
+            "market_regime": "risk_on",
+            "timeframe": "1d",
+            "cooldown_minutes": 10,
+        }
+        alert = _make_alert(condition_type="signal_profile", parameter=json.dumps(profile))
+        value = {
+            "current": 80,
+            "current_direction": "bullish",
+            "strength": 0.8,
+            "current_regime": "risk_on",
+            "timeframe": "1d",
+        }
+        with patch.object(self.engine, "_persist_trigger"):
+            self.assertTrue(self.engine._try_fire(alert, 150.0, extra_value=value))
+
+        profile["snoozed_until"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        snoozed = _make_alert(condition_type="signal_profile", parameter=json.dumps(profile), id=2)
+        self.assertFalse(self.engine._try_fire(snoozed, 150.0, extra_value=value))
 
     def test_price_above_fires(self):
         alert = _make_alert(condition_type="price_above", parameter="100.0")

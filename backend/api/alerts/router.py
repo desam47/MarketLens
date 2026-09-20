@@ -10,11 +10,10 @@ from sqlalchemy.orm import Session
 
 from backend.alerts.conditions import VALID_CONDITION_TYPES
 from backend.alerts.engine import alerts_engine
-from backend.repositories.alert_repository import AlertRepository
-from backend.utils.timezone import format_edt_iso
-
 from backend.api.dependencies import get_db
 from backend.api.rate_limit import _alerts_limiter, check_rate_limit
+from backend.repositories.alert_repository import AlertRepository
+from backend.utils.timezone import format_edt_iso
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -187,9 +186,21 @@ async def update_alert(
     )
 
     if was_price_alert and (not is_price_alert or not updated.is_enabled):
-        await asyncio.to_thread(alerts_engine.unregister_for_alert, updated)
+        await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
     elif is_price_alert and updated.is_enabled:
         await asyncio.to_thread(alerts_engine.register_for_alert, updated)
+    elif not was_price_alert:
+        # Bar/signal alerts are cached in-memory too. Refresh the cache when
+        # their profile parameter changes (for example, a snooze), and keep
+        # enable/disable behavior consistent with price alerts.
+        profile_changed = payload.condition_type is not None or payload.parameter is not None
+        if existing.is_enabled and not updated.is_enabled:
+            await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
+        elif not existing.is_enabled and updated.is_enabled:
+            await asyncio.to_thread(alerts_engine.register_for_alert, updated)
+        elif updated.is_enabled and profile_changed:
+            await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)
+            await asyncio.to_thread(alerts_engine.register_for_alert, updated)
 
     return updated
 
