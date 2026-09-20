@@ -37,11 +37,11 @@ describe('HistoricalReplayPanel', () => {
       confidence_inputs: null,
       strategy_version: null,
       data_quality: null,
-      return_5b: null,
-      return_10b: null,
-      return_20b: null,
-      mfe: null,
-      mae: null,
+      return_5b: 2.5,
+      return_10b: 4.1,
+      return_20b: 6.3,
+      mfe: 5.8,
+      mae: -1.2,
       created_at: null,
     }]);
 
@@ -54,5 +54,11 @@ describe('HistoricalReplayPanel', () => {
     expect(screen.getByText('2 / 3')).toBeInTheDocument();
     expect(screen.getByText('bullish')).toBeInTheDocument();
     expect(screen.getByText(/Score 72\.0/)).toBeInTheDocument();
+    expect(screen.getByText(/5-bar \+2\.50%/)).toBeInTheDocument();
+    expect(screen.getByText('100.0%')).toBeInTheDocument();
+    expect(screen.getByLabelText('Signal: bullish')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Replay start date'), { target: { value: '2026-09-02' } });
+    await waitFor(() => expect(screen.getByText('1 / 2')).toBeInTheDocument());
   });
 });

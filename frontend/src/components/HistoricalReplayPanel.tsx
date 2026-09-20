@@ -14,6 +14,14 @@ function fmt(value: number | null | undefined, digits = 2): string {
   return value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits);
 }
 
+function fmtPct(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function dateKey(timestamp: string): string {
+  return timestamp.slice(0, 10);
+}
+
 function latestSignalAt(signals: HistoricalSignal[], timestamp: string): HistoricalSignal | null {
   const point = Date.parse(timestamp);
   let latest: HistoricalSignal | null = null;
@@ -36,6 +44,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(700);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -81,11 +91,55 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
     void loadReplay();
   }, [loadReplay]); // Load the default symbol once; symbol changes are applied with Load.
 
+  const validDateRange = !fromDate || !toDate || fromDate <= toDate;
+  const replayBars = useMemo(() => {
+    if (!validDateRange) return [];
+    return bars.filter((bar) => {
+      const day = dateKey(bar.timestamp);
+      return (!fromDate || day >= fromDate) && (!toDate || day <= toDate);
+    });
+  }, [bars, fromDate, toDate, validDateRange]);
+  const replaySignals = useMemo(() => {
+    if (!replayBars.length) return [];
+    const firstDay = dateKey(replayBars[0].timestamp);
+    const lastDay = dateKey(replayBars[replayBars.length - 1].timestamp);
+    return signals.filter((signal) => dateKey(signal.timestamp) >= firstDay && dateKey(signal.timestamp) <= lastDay);
+  }, [replayBars, signals]);
+  const completedOutcomes = useMemo(
+    () => replaySignals.filter((signal) => signal.return_5b != null),
+    [replaySignals],
+  );
+  const replayStats = useMemo(() => {
+    const average = (values: Array<number | null>) => {
+      const usable = values.filter((value): value is number => value != null && Number.isFinite(value));
+      return usable.length ? usable.reduce((total, value) => total + value, 0) / usable.length : null;
+    };
+    const wins = completedOutcomes.filter((signal) => (signal.return_5b || 0) > 0).length;
+    return {
+      signals: replaySignals.length,
+      completed: completedOutcomes.length,
+      winRate: completedOutcomes.length ? (wins / completedOutcomes.length) * 100 : null,
+      averageReturn: average(completedOutcomes.map((signal) => signal.return_5b)),
+      averageMfe: average(completedOutcomes.map((signal) => signal.mfe)),
+      averageMae: average(completedOutcomes.map((signal) => signal.mae)),
+    };
+  }, [completedOutcomes, replaySignals.length]);
+
   useEffect(() => {
-    if (!playing || bars.length < 2) return undefined;
+    setCursor((current) => Math.min(current, Math.max(0, replayBars.length - 1)));
+    if (!validDateRange || replayBars.length < 2) setPlaying(false);
+  }, [replayBars.length, validDateRange]);
+
+  useEffect(() => {
+    setCursor(0);
+    setPlaying(false);
+  }, [fromDate, toDate]);
+
+  useEffect(() => {
+    if (!playing || replayBars.length < 2) return undefined;
     const timer = window.setInterval(() => {
       setCursor((current) => {
-        if (current >= bars.length - 1) {
+        if (current >= replayBars.length - 1) {
           setPlaying(false);
           return current;
         }
@@ -93,20 +147,20 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       });
     }, speed);
     return () => window.clearInterval(timer);
-  }, [playing, bars.length, speed]);
+  }, [playing, replayBars.length, speed]);
 
-  const currentBar = bars[cursor] || null;
+  const currentBar = replayBars[cursor] || null;
   const currentSignal = useMemo(
     () => currentBar ? latestSignalAt(signals, currentBar.timestamp) : null,
     [currentBar, signals],
   );
-  const previousBar = cursor > 0 ? bars[cursor - 1] : null;
+  const previousBar = cursor > 0 ? replayBars[cursor - 1] : null;
   const change = currentBar && previousBar ? currentBar.close - previousBar.close : null;
-  const visibleBars = bars.slice(Math.max(0, cursor - 11), cursor + 1);
+  const visibleBars = replayBars.slice(Math.max(0, cursor - 11), cursor + 1);
 
   const moveCursor = (next: number) => {
     setPlaying(false);
-    setCursor(Math.max(0, Math.min(next, Math.max(0, bars.length - 1))));
+    setCursor(Math.max(0, Math.min(next, Math.max(0, replayBars.length - 1))));
   };
 
   return (
@@ -119,7 +173,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             available at the selected point, so replay never looks ahead.
           </p>
         </div>
-        {bars.length > 0 && <span className="replay-counter">{cursor + 1} / {bars.length}</span>}
+        {replayBars.length > 0 && <span className="replay-counter">{cursor + 1} / {replayBars.length}</span>}
       </div>
 
       <div className="replay-controls">
@@ -150,33 +204,61 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             <option value={300}>Fast</option>
           </select>
         </label>
+        <label>
+          <span>From</span>
+          <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="Replay start date" />
+        </label>
+        <label>
+          <span>To</span>
+          <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="Replay end date" />
+        </label>
+        {(fromDate || toDate) && (
+          <button className="btn" onClick={() => { setFromDate(''); setToDate(''); }}>
+            Clear Dates
+          </button>
+        )}
       </div>
 
       {error && <div className="error-text replay-status">{error}</div>}
-      {!loading && !error && bars.length === 0 && (
+      {!loading && !error && !validDateRange && (
+        <div className="error-text replay-status">The start date must be on or before the end date.</div>
+      )}
+      {!loading && !error && validDateRange && bars.length === 0 && (
         <div className="empty-state replay-empty">Load a symbol to start the replay.</div>
+      )}
+      {!loading && !error && validDateRange && bars.length > 0 && replayBars.length === 0 && (
+        <div className="empty-state replay-empty">No candles fall inside the selected date range.</div>
       )}
 
       {currentBar && (
         <>
+          <div className="replay-metrics" aria-label="Replay performance summary">
+            <div><small>Signals</small><strong>{replayStats.signals}</strong></div>
+            <div><small>Completed</small><strong>{replayStats.completed}</strong></div>
+            <div><small>5-bar win rate</small><strong>{replayStats.winRate == null ? '—' : `${replayStats.winRate.toFixed(1)}%`}</strong></div>
+            <div><small>Avg 5-bar return</small><strong>{fmtPct(replayStats.averageReturn)}</strong></div>
+            <div><small>Avg MFE</small><strong>{fmtPct(replayStats.averageMfe)}</strong></div>
+            <div><small>Avg MAE</small><strong>{fmtPct(replayStats.averageMae)}</strong></div>
+          </div>
+
           <div className="replay-toolbar">
             <button className="btn" onClick={() => moveCursor(cursor - 1)} disabled={cursor === 0}>Previous</button>
             <button
               className="btn btn-primary"
               onClick={() => {
-                if (cursor >= bars.length - 1) setCursor(0);
+                if (cursor >= replayBars.length - 1) setCursor(0);
                 setPlaying((value) => !value);
               }}
-              disabled={bars.length < 2}
+              disabled={replayBars.length < 2}
             >
               {playing ? 'Pause' : 'Play'}
             </button>
-            <button className="btn" onClick={() => moveCursor(cursor + 1)} disabled={cursor >= bars.length - 1}>Next</button>
+            <button className="btn" onClick={() => moveCursor(cursor + 1)} disabled={cursor >= replayBars.length - 1}>Next</button>
             <input
               className="replay-progress"
               type="range"
               min={0}
-              max={Math.max(0, bars.length - 1)}
+              max={Math.max(0, replayBars.length - 1)}
               value={cursor}
               onChange={(event) => moveCursor(Number(event.target.value))}
               aria-label="Replay position"
@@ -203,6 +285,11 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
                   <span>Score {fmt(currentSignal.trend_score, 1)} · Strength {fmt(currentSignal.strength, 1)}</span>
                   <span>Regime: {currentSignal.market_regime || '—'}</span>
                   <span>Recorded {formatETDateTime(currentSignal.timestamp)} ET</span>
+                  <div className="replay-outcome">
+                    <small>Historical outcome after this signal</small>
+                    <span>5-bar {fmtPct(currentSignal.return_5b)} · 10-bar {fmtPct(currentSignal.return_10b)} · 20-bar {fmtPct(currentSignal.return_20b)}</span>
+                    <span>MFE {fmtPct(currentSignal.mfe)} · MAE {fmtPct(currentSignal.mae)}</span>
+                  </div>
                 </div>
               ) : (
                 <span className="replay-muted">No recorded signal at this point.</span>
@@ -214,10 +301,12 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             {visibleBars.map((bar, index) => {
               const isUp = bar.close >= bar.open;
               const isCurrent = bar.timestamp === currentBar.timestamp;
+              const marker = replaySignals.find((signal) => dateKey(signal.timestamp) === dateKey(bar.timestamp));
               return (
-                <div key={`${bar.timestamp}-${index}`} className={`replay-bar ${isCurrent ? 'current' : ''}`} title={`${formatETDateTime(bar.timestamp)} · ${fmt(bar.close)}`}>
+                <div key={`${bar.timestamp}-${index}`} className={`replay-bar ${isCurrent ? 'current' : ''}`} title={`${formatETDateTime(bar.timestamp)} · ${fmt(bar.close)}${marker ? ` · ${marker.trend_state || 'signal'}` : ''}`}>
                   <span className={`replay-bar-body ${isUp ? 'up' : 'down'}`} style={{ height: `${Math.max(10, Math.min(84, Math.abs(bar.close - bar.open) / Math.max(bar.high - bar.low, 0.01) * 84))}%` }} />
                   <span className="replay-bar-wick" />
+                  {marker && <span className={`replay-signal-marker ${marker.return_5b == null ? 'neutral' : marker.return_5b >= 0 ? 'positive' : 'negative'}`} aria-label={`Signal: ${marker.trend_state || 'unknown'}`} />}
                 </div>
               );
             })}
