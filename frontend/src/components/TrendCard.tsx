@@ -39,6 +39,18 @@ const timeframeLabels: Record<string, string> = {
   '1wk': 'Weekly',
 };
 
+function signalExplanation(trend: TrendData): string {
+  const timeframe = timeframeLabels[trend.timeframe] || trend.timeframe;
+  const direction = trend.direction.replace(/_/g, ' ');
+  const strength = trend.strength.replace(/_/g, ' ');
+  const confidence = `${Math.round(trend.confidence * 100)}%`;
+
+  if (trend.direction === 'unknown') {
+    return `${timeframe} has insufficient data for a directional signal.`;
+  }
+  return `${timeframe} is ${direction} with ${strength} strength and ${confidence} confidence.`;
+}
+
 export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const icon = directionIcons[trend.direction] || '?';
   const color = directionColors[trend.direction] || '#9ca3af';
@@ -72,6 +84,7 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
           style={{ width: `${confidencePct}%`, backgroundColor: color }}
         />
       </div>
+      <p className="signal-explanation">{signalExplanation(trend)}</p>
     </div>
   );
 });

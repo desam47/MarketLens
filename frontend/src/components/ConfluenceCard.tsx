@@ -121,6 +121,20 @@ function getNarrative(confluence: ConfluenceData): string {
   return `${trendLabel(higherDir)} bias`;
 }
 
+function getExplanation(confluence: ConfluenceData): string {
+  const coverage = Math.round((confluence.valid_coverage ?? 0) * 100);
+  const conflicts = confluence.conflicting ?? 0;
+  const alignment = Math.round(confluence.alignment_score * 100);
+
+  if (coverage === 0) {
+    return 'Waiting for enough valid timeframe data to confirm the broader signal.';
+  }
+  if (conflicts > 0) {
+    return `${alignment}% alignment across valid timeframes, with ${conflicts} timeframe${conflicts === 1 ? '' : 's'} disagreeing. Treat this as a mixed signal.`;
+  }
+  return `${alignment}% alignment across ${coverage}% of the configured timeframes supports this ${directionLabel(confluence.direction).toLowerCase()} bias.`;
+}
+
 export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
   // Hooks must run unconditionally on every render of this component
   // instance, so this has to sit above the early returns below (a
@@ -208,6 +222,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           <span className="overall-metric">Valid TF: {((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
         </div>
       </div>
+      <p className="signal-explanation confluence-explanation">Why this signal: {getExplanation(confluence)}</p>
 
       <div className="confluence-metrics">
         <div className="metric">
