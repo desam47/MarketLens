@@ -4,7 +4,8 @@ Tests for market regime engine
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
@@ -58,6 +59,23 @@ class TestMarketRegimeEngine(unittest.TestCase):
         # Test that we can get regime history
         history = self.engine.get_regime_history()
         self.assertIsInstance(history, list)
+
+    def test_update_feeds_shared_trend_once(self):
+        """Regime confluence refresh must not replay the tick through trend state."""
+        trend = self.engine.trend_engine
+        timeframe_engine = trend.timeframe_engine
+        duplicates_before = timeframe_engine.duplicate_count
+
+        self.assertTrue(all(
+            candidate is trend
+            for candidate in self.engine.multitimeframe_engine.trend_engines.values()
+        ))
+
+        with patch.object(trend, "update", wraps=trend.update) as update:
+            self.engine.update(123.45, 1000, datetime.now(UTC), provider="test")
+
+        self.assertEqual(update.call_count, 1)
+        self.assertEqual(timeframe_engine.duplicate_count, duplicates_before)
 
     def test_get_current_regime_no_data(self):
         """Test getting current regime with no data"""

@@ -4,8 +4,8 @@ Market regime detection engine for identifying market conditions.
 import logging
 from collections import deque
 from datetime import datetime
-from itertools import islice
 from enum import StrEnum
+from itertools import islice
 from typing import Any
 
 from ..engines.timeframe import Timeframe
@@ -81,11 +81,28 @@ class MarketRegimeEngine:
         # their indicator state and wasted CPU seeding the same bars
         # N times). Fall back to creating a fresh engine only when no
         # shared instance is provided (e.g. unit tests, one-off scripts).
-        self.trend_engine = trend_engine if trend_engine is not None else TrendEngine(symbol)
-        self.multitimeframe_engine = (
-            multitimeframe_engine if multitimeframe_engine is not None
-            else MultiTimeframeEngine(symbol)
+        # When only an MTF engine is injected, reuse its existing shared trend
+        # engine. Otherwise create one canonical trend engine and make every MTF
+        # timeframe reference it. Regime updates can then feed the market tick
+        # exactly once and refresh confluence as a read-only aggregation step.
+        mtf_trends = (
+            list(multitimeframe_engine.trend_engines.values())
+            if multitimeframe_engine is not None
+            else []
         )
+        self.trend_engine = (
+            trend_engine
+            if trend_engine is not None
+            else mtf_trends[0] if mtf_trends
+            else TrendEngine(symbol)
+        )
+        self.multitimeframe_engine = (
+            multitimeframe_engine
+            if multitimeframe_engine is not None
+            else MultiTimeframeEngine(symbol, trend_engine=self.trend_engine)
+        )
+        for timeframe in self.multitimeframe_engine.analysis_timeframes:
+            self.multitimeframe_engine.trend_engines[timeframe] = self.trend_engine
 
         # Initialize technical indicators for regime detection
         self.atr_indicator = ATRIndicator(period=14)
@@ -124,6 +141,7 @@ class MarketRegimeEngine:
 
         # Update component engines
         self.trend_engine.update(price, volume, timestamp, provider)
+        self.multitimeframe_engine.refresh_confluence(timestamp)
 
         # Update indicators
         # For simplicity, we'll use price as close, and approximate high/low/volume

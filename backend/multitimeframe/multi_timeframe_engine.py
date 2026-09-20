@@ -3,7 +3,7 @@ Multi-timeframe analysis engine for detecting trend confluence and alignment.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from ..config.settings import settings
@@ -113,8 +113,8 @@ class ConfluenceSignal:
       ``higher_direction`` : the directional bucket at each end of the
       preset's time horizon and the median
     - ``preset``            : which preset produced this signal
-    - ``short_term_state``, ``intermediate_state``, ``higher_state`` : 
-      trend state per horizon (continuation, pullback, transition, 
+    - ``short_term_state``, ``intermediate_state``, ``higher_state`` :
+      trend state per horizon (continuation, pullback, transition,
       reversal_confirmed, neutral)
     """
 
@@ -261,7 +261,8 @@ class MultiTimeframeEngine:
     rather than a hard-coded dict.
     """
 
-    def __init__(self, symbol: str, preset: str | None = None):
+    def __init__(self, symbol: str, preset: str | None = None,
+                 trend_engine: TrendEngine | None = None):
         self.symbol = symbol
         self.preset_name = preset or settings.multitimeframe.default_preset
         if self.preset_name not in _PRESET_MAP:
@@ -290,9 +291,9 @@ class MultiTimeframeEngine:
         # Phase 7: parallel snapshot history (new dataclass)
         self.snapshot_history: list[MultiTimeframeSnapshot] = []
 
-        self._initialize_trend_engines()
+        self._initialize_trend_engines(trend_engine)
 
-    def _initialize_trend_engines(self):
+    def _initialize_trend_engines(self, trend_engine: TrendEngine | None = None):
         """Initialize trend engines for each active timeframe.
 
         ``TrendEngine`` already maintains trend state for every timeframe for a
@@ -301,7 +302,7 @@ class MultiTimeframeEngine:
         ``MultiTimeframeEngine.update()`` call cannot feed the same symbol tick
         once per active timeframe.
         """
-        shared = TrendEngine(self.symbol)
+        shared = trend_engine if trend_engine is not None else TrendEngine(self.symbol)
         for timeframe in self.analysis_timeframes:
             self.trend_engines[timeframe] = shared
 
@@ -343,9 +344,9 @@ class MultiTimeframeEngine:
         a preset with five timeframe keys still applies the tick only once.
         """
         if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.replace(tzinfo=UTC)
         else:
-            timestamp = timestamp.astimezone(timezone.utc)
+            timestamp = timestamp.astimezone(UTC)
 
         seen: set[int] = set()
         for engine in self.trend_engines.values():
@@ -355,6 +356,19 @@ class MultiTimeframeEngine:
             seen.add(engine_id)
             engine.update(price, volume, timestamp, provider=provider, **kwargs)
 
+        self.refresh_confluence(timestamp)
+
+    def refresh_confluence(self, timestamp: datetime) -> None:
+        """Refresh confluence from existing trend state without replaying a tick.
+
+        Consumers that share an externally managed ``TrendEngine`` use this
+        after updating that engine once. This keeps aggregation read-only and
+        avoids duplicate indicator updates and duplicate-tick accounting.
+        """
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        else:
+            timestamp = timestamp.astimezone(UTC)
         self._generate_confluence_signal(timestamp)
 
     # ------------------------------------------------------------------
@@ -848,11 +862,11 @@ class MultiTimeframeEngine:
         (Phase 6) rather than the 4-class ``TrendDirection`` — the spec
         calls for the more granular bucket.
         """
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         else:
-            ts = ts.astimezone(timezone.utc)
+            ts = ts.astimezone(UTC)
         timeframe_signals = self.get_all_timeframe_trends()
         if not timeframe_signals:
             return None
@@ -959,7 +973,7 @@ class MultiTimeframeEngine:
     def get_current_confluence(self) -> ConfluenceSignal | None:
         """Get the current confluence signal - generates fresh on demand"""
         # Generate fresh confluence signal from current shared engine states
-        self._generate_confluence_signal(datetime.now(timezone.utc))
+        self._generate_confluence_signal(datetime.now(UTC))
         if self.confluence_history:
             return self.confluence_history[-1]
         return None

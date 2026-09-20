@@ -787,10 +787,10 @@ class ObservabilitySettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="OBSERVABILITY_", extra="ignore")
 
     # Tracing configuration
-    tracing_enabled: bool = Field(default=True)
+    tracing_enabled: bool = Field(default=False)
     # Jaeger agent host and port for trace export
     jaeger_agent_host: str = Field(default="localhost")
-    jaeger_agent_port: int = Field(default=6831)
+    jaeger_agent_port: int = Field(default=4317)
 
     # Metrics configuration
     metrics_enabled: bool = Field(default=True)

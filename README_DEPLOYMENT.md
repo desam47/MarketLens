@@ -91,7 +91,7 @@ docker run -d \
   -e REDIS_URL="redis://redis.example.com:6379/0" \
   -e OBSERVABILITY_TRACING_ENABLED=true \
   -e OBSERVABILITY_JAEGER_AGENT_HOST=otel.example.com \
-  -e OBSERVABILITY_JAEGER_AGENT_PORT=6831 \
+  -e OBSERVABILITY_JAEGER_AGENT_PORT=4317 \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -v marketlens-data:/app/data \
   marketlens:latest
@@ -197,9 +197,9 @@ for the full schema. Selected highlights:
 | `AI_ENABLED`                            | `false`                    | Toggle AI integration                |
 | `AI_PROVIDER`                           | `ollama`                   | Primary AI provider                  |
 | `AI_API_KEY`                            | (none)                     | Provider API key                     |
-| `OBSERVABILITY_TRACING_ENABLED`         | `true`                     | OpenTelemetry tracing                |
+| `OBSERVABILITY_TRACING_ENABLED`         | `false`                    | OpenTelemetry tracing                |
 | `OBSERVABILITY_JAEGER_AGENT_HOST`       | `localhost`                | Jaeger collector / agent host        |
-| `OBSERVABILITY_JAEGER_AGENT_PORT`       | `6831`                     | Jaeger port (UDP)                    |
+| `OBSERVABILITY_JAEGER_AGENT_PORT`       | `4317`                     | OTLP/gRPC collector port             |
 | `OBSERVABILITY_METRICS_ENABLED`         | `true`                     | In-process metrics                   |
 | `OBSERVABILITY_STRUCTURED_LOGGING_ENABLED` | `true`                  | JSON logging                         |
 | `CORS_ALLOWED_ORIGINS`                  | `http://localhost:3000,http://localhost:5001` | Comma-separated origin allowlist |
@@ -234,14 +234,12 @@ OBSERVABILITY_JAEGER_AGENT_HOST=otel-collector
 OBSERVABILITY_JAEGER_AGENT_PORT=4317   # OTLP/gRPC port — NOT 6831
 ```
 
-**Known pitfall (found live 2026-09-09):** `OBSERVABILITY_JAEGER_AGENT_PORT`
-defaults to `6831` in `.env.example`, which is Jaeger's legacy UDP *agent*
-port — not a valid OTLP/gRPC endpoint. `FastAPIInstrumentor` wraps every
-request regardless of route, so a misconfigured endpoint here is a doomed
-export attempt on every single request — a real, noticeable slowdown
-across the whole app, not a silent no-op. If you enable tracing, point it
-at an actual OTLP/gRPC collector on port `4317`, or leave
-`OBSERVABILITY_TRACING_ENABLED=false` until one is running. See
+**Known pitfall (found live 2026-09-09):** Jaeger's legacy UDP agent port
+`6831` is not a valid endpoint for the app's OTLP/gRPC exporter.
+`FastAPIInstrumentor` wraps every request regardless of route, so a
+misconfigured endpoint creates a doomed export attempt on every request and a
+noticeable slowdown. The shipped defaults now use OTLP/gRPC port `4317` and
+leave tracing disabled; enable it only when a compatible collector is running. See
 `docs/Version_3/phase_audit_v3.md`, Phase 3.10.
 
 If the collector is unreachable, tracing is silently disabled — the
