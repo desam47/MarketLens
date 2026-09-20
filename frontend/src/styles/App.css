@@ -2413,6 +2413,115 @@ h4 {
   margin-top: 16px;
 }
 
+.scanner-page {
+  width: 100%;
+}
+
+.page-title-row, .scanner-results-header, .scanner-presets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.scanner-watchlist-select, .scanner-save-row input {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+}
+
+.scanner-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.scanner-builder-card, .scanner-results-card {
+  margin-bottom: 1rem;
+}
+
+.scanner-presets {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.scanner-presets h2, .scanner-results-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.scanner-presets-header > span, .scanner-results-header > span {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.scanner-save-row {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.scanner-save-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.scanner-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.4rem 0;
+}
+
+.scanner-preset-row span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  flex: 1;
+}
+
+.scanner-preset-delete {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+}
+
+.scanner-results-header {
+  margin-bottom: 0.5rem;
+}
+
+.scanner-result-row {
+  display: grid;
+  grid-template-columns: 4rem 4rem minmax(0, 1fr) 5rem;
+  align-items: center;
+  width: 100%;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.scanner-result-row:hover { background: rgba(59, 130, 246, 0.08); }
+.scanner-score-positive { color: var(--success); }
+.scanner-score-negative { color: var(--danger); }
+.scanner-result-reason, .scanner-result-price { color: var(--text-muted); font-size: 0.75rem; }
+.scanner-result-price { text-align: right; }
+.scanner-empty { margin-top: 1rem; color: var(--text-muted); }
+
+@media (max-width: 900px) {
+  .scanner-layout { grid-template-columns: 1fr; }
+}
+
 .analysis-card {
   display: flex;
   flex-direction: column;

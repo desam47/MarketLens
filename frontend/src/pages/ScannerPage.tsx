@@ -1,0 +1,162 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import api, { FilterSpec, ScanResult, Watchlist } from '../services/api';
+import { FilterBuilder } from '../components/FilterBuilder';
+import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
+
+interface ScannerPageProps {
+  onSelectSymbol: (symbol: string) => void;
+}
+
+interface SavedPreset {
+  name: string;
+  filters: FilterSpec[];
+  match: 'AND' | 'OR';
+}
+
+const PRESETS_KEY = 'marketlens.scanner.presets';
+
+function signalLabel(signal: string): string {
+  return signal.replace(/_/g, ' ').toLowerCase().replace(/(^| )\S/g, c => c.toUpperCase());
+}
+
+function matchReason(result: ScanResult): string {
+  if (result.signals.length > 0) return result.signals.slice(0, 3).map(signalLabel).join(' · ');
+  if (result.total_score > 0) return `Positive composite score (+${result.total_score.toFixed(1)})`;
+  if (result.total_score < 0) return `Negative composite score (${result.total_score.toFixed(1)})`;
+  return 'Matched the selected filters';
+}
+
+export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [selectedWatchlist, setSelectedWatchlist] = useState<number | null>(null);
+  const [symbols, setSymbols] = useState<string[]>([]);
+  const [results, setResults] = useState<ScanResult[]>([]);
+  const [presets, setPresets] = useState<SavedPreset[]>(() => {
+    try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }
+  });
+  const [currentFilters, setCurrentFilters] = useState<FilterSpec[]>([]);
+  const [currentMatch, setCurrentMatch] = useState<'AND' | 'OR'>('AND');
+  const [presetName, setPresetName] = useState('');
+  const [presetVersion, setPresetVersion] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getWatchlists().then(data => {
+      setWatchlists(data);
+      if (data.length > 0) setSelectedWatchlist(data[0].id);
+    }).catch(e => setError(e.message || 'Failed to load watchlists')).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (selectedWatchlist == null) { setSymbols([]); return; }
+    api.getWatchlistSymbols(selectedWatchlist)
+      .then(rows => setSymbols(rows.filter(row => row.is_enabled).map(row => row.symbol)))
+      .catch(e => setError(e.message || 'Failed to load watchlist symbols'));
+  }, [selectedWatchlist]);
+
+  const handleResults = useCallback((next: ScanResult[]) => {
+    setResults(next);
+    setError(null);
+  }, []);
+
+  const handleFiltersChange = useCallback((filters: FilterSpec[], match: 'AND' | 'OR') => {
+    setCurrentFilters(filters);
+    setCurrentMatch(match);
+  }, []);
+
+  const savePreset = () => {
+    const name = presetName.trim();
+    if (!name || currentFilters.length === 0) return;
+    const next = [...presets.filter(p => p.name.toLowerCase() !== name.toLowerCase()), {
+      name, filters: currentFilters, match: currentMatch,
+    }];
+    setPresets(next);
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(next));
+    setPresetName('');
+  };
+
+  const loadPreset = (preset: SavedPreset) => {
+    setCurrentFilters(preset.filters);
+    setCurrentMatch(preset.match);
+    setPresetVersion(v => v + 1);
+  };
+
+  const deletePreset = (name: string) => {
+    const next = presets.filter(p => p.name !== name);
+    setPresets(next);
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(next));
+  };
+
+  const sortedResults = useMemo(
+    () => [...results].sort((a, b) => b.total_score - a.total_score),
+    [results],
+  );
+
+  return (
+    <div className="scanner-page">
+      <div className="page-title-row">
+        <div>
+          <h1>Scanner</h1>
+          <p className="subtitle">Build repeatable scans from your existing watchlist data.</p>
+        </div>
+        <select className="scanner-watchlist-select" value={selectedWatchlist ?? ''} onChange={e => setSelectedWatchlist(Number(e.target.value))}>
+          {watchlists.length === 0 && <option value="">No watchlists</option>}
+          {watchlists.map(watchlist => <option key={watchlist.id} value={watchlist.id}>{watchlist.name}</option>)}
+        </select>
+      </div>
+
+      {error && <div className="filter-error">{error}</div>}
+      {!loading && symbols.length === 0 && <div className="card scanner-empty">Add enabled symbols to a watchlist to scan them.</div>}
+
+      <div className="scanner-layout">
+        <div>
+          <div className="card scanner-builder-card">
+            <FilterBuilder
+              key={presetVersion}
+              symbols={symbols}
+              onResults={handleResults}
+              onClear={() => setResults([])}
+              initialFilters={currentFilters}
+              initialMatch={currentMatch}
+              onFiltersChange={handleFiltersChange}
+            />
+            <div className="scanner-presets">
+              <div className="scanner-presets-header"><h2>Saved scans</h2><span>{presets.length}</span></div>
+              <div className="scanner-save-row">
+                <input value={presetName} onChange={e => setPresetName(e.target.value)} placeholder="Name this scan" />
+                <button className="btn btn-secondary btn-sm" onClick={savePreset} disabled={!presetName.trim() || currentFilters.length === 0}>Save</button>
+              </div>
+              {presets.map(preset => (
+                <div className="scanner-preset-row" key={preset.name}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => loadPreset(preset)}>{preset.name}</button>
+                  <span>{preset.filters.length} filter{preset.filters.length === 1 ? '' : 's'} · {preset.match}</span>
+                  <button className="scanner-preset-delete" onClick={() => deletePreset(preset.name)} aria-label={`Delete ${preset.name}`}>×</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card scanner-results-card">
+            <div className="scanner-results-header"><h2>Matches</h2><span>{results.length} symbols</span></div>
+            {sortedResults.length === 0 ? <p className="empty-state">Apply a filter to see matching symbols.</p> : (
+              <div className="scanner-results-list">
+                {sortedResults.map(result => (
+                  <button className="scanner-result-row" key={result.symbol} onClick={() => onSelectSymbol(result.symbol)}>
+                    <strong>{result.symbol}</strong>
+                    <span className={result.total_score >= 0 ? 'scanner-score-positive' : 'scanner-score-negative'}>{result.total_score >= 0 ? '+' : ''}{result.total_score.toFixed(1)}</span>
+                    <span className="scanner-result-reason">{matchReason(result)}</span>
+                    <span className="scanner-result-price">{result.quote?.price != null ? `$${result.quote.price.toFixed(2)}` : '—'}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <NamedRankingsPanel symbols={symbols} onSelectSymbol={onSelectSymbol} />
+      </div>
+    </div>
+  );
+}
+
+export default ScannerPage;

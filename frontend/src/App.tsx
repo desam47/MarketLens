@@ -13,6 +13,7 @@ const AlertsPage = lazy(() => import('./pages/AlertsPage').then(m => ({ default:
 const BacktestPage = lazy(() => import('./pages/BacktestPage').then(m => ({ default: m.BacktestPage })));
 const SymbolPage = lazy(() => import('./pages/SymbolPage').then(m => ({ default: m.SymbolPage })));
 const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage').then(m => ({ default: m.HistoricalSignalsPage })));
+const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
 const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
@@ -22,7 +23,7 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'hub';
+type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -75,6 +76,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
       case 'signals':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
+      case 'scanner':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
@@ -88,6 +91,15 @@ export default function App() {
           <span className="logo-text">MarketLens</span>
         </div>
         <ul className="nav-links">
+          <li>
+            <button
+              className={currentPage === 'scanner' ? 'active' : ''}
+              onClick={() => setCurrentPage('scanner')}
+            >
+              <span className="nav-icon">🧭</span>
+              Scanner
+            </button>
+          </li>
           <li>
             <button
               className={currentPage === 'dashboard' ? 'active' : ''}

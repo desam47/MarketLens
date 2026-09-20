@@ -181,19 +181,34 @@ export interface FilterBuilderProps {
   onResults: (results: ReturnType<typeof api.applyFilter> extends Promise<infer T> ? T : never) => void;
   /** Called when the user wants to clear the filter and go back to the default view. */
   onClear: () => void;
+  /** Optional controlled starting state, used by saved scanner presets. */
+  initialFilters?: FilterSpec[];
+  initialMatch?: 'AND' | 'OR';
+  onFiltersChange?: (filters: FilterSpec[], match: 'AND' | 'OR') => void;
 }
 
 // ---------------------------------------------------------------------------
 // FilterBuilder
 // ---------------------------------------------------------------------------
 
-export function FilterBuilder({ symbols, onResults, onClear }: FilterBuilderProps) {
-  const [filters, setFilters] = useState<FilterSpec[]>([]);
-  const [match, setMatch] = useState<'AND' | 'OR'>('AND');
+export function FilterBuilder({
+  symbols,
+  onResults,
+  onClear,
+  initialFilters = [],
+  initialMatch = 'AND',
+  onFiltersChange,
+}: FilterBuilderProps) {
+  const [filters, setFilters] = useState<FilterSpec[]>(initialFilters);
+  const [match, setMatch] = useState<'AND' | 'OR'>(initialMatch);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeFilterType, setActiveFilterType] = useState<string>('daily_bullish');
+
+  useEffect(() => {
+    onFiltersChange?.(filters, match);
+  }, [filters, match, onFiltersChange]);
 
   // Auto-apply filters after a short debounce so rapid tweaks
   // (param changes, add/remove) don't require manual Apply clicks.
