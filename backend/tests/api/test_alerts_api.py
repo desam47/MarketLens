@@ -260,6 +260,17 @@ class TestAlertsAPI(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 400)
 
+    def test_delivery_summary(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.get_delivery_summary.return_value = {
+                "total": 4,
+                "by_status": {"delivered": 3, "failed": 1},
+                "by_channel": {"webhook": 2, "in_app": 2},
+            }
+            response = self.client.get("/api/alerts/deliveries/summary")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["by_status"]["failed"], 1)
+
     # --- GET /api/alerts/{id}/triggers -----------------------------------
 
     def test_get_alert_triggers(self):

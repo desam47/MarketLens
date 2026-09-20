@@ -3,7 +3,7 @@ Alert repository for data access operations.
 """
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, desc, inspect
+from sqlalchemy import and_, desc, func, inspect
 
 from backend.database import SessionLocal
 from backend.models import Alert, AlertDelivery, AlertTrigger
@@ -140,6 +140,26 @@ class AlertRepository:
 
     def get_delivery(self, delivery_id: int) -> AlertDelivery | None:
         return self.db.query(AlertDelivery).filter(AlertDelivery.id == delivery_id).first()
+
+    def get_delivery_summary(self) -> dict:
+        """Return persisted notification counts for the alert operations view."""
+        if not inspect(self.db.get_bind()).has_table("alert_deliveries"):
+            return {"total": 0, "by_status": {}, "by_channel": {}}
+        status_rows = (
+            self.db.query(AlertDelivery.status, func.count(AlertDelivery.id))
+            .group_by(AlertDelivery.status)
+            .all()
+        )
+        channel_rows = (
+            self.db.query(AlertDelivery.channel, func.count(AlertDelivery.id))
+            .group_by(AlertDelivery.channel)
+            .all()
+        )
+        return {
+            "total": sum(count for _, count in status_rows),
+            "by_status": {status: count for status, count in status_rows},
+            "by_channel": {channel: count for channel, count in channel_rows},
+        }
 
     def delete_all_triggers(self) -> int:
         """Clear every trigger row — the fired-alert history log, not

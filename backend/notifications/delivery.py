@@ -136,7 +136,7 @@ def _deliver_email(recipient: str, payload: dict) -> str:
     return "SMTP accepted message"
 
 
-def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, profile: dict) -> None:
+def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, profile: dict) -> str:
     delivery.attempts = int(delivery.attempts or 0) + 1
     delivery.status = "pending"
     db.commit()
@@ -161,9 +161,10 @@ def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, p
         delivery.response = str(exc)[:1000]
         logger.warning("Alert delivery failed: trigger=%s channel=%s: %s", trigger.id, delivery.channel, exc)
     db.commit()
+    return delivery.status
 
 
-def dispatch_trigger(trigger_id: int) -> None:
+def dispatch_trigger(trigger_id: int, retry_failures: bool = False) -> None:
     db = SessionLocal()
     try:
         trigger = db.query(AlertTrigger).filter(AlertTrigger.id == trigger_id).first()
@@ -175,11 +176,37 @@ def dispatch_trigger(trigger_id: int) -> None:
         profile = _profile(alert)
         selected = _channels(profile) if alert.condition_type == "signal_profile" else ["in_app"]
         quiet = _quiet_hours(profile)
+        failed = False
         for channel in selected:
-            delivery = AlertDelivery(trigger_id=trigger.id, channel=channel, status="pending", attempts=0)
-            db.add(delivery)
-            db.commit()
-            db.refresh(delivery)
+            idempotency_key = f"{trigger.id}:{channel}"
+            delivery = (
+                db.query(AlertDelivery)
+                .filter(AlertDelivery.idempotency_key == idempotency_key)
+                .first()
+            )
+            if delivery is None:
+                delivery = AlertDelivery(
+                    trigger_id=trigger.id,
+                    idempotency_key=idempotency_key,
+                    channel=channel,
+                    status="pending",
+                    attempts=0,
+                )
+                db.add(delivery)
+                try:
+                    db.commit()
+                    db.refresh(delivery)
+                except Exception:
+                    db.rollback()
+                    delivery = (
+                        db.query(AlertDelivery)
+                        .filter(AlertDelivery.idempotency_key == idempotency_key)
+                        .first()
+                    )
+                    if delivery is None:
+                        raise
+            if delivery.status in ("delivered", "skipped"):
+                continue
             if channel not in ("in_app", "browser") and not settings.notifications.enabled:
                 delivery.status = "skipped"
                 delivery.response = "External notifications are disabled"
@@ -189,17 +216,62 @@ def dispatch_trigger(trigger_id: int) -> None:
                 delivery.response = "Skipped during configured quiet hours"
                 db.commit()
             else:
-                _attempt(db, delivery, trigger, alert, profile)
+                if _attempt(db, delivery, trigger, alert, profile) == "failed":
+                    failed = True
+        if failed and retry_failures:
+            raise RuntimeError(f"Alert delivery failed for trigger {trigger_id}")
     except Exception:  # noqa: BLE001
         logger.exception("Alert delivery dispatch failed for trigger %s", trigger_id)
         db.rollback()
+        if retry_failures:
+            raise
     finally:
         db.close()
 
 
 def dispatch_trigger_async(trigger_id: int) -> None:
-    thread = threading.Thread(target=dispatch_trigger, args=(trigger_id,), daemon=True, name=f"alert-delivery-{trigger_id}")
+    """Queue delivery durably, falling back to a daemon thread without Redis."""
+    queue = _get_delivery_queue()
+    if queue is not None:
+        try:
+            from rq import Retry
+
+            from backend.notifications.tasks import deliver_trigger_task
+
+            queue.enqueue(
+                deliver_trigger_task,
+                kwargs={"trigger_id": trigger_id},
+                retry=Retry(
+                    max=settings.notifications.retry_max,
+                    interval=[
+                        settings.notifications.retry_backoff_seconds,
+                        settings.notifications.retry_backoff_seconds * 4,
+                        settings.notifications.retry_backoff_seconds * 20,
+                    ],
+                ),
+                result_ttl=settings.background.result_ttl,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to enqueue durable alert delivery %s: %s", trigger_id, exc)
+    thread = threading.Thread(
+        target=dispatch_trigger,
+        args=(trigger_id,),
+        daemon=True,
+        name=f"alert-delivery-{trigger_id}",
+    )
     thread.start()
+
+
+def _get_delivery_queue():
+    """Use the shared RQ queue when background processing is available."""
+    try:
+        from backend.ai.background import get_queue
+
+        return get_queue()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Alert delivery queue unavailable: %s", exc)
+        return None
 
 
 def retry_delivery(delivery_id: int) -> bool:

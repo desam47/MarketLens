@@ -259,6 +259,12 @@ export interface AlertTestDelivery {
   response: string;
 }
 
+export interface AlertDeliverySummary {
+  total: number;
+  by_status: Record<string, number>;
+  by_channel: Record<string, number>;
+}
+
 // Backtest
 export type BacktestStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -1609,6 +1615,10 @@ class ApiService {
 
   async getAlertDeliveries(alertId: number, limit = 20): Promise<AlertDelivery[]> {
     return this.fetch<AlertDelivery[]>(`/alerts/${alertId}/deliveries?limit=${limit}`);
+  }
+
+  async getAlertDeliverySummary(): Promise<AlertDeliverySummary> {
+    return this.fetch<AlertDeliverySummary>('/alerts/deliveries/summary');
   }
 
   async retryAlertDelivery(deliveryId: number): Promise<AlertDelivery> {

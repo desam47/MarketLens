@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { Alert, AlertDelivery, AlertTrigger } from '../services/api';
+import api, { Alert, AlertDelivery, AlertDeliverySummary, AlertTrigger } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -118,6 +118,7 @@ export function SignalAlertCenter() {
   const [status, setStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [acknowledged, setAcknowledged] = useState<Set<number>>(() => readAcknowledged());
   const [deliveriesByAlert, setDeliveriesByAlert] = useState<Map<number, AlertDelivery[]>>(new Map());
+  const [deliverySummary, setDeliverySummary] = useState<AlertDeliverySummary | null>(null);
   const [editingAlertId, setEditingAlertId] = useState<number | null>(null);
   const [editingSnoozedUntil, setEditingSnoozedUntil] = useState<string | undefined>(undefined);
   const [expandedDeliveries, setExpandedDeliveries] = useState<Set<number>>(new Set());
@@ -137,6 +138,7 @@ export function SignalAlertCenter() {
       ]);
       setAlerts(alertRows);
       setTriggers(triggerRows);
+      setDeliverySummary(await api.getAlertDeliverySummary().catch(() => null));
       const signalRows = alertRows.filter((alert) => alert.condition_type === 'signal_profile');
       const deliveryRows = await Promise.all(signalRows.map(async (alert) => [
         alert.id,
@@ -402,6 +404,7 @@ export function SignalAlertCenter() {
       </form>
 
       {status && <div className={status.error ? 'error-text' : 'info-text'} style={{ marginBottom: 8 }}>{status.message}</div>}
+      {deliverySummary && deliverySummary.total > 0 && <div className="signal-alert-metrics" aria-label="Alert delivery metrics"><span><strong>{deliverySummary.total}</strong> deliveries</span><span className="delivery-metric-delivered"><strong>{deliverySummary.by_status.delivered || 0}</strong> delivered</span><span className="delivery-metric-failed"><strong>{deliverySummary.by_status.failed || 0}</strong> failed</span><span className="delivery-metric-pending"><strong>{deliverySummary.by_status.pending || 0}</strong> pending</span><span className="delivery-metric-skipped"><strong>{deliverySummary.by_status.skipped || 0}</strong> skipped</span></div>}
       {loading && <div className="empty-state signal-alert-empty">Loading signal alerts…</div>}
       {!loading && signalAlerts.length === 0 && <div className="empty-state signal-alert-empty">No signal alerts configured yet.</div>}
 

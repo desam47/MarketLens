@@ -62,6 +62,8 @@ class NotificationSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="NOTIFICATIONS_", extra="ignore")
     enabled: bool = Field(default=True)
     request_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
+    retry_max: int = Field(default=3, ge=0, le=10)
+    retry_backoff_seconds: int = Field(default=30, ge=1, le=3600)
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587, ge=1, le=65535)
     smtp_username: str = Field(default="")

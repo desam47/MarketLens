@@ -117,6 +117,12 @@ class AlertTestDeliveryResponse(BaseModel):
     response: str
 
 
+class AlertDeliverySummaryResponse(BaseModel):
+    total: int
+    by_status: dict[str, int]
+    by_channel: dict[str, int]
+
+
 # --- Endpoints ----------------------------------------------------------
 
 
@@ -165,6 +171,14 @@ async def clear_triggers(db: Session = Depends(get_db)):
     repo = AlertRepository(db)
     deleted = await asyncio.to_thread(repo.delete_all_triggers)
     return ClearTriggersResponse(deleted=deleted)
+
+
+@router.get("/deliveries/summary", response_model=AlertDeliverySummaryResponse)
+async def alert_delivery_summary(db: Session = Depends(get_db)):
+    """Aggregated delivery counts for the alert operations dashboard."""
+    repo = AlertRepository(db)
+    summary = await asyncio.to_thread(repo.get_delivery_summary)
+    return AlertDeliverySummaryResponse(**summary)
 
 
 @router.get("/{alert_id}/deliveries", response_model=list[AlertDeliveryResponse])

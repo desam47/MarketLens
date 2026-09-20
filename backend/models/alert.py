@@ -79,6 +79,7 @@ class AlertDelivery(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     trigger_id = Column(Integer, ForeignKey("alert_triggers.id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key = Column(String(120), nullable=True, unique=True, index=True)
     channel = Column(String(20), nullable=False)
     status = Column(String(20), nullable=False, default="pending", index=True)
     attempts = Column(Integer, nullable=False, default=0)

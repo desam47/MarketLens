@@ -189,9 +189,11 @@ for the full schema. Selected highlights:
 | `REDIS_URL`                             | `redis://localhost:6379/0` | Redis connection string              |
 | `REDIS_PASSWORD`                        | (none)                     | Optional auth                        |
 | `BACKGROUND_ENABLED`                    | `true`                     | Toggle the RQ job queue itself       |
-| `BACKGROUND_QUEUE_NAME`                 | `marketlens-workers`       | AI analysis job queue name           |
+| `BACKGROUND_QUEUE_NAME`                 | `marketlens-workers`       | AI analysis and durable alert-delivery queue name |
 | `BACKGROUND_BACKFILL_QUEUE_NAME`        | `marketlens-backfill`      | Ticker backfill job queue name — separate from `BACKGROUND_QUEUE_NAME` so a slow backfill can't starve AI jobs |
 | `NOTIFICATIONS_ENABLED`                 | `true`                     | Enable server-side webhook/email delivery for alert triggers |
+| `NOTIFICATIONS_RETRY_MAX`               | `3`                       | Automatic RQ delivery retry count |
+| `NOTIFICATIONS_RETRY_BACKOFF_SECONDS`   | `30`                      | Initial retry delay; later retries use longer backoff |
 | `NOTIFICATIONS_SMTP_HOST`               | (empty)                   | SMTP host for per-alert email delivery |
 | `NOTIFICATIONS_SMTP_PORT`               | `587`                     | SMTP port |
 | `NOTIFICATIONS_SMTP_USERNAME/PASSWORD`  | (empty)                   | Optional SMTP authentication |
