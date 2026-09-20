@@ -3,6 +3,7 @@ Data models for MarketLens
 """
 # Import alert models
 from .alert import Alert as Alert
+from .alert import AlertDelivery as AlertDelivery
 from .alert import AlertTrigger as AlertTrigger
 
 # Import backtest models

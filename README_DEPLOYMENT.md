@@ -191,6 +191,11 @@ for the full schema. Selected highlights:
 | `BACKGROUND_ENABLED`                    | `true`                     | Toggle the RQ job queue itself       |
 | `BACKGROUND_QUEUE_NAME`                 | `marketlens-workers`       | AI analysis job queue name           |
 | `BACKGROUND_BACKFILL_QUEUE_NAME`        | `marketlens-backfill`      | Ticker backfill job queue name — separate from `BACKGROUND_QUEUE_NAME` so a slow backfill can't starve AI jobs |
+| `NOTIFICATIONS_ENABLED`                 | `true`                     | Enable server-side webhook/email delivery for alert triggers |
+| `NOTIFICATIONS_SMTP_HOST`               | (empty)                   | SMTP host for per-alert email delivery |
+| `NOTIFICATIONS_SMTP_PORT`               | `587`                     | SMTP port |
+| `NOTIFICATIONS_SMTP_USERNAME/PASSWORD`  | (empty)                   | Optional SMTP authentication |
+| `NOTIFICATIONS_SMTP_FROM`               | (empty)                   | Sender address required for email delivery |
 | `MARKET_DATA_PRIMARY_PROVIDER`          | `yahoo_finance`            | Primary market data provider         |
 | `MARKET_DATA_FALLBACK_PROVIDERS`        | (empty)                    | Comma-separated fallback chain       |
 | `MARKET_DATA_RATE_LIMIT_PER_MINUTE`     | `60`                       | Provider-side rate cap               |

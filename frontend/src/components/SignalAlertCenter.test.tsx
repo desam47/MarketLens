@@ -39,6 +39,7 @@ describe('SignalAlertCenter', () => {
       triggered_at: '2026-09-02T10:00:00-04:00',
       ai_commentary: null,
     }]);
+    jest.spyOn(api, 'getAlertDeliveries').mockResolvedValue([]);
     const create = jest.spyOn(api, 'createAlert').mockResolvedValue(alert);
 
     render(<SignalAlertCenter />);

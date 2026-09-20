@@ -61,6 +61,32 @@ class AlertTrigger(Base):
 
     # Relationship back to the alert
     alert = relationship("Alert", back_populates="triggers")
+    deliveries = relationship(
+        "AlertDelivery",
+        back_populates="trigger",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def __repr__(self):
         return f"<AlertTrigger(id={self.id}, alert_id={self.alert_id}, symbol={self.symbol})>"
+
+
+class AlertDelivery(Base):
+    """Delivery attempt for an alert trigger and one notification channel."""
+
+    __tablename__ = "alert_deliveries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trigger_id = Column(Integer, ForeignKey("alert_triggers.id", ondelete="CASCADE"), nullable=False, index=True)
+    channel = Column(String(20), nullable=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    response = Column(Text, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=now_ny)
+
+    trigger = relationship("AlertTrigger", back_populates="deliveries")
+
+    def __repr__(self):
+        return f"<AlertDelivery(id={self.id}, trigger_id={self.trigger_id}, channel={self.channel}, status={self.status})>"

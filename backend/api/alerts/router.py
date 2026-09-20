@@ -91,6 +91,22 @@ class AlertTriggerResponse(BaseModel):
         return format_edt_iso(value)
 
 
+class AlertDeliveryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    trigger_id: int
+    channel: str
+    status: str
+    attempts: int
+    response: str | None
+    delivered_at: datetime | None
+    created_at: datetime
+
+    @field_serializer("delivered_at", "created_at")
+    def _serialize_delivery_et(self, value: datetime | None) -> str | None:
+        return format_edt_iso(value)
+
+
 # --- Endpoints ----------------------------------------------------------
 
 
@@ -139,6 +155,29 @@ async def clear_triggers(db: Session = Depends(get_db)):
     repo = AlertRepository(db)
     deleted = await asyncio.to_thread(repo.delete_all_triggers)
     return ClearTriggersResponse(deleted=deleted)
+
+
+@router.get("/{alert_id}/deliveries", response_model=list[AlertDeliveryResponse])
+async def list_alert_deliveries(alert_id: int, limit: int = 100, db: Session = Depends(get_db)):
+    """Delivery attempts for one alert, newest first."""
+    repo = AlertRepository(db)
+    if await asyncio.to_thread(repo.get_by_id, alert_id) is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return await asyncio.to_thread(repo.get_deliveries, alert_id, limit=limit)
+
+
+@router.post("/deliveries/{delivery_id}/retry", response_model=AlertDeliveryResponse)
+async def retry_alert_delivery(delivery_id: int, db: Session = Depends(get_db)):
+    """Retry a failed/skipped external delivery without re-firing the alert."""
+    repo = AlertRepository(db)
+    delivery = await asyncio.to_thread(repo.get_delivery, delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    from backend.notifications import retry_delivery
+    await asyncio.to_thread(retry_delivery, delivery_id)
+    db.expire_all()
+    refreshed = await asyncio.to_thread(repo.get_delivery, delivery_id)
+    return refreshed
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)

@@ -3,12 +3,11 @@ Alert repository for data access operations.
 """
 from datetime import datetime, timedelta
 
-from backend.utils.timezone import now_ny
-
-from sqlalchemy import and_, desc
+from sqlalchemy import and_, desc, inspect
 
 from backend.database import SessionLocal
-from backend.models import Alert, AlertTrigger
+from backend.models import Alert, AlertDelivery, AlertTrigger
+from backend.utils.timezone import now_ny
 
 
 class AlertRepository:
@@ -129,6 +128,19 @@ class AlertRepository:
             .all()
         )
 
+    def get_deliveries(self, alert_id: int, limit: int = 100) -> list[AlertDelivery]:
+        return (
+            self.db.query(AlertDelivery)
+            .join(AlertTrigger, AlertDelivery.trigger_id == AlertTrigger.id)
+            .filter(AlertTrigger.alert_id == alert_id)
+            .order_by(desc(AlertDelivery.created_at))
+            .limit(limit)
+            .all()
+        )
+
+    def get_delivery(self, delivery_id: int) -> AlertDelivery | None:
+        return self.db.query(AlertDelivery).filter(AlertDelivery.id == delivery_id).first()
+
     def delete_all_triggers(self) -> int:
         """Clear every trigger row — the fired-alert history log, not
         the alerts themselves. Also sweeps up any trigger orphaned by
@@ -136,6 +148,8 @@ class AlertRepository:
         correctly today via the ORM relationship, but rows created
         before that could still be dangling). Returns the count
         removed."""
+        if inspect(self.db.get_bind()).has_table("alert_deliveries"):
+            self.db.query(AlertDelivery).delete(synchronize_session=False)
         n = self.db.query(AlertTrigger).delete(synchronize_session=False)
         self.db.commit()
         return n

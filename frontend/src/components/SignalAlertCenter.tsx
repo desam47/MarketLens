@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import api, { Alert, AlertTrigger } from '../services/api';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import api, { Alert, AlertDelivery, AlertTrigger } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -13,6 +13,10 @@ interface SignalProfile {
   market_regime: string;
   timeframe: string;
   cooldown_minutes: number;
+  channels: string[];
+  webhook_url?: string;
+  email_to?: string;
+  quiet_hours?: { start: string; end: string };
   snoozed_until?: string;
 }
 
@@ -23,6 +27,7 @@ const DEFAULT_PROFILE: SignalProfile = {
   market_regime: 'any',
   timeframe: '1d',
   cooldown_minutes: 60,
+  channels: ['in_app', 'browser'],
 };
 
 function parseProfile(alert: Alert): SignalProfile {
@@ -38,6 +43,21 @@ function profileSummary(profile: SignalProfile): string {
   const direction = profile.direction === 'any' ? 'Any direction' : profile.direction;
   const regime = profile.market_regime === 'any' ? 'any regime' : profile.market_regime;
   return `${direction} · score ≥ ${profile.min_score} · strength ≥ ${profile.min_strength} · ${profile.timeframe || 'all TF'} · ${regime}`;
+}
+
+function isQuietNow(profile: SignalProfile): boolean {
+  const quiet = profile.quiet_hours;
+  if (!quiet?.start || !quiet.end) return false;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const hour = parts.find((part) => part.type === 'hour')?.value || '00';
+  const minute = parts.find((part) => part.type === 'minute')?.value || '00';
+  const current = `${hour}:${minute}`;
+  if (quiet.start === quiet.end) return true;
+  return quiet.start < quiet.end
+    ? current >= quiet.start && current < quiet.end
+    : current >= quiet.start || current < quiet.end;
 }
 
 function readAcknowledged(): Set<number> {
@@ -65,11 +85,18 @@ export function SignalAlertCenter() {
     market_regime: DEFAULT_PROFILE.market_regime,
     timeframe: DEFAULT_PROFILE.timeframe,
     cooldown_minutes: DEFAULT_PROFILE.cooldown_minutes,
+    channels: DEFAULT_PROFILE.channels,
+    webhookUrl: '',
+    emailTo: '',
+    quietStart: '',
+    quietEnd: '',
   });
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [acknowledged, setAcknowledged] = useState<Set<number>>(() => readAcknowledged());
+  const [deliveriesByAlert, setDeliveriesByAlert] = useState<Map<number, AlertDelivery[]>>(new Map());
+  const seenTriggerIds = useRef<Set<number> | null>(null);
 
   const signalAlerts = useMemo(
     () => alerts.filter((alert) => alert.condition_type === 'signal_profile'),
@@ -85,6 +112,25 @@ export function SignalAlertCenter() {
       ]);
       setAlerts(alertRows);
       setTriggers(triggerRows);
+      const signalRows = alertRows.filter((alert) => alert.condition_type === 'signal_profile');
+      const deliveryRows = await Promise.all(signalRows.map(async (alert) => [
+        alert.id,
+        await api.getAlertDeliveries(alert.id, 20).catch(() => []),
+      ] as const));
+      setDeliveriesByAlert(new Map(deliveryRows));
+      const previous = seenTriggerIds.current;
+      if (previous && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        triggerRows.filter((trigger) => !previous.has(trigger.id)).forEach((trigger) => {
+          const alert = signalRows.find((row) => row.id === trigger.alert_id);
+          if (!alert) return;
+          const profile = parseProfile(alert);
+          if (!profile.channels.includes('browser') || isQuietNow(profile)) return;
+          new Notification('MarketLens signal alert', {
+            body: `${trigger.symbol}: ${trigger.message || alert.name}`,
+          });
+        });
+      }
+      seenTriggerIds.current = new Set(triggerRows.map((trigger) => trigger.id));
       setStatus(null);
     } catch (err: any) {
       setStatus({ message: err?.message || 'Unable to load signal alerts.', error: true });
@@ -95,14 +141,51 @@ export function SignalAlertCenter() {
 
   useEffect(() => {
     void refresh();
+    const interval = window.setInterval(() => void refresh(), 30_000);
+    return () => window.clearInterval(interval);
   }, [refresh]);
 
   const signalAlertIds = useMemo(() => new Set(signalAlerts.map((alert) => alert.id)), [signalAlerts]);
   const visibleTriggers = triggers.filter((trigger) => signalAlertIds.has(trigger.alert_id) && !acknowledged.has(trigger.id));
   const alertById = useMemo(() => new Map(signalAlerts.map((alert) => [alert.id, alert])), [signalAlerts]);
 
-  const updateProfile = (key: keyof typeof form, value: string | number) => {
+  const updateProfile = (key: keyof typeof form, value: string | number | string[]) => {
     setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const toggleChannel = (channel: string) => {
+    setForm((current) => ({
+      ...current,
+      channels: current.channels.includes(channel)
+        ? current.channels.filter((value) => value !== channel)
+        : [...current.channels, channel],
+    }));
+  };
+
+  const requestBrowserPermission = async () => {
+    if (typeof Notification === 'undefined') {
+      setStatus({ message: 'Browser notifications are not supported here.', error: true });
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setStatus({
+        message: permission === 'granted' ? 'Browser notifications enabled.' : 'Browser notification permission was not granted.',
+        error: permission !== 'granted',
+      });
+    } catch {
+      setStatus({ message: 'Unable to request browser notification permission.', error: true });
+    }
+  };
+
+  const retryDelivery = async (delivery: AlertDelivery) => {
+    try {
+      await api.retryAlertDelivery(delivery.id);
+      setStatus({ message: `${delivery.channel} delivery retry queued.`, error: false });
+      await refresh();
+    } catch (err: any) {
+      setStatus({ message: err?.message || 'Failed to retry delivery.', error: true });
+    }
   };
 
   const handleCreate = async (event: React.FormEvent) => {
@@ -126,6 +209,10 @@ export function SignalAlertCenter() {
         market_regime: form.market_regime,
         timeframe: form.timeframe,
         cooldown_minutes: Number(form.cooldown_minutes),
+        channels: form.channels,
+        webhook_url: form.webhookUrl || undefined,
+        email_to: form.emailTo || undefined,
+        quiet_hours: form.quietStart && form.quietEnd ? { start: form.quietStart, end: form.quietEnd } : undefined,
       };
       await api.createAlert({
         name,
@@ -202,6 +289,11 @@ export function SignalAlertCenter() {
         <label><span>Min strength</span><input type="number" min="0" max="1" step="0.05" value={form.minStrength} onChange={(event) => updateProfile('minStrength', Number(event.target.value))} /></label>
         <label><span>Regime</span><select value={form.market_regime} onChange={(event) => updateProfile('market_regime', event.target.value)}><option value="any">Any regime</option><option value="risk_on">Risk on</option><option value="risk_off">Risk off</option><option value="neutral">Neutral</option><option value="transition">Transition</option></select></label>
         <label><span>Cooldown (min)</span><input type="number" min="1" max="1440" step="1" value={form.cooldown_minutes} onChange={(event) => updateProfile('cooldown_minutes', Number(event.target.value))} /></label>
+        <fieldset className="signal-alert-notifications"><legend>Notification channels</legend><label className="signal-alert-check"><input type="checkbox" checked disabled /> In-app</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('browser')} onChange={() => toggleChannel('browser')} /> Browser</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('webhook')} onChange={() => toggleChannel('webhook')} /> Webhook</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('email')} onChange={() => toggleChannel('email')} /> Email</label><button type="button" className="btn btn-secondary btn-small" onClick={() => void requestBrowserPermission()}>{typeof Notification !== 'undefined' && Notification.permission === 'granted' ? 'Browser notifications enabled' : 'Enable Browser Notifications'}</button></fieldset>
+        {form.channels.includes('webhook') && <label><span>Webhook URL</span><input type="url" value={form.webhookUrl} onChange={(event) => updateProfile('webhookUrl', event.target.value)} placeholder="https://example.com/hooks/…" /></label>}
+        {form.channels.includes('email') && <label><span>Email recipient</span><input type="email" value={form.emailTo} onChange={(event) => updateProfile('emailTo', event.target.value)} placeholder="you@example.com" /></label>}
+        <label><span>Quiet hours start (ET)</span><input type="time" value={form.quietStart} onChange={(event) => updateProfile('quietStart', event.target.value)} /></label>
+        <label><span>Quiet hours end (ET)</span><input type="time" value={form.quietEnd} onChange={(event) => updateProfile('quietEnd', event.target.value)} /></label>
         <button className="btn btn-primary" type="submit" disabled={submitting}>{submitting ? 'Creating…' : 'Create Signal Alert'}</button>
       </form>
 
@@ -220,6 +312,7 @@ export function SignalAlertCenter() {
               <label className="alert-toggle"><input type="checkbox" checked={alert.is_enabled} onChange={(event) => void toggleAlert(alert, event.target.checked)} /><span className={alert.is_enabled ? 'enabled-yes' : 'enabled-no'}>{alert.is_enabled ? 'on' : 'off'}</span></label>
               {snoozed ? <button className="btn btn-secondary btn-small" onClick={() => void resumeAlert(alert)}>Resume</button> : <select className="btn btn-secondary btn-small" defaultValue="" onChange={(event) => { const hours = Number(event.target.value); if (hours) void snoozeAlert(alert, hours); event.currentTarget.value = ''; }} aria-label={`Snooze ${alert.name}`}><option value="">Snooze…</option><option value="1">1 hour</option><option value="4">4 hours</option><option value="24">1 day</option></select>}
             </div>
+            {(deliveriesByAlert.get(alert.id) || []).length > 0 && <div className="signal-alert-deliveries"><span className="label">Recent delivery status</span>{(deliveriesByAlert.get(alert.id) || []).slice(0, 3).map((delivery) => <div className="signal-alert-delivery" key={delivery.id}><span>{delivery.channel}: <strong className={`delivery-${delivery.status}`}>{delivery.status}</strong>{delivery.response ? ` · ${delivery.response}` : ''}</span>{(delivery.status === 'failed' || (delivery.status === 'skipped' && ['webhook', 'email'].includes(delivery.channel))) && <button className="btn btn-secondary btn-small" onClick={() => void retryDelivery(delivery)}>Retry</button>}</div>)}</div>}
           </div>;
         })}
       </div>}

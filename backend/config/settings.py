@@ -57,6 +57,18 @@ class BackgroundProcessingSettings(BaseSettings):
     job_timeout: int = Field(default=600)
 
 
+class NotificationSettings(BaseSettings):
+    """Optional server-side delivery settings for alert notifications."""
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="NOTIFICATIONS_", extra="ignore")
+    enabled: bool = Field(default=True)
+    request_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from: str = Field(default="")
+
+
 class FinnhubSettings(BaseSettings):
     """Finnhub free-tier provider configuration (v2.2).
 
@@ -944,6 +956,7 @@ class Settings(BaseSettings):
     aux_data: AuxDataSettings = Field(default_factory=AuxDataSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     background: BackgroundProcessingSettings = Field(default_factory=BackgroundProcessingSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     ai_digest: DigestSettings = Field(default_factory=DigestSettings)
     tape: TapeSettings = Field(default_factory=TapeSettings)
     ai_trade_plan_tracking: AITradePlanTrackingSettings = Field(

@@ -242,6 +242,17 @@ export interface AlertTrigger {
   ai_commentary?: string | null;
 }
 
+export interface AlertDelivery {
+  id: number;
+  trigger_id: number;
+  channel: string;
+  status: 'pending' | 'delivered' | 'failed' | 'skipped' | string;
+  attempts: number;
+  response: string | null;
+  delivered_at: string | null;
+  created_at: string;
+}
+
 // Backtest
 export type BacktestStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -1588,6 +1599,14 @@ class ApiService {
    */
   async clearAlertTriggers(): Promise<{ deleted: number }> {
     return this.fetch<{ deleted: number }>('/alerts/triggers', { method: 'DELETE' });
+  }
+
+  async getAlertDeliveries(alertId: number, limit = 20): Promise<AlertDelivery[]> {
+    return this.fetch<AlertDelivery[]>(`/alerts/${alertId}/deliveries?limit=${limit}`);
+  }
+
+  async retryAlertDelivery(deliveryId: number): Promise<AlertDelivery> {
+    return this.fetch<AlertDelivery>(`/alerts/deliveries/${deliveryId}/retry`, { method: 'POST' });
   }
 
   // Backtest

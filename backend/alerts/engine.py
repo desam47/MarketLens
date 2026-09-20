@@ -510,6 +510,12 @@ class AlertsEngine:
             logger.info(f"Alert fired: id={alert.id} {alert.name} "
                         f"({alert.condition_type} {alert.parameter})")
 
+            try:
+                from backend.notifications import dispatch_trigger_async
+                dispatch_trigger_async(trigger.id)
+            except Exception as e:
+                logger.warning(f"Failed to enqueue alert delivery for trigger {trigger.id}: {e}")
+
             # Version 4, AI feature 3: enqueue AI commentary out-of-band.
             # This method runs inline on two latency-sensitive paths (an
             # async request handler, and a live-tick callback that gates
