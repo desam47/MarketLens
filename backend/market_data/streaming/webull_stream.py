@@ -94,6 +94,32 @@ def _patch_quotes_client_logger() -> None:
 
 _patch_quotes_client_logger()
 
+
+# Stopping the SDK client always ends in a fake failure. ``loop_stop()`` sets paho's terminate
+# flag, ``loop_forever`` then returns 1, and ``QuotesClient.connect_and_loop_forever`` treats any
+# non-zero return as a server error: it logs "exception:loop ack code: 1, msg: Protocol not
+# supported" at ERROR, then ``time.sleep(10)`` before it looks at the flag again. ``loop_stop()``
+# joins that thread, so every stop blocked ~10 s (a reload took 10 s longer to shut down, and the
+# event loop was frozen for it) and left an ERROR line: 1,544 of them in a week of logs, every
+# one at a shutdown. Reproduced against real paho and a fake broker; disconnecting first does not
+# change it, the SDK sleeps regardless.
+_TEARDOWN_WAIT_S = 2.0
+_teardowns_lock = threading.Lock()
+_teardowns_in_flight = 0
+
+
+class _ExpectedStopFilter(logging.Filter):
+    """Demote the SDK's "loop ack code" ERROR to INFO while we are the ones stopping it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno == logging.ERROR and _teardowns_in_flight \
+                and "loop ack code" in record.getMessage():
+            record.levelno, record.levelname = logging.INFO, "INFO"
+        return True
+
+
+logging.getLogger("webull.data").addFilter(_ExpectedStopFilter())
+
 _SnapshotCb = Callable[[str, float, float | None, "object", float | None, float | None, float | None], None]
 _TradeCb = Callable[[str, float, float | None, "object", str | None], None]
 _StatusCb = Callable[[str], None]
@@ -197,15 +223,33 @@ class WebullStreamClient:
         return bool(t and t.is_alive())
 
     def _teardown_client(self) -> None:
+        global _teardowns_in_flight
         c, self._client = self._client, None
         self._connected = False
         if c is None:
             return
-        for call in (lambda: c.unsubscribe(unsubscribe_all=True), c.loop_stop, c.disconnect):
+
+        def _close() -> None:
+            global _teardowns_in_flight
             try:
-                call()
-            except Exception:  # noqa: BLE001
-                pass
+                # disconnect() before loop_stop(): loop_stop() is the call that blocks on the
+                # SDK's 10 s sleep, and the broker allows only 5 connections per App Key, so the
+                # DISCONNECT must not queue behind it.
+                for call in (lambda: c.unsubscribe(unsubscribe_all=True), c.disconnect, c.loop_stop):
+                    try:
+                        call()
+                    except Exception:  # noqa: BLE001
+                        pass
+            finally:
+                with _teardowns_lock:
+                    _teardowns_in_flight -= 1
+
+        with _teardowns_lock:
+            _teardowns_in_flight += 1
+        # The SDK thread is a daemon and exits by itself once its sleep ends, so wait only briefly.
+        closer = threading.Thread(target=_close, name="webull-sdk-teardown", daemon=True)
+        closer.start()
+        closer.join(timeout=_TEARDOWN_WAIT_S)
 
     def _supervise(self) -> None:
         """Keep an MQTT connection alive: (re)build the SDK client, wait for

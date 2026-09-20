@@ -3,10 +3,13 @@ Tests for backend.market_data.streaming.webull_stream.WebullStreamClient.
 
 The Webull SDK's DataStreamingClient is mocked — no MQTT, no network.
 """
+import logging
+import threading
 import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from backend.market_data.streaming import webull_stream
 from backend.market_data.streaming.webull_stream import (
     WebullStreamClient,
     get_webull_stream_client,
@@ -153,6 +156,89 @@ class TestSupervisor(unittest.TestCase):
             time.sleep(0.3)
             self.assertTrue(c._connected)
             c.stop()
+
+
+class TestTeardown(unittest.TestCase):
+    """The SDK's loop_stop() blocks ~10 s (it sleeps before noticing the stop) and logs an ERROR."""
+
+    def _client_with(self, sdk):
+        c = WebullStreamClient("k", "s")
+        c._client = sdk
+        c._connected = True
+        return c
+
+    def test_does_not_wait_for_a_slow_loop_stop(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        sdk = MagicMock()
+        sdk.loop_stop.side_effect = lambda: release.wait(10)   # the SDK's 10 s sleep
+        c = self._client_with(sdk)
+        with patch.object(webull_stream, "_TEARDOWN_WAIT_S", 0.2):
+            t0 = time.monotonic()
+            c._teardown_client()
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertIsNone(c._client)
+        self.assertFalse(c._connected)
+
+    def test_disconnect_is_sent_before_the_blocking_loop_stop(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        order = []
+        sdk = MagicMock()
+        sdk.unsubscribe.side_effect = lambda **_: order.append("unsubscribe")
+        sdk.disconnect.side_effect = lambda: order.append("disconnect")
+        sdk.loop_stop.side_effect = lambda: (order.append("loop_stop"), release.wait(10))
+        with patch.object(webull_stream, "_TEARDOWN_WAIT_S", 0.2):
+            self._client_with(sdk)._teardown_client()
+        self.assertEqual(order, ["unsubscribe", "disconnect", "loop_stop"])
+
+    def test_a_failing_call_does_not_skip_the_rest(self):
+        sdk = MagicMock()
+        sdk.unsubscribe.side_effect = RuntimeError("not connected")
+        sdk.disconnect.side_effect = RuntimeError("socket closed")
+        self._client_with(sdk)._teardown_client()
+        sdk.loop_stop.assert_called_once()
+
+    def test_no_client_is_a_no_op(self):
+        c = WebullStreamClient("k", "s")
+        c._teardown_client()
+        self.assertEqual(webull_stream._teardowns_in_flight, 0)
+
+    def test_in_flight_count_returns_to_zero(self):
+        self._client_with(MagicMock())._teardown_client()
+        deadline = time.monotonic() + 2
+        while webull_stream._teardowns_in_flight and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(webull_stream._teardowns_in_flight, 0)
+
+
+class TestExpectedStopLogFilter(unittest.TestCase):
+    MSG = "exception:loop ack code: 1, msg: Protocol not supported"
+
+    def _record(self, msg, level=logging.ERROR):
+        return logging.LogRecord("webull.data", level, __file__, 1, msg, None, None)
+
+    def test_demoted_only_while_a_teardown_is_running(self):
+        f = webull_stream._ExpectedStopFilter()
+        with patch.object(webull_stream, "_teardowns_in_flight", 1):
+            r = self._record(self.MSG)
+            self.assertTrue(f.filter(r))
+            self.assertEqual((r.levelno, r.levelname), (logging.INFO, "INFO"))
+        with patch.object(webull_stream, "_teardowns_in_flight", 0):
+            r = self._record(self.MSG)
+            f.filter(r)
+            self.assertEqual(r.levelno, logging.ERROR)   # a real loop failure stays an error
+
+    def test_other_errors_during_a_teardown_stay_errors(self):
+        f = webull_stream._ExpectedStopFilter()
+        with patch.object(webull_stream, "_teardowns_in_flight", 1):
+            r = self._record("connect exception:timed out")
+            self.assertTrue(f.filter(r))
+            self.assertEqual(r.levelno, logging.ERROR)
+
+    def test_is_installed_on_the_sdk_logger(self):
+        self.assertTrue(any(isinstance(f, webull_stream._ExpectedStopFilter)
+                            for f in logging.getLogger("webull.data").filters))
 
 
 class TestFactory(unittest.TestCase):
