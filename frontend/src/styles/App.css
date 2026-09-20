@@ -422,7 +422,7 @@ h4 {
      still responsive — drops to 100% below 400px viewport. */
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
   gap: 1rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .dashboard-grid > .card {
@@ -603,7 +603,7 @@ h4 {
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
-  padding: 1.25rem;
+  padding: 1rem;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   display: flex;
