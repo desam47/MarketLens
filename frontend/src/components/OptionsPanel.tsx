@@ -43,10 +43,18 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
+    setChains([]);
+    setExpirations([]);
+    setNearTermIv(null);
+    setIvRank(null);
+    setProvider(null);
+    setSelectedExp(null);
     api.getOptions(symbol)
       .then(res => {
+        if (cancelled) return;
         if (res.provider === 'disabled') {
           setError('Options disabled — set AUX_OPTIONS_ENABLED=true.');
         } else if (res.provider === 'none' || !res.chains?.length) {
@@ -59,8 +67,13 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
           setProvider(res.provider);
         }
       })
-      .catch((e: any) => setError(e?.message || 'Failed to load options'))
-      .finally(() => setLoading(false));
+      .catch((e: any) => {
+        if (!cancelled) setError(e?.message || 'Failed to load options');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [symbol]);
 
   const activeChain = useMemo(() => {

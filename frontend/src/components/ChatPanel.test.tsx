@@ -37,7 +37,7 @@ afterEach(() => {
 describe('ChatPanel (universal)', () => {
   it('opens a universal session with no symbol on mount', async () => {
     render(<ChatPanel />);
-    await waitFor(() => expect(mockApi.createChatSession).toHaveBeenCalled());
+    await screen.findByPlaceholderText(/Ask about any stock/i);
     expect(mockApi.createChatSession).toHaveBeenCalledWith(undefined, null);
   });
 
@@ -186,8 +186,11 @@ describe('ChatPanel (universal)', () => {
     jest.useFakeTimers();
     mockApi.getChatMessages.mockResolvedValueOnce([]);
 
-    render(<ChatPanel alertTriggerId={42} />);
-    await waitFor(() => expect(mockApi.createChatSession).toHaveBeenCalled());
+    await act(async () => {
+      render(<ChatPanel alertTriggerId={42} />);
+    });
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    expect(mockApi.createChatSession).toHaveBeenCalled();
     mockApi.getChatMessages.mockClear();
 
     await act(async () => {

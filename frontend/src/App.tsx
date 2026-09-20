@@ -60,23 +60,23 @@ export default function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
+        return <PageErrorBoundary key={currentPage} pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'watchlist':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'hub':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} /></PageErrorBoundary></Suspense>;
       case 'alerts':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Backtest"><BacktestPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Backtest"><BacktestPage /></PageErrorBoundary></Suspense>;
       case 'health':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
       case 'signals':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
       default:
-        return <PageErrorBoundary pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
+        return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
   };
 

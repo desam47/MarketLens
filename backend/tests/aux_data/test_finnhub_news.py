@@ -15,8 +15,8 @@ def _resp(json_body, status=200, ok=True):
 
 
 _ROWS = [
-    {"datetime": 1_700_000_100, "headline": "Older", "source": "Reuters", "related": "AAPL"},
-    {"datetime": 1_700_000_900, "headline": "Newer", "source": "CNBC", "related": "MSFT"},
+    {"datetime": 1_700_000_100, "headline": "Older", "source": "Reuters", "related": "AAPL", "url": "https://example.com/older"},
+    {"datetime": 1_700_000_900, "headline": "Newer", "source": "CNBC", "related": "MSFT", "url": "https://example.com/newer"},
     {"datetime": 1_700_000_500, "headline": "", "source": "X", "related": "AAPL"},  # dropped
 ]
 
@@ -39,6 +39,7 @@ class TestFinnhubNewsProvider(unittest.TestCase):
         self.assertEqual(out.items[1].source, "Reuters")
         self.assertEqual(out.items[1].relevance, 0.75)   # AAPL in `related`
         self.assertEqual(out.items[0].relevance, 0.55)   # not related
+        self.assertEqual(out.items[0].url, "https://example.com/newer")
         self.assertTrue(prov._is_healthy)
 
     @patch("backend.aux_data.providers.finnhub_news.requests.get")

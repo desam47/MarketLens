@@ -70,6 +70,13 @@ class YFinanceNewsProvider(NewsProvider):
                 # used whenever that data was unavailable.
                 rel = 0.5
 
+                url_info = content.get("canonicalUrl") or content.get("clickThroughUrl")
+                article_url = (
+                    url_info.get("url")
+                    if isinstance(url_info, dict)
+                    else url_info
+                ) or content.get("link")
+
                 items.append(
                     NewsItem(
                         headline=content.get("title", ""),
@@ -77,6 +84,7 @@ class YFinanceNewsProvider(NewsProvider):
                         timestamp=pub_dt,
                         symbol=symbol.upper(),
                         relevance=rel,
+                        url=article_url or None,
                     )
                 )
 

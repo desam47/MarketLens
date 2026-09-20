@@ -23,9 +23,11 @@ class TestNewsItem(unittest.TestCase):
             timestamp=datetime.utcnow(),
             symbol="AAPL",
             relevance=0.85,
+            url="https://example.com/apple",
         )
         self.assertEqual(item.symbol, "AAPL")
         self.assertEqual(item.relevance, 0.85)
+        self.assertEqual(item.url, "https://example.com/apple")
 
     def test_relevance_clamped(self):
         with self.assertRaises(ValueError):

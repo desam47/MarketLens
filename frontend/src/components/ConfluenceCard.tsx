@@ -34,14 +34,6 @@ const stateColors: Record<string, string> = {
   neutral: '#9ca3af',
 };
 
-const stateIcons: Record<string, string> = {
-  continuation: '→',
-  pullback: '↩',
-  transition: '⇄',
-  reversal_confirmed: '↻',
-  neutral: '•',
-};
-
 // Canonical sort order for timeframe strings (shortest → longest).
 const TF_ORDER: Record<string, number> = {
   '1m': 1, '2m': 2, '3m': 3, '5m': 4,
@@ -57,15 +49,42 @@ const PRESET_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'all', label: 'All Timeframes' },
 ];
 
-function formatStateLabel(state: string): string {
-  return state.replace(/_/g, ' ').toUpperCase();
-}
-
 function directionIcon(direction: string): string {
   if (direction.includes('up') || direction.includes('bullish')) return '↑';
   if (direction.includes('down') || direction.includes('bearish')) return '↓';
   if (direction === 'sideways') return '↔';
   return '→';
+}
+
+function directionLabel(direction: string): string {
+  if (direction.includes('up') || direction.includes('bullish')) return 'Bullish';
+  if (direction.includes('down') || direction.includes('bearish')) return 'Bearish';
+  return 'Neutral';
+}
+
+function structureLabel(state: string): string {
+  if (state === 'continuation') return 'Continuation';
+  if (state === 'pullback') return 'Pullback';
+  if (state === 'transition') return 'Transition';
+  if (state === 'reversal_confirmed') return 'Reversal';
+  return state.replace(/_/g, ' ').toUpperCase();
+}
+
+function timingLabel(shortState: string, shortDir: string, higherDir: string): string {
+  const directionSide = (direction: string): 'up' | 'down' | null => {
+    if (direction.includes('up') || direction.includes('bullish')) return 'up';
+    if (direction.includes('down') || direction.includes('bearish')) return 'down';
+    return null;
+  };
+  const shortSide = directionSide(shortDir);
+  const higherSide = directionSide(higherDir);
+  if (shortState === 'pullback') return 'Countertrend';
+  if (shortState === 'transition') return 'Breakout attempt';
+  if (shortState === 'reversal_confirmed') return 'Breakout attempt';
+  if (shortState === 'continuation' && shortSide && higherSide) {
+    return shortSide === higherSide ? 'Aligned' : 'Countertrend';
+  }
+  return 'Neutral';
 }
 
 function getNarrative(confluence: ConfluenceData): string {
@@ -147,13 +166,6 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
   const bearishPct = ((confluence.bearish_alignment ?? 0) * 100).toFixed(0);
   const conflicts = confluence.conflicting ?? 0;
 
-  // Horizon chips with direction + state
-  const horizonChips: Array<{ label: string; direction: string | undefined; state: string | undefined; variant: 'higher' | 'intermediate' | 'lower' }> = [
-    { label: 'Higher', direction: confluence.higher_direction, state: confluence.higher_state, variant: 'higher' },
-    { label: 'Intermediate', direction: confluence.intermediate_direction, state: confluence.intermediate_state, variant: 'intermediate' },
-    { label: 'Lower', direction: confluence.short_term_direction, state: confluence.short_term_state, variant: 'lower' },
-  ];
-
   const narrative = getNarrative(confluence);
 
   return (
@@ -163,39 +175,40 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
         <PresetSelector selectedPreset={selectedPreset} onPresetChange={onPresetChange} />
       </div>
       
-      {/* Trend Map - Horizon Narrative */}
-      <div className="trend-map">
-        <div className="trend-narrative">
-          <span className="narrative-label">Trend Map:</span>
-          <span className="narrative-text">{narrative}</span>
+      {/* Compact Trend Map */}
+      <div className="trend-map-compact">
+        <div className="tm-col tm-lower">
+          <div className="tm-col-label">Lower</div>
+          <div className="tm-col-value" style={{ color: directionColors[confluence.short_term_direction || 'neutral'] || '#9ca3af' }}>
+            Timing: {timingLabel(confluence.short_term_state || 'neutral', confluence.short_term_direction || 'neutral', confluence.higher_direction || 'neutral')}
+          </div>
         </div>
-        <div className="horizon-row">
-          {horizonChips.map((chip) => {
-            const dir = chip.direction || 'neutral';
-            const state = chip.state || 'neutral';
-            return (
-              <div key={chip.label} className={`horizon-column ${chip.variant}`}>
-                <span className="horizon-label">{chip.label}</span>
-                <div className="horizon-content">
-                  <span className="horizon-direction" style={{ color: directionColors[dir] || '#9ca3af' }}>
-                    {dir.replace(/_/g, ' ').toUpperCase()}
-                  </span>
-                  <span className="horizon-state" style={{ color: stateColors[state] || '#9ca3af' }}>
-                    {stateIcons[state]} {formatStateLabel(state)}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+        <div className="tm-col tm-intermediate">
+          <div className="tm-col-label">Intermediate</div>
+          <div className="tm-col-value" style={{ color: stateColors[confluence.intermediate_state || 'neutral'] || '#9ca3af' }}>
+            Structure: {structureLabel(confluence.intermediate_state || 'neutral')}
+          </div>
+        </div>
+        <div className="tm-col tm-higher">
+          <div className="tm-col-label">Higher</div>
+          <div className="tm-col-value" style={{ color: directionColors[confluence.higher_direction || 'neutral'] || '#9ca3af' }}>
+            Bias: {directionLabel(confluence.higher_direction || 'neutral')}
+          </div>
+          <div className="tm-col-sub">
+            Score: {alignmentPct}% • Freshness: {formatETDateTime(confluence.timestamp)}
+          </div>
         </div>
       </div>
 
-      <div className="confluence-main">
-        <div className="confluence-direction" style={{ color }}>
-          <span className="direction-arrow">{confluence.direction.includes('up') ? '↑' : confluence.direction.includes('down') ? '↓' : '→'}</span>
-          <span className="direction-text">{confluence.direction.replace(/_/g, ' ').toUpperCase()}</span>
+      {/* Overall */}
+      <div className="confluence-overall">
+        <span className="overall-narrative">{narrative}</span>
+        <div className="overall-metrics">
+          <span className="overall-metric">Confidence: {strengthPct}%</span>
+          <span className="overall-metric">Valid TF: {((confluence.valid_coverage ?? 0) * 100).toFixed(0)}%</span>
         </div>
       </div>
+
       <div className="confluence-metrics">
         <div className="metric">
           <span className="metric-label">Alignment</span>

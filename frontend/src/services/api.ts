@@ -936,6 +936,7 @@ export interface NewsItem {
   timestamp: string;
   symbol: string;
   relevance: number;
+  url: string | null;
 }
 
 // ---- Phase 2.3.4: custom indicators ----

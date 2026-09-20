@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api, { NewsItem } from '../services/api';
-import { parseET, formatETDateTime24Hour } from './chartMath';
+import { formatETDateTime } from './chartMath';
 
 interface NewsPanelProps {
   symbol: string;
@@ -12,7 +12,17 @@ const unusualColors: Record<string, string> = {
 
 function formatTs(ts: string | null | undefined): string {
   if (!ts) return '—';
-  return formatETDateTime24Hour(ts);
+  return formatETDateTime(ts);
+}
+
+function safeArticleUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function RelevanceBar({ value }: { value: number }) {
@@ -35,10 +45,14 @@ export function NewsPanel({ symbol }: NewsPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
+    setItems([]);
+    setProvider(null);
     api.getNews(symbol, 20)
       .then(res => {
+        if (cancelled) return;
         if (res.provider === 'disabled') {
           setError('News disabled — set AUX_NEWS_ENABLED=true to enable.');
           setItems([]);
@@ -47,8 +61,13 @@ export function NewsPanel({ symbol }: NewsPanelProps) {
           setProvider(res.provider);
         }
       })
-      .catch((e: any) => setError(e?.message || 'Failed to load news'))
-      .finally(() => setLoading(false));
+      .catch((e: any) => {
+        if (!cancelled) setError(e?.message || 'Failed to load news');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [symbol]);
 
   if (loading) return <div className="card analysis-card"><p className="empty-state">Loading news…</p></div>;
@@ -84,23 +103,33 @@ export function NewsPanel({ symbol }: NewsPanelProps) {
         <p className="empty-state">No recent news</p>
       ) : (
         <div className="news-list-scroll">
-          {items.map((item, i) => (
+          {items.map((item, i) => {
+            const articleUrl = safeArticleUrl(item.url);
+            return (
             <div key={i} className="news-item">
               <div className="news-header-row">
                 <span className="news-source">{item.source}</span>
                 <span className="news-time">{formatTs(item.timestamp)}</span>
               </div>
-              <button
-                style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit' }}
-                className="news-headline"
-                onClick={e => { e.preventDefault(); }}
-                title={item.headline}
-              >
-                {item.headline.length > 120 ? item.headline.slice(0, 117) + '…' : item.headline}
-              </button>
+              {articleUrl ? (
+                <a
+                  className="news-headline"
+                  href={articleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={item.headline}
+                >
+                  {item.headline.length > 120 ? item.headline.slice(0, 117) + '…' : item.headline}
+                </a>
+              ) : (
+                <span className="news-headline" title={item.headline}>
+                  {item.headline.length > 120 ? item.headline.slice(0, 117) + '…' : item.headline}
+                </span>
+              )}
               <RelevanceBar value={item.relevance} />
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

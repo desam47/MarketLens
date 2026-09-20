@@ -39,6 +39,7 @@ class NewsItem(BaseModel):
     timestamp: datetime
     symbol: str
     relevance: float = Field(ge=0.0, le=1.0, description="Relevance score 0–1")
+    url: str | None = None
 
 
 class NewsResponse(BaseModel):

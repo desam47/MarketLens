@@ -29,7 +29,6 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
-  const [symbolCounts, setSymbolCounts] = useState<Record<number, number>>({});
 
   const fetchWatchlists = async () => {
     setLoading(true);
@@ -46,12 +45,6 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
       } else {
         setSelectedId(null);
       }
-      // Symbol counts are now returned directly from the API endpoint
-      const counts: Record<number, number> = {};
-      data.forEach((wl) => {
-        counts[wl.id] = wl.symbol_count ?? 0;
-      });
-      setSymbolCounts(counts);
     } catch (err: any) {
       setError(err.message || 'Failed to load watchlists');
     } finally {

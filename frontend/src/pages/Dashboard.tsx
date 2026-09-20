@@ -11,7 +11,7 @@ import { SymbolInput } from '../components/SymbolInput';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
-import { formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
+import { formatETDateTime } from '../components/chartMath';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 
 // Per-card skeletons rather than the page-level DashboardSkeleton
@@ -422,7 +422,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
               )}
               {latestQuote.timestamp && (
                 <span className="last-close-fetched">
-                  {formatETDateTime24Hour(latestQuote.timestamp)}
+                  {formatETDateTime(latestQuote.timestamp)}
                 </span>
               )}
             </div>

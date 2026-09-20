@@ -11,7 +11,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import api, { AITemplate, AITemplatePreview } from '../services/api';
-import { renderTemplate, parseVariables, type RenderContext } from './templateRenderer';
+import { renderTemplate, type RenderContext } from './templateRenderer';
 
 interface AITemplatesPanelProps {
   /** Symbol+timeframe context for "Run with template" actions. */

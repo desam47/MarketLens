@@ -46,10 +46,14 @@ export function FundamentalsPanel({ symbol }: FundamentalsPanelProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(null);
+    setData(null);
+    setProvider(null);
     api.getFundamentals(symbol)
       .then(res => {
+        if (cancelled) return;
         if (res.provider === 'disabled') {
           setError('Fundamentals disabled — set AUX_FUNDAMENTALS_ENABLED=true.');
         } else if (res.provider === 'none') {
@@ -59,8 +63,13 @@ export function FundamentalsPanel({ symbol }: FundamentalsPanelProps) {
           setProvider(res.provider);
         }
       })
-      .catch((e: any) => setError(e?.message || 'Failed to load fundamentals'))
-      .finally(() => setLoading(false));
+      .catch((e: any) => {
+        if (!cancelled) setError(e?.message || 'Failed to load fundamentals');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [symbol]);
 
   if (loading) return <div className="card analysis-card"><p className="empty-state">Loading fundamentals…</p></div>;

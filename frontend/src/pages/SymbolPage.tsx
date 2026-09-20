@@ -8,7 +8,7 @@ import api, {
   TapeSnapshot,
   Transition,
 } from '../services/api';
-import { formatETDate, formatETDateTime, formatETDateTime24Hour } from '../components/chartMath';
+import { formatETDate, formatETDateTime } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 // import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -344,7 +344,7 @@ const PriceHistoryPanel = memo(function PriceHistoryPanel({
           )}
           {latestCloseTimestamp != null && (
             <span className="price-timestamp">
-              {formatETDateTime24Hour(fetchedAt ?? latestCloseTimestamp)}
+              {formatETDateTime(fetchedAt ?? latestCloseTimestamp)}
             </span>
           )}
         </div>
@@ -473,7 +473,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     : null;
                 return (
                   <tr key={i}>
-                    <td>{b.timestamp ? formatETDateTime24Hour(b.timestamp) : '—'}</td>
+                    <td>{b.timestamp ? formatETDateTime(b.timestamp) : '—'}</td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
@@ -546,6 +546,10 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
+  const currentSymbolRef = useRef(symbol);
+  const analysisContextRef = useRef({ symbol, timeframe });
+  currentSymbolRef.current = symbol;
+  analysisContextRef.current = { symbol, timeframe };
   // Ticker search lives in both the page header and the chart card
   // header, so it needs two refs to reach the input from the page-level
   // Refresh button.
@@ -553,32 +557,48 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const chartTickerSearchRef = useRef<SymbolInputHandle | null>(null);
 
   const fetchQuote = useCallback(async () => {
+    const requestedSymbol = symbol;
     try {
-      const data = await api.getQuote(symbol);
+      const data = await api.getQuote(requestedSymbol);
+      if (currentSymbolRef.current !== requestedSymbol) return;
       setQuote(data);
     } catch (err: any) {
+      if (currentSymbolRef.current !== requestedSymbol) return;
       console.error('Failed to load quote:', err);
     }
   }, [symbol]);
 
   const fetchTransitions = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedTimeframe = timeframe;
     setTransitionsLoading(true);
     try {
-      const data = await api.getTransitions(symbol, timeframe);
+      const data = await api.getTransitions(requestedSymbol, requestedTimeframe);
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setTransitions(data?.transitions || []);
       setLatestScore(data?.latest_score ?? 0);
       setLatestTimestamp(data?.latest_timestamp ?? null);
     } catch (err: any) {
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load transitions:', err);
     } finally {
-      setTransitionsLoading(false);
+      const current = analysisContextRef.current;
+      if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
+        setTransitionsLoading(false);
+      }
     }
   }, [symbol, timeframe]);
 
   const fetchSR = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedTimeframe = timeframe;
     setSrLoading(true);
     try {
-      const data = await api.getPriceRange(symbol, timeframe);
+      const data = await api.getPriceRange(requestedSymbol, requestedTimeframe);
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setSrLevels(data?.levels || []);
       setPriceHistory(data?.price_history || []);
       setLatestClose(data?.latest_close ?? null);
@@ -595,25 +615,41 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         }
       }
     } catch (err: any) {
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load price-range levels:', err);
     } finally {
-      setSrLoading(false);
+      const current = analysisContextRef.current;
+      if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
+        setSrLoading(false);
+      }
     }
   }, [symbol, timeframe]);
 
   const fetchDivergences = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedTimeframe = timeframe;
     setDivergencesLoading(true);
     try {
-      const data = await api.getDivergences(symbol, timeframe);
+      const data = await api.getDivergences(requestedSymbol, requestedTimeframe);
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setDivergences(data?.divergences || []);
     } catch (err: any) {
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load divergences:', err);
     } finally {
-      setDivergencesLoading(false);
+      const current = analysisContextRef.current;
+      if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
+        setDivergencesLoading(false);
+      }
     }
   }, [symbol, timeframe]);
 
 const fetchBars = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedTimeframe = timeframe;
     setBarsLoading(true);
     try {
       // `bars` feeds both CandlestickChart (a canvas-based lightweight-
@@ -627,12 +663,19 @@ const fetchBars = useCallback(async () => {
       // is ~1.5MB, which took 2-40s on the wire. 1m is capped at 2000
       // (~1.4 trading days) — plenty for a chart and far cheaper to ship.
       const LIMITS: Record<string, number> = { '1m': 2000, '5m': 3000, '15m': 4000, '30m': 4000, '1h': 4000, '4h': 3000, '1d': 2000 };
-      const data = await api.getAnalysisBars(symbol, timeframe, LIMITS[timeframe] ?? 5000);
+      const data = await api.getAnalysisBars(requestedSymbol, requestedTimeframe, LIMITS[requestedTimeframe] ?? 5000);
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setBars(data?.bars || []);
     } catch (err: any) {
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load bars:', err);
     } finally {
-      setBarsLoading(false);
+      const current = analysisContextRef.current;
+      if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
+        setBarsLoading(false);
+      }
     }
   }, [symbol, timeframe]);
 
@@ -751,6 +794,26 @@ const fetchBars = useCallback(async () => {
     fetchMTF();
   }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
 
+  // Do not render the previous selection's values under a newly-selected
+  // symbol/timeframe while the replacement requests are in flight.
+  useEffect(() => {
+    setQuote(null);
+  }, [symbol]);
+
+  useEffect(() => {
+    setTransitions([]);
+    setLatestScore(0);
+    setLatestTimestamp(null);
+    setSrLevels([]);
+    setPriceHistory([]);
+    setLatestClose(null);
+    setLatestCloseTimestamp(null);
+    setFetchedAt(null);
+    setPrevClose(null);
+    setDivergences([]);
+    setBars([]);
+  }, [symbol, timeframe]);
+
   useEffect(() => {
     fetchQuote();
     const id = setInterval(fetchQuote, 5000);
@@ -852,7 +915,7 @@ const fetchBars = useCallback(async () => {
                 )}
                 {quote.timestamp && (
                   <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
-                    {formatETDateTime24Hour(quote.timestamp)}
+                    {formatETDateTime(quote.timestamp)}
                   </span>
                 )}
               </>

@@ -78,6 +78,7 @@ class FinnhubNewsProvider(NewsProvider):
                 timestamp=ts,
                 symbol=sym,
                 relevance=0.75 if sym in related else 0.55,
+                url=a.get("url") or None,
             ))
 
         self._mark_ok()

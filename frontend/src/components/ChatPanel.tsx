@@ -16,7 +16,7 @@
  * "Clear" (top-right) permanently deletes the chat history — every
  * universal session and its messages — then opens a fresh session.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api, { ChatMessage } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 
@@ -476,7 +476,7 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
 
   const existingWatchlistId = watchlistIndex?.memberOf[symbol];
   const alreadyWatchlisted = watchlistState === 'done' || existingWatchlistId !== undefined;
-  const lists = watchlistIndex?.lists ?? [];
+  const lists = useMemo(() => watchlistIndex?.lists ?? [], [watchlistIndex?.lists]);
 
   const addToList = useCallback(async (watchlistId: number) => {
     setWatchlistState('busy');

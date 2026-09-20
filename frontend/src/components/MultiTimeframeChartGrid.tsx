@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api, { Bar, BarsResult } from '../services/api';
 import { CandlestickChart, ChartType } from './CandlestickChart';
 import { OVERLAYS, type OverlayKey } from './chartMath';
@@ -60,6 +60,7 @@ export function MultiTimeframeChartGrid({
   const [panels, setPanels] = useState<PanelState[]>(() =>
     timeframes.map(tf => ({ timeframe: tf, bars: [], loading: true, error: null })),
   );
+  const requestGenerationRef = useRef(0);
 
   const handleToggleOverlay = useCallback((key: OverlayKey) => {
     setActiveOverlays(prev => {
@@ -75,7 +76,7 @@ export function MultiTimeframeChartGrid({
   // ── Live bar updates via WebSocket ──────────────────────────────────────
   const subscriptions: MarketSub[] = useMemo(
     () => liveUpdate ? timeframes.map(tf => ({ symbol, timeframe: tf })) : [],
-    [liveUpdate, symbol, timeframes.join(',')],
+    [liveUpdate, symbol, timeframes],
   );
 
   const { latestBars } = useMarketStream({ subscriptions });
@@ -125,7 +126,8 @@ export function MultiTimeframeChartGrid({
   }, [latestBars, symbol]);
 
   // ── Initial data fetch ──────────────────────────────────────────────────
-  const fetchPanel = useCallback(async (tf: string) => {
+  const fetchPanel = useCallback(async (tf: string, requestSymbol: string, generation: number) => {
+    if (requestGenerationRef.current !== generation) return;
     setPanels(prev => prev.map(p =>
       p.timeframe === tf ? { ...p, loading: true, error: null } : p,
     ));
@@ -134,7 +136,8 @@ export function MultiTimeframeChartGrid({
       // which took 2-40s on the wire. Cap each panel so the grid of 6
       // loads fast instead of one slow 1m panel blocking everything.
       const LIMITS: Record<string, number> = { '1m': 2000, '5m': 3000, '15m': 4000, '30m': 4000, '1h': 4000, '4h': 3000, '1d': 2000 };
-      const res: BarsResult = await api.getAnalysisBars(symbol, tf, LIMITS[tf] ?? 5000);
+      const res: BarsResult = await api.getAnalysisBars(requestSymbol, tf, LIMITS[tf] ?? 5000);
+      if (requestGenerationRef.current !== generation) return;
       const bars = res?.bars ?? [];
       setPanels(prev => prev.map(p =>
         p.timeframe === tf
@@ -142,19 +145,27 @@ export function MultiTimeframeChartGrid({
           : p,
       ));
     } catch (e: any) {
+      if (requestGenerationRef.current !== generation) return;
       setPanels(prev => prev.map(p =>
         p.timeframe === tf
           ? { ...p, loading: false, error: e?.message || 'Failed to load' }
           : p,
       ));
     }
-  }, [symbol]);
+  }, []);
 
   useEffect(() => {
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
     // Reset panels when symbol changes
     setPanels(timeframes.map(tf => ({ timeframe: tf, bars: [], loading: true, error: null })));
     // Fetch all in parallel
-    timeframes.forEach(tf => { fetchPanel(tf); });
+    timeframes.forEach(tf => { fetchPanel(tf, symbol, generation); });
+    return () => {
+      if (requestGenerationRef.current === generation) {
+        requestGenerationRef.current += 1;
+      }
+    };
   }, [symbol, timeframes, fetchPanel]);
 
   // Always 2 columns — 6 timeframes stack as 3 rows of 2. The grid
@@ -241,6 +252,7 @@ export function MultiTimeframeChartGrid({
                 symbol={symbol}
                 height={panelHeight}
                 initialChartType={chartType}
+                timeframe={panel.timeframe}
                 initialActiveOverlays={['ema9', 'ema21', 'supertrend']}
                 showVolume={false}
                 showOverlayToolbar={false}

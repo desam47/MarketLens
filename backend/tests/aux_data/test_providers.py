@@ -20,6 +20,7 @@ class TestYFinanceNewsProvider(unittest.TestCase):
                 "publisher": "Reuters",
                 "providerPublishTime": 1710000000,
                 "relatedTickers": ["AAPL", "MSFT"],
+                "link": "https://example.com/apple-quarter",
             },
             {
                 "title": "Tech stocks rally",
@@ -39,6 +40,7 @@ class TestYFinanceNewsProvider(unittest.TestCase):
         self.assertEqual(len(resp.items), 2)
         self.assertEqual(resp.items[0].headline, "AAPL reports record quarter")
         self.assertEqual(resp.items[0].source, "Reuters")
+        self.assertEqual(resp.items[0].url, "https://example.com/apple-quarter")
         self.assertEqual(resp.items[1].headline, "Tech stocks rally")
         self.assertTrue(prov._is_healthy)
 
@@ -63,6 +65,7 @@ class TestYFinanceNewsProvider(unittest.TestCase):
                     "title": "Apple reveals the foldable iPhone Duo",
                     "provider": {"displayName": "Yahoo Finance Video"},
                     "pubDate": "2026-09-09T18:36:45Z",
+                    "canonicalUrl": {"url": "https://finance.yahoo.com/apple-duo"},
                 },
             },
         ]
@@ -78,6 +81,7 @@ class TestYFinanceNewsProvider(unittest.TestCase):
         self.assertEqual(item.timestamp.year, 2026)
         self.assertEqual(item.timestamp.month, 9)
         self.assertEqual(item.relevance, 0.5)
+        self.assertEqual(item.url, "https://finance.yahoo.com/apple-duo")
 
     @patch("yfinance.Ticker")
     def test_get_news_empty_on_exception(self, mock_ticker_cls):

@@ -93,6 +93,13 @@ function CandlestickChartImpl({
   );
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
 
+  // The multi-timeframe grid controls all child chart types from one shared
+  // toolbar. Keep the local chart state in sync when that controlled initial
+  // value changes after mount; useState only consumes its initializer once.
+  useEffect(() => {
+    setChartType(initialChartType);
+  }, [initialChartType]);
+
   // Controlled vs uncontrolled overlay mode. When the parent (the
   // multi-TF grid) passes activeOverlays + onToggleOverlay, the grid owns
   // the set and every panel reflects the same toggles; otherwise this card
@@ -121,6 +128,7 @@ function CandlestickChartImpl({
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
+    const overlayMap = overlaySeriesRef.current;
 
     (async () => {
       try {
@@ -193,7 +201,6 @@ function CandlestickChartImpl({
       cancelled = true;
       if (resizeObserver) resizeObserver.disconnect();
       const chart = chartRef.current;
-      const overlayMap = overlaySeriesRef.current;
       if (chart) {
         try {
           chart.remove();
@@ -324,6 +331,14 @@ function CandlestickChartImpl({
       } catch {
         // ignore
       }
+    } else {
+      // Clear markers when the control is switched off or the transition
+      // collection becomes empty; otherwise old markers remain on the series.
+      try {
+        seriesRef.current.setMarkers([]);
+      } catch {
+        // ignore
+      }
     }
 
     // Overlay management: create series on first activation, set data, remove when off.
@@ -356,7 +371,7 @@ function CandlestickChartImpl({
     }
 
     chart.timeScale().fitContent();
-  }, [bars, transitions, ready, activeOverlays, chartType]);
+  }, [bars, transitions, ready, activeOverlays, chartType, showMarkers, timeframe]);
 
   if (err) {
     return (
