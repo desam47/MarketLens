@@ -107,6 +107,16 @@ class AlertDeliveryResponse(BaseModel):
         return format_edt_iso(value)
 
 
+class AlertTestDeliveryRequest(BaseModel):
+    channel: str
+
+
+class AlertTestDeliveryResponse(BaseModel):
+    channel: str
+    status: str
+    response: str
+
+
 # --- Endpoints ----------------------------------------------------------
 
 
@@ -178,6 +188,26 @@ async def retry_alert_delivery(delivery_id: int, db: Session = Depends(get_db)):
     db.expire_all()
     refreshed = await asyncio.to_thread(repo.get_delivery, delivery_id)
     return refreshed
+
+
+@router.post("/{alert_id}/test-delivery", response_model=AlertTestDeliveryResponse)
+async def test_alert_delivery(
+    alert_id: int,
+    payload: AlertTestDeliveryRequest,
+    db: Session = Depends(get_db),
+    _rl: None = Depends(check_rate_limit(_alerts_limiter)),
+):
+    """Send a one-off notification test without firing or storing a trigger."""
+    repo = AlertRepository(db)
+    alert = await asyncio.to_thread(repo.get_by_id, alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    from backend.notifications.delivery import send_test_delivery
+    try:
+        result = await asyncio.to_thread(send_test_delivery, alert, payload.channel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AlertTestDeliveryResponse(channel=payload.channel, **result)
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)

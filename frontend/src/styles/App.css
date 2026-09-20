@@ -856,6 +856,7 @@ h4 {
 .signal-alert-notifications legend { padding: 0 0.25rem; }
 .signal-alert-check { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 0.3rem !important; }
 .signal-alert-deliveries { flex-basis: 100%; margin-top: 0.4rem; padding-top: 0.45rem; border-top: 1px solid var(--border); }
+.signal-alert-deliveries-heading { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem; }
 .signal-alert-delivery { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0; color: var(--text-secondary); font-size: 0.75rem; }
 .delivery-delivered { color: var(--success, #22c55e); }
 .delivery-failed { color: var(--danger, #ef4444); }
@@ -866,6 +867,7 @@ h4 {
 .signal-alert-main strong { color: var(--text-primary); }
 .signal-alert-snoozed { color: var(--warning, #f59e0b); font-size: 0.78rem; }
 .signal-alert-actions, .signal-alert-trigger-actions { display: flex; align-items: center; gap: 0.45rem; flex: 0 0 auto; }
+.signal-alert-test-actions { display: flex; align-items: center; gap: 0.4rem; flex: 0 0 auto; }
 .signal-alert-empty { padding: 1rem; }
 .signal-alert-triggers { margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
 .signal-alert-triggers-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.5rem; }

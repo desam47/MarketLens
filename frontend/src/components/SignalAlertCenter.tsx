@@ -20,6 +20,22 @@ interface SignalProfile {
   snoozed_until?: string;
 }
 
+interface SignalAlertForm {
+  name: string;
+  symbol: string;
+  direction: string;
+  minScore: number;
+  minStrength: number;
+  market_regime: string;
+  timeframe: string;
+  cooldown_minutes: number;
+  channels: string[];
+  webhookUrl: string;
+  emailTo: string;
+  quietStart: string;
+  quietEnd: string;
+}
+
 const DEFAULT_PROFILE: SignalProfile = {
   direction: 'bullish',
   min_score: 70,
@@ -30,10 +46,30 @@ const DEFAULT_PROFILE: SignalProfile = {
   channels: ['in_app', 'browser'],
 };
 
+const INITIAL_FORM: SignalAlertForm = {
+  name: '',
+  symbol: 'SPY',
+  direction: DEFAULT_PROFILE.direction,
+  minScore: DEFAULT_PROFILE.min_score,
+  minStrength: DEFAULT_PROFILE.min_strength,
+  market_regime: DEFAULT_PROFILE.market_regime,
+  timeframe: DEFAULT_PROFILE.timeframe,
+  cooldown_minutes: DEFAULT_PROFILE.cooldown_minutes,
+  channels: DEFAULT_PROFILE.channels,
+  webhookUrl: '',
+  emailTo: '',
+  quietStart: '',
+  quietEnd: '',
+};
+
 function parseProfile(alert: Alert): SignalProfile {
   try {
     const parsed = JSON.parse(alert.parameter);
-    return { ...DEFAULT_PROFILE, ...(parsed || {}) };
+    const merged = { ...DEFAULT_PROFILE, ...(parsed || {}) };
+    return {
+      ...merged,
+      channels: Array.isArray(merged.channels) && merged.channels.length > 0 ? merged.channels : DEFAULT_PROFILE.channels,
+    };
   } catch {
     return { ...DEFAULT_PROFILE };
   }
@@ -76,26 +112,15 @@ function writeAcknowledged(values: Set<number>): void {
 export function SignalAlertCenter() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [triggers, setTriggers] = useState<AlertTrigger[]>([]);
-  const [form, setForm] = useState({
-    name: '',
-    symbol: 'SPY',
-    direction: DEFAULT_PROFILE.direction,
-    minScore: DEFAULT_PROFILE.min_score,
-    minStrength: DEFAULT_PROFILE.min_strength,
-    market_regime: DEFAULT_PROFILE.market_regime,
-    timeframe: DEFAULT_PROFILE.timeframe,
-    cooldown_minutes: DEFAULT_PROFILE.cooldown_minutes,
-    channels: DEFAULT_PROFILE.channels,
-    webhookUrl: '',
-    emailTo: '',
-    quietStart: '',
-    quietEnd: '',
-  });
+  const [form, setForm] = useState<SignalAlertForm>(INITIAL_FORM);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [acknowledged, setAcknowledged] = useState<Set<number>>(() => readAcknowledged());
   const [deliveriesByAlert, setDeliveriesByAlert] = useState<Map<number, AlertDelivery[]>>(new Map());
+  const [editingAlertId, setEditingAlertId] = useState<number | null>(null);
+  const [editingSnoozedUntil, setEditingSnoozedUntil] = useState<string | undefined>(undefined);
+  const [expandedDeliveries, setExpandedDeliveries] = useState<Set<number>>(new Set());
   const seenTriggerIds = useRef<Set<number> | null>(null);
 
   const signalAlerts = useMemo(
@@ -115,7 +140,7 @@ export function SignalAlertCenter() {
       const signalRows = alertRows.filter((alert) => alert.condition_type === 'signal_profile');
       const deliveryRows = await Promise.all(signalRows.map(async (alert) => [
         alert.id,
-        await api.getAlertDeliveries(alert.id, 20).catch(() => []),
+        await api.getAlertDeliveries(alert.id, 100).catch(() => []),
       ] as const));
       setDeliveriesByAlert(new Map(deliveryRows));
       const previous = seenTriggerIds.current;
@@ -188,7 +213,88 @@ export function SignalAlertCenter() {
     }
   };
 
-  const handleCreate = async (event: React.FormEvent) => {
+  const profileFromForm = (): SignalProfile => ({
+    direction: form.direction,
+    min_score: Number(form.minScore),
+    min_strength: Number(form.minStrength),
+    market_regime: form.market_regime,
+    timeframe: form.timeframe,
+    cooldown_minutes: Number(form.cooldown_minutes),
+    channels: form.channels,
+    webhook_url: form.webhookUrl || undefined,
+    email_to: form.emailTo || undefined,
+    quiet_hours: form.quietStart && form.quietEnd ? { start: form.quietStart, end: form.quietEnd } : undefined,
+    snoozed_until: editingSnoozedUntil,
+  });
+
+  const editAlert = (alert: Alert) => {
+    const profile = parseProfile(alert);
+    setEditingAlertId(alert.id);
+    setEditingSnoozedUntil(profile.snoozed_until);
+    setForm({
+      name: alert.name,
+      symbol: alert.symbol,
+      direction: profile.direction,
+      minScore: profile.min_score,
+      minStrength: profile.min_strength,
+      market_regime: profile.market_regime,
+      timeframe: profile.timeframe,
+      cooldown_minutes: profile.cooldown_minutes,
+      channels: profile.channels,
+      webhookUrl: profile.webhook_url || '',
+      emailTo: profile.email_to || '',
+      quietStart: profile.quiet_hours?.start || '',
+      quietEnd: profile.quiet_hours?.end || '',
+    });
+    setStatus({ message: `Editing ${alert.name}.`, error: false });
+  };
+
+  const cancelEdit = () => {
+    setEditingAlertId(null);
+    setEditingSnoozedUntil(undefined);
+    setForm(INITIAL_FORM);
+  };
+
+  const duplicateAlert = async (alert: Alert) => {
+    const name = `${alert.name} copy`.slice(0, 120);
+    const profile = parseProfile(alert);
+    delete profile.snoozed_until;
+    try {
+      await api.createAlert({
+        name,
+        symbol: alert.symbol,
+        condition_type: alert.condition_type,
+        parameter: JSON.stringify(profile),
+      });
+      setStatus({ message: `Duplicated ${alert.name}.`, error: false });
+      await refresh();
+    } catch (err: any) {
+      setStatus({ message: err?.message || 'Failed to duplicate alert.', error: true });
+    }
+  };
+
+  const removeAlert = async (alert: Alert) => {
+    if (!window.confirm(`Delete “${alert.name}”? This also removes its trigger history.`)) return;
+    try {
+      await api.deleteAlert(alert.id);
+      if (editingAlertId === alert.id) cancelEdit();
+      setStatus({ message: `Deleted ${alert.name}.`, error: false });
+      await refresh();
+    } catch (err: any) {
+      setStatus({ message: err?.message || 'Failed to delete alert.', error: true });
+    }
+  };
+
+  const testDelivery = async (alert: Alert, channel: string) => {
+    try {
+      const result = await api.testAlertDelivery(alert.id, channel);
+      setStatus({ message: `${channel} test: ${result.response}`, error: result.status !== 'delivered' });
+    } catch (err: any) {
+      setStatus({ message: err?.message || `Failed to test ${channel} delivery.`, error: true });
+    }
+  };
+
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     const name = form.name.trim();
     const symbol = form.symbol.trim().toUpperCase();
@@ -202,26 +308,23 @@ export function SignalAlertCenter() {
     }
     setSubmitting(true);
     try {
-      const profile: SignalProfile = {
-        direction: form.direction,
-        min_score: Number(form.minScore),
-        min_strength: Number(form.minStrength),
-        market_regime: form.market_regime,
-        timeframe: form.timeframe,
-        cooldown_minutes: Number(form.cooldown_minutes),
-        channels: form.channels,
-        webhook_url: form.webhookUrl || undefined,
-        email_to: form.emailTo || undefined,
-        quiet_hours: form.quietStart && form.quietEnd ? { start: form.quietStart, end: form.quietEnd } : undefined,
-      };
-      await api.createAlert({
-        name,
-        symbol,
-        condition_type: 'signal_profile',
-        parameter: JSON.stringify(profile),
-      });
-      setForm((current) => ({ ...current, name: '' }));
-      setStatus({ message: `Signal alert "${name}" created.`, error: false });
+      const profile = profileFromForm();
+      if (editingAlertId !== null) {
+        await api.updateAlert(editingAlertId, { name, parameter: JSON.stringify(profile) });
+        setStatus({ message: `Signal alert "${name}" updated.`, error: false });
+        setEditingAlertId(null);
+        setEditingSnoozedUntil(undefined);
+        setForm(INITIAL_FORM);
+      } else {
+        await api.createAlert({
+          name,
+          symbol,
+          condition_type: 'signal_profile',
+          parameter: JSON.stringify(profile),
+        });
+        setForm((current) => ({ ...current, name: '' }));
+        setStatus({ message: `Signal alert "${name}" created.`, error: false });
+      }
       await refresh();
     } catch (err: any) {
       setStatus({ message: err?.message || 'Failed to create signal alert.', error: true });
@@ -275,14 +378,14 @@ export function SignalAlertCenter() {
       <div className="signal-alert-heading">
         <div>
           <h2>Signal Alert Center</h2>
-          <p className="label">Create real-time trend alerts with score, strength, regime, timeframe, and cooldown filters.</p>
+          <p className="label">Create and manage real-time trend alerts with delivery preferences and quiet hours.</p>
         </div>
         <a className="btn btn-secondary" href="#historical-replay">Open Replay</a>
       </div>
 
-      <form className="signal-alert-form" onSubmit={handleCreate}>
+      <form className="signal-alert-form" onSubmit={handleSubmit}>
         <label><span>Name</span><input value={form.name} onChange={(event) => updateProfile('name', event.target.value)} placeholder="SPY bullish setup" maxLength={80} /></label>
-        <label><span>Symbol</span><input value={form.symbol} onChange={(event) => updateProfile('symbol', event.target.value.toUpperCase())} maxLength={8} /></label>
+        <label><span>Symbol</span><input value={form.symbol} disabled={editingAlertId !== null} onChange={(event) => updateProfile('symbol', event.target.value.toUpperCase())} maxLength={8} /></label>
         <label><span>Direction</span><select value={form.direction} onChange={(event) => updateProfile('direction', event.target.value)}><option value="bullish">Bullish</option><option value="bearish">Bearish</option><option value="any">Any</option></select></label>
         <label><span>Timeframe</span><select value={form.timeframe} onChange={(event) => updateProfile('timeframe', event.target.value)}><option value="">All timeframes</option>{ALERT_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}</select></label>
         <label><span>Min score</span><input type="number" min="0" max="100" step="1" value={form.minScore} onChange={(event) => updateProfile('minScore', Number(event.target.value))} /></label>
@@ -294,7 +397,8 @@ export function SignalAlertCenter() {
         {form.channels.includes('email') && <label><span>Email recipient</span><input type="email" value={form.emailTo} onChange={(event) => updateProfile('emailTo', event.target.value)} placeholder="you@example.com" /></label>}
         <label><span>Quiet hours start (ET)</span><input type="time" value={form.quietStart} onChange={(event) => updateProfile('quietStart', event.target.value)} /></label>
         <label><span>Quiet hours end (ET)</span><input type="time" value={form.quietEnd} onChange={(event) => updateProfile('quietEnd', event.target.value)} /></label>
-        <button className="btn btn-primary" type="submit" disabled={submitting}>{submitting ? 'Creating…' : 'Create Signal Alert'}</button>
+        <button className="btn btn-primary" type="submit" disabled={submitting}>{submitting ? (editingAlertId !== null ? 'Saving…' : 'Creating…') : (editingAlertId !== null ? 'Save Signal Alert' : 'Create Signal Alert')}</button>
+        {editingAlertId !== null && <button className="btn btn-secondary" type="button" onClick={cancelEdit}>Cancel edit</button>}
       </form>
 
       {status && <div className={status.error ? 'error-text' : 'info-text'} style={{ marginBottom: 8 }}>{status.message}</div>}
@@ -311,8 +415,12 @@ export function SignalAlertCenter() {
             <div className="signal-alert-actions">
               <label className="alert-toggle"><input type="checkbox" checked={alert.is_enabled} onChange={(event) => void toggleAlert(alert, event.target.checked)} /><span className={alert.is_enabled ? 'enabled-yes' : 'enabled-no'}>{alert.is_enabled ? 'on' : 'off'}</span></label>
               {snoozed ? <button className="btn btn-secondary btn-small" onClick={() => void resumeAlert(alert)}>Resume</button> : <select className="btn btn-secondary btn-small" defaultValue="" onChange={(event) => { const hours = Number(event.target.value); if (hours) void snoozeAlert(alert, hours); event.currentTarget.value = ''; }} aria-label={`Snooze ${alert.name}`}><option value="">Snooze…</option><option value="1">1 hour</option><option value="4">4 hours</option><option value="24">1 day</option></select>}
+              <button className="btn btn-secondary btn-small" onClick={() => editAlert(alert)}>Edit</button>
+              <button className="btn btn-secondary btn-small" onClick={() => void duplicateAlert(alert)}>Duplicate</button>
+              <button className="btn btn-secondary btn-small" onClick={() => void removeAlert(alert)}>Delete</button>
             </div>
-            {(deliveriesByAlert.get(alert.id) || []).length > 0 && <div className="signal-alert-deliveries"><span className="label">Recent delivery status</span>{(deliveriesByAlert.get(alert.id) || []).slice(0, 3).map((delivery) => <div className="signal-alert-delivery" key={delivery.id}><span>{delivery.channel}: <strong className={`delivery-${delivery.status}`}>{delivery.status}</strong>{delivery.response ? ` · ${delivery.response}` : ''}</span>{(delivery.status === 'failed' || (delivery.status === 'skipped' && ['webhook', 'email'].includes(delivery.channel))) && <button className="btn btn-secondary btn-small" onClick={() => void retryDelivery(delivery)}>Retry</button>}</div>)}</div>}
+            {profile.channels.some((channel) => channel === 'webhook' || channel === 'email') && <div className="signal-alert-test-actions">{profile.channels.filter((channel) => channel === 'webhook' || channel === 'email').map((channel) => <button className="btn btn-secondary btn-small" key={`test-${channel}`} onClick={() => void testDelivery(alert, channel)}>Test {channel}</button>)}</div>}
+            {(deliveriesByAlert.get(alert.id) || []).length > 0 && <div className="signal-alert-deliveries"><div className="signal-alert-deliveries-heading"><span className="label">Delivery history ({(deliveriesByAlert.get(alert.id) || []).length})</span><button className="btn btn-secondary btn-small" onClick={() => setExpandedDeliveries((current) => { const next = new Set(current); if (next.has(alert.id)) next.delete(alert.id); else next.add(alert.id); return next; })}>{expandedDeliveries.has(alert.id) ? 'Hide history' : 'View all'}</button></div>{(expandedDeliveries.has(alert.id) ? deliveriesByAlert.get(alert.id) || [] : (deliveriesByAlert.get(alert.id) || []).slice(0, 3)).map((delivery) => <div className="signal-alert-delivery" key={delivery.id}><span>{delivery.channel}: <strong className={`delivery-${delivery.status}`}>{delivery.status}</strong>{delivery.response ? ` · ${delivery.response}` : ''}</span>{(delivery.status === 'failed' || (delivery.status === 'skipped' && ['webhook', 'email'].includes(delivery.channel))) && <button className="btn btn-secondary btn-small" onClick={() => void retryDelivery(delivery)}>Retry</button>}</div>)}</div>}
           </div>;
         })}
       </div>}

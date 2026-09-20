@@ -72,6 +72,38 @@ def _payload(trigger: AlertTrigger, alert: Alert) -> dict:
     }
 
 
+def send_test_delivery(alert: Alert, channel: str) -> dict[str, str]:
+    """Send a one-off test without creating a trigger or delivery history row."""
+    profile = _profile(alert)
+    if channel not in {"in_app", "browser", "webhook", "email"}:
+        raise ValueError("unsupported notification channel")
+    if channel == "in_app":
+        return {"status": "delivered", "response": "In-app alerts are active"}
+    if channel == "browser":
+        return {"status": "skipped", "response": "Browser delivery is handled by connected clients"}
+    if not settings.notifications.enabled:
+        return {"status": "skipped", "response": "External notifications are disabled"}
+    payload = {
+        "event": "alert_test",
+        "trigger_id": None,
+        "alert_id": alert.id,
+        "alert_name": alert.name,
+        "symbol": alert.symbol,
+        "message": f"Test notification for {alert.name}",
+        "observed_value": None,
+        "triggered_at": now_ny().isoformat(),
+    }
+    try:
+        if channel == "webhook":
+            response = _deliver_webhook(str(profile.get("webhook_url") or ""), payload)
+        else:
+            response = _deliver_email(str(profile.get("email_to") or ""), payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Alert test delivery failed: alert=%s channel=%s: %s", alert.id, channel, exc)
+        return {"status": "failed", "response": str(exc)[:1000]}
+    return {"status": "delivered", "response": response}
+
+
 def _deliver_webhook(url: str, payload: dict) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:

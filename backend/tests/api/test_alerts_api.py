@@ -237,6 +237,29 @@ class TestAlertsAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"deleted": 0})
 
+    def test_test_delivery_returns_result_without_triggering_engine(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo, patch(
+            "backend.notifications.delivery.send_test_delivery",
+            return_value={"status": "delivered", "response": "HTTP 200"},
+        ) as send_test:
+            MockRepo.return_value.get_by_id.return_value = _mock_alert(
+                id=4, condition_type="signal_profile", parameter='{"channels":["webhook"]}'
+            )
+            response = self.client.post(
+                "/api/alerts/4/test-delivery", json={"channel": "webhook"}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "delivered")
+        send_test.assert_called_once()
+
+    def test_test_delivery_rejects_unknown_channel(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.get_by_id.return_value = _mock_alert(id=4)
+            response = self.client.post(
+                "/api/alerts/4/test-delivery", json={"channel": "pager"}
+            )
+        self.assertEqual(response.status_code, 400)
+
     # --- GET /api/alerts/{id}/triggers -----------------------------------
 
     def test_get_alert_triggers(self):

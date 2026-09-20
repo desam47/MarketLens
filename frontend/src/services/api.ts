@@ -253,6 +253,12 @@ export interface AlertDelivery {
   created_at: string;
 }
 
+export interface AlertTestDelivery {
+  channel: string;
+  status: string;
+  response: string;
+}
+
 // Backtest
 export type BacktestStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -1607,6 +1613,13 @@ class ApiService {
 
   async retryAlertDelivery(deliveryId: number): Promise<AlertDelivery> {
     return this.fetch<AlertDelivery>(`/alerts/deliveries/${deliveryId}/retry`, { method: 'POST' });
+  }
+
+  async testAlertDelivery(alertId: number, channel: string): Promise<AlertTestDelivery> {
+    return this.fetch<AlertTestDelivery>(`/alerts/${alertId}/test-delivery`, {
+      method: 'POST',
+      body: JSON.stringify({ channel }),
+    });
   }
 
   // Backtest
