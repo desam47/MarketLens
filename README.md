@@ -810,7 +810,7 @@ After the tier1-3 fetch, a gap-check-and-targeted-refill step compares actual vs
 
 Computes indicators, generates signals, and scores symbols. The singleton `market_scanner` holds per-symbol `ScanResult` dicts.
 
-Key indicators: RSI(14), MACD(12,26,9), ATR(14), ADX(14), Bollinger Bands(20,2), volume SMA, price momentum, trend alignment score.
+Key indicators: RSI(14), MACD(12,26,9), ATR(14), ADX(14), SMA-20/50/200, prior 10/20/50-bar breakout levels, relative volume, realized volatility (5/20 ratio), benchmark-relative return, price momentum, and trend alignment score. The Scanner page combines these into composable saved scans with quick templates for breakouts, oversold reversals, MTF alignment, relative-strength leaders, and volatility squeezes.
 
 ### RegimeEngine (`backend/regime/market_regime_engine.py`)
 

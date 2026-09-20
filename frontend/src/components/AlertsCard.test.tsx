@@ -150,7 +150,7 @@ describe('AlertsCard editing an alert', () => {
 });
 
 describe('AlertsCard signal parameter picker', () => {
-  it('shows all 10 known signals as a picker for the default (signal_equals) condition', async () => {
+  it('shows all known scanner signals as a picker for the default (signal_equals) condition', async () => {
     render(<AlertsCard />);
     await screen.findByText('No alerts configured.');
 
@@ -160,6 +160,9 @@ describe('AlertsCard signal parameter picker', () => {
     expect(optionValues).toEqual([
       '', 'RSI_OVERSOLD', 'RSI_OVERBOUGHT', 'MACD_BULLISH', 'MACD_BEARISH',
       'MULTI_TIMEFRAME_BULLISH', 'MULTI_TIMEFRAME_BEARISH', 'HIGH_VOLUME',
+      'VOLUME_SPIKE', 'RSI_OVERSOLD_REVERSAL', 'BREAKOUT', 'BREAKDOWN',
+      'VOLATILITY_CONTRACTION', 'VOLATILITY_EXPANSION',
+      'RELATIVE_STRENGTH_OUTPERFORMER', 'RELATIVE_STRENGTH_UNDERPERFORMER',
       'HEAVY_BUY_PRESSURE', 'HEAVY_SELL_PRESSURE', 'BLOCK_ACTIVITY',
     ]);
   });

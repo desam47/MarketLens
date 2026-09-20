@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 from backend.scanner.filters import (
     ADXStrong,
     AndFilter,
+    Breakdown,
+    Breakout,
     DailyBearish,
     DailyBullish,
     HighVolume,
@@ -20,8 +22,13 @@ from backend.scanner.filters import (
     MinTimeframeBullish,
     MTFAlignment,
     OrFilter,
+    OversoldReversal,
     PriceAbove,
+    PriceAboveMovingAverage,
     PriceBelow,
+    PriceBelowMovingAverage,
+    RelativeStrengthAbove,
+    RelativeStrengthBelow,
     RSIOverbought,
     RSIOversold,
     SignalPresent,
@@ -29,6 +36,9 @@ from backend.scanner.filters import (
     TrendScoreGt,
     TrendScoreLt,
     TrueFilter,
+    VolatilityContraction,
+    VolatilityExpansion,
+    VolumeExpansion,
     apply_filter,
     default_registry,
 )
@@ -200,6 +210,29 @@ class TestConcreteFilters(unittest.TestCase):
         self.assertTrue(ADXStrong(25.0).matches(_result(adx=30.0)))
         self.assertFalse(ADXStrong(25.0).matches(_result(adx=20.0)))
 
+    def test_composite_scanner_filters(self):
+        r = _result(price=110.0, rsi=40.0)
+        r.indicator_values.update({
+            "rsi_previous": 30.0,
+            "price_change_pct": 1.5,
+            "volume_ratio": 2.0,
+            "volatility_ratio": 0.6,
+            "sma_20": 100.0,
+            "highest_high_20": 108.0,
+            "lowest_low_20": 90.0,
+            "rs_pct_SPY": 3.5,
+        })
+        self.assertTrue(OversoldReversal(35, 2).matches(r))
+        self.assertTrue(Breakout(20).matches(r))
+        self.assertFalse(Breakdown(20).matches(r))
+        self.assertTrue(VolumeExpansion(1.5).matches(r))
+        self.assertTrue(PriceAboveMovingAverage(20).matches(r))
+        self.assertFalse(PriceBelowMovingAverage(20).matches(r))
+        self.assertTrue(VolatilityContraction(0.75).matches(r))
+        self.assertFalse(VolatilityExpansion(1.25).matches(r))
+        self.assertTrue(RelativeStrengthAbove("SPY", 2).matches(r))
+        self.assertFalse(RelativeStrengthBelow("SPY", -1).matches(r))
+
 
 class TestComposition(unittest.TestCase):
 
@@ -267,6 +300,8 @@ class TestRegistry(unittest.TestCase):
         self.assertIn("trend_score_gt", types)
         self.assertIn("daily_bullish", types)
         self.assertIn("mtf_alignment", types)
+        self.assertIn("breakout", types)
+        self.assertIn("relative_strength_above", types)
         self.assertIn("true", types)
 
     def test_build_true_filter(self):

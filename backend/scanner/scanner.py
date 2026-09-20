@@ -2,7 +2,9 @@
 Market scanner and ranking system
 """
 import asyncio
+import inspect
 import logging
+import math
 import time
 from datetime import datetime
 from typing import Any
@@ -111,6 +113,13 @@ class Scanner:
         self._tape_cache: dict[str, tuple[float, dict]] = {}
         self._tape_cache_ttl: float = 10.0
 
+        # Benchmark bars are shared by every symbol in a watchlist scan.
+        # Keeping a short process-local cache prevents an RS filter from
+        # turning a 30-second watchlist scan into one provider request per
+        # symbol and benchmark.
+        self._benchmark_bars_cache: dict[str, tuple[float, list]] = {}
+        self._benchmark_bars_ttl: float = 300.0
+
         # Scoring weights for different factors
         self.score_weights = {
             "trend_strength": 0.25,
@@ -122,7 +131,13 @@ class Scanner:
             "adx": 0.05
         }
 
-    def scan_symbol(self, symbol: str, historical_bars: list | None = None, quote: Quote | None = None) -> ScanResult:
+    def scan_symbol(
+        self,
+        symbol: str,
+        historical_bars: list | None = None,
+        quote: Quote | None = None,
+        benchmark_bars: dict[str, list] | None = None,
+    ) -> ScanResult:
         """Scan a single symbol and return results"""
         result = ScanResult(symbol, datetime.now())
 
@@ -166,7 +181,7 @@ class Scanner:
                         })
 
             # Calculate technical indicators
-            self._calculate_indicators(result, symbol, historical_bars)
+            self._calculate_indicators(result, symbol, historical_bars, benchmark_bars)
             self._compute_change(result, historical_bars)
 
             # Calculate scores
@@ -182,7 +197,13 @@ class Scanner:
         self.scan_results[symbol] = result
         return result
 
-    def _calculate_indicators(self, result: ScanResult, symbol: str, historical_bars: list | None = None):
+    def _calculate_indicators(
+        self,
+        result: ScanResult,
+        symbol: str,
+        historical_bars: list | None = None,
+        benchmark_bars: dict[str, list] | None = None,
+    ):
         """Calculate technical indicators for the symbol.
 
         When a real bar is available from the latest timeframe, we use
@@ -241,7 +262,9 @@ class Scanner:
                 # Pull a 3-month daily history and feed it to the
                 # windowed indicators. Use pre-fetched bars if available,
                 # otherwise fetch via the market data manager.
-                self._populate_windowed_indicators(result, symbol, historical_bars)
+                self._populate_windowed_indicators(
+                    result, symbol, historical_bars, benchmark_bars
+                )
 
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")
@@ -265,7 +288,221 @@ class Scanner:
         result.change = result.quote.price - prev_close
         result.change_pct = (result.change / prev_close) * 100
 
-    def _populate_windowed_indicators(self, result: ScanResult, symbol: str, historical_bars: list | None = None):
+    def _benchmark_symbols(self) -> tuple[str, ...]:
+        """Return configured benchmark symbols without importing settings at startup."""
+        try:
+            from backend.config.settings import settings
+
+            return tuple(symbol.upper() for symbol in settings.relative_strength.benchmark_list())
+        except Exception:  # pragma: no cover - defensive configuration fallback
+            return ("SPY", "QQQ")
+
+    def _get_benchmark_bars(self, benchmark: str) -> list:
+        """Load one benchmark history with a short process-local TTL."""
+        now = time.monotonic()
+        cached = self._benchmark_bars_cache.get(benchmark)
+        if cached is not None and now - cached[0] < self._benchmark_bars_ttl:
+            return cached[1]
+        try:
+            bars = market_data_manager.get_historical_bars(
+                benchmark,
+                timeframe="1d",
+                range_="3mo",
+                use_cache=True,
+            )
+            if not isinstance(bars, list):
+                bars = []
+        except Exception as exc:  # pragma: no cover - provider dependent
+            logger.debug("Benchmark history unavailable for %s: %s", benchmark, exc)
+            bars = []
+        self._benchmark_bars_cache[benchmark] = (now, bars)
+        return bars
+
+    @staticmethod
+    def _bar_values(bars: list) -> tuple[list[float], list[float], list[float], list[float]]:
+        """Extract valid close/high/low/volume arrays from provider bars."""
+        closes: list[float] = []
+        highs: list[float] = []
+        lows: list[float] = []
+        volumes: list[float] = []
+        for bar in bars:
+            try:
+                close = float(bar.close)
+                high = float(bar.high)
+                low = float(bar.low)
+                volume = float(bar.volume or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if close <= 0 or high <= 0 or low <= 0:
+                continue
+            closes.append(close)
+            highs.append(high)
+            lows.append(low)
+            volumes.append(max(0.0, volume))
+        return closes, highs, lows, volumes
+
+    @staticmethod
+    def _mean(values: list[float]) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    @staticmethod
+    def _stddev(values: list[float]) -> float | None:
+        if not values:
+            return None
+        mean = sum(values) / len(values)
+        return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
+
+    def _set_unavailable_derived_indicators(self, result: ScanResult) -> None:
+        """Keep the scanner response shape stable when history is unavailable."""
+        for key in (
+            "rsi", "rsi_previous", "rsi_delta", "macd", "adx",
+            "price_change_pct", "volume_ratio", "volatility_ratio",
+            "volatility_5_pct", "volatility_20_pct", "relative_strength",
+        ):
+            result.add_indicator(key, None)
+        for period in (10, 20, 50):
+            result.add_indicator(f"breakout_{period}", False)
+            result.add_indicator(f"breakdown_{period}", False)
+            result.add_indicator(f"highest_high_{period}", None)
+            result.add_indicator(f"lowest_low_{period}", None)
+            result.add_indicator(f"breakout_pct_{period}", None)
+            result.add_indicator(f"breakdown_pct_{period}", None)
+        for period in (20, 50, 200):
+            result.add_indicator(f"sma_{period}", None)
+            result.add_indicator(f"price_vs_sma_{period}_pct", None)
+        for benchmark in self._benchmark_symbols():
+            result.add_indicator(f"rs_pct_{benchmark}", None)
+            result.add_indicator(f"symbol_return_pct_{benchmark}", None)
+            result.add_indicator(f"benchmark_return_pct_{benchmark}", None)
+        for group in ("sma", "highest_high", "lowest_low", "rs_pct", "symbol_return_pct", "benchmark_return_pct"):
+            result.add_indicator(group, {})
+
+    def _populate_derived_indicators(
+        self,
+        result: ScanResult,
+        symbol: str,
+        bars: list,
+        benchmark_bars: dict[str, list] | None,
+    ) -> None:
+        """Populate scanner-specific windows used by the filter builder."""
+        closes, highs, lows, volumes = self._bar_values(bars)
+        if not closes:
+            self._set_unavailable_derived_indicators(result)
+            return
+
+        price = result.indicator_values.get("price")
+        if not isinstance(price, (int, float)) or price <= 0:
+            price = closes[-1]
+        price = float(price)
+
+        # Moving averages are retained both as flattened keys and as a map so
+        # filters can request a supported window without another data fetch.
+        moving_averages: dict[str, float] = {}
+        for period in (20, 50, 200):
+            if len(closes) >= period:
+                average = sum(closes[-period:]) / period
+                moving_averages[str(period)] = average
+                result.add_indicator(f"sma_{period}", average)
+                result.add_indicator(f"price_vs_sma_{period}_pct", (price / average - 1.0) * 100.0)
+            else:
+                result.add_indicator(f"sma_{period}", None)
+                result.add_indicator(f"price_vs_sma_{period}_pct", None)
+        result.add_indicator("sma", moving_averages)
+
+        # Breakout/breakdown levels exclude the current bar. This avoids
+        # making every symbol with a new all-time high look like a breakout
+        # merely because the current bar is included in its own reference.
+        highest_high: dict[str, float] = {}
+        lowest_low: dict[str, float] = {}
+        for period in (10, 20, 50):
+            if len(highs) < period + 1:
+                result.add_indicator(f"highest_high_{period}", None)
+                result.add_indicator(f"lowest_low_{period}", None)
+                result.add_indicator(f"breakout_{period}", False)
+                result.add_indicator(f"breakdown_{period}", False)
+                continue
+            prior_high = max(highs[-period - 1:-1])
+            prior_low = min(lows[-period - 1:-1])
+            highest_high[str(period)] = prior_high
+            lowest_low[str(period)] = prior_low
+            result.add_indicator(f"highest_high_{period}", prior_high)
+            result.add_indicator(f"lowest_low_{period}", prior_low)
+            result.add_indicator(f"breakout_pct_{period}", (price / prior_high - 1.0) * 100.0)
+            result.add_indicator(f"breakdown_pct_{period}", (price / prior_low - 1.0) * 100.0)
+            result.add_indicator(f"breakout_{period}", price > prior_high)
+            result.add_indicator(f"breakdown_{period}", price < prior_low)
+        result.add_indicator("highest_high", highest_high)
+        result.add_indicator("lowest_low", lowest_low)
+
+        # Relative volume compares against the previous 20 bars, excluding
+        # the current bar so an expansion can actually be detected.
+        if len(volumes) >= 2:
+            average_volume = self._mean(volumes[-21:-1])
+            current_volume = volumes[-1]
+            result.add_indicator("volume_avg_20", average_volume)
+            result.add_indicator(
+                "volume_ratio",
+                current_volume / average_volume if average_volume and average_volume > 0 else None,
+            )
+        else:
+            result.add_indicator("volume_avg_20", None)
+            result.add_indicator("volume_ratio", None)
+
+        # Realized volatility uses close-to-close returns. The ratio is the
+        # central squeeze/expansion metric: <1 means contracting, >1 means
+        # expanding relative to the 20-bar baseline.
+        returns = [((closes[i] / closes[i - 1]) - 1.0) * 100.0 for i in range(1, len(closes)) if closes[i - 1] > 0]
+        vol5 = self._stddev(returns[-5:]) if len(returns) >= 5 else None
+        vol20 = self._stddev(returns[-20:]) if len(returns) >= 20 else None
+        result.add_indicator("volatility_5_pct", vol5)
+        result.add_indicator("volatility_20_pct", vol20)
+        result.add_indicator("volatility_ratio", vol5 / vol20 if vol5 is not None and vol20 and vol20 > 0 else None)
+
+        # Price confirmation for an oversold reversal and the previous RSI
+        # are computed alongside the existing RSI series below.
+        if len(closes) >= 2 and closes[-2] > 0:
+            result.add_indicator("price_change_pct", (price / closes[-2] - 1.0) * 100.0)
+        else:
+            result.add_indicator("price_change_pct", None)
+
+        # Benchmark-relative return in percentage points. The configured
+        # benchmarks are fetched once per process TTL and can be injected by
+        # batch callers to avoid any per-symbol requests.
+        benchmark_bars = benchmark_bars or {}
+        primary_rs: float | None = None
+        try:
+            from backend.config.settings import settings
+
+            lookback = int(settings.relative_strength.lookback_days)
+        except Exception:  # pragma: no cover - defensive fallback
+            lookback = 20
+        for benchmark in self._benchmark_symbols():
+            bench = benchmark_bars.get(benchmark)
+            if not bench:
+                bench = bars if benchmark.upper() == symbol.upper() else self._get_benchmark_bars(benchmark)
+            benchmark_closes, _, _, _ = self._bar_values(bench or [])
+            if len(closes) >= lookback + 1 and len(benchmark_closes) >= lookback + 1:
+                symbol_return = (closes[-1] / closes[-lookback - 1] - 1.0) * 100.0
+                benchmark_return = (benchmark_closes[-1] / benchmark_closes[-lookback - 1] - 1.0) * 100.0
+                rs_pct = symbol_return - benchmark_return
+                if primary_rs is None:
+                    primary_rs = rs_pct
+                result.add_indicator(f"rs_pct_{benchmark}", rs_pct)
+                result.add_indicator(f"symbol_return_pct_{benchmark}", symbol_return)
+                result.add_indicator(f"benchmark_return_pct_{benchmark}", benchmark_return)
+            else:
+                result.add_indicator(f"rs_pct_{benchmark}", None)
+                result.add_indicator(f"symbol_return_pct_{benchmark}", None)
+                result.add_indicator(f"benchmark_return_pct_{benchmark}", None)
+        result.add_indicator("relative_strength", primary_rs)
+
+    def _populate_windowed_indicators(
+        self,
+        result: ScanResult,
+        symbol: str,
+        historical_bars: list | None = None,
+        benchmark_bars: dict[str, list] | None = None,
+    ):
         """Compute RSI / MACD / ADX from a bar history window.
 
         If historical_bars is provided, use it. Otherwise, fetch via the market data manager.
@@ -306,10 +543,10 @@ class Scanner:
                     bars = []
 
         if not bars:
-            result.add_indicator("rsi", None)
-            result.add_indicator("macd", None)
-            result.add_indicator("adx", None)
+            self._set_unavailable_derived_indicators(result)
             return
+
+        self._populate_derived_indicators(result, symbol, bars, benchmark_bars)
 
         # Convert to the {"close", "high", "low"} dict shape that
         # BaseIndicator.calculate() expects.
@@ -327,6 +564,11 @@ class Scanner:
 
             rsi_series = RSIIndicator(period=14).calculate(bar_dicts)
             result.add_indicator("rsi", rsi_series[-1] if rsi_series else None)
+            result.add_indicator("rsi_previous", rsi_series[-2] if len(rsi_series) > 1 else None)
+            if len(rsi_series) > 1:
+                result.add_indicator("rsi_delta", rsi_series[-1] - rsi_series[-2])
+            else:
+                result.add_indicator("rsi_delta", None)
 
             macd_series = MACDIndicator().calculate(bar_dicts)
             # MACD returns the histogram; the "current value" consumers
@@ -444,6 +686,23 @@ class Scanner:
                     signals.append("RSI_OVERSOLD")
                 elif rsi_value > 70:
                     signals.append("RSI_OVERBOUGHT")
+            # A reversal requires the prior RSI to have been oversold, the
+            # current RSI to be rising, and price to have turned higher. It
+            # is intentionally separate from RSI_OVERSOLD so scans can
+            # distinguish a falling knife from a confirmed bounce attempt.
+            rsi_previous = result.indicator_values.get("rsi_previous")
+            rsi_delta = result.indicator_values.get("rsi_delta")
+            price_change_pct = result.indicator_values.get("price_change_pct")
+            if (
+                isinstance(rsi_previous, (int, float))
+                and isinstance(rsi_value, (int, float))
+                and isinstance(rsi_delta, (int, float))
+                and isinstance(price_change_pct, (int, float))
+                and rsi_previous <= 35
+                and rsi_delta >= 2
+                and price_change_pct > 0
+            ):
+                signals.append("RSI_OVERSOLD_REVERSAL")
 
             # MACD signals
             macd_value = result.indicator_values.get("macd")
@@ -471,10 +730,35 @@ class Scanner:
 
             # Volume spike signal
             volume = result.indicator_values.get("volume", 0)
-            # This would need volume history to be meaningful
-            # For now, just a placeholder
+            volume_ratio = result.indicator_values.get("volume_ratio")
+            if isinstance(volume_ratio, (int, float)) and volume_ratio >= 2.0:
+                signals.append("VOLUME_SPIKE")
+            # Keep the original absolute-volume signal for compatibility with
+            # existing alerts and clients that do not have bar history.
             if volume > 1000000:  # Arbitrary threshold
                 signals.append("HIGH_VOLUME")
+
+            # Price-pattern and volatility state signals are derived from the
+            # same daily bar window used by the scanner filters.
+            if result.indicator_values.get("breakout_20") is True:
+                signals.append("BREAKOUT")
+            if result.indicator_values.get("breakdown_20") is True:
+                signals.append("BREAKDOWN")
+            volatility_ratio = result.indicator_values.get("volatility_ratio")
+            if isinstance(volatility_ratio, (int, float)):
+                if volatility_ratio <= 0.75:
+                    signals.append("VOLATILITY_CONTRACTION")
+                elif volatility_ratio >= 1.25:
+                    signals.append("VOLATILITY_EXPANSION")
+
+            # Expose a simple primary-benchmark signal for clients that want
+            # a readable label instead of interpreting rs_pct_* themselves.
+            relative_strength = result.indicator_values.get("relative_strength")
+            if isinstance(relative_strength, (int, float)):
+                if relative_strength >= 1.0:
+                    signals.append("RELATIVE_STRENGTH_OUTPERFORMER")
+                elif relative_strength <= -1.0:
+                    signals.append("RELATIVE_STRENGTH_UNDERPERFORMER")
 
             # Tape (Time & Sales) order-flow signals — only when the tape
             # subsystem is enabled and streaming (best-effort; a cold
@@ -485,8 +769,9 @@ class Scanner:
             from backend.config.settings import settings as _settings
             if _settings.tape.enabled:
                 try:
-                    from backend.api.tape.registry import get_tape_engine
                     import time as _time
+
+                    from backend.api.tape.registry import get_tape_engine
                     now = _time.monotonic()
                     cached = self._tape_cache.get(result.symbol)
                     if cached is not None and (now - cached[0]) < self._tape_cache_ttl:
@@ -514,10 +799,12 @@ class Scanner:
         from backend.database import SessionLocal
         batch_bars = {}
         batch_quotes = {}
+        benchmark_symbols = self._benchmark_symbols()
+        symbols_with_benchmarks = list(dict.fromkeys([*symbols, *benchmark_symbols]))
         try:
             with SessionLocal() as db:
                 batch_bars = await market_data_manager.get_batch_historical_bars(
-                    symbols,
+                    symbols_with_benchmarks,
                     timeframe="1d",
                     range_="3mo",
                     use_cache=True,
@@ -541,9 +828,16 @@ class Scanner:
             batch_quotes = {}
 
         results = []
+        benchmark_bars = {benchmark: batch_bars.get(benchmark, []) for benchmark in benchmark_symbols}
         for symbol in symbols:
             # Pass the pre-fetched bars and quote to avoid individual database/provider calls
-            result = self.scan_symbol(symbol, historical_bars=batch_bars.get(symbol), quote=batch_quotes.get(symbol))
+            scan_kwargs = {"benchmark_bars": benchmark_bars} if any(benchmark_bars.values()) else {}
+            result = self.scan_symbol(
+                symbol,
+                historical_bars=batch_bars.get(symbol),
+                quote=batch_quotes.get(symbol),
+                **scan_kwargs,
+            )
             results.append(result)
 
         self.last_scan_time = datetime.now()
@@ -595,7 +889,10 @@ class Scanner:
         # enabled and is the primary cache here, so skipping the DB tier
         # only matters on a Redis miss, and any bars fetched still get
         # written back to Redis for next time.
-        def _prefetch() -> tuple[dict, dict]:
+        benchmark_symbols = self._benchmark_symbols()
+        symbols_with_benchmarks = list(dict.fromkeys([*symbols, *benchmark_symbols]))
+
+        def _prefetch() -> tuple[dict, dict, dict[str, list]]:
             # Lazy import: backend.ai.__init__ pulls in analyze → context,
             # which imports this module back — a top-level import here would
             # be circular when scanner is the import entry point.
@@ -604,18 +901,20 @@ class Scanner:
             # Runs on a worker thread (asyncio.to_thread below), so no
             # event loop here — bridge the async batch-bars call.
             bars = run_sync(market_data_manager.get_batch_historical_bars(
-                symbols,
+                symbols_with_benchmarks,
                 timeframe="1d",
                 range_="3mo",
                 use_cache=True,
             ))
             quotes = market_data_manager.get_batch_quotes(symbols)
-            return bars, quotes
+            benchmarks = {benchmark: bars.get(benchmark, []) for benchmark in benchmark_symbols}
+            return bars, quotes, benchmarks
 
         batch_bars: dict = {}
         batch_quotes: dict = {}
+        benchmark_bars: dict[str, list] = {}
         try:
-            batch_bars, batch_quotes = await asyncio.to_thread(_prefetch)
+            batch_bars, batch_quotes, benchmark_bars = await asyncio.to_thread(_prefetch)
         except Exception as e:
             logger.warning(f"Async scan batch pre-fetch failed, falling back to per-symbol: {e}")
 
@@ -623,14 +922,26 @@ class Scanner:
         # default executor's worker count — prevents overwhelming providers
         # and the DB pool when scanning a large watchlist.
         sem = asyncio.Semaphore(max_concurrent)
+        try:
+            accepts_benchmark_bars = "benchmark_bars" in inspect.signature(self.scan_symbol).parameters
+        except (TypeError, ValueError):
+            accepts_benchmark_bars = True
 
         async def _throttled_scan(symbol: str) -> ScanResult:
             async with sem:
+                scan_kwargs = {}
+                # Keep compatibility with lightweight test/consumer scanner
+                # doubles that implement the historical three-argument
+                # signature. If no benchmark data was prefetched, the real
+                # scanner will lazily use its own short-lived cache.
+                if accepts_benchmark_bars and any(benchmark_bars.values()):
+                    scan_kwargs["benchmark_bars"] = benchmark_bars
                 return await asyncio.to_thread(
                     self.scan_symbol,
                     symbol,
                     batch_bars.get(symbol),
                     batch_quotes.get(symbol),
+                    **scan_kwargs,
                 )
 
         tasks = [_throttled_scan(s) for s in symbols]

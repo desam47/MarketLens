@@ -166,6 +166,105 @@ const FILTER_DEFS: FilterDef[] = [
     description: 'ADX is above threshold (strong trend)',
     paramDefs: [{ key: 'threshold', label: 'Threshold', type: 'number', default: 25, min: 0, max: 100, step: 1 }],
   },
+  {
+    type: 'oversold_reversal',
+    label: 'Oversold Reversal',
+    description: 'RSI was oversold and is turning higher with price confirmation',
+    paramDefs: [
+      { key: 'threshold', label: 'Max Prior RSI', type: 'number', default: 35, min: 0, max: 100, step: 1 },
+      { key: 'min_rsi_rise', label: 'Min RSI Rise', type: 'number', default: 2, min: 0, max: 50, step: 1 },
+    ],
+  },
+  {
+    type: 'breakout',
+    label: 'Breakout',
+    description: 'Price is above the prior high for the selected lookback',
+    paramDefs: [
+      {
+        key: 'lookback', label: 'Lookback', type: 'select', default: '20',
+        options: [{ value: '10', label: '10 bars' }, { value: '20', label: '20 bars' }, { value: '50', label: '50 bars' }],
+      },
+      { key: 'min_breakout_pct', label: 'Min Breakout %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 },
+    ],
+  },
+  {
+    type: 'breakdown',
+    label: 'Breakdown',
+    description: 'Price is below the prior low for the selected lookback',
+    paramDefs: [
+      {
+        key: 'lookback', label: 'Lookback', type: 'select', default: '20',
+        options: [{ value: '10', label: '10 bars' }, { value: '20', label: '20 bars' }, { value: '50', label: '50 bars' }],
+      },
+      { key: 'min_breakdown_pct', label: 'Min Breakdown %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 },
+    ],
+  },
+  {
+    type: 'volume_expansion',
+    label: 'Volume Expansion',
+    description: 'Current volume is above its trailing average',
+    paramDefs: [{ key: 'min_ratio', label: 'Min Ratio', type: 'number', default: 1.5, min: 1, max: 20, step: 0.1 }],
+  },
+  {
+    type: 'price_above_ma',
+    label: 'Price Above SMA',
+    description: 'Price is above a selected simple moving average',
+    paramDefs: [
+      {
+        key: 'period', label: 'Period', type: 'select', default: '20',
+        options: [{ value: '20', label: 'SMA 20' }, { value: '50', label: 'SMA 50' }, { value: '200', label: 'SMA 200' }],
+      },
+      { key: 'min_distance_pct', label: 'Min Distance %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 },
+    ],
+  },
+  {
+    type: 'price_below_ma',
+    label: 'Price Below SMA',
+    description: 'Price is below a selected simple moving average',
+    paramDefs: [
+      {
+        key: 'period', label: 'Period', type: 'select', default: '20',
+        options: [{ value: '20', label: 'SMA 20' }, { value: '50', label: 'SMA 50' }, { value: '200', label: 'SMA 200' }],
+      },
+      { key: 'min_distance_pct', label: 'Min Distance %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 },
+    ],
+  },
+  {
+    type: 'volatility_contraction',
+    label: 'Volatility Contraction',
+    description: 'Five-bar realized volatility is below its 20-bar baseline',
+    paramDefs: [{ key: 'max_ratio', label: 'Max 5/20 Ratio', type: 'number', default: 0.75, min: 0.05, max: 1, step: 0.05 }],
+  },
+  {
+    type: 'volatility_expansion',
+    label: 'Volatility Expansion',
+    description: 'Five-bar realized volatility is above its 20-bar baseline',
+    paramDefs: [{ key: 'min_ratio', label: 'Min 5/20 Ratio', type: 'number', default: 1.25, min: 1, max: 10, step: 0.05 }],
+  },
+  {
+    type: 'relative_strength_above',
+    label: 'Relative Strength Above',
+    description: 'Symbol outperforms a benchmark over the configured lookback',
+    paramDefs: [
+      {
+        key: 'benchmark', label: 'Benchmark', type: 'select', default: 'SPY',
+        options: [{ value: 'SPY', label: 'SPY' }, { value: 'QQQ', label: 'QQQ' }],
+      },
+      { key: 'min_pct', label: 'Min Outperformance %', type: 'number', default: 1, min: -100, max: 100, step: 0.5 },
+    ],
+  },
+  {
+    type: 'relative_strength_below',
+    label: 'Relative Strength Below',
+    description: 'Symbol underperforms a benchmark over the configured lookback',
+    paramDefs: [
+      {
+        key: 'benchmark', label: 'Benchmark', type: 'select', default: 'SPY',
+        options: [{ value: 'SPY', label: 'SPY' }, { value: 'QQQ', label: 'QQQ' }],
+      },
+      { key: 'max_pct', label: 'Max Relative Strength %', type: 'number', default: -1, min: -100, max: 100, step: 0.5 },
+    ],
+  },
 ];
 
 const TYPE_TO_DEF = Object.fromEntries(FILTER_DEFS.map(d => [d.type, d]));

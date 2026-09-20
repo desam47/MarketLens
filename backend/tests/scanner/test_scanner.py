@@ -5,7 +5,7 @@ import asyncio
 import os
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 # Add the backend directory to the path so we can import modules
@@ -219,6 +219,46 @@ class TestScanner(unittest.TestCase):
                 f"{key} should be a number when bars are returned",
             )
             self.assertIsInstance(result.indicator_values[key], (int, float))
+
+    def test_calculate_scanner_windows(self):
+        """Scanner exposes the windows consumed by the saved scan filters."""
+        result = ScanResult("AAPL", datetime.now())
+        result.quote = Quote(
+            symbol="AAPL", price=130.0, timestamp=datetime.now(),
+            provider="yahoo_finance", data_status=DataStatus.DELAYED,
+            volume=2_000_000,
+        )
+
+        bars: list[Bar] = []
+        benchmark: list[Bar] = []
+        for i in range(60):
+            close = 100.0 + i * 0.25
+            bars.append(Bar(
+                symbol="AAPL", timestamp=datetime(2025, 1, 1) + timedelta(days=i),
+                open=close - 0.2, high=close + 0.4, low=close - 0.4,
+                close=close, volume=1_000_000, timeframe="1d",
+                provider="yahoo_finance", data_status=DataStatus.HISTORICAL,
+            ))
+            benchmark.append(Bar(
+                symbol="SPY", timestamp=datetime(2025, 1, 1) + timedelta(days=i),
+                open=100.0, high=100.2, low=99.8, close=100.0,
+                volume=1_000_000, timeframe="1d",
+                provider="yahoo_finance", data_status=DataStatus.HISTORICAL,
+            ))
+
+        # Make the current quote a confirmed breakout and volume expansion.
+        bars[-1] = bars[-1].model_copy(update={"high": 130.5, "close": 130.0, "volume": 2_000_000})
+        with patch("backend.scanner.scanner.market_data_manager"):
+            self.scanner._calculate_indicators(
+                result, "AAPL", bars, {"SPY": benchmark},
+            )
+
+        self.assertIsNotNone(result.indicator_values["sma_20"])
+        self.assertIsNotNone(result.indicator_values["highest_high_20"])
+        self.assertTrue(result.indicator_values["breakout_20"])
+        self.assertEqual(result.indicator_values["volume_ratio"], 2.0)
+        self.assertGreater(result.indicator_values["rs_pct_SPY"], 0)
+        self.assertGreater(result.indicator_values["relative_strength"], 0)
 
     def test_calculate_indicators_db_failure_falls_back(self):
         """DB-cache failure should fall back to a direct provider call."""

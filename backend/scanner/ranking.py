@@ -14,7 +14,7 @@ The categories defined here are:
 - ``biggest_improvement`` — top N by trend_strength score (high-ADX uptrends)
 - ``biggest_deterioration`` — bottom N by trend_strength score
 - ``best_mtf_alignment`` — top N by multi-timeframe bullish agreement
-- ``strongest_relative_strength`` — top N by ADX-confirmed uptrend confidence
+- ``strongest_relative_strength`` — top N by actual benchmark-relative return
 
 Each category can optionally be filtered before ranking so a caller
 can answer questions like "strongest bullish among daily-bullish
@@ -179,7 +179,7 @@ class RankingEngine:
         {
             "name": "strongest_relative_strength",
             "label": "Strongest Relative Strength",
-            "description": "Symbols with the most total bullish-trend confidence (proxy for relative strength).",
+            "description": "Symbols with the strongest return outperformance versus the configured benchmark.",
         },
     ]
 
@@ -392,13 +392,32 @@ class RankingEngine:
     ) -> tuple[list[RankedEntry], int]:
         scored = []
         for r in results:
-            score = _total_trend_confidence(r)
+            # Scanner results now carry actual benchmark-relative returns
+            # (rs_pct_SPY, rs_pct_QQQ, …). Prefer the strongest available
+            # benchmark reading; retain the historical trend-confidence
+            # fallback for cached/older results that predate this field.
+            rs_values = {
+                key.removeprefix("rs_pct_"): value
+                for key, value in r.indicator_values.items()
+                if key.startswith("rs_pct_") and isinstance(value, (int, float))
+            }
+            if rs_values:
+                benchmark, score = max(rs_values.items(), key=lambda item: item[1])
+                metrics = {
+                    "benchmark": benchmark,
+                    "relative_strength_pct": score,
+                    "symbol_return_pct": r.indicator_values.get(f"symbol_return_pct_{benchmark}"),
+                    "benchmark_return_pct": r.indicator_values.get(f"benchmark_return_pct_{benchmark}"),
+                }
+            else:
+                score = _total_trend_confidence(r)
+                metrics = {"bullish_confidence_total": score}
             scored.append(
                 RankedEntry(
                     symbol=r.symbol,
                     score=score,
                     rank=0,
-                    metrics={"bullish_confidence_total": score},
+                    metrics=metrics,
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)

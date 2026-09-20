@@ -13,6 +13,46 @@ interface SavedPreset {
   match: 'AND' | 'OR';
 }
 
+const QUICK_PRESETS: SavedPreset[] = [
+  {
+    name: 'Breakout + Volume',
+    filters: [
+      { type: 'breakout', params: { lookback: '20', min_breakout_pct: 0 } },
+      { type: 'volume_expansion', params: { min_ratio: 1.5 } },
+    ],
+    match: 'AND',
+  },
+  {
+    name: 'Oversold Reversals',
+    filters: [
+      { type: 'oversold_reversal', params: { threshold: 35, min_rsi_rise: 2 } },
+      { type: 'volume_expansion', params: { min_ratio: 1.2 } },
+    ],
+    match: 'AND',
+  },
+  {
+    name: 'MTF Alignment',
+    filters: [{ type: 'mtf_alignment', params: { min_timeframes: 3, min_confidence: 0.5 } }],
+    match: 'AND',
+  },
+  {
+    name: 'Relative Strength Leaders',
+    filters: [
+      { type: 'relative_strength_above', params: { benchmark: 'SPY', min_pct: 1 } },
+      { type: 'price_above_ma', params: { period: '50', min_distance_pct: 0 } },
+    ],
+    match: 'AND',
+  },
+  {
+    name: 'Volatility Squeeze',
+    filters: [
+      { type: 'volatility_contraction', params: { max_ratio: 0.75 } },
+      { type: 'price_above_ma', params: { period: '20', min_distance_pct: 0 } },
+    ],
+    match: 'AND',
+  },
+];
+
 const PRESETS_KEY = 'marketlens.scanner.presets';
 
 function signalLabel(signal: string): string {
@@ -20,7 +60,14 @@ function signalLabel(signal: string): string {
 }
 
 function matchReason(result: ScanResult): string {
-  if (result.signals.length > 0) return result.signals.slice(0, 3).map(signalLabel).join(' · ');
+  const details: string[] = [];
+  const indicators = result.indicator_values || {};
+  const primaryRs = Object.entries(indicators).find(([key, value]) => key.startsWith('rs_pct_') && typeof value === 'number');
+  if (primaryRs) details.push(`RS ${Number(primaryRs[1]) >= 0 ? '+' : ''}${Number(primaryRs[1]).toFixed(1)}%`);
+  if (typeof indicators.volume_ratio === 'number') details.push(`Vol ${indicators.volume_ratio.toFixed(1)}×`);
+  if (typeof indicators.volatility_ratio === 'number') details.push(`Volatility ${indicators.volatility_ratio.toFixed(2)}×`);
+  const signalText = result.signals.length > 0 ? result.signals.slice(0, 3).map(signalLabel).join(' · ') : '';
+  if (signalText || details.length > 0) return [signalText, ...details].filter(Boolean).join(' · ');
   if (result.total_score > 0) return `Positive composite score (+${result.total_score.toFixed(1)})`;
   if (result.total_score < 0) return `Negative composite score (${result.total_score.toFixed(1)})`;
   return 'Matched the selected filters';
@@ -123,6 +170,16 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
             />
             <div className="scanner-presets">
               <div className="scanner-presets-header"><h2>Saved scans</h2><span>{presets.length}</span></div>
+              <div className="scanner-quick-presets">
+                <span className="label">Quick scans</span>
+                <div className="scanner-quick-preset-buttons">
+                  {QUICK_PRESETS.map(preset => (
+                    <button className="btn btn-ghost btn-sm" key={preset.name} onClick={() => loadPreset(preset)}>
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="scanner-save-row">
                 <input value={presetName} onChange={e => setPresetName(e.target.value)} placeholder="Name this scan" />
                 <button className="btn btn-secondary btn-sm" onClick={savePreset} disabled={!presetName.trim() || currentFilters.length === 0}>Save</button>

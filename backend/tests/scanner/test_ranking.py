@@ -99,6 +99,19 @@ class TestRankingEngine(unittest.TestCase):
         names = set(out.keys())
         self.assertEqual(names, {c["name"] for c in self.engine.CATEGORIES})
 
+    def test_relative_strength_ranking_uses_benchmark_alpha(self):
+        outperformer = _result("OUTPERFORMER")
+        outperformer.indicator_values["rs_pct_SPY"] = 8.0
+        underperformer = _result("UNDERPERFORMER")
+        underperformer.indicator_values["rs_pct_SPY"] = -4.0
+
+        ranking = self.engine.rank([underperformer, outperformer], top_n=2)[
+            "strongest_relative_strength"
+        ]
+        self.assertEqual([entry.symbol for entry in ranking.entries], ["OUTPERFORMER", "UNDERPERFORMER"])
+        self.assertEqual(ranking.entries[0].metrics["benchmark"], "SPY")
+        self.assertEqual(ranking.entries[0].score, 8.0)
+
     def test_strongest_bullish_top_n(self):
         results = [
             # strongest_bullish/bearish rank by live price change_pct now,

@@ -411,6 +411,207 @@ class ADXStrong(Filter):
 
 
 # ---------------------------------------------------------------------------
+# Composite scanner filters
+# ---------------------------------------------------------------------------
+
+def _price(result: ScanResult) -> float | None:
+    """Return the best available current price for a scan result."""
+    value = result.indicator_values.get("price")
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    quote = result.quote
+    if quote is not None and isinstance(quote.price, (int, float)) and quote.price > 0:
+        return float(quote.price)
+    return None
+
+
+def _window_value(result: ScanResult, group: str, period: int) -> float | None:
+    """Read a windowed scanner metric from the flattened or grouped shape.
+
+    The grouped fallback keeps the response extensible while the flattened
+    keys remain convenient for API consumers and backwards-compatible with
+    the first scanner implementation.
+    """
+    direct = result.indicator_values.get(f"{group}_{period}")
+    if isinstance(direct, (int, float)):
+        return float(direct)
+    grouped = result.indicator_values.get(group)
+    if isinstance(grouped, dict):
+        value = grouped.get(str(period), grouped.get(period))
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+class OversoldReversal(Filter):
+    """RSI was oversold and is now turning higher with price confirmation."""
+
+    def __init__(self, threshold: float = 35.0, min_rsi_rise: float = 2.0):
+        self.threshold = threshold
+        self.min_rsi_rise = min_rsi_rise
+
+    def matches(self, result: ScanResult) -> bool:
+        rsi = result.indicator_values.get("rsi")
+        previous = result.indicator_values.get("rsi_previous")
+        price_change = result.indicator_values.get("price_change_pct")
+        return (
+            isinstance(rsi, (int, float))
+            and isinstance(previous, (int, float))
+            and isinstance(price_change, (int, float))
+            and float(previous) <= self.threshold
+            and float(rsi) >= float(previous) + self.min_rsi_rise
+            and float(price_change) > 0
+        )
+
+    def describe(self) -> str:
+        return f"oversold reversal (RSI ≤ {self.threshold}, rising ≥ {self.min_rsi_rise})"
+
+
+class Breakout(Filter):
+    """Current price is above the prior high for a lookback window."""
+
+    def __init__(self, lookback: int = 20, min_breakout_pct: float = 0.0):
+        self.lookback = int(lookback)
+        self.min_breakout_pct = float(min_breakout_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        price = _price(result)
+        high = _window_value(result, "highest_high", self.lookback)
+        if price is None or high is None or high <= 0:
+            return False
+        return price >= high * (1.0 + self.min_breakout_pct / 100.0)
+
+    def describe(self) -> str:
+        return f"breakout above {self.lookback}-bar high"
+
+
+class Breakdown(Filter):
+    """Current price is below the prior low for a lookback window."""
+
+    def __init__(self, lookback: int = 20, min_breakdown_pct: float = 0.0):
+        self.lookback = int(lookback)
+        self.min_breakdown_pct = float(min_breakdown_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        price = _price(result)
+        low = _window_value(result, "lowest_low", self.lookback)
+        if price is None or low is None or low <= 0:
+            return False
+        return price <= low * (1.0 - self.min_breakdown_pct / 100.0)
+
+    def describe(self) -> str:
+        return f"breakdown below {self.lookback}-bar low"
+
+
+class VolumeExpansion(Filter):
+    """Current volume is a multiple of its trailing average."""
+
+    def __init__(self, min_ratio: float = 1.5):
+        self.min_ratio = float(min_ratio)
+
+    def matches(self, result: ScanResult) -> bool:
+        ratio = result.indicator_values.get("volume_ratio")
+        return isinstance(ratio, (int, float)) and float(ratio) >= self.min_ratio
+
+    def describe(self) -> str:
+        return f"volume ≥ {self.min_ratio:.1f}× 20-bar average"
+
+
+class PriceAboveMovingAverage(Filter):
+    """Current price is above a selected simple moving average."""
+
+    def __init__(self, period: int = 20, min_distance_pct: float = 0.0):
+        self.period = int(period)
+        self.min_distance_pct = float(min_distance_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        price = _price(result)
+        average = _window_value(result, "sma", self.period)
+        if price is None or average is None or average <= 0:
+            return False
+        return price >= average * (1.0 + self.min_distance_pct / 100.0)
+
+    def describe(self) -> str:
+        return f"price above SMA-{self.period}"
+
+
+class PriceBelowMovingAverage(Filter):
+    """Current price is below a selected simple moving average."""
+
+    def __init__(self, period: int = 20, min_distance_pct: float = 0.0):
+        self.period = int(period)
+        self.min_distance_pct = float(min_distance_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        price = _price(result)
+        average = _window_value(result, "sma", self.period)
+        if price is None or average is None or average <= 0:
+            return False
+        return price <= average * (1.0 - self.min_distance_pct / 100.0)
+
+    def describe(self) -> str:
+        return f"price below SMA-{self.period}"
+
+
+class VolatilityContraction(Filter):
+    """Short-term realized volatility is below long-term volatility."""
+
+    def __init__(self, max_ratio: float = 0.75):
+        self.max_ratio = float(max_ratio)
+
+    def matches(self, result: ScanResult) -> bool:
+        ratio = result.indicator_values.get("volatility_ratio")
+        return isinstance(ratio, (int, float)) and float(ratio) <= self.max_ratio
+
+    def describe(self) -> str:
+        return f"volatility contraction (5/20 ratio ≤ {self.max_ratio:.2f})"
+
+
+class VolatilityExpansion(Filter):
+    """Short-term realized volatility is above long-term volatility."""
+
+    def __init__(self, min_ratio: float = 1.25):
+        self.min_ratio = float(min_ratio)
+
+    def matches(self, result: ScanResult) -> bool:
+        ratio = result.indicator_values.get("volatility_ratio")
+        return isinstance(ratio, (int, float)) and float(ratio) >= self.min_ratio
+
+    def describe(self) -> str:
+        return f"volatility expansion (5/20 ratio ≥ {self.min_ratio:.2f})"
+
+
+class RelativeStrengthAbove(Filter):
+    """Symbol return outperforms a configured benchmark by a percentage."""
+
+    def __init__(self, benchmark: str = "SPY", min_pct: float = 0.0):
+        self.benchmark = benchmark.strip().upper()
+        self.min_pct = float(min_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get(f"rs_pct_{self.benchmark}")
+        return isinstance(value, (int, float)) and float(value) >= self.min_pct
+
+    def describe(self) -> str:
+        return f"RS({self.benchmark}) ≥ {self.min_pct:.1f}%"
+
+
+class RelativeStrengthBelow(Filter):
+    """Symbol return underperforms a configured benchmark by a percentage."""
+
+    def __init__(self, benchmark: str = "SPY", max_pct: float = 0.0):
+        self.benchmark = benchmark.strip().upper()
+        self.max_pct = float(max_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get(f"rs_pct_{self.benchmark}")
+        return isinstance(value, (int, float)) and float(value) <= self.max_pct
+
+    def describe(self) -> str:
+        return f"RS({self.benchmark}) ≤ {self.max_pct:.1f}%"
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -433,6 +634,16 @@ _FILTER_REGISTRY: dict[str, type[Filter]] = {
     "price_above": PriceAbove,
     "price_below": PriceBelow,
     "adx_strong": ADXStrong,
+    "oversold_reversal": OversoldReversal,
+    "breakout": Breakout,
+    "breakdown": Breakdown,
+    "volume_expansion": VolumeExpansion,
+    "price_above_ma": PriceAboveMovingAverage,
+    "price_below_ma": PriceBelowMovingAverage,
+    "volatility_contraction": VolatilityContraction,
+    "volatility_expansion": VolatilityExpansion,
+    "relative_strength_above": RelativeStrengthAbove,
+    "relative_strength_below": RelativeStrengthBelow,
 }
 
 
