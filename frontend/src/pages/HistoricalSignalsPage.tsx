@@ -1,4 +1,5 @@
 import React from 'react';
+import { HistoricalReplayPanel } from '../components/HistoricalReplayPanel';
 import { HistoricalSignalCard } from '../components/HistoricalSignalCard';
 
 export function HistoricalSignalsPage() {
@@ -15,6 +16,7 @@ export function HistoricalSignalsPage() {
           </p>
         </div>
       </div>
+      <HistoricalReplayPanel />
       <HistoricalSignalCard />
     </div>
   );
