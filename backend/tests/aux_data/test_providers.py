@@ -291,6 +291,46 @@ class TestYFinanceOptionsProvider(unittest.TestCase):
         self.assertEqual(resp.chains, [])
         self.assertFalse(prov._is_healthy)
 
+    @patch("yfinance.Ticker")
+    def test_get_options_keeps_chain_when_volume_or_open_interest_is_missing(self, mock_ticker_cls):
+        import pandas as pd
+
+        from backend.aux_data.providers.yfinance_options import YFinanceOptionsProvider
+
+        calls_df = pd.DataFrame(
+            [
+                {
+                    "strike": 200.0,
+                    "volume": float("nan"),
+                    "openInterest": float("nan"),
+                    "impliedVolatility": 0.30,
+                    "inTheMoney": False,
+                }
+            ]
+        )
+        puts_df = pd.DataFrame(
+            [
+                {
+                    "strike": 200.0,
+                    "volume": 25,
+                    "openInterest": 50,
+                    "impliedVolatility": 0.28,
+                    "inTheMoney": True,
+                }
+            ]
+        )
+        mock_ticker = MagicMock()
+        mock_ticker.options = ("2026-12-18",)
+        mock_ticker.option_chain.return_value = MagicMock(calls=calls_df, puts=puts_df)
+        mock_ticker_cls.return_value = mock_ticker
+
+        response = YFinanceOptionsProvider().get_options("AAPL")
+
+        self.assertEqual(len(response.chains), 1)
+        self.assertIsNone(response.chains[0].calls[0].volume)
+        self.assertIsNone(response.chains[0].calls[0].open_interest)
+        self.assertEqual(response.chains[0].puts[0].volume, 25)
+
     def test_classify_unusual(self):
         from backend.aux_data.providers.yfinance_options import YFinanceOptionsProvider
 

@@ -159,10 +159,12 @@ function buildEvents(
 export function CatalystTimelinePanel({ symbol, scanResult }: CatalystTimelinePanelProps) {
   const [state, setState] = useState<CatalystState>({ news: null, fundamentals: null, options: null, errors: [] });
   const [loading, setLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setUpdatedAt(null);
     setState({ news: null, fundamentals: null, options: null, errors: [] });
     Promise.allSettled([
       api.getNews(symbol, 10),
@@ -179,6 +181,7 @@ export function CatalystTimelinePanel({ symbol, scanResult }: CatalystTimelinePa
       if (fundamentals.status === 'rejected') errors.push('Fundamentals unavailable');
       if (options.status === 'rejected') errors.push('Options unavailable');
       setState({ news: newsData, fundamentals: fundamentalsData, options: optionsData, errors });
+      setUpdatedAt(new Date().toISOString());
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -227,6 +230,7 @@ export function CatalystTimelinePanel({ symbol, scanResult }: CatalystTimelinePa
       )}
       {state.errors.length > 0 && <p className="panel-caveat">{state.errors.join(' · ')}</p>}
       {!loading && <p className="panel-caveat">Provider timestamps may be delayed; options and fundamentals are snapshots, not live quotes.</p>}
+      {updatedAt && <p className="panel-caveat">Panel refreshed {formatETDateTime(updatedAt)}</p>}
     </div>
   );
 }

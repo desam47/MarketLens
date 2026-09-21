@@ -17,6 +17,7 @@ import { ConfluenceCard } from '../components/ConfluenceCard';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
+import { ErrorBanner } from '../components/ErrorBanner';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
@@ -439,6 +440,16 @@ const DivergencesPanel = memo(function DivergencesPanel({ divergences }: { diver
 
 // --- Bars table ---
 const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
+  const BARS_PER_PAGE = 50;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(bars.length / BARS_PER_PAGE));
+  const pageStart = page * BARS_PER_PAGE;
+  const pageBars = bars.slice(pageStart, pageStart + BARS_PER_PAGE);
+
+  useEffect(() => {
+    setPage(0);
+  }, [bars[0]?.timestamp]);
+
   // Backend returns newest→oldest (desc=True), so index 0 is already latest
   return (
     <div className="card analysis-card">
@@ -461,10 +472,10 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
               </tr>
             </thead>
             <tbody>
-              {bars.map((b, i) => {
+              {pageBars.map((b, i) => {
                 // Each bar shows change from the next older bar (bars[i+1]);
                 // bars arrive newest→oldest. Absolute $ change + % change.
-                const prev = bars[i + 1];
+                const prev = bars[pageStart + i + 1];
                 const chgAbs =
                   prev && typeof prev.close === 'number' && typeof b.close === 'number'
                     ? b.close - prev.close
@@ -474,7 +485,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                     ? (chgAbs / prev.close) * 100
                     : null;
                 return (
-                  <tr key={i}>
+                  <tr key={b.timestamp || pageStart + i}>
                     <td>{b.timestamp ? formatETDateTime(b.timestamp) : '—'}</td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
@@ -494,6 +505,15 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
           </table>
         </div>
       )}
+      {bars.length > BARS_PER_PAGE && (
+        <div className="bars-pagination">
+          <span>Rows {pageStart + 1}–{Math.min(pageStart + BARS_PER_PAGE, bars.length)} of {bars.length}</span>
+          <div>
+            <button className="btn btn-small" onClick={() => setPage(current => Math.max(0, current - 1))} disabled={page === 0}>Previous</button>
+            <button className="btn btn-small" onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))} disabled={page >= pageCount - 1}>Next</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -501,6 +521,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [latestScore, setLatestScore] = useState(0);
@@ -558,17 +579,31 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const tickerSearchRef = useRef<SymbolInputHandle | null>(null);
   const chartTickerSearchRef = useRef<SymbolInputHandle | null>(null);
 
+  const setLoadError = useCallback((source: string, message: string) => {
+    setLoadErrors(previous => ({ ...previous, [source]: message }));
+  }, []);
+
+  const clearLoadError = useCallback((source: string) => {
+    setLoadErrors(previous => {
+      if (!(source in previous)) return previous;
+      const { [source]: _removed, ...remaining } = previous;
+      return remaining;
+    });
+  }, []);
+
   const fetchQuote = useCallback(async () => {
     const requestedSymbol = symbol;
     try {
       const data = await api.getQuote(requestedSymbol);
       if (currentSymbolRef.current !== requestedSymbol) return;
       setQuote(data);
+      clearLoadError('quote');
     } catch (err: any) {
       if (currentSymbolRef.current !== requestedSymbol) return;
       console.error('Failed to load quote:', err);
+      setLoadError('quote', 'Latest quote is temporarily unavailable.');
     }
-  }, [symbol]);
+  }, [symbol, clearLoadError, setLoadError]);
 
   const fetchTransitions = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -581,17 +616,19 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       setTransitions(data?.transitions || []);
       setLatestScore(data?.latest_score ?? 0);
       setLatestTimestamp(data?.latest_timestamp ?? null);
+      clearLoadError('transitions');
     } catch (err: any) {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load transitions:', err);
+      setLoadError('transitions', 'Trend transitions are temporarily unavailable.');
     } finally {
       const current = analysisContextRef.current;
       if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
         setTransitionsLoading(false);
       }
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, clearLoadError, setLoadError]);
 
   const fetchSR = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -606,6 +643,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       setLatestClose(data?.latest_close ?? null);
       setLatestCloseTimestamp(data?.latest_close_timestamp ?? null);
       setFetchedAt(data?.fetched_at ?? null);
+      clearLoadError('price history');
       // Compute prev_close from today's bar close and change (same as Dashboard)
       // prev_close = today_close - today_change (i.e., yesterday's close)
       if (data?.price_history && Array.isArray(data.price_history)) {
@@ -614,19 +652,24 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
         );
         if (todayEntry && todayEntry.close != null && todayEntry.change != null) {
           setPrevClose(todayEntry.close - todayEntry.change);
+        } else {
+          setPrevClose(null);
         }
+      } else {
+        setPrevClose(null);
       }
     } catch (err: any) {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load price-range levels:', err);
+      setLoadError('price history', 'Price history is temporarily unavailable.');
     } finally {
       const current = analysisContextRef.current;
       if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
         setSrLoading(false);
       }
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, clearLoadError, setLoadError]);
 
   const fetchDivergences = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -637,17 +680,19 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setDivergences(data?.divergences || []);
+      clearLoadError('divergences');
     } catch (err: any) {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load divergences:', err);
+      setLoadError('divergences', 'Divergences are temporarily unavailable.');
     } finally {
       const current = analysisContextRef.current;
       if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
         setDivergencesLoading(false);
       }
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, clearLoadError, setLoadError]);
 
 const fetchBars = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -669,17 +714,19 @@ const fetchBars = useCallback(async () => {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       setBars(data?.bars || []);
+      clearLoadError('bars');
     } catch (err: any) {
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
       console.error('Failed to load bars:', err);
+      setLoadError('bars', 'Chart bars are temporarily unavailable.');
     } finally {
       const current = analysisContextRef.current;
       if (current.symbol === requestedSymbol && current.timeframe === requestedTimeframe) {
         setBarsLoading(false);
       }
     }
-  }, [symbol, timeframe]);
+  }, [symbol, timeframe, clearLoadError, setLoadError]);
 
   const fetchTape = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -693,19 +740,22 @@ const fetchBars = useCallback(async () => {
       setTape(data.snapshot);
       setTapeDisabled(false);
       setTapeError(null);
+      clearLoadError('tape');
     } catch (err: any) {
       if (tapeRequestSymbolRef.current !== requestedSymbol) return;
       // 503 = tape streaming off; anything else is a real error.
       if (String(err?.message || '').includes('503')) {
         setTapeDisabled(true);
         setTapeError(null);
+        clearLoadError('tape');
       } else {
         console.error('Failed to load tape:', err);
         setTapeError(err?.message || 'Failed to load tape data');
+        setLoadError('tape', 'Time and sales data is temporarily unavailable.');
       }
       setTape(null);
     }
-  }, [symbol]);
+  }, [symbol, clearLoadError, setLoadError]);
 
   const fetchScan = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -715,13 +765,15 @@ const fetchBars = useCallback(async () => {
       const data = await api.getScanResult(requestedSymbol, true);
       if (scanRequestSymbolRef.current !== requestedSymbol) return;
       setScanResult(data);
+      clearLoadError('scanner');
     } catch (err: any) {
       if (scanRequestSymbolRef.current !== requestedSymbol) return;
       console.error('Failed to load scan:', err);
+      setLoadError('scanner', 'Signal analysis is temporarily unavailable.');
     } finally {
       if (scanRequestSymbolRef.current === requestedSymbol) setScanLoading(false);
     }
-  }, [symbol]);
+  }, [symbol, clearLoadError, setLoadError]);
 
   const fetchMTF = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -777,13 +829,15 @@ const fetchBars = useCallback(async () => {
       } else {
         setMtfConfluence(null);
       }
+      clearLoadError('multi-timeframe analysis');
     } catch (err: any) {
       if (mtfRequestSymbolRef.current !== requestedSymbol || mtfPresetRef.current !== requestedPreset) return;
       setMtfError(err?.message || 'Failed to load MTF confluence');
+      setLoadError('multi-timeframe analysis', 'Multi-timeframe analysis is temporarily unavailable.');
     } finally {
       if (mtfRequestSymbolRef.current === requestedSymbol && mtfPresetRef.current === requestedPreset) setMtfLoading(false);
     }
-  }, [symbol, mtfPreset]);
+  }, [symbol, mtfPreset, clearLoadError, setLoadError]);
 
   const handleRefresh = useCallback(() => {
     fetchQuote();
@@ -796,10 +850,31 @@ const fetchBars = useCallback(async () => {
     fetchMTF();
   }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
 
+  const retryLoad = useCallback((source: string) => {
+    const retries: Record<string, () => void> = {
+      quote: fetchQuote,
+      transitions: fetchTransitions,
+      'price history': fetchSR,
+      divergences: fetchDivergences,
+      bars: fetchBars,
+      scanner: fetchScan,
+      tape: fetchTape,
+      'multi-timeframe analysis': fetchMTF,
+    };
+    retries[source]?.();
+  }, [fetchQuote, fetchTransitions, fetchSR, fetchDivergences, fetchBars, fetchScan, fetchTape, fetchMTF]);
+
   // Do not render the previous selection's values under a newly-selected
   // symbol/timeframe while the replacement requests are in flight.
   useEffect(() => {
     setQuote(null);
+    setScanResult(null);
+    setTape(null);
+    setTapeDisabled(false);
+    setTapeError(null);
+    setMtfConfluence(null);
+    setMtfError(null);
+    setLoadErrors({});
   }, [symbol]);
 
   useEffect(() => {
@@ -953,6 +1028,14 @@ const fetchBars = useCallback(async () => {
           <button className="btn" onClick={handleRefresh}>↻ Refresh</button>
         </div>
       </div>
+      {Object.entries(loadErrors).map(([source, message]) => (
+        <ErrorBanner
+          key={source}
+          message={message}
+          onDismiss={() => clearLoadError(source)}
+          onRetry={() => retryLoad(source)}
+        />
+      ))}
 
       <div className="symbol-grid">
         <PriceHistoryPanel
@@ -981,6 +1064,17 @@ const fetchBars = useCallback(async () => {
         <div className={divergencesLoading && divergences.length === 0 ? 'card-loading-skeleton' : ''}>
           <DivergencesPanel divergences={divergences} />
         </div>
+        <div className="symbol-grid-pair-panel">
+          <Suspense fallback={<div className="panel-skeleton">Loading catalyst timeline…</div>}>
+            <CatalystTimelinePanel symbol={symbol} scanResult={scanResult} />
+          </Suspense>
+        </div>
+        <div className={`symbol-grid-pair-panel${scanLoading && !scanResult ? ' card-loading-skeleton' : ''}`}>
+          <SignalExplanationPanel
+            symbol={symbol}
+            explanation={scanResult?.explanation}
+          />
+        </div>
         <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
           <ScoreDetailPanel
             totalScore={scanResult?.total_score ?? 0}
@@ -988,12 +1082,6 @@ const fetchBars = useCallback(async () => {
             signals={scanResult?.signals}
             confidence={scanResult?.explanation?.confidence}
             symbol={symbol}
-          />
-        </div>
-        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
-          <SignalExplanationPanel
-            symbol={symbol}
-            explanation={scanResult?.explanation}
           />
         </div>
         <TapePressureCard tape={tape} disabled={tapeDisabled} error={tapeError} />
@@ -1047,11 +1135,8 @@ const fetchBars = useCallback(async () => {
             )}
           />
         )}
-        <Suspense fallback={<div className="panel-skeleton">Loading catalyst timeline…</div>}>
-          <CatalystTimelinePanel symbol={symbol} scanResult={scanResult} />
-        </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading options snapshot…</div>}>
-          <OptionsPanel symbol={symbol} underlyingPrice={scanResult?.quote?.price} />
+          <OptionsPanel symbol={symbol} underlyingPrice={quote?.price ?? scanResult?.quote?.price} />
         </Suspense>
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
           {/* Table stays bounded to the most recent rows (plain HTML

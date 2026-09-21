@@ -104,8 +104,12 @@ class YFinanceOptionsProvider(OptionsProvider):
         puts_df: pd.DataFrame,
     ) -> OptionsChain:
         """Convert a (calls_df, puts_df) pair into an OptionsChain."""
-        calls = [self._to_contract(row, OptionsType.CALL) for _, row in calls_df.iterrows()]
-        puts = [self._to_contract(row, OptionsType.PUT) for _, row in puts_df.iterrows()]
+        calls = [
+            self._to_contract(row, OptionsType.CALL, expiration) for _, row in calls_df.iterrows()
+        ]
+        puts = [
+            self._to_contract(row, OptionsType.PUT, expiration) for _, row in puts_df.iterrows()
+        ]
 
         call_oi = sum(c.open_interest or 0 for c in calls)
         put_oi = sum(c.open_interest or 0 for c in puts)
@@ -131,19 +135,19 @@ class YFinanceOptionsProvider(OptionsProvider):
         )
 
     @staticmethod
-    def _to_contract(row: pd.Series, option_type: OptionsType) -> OptionContract:
+    def _to_contract(row: pd.Series, option_type: OptionsType, expiration: str) -> OptionContract:
         """Convert a single row from the yfinance DataFrame."""
         return OptionContract(
-            strike=float(row.get("strike", 0.0) or 0.0),
-            expiration=str(row.get("expiration", "")),
+            strike=_safe_float(row.get("strike")) or 0.0,
+            expiration=expiration,
             option_type=option_type,
-            bid=OptionContract.model_fields["bid"].annotation and _safe_float(row.get("bid")),
+            bid=_safe_float(row.get("bid")),
             ask=_safe_float(row.get("ask")),
             last=_safe_float(row.get("lastPrice")),
-            volume=int(row.get("volume") or 0) or None,
-            open_interest=int(row.get("openInterest") or 0) or None,
+            volume=_safe_int(row.get("volume")) or None,
+            open_interest=_safe_int(row.get("openInterest")) or None,
             implied_volatility=_safe_float(row.get("impliedVolatility")),
-            in_the_money=bool(row.get("inTheMoney", False)),
+            in_the_money=_safe_bool(row.get("inTheMoney", False)),
         )
 
     @staticmethod
@@ -215,3 +219,26 @@ def _safe_float(value) -> float | None:
         return f
     except (TypeError, ValueError):
         return None
+
+
+def _safe_int(value) -> int | None:
+    """Return a non-negative integer, treating Yahoo's missing values as empty.
+
+    yfinance represents absent volume and open interest as ``NaN``. Calling
+    ``int`` directly on those values raises and previously caused the entire
+    expiration to be discarded.
+    """
+    if value is None or pd.isna(value):
+        return None
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if number >= 0 else None
+
+
+def _safe_bool(value) -> bool:
+    """Treat a missing pandas boolean as ``False`` instead of raising."""
+    if value is None or pd.isna(value):
+        return False
+    return bool(value)

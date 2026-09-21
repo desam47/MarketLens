@@ -28,4 +28,11 @@ describe('ErrorBanner', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+
+  it('calls onRetry when the retry action is clicked', () => {
+    const onRetry = jest.fn();
+    render(<ErrorBanner message="Retry me" onRetry={onRetry} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });

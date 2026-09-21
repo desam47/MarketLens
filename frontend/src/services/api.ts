@@ -1225,6 +1225,7 @@ const AI_TIMEOUT_MS = 150000;
 
 class ApiService {
   private baseUrl: string;
+  private inFlightOptionsRequests = new Map<string, Promise<OptionsResponse>>();
 
   constructor(baseUrl: string = API_BASE) {
     this.baseUrl = baseUrl;
@@ -1994,8 +1995,21 @@ class ApiService {
   }
 
   async getOptions(symbol: string, expiration?: string): Promise<OptionsResponse> {
+    const normalizedSymbol = symbol.trim().toUpperCase();
     const params = expiration ? `?expiration=${encodeURIComponent(expiration)}` : '';
-    return this.fetch<OptionsResponse>(`/aux-data/options/${symbol}${params}`);
+    const requestKey = `${normalizedSymbol}:${expiration ?? 'near-term'}`;
+    const existingRequest = this.inFlightOptionsRequests.get(requestKey);
+    if (existingRequest) return existingRequest;
+
+    const request = this.fetch<OptionsResponse>(`/aux-data/options/${normalizedSymbol}${params}`);
+    this.inFlightOptionsRequests.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      if (this.inFlightOptionsRequests.get(requestKey) === request) {
+        this.inFlightOptionsRequests.delete(requestKey);
+      }
+    }
   }
 
   // ── Phase 2.3.4: custom indicators ──────────────────────────────────

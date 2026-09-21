@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import api, { OptionsChain } from '../services/api';
+import { formatETDateTime } from './chartMath';
 
 interface OptionsPanelProps {
   symbol: string;
@@ -52,11 +53,15 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
   const [selectedExp, setSelectedExp] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
+    setUpdatedAt(null);
     setChains([]);
     setExpirations([]);
     setNearTermIv(null);
@@ -65,7 +70,7 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
     setSelectedExp(null);
     api.getOptions(symbol)
       .then(res => {
-        if (cancelled) return;
+        if (cancelled || requestId !== requestIdRef.current) return;
         if (res.provider === 'disabled') {
           setError('Options disabled — set AUX_OPTIONS_ENABLED=true.');
         } else if (res.provider === 'none' || !res.chains?.length) {
@@ -76,16 +81,58 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
           setNearTermIv(res.near_term_iv);
           setIvRank(res.iv_rank);
           setProvider(res.provider);
+          setUpdatedAt(res.timestamp);
         }
       })
       .catch((e: any) => {
-        if (!cancelled) setError(e?.message || 'Failed to load options');
+        if (!cancelled && requestId === requestIdRef.current) {
+          setError(e?.message || 'Failed to load options');
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestId === requestIdRef.current) setLoading(false);
       });
     return () => { cancelled = true; };
   }, [symbol]);
+
+  const handleExpirationChange = (expiration: string) => {
+    setSelectedExp(expiration);
+    if (chains.some(chain => chain.expiration === expiration)) return;
+
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+    api.getOptions(symbol, expiration)
+      .then(response => {
+        if (requestId !== requestIdRef.current) return;
+        if (response.provider === 'disabled') {
+          setError('Options disabled — set AUX_OPTIONS_ENABLED=true.');
+          return;
+        }
+        const selectedChain = response.chains.find(chain => chain.expiration === expiration);
+        if (!selectedChain) {
+          setError('No options chain returned for the selected expiration.');
+          return;
+        }
+        setChains(previous => [
+          ...previous.filter(chain => chain.expiration !== expiration),
+          selectedChain,
+        ].sort((a, b) => a.expiration.localeCompare(b.expiration)));
+        setExpirations(response.expirations);
+        setNearTermIv(response.near_term_iv);
+        setIvRank(response.iv_rank);
+        setProvider(response.provider);
+        setUpdatedAt(response.timestamp);
+      })
+      .catch((e: any) => {
+        if (requestId === requestIdRef.current) {
+          setError(e?.message || 'Failed to load the selected options expiration');
+        }
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
+  };
 
   const activeChain = useMemo(() => {
     if (!chains.length) return null;
@@ -105,21 +152,44 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
 
   if (!activeChain) return null;
 
-  // Center the chain around the strike nearest to (last *1.0) — fallback to median
+  // Show the same number of strikes below and above the underlying price.
+  // This keeps ITM and OTM coverage balanced for both calls and puts.
   const allStrikes = [...activeChain.calls, ...activeChain.puts]
     .map(c => c.strike)
-    .filter(s => s > 0);
-  const center = allStrikes.length
-    ? allStrikes.sort((a, b) => a - b)[Math.floor(allStrikes.length / 2)]
-    : 0;
-  const window = center * 0.1 || 5;
+    .filter(s => s > 0)
+    .filter((strike, index, strikes) => strikes.indexOf(strike) === index)
+    .sort((a, b) => a - b);
+  const referencePrice = underlyingPrice ?? (allStrikes.length
+    ? allStrikes[Math.floor(allStrikes.length / 2)]
+    : 0);
+  const lowerStrikes = allStrikes.filter(strike => strike < referencePrice);
+  const upperStrikes = allStrikes.filter(strike => strike > referencePrice);
+  const strikesPerSide = Math.min(7, lowerStrikes.length, upperStrikes.length);
+  const visibleStrikes = strikesPerSide > 0
+    ? [
+      ...lowerStrikes.slice(-strikesPerSide),
+      ...upperStrikes.slice(0, strikesPerSide),
+    ]
+    : allStrikes
+      .slice()
+      .sort((a, b) => Math.abs(a - referencePrice) - Math.abs(b - referencePrice))
+      .slice(0, 10)
+      .sort((a, b) => a - b);
+  const visibleStrikeSet = new Set(visibleStrikes);
+  const atmStrike = underlyingPrice == null || allStrikes.length === 0
+    ? null
+    : allStrikes.reduce((closest, strike) => (
+      Math.abs(strike - underlyingPrice) < Math.abs(closest - underlyingPrice) ? strike : closest
+    ));
 
   const calls = activeChain.calls
-    .filter(c => Math.abs(c.strike - center) <= window)
-    .sort((a, b) => b.strike - a.strike);
+    .filter(c => visibleStrikeSet.has(c.strike));
   const puts = activeChain.puts
-    .filter(c => Math.abs(c.strike - center) <= window)
-    .sort((a, b) => a.strike - b.strike);
+    .filter(c => visibleStrikeSet.has(c.strike));
+  const callsByStrike = new Map(calls.map(contract => [contract.strike, contract]));
+  const putsByStrike = new Map(puts.map(contract => [contract.strike, contract]));
+  const strikes = Array.from(new Set([...calls.map(contract => contract.strike), ...puts.map(contract => contract.strike)]))
+    .sort((a, b) => a - b);
 
   const selectedIv = activeChain.avg_iv_call != null && activeChain.avg_iv_put != null
     ? (activeChain.avg_iv_call + activeChain.avg_iv_put) / 2
@@ -174,6 +244,7 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
       </div>
 
       <p className="options-caveat">Expected move is an IV-based estimate for the selected expiry. Options quotes may be delayed.</p>
+      {updatedAt && <p className="panel-caveat">Snapshot updated {formatETDateTime(updatedAt)}</p>}
       <div className="options-flags" aria-label="Unusual options activity">
         <span className="options-flags-label">Flags</span>
         {activityFlags.length > 0 ? activityFlags.map(flag => (
@@ -187,7 +258,7 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
           id="exp-select"
           className="timeframe-select"
           value={activeChain.expiration}
-          onChange={e => setSelectedExp(e.target.value)}
+          onChange={e => handleExpirationChange(e.target.value)}
         >
           {expirations.map(exp => (
             <option key={exp} value={exp}>{exp}</option>
@@ -196,6 +267,11 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
       </div>
 
       <div className="options-chains">
+        <div className="options-chain-legend" aria-label="Options money-ness legend">
+          <span className="options-legend-itm">ITM</span>
+          <span className="options-legend-otm">OTM</span>
+          {atmStrike != null && <span>ATM ≈ ${fmtNum(atmStrike)}</span>}
+        </div>
         <table className="options-table">
           <thead>
             <tr>
@@ -210,30 +286,30 @@ export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelPro
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: Math.max(calls.length, puts.length) }, (_, i) => {
-              const c = calls[i];
-              const p = puts[i];
+            {strikes.map(strike => {
+              const c = callsByStrike.get(strike);
+              const p = putsByStrike.get(strike);
               return (
-                <tr key={i}>
+                <tr key={strike}>
                   {c ? (
                     <>
-                      <td>{fmtNum(c.bid)}</td>
-                      <td>{fmtNum(c.ask)}</td>
-                      <td>{fmtInt(c.volume)}</td>
-                      <td>{fmtInt(c.open_interest)}</td>
+                      <td className={c.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtNum(c.bid)}</td>
+                      <td className={c.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtNum(c.ask)}</td>
+                      <td className={c.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtInt(c.volume)}</td>
+                      <td className={c.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtInt(c.open_interest)}</td>
                     </>
                   ) : (
                     <><td colSpan={4}>—</td></>
                   )}
-                  <td style={{ borderLeft: '1px solid #374151', borderRight: '1px solid #374151', textAlign: 'center' }}>
-                    {c?.strike ?? p?.strike ?? '—'}
+                  <td data-testid="option-strike" className={strike === atmStrike ? 'options-strike-atm' : undefined} style={{ borderLeft: '1px solid #374151', borderRight: '1px solid #374151', textAlign: 'center' }}>
+                    {fmtNum(strike)}{strike === atmStrike && <small>ATM</small>}
                   </td>
                   {p ? (
                     <>
-                      <td>{fmtNum(p.bid)}</td>
-                      <td>{fmtNum(p.ask)}</td>
-                      <td>{fmtInt(p.volume)}</td>
-                      <td>{fmtInt(p.open_interest)}</td>
+                      <td className={p.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtNum(p.bid)}</td>
+                      <td className={p.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtNum(p.ask)}</td>
+                      <td className={p.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtInt(p.volume)}</td>
+                      <td className={p.in_the_money ? 'options-contract-itm' : 'options-contract-otm'}>{fmtInt(p.open_interest)}</td>
                     </>
                   ) : (
                     <><td colSpan={4}>—</td></>
