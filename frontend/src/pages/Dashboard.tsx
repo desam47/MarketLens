@@ -56,7 +56,102 @@ interface DashboardProps {
   onSymbolChange: (symbol: string) => void;
 }
 
+type DashboardSectionId =
+  | 'regime'
+  | 'market_context'
+  | 'confluence'
+  | 'strategy'
+  | 'trends'
+  | 'movers'
+  | 'search'
+  | 'digest'
+  | 'transitions';
+
+interface DashboardLayout {
+  id: string;
+  name: string;
+  visible: DashboardSectionId[];
+  order: DashboardSectionId[];
+  builtIn?: boolean;
+}
+
+const DASHBOARD_LAYOUT_KEY = 'marketlens.dashboard.layout';
+const DASHBOARD_CUSTOM_LAYOUTS_KEY = 'marketlens.dashboard.layouts';
+
+const SECTION_LABELS: Record<DashboardSectionId, string> = {
+  regime: 'Market regime',
+  market_context: 'Market context',
+  confluence: 'Multi-timeframe confluence',
+  strategy: 'Strategy guidance',
+  trends: 'Multi-timeframe trends',
+  movers: 'Top movers',
+  search: 'Natural-language search',
+  digest: 'Market digest',
+  transitions: 'Recent transitions',
+};
+
+const ALL_SECTIONS = Object.keys(SECTION_LABELS) as DashboardSectionId[];
+
+const DASHBOARD_PRESETS: DashboardLayout[] = [
+  {
+    id: 'day_trading', name: 'Day trading', builtIn: true,
+    visible: ALL_SECTIONS,
+    order: ['movers', 'trends', 'confluence', 'regime', 'market_context', 'search', 'strategy', 'transitions', 'digest'],
+  },
+  {
+    id: 'swing_trading', name: 'Swing trading', builtIn: true,
+    visible: ALL_SECTIONS,
+    order: ['confluence', 'regime', 'trends', 'strategy', 'market_context', 'transitions', 'movers', 'digest', 'search'],
+  },
+  {
+    id: 'earnings_research', name: 'Earnings research', builtIn: true,
+    visible: ALL_SECTIONS,
+    order: ['digest', 'market_context', 'regime', 'strategy', 'confluence', 'trends', 'transitions', 'movers', 'search'],
+  },
+  {
+    id: 'options_research', name: 'Options research', builtIn: true,
+    visible: ALL_SECTIONS,
+    order: ['market_context', 'confluence', 'trends', 'movers', 'regime', 'strategy', 'digest', 'transitions', 'search'],
+  },
+  {
+    id: 'long_term', name: 'Long-term investing', builtIn: true,
+    visible: ALL_SECTIONS,
+    order: ['regime', 'market_context', 'strategy', 'trends', 'confluence', 'digest', 'transitions', 'movers', 'search'],
+  },
+];
+
+function readCustomLayouts(): DashboardLayout[] {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(DASHBOARD_CUSTOM_LAYOUTS_KEY) || '[]');
+    if (!Array.isArray(value)) return [];
+    return value.filter((layout): layout is DashboardLayout => (
+      layout && typeof layout.id === 'string' && typeof layout.name === 'string'
+      && Array.isArray(layout.visible) && Array.isArray(layout.order)
+      && layout.visible.every((section: unknown) => ALL_SECTIONS.includes(section as DashboardSectionId))
+      && layout.order.every((section: unknown) => ALL_SECTIONS.includes(section as DashboardSectionId))
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function readSelectedLayout(): string {
+  try {
+    const value = window.localStorage.getItem(DASHBOARD_LAYOUT_KEY);
+    return value && [...DASHBOARD_PRESETS, ...readCustomLayouts()].some(layout => layout.id === value)
+      ? value
+      : DASHBOARD_PRESETS[0].id;
+  } catch {
+    return DASHBOARD_PRESETS[0].id;
+  }
+}
+
 export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
+  const [customLayouts, setCustomLayouts] = useState<DashboardLayout[]>(readCustomLayouts);
+  const [selectedLayoutId, setSelectedLayoutId] = useState<string>(readSelectedLayout);
+  const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
+  const [layoutDraft, setLayoutDraft] = useState<DashboardLayout | null>(null);
+  const [layoutName, setLayoutName] = useState('');
   const [selectedPreset, setSelectedPreset] = useState<string>('day_trading');
   // Defaults on so a tab left open doesn't silently freeze — matches the
   // fix already applied to the Watchlist and Symbol page this session.
@@ -396,6 +491,112 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
 
   const isRefreshing = regimeLoading || sectorLoading || trendsLoading || confluenceLoading || strategyLoading || marketContextLoading;
 
+  const allLayouts = [...DASHBOARD_PRESETS, ...customLayouts];
+  const activeLayout = allLayouts.find(layout => layout.id === selectedLayoutId) || DASHBOARD_PRESETS[0];
+
+  useEffect(() => {
+    window.localStorage.setItem(DASHBOARD_LAYOUT_KEY, selectedLayoutId);
+  }, [selectedLayoutId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DASHBOARD_CUSTOM_LAYOUTS_KEY, JSON.stringify(customLayouts));
+  }, [customLayouts]);
+
+  const openLayoutEditor = () => {
+    setLayoutDraft({ ...activeLayout, visible: [...activeLayout.visible], order: [...activeLayout.order] });
+    setLayoutName(activeLayout.builtIn ? '' : activeLayout.name);
+    setLayoutEditorOpen(true);
+  };
+
+  const toggleLayoutSection = (section: DashboardSectionId) => {
+    setLayoutDraft(current => {
+      if (!current) return current;
+      const visible = current.visible.includes(section)
+        ? current.visible.filter(item => item !== section)
+        : [...current.visible, section];
+      return { ...current, visible };
+    });
+  };
+
+  const moveLayoutSection = (section: DashboardSectionId, direction: -1 | 1) => {
+    setLayoutDraft(current => {
+      if (!current) return current;
+      const index = current.order.indexOf(section);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.order.length) return current;
+      const order = [...current.order];
+      [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+      return { ...current, order };
+    });
+  };
+
+  const saveLayout = () => {
+    if (!layoutDraft) return;
+    const name = layoutName.trim();
+    if (!name) return;
+    const id = layoutDraft.builtIn ? `custom_${Date.now()}` : layoutDraft.id;
+    const saved: DashboardLayout = {
+      id,
+      name,
+      visible: layoutDraft.visible,
+      order: layoutDraft.order,
+    };
+    setCustomLayouts(current => [...current.filter(layout => layout.id !== id), saved]);
+    setSelectedLayoutId(id);
+    setLayoutEditorOpen(false);
+    setLayoutDraft(null);
+  };
+
+  const deleteSelectedLayout = () => {
+    if (activeLayout.builtIn) return;
+    setCustomLayouts(current => current.filter(layout => layout.id !== activeLayout.id));
+    setSelectedLayoutId(DASHBOARD_PRESETS[0].id);
+    setLayoutEditorOpen(false);
+    setLayoutDraft(null);
+  };
+
+  const renderDashboardSection = (section: DashboardSectionId): React.ReactNode => {
+    switch (section) {
+      case 'regime':
+        return regimeLoading && !regime ? <SkeletonCard rows={4} /> : <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />;
+      case 'market_context':
+        return marketContextLoading && !marketContext ? <SkeletonCard rows={3} /> : <MarketContextCard context={marketContext} error={marketContextError} />;
+      case 'confluence':
+        return confluenceLoading && !confluence ? <SkeletonCard rows={5} /> : <ConfluenceCard confluence={confluence} error={confluenceError} selectedPreset={selectedPreset} onPresetChange={setSelectedPreset} />;
+      case 'strategy':
+        return strategyLoading && !strategy ? <SkeletonCard rows={3} /> : <StrategyCard strategy={strategy} error={strategyError} />;
+      case 'trends':
+        return (
+          <div className="trends-section">
+            <h2>Multi-Timeframe Trend</h2>
+            {trendsLoading && trends.length === 0 ? (
+              <>
+                <div className="trend-grid">{Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}</div>
+                <div className="trend-grid">{Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}</div>
+              </>
+            ) : (
+              <>
+                <div className="trend-grid">{trends.slice(0, 5).map(trend => <TrendCard key={trend.timeframe} trend={trend} />)}</div>
+                <div className="trend-grid">{trends.slice(5).map(trend => <TrendCard key={trend.timeframe} trend={trend} />)}</div>
+              </>
+            )}
+            {trends.length === 0 && !trendsLoading && !trendsError && <p className="empty-state">No trend data available</p>}
+            {trendsError && <p className="empty-state">⚠ Failed to load trends: {trendsError}</p>}
+          </div>
+        );
+      case 'movers':
+        return <TopMoversCard onSelectSymbol={onSymbolChange} autoRefresh={autoRefresh} />;
+      case 'search':
+        return <NLSearchBar onSelectSymbol={onSymbolChange} />;
+      case 'digest':
+        return <DigestCard />;
+      case 'transitions':
+        return <TransitionsMiniCard symbol={symbol} onSelectSymbol={onSymbolChange} autoRefresh={autoRefresh} />;
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="dashboard">
       <div className="dashboard-header">
@@ -429,6 +630,25 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
           )}
         </div>
         <div className="header-actions">
+          <div className="dashboard-layout-controls">
+            <label className="dashboard-layout-select-label">
+              <span>Layout</span>
+              <select
+                aria-label="Dashboard layout"
+                value={selectedLayoutId}
+                onChange={event => {
+                  setSelectedLayoutId(event.target.value);
+                  setLayoutEditorOpen(false);
+                }}
+              >
+                <optgroup label="Presets">
+                  {DASHBOARD_PRESETS.map(layout => <option key={layout.id} value={layout.id}>{layout.name}</option>)}
+                </optgroup>
+                {customLayouts.length > 0 && <optgroup label="Saved layouts">{customLayouts.map(layout => <option key={layout.id} value={layout.id}>{layout.name}</option>)}</optgroup>}
+              </select>
+            </label>
+            <button className="btn btn-secondary" type="button" onClick={openLayoutEditor}>Customize</button>
+          </div>
           <SymbolInput symbol={symbol} onChange={onSymbolChange} onSubmit={fetchAll} />
           <button
             className={`btn ${isRefreshing ? 'btn-loading' : ''}`}
@@ -448,82 +668,35 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
         </div>
       </div>
 
-      <div className="dashboard-grid">
-        {/* Regime Card */}
-        {regimeLoading && !regime ? (
-          <SkeletonCard rows={4} />
-        ) : (
-          <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />
-        )}
-
-        {/* Market Context Card */}
-        {marketContextLoading && !marketContext ? (
-          <SkeletonCard rows={3} />
-        ) : (
-          <MarketContextCard context={marketContext} error={marketContextError} />
-        )}
-
-        {/* Confluence Card */}
-        {confluenceLoading && !confluence ? (
-          <SkeletonCard rows={5} />
-        ) : (
-          <ConfluenceCard
-            confluence={confluence}
-            error={confluenceError}
-            selectedPreset={selectedPreset}
-            onPresetChange={setSelectedPreset}
-          />
-        )}
-
-        {/* Strategy Card */}
-        {strategyLoading && !strategy ? (
-          <SkeletonCard rows={3} />
-        ) : (
-          <StrategyCard strategy={strategy} error={strategyError} />
-        )}
-
-        {/* Trends Section */}
-        <div className="trends-section">
-          <h2>Multi-Timeframe Trend</h2>
-          {trendsLoading && trends.length === 0 ? (
-            <>
-              <div className="trend-grid">
-                {Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}
+      {layoutEditorOpen && layoutDraft && (
+        <div className="dashboard-layout-editor card">
+          <div className="dashboard-layout-editor-header">
+            <div><h2>Customize dashboard</h2><p className="label">Choose visible sections and their order, then save this view for quick access.</p></div>
+            <button className="btn btn-secondary" type="button" onClick={() => { setLayoutEditorOpen(false); setLayoutDraft(null); }}>Close</button>
+          </div>
+          <div className="dashboard-layout-editor-list">
+            {layoutDraft.order.map((section, index) => (
+              <div className={`dashboard-layout-editor-row ${layoutDraft.visible.includes(section) ? '' : 'is-hidden'}`} key={section}>
+                <label><input aria-label={`Show ${SECTION_LABELS[section]}`} type="checkbox" checked={layoutDraft.visible.includes(section)} onChange={() => toggleLayoutSection(section)} /> {SECTION_LABELS[section]}</label>
+                <div className="dashboard-layout-editor-actions">
+                  <button className="btn btn-secondary btn-small" type="button" disabled={index === 0} onClick={() => moveLayoutSection(section, -1)} aria-label={`Move ${SECTION_LABELS[section]} up`}>↑</button>
+                  <button className="btn btn-secondary btn-small" type="button" disabled={index === layoutDraft.order.length - 1} onClick={() => moveLayoutSection(section, 1)} aria-label={`Move ${SECTION_LABELS[section]} down`}>↓</button>
+                </div>
               </div>
-              <div className="trend-grid">
-                {Array.from({ length: 5 }).map((_, i) => <TrendCardSkeleton key={i} />)}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="trend-grid">
-                {trends.slice(0, 5).map((trend) => (
-                  <TrendCard key={trend.timeframe} trend={trend} />
-                ))}
-              </div>
-              <div className="trend-grid">
-                {trends.slice(5).map((trend) => (
-                  <TrendCard key={trend.timeframe} trend={trend} />
-                ))}
-              </div>
-            </>
-          )}
-          {trends.length === 0 && !trendsLoading && !trendsError && (
-            <p className="empty-state">No trend data available</p>
-          )}
-          {trendsError && (
-            <p className="empty-state">⚠ Failed to load trends: {trendsError}</p>
-          )}
+            ))}
+          </div>
+          <div className="dashboard-layout-save-row">
+            <input aria-label="Saved layout name" value={layoutName} onChange={event => setLayoutName(event.target.value)} placeholder="e.g. My morning scan" maxLength={50} />
+            <button className="btn btn-primary" type="button" onClick={saveLayout} disabled={!layoutName.trim()}>Save layout</button>
+            {!activeLayout.builtIn && <button className="btn btn-danger" type="button" onClick={deleteSelectedLayout}>Delete saved layout</button>}
+          </div>
         </div>
+      )}
 
-        <TopMoversCard onSelectSymbol={onSymbolChange} autoRefresh={autoRefresh} />
-        <NLSearchBar onSelectSymbol={onSymbolChange} />
-        <DigestCard />
-        <TransitionsMiniCard
-          symbol={symbol}
-          onSelectSymbol={onSymbolChange}
-          autoRefresh={autoRefresh}
-        />
+      <div className="dashboard-grid">
+        {activeLayout.order.filter(section => activeLayout.visible.includes(section)).map(section => (
+          <React.Fragment key={section}>{renderDashboardSection(section)}</React.Fragment>
+        ))}
       </div>
     </div>
   );

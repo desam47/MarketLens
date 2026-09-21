@@ -430,6 +430,114 @@ h4 {
   flex-direction: column;
 }
 
+.dashboard-layout-controls {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+}
+
+.dashboard-layout-select-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dashboard-layout-select-label select,
+.dashboard-layout-save-row input {
+  min-width: 150px;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.dashboard-layout-editor {
+  margin-bottom: 1rem;
+  border: 1px solid rgba(59, 130, 246, 0.38);
+}
+
+.dashboard-layout-editor-header,
+.dashboard-layout-save-row,
+.dashboard-layout-editor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.dashboard-layout-editor-header {
+  align-items: flex-start;
+  margin-bottom: 0.8rem;
+}
+
+.dashboard-layout-editor-header h2 {
+  margin-bottom: 0.2rem;
+}
+
+.dashboard-layout-editor-list {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+
+.dashboard-layout-editor-row {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.3rem;
+  background: rgba(15, 23, 42, 0.3);
+}
+
+.dashboard-layout-editor-row.is-hidden {
+  opacity: 0.55;
+}
+
+.dashboard-layout-editor-row label {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.dashboard-layout-editor-row input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+}
+
+.dashboard-layout-editor-actions {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.dashboard-layout-save-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.dashboard-layout-save-row input {
+  flex: 1;
+  min-width: 200px;
+}
+
+@media (max-width: 900px) {
+  .dashboard-layout-controls {
+    width: 100%;
+  }
+
+  .dashboard-layout-select-label {
+    flex: 1;
+  }
+
+  .dashboard-layout-select-label select {
+    width: 100%;
+  }
+}
+
 .trends-section {
   grid-column: 1 / -1;
 }
