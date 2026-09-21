@@ -16,6 +16,7 @@ const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage')
 const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
 const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
 const RiskDashboardPage = lazy(() => import('./pages/RiskDashboardPage').then(m => ({ default: m.RiskDashboardPage })));
+const TradeJournalPage = lazy(() => import('./pages/TradeJournalPage').then(m => ({ default: m.TradeJournalPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -24,7 +25,7 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub' | 'risk';
+type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub' | 'risk' | 'journal';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -81,6 +82,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'risk':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage /></PageErrorBoundary></Suspense>;
+      case 'journal':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Journal"><TradeJournalPage /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
@@ -119,6 +122,15 @@ export default function App() {
             >
               <span className="nav-icon">🛡️</span>
               Risk Dashboard
+            </button>
+          </li>
+          <li>
+            <button
+              className={currentPage === 'journal' ? 'active' : ''}
+              onClick={() => setCurrentPage('journal')}
+            >
+              <span className="nav-icon">📝</span>
+              Trade Journal
             </button>
           </li>
           <li>
