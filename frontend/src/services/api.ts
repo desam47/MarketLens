@@ -183,6 +183,52 @@ export interface IngestionStatus {
   last_quote_updates?: Record<string, string>;
 }
 
+/** Runtime diagnostics shown on the local System Health page.  The API only
+ * exposes operational metadata here; no environment values or credentials. */
+export interface SystemPerformance {
+  timestamp: string;
+  cache?: {
+    cache?: {
+      bar_hits: number;
+      bar_misses: number;
+      quote_hits: number;
+      quote_misses: number;
+      bar_hit_rate: number;
+      quote_hit_rate: number;
+    };
+    redis?: Record<string, unknown>;
+  } | null;
+  ingestion: {
+    is_running: boolean;
+    total_bars_ingested: number;
+    last_bar_time: string | null;
+    tf_update_latency_seconds: number | null;
+  };
+  providers?: Record<string, {
+    is_healthy: boolean;
+    last_error?: string | null;
+    circuit_breaker_state?: string;
+    consecutive_failures?: number;
+    ws_status?: string;
+  }> | null;
+}
+
+export interface AuxiliaryProviderStatus {
+  provider_name: string;
+  provider_type: 'news' | 'fundamentals' | 'options';
+  is_healthy: boolean;
+  last_error: string | null;
+  last_success: string | null;
+  timestamp: string;
+}
+
+export interface AuxiliaryProviderStatuses {
+  news: AuxiliaryProviderStatus[];
+  fundamentals: AuxiliaryProviderStatus[];
+  options: AuxiliaryProviderStatus[];
+  timestamp: string;
+}
+
 // Phase 3.3.3: WAL mode + Litestream health snapshot.
 export interface BackupStatusData {
   timestamp: string;
@@ -1406,6 +1452,14 @@ class ApiService {
   // Phase 3.3.3: WAL + Litestream backup health.
   async getBackupStatus(): Promise<BackupStatusData> {
     return this.fetch<BackupStatusData>('/system/backup-status');
+  }
+
+  async getSystemPerformance(): Promise<SystemPerformance> {
+    return this.fetch<SystemPerformance>('/system/performance');
+  }
+
+  async getAuxiliaryProviderStatuses(): Promise<AuxiliaryProviderStatuses> {
+    return this.fetch<AuxiliaryProviderStatuses>('/aux-data/providers');
   }
 
   /** Restarts the backend + frontend dev servers. The backend process

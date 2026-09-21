@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
-import api, { HealthData, IngestionStatus, SystemStatus, SystemConfig, BackupStatusData } from '../services/api';
+import api, {
+  AuxiliaryProviderStatus,
+  AuxiliaryProviderStatuses,
+  BackupStatusData,
+  HealthData,
+  IngestionStatus,
+  SystemConfig,
+  SystemPerformance,
+  SystemStatus,
+} from '../services/api';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 import { ErrorBanner } from '../components/ErrorBanner';
 
@@ -9,6 +18,28 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatTimestamp(timestamp: string | null | undefined): string {
+  if (!timestamp) return 'Not available';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  }).format(date);
+}
+
+function freshnessStatus(seconds: number | null | undefined): { label: string; className: string } {
+  if (seconds == null || !Number.isFinite(seconds)) return { label: 'Unknown', className: 'status-warning' };
+  if (seconds <= 60) return { label: 'Fresh', className: 'status-ok' };
+  if (seconds <= 300) return { label: 'Delayed', className: 'status-warning' };
+  return { label: 'Stale', className: 'status-error' };
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +298,124 @@ const BackupCard = memo(function BackupCard({
   );
 });
 
+const RuntimeDataCard = memo(function RuntimeDataCard({
+  performance,
+  loading,
+  error,
+}: {
+  performance: SystemPerformance | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const cache = performance?.cache?.cache;
+  const freshness = freshnessStatus(performance?.ingestion.tf_update_latency_seconds);
+
+  return (
+    <div className={`health-card${loading && !performance ? ' card-loading-skeleton' : ''}`}>
+      <h2>Data Freshness &amp; Cache</h2>
+      {loading && !performance ? (
+        <>
+          <SkeletonBlock width="90%" height="0.8rem" />
+          <SkeletonBlock width="100%" height="0.8rem" />
+          <SkeletonBlock width="75%" height="0.8rem" />
+        </>
+      ) : error && !performance ? (
+        <p className="error-text">⚠ {error}</p>
+      ) : performance ? (
+        <div className="health-details">
+          <p>
+            <strong>Pipeline:</strong>
+            <span className={`status-badge ${freshness.className}`}>{freshness.label}</span>
+          </p>
+          <p><strong>Latest Bar:</strong> <span className="health-value">{formatTimestamp(performance.ingestion.last_bar_time)}</span></p>
+          <p><strong>Pipeline Delay:</strong> <span className="health-value">{performance.ingestion.tf_update_latency_seconds == null ? 'Not available' : `${Math.round(performance.ingestion.tf_update_latency_seconds)}s`}</span></p>
+          {cache ? (
+            <>
+              <p><strong>Quote Cache Hit Rate:</strong> <span className="health-value">{cache.quote_hit_rate.toFixed(1)}%</span></p>
+              <p><strong>Bar Cache Hit Rate:</strong> <span className="health-value">{cache.bar_hit_rate.toFixed(1)}%</span></p>
+            </>
+          ) : (
+            <p><strong>Cache:</strong> <span className="health-value">No cache metrics reported</span></p>
+          )}
+        </div>
+      ) : (
+        <p className="info-text">Runtime metrics unavailable.</p>
+      )}
+    </div>
+  );
+});
+
+function ProviderRow({ provider, category }: { provider: AuxiliaryProviderStatus | { name: string; is_healthy: boolean; lastError?: string | null; breaker?: string; websocket?: string }; category?: string }) {
+  const isAuxiliary = 'provider_name' in provider;
+  const name = isAuxiliary ? provider.provider_name : provider.name;
+  const lastError = isAuxiliary ? provider.last_error : provider.lastError;
+  const detail = isAuxiliary
+    ? provider.last_success ? `Last success ${formatTimestamp(provider.last_success)}` : 'No successful request yet'
+    : [provider.breaker && `Breaker ${provider.breaker}`, provider.websocket && `Stream ${provider.websocket}`].filter(Boolean).join(' · ');
+
+  return (
+    <div className="health-provider-row">
+      <div>
+        <span className="provider-name">{name}</span>
+        {category && <span className="provider-category">{category}</span>}
+        {(detail || lastError) && <small title={lastError || detail}>{lastError ? `Error: ${lastError}` : detail}</small>}
+      </div>
+      <span className={`status-badge ${provider.is_healthy ? 'status-ok' : 'status-error'}`}>
+        {provider.is_healthy ? 'Healthy' : 'Unavailable'}
+      </span>
+    </div>
+  );
+}
+
+const ProviderHealthCard = memo(function ProviderHealthCard({
+  performance,
+  auxiliaryProviders,
+  loading,
+  error,
+}: {
+  performance: SystemPerformance | null;
+  auxiliaryProviders: AuxiliaryProviderStatuses | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const marketProviders = Object.entries(performance?.providers || {}).map(([name, status]) => ({
+    name,
+    is_healthy: status.is_healthy,
+    lastError: status.last_error,
+    breaker: status.circuit_breaker_state,
+    websocket: status.ws_status,
+  }));
+  const auxiliary = auxiliaryProviders
+    ? [
+      ...auxiliaryProviders.news,
+      ...auxiliaryProviders.fundamentals,
+      ...auxiliaryProviders.options,
+    ]
+    : [];
+
+  return (
+    <div className={`health-card health-provider-card${loading && !performance && !auxiliaryProviders ? ' card-loading-skeleton' : ''}`}>
+      <h2>Provider Availability</h2>
+      {loading && !performance && !auxiliaryProviders ? (
+        <>
+          <SkeletonBlock width="100%" height="0.8rem" />
+          <SkeletonBlock width="100%" height="0.8rem" />
+          <SkeletonBlock width="80%" height="0.8rem" />
+        </>
+      ) : error && marketProviders.length === 0 && auxiliary.length === 0 ? (
+        <p className="error-text">⚠ {error}</p>
+      ) : marketProviders.length || auxiliary.length ? (
+        <div className="health-provider-list">
+          {marketProviders.map(provider => <ProviderRow key={`market-${provider.name}`} provider={provider} category="market data" />)}
+          {auxiliary.map(provider => <ProviderRow key={`aux-${provider.provider_type}-${provider.provider_name}`} provider={provider} category={provider.provider_type} />)}
+        </div>
+      ) : (
+        <p className="info-text">No provider status has been reported yet.</p>
+      )}
+    </div>
+  );
+});
+
 const ConnectionTestCard = memo(function ConnectionTestCard({
   health,
   systemStatus,
@@ -339,6 +488,11 @@ export function SystemHealth() {
   const [backupLoading, setBackupLoading] = useState(true);
   const [backupError, setBackupError] = useState<string | null>(null);
 
+  const [performance, setPerformance] = useState<SystemPerformance | null>(null);
+  const [auxiliaryProviders, setAuxiliaryProviders] = useState<AuxiliaryProviderStatuses | null>(null);
+  const [observabilityLoading, setObservabilityLoading] = useState(true);
+  const [observabilityError, setObservabilityError] = useState<string | null>(null);
+
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -400,12 +554,32 @@ export function SystemHealth() {
     }
   }, []);
 
+  const fetchObservability = useCallback(async () => {
+    setObservabilityLoading(true);
+    setObservabilityError(null);
+    const [performanceResult, providersResult] = await Promise.allSettled([
+      api.getSystemPerformance(),
+      api.getAuxiliaryProviderStatuses(),
+    ]);
+
+    if (performanceResult.status === 'fulfilled') setPerformance(performanceResult.value);
+    else setPerformance(null);
+    if (providersResult.status === 'fulfilled') setAuxiliaryProviders(providersResult.value);
+    else setAuxiliaryProviders(null);
+
+    if (performanceResult.status === 'rejected' && providersResult.status === 'rejected') {
+      setObservabilityError('Failed to load runtime and provider status');
+    }
+    setObservabilityLoading(false);
+  }, []);
+
   const fetchAll = useCallback(() => {
     fetchHealth();
     fetchConfig();
     fetchIngestion();
     fetchBackup();
-  }, [fetchHealth, fetchConfig, fetchIngestion, fetchBackup]);
+    fetchObservability();
+  }, [fetchHealth, fetchConfig, fetchIngestion, fetchBackup, fetchObservability]);
 
   useEffect(() => {
     fetchAll();
@@ -452,7 +626,7 @@ export function SystemHealth() {
     }
   }, [restarting]);
 
-  const anyLoading = healthLoading || configLoading || ingestionLoading || backupLoading;
+  const anyLoading = healthLoading || configLoading || ingestionLoading || backupLoading || observabilityLoading;
 
   return (
     <div className="system-health">
@@ -501,6 +675,15 @@ export function SystemHealth() {
         />
 
         <BackupCard backupStatus={backupStatus} loading={backupLoading} error={backupError} />
+
+        <RuntimeDataCard performance={performance} loading={observabilityLoading} error={observabilityError} />
+
+        <ProviderHealthCard
+          performance={performance}
+          auxiliaryProviders={auxiliaryProviders}
+          loading={observabilityLoading}
+          error={observabilityError}
+        />
 
         <ConnectionTestCard
           health={health}
