@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import api, { HistoricalSignal } from '../services/api';
+import api, { HistoricalSignal, ScanResult, TapeSnapshot } from '../services/api';
 
 const STORAGE_KEY = 'marketlens.trade.journal';
 const MAX_SCREENSHOT_BYTES = 1_500_000;
@@ -15,6 +15,16 @@ interface JournalSignalContext {
   strength: number | null;
   marketRegime: string | null;
   return5b: number | null;
+}
+
+interface JournalMarketContext {
+  provider: string | null;
+  dataStatus: string | null;
+  spreadBps: number | null;
+  tapePressure: string | null;
+  pressureTrend: string | null;
+  tapeAcceleration: number | null;
+  volumeAcceleration: number | null;
 }
 
 export interface JournalEntry {
@@ -33,6 +43,7 @@ export interface JournalEntry {
   screenshotDataUrl: string | null;
   reviewNotes: string;
   signalContext: JournalSignalContext | null;
+  marketContext: JournalMarketContext | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -82,6 +93,20 @@ function latestSignal(signals: Record<string, HistoricalSignal>): HistoricalSign
   return Object.values(signals)
     .filter(signal => signal && typeof signal.timestamp === 'string')
     .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))[0] || null;
+}
+
+function marketContext(scan: ScanResult | null, tape: TapeSnapshot | null): JournalMarketContext | null {
+  if (!scan && !tape) return null;
+  const value = scan?.indicator_values?.spread_bps;
+  return {
+    provider: scan?.quote?.provider || null,
+    dataStatus: scan?.quote?.data_status || null,
+    spreadBps: typeof value === 'number' ? value : null,
+    tapePressure: tape?.pressure || null,
+    pressureTrend: tape?.pressure_trend || null,
+    tapeAcceleration: tape?.tape_accel ?? null,
+    volumeAcceleration: tape?.volume_accel ?? null,
+  };
 }
 
 function entryPnl(entry: JournalEntry): number | null {
@@ -176,9 +201,17 @@ export function TradeJournalPage() {
     }
     setSaving(true); setFormError(null);
     let attachedSignal: JournalSignalContext | null = null;
+    let attachedMarket: JournalMarketContext | null = null;
     try {
-      const latest = await api.getLatestSignalsForSymbol(normalizedSymbol);
-      attachedSignal = signalContext(latestSignal(latest));
+      const [latestResult, scanResult, tapeResult] = await Promise.allSettled([
+        api.getLatestSignalsForSymbol(normalizedSymbol),
+        api.getScanResult(normalizedSymbol),
+        api.getTape(normalizedSymbol),
+      ]);
+      if (latestResult.status === 'fulfilled') attachedSignal = signalContext(latestSignal(latestResult.value));
+      const scan = scanResult.status === 'fulfilled' ? scanResult.value : null;
+      const tape = tapeResult.status === 'fulfilled' ? tapeResult.value.snapshot : null;
+      attachedMarket = marketContext(scan, tape);
     } catch {
       // A journal entry remains useful when the provider is unavailable.
     }
@@ -191,6 +224,7 @@ export function TradeJournalPage() {
       stopPrice: parsedStop, targetPrice: parsedTarget, thesis: thesis.trim(),
       screenshotDataUrl, reviewNotes: reviewNotes.trim(),
       signalContext: attachedSignal || existing?.signalContext || null,
+      marketContext: attachedMarket || existing?.marketContext || null,
       createdAt: existing?.createdAt || now, updatedAt: now,
     };
     setEntries(current => existing ? current.map(entry => entry.id === existing.id ? next : entry) : [next, ...current]);
@@ -273,7 +307,7 @@ export function TradeJournalPage() {
               <div className="journal-entry-header"><div><strong className="journal-symbol">{entry.symbol}</strong><span className={`journal-badge journal-${entry.side}`}>{entry.side}</span><span className={`journal-badge journal-status-${entry.status}`}>{entry.status}</span></div><div className="journal-entry-actions"><button className="btn btn-secondary btn-small" onClick={() => editEntry(entry)}>Edit</button><button className="btn btn-danger btn-small" onClick={() => removeEntry(entry.id)}>Delete</button></div></div>
               <div className="journal-entry-metrics"><span><small>Entry</small>{formatDate(entry.entryDate)} · {fmtMoney(entry.entryPrice)}</span><span><small>Exit</small>{entry.exitPrice == null ? '—' : `${formatDate(entry.exitDate)} · ${fmtMoney(entry.exitPrice)}`}</span><span><small>Size</small>{entry.quantity.toLocaleString()}</span><span><small>P&amp;L</small><strong className={pnl == null ? '' : pnl >= 0 ? 'journal-positive' : 'journal-negative'}>{fmtMoney(pnl)}</strong>{rMultiple != null && <em>{rMultiple >= 0 ? '+' : ''}{rMultiple.toFixed(2)}R</em>}</span></div>
               <div className="journal-entry-copy"><div><h3>Thesis</h3><p>{entry.thesis || 'No thesis recorded.'}</p></div><div><h3>Review</h3><p>{entry.reviewNotes || 'No review notes yet.'}</p></div></div>
-              <div className="journal-entry-footer">{entry.signalContext ? <span className="journal-signal"><strong>Signal attached:</strong> {entry.signalContext.timeframe} · {entry.signalContext.trendState || 'unknown'} · {entry.signalContext.marketRegime || 'regime unavailable'} <small>{formatDate(entry.signalContext.timestamp.slice(0, 10))}{entry.signalContext.return5b == null ? '' : ` · 5-bar ${fmtPct(entry.signalContext.return5b)}`}</small></span> : <span className="info-text">No recorded signal was available when this entry was saved.</span>}{entry.screenshotDataUrl && <img className="journal-screenshot" src={entry.screenshotDataUrl} alt={`${entry.symbol} trade screenshot`} />}</div>
+              <div className="journal-entry-footer">{entry.signalContext ? <span className="journal-signal"><strong>Signal attached:</strong> {entry.signalContext.timeframe} · {entry.signalContext.trendState || 'unknown'} · {entry.signalContext.marketRegime || 'regime unavailable'} <small>{formatDate(entry.signalContext.timestamp.slice(0, 10))}{entry.signalContext.return5b == null ? '' : ` · 5-bar ${fmtPct(entry.signalContext.return5b)}`}</small></span> : <span className="info-text">No recorded signal was available when this entry was saved.</span>}{entry.marketContext && <span className="journal-signal"><strong>Market context:</strong> {entry.marketContext.tapePressure ? `tape ${entry.marketContext.tapePressure}` : 'tape unavailable'}{entry.marketContext.pressureTrend && ` · ${entry.marketContext.pressureTrend}`}{entry.marketContext.spreadBps != null && ` · spread ${entry.marketContext.spreadBps.toFixed(1)} bps`}{entry.marketContext.provider && ` · ${entry.marketContext.provider}`}</span>}{entry.screenshotDataUrl && <img className="journal-screenshot" src={entry.screenshotDataUrl} alt={`${entry.symbol} trade screenshot`} />}</div>
             </article>;
           })}
         </div>
