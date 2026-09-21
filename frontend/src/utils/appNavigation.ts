@@ -9,7 +9,8 @@ export type AppPage =
   | 'scanner'
   | 'hub'
   | 'risk'
-  | 'journal';
+  | 'journal'
+  | 'calendar';
 
 const HASH_BY_PAGE: Record<AppPage, string> = {
   dashboard: '#dashboard',
@@ -23,6 +24,7 @@ const HASH_BY_PAGE: Record<AppPage, string> = {
   hub: '#ai-hub',
   risk: '#risk',
   journal: '#journal',
+  calendar: '#calendar',
 };
 
 const PAGE_BY_HASH: Record<string, AppPage> = {
@@ -38,6 +40,7 @@ const PAGE_BY_HASH: Record<string, AppPage> = {
   '#ai-hub': 'hub',
   '#risk': 'risk',
   '#journal': 'journal',
+  '#calendar': 'calendar',
 };
 
 export function pageForHash(hash: string): AppPage {

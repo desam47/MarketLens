@@ -1094,6 +1094,17 @@ h4 {
   font-style: normal;
 }
 
+.calendar-page { max-width: 1100px; margin: 0 auto; }
+.calendar-list { display: grid; gap: 1rem; }
+.calendar-day h2 { font-size: 1rem; margin-bottom: 0.5rem; }
+.calendar-event { display: flex; align-items: center; gap: 0.75rem; padding: 0.65rem 0; border-top: 1px solid var(--border); }
+.calendar-event:first-of-type { border-top: 0; }
+.calendar-event small { margin-left: auto; color: var(--text-muted); }
+.calendar-event-type { padding: 0.18rem 0.5rem; border-radius: 999px; font-size: 0.75rem; background: var(--accent-primary); color: white; }
+.calendar-dividend { background: var(--success); }
+.calendar-ex_dividend { background: var(--warning); color: #111827; }
+.calendar-empty { margin-top: 1rem; text-align: center; color: var(--text-muted); }
+
 .info-text { color: var(--info); }
 .error-text { color: var(--danger); }
 

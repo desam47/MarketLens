@@ -20,6 +20,7 @@ const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ defaul
 const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
 const RiskDashboardPage = lazy(() => import('./pages/RiskDashboardPage').then(m => ({ default: m.RiskDashboardPage })));
 const TradeJournalPage = lazy(() => import('./pages/TradeJournalPage').then(m => ({ default: m.TradeJournalPage })));
+const CalendarPage = lazy(() => import('./pages/CalendarPage').then(m => ({ default: m.CalendarPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -117,6 +118,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage /></PageErrorBoundary></Suspense>;
       case 'journal':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Journal"><TradeJournalPage /></PageErrorBoundary></Suspense>;
+      case 'calendar':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Earnings & Events"><CalendarPage /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
@@ -130,6 +133,9 @@ export default function App() {
           <span className="logo-text">MarketLens</span>
         </div>
         <ul className="nav-links">
+          <li>
+            <button className={currentPage === 'calendar' ? 'active' : ''} onClick={() => navigateTo('calendar')}><span className="nav-icon">🗓️</span>Earnings &amp; Events</button>
+          </li>
           <li>
             <button
               className={currentPage === 'scanner' ? 'active' : ''}

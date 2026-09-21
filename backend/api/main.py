@@ -27,6 +27,7 @@ from backend.api.alerts.router import router as alerts_router
 from backend.api.aux_data.router import router as aux_data_router
 from backend.api.backtest.router import router as backtest_router
 from backend.api.cache import CacheMiddleware
+from backend.api.calendar.router import router as calendar_router
 from backend.api.custom_indicators.router import router as custom_indicators_router
 from backend.api.drawing_tools.router import router as drawing_tools_router
 from backend.api.finnhub.router import router as finnhub_router
@@ -507,6 +508,7 @@ app.include_router(market_context.router)
 app.include_router(market_data_routes_router)
 app.include_router(tape_router)
 app.include_router(watchlist_router)
+app.include_router(calendar_router)
 app.include_router(ai_router)
 # Less frequently hit, in their original relative order:
 app.include_router(alerts_router)

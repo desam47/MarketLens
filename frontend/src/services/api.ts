@@ -265,6 +265,22 @@ export interface WatchlistSymbol {
   entity_type?: 'stock' | 'etf' | null;
 }
 
+export interface CalendarEvent {
+  symbol: string;
+  event_type: 'earnings' | 'ex_dividend' | 'dividend' | string;
+  date: string;
+  source: string;
+}
+
+export interface WatchlistCalendar {
+  watchlist_id: number;
+  events: CalendarEvent[];
+  symbols_requested: number;
+  symbols_with_events: number;
+  provider: string;
+  timestamp: string;
+}
+
 // Alerts
 export interface Alert {
   id: number;
@@ -1571,6 +1587,10 @@ class ApiService {
 
   async getWatchlistSymbols(watchlistId: number): Promise<WatchlistSymbol[]> {
     return this.fetch<WatchlistSymbol[]>(`/watchlists/${watchlistId}/symbols`);
+  }
+
+  async getWatchlistCalendar(watchlistId: number): Promise<WatchlistCalendar> {
+    return this.fetch<WatchlistCalendar>(`/calendar/watchlist/${watchlistId}`);
   }
 
   async createWatchlist(name: string, description?: string): Promise<Watchlist> {
