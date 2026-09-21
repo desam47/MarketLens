@@ -134,9 +134,11 @@ class _ExpectedStopFilter(logging.Filter):
 logging.getLogger("webull.data").addFilter(_ExpectedStopFilter())
 
 _SnapshotCb = Callable[
-    [str, float, float | None, "object", float | None, float | None, float | None], None
+    [str, float, float | None, "object", float | None, float | None, float | None,
+     float | None, float | None, float | None, float | None], None
 ]
 _TradeCb = Callable[[str, float, float | None, "object", str | None], None]
+_BboCb = Callable[[str, float | None, float | None, float | None, float | None, "object"], None]
 _StatusCb = Callable[[str], None]
 
 # Webull tick "side" codes seen in the wild. 1 = buy-initiated,
@@ -178,6 +180,19 @@ def _num(v) -> float | None:
         return None
 
 
+def _field(obj, *names):
+    """Read an SDK field across Webull SDK versions."""
+    for name in names:
+        value = getattr(obj, name, None)
+        try:
+            value = value() if callable(value) else value
+        except Exception:  # noqa: BLE001
+            continue
+        if value is not None:
+            return value
+    return None
+
+
 class WebullStreamClient:
     def __init__(
         self,
@@ -189,6 +204,7 @@ class WebullStreamClient:
         mqtt_host: str = "",
         on_snapshot: _SnapshotCb | None = None,
         on_trade: _TradeCb | None = None,
+        on_bbo: _BboCb | None = None,
         on_status: _StatusCb | None = None,
     ) -> None:
         self._app_key = app_key
@@ -198,11 +214,13 @@ class WebullStreamClient:
         self._mqtt_host = mqtt_host or None
         self.on_snapshot = on_snapshot
         self.on_trade = on_trade
+        self.on_bbo = on_bbo
         self.on_status = on_status
 
         self._lock = threading.Lock()
         self._subscribed: set[str] = set()
         self._last_msg_at: dict[str, float] = {}
+        self._topic_counts: dict[str, int] = {}
         self._client = None  # DataStreamingClient, built by the supervisor
         self._connected = False
         self._started = False
@@ -357,7 +375,7 @@ class WebullStreamClient:
                 self._client.unsubscribe(
                     symbols=sorted(drop),
                     category=Category.US_STOCK.name,
-                    sub_types=[SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
+                    sub_types=[SubscribeType.QUOTE.name, SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("Webull stream unsubscribe failed: %s", e)
@@ -372,7 +390,7 @@ class WebullStreamClient:
             self._client.subscribe(
                 symbols,
                 Category.US_STOCK.name,
-                [SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
+                [SubscribeType.QUOTE.name, SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
             )
             logger.info("Webull stream: subscribed %d symbols", len(symbols))
         except Exception as e:  # noqa: BLE001
@@ -409,11 +427,18 @@ class WebullStreamClient:
 
     def _on_message(self, client, topic, result) -> None:
         try:
-            if topic == "snapshot":
+            topic_key = str(topic).lower()
+            count = self._topic_counts.get(topic_key, 0) + 1
+            self._topic_counts[topic_key] = count
+            if count <= 3:
+                logger.info("Webull stream event received: topic=%s", topic_key)
+            if topic_key == "snapshot":
                 self._handle_snapshot(result)
-            elif topic == "tick":
+            elif topic_key == "quote":
+                self._handle_quote(result)
+            elif topic_key == "tick":
                 self._handle_tick(result)
-            elif topic == "notice":
+            elif topic_key == "notice":
                 logger.info("Webull stream notice: %s", result)
         except Exception as e:  # noqa: BLE001 — a bad message must not kill the loop
             logger.warning("Webull stream message handler error (%s): %s", topic, e)
@@ -431,6 +456,10 @@ class WebullStreamClient:
         if price is None:
             return
         self._mark(sym)
+        bid = _num(_field(r, "get_bid", "get_bid_price", "get_buy_price"))
+        ask = _num(_field(r, "get_ask", "get_ask_price", "get_sell_price"))
+        bid_size = _num(_field(r, "get_bid_size", "get_bid_volume", "get_buy_volume"))
+        ask_size = _num(_field(r, "get_ask_size", "get_ask_volume", "get_sell_volume"))
         if self.on_snapshot:
             self.on_snapshot(
                 sym,
@@ -440,6 +469,10 @@ class WebullStreamClient:
                 _num(r.get_high()),
                 _num(r.get_low()),
                 _num(r.get_open()),
+                bid,
+                ask,
+                bid_size,
+                ask_size,
             )
 
     def _handle_tick(self, r) -> None:
@@ -455,6 +488,22 @@ class WebullStreamClient:
         self._mark(sym)
         if self.on_trade:
             self.on_trade(sym, price, _num(r.get_volume()), ts, side)
+
+    def _handle_quote(self, r) -> None:
+        basic = r.get_basic()
+        sym = (basic.symbol or "").upper()
+        if not sym:
+            return
+        bids = r.get_bids() or []
+        asks = r.get_asks() or []
+        bid = _num(bids[0].get_price()) if bids else None
+        ask = _num(asks[0].get_price()) if asks else None
+        bid_size = _num(bids[0].get_size()) if bids else None
+        ask_size = _num(asks[0].get_size()) if asks else None
+        ts = _epoch_ms_to_ny(basic.timestamp)
+        self._mark(sym)
+        if self.on_bbo:
+            self.on_bbo(sym, bid, ask, bid_size, ask_size, ts)
 
 
 # --- module singleton ----------------------------------------------------

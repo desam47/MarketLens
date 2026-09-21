@@ -193,6 +193,7 @@ async def lifespan(app: FastAPI):
         if settings.startup_mode == "full" and settings.webull.streaming_enabled:
             from backend.market_data.services.ingestion_service import ingestion_service
             from backend.market_data.streaming.bridge import (
+                on_stream_bbo,
                 on_stream_snapshot,
                 on_stream_trade,
             )
@@ -202,6 +203,7 @@ async def lifespan(app: FastAPI):
             if _stream is not None:
                 _stream.on_snapshot = on_stream_snapshot
                 _stream.on_trade = on_stream_trade
+                _stream.on_bbo = on_stream_bbo
                 _stream.subscribe(ingestion_service.symbols)
                 _stream.start()
                 app.state.webull_stream = _stream

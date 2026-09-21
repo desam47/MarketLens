@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from backend.market_data.services.engine_seeder import engine_registry
+from backend.market_data.streaming.live_quotes import live_quote_cache
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,23 @@ _SUPPORTED_STREAM_PROVIDERS = frozenset({"alpaca"})
 _broadcast_tasks: set[asyncio.Task] = set()
 
 
+def _subscribe_quote_provider(symbol: str) -> None:
+    """Add a live-quote symbol to the process-wide provider stream.
+
+    The WebSocket registry only controls browser delivery. Symbols requested
+    after backend startup must also be added to Webull's shared stream or
+    they will never produce quote events for the browser.
+    """
+    try:
+        from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
+        stream = get_webull_stream_client()
+        if stream is not None:
+            stream.subscribe([symbol])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to subscribe %s to live quote provider: %s", symbol, exc)
+
+
 def _to_dashboard_tz(value: datetime | None) -> str | None:
     from backend.utils.timezone import format_edt_iso
 
@@ -86,6 +104,8 @@ class RealtimeBroadcastManager:
         # reverse index makes disconnect cleanup and the per-socket cap
         # O(subscriptions of that socket) instead of a scan of every key.
         self._socket_keys: dict[int, set[str]] = {}
+        self._quote_subs: dict[str, set[int]] = {}
+        self._socket_quote_symbols: dict[int, set[str]] = {}
         self._lock = asyncio.Lock()
         self._connections_total: int = 0
         self._disconnections_total: int = 0
@@ -128,8 +148,52 @@ class RealtimeBroadcastManager:
         async with self._lock:
             return self._drop_socket_locked(id(ws))
 
+    async def subscribe_quote(self, ws: WebSocket, symbol: str) -> bool:
+        async with self._lock:
+            symbol = symbol.upper()
+            ws_id = id(ws)
+            self._sockets.setdefault(ws_id, ws)
+            ids = self._quote_subs.setdefault(symbol, set())
+            if ws_id in ids:
+                return False
+            ids.add(ws_id)
+            self._socket_quote_symbols.setdefault(ws_id, set()).add(symbol)
+            return True
+
+    async def unsubscribe_quote(self, ws: WebSocket, symbol: str) -> None:
+        async with self._lock:
+            symbol = symbol.upper()
+            ws_id = id(ws)
+            ids = self._quote_subs.get(symbol)
+            if ids is not None:
+                ids.discard(ws_id)
+                if not ids:
+                    self._quote_subs.pop(symbol, None)
+            self._socket_quote_symbols.get(ws_id, set()).discard(symbol)
+
+    async def send_latest_quote(self, ws: WebSocket, symbol: str) -> None:
+        payload = live_quote_cache.get(symbol)
+        if payload is not None:
+            await ws.send_json({"type": "quote_update", "symbol": symbol.upper(), "data": payload})
+
+    async def broadcast_quote(self, symbol: str, payload: dict[str, Any]) -> None:
+        symbol = symbol.upper()
+        async with self._lock:
+            sockets = [self._sockets[ws_id] for ws_id in self._quote_subs.get(symbol, ()) if ws_id in self._sockets]
+        if sockets:
+            await asyncio.gather(
+                *(ws.send_json({"type": "quote_update", "symbol": symbol, "data": payload}) for ws in sockets),
+                return_exceptions=True,
+            )
+
     def _drop_socket_locked(self, ws_id: int) -> list[str]:
         self._sockets.pop(ws_id, None)
+        for symbol in self._socket_quote_symbols.pop(ws_id, ()):
+            ids = self._quote_subs.get(symbol)
+            if ids is not None:
+                ids.discard(ws_id)
+                if not ids:
+                    self._quote_subs.pop(symbol, None)
         orphaned: list[str] = []
         for key in self._socket_keys.pop(ws_id, ()):
             ids = self._subs.get(key)
@@ -163,6 +227,7 @@ class RealtimeBroadcastManager:
             "disconnections_total": self._disconnections_total,
             "messages_sent_total": self._messages_sent,
             "broadcasts_total": self._broadcasts_total,
+            "quote_subscriptions": sum(len(ids) for ids in self._quote_subs.values()),
         }
 
     # ── broadcast ─────────────────────────────────────────────────────────
@@ -219,6 +284,25 @@ class RealtimeBroadcastManager:
 
 # Process-wide singleton.
 broadcast_manager = RealtimeBroadcastManager()
+
+_realtime_loop: asyncio.AbstractEventLoop | None = None
+
+
+def publish_live_quote(symbol: str, payload: dict[str, Any]) -> None:
+    """Thread-safe entry point used by the Webull SDK callback thread."""
+    loop = _realtime_loop
+    if loop is None or loop.is_closed() or not broadcast_manager._quote_subs.get(symbol.upper()):
+        return
+
+    def _schedule() -> None:
+        task = asyncio.ensure_future(broadcast_manager.broadcast_quote(symbol, payload))
+        _broadcast_tasks.add(task)
+        task.add_done_callback(_broadcast_tasks.discard)
+
+    try:
+        loop.call_soon_threadsafe(_schedule)
+    except RuntimeError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -368,11 +452,12 @@ _dispatcher: RealtimeDispatcher | None = None
 
 
 def install(loop: asyncio.AbstractEventLoop | None = None) -> RealtimeDispatcher:
-    global _dispatcher
+    global _dispatcher, _realtime_loop
     if _dispatcher is None:
         from backend.api.trend.registry import _TREND_TIMEFRAMES
 
         target_loop = loop or asyncio.get_running_loop()
+        _realtime_loop = target_loop
         _dispatcher = RealtimeDispatcher(broadcast_manager, target_loop)
         _dispatcher.register(_TREND_TIMEFRAMES)
     return _dispatcher
@@ -494,6 +579,23 @@ async def realtime_websocket(websocket: WebSocket):
             symbol = msg.get("symbol")
             timeframe = msg.get("timeframe")
             provider = msg.get("provider")
+
+            if action in ("subscribe_quote", "unsubscribe_quote"):
+                sym = symbol.strip().upper() if isinstance(symbol, str) else ""
+                if not _SYMBOL_RE.match(sym):
+                    await websocket.send_json({"type": "error", "message": f"Invalid symbol: {symbol!r}"})
+                    continue
+                if action == "subscribe_quote":
+                    is_new = await broadcast_manager.subscribe_quote(websocket, sym)
+                    if is_new:
+                        _subscribe_quote_provider(sym)
+                    logger.info("Realtime quote subscription added: symbol=%s", sym)
+                    await broadcast_manager.send_latest_quote(websocket, sym)
+                    await websocket.send_json({"type": "subscribed_quote", "symbol": sym})
+                else:
+                    await broadcast_manager.unsubscribe_quote(websocket, sym)
+                    await websocket.send_json({"type": "unsubscribed_quote", "symbol": sym})
+                continue
 
             if action in ("subscribe", "unsubscribe"):
                 sym = symbol.strip().upper() if isinstance(symbol, str) else ""

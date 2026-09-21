@@ -763,10 +763,26 @@ export interface BarUpdateData {
   timestamp: string | null;
 }
 
+export interface LiveQuoteUpdateData {
+  price: number | null;
+  volume: number | null;
+  bid: number | null;
+  ask: number | null;
+  bid_size: number | null;
+  ask_size: number | null;
+  timestamp: string | null;
+  received_at: number;
+  provider: string;
+  event_type: string;
+}
+
 export type RealtimeEvent =
   | { type: 'bar_update'; symbol: string; timeframe: string; data: BarUpdateData }
+  | { type: 'quote_update'; symbol: string; data: LiveQuoteUpdateData }
   | { type: 'subscribed'; symbol: string; timeframe: string }
   | { type: 'unsubscribed'; symbol: string; timeframe: string }
+  | { type: 'subscribed_quote'; symbol: string }
+  | { type: 'unsubscribed_quote'; symbol: string }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -779,6 +795,7 @@ export class RealtimeSubscriber {
   private wsUrl: string;
   /** Active (symbol, tf) subscriptions keyed by "SYMBOL:TF". */
   private subs: Set<string> = new Set();
+  private quoteSubs: Set<string> = new Set();
   private listeners: Set<(evt: RealtimeEvent) => void> = new Set();
   private statusListeners: Set<(status: 'connecting' | 'open' | 'closed') => void> = new Set();
   private reconnectAttempts = 0;
@@ -808,6 +825,9 @@ export class RealtimeSubscriber {
       for (const key of Array.from(this.subs)) {
         const [symbol, timeframe] = key.split(':');
         this.send({ action: 'subscribe', symbol, timeframe });
+      }
+      for (const symbol of Array.from(this.quoteSubs)) {
+        this.send({ action: 'subscribe_quote', symbol });
       }
       this.startPing();
     };
@@ -862,6 +882,23 @@ export class RealtimeSubscriber {
     if (this.subs.delete(key) && this.currentStatus === 'open') {
       const [s, tf] = key.split(':');
       this.send({ action: 'unsubscribe', symbol: s, timeframe: tf });
+    }
+  }
+
+  subscribeQuote(symbol: string): void {
+    const normalized = symbol.toUpperCase();
+    this.quoteSubs.add(normalized);
+    if (this.currentStatus === 'open') {
+      this.send({ action: 'subscribe_quote', symbol: normalized });
+    } else {
+      this.connect();
+    }
+  }
+
+  unsubscribeQuote(symbol: string): void {
+    const normalized = symbol.toUpperCase();
+    if (this.quoteSubs.delete(normalized) && this.currentStatus === 'open') {
+      this.send({ action: 'unsubscribe_quote', symbol: normalized });
     }
   }
 

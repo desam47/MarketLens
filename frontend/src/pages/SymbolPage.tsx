@@ -9,6 +9,8 @@ import api, {
   Transition,
   MarketQuote,
   CalendarEvent,
+  RealtimeEvent,
+  LiveQuoteUpdateData,
 } from '../services/api';
 import { formatETDate, formatETDateTime } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
@@ -524,6 +526,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
+  const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
@@ -606,6 +609,20 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
       const data = await api.getQuote(requestedSymbol);
       if (currentSymbolRef.current !== requestedSymbol) return;
       setQuote(data);
+      // Seed the panel with the REST snapshot until the live stream delivers
+      // its first event; the next Webull event replaces this with LIVE data.
+      setLiveQuote(previous => previous?.event_type !== 'rest_fallback' && previous?.provider === 'webull' ? previous : ({
+        price: data.price,
+        volume: data.volume,
+        bid: data.bid,
+        ask: data.ask,
+        bid_size: null,
+        ask_size: null,
+        timestamp: data.timestamp,
+        received_at: Date.now() / 1000,
+        provider: data.provider || 'rest',
+        event_type: 'rest_fallback',
+      }));
       clearLoadError('quote');
     } catch (err: any) {
       if (currentSymbolRef.current !== requestedSymbol) return;
@@ -877,6 +894,7 @@ const fetchBars = useCallback(async () => {
   // symbol/timeframe while the replacement requests are in flight.
   useEffect(() => {
     setQuote(null);
+    setLiveQuote(null);
     setScanResult(null);
     setTape(null);
     setTapeDisabled(false);
@@ -902,9 +920,34 @@ const fetchBars = useCallback(async () => {
 
   useEffect(() => {
     fetchQuote();
-    const id = setInterval(fetchQuote, 5000);
-    return () => clearInterval(id);
-  }, [fetchQuote]);
+    // REST remains a slow fallback; live Webull snapshots/trades arrive over
+    // the shared realtime channel whenever streaming is available.
+    const id = setInterval(fetchQuote, 30000);
+    const subscriber = api.createRealtimeSubscriber();
+    const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
+      if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
+      const live = event.data;
+      setLiveQuote(live);
+      setQuote(previous => ({
+        ...(previous || { symbol: symbol.toUpperCase() }),
+        symbol: symbol.toUpperCase(),
+        price: live.price,
+        bid: live.bid ?? previous?.bid ?? null,
+        ask: live.ask ?? previous?.ask ?? null,
+        volume: live.volume ?? previous?.volume ?? null,
+        timestamp: live.timestamp,
+        provider: live.provider,
+        data_status: 'LIVE',
+      }));
+    });
+    subscriber.subscribeQuote(symbol);
+    return () => {
+      clearInterval(id);
+      unsubscribe();
+      subscriber.unsubscribeQuote(symbol);
+      subscriber.disconnect();
+    };
+  }, [fetchQuote, symbol]);
 
   useEffect(() => {
     fetchTransitions();
@@ -978,6 +1021,18 @@ const fetchBars = useCallback(async () => {
   const liveChangePct = liveChange != null && prevClose != null
     ? (liveChange / prevClose) * 100
     : null;
+  const displayQuote = liveQuote || (quote ? {
+    price: quote.price,
+    volume: quote.volume,
+    bid: quote.bid,
+    ask: quote.ask,
+    bid_size: null,
+    ask_size: null,
+    timestamp: quote.timestamp,
+    received_at: Date.now() / 1000,
+    provider: quote.provider || 'rest',
+    event_type: 'rest_fallback',
+  } : null);
 
   return (
     <div className="symbol-page">
@@ -1017,6 +1072,16 @@ const fetchBars = useCallback(async () => {
               />
             )}
           </p>
+          {displayQuote && (
+            <div className="symbol-bbo-panel" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginTop: 8, color: 'var(--text-muted)', fontSize: 12 }}>
+              <span style={{ color: displayQuote.event_type === 'rest_fallback' ? '#f59e0b' : '#10b981', fontWeight: 600 }}>● {displayQuote.event_type === 'rest_fallback' ? 'REST FALLBACK' : (displayQuote.bid != null && displayQuote.ask != null ? 'LIVE BBO' : 'LIVE QUOTE')}</span>
+              <span>Bid <strong>{displayQuote.bid != null ? `$${displayQuote.bid.toFixed(4)}` : '—'}</strong>{displayQuote.bid_size != null ? ` × ${displayQuote.bid_size}` : ''}</span>
+              <span>Ask <strong>{displayQuote.ask != null ? `$${displayQuote.ask.toFixed(4)}` : '—'}</strong>{displayQuote.ask_size != null ? ` × ${displayQuote.ask_size}` : ''}</span>
+              <span>Mid <strong>{displayQuote.bid != null && displayQuote.ask != null ? `$${((displayQuote.bid + displayQuote.ask) / 2).toFixed(4)}` : '—'}</strong></span>
+              <span>Spread <strong>{displayQuote.bid != null && displayQuote.ask != null ? `$${(displayQuote.ask - displayQuote.bid).toFixed(4)}` : '—'}</strong></span>
+              <span title={displayQuote.timestamp || undefined}>{displayQuote.provider} · {displayQuote.event_type}</span>
+            </div>
+          )}
         </div>
         <div className="header-actions">
           <select

@@ -24,7 +24,18 @@ from backend.market_data.services.engine_seeder import _ensure_aware, engine_reg
 logger = logging.getLogger(__name__)
 
 
-def on_stream_snapshot(symbol, price, volume, ts, high, low, open_) -> None:
+def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, ask=None, bid_size=None, ask_size=None) -> None:
+    from backend.market_data.streaming.live_quotes import live_quote_cache
+
+    payload = live_quote_cache.update(
+        symbol, price=price, volume=volume, timestamp=ts, bid=bid, ask=ask,
+        bid_size=bid_size, ask_size=ask_size,
+    )
+    try:
+        from backend.api.realtime.ws_router import publish_live_quote
+        publish_live_quote(symbol, payload)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("stream snapshot -> quote broadcast failed for %s: %s", symbol, e)
     try:
         from backend.api.tape.registry import get_tape_engine
 
@@ -34,6 +45,14 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_) -> None:
 
 
 def on_stream_trade(symbol, price, size, ts, side) -> None:
+    from backend.market_data.streaming.live_quotes import live_quote_cache
+
+    payload = live_quote_cache.update(symbol, price=price, volume=size, timestamp=ts, event_type="trade")
+    try:
+        from backend.api.realtime.ws_router import publish_live_quote
+        publish_live_quote(symbol, payload)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("stream trade -> quote broadcast failed for %s: %s", symbol, e)
     try:
         engine_registry.dispatch_trade(
             symbol,
@@ -48,3 +67,23 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
         # symbol-less handler in webull_stream.py, making it harder to
         # tell which symbol's tape feed broke from the logs alone.
         logger.debug("stream trade -> tape failed for %s: %s", symbol, e)
+
+
+def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
+    from backend.market_data.streaming.live_quotes import live_quote_cache
+
+    previous = live_quote_cache.get(symbol) or {}
+    price = previous.get("price")
+    if price is None and bid is not None and ask is not None:
+        price = (bid + ask) / 2
+    if price is None:
+        return
+    payload = live_quote_cache.update(
+        symbol, price=price, timestamp=ts, bid=bid, ask=ask,
+        bid_size=bid_size, ask_size=ask_size, event_type="bbo",
+    )
+    try:
+        from backend.api.realtime.ws_router import publish_live_quote
+        publish_live_quote(symbol, payload)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("stream BBO -> quote broadcast failed for %s: %s", symbol, e)

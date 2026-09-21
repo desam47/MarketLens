@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.realtime import ws_router
 from backend.api.realtime.ws_router import RealtimeBroadcastManager
+from backend.market_data.streaming.live_quotes import LiveQuoteCache
 
 
 class _FakeSocket:
@@ -35,6 +36,22 @@ class _FakeSocket:
 
 
 class TestBroadcastManager(unittest.IsolatedAsyncioTestCase):
+    async def test_quote_subscribers_receive_live_updates(self):
+        mgr = RealtimeBroadcastManager()
+        ws = _FakeSocket()
+        await mgr.subscribe_quote(ws, "aapl")
+        await mgr.broadcast_quote("AAPL", {"price": 123.45, "provider": "webull"})
+        self.assertEqual(ws.sent[0]["type"], "quote_update")
+        self.assertEqual(ws.sent[0]["symbol"], "AAPL")
+        self.assertEqual(ws.sent[0]["data"]["price"], 123.45)
+
+    async def test_quote_subscription_is_removed_with_socket(self):
+        mgr = RealtimeBroadcastManager()
+        ws = _FakeSocket()
+        await mgr.subscribe_quote(ws, "AAPL")
+        await mgr.remove_socket(ws)
+        await mgr.broadcast_quote("AAPL", {"price": 1})
+        self.assertEqual(ws.sent, [])
     async def test_slow_client_does_not_block_or_delay_others_and_is_dropped(self):
         mgr = RealtimeBroadcastManager()
         stalled, healthy = _FakeSocket(stall=True), _FakeSocket()
@@ -156,6 +173,23 @@ class TestRealtimeEndpoint(unittest.TestCase):
         self.assertEqual(
             reply, {"type": "subscribed", "symbol": "AAPL", "timeframe": "5m", "provider": "local"}
         )
+
+    def test_quote_subscribe_normalises_and_acks(self):
+        with self.client.websocket_connect("/api/realtime/ws") as ws:
+            reply = self._roundtrip(ws, {"action": "subscribe_quote", "symbol": " aapl "})
+        self.assertEqual(reply, {"type": "subscribed_quote", "symbol": "AAPL"})
+
+    def test_quote_subscribe_sends_cached_snapshot_first(self):
+        from backend.market_data.streaming.live_quotes import live_quote_cache
+
+        live_quote_cache.update("AAPL", price=123.45, timestamp="2026-01-01T12:00:00Z")
+        with self.client.websocket_connect("/api/realtime/ws") as ws:
+            ws.send_json({"action": "subscribe_quote", "symbol": "AAPL"})
+            first = ws.receive_json()
+            second = ws.receive_json()
+        self.assertEqual(first["type"], "quote_update")
+        self.assertEqual(first["data"]["price"], 123.45)
+        self.assertEqual(second, {"type": "subscribed_quote", "symbol": "AAPL"})
 
     def test_timeframe_defaults_to_1m(self):
         with self.client.websocket_connect("/api/realtime/ws") as ws:

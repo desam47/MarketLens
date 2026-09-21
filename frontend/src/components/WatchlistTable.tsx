@@ -1,6 +1,12 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
-import api, { WatchlistScanResult, RelativeStrengthData, RelativeStrengthSignal } from '../services/api';
+import api, {
+  LiveQuoteUpdateData,
+  RealtimeEvent,
+  WatchlistScanResult,
+  RelativeStrengthData,
+  RelativeStrengthSignal,
+} from '../services/api';
 import { formatETTime } from './chartMath';
 import {
   fmt,
@@ -257,6 +263,34 @@ export function WatchlistTable({
 
   const colToggleRef = useRef<HTMLDivElement>(null);
 
+  const liveSymbols = useMemo(
+    () => Array.from(new Set(rows.map(row => row.symbol.trim().toUpperCase()).filter(Boolean))).sort(),
+    [rows],
+  );
+  const liveSymbolsKey = liveSymbols.join(',');
+  const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteUpdateData>>({});
+
+  // Use the same direct realtime subscriber lifecycle as Dashboard and
+  // Symbol Page. One socket subscribes to every symbol currently displayed
+  // in this Watchlist table.
+  useEffect(() => {
+    if (!liveSymbols.length) return;
+    const subscriber = api.createRealtimeSubscriber?.();
+    if (!subscriber) return;
+    const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
+      if (event.type !== 'quote_update') return;
+      setLiveQuotes(previous => ({ ...previous, [event.symbol]: event.data }));
+    });
+    liveSymbols.forEach(symbol => subscriber.subscribeQuote(symbol));
+    return () => {
+      unsubscribe();
+      liveSymbols.forEach(symbol => subscriber.unsubscribeQuote(symbol));
+      subscriber.disconnect();
+    };
+  // `liveSymbolsKey` is the stable representation of the current symbol set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveSymbolsKey]);
+
   useEffect(() => {
     if (!showColToggle) return;
     const onClick = (e: MouseEvent) => {
@@ -322,21 +356,16 @@ export function WatchlistTable({
     fetchData();
   }, [fetchData]);
 
-  // Keep prices/change% current without a manual reload — the
-  // backend scan is always live (no TTL cache on this endpoint), so a
-  // stale table here is purely a frontend polling gap. Mirrors
-  // AlertsCard's 30s trigger refresh; `refresh=true` uses the small
-  // "Rescan" spinner instead of the full loading skeleton, so periodic
-  // updates don't blank the table while it refreshes.
+  // Match Symbol Page's fallback behavior: WebSocket is the primary live
+  // source, while a slow REST refresh repairs missed events or a temporarily
+  // disconnected browser socket (and refreshes scanner-only fields).
   useEffect(() => {
     const interval = setInterval(() => fetchData(true), 30_000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  // Browsers throttle setInterval heavily in backgrounded/inactive tabs,
-  // so a tab left in the background can sit on a stale scan for far
-  // longer than 30s until its throttled timer eventually fires again.
-  // Refetch immediately on tab-focus-regain to close that gap.
+  // Refresh scanner fields when the user returns to the tab; live prices
+  // continue through the WebSocket subscription without REST polling.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') fetchData(true);
@@ -393,11 +422,34 @@ export function WatchlistTable({
   // Resolve the displayed RS signal from the selected benchmark here (not in
   // fetchData) so switching benchmarks is instant and needs no re-fetch.
   const displayRows = useMemo(
-    () => rows.map((r): RowData => ({
-      ...r,
-      rs: r.rsSignals.find(s => s.benchmark === rsBenchmark) ?? r.rsSignals[0] ?? null,
-    })),
-    [rows, rsBenchmark],
+    () => rows.map((r): RowData => {
+      const live = liveQuotes[r.symbol.toUpperCase()];
+      const withRelativeStrength = {
+        ...r,
+        rs: r.rsSignals.find(s => s.benchmark === rsBenchmark) ?? r.rsSignals[0] ?? null,
+      };
+      // A live quote is useful even when the scanner has not yet produced a
+      // valid prior-close baseline for this symbol. Never suppress the live
+      // price just because change/change % cannot be recalculated yet.
+      if (!live || live.price == null) {
+        return withRelativeStrength;
+      }
+      if (r.price == null || r.change == null) {
+        return {
+          ...withRelativeStrength,
+          price: live.price,
+        };
+      }
+      const priorClose = r.price - r.change;
+      const liveChange = live.price - priorClose;
+      return {
+        ...withRelativeStrength,
+        price: live.price,
+        change: liveChange,
+        changePct: priorClose !== 0 ? (liveChange / priorClose) * 100 : r.changePct,
+      };
+    }),
+    [rows, rsBenchmark, liveQuotes],
   );
 
   const sorted = useMemo(() => {

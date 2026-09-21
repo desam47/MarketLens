@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData } from '../services/api';
+import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData, RealtimeEvent, LiveQuoteUpdateData } from '../services/api';
 import { RegimeCard } from '../components/RegimeCard';
 import { TrendCard } from '../components/TrendCard';
 import { ConfluenceCard } from '../components/ConfluenceCard';
@@ -13,6 +13,7 @@ import { NLSearchBar } from '../components/NLSearchBar';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
 import { formatETDateTime } from '../components/chartMath';
 import { SkeletonBlock } from '../components/SkeletonBlock';
+import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
 
 // Per-card skeletons rather than the page-level DashboardSkeleton
 // component (components/skeletons/DashboardSkeleton.tsx): that one
@@ -175,6 +176,26 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     price: number | null;
     timestamp: string | null;
   } | null>(null);
+  const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
+  useEffect(() => {
+    const subscriber = api.createRealtimeSubscriber?.();
+    if (!subscriber) return;
+    const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
+      if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
+      setLiveQuote(event.data);
+    });
+    subscriber.subscribeQuote(symbol);
+    return () => {
+      unsubscribe();
+      subscriber.unsubscribeQuote(symbol);
+      subscriber.disconnect();
+    };
+  }, [symbol]);
+  useEffect(() => {
+    const live = liveQuote;
+    if (live?.price == null) return;
+    setLatestQuote({ price: live.price, timestamp: live.timestamp });
+  }, [liveQuote]);
 
   // Individual card states
   const [regime, setRegime] = useState<RegimeData | null>(null);
@@ -472,20 +493,21 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [autoRefresh, fetchAllIfIdle]);
 
-  // Separate faster polling for quote (5s) to keep price updated in real-time
+  // REST remains a fallback; the shared WebSocket is the primary live source.
   useEffect(() => {
     if (!autoRefresh) return;
     // Initial fetch
     fetchQuote();
     const interval = setInterval(() => {
       fetchQuote();
-    }, 5000);
+    }, 30000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchQuote]);
 
   const prevClose = lastClose?.prev_close ?? null;
+  const effectiveQuote = liveQuote || latestQuote;
   const liveChange =
-    latestQuote?.price != null && prevClose ? latestQuote.price - prevClose : null;
+    effectiveQuote?.price != null && prevClose ? effectiveQuote.price - prevClose : null;
   const liveChangePct =
     liveChange != null && prevClose ? (liveChange / prevClose) * 100 : null;
 
@@ -612,10 +634,10 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
             {' · '}
             <FreshnessIndicator regime={regime} />
           </p>
-          {(latestQuote && latestQuote.price != null) && (
+          {(effectiveQuote && effectiveQuote.price != null) && (
             <div className="last-close-info">
               <span className="last-close-label">Latest Price</span>
-              <span className="last-close-price">${latestQuote.price.toFixed(4)}</span>
+              <span className="last-close-price">${effectiveQuote.price.toFixed(4)}</span>
               {liveChange != null && liveChangePct != null && (
                 <>
                   <span className={`last-close-change ${liveChange >= 0 ? 'positive' : 'negative'}`}>
@@ -626,11 +648,16 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                   </span>
                 </>
               )}
-              {latestQuote.timestamp && (
+              {effectiveQuote.timestamp && (
                 <span className="last-close-fetched">
-                  {formatETDateTime(latestQuote.timestamp)}
+                  {formatETDateTime(effectiveQuote.timestamp)}
                 </span>
               )}
+              <MarketDataFreshnessBadge
+                dataStatus={liveQuote ? 'LIVE' : 'STALE'}
+                timestamp={effectiveQuote.timestamp}
+                showAge
+              />
             </div>
           )}
         </div>
