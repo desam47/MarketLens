@@ -22,14 +22,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 # another module happened to import the app first. Isolation does not depend on it: setUpModule
 # rebinds the engine to a private temp database either way.
 
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from fastapi.testclient import TestClient
-
-from backend.api.main import app
 import backend.database as _database_pkg
 import backend.database.db as _database_impl
+from backend.api.main import app
 from backend.database import Base
 from backend.models import Experiment
 
@@ -76,8 +75,6 @@ engine = create_engine(
 )
 _TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-import backend.repositories.experiment_repository as _exp_repo
-
 # This module is the only one in the suite that triggers FastAPI's lifespan
 # startup (``with TestClient(app)``; a bare ``TestClient(app)`` does not).
 # The lifespan is expensive — alembic subprocess, Redis SCAN+DELETE,
@@ -90,10 +87,14 @@ import backend.repositories.experiment_repository as _exp_repo
 # once started, regardless of this module's DB isolation. Patch
 # ``.start()`` to a no-op for the same setUpModule/tearDownModule-scoped
 # reason as above.
-from unittest.mock import patch as _patch
-from backend.ai.digest_service import digest_service as _digest_service
-from backend.ai.nudges import nudge_service as _nudge_service
-from backend.market_data.services.ingestion_service import ingestion_service as _ingestion_service
+from unittest.mock import patch as _patch  # noqa: E402
+
+import backend.repositories.experiment_repository as _exp_repo  # noqa: E402
+from backend.ai.digest_service import digest_service as _digest_service  # noqa: E402
+from backend.ai.nudges import nudge_service as _nudge_service  # noqa: E402
+from backend.market_data.services.ingestion_service import (  # noqa: E402
+    ingestion_service as _ingestion_service,  # noqa: E402
+)
 
 _orig_engine = None
 _orig_session_local = None

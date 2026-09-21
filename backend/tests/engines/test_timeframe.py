@@ -4,7 +4,7 @@ Tests for timeframe/candle engine
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # Add the backend directory to the path so we can import modules
@@ -133,7 +133,7 @@ class TestTimeframeEngine(unittest.TestCase):
         """Test converting a closed candle to Bar model"""
         # Use timezone-aware UTC so the bar.timestamp comparison works
         # regardless of the _ensure_aware() normalization in update_tick.
-        timestamp = datetime.now(timezone.utc)
+        timestamp = datetime.now(UTC)
         price = 150.0
         volume = 1000
 

@@ -27,16 +27,17 @@ import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from backend.alerts.conditions.evaluators import (
+    VALID_CONDITION_TYPES as _VALID_ALERT_CONDITION_TYPES,
+)
+
 SYSTEM_PROMPT_CONFLUENCE = """This is the system prompt for confluence analysis. It instructs the AI to consider quantitative trend, sentiment, and fundamentals, and output a JSON with score (0‑100), alignment (\"strong\", \"moderate\", \"weak\", \"conflicting\"), reasoning, and primary_catalyst. The AI must output only the JSON block and nothing else."""
 class ConfluenceResponse(BaseModel):
     score: float = Field(..., ge=0.0, le=100.0)
     alignment: Literal["strong", "moderate", "weak", "conflicting"]
     reasoning: str = Field(..., min_length=1, max_length=500)
     primary_catalyst: str = Field(..., min_length=1, max_length=200)
-
-from backend.alerts.conditions.evaluators import (
-    VALID_CONDITION_TYPES as _VALID_ALERT_CONDITION_TYPES,
-)
 
 # --- Response model -------------------------------------------------
 
@@ -110,7 +111,7 @@ class TradePlan(BaseModel):
         return [float(t) for t in v if t and t > 0]
 
     @model_validator(mode="after")
-    def _check_consistency(self) -> "TradePlan":
+    def _check_consistency(self) -> TradePlan:
         if self.recommendation in ("hold", "avoid"):
             # No actionable levels for a non-entry call — drop any the
             # AI attached so the UI never renders a stop/target on a "hold".

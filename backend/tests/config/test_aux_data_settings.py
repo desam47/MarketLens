@@ -94,7 +94,7 @@ class TestAuxDataSettingsEnvBinding(unittest.TestCase):
         2026-09-09: this test originally hardcoded True and went red the
         moment .env's aux flags were flipped back to false, even though
         the settings binding itself was working correctly."""
-        from backend.config.settings import settings, AuxDataSettings
+        from backend.config.settings import AuxDataSettings, settings
         fresh = AuxDataSettings()
         self.assertEqual(settings.aux_data.news.enabled, fresh.news.enabled)
         self.assertEqual(settings.aux_data.fundamentals.enabled, fresh.fundamentals.enabled)

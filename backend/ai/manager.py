@@ -456,7 +456,7 @@ class AIManager:
             # O4: skip pre-flight health_check() — let provider.stream()
             # surface ProviderUnavailable directly, same rationale as
             # complete() above.
-            def _attribute() -> None:
+            def _attribute(provider: AIProvider = provider) -> None:
                 if attribution is not None:
                     attribution.provider = provider.name
                     attribution.model = provider._model

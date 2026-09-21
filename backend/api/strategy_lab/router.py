@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+from backend.repositories.experiment_repository import ExperimentRepository
 
 from ...backtesting.engine import DEFAULT_SIGNALS
 from ...backtesting.experiment_runner import (
@@ -26,7 +28,6 @@ from ...backtesting.experiment_runner import (
     run_experiment,
 )
 from ...backtesting.parameters import ExperimentParameters
-from backend.repositories.experiment_repository import ExperimentRepository
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/strategy-lab", tags=["strategy-lab"])

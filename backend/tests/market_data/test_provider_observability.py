@@ -20,10 +20,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.market_data.circuit_breaker import CircuitState
 from backend.market_data.services.manager import (
-    _correlation_id_placeholder,
     _call_provider,
-    _circuit_breakers,
     _cb_lock,
+    _circuit_breakers,
+    _correlation_id_placeholder,
     _get_breaker,
     _rate_limiter,
 )

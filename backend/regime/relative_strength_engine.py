@@ -7,13 +7,13 @@ UNDERPERFORMER / STRONG_UNDERPERFORMER.
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from ..config.settings import settings
-from ..trend.trend_engine import TrendEngine
 from ..repositories.bar_repository import get_bars as _get_db_bars
+from ..trend.trend_engine import TrendEngine
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ class RelativeStrengthEngine:
         the sector ETF signal if the engine was seeded with sector ETF data.
         """
         self._ensure_historical_data()
-        ts = timestamp or datetime.now(timezone.utc)
+        ts = timestamp or datetime.now(UTC)
         signals = []
 
         for benchmark in self._cfg.benchmark_list():

@@ -9,6 +9,8 @@ import os
 import sys
 import unittest
 
+from pydantic import ValidationError
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
 from backend.backtesting.parameters import ExperimentParameters
@@ -52,27 +54,27 @@ class TestExperimentParametersDefaults(unittest.TestCase):
 
 class TestExperimentParametersConstraints(unittest.TestCase):
     def test_rsi_period_must_be_at_least_2(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(rsi_period=1)
 
     def test_rsi_period_must_be_at_most_100(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(rsi_period=101)
 
     def test_rsi_oversold_below_1_rejected(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(rsi_oversold=0.5)
 
     def test_rsi_oversold_above_50_rejected(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(rsi_oversold=51.0)
 
     def test_rsi_overbought_below_50_rejected(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(rsi_overbought=49.0)
 
     def test_negative_weight_rejected(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValidationError):
             ExperimentParameters(weight_ema=-0.1)
 
 

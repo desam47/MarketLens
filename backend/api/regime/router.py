@@ -2,21 +2,27 @@
 API endpoints for market regime analysis
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
+
+from backend.api.trend.registry import get_engine as get_shared_trend_engine
+from backend.api.ttl_cache import (
+    _regime_cache,
+    _regime_history_cache,
+    _rs_batch_cache,
+    _sector_cache,
+    _transitions_cache,
+)
+from backend.regime.market_regime_engine import MarketRegimeEngine
+from backend.regime.relative_strength_engine import RelativeStrengthEngine
+from backend.regime.sector_engine import SectorEngine
 
 from ...market_data.services.engine_seeder import (
     engine_registry,
     seed_engine_from_bars,
 )
-from backend.api.trend.registry import get_engine as get_shared_trend_engine
-from backend.regime.market_regime_engine import MarketRegimeEngine
-from backend.regime.relative_strength_engine import RelativeStrengthEngine
-from backend.regime.sector_engine import SectorEngine
-from backend.api.ttl_cache import _regime_cache, _sector_cache, _rs_batch_cache, _regime_history_cache
-from backend.api.ttl_cache import _transitions_cache
 
 logger = logging.getLogger(__name__)
 

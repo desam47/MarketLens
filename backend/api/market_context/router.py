@@ -8,17 +8,18 @@ context at a time.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
-from backend.utils.timezone import ensure_aware_ny
-from ...market_data.services.engine_seeder import engine_registry
+from backend.api.ttl_cache import _context_cache
 from backend.database import SessionLocal
 from backend.models.market_data_sql import BarModel
 from backend.regime.market_context_engine import MarketContextEngine
-from backend.api.ttl_cache import _context_cache
+from backend.utils.timezone import ensure_aware_ny
+
+from ...market_data.services.engine_seeder import engine_registry
 
 logger = logging.getLogger(__name__)
 

@@ -60,7 +60,7 @@ class CustomIndicatorEngine:
         timestamps = [b.timestamp for b in bars[-len(values):]]
         return [
             {"timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts, "value": v}
-            for ts, v in zip(timestamps, values)
+            for ts, v in zip(timestamps, values, strict=False)
             if v is not None
         ]
 
@@ -105,7 +105,7 @@ class CustomIndicatorEngine:
         timestamps = [b.timestamp for b in bars[-len(values):]]
         return [
             {"timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts, "value": v}
-            for ts, v in zip(timestamps, values)
+            for ts, v in zip(timestamps, values, strict=False)
             if v is not None
         ]
 

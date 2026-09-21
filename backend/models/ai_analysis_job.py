@@ -6,7 +6,7 @@ Status transitions: queued → started → finished | failed
 """
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SAEnum, Index, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base

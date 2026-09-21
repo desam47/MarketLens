@@ -7,8 +7,7 @@ for logging and tracing purposes. It integrates with the structured logging
 system so every log line automatically includes the request's correlation ID.
 """
 import uuid
-from contextlib import asynccontextmanager
-from typing import Callable
+from collections.abc import Callable
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -27,7 +26,8 @@ def _get_set_correlation_id():
 
             _logging_ctx = _set
         except ImportError:
-            _logging_ctx = lambda *_: None  # no-op fallback
+            def _logging_ctx(*_):
+                return None  # no-op fallback
     return _logging_ctx
 
 

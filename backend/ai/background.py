@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from backend.config.settings import settings
@@ -229,9 +229,9 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
             if rq_status and rq_status != record.status:
                 record.status = rq_status
                 if rq_status == "started" and record.started_at is None:
-                    record.started_at = datetime.now(timezone.utc)
+                    record.started_at = datetime.now(UTC)
                 if rq_status in ("finished", "failed") and record.completed_at is None:
-                    record.completed_at = datetime.now(timezone.utc)
+                    record.completed_at = datetime.now(UTC)
                 db.commit()
 
         result_data: Any = None

@@ -8,7 +8,6 @@ forward outcomes (returns, MFE, MAE).
 Outcomes are NOT computed at insert time — a background job fills them
 in once the required future bars exist, ensuring no look-ahead bias.
 """
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean,

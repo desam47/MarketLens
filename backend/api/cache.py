@@ -14,7 +14,6 @@ system status refreshes every 30 seconds.
 """
 import hashlib
 import logging
-from typing import Set
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import Response
@@ -74,7 +73,7 @@ class CacheMiddleware:
         self,
         app: ASGIApp,
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
-        exempt_paths: Set[str] | None = None,
+        exempt_paths: set[str] | None = None,
         cache_durations: dict[str, int] | None = None,
     ):
         self.app = app

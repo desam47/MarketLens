@@ -169,20 +169,18 @@ async def get_session_for_symbol(
         from backend.models import ChatSession
 
         if symbol is None:
-            query = (
-                lambda: repo.db.query(ChatSession)
-                .filter(ChatSession.scope == "universal")
-                .order_by(ChatSession.updated_at.desc())
-                .first()
-            )
+            def query():
+                return (repo.db.query(ChatSession)
+                            .filter(ChatSession.scope == "universal")
+                            .order_by(ChatSession.updated_at.desc())
+                            .first())
         else:
             sym = symbol.upper()
-            query = (
-                lambda: repo.db.query(ChatSession)
-                .filter(ChatSession.symbol == sym, ChatSession.scope == "symbol")
-                .order_by(ChatSession.updated_at.desc())
-                .first()
-            )
+            def query():
+                return (repo.db.query(ChatSession)
+                            .filter(ChatSession.symbol == sym, ChatSession.scope == "symbol")
+                            .order_by(ChatSession.updated_at.desc())
+                            .first())
         session = await asyncio.to_thread(query)
         if session is None:
             where = symbol.upper() if symbol else "the universal chat"

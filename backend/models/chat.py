@@ -17,7 +17,6 @@ A session has a ``scope`` (Universal AI Hub chat, 2026-09-10):
 Invariants are enforced in ChatRepository, not the DB (this codebase
 declares no CHECK constraints anywhere).
 """
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship

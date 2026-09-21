@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from backend.config.settings import settings, _PROJECT_ROOT
+from backend.config.settings import _PROJECT_ROOT, settings
 
 
 class Base(DeclarativeBase):

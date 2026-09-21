@@ -47,12 +47,11 @@ When per-symbol granularity is required, prefer:
   - OpenTelemetry native metrics (which handle high-cardinality natively),
     and scrape those from Jaeger or a dedicated Otel collector.
 """
-from typing import Iterable
+from collections.abc import Iterable
 
-from ..api.scanner.ws_router import broadcast_manager
 from ..api.rate_limit import RedisRateLimiter
+from ..api.scanner.ws_router import broadcast_manager
 from .metrics import get_snapshot
-
 
 # Counter increments are pulled live from each subsystem. The Prometheus
 # exposition reads them on every scrape; values are therefore always
@@ -399,9 +398,9 @@ def _provider_metrics() -> list[str]:
     """
     try:
         from ..market_data.services.manager import (
-            market_data_manager,
             _circuit_breakers,
             _rate_limiter,
+            market_data_manager,
         )
     except Exception:
         return []

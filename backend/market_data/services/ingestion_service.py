@@ -7,7 +7,7 @@ import atexit
 import logging
 import random
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_
@@ -28,8 +28,7 @@ from backend.repositories import quote_repository
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.services.signal_recorder import signal_recorder
 
-from .engine_seeder import engine_registry
-from .engine_seeder import _ensure_aware
+from .engine_seeder import _ensure_aware, engine_registry
 from .manager import MarketDataManager, market_data_manager
 
 logger = logging.getLogger(__name__)
@@ -334,7 +333,10 @@ class MarketDataIngestionService:
         # task that doesn't inherit them either.
         captured_corr_id: str | None = None
         try:
-            from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
+            from backend.observability.logging_enhanced import (
+                get_correlation_id,
+                set_correlation_id,
+            )
             captured_corr_id = get_correlation_id()
         except Exception:
             pass
@@ -465,7 +467,7 @@ class MarketDataIngestionService:
                 sub-hour resample of a newly backfilled symbol.
         """
         from backend.repositories.bar_repository import upsert_bars
-        from backend.utils.resampler import resample_ohlcv, ResampleError, _TF_MINUTES
+        from backend.utils.resampler import _TF_MINUTES, ResampleError, resample_ohlcv
 
         symbols_to_process = [_symbol] if _symbol else self.symbols
         written = 0
@@ -731,7 +733,7 @@ class MarketDataIngestionService:
                     # bar.timestamp is naive NY, so localize to NY tz first
                     try:
                         dt_ny = bar.timestamp.replace(tzinfo=_NY_TZ)
-                        dt_utc = dt_ny.astimezone(timezone.utc)
+                        dt_utc = dt_ny.astimezone(UTC)
                         monday = dt_utc - timedelta(days=dt_utc.weekday())
                         bucket_start_utc = monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
                     except Exception:
@@ -1258,8 +1260,8 @@ class MarketDataIngestionService:
         source — matches ``normalize_fn``'s call convention).
         """
         from backend.market_data.services.manager import (
-            get_backfill_primary_provider,
             get_1h_1d_fallback_providers,
+            get_backfill_primary_provider,
         )
 
         provider = get_backfill_primary_provider(timeframe)
@@ -1675,12 +1677,13 @@ class MarketDataIngestionService:
         only the bars newer than that timestamp. Returns the total
         number of bars written across all symbols.
         """
-        from backend.models.market_data_sql import BarModel as _BarModel
+        from sqlalchemy import func as _func
+
         from backend.market_data.services.backfill_service import (
             _fetch_tier1_1m_bars,
             _write_bars_in_chunks,
         )
-        from sqlalchemy import func as _func
+        from backend.models.market_data_sql import BarModel as _BarModel
 
         written_total = 0
         for symbol in self.symbols:
@@ -2077,14 +2080,15 @@ class MarketDataIngestionService:
         so this is safe to call unconditionally.
         """
         from datetime import timedelta as _td
-        from sqlalchemy import func as _func
-        from backend.models.market_data_sql import BarModel as _BarModel
-        from backend.market_data.services.backfill_queue import enqueue_backfill
 
+        from sqlalchemy import func as _func
+
+        from backend.market_data.services.backfill_queue import enqueue_backfill
         from backend.models import BackfillJob
+        from backend.models.market_data_sql import BarModel as _BarModel
 
         threshold = datetime.now() - _td(days=_SEED_MIN_HISTORY_DAYS)
-        retry_after = datetime.now(timezone.utc).replace(tzinfo=None) - _td(hours=_SEED_RETRY_HOURS)
+        retry_after = datetime.now(UTC).replace(tzinfo=None) - _td(hours=_SEED_RETRY_HOURS)
         symbols = list(self.symbols)
         if not symbols:
             return

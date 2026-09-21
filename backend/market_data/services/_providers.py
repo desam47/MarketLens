@@ -19,7 +19,6 @@ import redis as _redis_lib
 
 from backend.config.settings import settings as _real_settings
 
-
 # Module-level defaults — used during initial import before the shim is
 # fully set up, and as type-hint anchors in the submodules.
 _settings = _real_settings
@@ -38,7 +37,7 @@ def get_settings():
     """
     import sys
     try:
-        return getattr(sys.modules[__package__ + ".manager"], "_settings")
+        return sys.modules[__package__ + ".manager"]._settings
     except (KeyError, AttributeError):
         return _settings
 
@@ -52,7 +51,7 @@ def get_redis():
     """
     import sys
     try:
-        return getattr(sys.modules[__package__ + ".manager"], "redis")
+        return sys.modules[__package__ + ".manager"].redis
     except (KeyError, AttributeError):
         return redis
 
@@ -69,7 +68,7 @@ def get_redis_cache():
     """
     import sys
     try:
-        return getattr(sys.modules[__package__ + ".manager"], "_redis_cache")
+        return sys.modules[__package__ + ".manager"]._redis_cache
     except (KeyError, AttributeError):
         # Defer the import to break the circular dependency
         # (_providers → cache → _providers would be a cycle).

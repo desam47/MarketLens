@@ -9,7 +9,7 @@ Covers the seams that do NOT require a live Redis / RQ worker / DB:
     ``None`` (or an empty result) instead of raising. The ``*_job`` helpers
     return ``None`` before any DB access, so these tests never touch SQLite.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -31,7 +31,7 @@ class TestIsoHelper:
         assert background._iso(None) is None
 
     def test_datetime_gets_z_suffix(self):
-        dt = datetime(2026, 9, 1, 12, 30, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 9, 1, 12, 30, 0, tzinfo=UTC)
         assert background._iso(dt) == "2026-09-01T12:30:00+00:00Z"
 
 

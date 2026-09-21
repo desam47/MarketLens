@@ -18,15 +18,15 @@ Falls back to in-memory token bucket if Redis is unavailable.
 import logging
 import time
 from collections import defaultdict, deque
-from typing import Optional
 
 import redis
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.api.security_headers import SecurityHeadersMiddleware
+
 from ..config.settings import settings as _settings
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ class RedisRateLimiter:
         # separately by limiter instance, so it does not need namespacing.
         self.name = name
         self._fallback_limiter = InMemoryRateLimiter(max_requests, window_seconds)
-        self._redis_client: Optional[redis.Redis] = None
+        self._redis_client: redis.Redis | None = None
         # Monotonic deadline before which Redis is skipped (circuit breaker
         # opened by a failed call), so a dead Redis costs one short timeout
         # per retry window rather than one per request.

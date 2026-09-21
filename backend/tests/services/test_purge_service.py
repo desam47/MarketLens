@@ -10,7 +10,6 @@ import logging
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import text
 
 from backend.database import SessionLocal
 from backend.models import (
@@ -19,24 +18,16 @@ from backend.models import (
     AlertTrigger,
     BackfillJob,
     BacktestRun,
-    Bar,
     BarModel,
     DrawingTool,
     HistoricalSignal,
-    MarketStatus,
     MarketStatusModel,
-    ProviderStatus,
-    ProviderStatusModel,
-    Quote,
     QuoteModel,
-    Watchlist,
-    WatchlistSymbol,
 )
 from backend.services.purge_service import (
     purge_symbol_from_database,
     purge_symbol_from_database_safe,
 )
-
 
 logger = logging.getLogger(__name__)
 

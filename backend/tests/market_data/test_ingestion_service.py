@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -303,10 +303,11 @@ class TestPhase31LastBarUpdate(unittest.TestCase):
 
     def test_symbol_refresh_only_adds_1m_key(self):
         """_refresh_symbols_from_watchlist only adds '1m' entries for new symbols."""
+        from unittest.mock import patch
+
         from backend.market_data.services.ingestion_service import (
             MarketDataIngestionService,
         )
-        from unittest.mock import patch
 
         service = MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
         # Simulate the watchlist gaining a new symbol. (This used to patch
@@ -366,6 +367,7 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
     async def test_premarket_only_bucket_now_resamples_and_is_tagged(self):
         from datetime import datetime
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
         # Premarket bucket: 2026-09-08 08:00/08:01 ET — 2 bars, session='premarket'.
@@ -389,6 +391,7 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
     async def test_after_hours_only_bucket_now_resamples_and_is_tagged(self):
         from datetime import datetime
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
         self._insert_bar(self.db, datetime(2026, 9, 8, 17, 0), "after_hours")
@@ -409,6 +412,7 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
     async def test_regular_bucket_still_resamples_normally(self):
         from datetime import datetime
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
         # Regular-session bucket: 2026-09-08 10:00/10:01 ET — 2 bars.
@@ -435,6 +439,7 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
         both produce correctly-tagged 5m bars — proves the two aren't
         cross-contaminating each other now that neither is filtered out."""
         from datetime import datetime
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
         self._insert_bar(self.db, datetime(2026, 9, 8, 8, 0), "premarket", close=50.0)
@@ -539,6 +544,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
 
     async def test_builds_incomplete_bar_from_this_hours_1m_bars(self):
         from datetime import timedelta
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.models.market_data_sql import BarModel
 
@@ -571,6 +577,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         1wk source query in this codebase (see BarModel.session's
         docstring, still accurate for those)."""
         from datetime import timedelta
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.models.market_data_sql import BarModel
 
@@ -609,10 +616,11 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         closes) must win — upsert's ON CONFLICT DO UPDATE, no special
         casing needed."""
         from datetime import timedelta
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data import Bar, DataStatus
         from backend.models.market_data_sql import BarModel
         from backend.repositories.bar_repository import upsert_bars
-        from backend.models.market_data import Bar, DataStatus
 
         hour_start = self._hour_start()
         self._insert_1m_bar(self.db, hour_start, close=100.0)
@@ -646,11 +654,12 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         hour). Passing that hour's start in hour_starts must rebuild it
         from 1m and overwrite the bad value with HISTORICAL status
         (the hour is closed, not live)."""
-        from datetime import datetime, timedelta
+        from datetime import timedelta
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data import Bar, DataStatus
         from backend.models.market_data_sql import BarModel
         from backend.repositories.bar_repository import upsert_bars
-        from backend.models.market_data import Bar, DataStatus
 
         past_hour = self._hour_start() - timedelta(hours=2)
 
@@ -686,7 +695,8 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(row.high, 999.0)  # the bad value is gone
 
     async def test_hour_starts_between_helper(self):
-        from datetime import datetime, timedelta
+        from datetime import datetime
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
         start = datetime(2026, 9, 9, 4, 0)
@@ -974,6 +984,7 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
     async def test_only_writes_bars_newer_than_latest_db_row(self):
         from datetime import timedelta
         from unittest.mock import AsyncMock, patch
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.models.market_data import Bar, DataStatus
         from backend.models.market_data_sql import BarModel
@@ -1016,6 +1027,7 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
 
     async def test_writes_nothing_when_no_bars_are_newer(self):
         from unittest.mock import AsyncMock, patch
+
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.models.market_data import Bar, DataStatus
 
@@ -1049,8 +1061,10 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
         were fully current. Found live on AAPL/SPY."""
         from datetime import timedelta
         from unittest.mock import AsyncMock, patch
+
         from backend.market_data.services.ingestion_service import (
-            MarketDataIngestionService, engine_registry,
+            MarketDataIngestionService,
+            engine_registry,
         )
         from backend.models.market_data import Bar, DataStatus
 
@@ -1115,6 +1129,7 @@ class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
 
     def test_second_call_reuses_the_same_instance(self):
         from unittest.mock import patch
+
         from backend.market_data.services.ingestion_service import _instantiate_backfill_provider
 
         construct_count = {"n": 0}
@@ -1132,6 +1147,7 @@ class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
 
     def test_unknown_provider_returns_none(self):
         from unittest.mock import patch
+
         from backend.market_data.services.ingestion_service import _instantiate_backfill_provider
 
         with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {}):
@@ -1336,11 +1352,10 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
         self.assertEqual(len(self._dispatched(registry)["AAPL"]), 3)
 
     def test_naive_vs_aware_timestamps_fail_open(self):
-        from datetime import timezone
 
         svc = self._service(lambda: {})
         svc._mark_bar_dispatched("AAPL", datetime(2026, 9, 18, 10, 0))
-        self.assertTrue(svc._should_dispatch_bar("AAPL", datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)))
+        self.assertTrue(svc._should_dispatch_bar("AAPL", datetime(2026, 9, 18, 10, 0, tzinfo=UTC)))
 
     def test_older_bar_is_skipped_equal_and_newer_are_sent(self):
         svc = self._service(lambda: {})

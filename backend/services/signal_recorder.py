@@ -20,7 +20,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func
 
@@ -89,7 +89,7 @@ class SignalRecorder:
         # convention (2026-09-02+). The signal API serializes these with an
         # explicit ``-04:00``/``-05:00`` suffix so the browser parses them
         # correctly regardless of local timezone.
-        from backend.utils.timezone import to_ny, now_ny
+        from backend.utils.timezone import now_ny, to_ny
 
         if timestamp is None:
             ts = now_ny()

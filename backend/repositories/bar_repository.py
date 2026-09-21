@@ -3,7 +3,7 @@ Bar repository for persisting and retrieving historical OHLCV bars.
 """
 import collections.abc
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from datetime import time as _time
 
 from sqlalchemy import and_, select, text
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.engines.market_calendar import EASTERN, classify_bar_session, us_market_calendar
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
-from backend.observability import record_bar, record_bars
+from backend.observability import record_bars
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,6 @@ def get_bars(
     Phase 20 perf: slow queries (≥ 100ms) are logged with their EXPLAIN
     plan so expensive query patterns surface during development.
     """
-    import time
 
     rows, elapsed_ms = _fetch_bars(
         db,

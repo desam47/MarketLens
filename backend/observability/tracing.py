@@ -7,14 +7,13 @@ for FastAPI, SQLAlchemy, Redis, and HTTP clients.
 """
 import logging
 import os
-from typing import Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -24,7 +23,7 @@ from backend.config.settings import settings as _settings
 logger = logging.getLogger(__name__)
 
 # Global tracer instance
-_tracer: Optional[trace.Tracer] = None
+_tracer: trace.Tracer | None = None
 
 
 def _get_otlp_endpoint() -> str:
@@ -113,7 +112,7 @@ def _instrument_libraries() -> None:
         logger.warning(f"Failed to instrument some libraries: {e}")
 
 
-def get_tracer() -> Optional[trace.Tracer]:
+def get_tracer() -> trace.Tracer | None:
     """Get the global tracer instance.
 
     Returns:

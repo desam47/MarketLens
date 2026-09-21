@@ -6,7 +6,7 @@ Yahoo Finance or Webull: company profile, key metrics, financials,
 news, analyst recommendations, and insider sentiment.
 """
 
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel
 

@@ -37,14 +37,14 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-
-from backend.utils.timezone import now_ny
+from typing import TYPE_CHECKING
 
 from backend.config.settings import settings as _settings
 from backend.database import SessionLocal
 from backend.models import BacktestTrade
 from backend.repositories.backtest_repository import BacktestRepository
 from backend.scanner.scanner import ScanResult
+from backend.utils.timezone import now_ny
 
 from .replay import (
     HIGH_VOLUME_MULTIPLIER,
@@ -54,8 +54,6 @@ from .replay import (
     build_scan_result,
     classify_regime,
 )
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .parameters import ExperimentParameters

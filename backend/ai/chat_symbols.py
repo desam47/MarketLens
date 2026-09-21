@@ -24,7 +24,7 @@ from backend.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_VALID_CACHE: "OrderedDict[str, bool]" = OrderedDict()  # token -> True (hits only)
+_VALID_CACHE: OrderedDict[str, bool] = OrderedDict()  # token -> True (hits only)
 _VALID_CACHE_CAP = 256
 
 # Known-symbol set, rebuilt lazily every ~60s so a freshly added

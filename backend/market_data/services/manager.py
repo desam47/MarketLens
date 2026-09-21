@@ -16,36 +16,38 @@ IMPORTANT: import _settings and redis from _providers so that patches at
 """
 import threading
 
+from backend.market_data.providers.yfinance_provider import YFinanceProvider
+
 from . import _providers as _shared
-from ._providers import get_redis, get_redis_cache, get_settings, redis
+from ._providers import redis
 from .cache import RedisCache, _redis_cache
 from .manager_class import MarketDataManager, market_data_manager
+
 # Re-export the module-level logger so tests that patch
 # ``backend.market_data.services.manager.logger`` find it.
-from .providers import logger
 from .providers import (
     _EXPECTED_BAR_COUNTS,
     _INTRADAY_TIMEFRAMES,
     _PROVIDER_CLASSES,
-    _PerProviderRateLimiter,
     _call_provider,
     _cb_lock,
     _circuit_breakers,
     _corr_id_fn,
     _correlation_id_placeholder,
+    _get_alpaca_class,
     _get_breaker,
     _get_finnhub_class,
     _get_per_provider_rate_limit,
     _get_webull_class,
-    _get_alpaca_class,
     _newest_bar_age_seconds,
+    _PerProviderRateLimiter,
     _provider_call_with_breaker,
     _provider_retry,
     _rate_limiter,
-    _register_finnhub,
     _register_alpaca,
+    _register_finnhub,
+    logger,
 )
-from backend.market_data.providers.yfinance_provider import YFinanceProvider
 
 # Re-export the names tests patch — these must be the SAME objects as
 # _providers._settings and _providers.redis so that test patches work.

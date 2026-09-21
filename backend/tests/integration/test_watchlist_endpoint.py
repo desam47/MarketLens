@@ -23,6 +23,7 @@ class TestWatchlistCRUD(unittest.TestCase):
 
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
 

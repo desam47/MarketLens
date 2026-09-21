@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -45,32 +45,32 @@ router = APIRouter(prefix="/api/ai/templates", tags=["ai-templates"])
 
 class AITemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
     system_prompt: str = Field(..., min_length=10, max_length=MAX_SYSTEM_PROMPT_LEN)
-    user_instructions: Optional[str] = Field(default=None, max_length=MAX_USER_INSTRUCTIONS_LEN)
+    user_instructions: str | None = Field(default=None, max_length=MAX_USER_INSTRUCTIONS_LEN)
     variables: list[str] = Field(default_factory=lambda: ["symbol", "timeframe"])
     is_active: bool = True
     is_default: bool = False
 
 
 class AITemplateUpdate(BaseModel):
-    name: Optional[str] = Field(default=None, min_length=1, max_length=MAX_NAME_LEN)
-    description: Optional[str] = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
-    system_prompt: Optional[str] = Field(
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME_LEN)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
+    system_prompt: str | None = Field(
         default=None, min_length=10, max_length=MAX_SYSTEM_PROMPT_LEN
     )
-    user_instructions: Optional[str] = Field(default=None, max_length=MAX_USER_INSTRUCTIONS_LEN)
-    variables: Optional[list[str]] = None
-    is_active: Optional[bool] = None
-    is_default: Optional[bool] = None
+    user_instructions: str | None = Field(default=None, max_length=MAX_USER_INSTRUCTIONS_LEN)
+    variables: list[str] | None = None
+    is_active: bool | None = None
+    is_default: bool | None = None
 
 
 class AITemplateResponse(BaseModel):
     id: int
     name: str
-    description: Optional[str]
+    description: str | None
     system_prompt: str
-    user_instructions: Optional[str]
+    user_instructions: str | None
     variables: list[str]
     is_active: bool
     is_default: bool
@@ -89,7 +89,7 @@ class TemplatePreviewResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _parse_variables(json_str: Optional[str]) -> list[str]:
+def _parse_variables(json_str: str | None) -> list[str]:
     if not json_str:
         return []
     try:
@@ -148,8 +148,8 @@ def _ensure_single_default(db: Session, new_default_id: int) -> None:
 
 
 def _resolve_template_for_request(
-    db: Session, template_id: Optional[int]
-) -> Optional[AITemplate]:
+    db: Session, template_id: int | None
+) -> AITemplate | None:
     """Pick the template to use for an analysis call.
 
     - If ``template_id`` given, load it (must be active).
@@ -351,9 +351,9 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
 
 def resolve_and_render(
     db: Session,
-    template_id: Optional[int],
+    template_id: int | None,
     context: dict[str, Any],
-) -> Optional[str]:
+) -> str | None:
     """Resolve a template (if any) and render it with the given context.
 
     Returns the rendered system prompt, or ``None`` if no template

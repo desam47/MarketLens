@@ -6,7 +6,7 @@ of Finnhub JSON into our Pydantic models.
 """
 import unittest
 from datetime import date
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from backend.market_data.services.finnhub_service import FinnhubService
 

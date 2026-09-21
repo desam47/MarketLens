@@ -6,7 +6,6 @@ the cache lifecycle (initialisation, pub/sub listener startup) is isolated.
 """
 import json
 import logging
-import sys
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any

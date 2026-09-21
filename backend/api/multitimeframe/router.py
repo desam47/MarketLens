@@ -12,10 +12,12 @@ computations (per-preset), but delegates its per-TF trend data to the
 shared engines.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
+
+from backend.api.ttl_cache import _confluence_cache, _mtf_history_cache
 
 from ...multitimeframe.multi_timeframe_engine import (
     PRESET_NAMES,
@@ -23,10 +25,7 @@ from ...multitimeframe.multi_timeframe_engine import (
     MultiTimeframeSnapshot,
     TimeframeTrendSnapshot,
 )
-
-from ...market_data.services.engine_seeder import engine_registry
 from ..trend.registry import get_engine as get_shared_trend_engine
-from backend.api.ttl_cache import _confluence_cache, _mtf_history_cache
 
 # All timestamps in this response are emitted in America/New_York so the
 # dashboard renders them in EST/EDT without each caller converting.
@@ -84,7 +83,7 @@ def get_engine(symbol: str, preset: str = "day_trading") -> MultiTimeframeEngine
         # whose timeframes never receive a live dispatch (e.g. ``all``
         # includes 1d/1wk which only get warmup data) would render empty
         # until the next bar of any registered TF arrives.
-        engine._generate_confluence_signal(datetime.now(timezone.utc))
+        engine._generate_confluence_signal(datetime.now(UTC))
 
         # MTF engine is now READ-ONLY: it does NOT register for bar updates.
         # The shared TrendEngine(s) are already updated by the ingestion

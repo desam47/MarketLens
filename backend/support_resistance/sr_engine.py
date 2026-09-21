@@ -40,9 +40,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 
 class SRType(StrEnum):
@@ -601,8 +600,8 @@ class SupportResistanceEngine:
             return 1.0
         trs: list[float] = []
         for i in range(1, n):
-            h, l, c_prev = highs[i], lows[i], closes[i - 1]
-            trs.append(max(h - l, abs(h - c_prev), abs(l - c_prev)))
+            h, low, c_prev = highs[i], lows[i], closes[i - 1]
+            trs.append(max(h - low, abs(h - c_prev), abs(low - c_prev)))
         atr = sum(trs) / len(trs)
         return atr if atr > 0 else 1.0
 

@@ -11,10 +11,9 @@ in ``rq info`` output too).
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ...ai.background import enqueue_analyze_job, get_job_status

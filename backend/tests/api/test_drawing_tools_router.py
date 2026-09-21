@@ -3,8 +3,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
-from backend.models import DrawingTool
 from backend.database import Base, engine
+from backend.models import DrawingTool
 
 
 @pytest.fixture

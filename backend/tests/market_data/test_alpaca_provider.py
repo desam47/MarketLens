@@ -15,19 +15,18 @@ Coverage:
 """
 import asyncio
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from backend.market_data.providers.alpaca_provider import (
     AlpacaProvider,
     AlpacaWebSocketClient,
-    _resolve_tf,
     _resolve_feed,
+    _resolve_tf,
     _ts_to_ny,
 )
-from backend.models.market_data import Bar, DataStatus, Quote
-
+from backend.models.market_data import Bar, DataStatus
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,18 +53,19 @@ def _sdk_quote(symbol="AAPL", bid=150.0, ask=150.5, ts=None):
         ask_price=ask,
         bid_size=100,
         ask_size=200,
-        timestamp=ts or datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc),
+        timestamp=ts or datetime(2024, 1, 15, 14, 30, tzinfo=UTC),
     )
 
 
-def _sdk_bar(symbol="AAPL", ts=None, o=100.0, h=101.0, l=99.0, c=100.5, v=1000):
+def _sdk_bar(symbol="AAPL", ts=None, o=100.0, h=101.0, low=99.0, c=100.5, v=1000, **kwargs):
     """Build a mock SDK ``Bar`` object."""
+    low = kwargs.pop("l", low)  # backwards-compatible short name used by callers
     return SimpleNamespace(
         symbol=symbol,
-        timestamp=ts or datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc),
+        timestamp=ts or datetime(2024, 1, 15, 14, 30, tzinfo=UTC),
         open=o,
         high=h,
-        low=l,
+        low=low,
         close=c,
         volume=v,
     )
@@ -199,7 +199,7 @@ class TestAlpacaProviderBars(unittest.TestCase):
 
     def test_get_historical_bars_returns_bars(self):
         b1 = _sdk_bar(o=100.0, h=101.5, l=99.5, c=101.0, v=1000)
-        b2 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 31, tzinfo=timezone.utc), o=101.0, h=102.0, l=100.5, c=101.5, v=1500)
+        b2 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 31, tzinfo=UTC), o=101.0, h=102.0, l=100.5, c=101.5, v=1500)
         self._mock_data_client.get_stock_bars.return_value = _barset(bars=[b1, b2])
 
         bars = self.provider.get_historical_bars("AAPL", timeframe="1d", range_="5d")
@@ -220,8 +220,8 @@ class TestAlpacaProviderBars(unittest.TestCase):
         self.assertEqual(bars, [])
 
     def test_get_latest_bar_returns_most_recent(self):
-        b1 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 30, tzinfo=timezone.utc), c=100.5, v=1000)
-        b2 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 31, tzinfo=timezone.utc), c=101.0, v=1100)
+        b1 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 30, tzinfo=UTC), c=100.5, v=1000)
+        b2 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 31, tzinfo=UTC), c=101.0, v=1100)
         self._mock_data_client.get_stock_bars.return_value = _barset(bars=[b1, b2])
         bar = self.provider.get_latest_bar("AAPL", "1m")
         self.assertEqual(bar.close, 101.0)
@@ -235,7 +235,7 @@ class TestAlpacaProviderBars(unittest.TestCase):
     def test_get_bar_uses_uncapped_window_for_historical_ts(self):
         """Historical timestamps (outside recent zone) must NOT have end capped."""
         from datetime import timedelta
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        yesterday = datetime.now(UTC) - timedelta(days=1)
         self._mock_data_client.get_stock_bars.return_value = _barset(bars=[
             _sdk_bar(ts=yesterday, c=150.0, v=1000)
         ])
@@ -246,7 +246,7 @@ class TestAlpacaProviderBars(unittest.TestCase):
         req_obj = self._mock_data_client.get_stock_bars.call_args.args[0]
         end = req_obj.end
         # end should be the natural window end (~yesterday + 1 day), not "now - 15min"
-        self.assertLess(end, datetime.now(timezone.utc).replace(tzinfo=None))
+        self.assertLess(end, datetime.now(UTC).replace(tzinfo=None))
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +290,8 @@ class TestAlpacaProviderBatchAndStatus(unittest.TestCase):
     def test_get_market_status_returns_open_status(self):
         clock = SimpleNamespace(
             is_open=True,
-            next_open=datetime(2024, 1, 16, 14, 30, tzinfo=timezone.utc),
-            next_close=datetime(2024, 1, 15, 21, 0, tzinfo=timezone.utc),
+            next_open=datetime(2024, 1, 16, 14, 30, tzinfo=UTC),
+            next_close=datetime(2024, 1, 15, 21, 0, tzinfo=UTC),
         )
         mock_tc = MagicMock()
         mock_tc.get_clock.return_value = clock
@@ -307,7 +307,7 @@ class TestAlpacaProviderBatchAndStatus(unittest.TestCase):
     def test_get_market_status_when_closed(self):
         clock = SimpleNamespace(
             is_open=False,
-            next_open=datetime(2024, 1, 16, 14, 30, tzinfo=timezone.utc),
+            next_open=datetime(2024, 1, 16, 14, 30, tzinfo=UTC),
             next_close=None,
         )
         mock_tc = MagicMock()

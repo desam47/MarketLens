@@ -1,5 +1,5 @@
 """Tests for the background AI jobs API (Phase 2.5)."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient

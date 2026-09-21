@@ -11,7 +11,7 @@ Each group is independently gated: when its provider is disabled
 The rest of the API is unaffected.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -33,7 +33,7 @@ _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _to_dashboard_tz(value: datetime | None) -> str:
@@ -157,5 +157,5 @@ async def get_aux_providers():
         news=aux_data_manager.news.get_statuses(),
         fundamentals=aux_data_manager.fundamentals.get_statuses(),
         options=aux_data_manager.options.get_statuses(),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
     )

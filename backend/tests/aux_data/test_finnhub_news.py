@@ -50,9 +50,9 @@ class TestFinnhubNewsProvider(unittest.TestCase):
             prov.get_news("AAPL")
         self.assertFalse(prov._is_healthy)
 
-    @patch("backend.aux_data.providers.finnhub_news.requests.get", side_effect=Exception("net"))
+    @patch("backend.aux_data.providers.finnhub_news.requests.get", side_effect=RuntimeError("net"))
     def test_network_error_raises(self, _mock_get):
-        with self.assertRaises(Exception):
+        with self.assertRaises(RuntimeError):
             FinnhubNewsProvider().get_news("AAPL")
 
     def test_missing_key_raises(self):

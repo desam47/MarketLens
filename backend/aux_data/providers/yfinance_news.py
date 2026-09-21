@@ -16,9 +16,8 @@ was absent.
 import logging
 from datetime import datetime
 
-from backend.utils.timezone import now_ny
-
 from backend.models.aux_data import NewsItem, NewsResponse
+from backend.utils.timezone import now_ny
 
 from ..provider import NewsProvider
 

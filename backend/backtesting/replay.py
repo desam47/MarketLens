@@ -17,12 +17,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from backend.indicators import ADXIndicator, MACDIndicator, RSIIndicator
 from backend.models.market_data import Bar
 from backend.scanner.scanner import ScanResult
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .parameters import ExperimentParameters

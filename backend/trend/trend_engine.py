@@ -3,7 +3,7 @@ Trend and market structure engine
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -249,7 +249,7 @@ class TrendEngine:
         self.timeframe_engine = multi_symbol_timeframe_engine.get_engine_for_symbol(symbol)
         if self.timeframe_engine is None:
             # Create engine if it doesn't exist
-            multi_symbol_timeframe_engine.update_tick(symbol, 0, 0, datetime.now(timezone.utc))
+            multi_symbol_timeframe_engine.update_tick(symbol, 0, 0, datetime.now(UTC))
             self.timeframe_engine = multi_symbol_timeframe_engine.get_engine_for_symbol(symbol)
 
         # Per-Phase 6.1 fix: reset per-TF candle-open tracking so a new
@@ -385,7 +385,7 @@ class TrendEngine:
         # the live-tick synthesis. This ensures SuperTrend, ADX, and Bollinger
         # all compute from true price ranges rather than flat single-price bars.
         dq = _settings.data_quality
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # --- Stale check -------------------------------------------------
         if self._last_update_time is not None:
@@ -808,7 +808,7 @@ class TrendEngine:
         return TrendSnapshot(
             symbol=self.symbol,
             timeframe=timeframe,
-            timestamp=timestamp or datetime.now(timezone.utc),
+            timestamp=timestamp or datetime.now(UTC),
             direction=signal.classification,
             score=signal.score,
             strength=strength_to_float(signal.strength),
@@ -895,7 +895,7 @@ class TrendEngine:
                 direction=overall_direction,
                 strength=overall_strength,
                 confidence=overall_confidence,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 score=avg_score * 100.0,
             )
 

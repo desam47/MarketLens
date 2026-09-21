@@ -119,18 +119,18 @@ def _get_bridge_loop() -> asyncio.AbstractEventLoop:
         return loop
 
 
-def _submit(awaitable: "Awaitable[Any]") -> "Future[Any]":
+def _submit(awaitable: Awaitable[Any]) -> Future[Any]:
     """Schedule *awaitable* on the bridge loop from any (loop-less) thread."""
     return asyncio.run_coroutine_threadsafe(_wrap(awaitable), _get_bridge_loop())
 
 
-async def _wrap(awaitable: "Awaitable[Any]") -> Any:
+async def _wrap(awaitable: Awaitable[Any]) -> Any:
     """run_coroutine_threadsafe wants a coroutine; __anext__()/aclose()
     technically return awaitables. Wrapping covers both."""
     return await awaitable
 
 
-async def on_bridge(awaitable: "Awaitable[T]") -> T:
+async def on_bridge[T](awaitable: Awaitable[T]) -> T:
     """Await *awaitable* with its work executed on the bridge loop.
 
     The async counterpart of :func:`run_sync`, for callers already
@@ -174,7 +174,7 @@ def stop_bridge_loop() -> None:
         thread.join(timeout=5.0)
 
 
-def run_sync(coro: "Any") -> T:
+def run_sync(coro: Any) -> T:
     """Run *coro* to completion on the shared bridge loop, return its result.
 
     Use from sync code that has no running loop (RQ workers,
@@ -222,7 +222,7 @@ def run_sync(coro: "Any") -> T:
         raise
 
 
-def stream_sync(agen: AsyncIterator[T]) -> Iterator[T]:
+def stream_sync[T](agen: AsyncIterator[T]) -> Iterator[T]:
     """Yield items from an async iterator in a sync ``for`` loop.
 
     Drives the async iterator one item at a time on the shared bridge

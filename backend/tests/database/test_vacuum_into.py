@@ -12,6 +12,7 @@ Validates:
 import sqlite3
 import tempfile
 import unittest
+from datetime import UTC
 from pathlib import Path
 
 
@@ -31,10 +32,10 @@ class TestVacuumInto(unittest.TestCase):
         # successive runs of the same test method.
         import time
         self.test_symbol = f"VACUUM_TEST_{int(time.time() * 1000)}"
-        from datetime import datetime, timezone
+        from datetime import datetime
         self._session.add(BarModel(
             symbol=self.test_symbol,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             timeframe="1m",
             open=1.0, high=2.0, low=0.5, close=1.5, volume=100,
             source="raw",

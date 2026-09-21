@@ -6,13 +6,11 @@ of company metrics. Field names map directly to the Yahoo Finance API
 schema; unavailable fields are left as ``None``.
 """
 import logging
-from datetime import datetime
 
 from pydantic import ValidationError
 
-from backend.utils.timezone import now_ny
-
 from backend.models.aux_data import FundamentalsItem, FundamentalsResponse
+from backend.utils.timezone import now_ny
 
 from ..provider import FundamentalProvider
 

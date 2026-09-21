@@ -6,7 +6,7 @@ data_status propagation, empty/single-bar edge cases, and error paths.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -19,7 +19,6 @@ from backend.utils.resampler import (
     _floor_minute,
     resample_ohlcv,
 )
-
 
 # ------------------------------------------------------------------ helpers
 
@@ -50,7 +49,7 @@ def dt(year, month, day, hour, minute=0, tz=None) -> datetime:
     """Construct a UTC datetime, optionally with a timezone."""
     if tz:
         return datetime(year, month, day, hour, minute, tzinfo=tz)
-    return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    return datetime(year, month, day, hour, minute, tzinfo=UTC)
 
 
 # ------------------------------------------------------------------ _floor_minute / _floor_hour
@@ -417,8 +416,9 @@ class TestZoneInfoHoisted:
     def test_bucket_start_1d_uses_module_tz(self):
         """``_bucket_start_1d`` references the module-level ``_NY_TZ``,
         not a freshly constructed ZoneInfo."""
-        from backend.utils import resampler
         import inspect
+
+        from backend.utils import resampler
 
         src = inspect.getsource(resampler._bucket_start_1d)
         # The function body must NOT contain ``ZoneInfo(`` — that would
@@ -445,8 +445,9 @@ class TestZoneInfoHoisted:
     def test_1wk_no_longer_imports_zoneinfo(self):
         """``_bucket_start_1wk`` previously did ``from zoneinfo import ZoneInfo``
         per call but never used it. Ensure the dead import is gone."""
-        from backend.utils import resampler
         import inspect
+
+        from backend.utils import resampler
 
         src = inspect.getsource(resampler._bucket_start_1wk)
         assert "from zoneinfo import" not in src

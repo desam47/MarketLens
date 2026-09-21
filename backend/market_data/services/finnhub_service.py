@@ -10,7 +10,7 @@ Routes in ``backend/api/finnhub/router.py`` call into this service.
 import asyncio
 import logging
 import os
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import requests
 
@@ -304,7 +304,7 @@ class FinnhubService:
             id=int(item.get("id", 0)),
             symbol=item.get("related") or default_symbol,
             category=item.get("category"),
-            datetime=datetime.fromtimestamp(ts_epoch, tz=timezone.utc),
+            datetime=datetime.fromtimestamp(ts_epoch, tz=UTC),
             headline=item.get("headline", ""),
             image=item.get("image"),
             related=item.get("related"),

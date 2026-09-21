@@ -116,7 +116,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
     def test_get_bars_unavailable_redis(self):
         """Should return None when Redis is unavailable."""
         with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+             patch("backend.market_data.services.manager.redis.Redis"):
             mock_settings.redis.enabled = False
             cache = RedisCache()
             result = cache.get_bars("AAPL", "1d")
@@ -144,7 +144,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
     def test_set_bars_unavailable_redis(self):
         """Should return False when Redis is unavailable."""
         with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+             patch("backend.market_data.services.manager.redis.Redis"):
             mock_settings.redis.enabled = False
             cache = RedisCache()
             result = cache.set_bars("AAPL", "1d", [])
@@ -237,7 +237,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
     def test_set_latest_bar_unavailable_redis(self):
         """Should return False when Redis is unavailable."""
         with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+             patch("backend.market_data.services.manager.redis.Redis"):
             mock_settings.redis.enabled = False
             cache = RedisCache()
             result = cache.set_latest_bar("AAPL", "1d", Bar(
@@ -411,7 +411,7 @@ class TestRedisCachePubSub(unittest.TestCase):
     def test_publish_when_redis_unavailable(self):
         """Should silently skip publishing when Redis is unavailable."""
         with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+             patch("backend.market_data.services.manager.redis.Redis"):
             mock_settings.redis.enabled = False
             cache = RedisCache()
 

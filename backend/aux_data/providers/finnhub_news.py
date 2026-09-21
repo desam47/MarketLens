@@ -8,7 +8,7 @@ yfinance provider — the manager only advances the chain on an exception,
 not on an empty response.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -36,7 +36,7 @@ class FinnhubNewsProvider(NewsProvider):
             self._mark_error(RuntimeError("no FINNHUB_API_KEY"))
             raise RuntimeError("FinnhubNewsProvider: no API key configured")
 
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         params = {
             "symbol": sym,
             "from": (today - timedelta(days=_LOOKBACK_DAYS)).isoformat(),
@@ -67,7 +67,7 @@ class FinnhubNewsProvider(NewsProvider):
                 continue
             ts_raw = a.get("datetime")
             ts = (
-                datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+                datetime.fromtimestamp(ts_raw, tz=UTC)
                 if isinstance(ts_raw, (int, float)) and ts_raw > 0
                 else now_ny()
             )

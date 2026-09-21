@@ -6,9 +6,8 @@ All TrendEngine instances are sourced from the shared registry
 multi-timeframe API, and any future consumer share the same warmed-up
 engine per symbol — no signal divergence from independent warmup paths.
 """
-import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException

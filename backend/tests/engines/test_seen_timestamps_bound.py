@@ -7,13 +7,13 @@ symbols x 10 timeframe engines (~4.7 MB/day, ~140 MB per month of uptime). It is
 a FIFO-bounded set; duplicate detection for anything recent is unchanged.
 """
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 from backend.engines import timeframe as tf_mod
 from backend.engines.timeframe import TimeframeEngine, _BoundedSeen
 
-T0 = datetime(2026, 9, 18, 14, 30, tzinfo=timezone.utc)
+T0 = datetime(2026, 9, 18, 14, 30, tzinfo=UTC)
 
 
 def _t(i: int) -> datetime:

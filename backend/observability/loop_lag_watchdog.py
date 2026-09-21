@@ -240,7 +240,7 @@ class LoopLagWatchdog:
         logger.warning(
             "event loop stalled %.0f ms (%d stack samples)%s; busiest: %s",
             stall_ms, len(samples),
-            (" — overlaps GC gen%d %.0f ms" % (report["gc_overlap"][0]["generation"], report["gc_overlap"][0]["ms"]))
+            f" — overlaps GC gen{report['gc_overlap'][0]['generation']} {report['gc_overlap'][0]['ms']:.0f} ms"
             if report["gc_overlap"] else "",
             " | ".join(
                 f"{t['thread']}{'[loop]' if t['is_event_loop'] else ''}"

@@ -15,8 +15,8 @@ import json
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, PropertyMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
@@ -25,7 +25,6 @@ from backend.market_data.providers.webull_provider import (
     WebullAuthError,
     WebullProvider,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -295,30 +294,34 @@ class TestTimeframeInference(unittest.TestCase):
     reflect the true resolution."""
 
     def test_infers_1m_for_60s_gaps(self):
+        from datetime import timedelta
+
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
-        from datetime import datetime, timezone, timedelta
-        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=60 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "1m")
 
     def test_infers_5m_for_300s_gaps(self):
+        from datetime import timedelta
+
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
-        from datetime import datetime, timezone, timedelta
-        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=300 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "5m")
 
     def test_infers_15m_for_900s_gaps(self):
+        from datetime import timedelta
+
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
-        from datetime import datetime, timezone, timedelta
-        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=900 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "15m")
 
     def test_infers_1h_for_3600s_gaps(self):
+        from datetime import timedelta
+
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
-        from datetime import datetime, timezone, timedelta
-        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=3600 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "1h")
 
@@ -329,9 +332,10 @@ class TestTimeframeInference(unittest.TestCase):
 
     def test_median_robust_to_outliers(self):
         """One huge gap (lunch break) shouldn't pull inference to a coarser TF."""
+        from datetime import timedelta
+
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
-        from datetime import datetime, timezone, timedelta
-        base = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         # 9 1-minute bars + 1 big gap, then 9 more
         bars = [base + timedelta(seconds=60 * i) for i in range(9)]
         bars += [base + timedelta(seconds=60 * 18 + i) for i in range(9)]

@@ -25,10 +25,9 @@ with valid ``ALPACA_API_KEY`` and ``ALPACA_SECRET_KEY``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -51,7 +50,7 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
-from backend.utils.timezone import NY, UTC, to_ny, ny_to_utc
+from backend.utils.timezone import NY, UTC
 
 from ..provider import BaseMarketDataProvider
 
@@ -489,14 +488,14 @@ class AlpacaProvider(BaseMarketDataProvider):
             # Cap ``end`` at "now - 15 min" ONLY when the requested window
             # overlaps the recent-SIP-only zone. Historical lookups (e.g.
             # yesterday's bar) pass through unmodified.
-            cap = datetime.now(timezone.utc).timestamp() - 15 * 60
+            cap = datetime.now(UTC).timestamp() - 15 * 60
             end_capped = min(end, cap) if end > cap else end
 
             req = StockBarsRequest(
                 symbol_or_symbols=symbol.upper(),
                 timeframe=tf,
-                start=datetime.fromtimestamp(start, tz=timezone.utc),
-                end=datetime.fromtimestamp(end_capped, tz=timezone.utc),
+                start=datetime.fromtimestamp(start, tz=UTC),
+                end=datetime.fromtimestamp(end_capped, tz=UTC),
                 limit=100,
             )
             client = self._get_data_client()
@@ -532,9 +531,9 @@ class AlpacaProvider(BaseMarketDataProvider):
             from backend.utils.timezone import now_ny as _now_ny
             today_ny = _now_ny().replace(hour=0, minute=0, second=0, microsecond=0)
             start_utc = NY.localize(today_ny) if hasattr(NY, "localize") else \
-                today_ny.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+                today_ny.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(UTC)
             # Cap end at now-15min to avoid the IEX 403 on recent SIP data.
-            end_utc = datetime.now(timezone.utc) - timedelta(minutes=15)
+            end_utc = datetime.now(UTC) - timedelta(minutes=15)
             req = StockBarsRequest(
                 symbol_or_symbols=symbol.upper(),
                 timeframe=tf,
@@ -579,7 +578,7 @@ class AlpacaProvider(BaseMarketDataProvider):
         try:
             tf = _resolve_tf(timeframe)
             duration = _RANGE_SECONDS.get(range_, 7776000)
-            end_ts = datetime.now(timezone.utc) - timedelta(minutes=15)
+            end_ts = datetime.now(UTC) - timedelta(minutes=15)
             start_ts = end_ts - timedelta(seconds=duration)
 
             req = StockBarsRequest(
@@ -627,7 +626,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                     results[sym] = Quote(
                         symbol=sym,
                         price=0.0,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=datetime.now(UTC),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -663,7 +662,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                 s.upper(): Quote(
                     symbol=s.upper(),
                     price=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     provider=self.name,
                     data_status=DataStatus.ERROR,
                 )
@@ -677,7 +676,7 @@ class AlpacaProvider(BaseMarketDataProvider):
         try:
             tc = self._get_trading_client()
             clock = tc.get_clock()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             status = MarketStatus(
                 symbol=symbol.upper(),
@@ -756,7 +755,7 @@ class AlpacaProvider(BaseMarketDataProvider):
             rate_limit_remaining=base.rate_limit_remaining,
             last_success=base.last_success,
             error_message=(base.error_message or "") + extra,
-            timestamp=_ts_to_ny(datetime.now(timezone.utc)),
+            timestamp=_ts_to_ny(datetime.now(UTC)),
             circuit_breaker_state=base.circuit_breaker_state,
             consecutive_failures=base.consecutive_failures,
             total_successes=base.total_successes,

@@ -12,9 +12,6 @@ They are intentionally separate from the core trend engine and never
 called by it. Each is disabled by default (AUX_*_ENABLED=false).
 """
 from abc import ABC, abstractmethod
-from datetime import datetime
-
-from backend.utils.timezone import now_ny
 
 from backend.models.aux_data import (
     AuxProviderStatus,
@@ -22,6 +19,7 @@ from backend.models.aux_data import (
     NewsResponse,
     OptionsResponse,
 )
+from backend.utils.timezone import now_ny
 
 
 class NewsProvider(ABC):

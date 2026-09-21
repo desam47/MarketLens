@@ -13,22 +13,20 @@ import os
 import sys
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.market_data.circuit_breaker import (
-    CircuitBreaker,
     CircuitBreakerOpen,
     CircuitState,
 )
 from backend.market_data.services.manager import (
     _call_provider,
-    _circuit_breakers,
     _cb_lock,
+    _circuit_breakers,
     _get_breaker,
-    _provider_call_with_breaker,
 )
 from backend.models.market_data import ProviderStatus
 
@@ -173,7 +171,7 @@ class TestProviderStatusEnrichment(unittest.TestCase):
                             get_provider_status=MagicMock(return_value=ProviderStatus(
                                 provider_name="test_status",
                                 is_healthy=True,
-                                timestamp=datetime.now(timezone.utc),
+                                timestamp=datetime.now(UTC),
                             )),
                         ),
                     }
@@ -224,7 +222,7 @@ class TestProviderStatusEnrichment(unittest.TestCase):
                             get_provider_status=MagicMock(return_value=ProviderStatus(
                                 provider_name="no_breaker",
                                 is_healthy=True,
-                                timestamp=datetime.now(timezone.utc),
+                                timestamp=datetime.now(UTC),
                             )),
                         ),
                     }

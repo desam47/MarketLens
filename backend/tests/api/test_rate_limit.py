@@ -14,7 +14,6 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
 
-
 from backend.api import rate_limit as rl
 from backend.api.rate_limit import (
     InMemoryRateLimiter,
@@ -207,7 +206,7 @@ class TestRedisRateLimiterWithMockedRedis(unittest.TestCase):
         mock_redis.pipeline.return_value.execute.return_value = [1, True]
 
         with patch("backend.api.rate_limit.redis.Redis.from_url", return_value=mock_redis):
-            limiter = RedisRateLimiter(max_requests=10, window_seconds=60)
+            RedisRateLimiter(max_requests=10, window_seconds=60)
             # Verify Redis connection was attempted
             mock_redis.ping.assert_called()
 
@@ -510,6 +509,7 @@ class TestRateLimitMiddlewareIntegration(unittest.TestCase):
 
     def setUp(self):
         from starlette.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
         # Reset the limiter between tests.

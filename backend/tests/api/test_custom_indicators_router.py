@@ -3,8 +3,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
-from backend.models import CustomIndicator
 from backend.database import Base, engine
+from backend.models import CustomIndicator
 
 
 @pytest.fixture

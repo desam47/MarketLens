@@ -4,7 +4,7 @@ Tests for MarketDataManager
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
@@ -25,7 +25,7 @@ class TestMarketDataManager(unittest.TestCase):
         # Clear circuit breakers BEFORE manager init so a clean slate for each test.
         # Breakers are module-level singletons — a breaker opened in one test would
         # otherwise fail-fast in the next test.
-        from backend.market_data.services.manager import _circuit_breakers, _cb_lock
+        from backend.market_data.services.manager import _cb_lock, _circuit_breakers
         with _cb_lock:
             _circuit_breakers.clear()
         # Make Redis look like a miss-everything cache so tests don't read
@@ -304,7 +304,7 @@ class TestMarketDataManager(unittest.TestCase):
         # Use timezone-aware UTC now to match the production code's
         # ``datetime.now(timezone.utc)`` age calculation — avoids a 4-hour
         # offset when the host's local timezone differs from UTC.
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fresh_ts = now - timedelta(seconds=10)  # well under TTL
         cached = [self._make_bar("AAPL", "5m", fresh_ts) for _ in range(80)]
         mock_db = MagicMock()

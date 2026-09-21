@@ -22,9 +22,9 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Callable
 
 from backend.config.settings import settings
 

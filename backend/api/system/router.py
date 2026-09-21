@@ -14,11 +14,11 @@ scanner, ingestion, and bar repository can import them without pulling
 in FastAPI (avoids circular imports).
 """
 import asyncio
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -193,8 +193,8 @@ def _safe_rate_limit_stats() -> dict | None:
 def _safe_websocket_stats() -> dict | None:
     """Pull WebSocket connection + broadcast stats from both scanner and realtime streams."""
     try:
-        from ..scanner.ws_router import broadcast_manager as scanner_bm
         from ..realtime.ws_router import broadcast_manager as realtime_bm
+        from ..scanner.ws_router import broadcast_manager as scanner_bm
         return {
             "scanner": scanner_bm.get_stats(),
             "realtime": realtime_bm.get_stats(),

@@ -20,9 +20,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
+from backend.market_data.services.ingestion_service import ingestion_service
 from backend.repositories.signal_repository import SignalRepository
 from backend.services.signal_recorder import signal_recorder
-from backend.market_data.services.ingestion_service import ingestion_service
 from backend.utils.timezone import format_edt_iso
 
 from ..dependencies import get_db

@@ -55,8 +55,8 @@ class TestSessionIsolation(unittest.TestCase):
         self.assertEqual(parsed.path, "/15")
 
     def test_the_schema_is_complete(self):
-        from backend.database import Base, engine
         import backend.models  # noqa: F401
+        from backend.database import Base, engine
 
         with engine.connect() as conn:
             tables = {row[0] for row in conn.exec_driver_sql("select name from sqlite_master where type='table'")}

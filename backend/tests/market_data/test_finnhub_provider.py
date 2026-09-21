@@ -7,8 +7,8 @@ All HTTP calls are mocked. We exercise the public API surface
 behaviour (HTTP 429, 4xx, 5xx, empty responses).
 """
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 from backend.market_data.providers.finnhub_provider import FinnhubProvider
 
@@ -157,7 +157,7 @@ class TestFinnhubProviderBatchQuotes(unittest.TestCase):
         """Each symbol must call _rate_limiter.acquire before the HTTP request."""
         mock_get_breaker.return_value.call.return_value = MagicMock(
             price=150.0, bid=None, ask=None, data_status=MagicMock(value="DELAYED"),
-            timestamp=datetime.now(timezone.utc), symbol="AAPL",
+            timestamp=datetime.now(UTC), symbol="AAPL",
             provider="finnhub",
         )
         result = self.provider.get_batch_quotes(["AAPL", "SPY", "QQQ"])

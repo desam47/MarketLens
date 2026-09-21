@@ -5,13 +5,12 @@ Drives the FastAPI app through TestClient. All FinnhubService calls
 are mocked so no real HTTP requests are made.
 """
 import unittest
-from datetime import date, datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
 
 from backend.api.main import app
-from backend.api.finnhub.router import router
 from backend.market_data.services.finnhub_service import FinnhubService
 from backend.models.finnhub import (
     AnalystRecommendation,
@@ -105,7 +104,7 @@ class TestFinnhubRouterResponses(unittest.TestCase):
 
     def test_company_news_200(self):
         news = [
-            NewsItem(id=1, datetime=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            NewsItem(id=1, datetime=datetime(2024, 1, 15, tzinfo=UTC),
                      headline="Apple announces Q1 results",
                      source="Reuters", url="https://example.com/1"),
         ]

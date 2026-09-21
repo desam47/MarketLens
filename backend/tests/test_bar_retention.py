@@ -13,12 +13,12 @@ Validates:
 """
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.models.market_data_sql import Base, BarModel
+from backend.models.market_data_sql import BarModel, Base
 
 
 class _TestMixin:
@@ -50,7 +50,7 @@ class _TestMixin:
         minutes_ago: int,
         timeframe: str = "1m",
     ) -> BarModel:
-        ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        ts = datetime.now(UTC) - timedelta(minutes=minutes_ago)
         bar = BarModel(
             symbol=symbol.upper(),
             timestamp=ts,
@@ -78,7 +78,7 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
         db = self._session()
         try:
             self._add_bar(db, "AAPL", minutes_ago=60)  # 1h old
-            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             deleted = prune_bars_older_than(db, cutoff)
             self.assertEqual(deleted, 0)
         finally:
@@ -91,7 +91,7 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
         try:
             self._add_bar(db, "AAPL", minutes_ago=60)  # 1h
             self._add_bar(db, "TSLA", minutes_ago=60 * 60 * 48)  # 48h
-            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             deleted = prune_bars_older_than(db, cutoff)
             self.assertEqual(deleted, 1)  # only TSLA
             # AAPL should remain
@@ -108,7 +108,7 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
         db = self._session()
         try:
             # Insert 100 bars all older than the cutoff.
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             for i in range(100):
                 ts = now - timedelta(days=100 + i)
                 db.add(BarModel(
@@ -133,7 +133,7 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
             with self.assertRaises(ValueError):
                 prune_bars_older_than(
                     db,
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                     chunk_size=0,
                 )
         finally:
@@ -163,7 +163,7 @@ class TestBulkDeleteBars(_TestMixin, unittest.TestCase):
         try:
             self._add_bar(db, "AAPL", minutes_ago=60)  # 1h old
             self._add_bar(db, "AAPL", minutes_ago=60 * 60 * 48)  # 48h old
-            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             deleted = bulk_delete_bars(db, ["AAPL"], cutoff=cutoff)
             self.assertEqual(deleted, 1)  # only the 48h bar
             remaining = db.query(BarModel).filter(BarModel.symbol == "AAPL").count()
@@ -197,8 +197,8 @@ class TestDeleteBarsForSymbol(_TestMixin, unittest.TestCase):
     """delete_bars_for_symbol and delete_bars_for_symbols use their own session."""
 
     def test_delete_bars_for_symbol(self):
-        from backend.repositories.bar_repository import delete_bars_for_symbol
         from backend.database import SessionLocal
+        from backend.repositories.bar_repository import delete_bars_for_symbol
 
         # Use SessionLocal so the bar is added to the same DB that
         # delete_bars_for_symbol() reads from.
@@ -212,8 +212,8 @@ class TestDeleteBarsForSymbol(_TestMixin, unittest.TestCase):
         self.assertEqual(deleted, 1)
 
     def test_delete_bars_for_symbols(self):
-        from backend.repositories.bar_repository import delete_bars_for_symbols
         from backend.database import SessionLocal
+        from backend.repositories.bar_repository import delete_bars_for_symbols
 
         db = SessionLocal()
         try:
@@ -236,8 +236,8 @@ class TestSymbolExistsInAnyWatchlist(unittest.TestCase):
     """symbol_exists_in_any_watchlist requires the full DB (WatchlistSymbol model)."""
 
     def test_returns_false_for_unknown_symbol(self):
-        from backend.repositories.watchlist_repository import WatchlistRepository
         from backend.database.db import SessionLocal
+        from backend.repositories.watchlist_repository import WatchlistRepository
 
         db = SessionLocal()
         try:
@@ -247,8 +247,8 @@ class TestSymbolExistsInAnyWatchlist(unittest.TestCase):
             db.close()
 
     def test_returns_true_for_watched_symbol(self):
-        from backend.repositories.watchlist_repository import WatchlistRepository
         from backend.database.db import SessionLocal
+        from backend.repositories.watchlist_repository import WatchlistRepository
 
         db = SessionLocal()
         try:
@@ -277,7 +277,7 @@ class TestPruneBarsOlderThanTimeframeFilter(_TestMixin, unittest.TestCase):
         try:
             self._add_bar(db, "AAPL", minutes_ago=60 * 60 * 48, timeframe="1m")  # 48h
             self._add_bar(db, "AAPL", minutes_ago=60 * 60 * 48, timeframe="1h")  # 48h
-            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             deleted = prune_bars_older_than(db, cutoff, timeframe="1m")
             self.assertEqual(deleted, 1)
             # The 1h row is old too, but wasn't targeted — must remain.
@@ -296,7 +296,7 @@ class TestPruneBarsOlderThanTimeframeFilter(_TestMixin, unittest.TestCase):
         try:
             self._add_bar(db, "AAPL", minutes_ago=60 * 60 * 48, timeframe="1m")
             self._add_bar(db, "AAPL", minutes_ago=60 * 60 * 48, timeframe="1h")
-            cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            cutoff = datetime.now(UTC) - timedelta(days=1)
             deleted = prune_bars_older_than(db, cutoff)
             self.assertEqual(deleted, 2)
         finally:
@@ -395,6 +395,7 @@ class TestRetentionSettings(unittest.TestCase):
     def test_env_var_override(self):
         import os
         from unittest.mock import patch
+
         from backend.config.settings import RetentionSettings
 
         with patch.dict(os.environ, {"RETENTION_TF_1M_DAYS": "5"}):

@@ -2,20 +2,19 @@
 Market Data API Routes
 Endpoints for controlling data ingestion and accessing historical data
 """
-import logging
 import asyncio
-from datetime import datetime, timezone
+import logging
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.api.ttl_cache import _quote_cache
 from backend.config.settings import settings as _settings
-from backend.models.market_data import Bar, MarketStatus, Quote
-
 from backend.market_data.services.ingestion_service import ingestion_service
 from backend.market_data.services.manager import _rate_limiter, _redis_cache, market_data_manager
-from backend.api.ttl_cache import _quote_cache
+from backend.models.market_data import Bar, MarketStatus, Quote
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +240,7 @@ async def get_latest_bar(symbol: str, timeframe: str):
         raise HTTPException(
             status_code=404,
             detail=f"No bar data found for {symbol} {timeframe}: {e}",
-        )
+        ) from e
 
 @router.get("/bars/{symbol}", response_model=dict[str, Bar])
 async def get_latest_bars(symbol: str):

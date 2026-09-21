@@ -12,13 +12,13 @@ at the provider layer — providers convert UTC → NY naive before returning.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 # Single source of truth. America/New_York switches between EDT (UTC-4) and
 # EST (UTC-5) automatically based on the date.
 NY = ZoneInfo("America/New_York")
-UTC = timezone.utc
+UTC = UTC
 
 
 def to_ny(dt: datetime | None) -> datetime | None:

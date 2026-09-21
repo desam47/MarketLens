@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
 from backend.models.market_data import DataStatus, Quote
-from backend.models.market_data_sql import QuoteModel, MarketStatusModel
+from backend.models.market_data_sql import MarketStatusModel, QuoteModel
 
 logger = logging.getLogger(__name__)
 

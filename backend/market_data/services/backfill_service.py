@@ -53,19 +53,17 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func
 
 from backend.config.settings import settings as _settings
 from backend.database import SessionLocal
+from backend.market_data.services.manager_class import MarketDataManager, market_data_manager
 from backend.models import Bar
 from backend.repositories.bar_repository import (
-    bulk_delete_bars,
-    prune_bars_older_than,
     upsert_bars,
 )
-from backend.market_data.services.manager_class import MarketDataManager, market_data_manager
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +83,7 @@ def _utc_key(b) -> datetime:
         from backend.utils.timezone import ny_to_utc
         return ny_to_utc(ts)
     # tz-aware: convert to UTC regardless of original zone.
-    return ts.astimezone(timezone.utc)
+    return ts.astimezone(UTC)
 
 
 def _instantiate_provider(name: str):
@@ -441,7 +439,7 @@ async def _fetch_tier2_1d_bars(
     # Phase 3.8.6: keep the cutoff as timezone-aware UTC. Providers return
     # bars with tzinfo attached (UTC) and Python refuses to compare naive
     # and aware datetimes, so don't round-trip through to_ny here.
-    start_cutoff_utc = datetime.now(timezone.utc) - timedelta(days=days_start)
+    start_cutoff_utc = datetime.now(UTC) - timedelta(days=days_start)
 
     def _after_cutoff(b: Bar) -> bool:
         ts = b.timestamp
@@ -563,7 +561,7 @@ def _count_contiguous_spans(gaps: list[datetime], timeframe: str) -> int:
         return 0
     threshold = _GAP_SPAN_THRESHOLDS.get(timeframe, timedelta(days=1))
     spans = 1
-    for prev, cur in zip(gaps, gaps[1:]):
+    for prev, cur in zip(gaps, gaps[1:], strict=False):
         if cur - prev > threshold:
             spans += 1
     return spans
@@ -814,8 +812,8 @@ async def backfill_symbol_history(symbol: str, days: int | None = None) -> dict:
         # aggregate wherever 1m is available. See
         # ingestion_service._resample_1h_from_1m_and_upsert's docstring.
         try:
-            from backend.market_data.services.ingestion_service import ingestion_service
             from backend.config.settings import settings as _settings_1h
+            from backend.market_data.services.ingestion_service import ingestion_service
             from backend.utils.timezone import NY as _NY_TZ_local
             now_ny = datetime.now(_NY_TZ_local).replace(tzinfo=None)
             window_start = now_ny - timedelta(days=_settings_1h.retention.tf_1m_days)

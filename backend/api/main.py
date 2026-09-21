@@ -16,38 +16,38 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.ai.digest_service import digest_service
 from backend.alerts.engine import alerts_engine
-from backend.config.settings import _PROJECT_ROOT, settings
-from backend.observability.correlation_id import CorrelationIdMiddleware
-from backend.observability.logging_enhanced import get_correlation_id
-from backend.observability.tracing import initialize_tracing, shutdown_tracing
 from backend.api import analysis, market_context, multitimeframe, regime, strategy, trend
+from backend.api.ai.chat_router import router as ai_chat_router
+from backend.api.ai.digest_router import router as ai_digest_router
+from backend.api.ai.jobs import router as ai_jobs_router
 from backend.api.ai.router import router as ai_router
+from backend.api.ai_templates.router import router as ai_templates_router
 from backend.api.alerts.router import router as alerts_router
 from backend.api.aux_data.router import router as aux_data_router
 from backend.api.backtest.router import router as backtest_router
-from backend.api.finnhub.router import router as finnhub_router
 from backend.api.cache import CacheMiddleware
+from backend.api.custom_indicators.router import router as custom_indicators_router
+from backend.api.drawing_tools.router import router as drawing_tools_router
+from backend.api.finnhub.router import router as finnhub_router
 from backend.api.market_data_routes import router as market_data_routes_router
 from backend.api.nl_search.router import router as nl_search_router
-from backend.api.rate_limit import RedisRateLimiter, RateLimitMiddleware
+from backend.api.rate_limit import RateLimitMiddleware, RedisRateLimiter
 from backend.api.realtime import router as realtime_router
-from backend.version import get_version
-from backend.api.security_headers import SecurityHeadersMiddleware
 from backend.api.scanner.router import router as scanner_router
 from backend.api.scanner.ws_router import router as scanner_ws_router
-from backend.api.tape.router import router as tape_router
+from backend.api.security_headers import SecurityHeadersMiddleware
 from backend.api.signals.router import router as signals_router
 from backend.api.strategy_lab.router import router as strategy_lab_router
 from backend.api.structured_logging import configure_logging
 from backend.api.system.router import RequestCounterMiddleware
 from backend.api.system.router import router as system_router
+from backend.api.tape.router import router as tape_router
 from backend.api.watchlist.router import router as watchlist_router
-from backend.api.custom_indicators.router import router as custom_indicators_router
-from backend.api.drawing_tools.router import router as drawing_tools_router
-from backend.api.ai_templates.router import router as ai_templates_router
-from backend.api.ai.chat_router import router as ai_chat_router
-from backend.api.ai.digest_router import router as ai_digest_router
-from backend.api.ai.jobs import router as ai_jobs_router
+from backend.config.settings import _PROJECT_ROOT, settings
+from backend.observability.correlation_id import CorrelationIdMiddleware
+from backend.observability.logging_enhanced import get_correlation_id
+from backend.observability.tracing import initialize_tracing, shutdown_tracing
+from backend.version import get_version
 
 # Configure structured JSON logging
 configure_logging(
@@ -121,6 +121,7 @@ async def lifespan(app: FastAPI):
     # untouched.
     try:
         import redis
+
         from backend.config.settings import settings as _s
         redis_url = _s.redis.url
         r = redis.from_url(redis_url)
@@ -525,8 +526,8 @@ async def system_config():
     haven't triggered a server restart yet. Falls back to cached settings
     for fields that can't be read from the env file.
     """
-    from pathlib import Path
     from datetime import datetime
+    from pathlib import Path
 
     # Read primary and fallback providers directly from .env file.
     env_path = Path(__file__).parent.parent.parent / ".env"

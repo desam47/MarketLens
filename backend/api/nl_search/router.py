@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
@@ -25,11 +25,12 @@ from sqlalchemy.orm import Session
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import extract_json_object
 from backend.ai.sync_bridge import run_sync
-from ..dependencies import get_db
+
 from ...nl_search.executor import execute_query
 from ...nl_search.parser import parse_query
 from ...nl_search.prompt import NL_EXPLAIN_PROMPT, build_explain_prompt
 from ...nl_search.schema import NLFilters, NLSearchResponse, Ranking
+from ..dependencies import get_db
 
 logger = logging.getLogger(__name__)
 

@@ -23,29 +23,29 @@ class CustomIndicator(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     # Owner: null = global (available to all), or a watchlist_id.
-    watchlist_id: Mapped[Optional[int]] = mapped_column(
+    watchlist_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("watchlists.id"), nullable=True
     )
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # Short slug used in URL params or chart legend.
     slug: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Formula type: 'sma', 'ema', 'rsi', 'macd', 'bollinger', 'atr', 'custom'
     formula_type: Mapped[str] = mapped_column(
         String(30), nullable=False, default="custom"
     )
     # JSON-encoded parameters: e.g. {"period": 20, "field": "close"}
-    parameters: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parameters: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Display styling
-    color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True)
-    line_width: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    line_style: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    line_width: Mapped[float | None] = mapped_column(Float, nullable=True)
+    line_style: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Whether to show as a separate pane below the main chart
     separate_pane: Mapped[bool] = mapped_column(Boolean, default=False)
-    pane_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pane_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Indicator overlays vs separate panes
     is_overlay: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -16,7 +16,7 @@ adapters in addition to (or in place of) the HTTP ones.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -139,6 +139,7 @@ class AIProvider(ABC):
         loop the client was used on (the sync-bridge loop), not an
         arbitrary caller's loop.
         """
+        return None
 
 
 class ProviderUnavailable(RuntimeError):

@@ -121,7 +121,6 @@ class TestChatRepository(unittest.TestCase):
     def test_add_message_updates_session_updated_at(self):
         repo = self._repo()
         session = repo.create_session("AAPL")
-        original_updated = session.updated_at
         repo.add_message(session.id, "user", "hi")
         refreshed = repo.get_session(session.id)
         self.assertIsNotNone(refreshed.updated_at)

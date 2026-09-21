@@ -12,11 +12,11 @@ receive HTTP 429 (Too Many Requests) due to differences in TLS cipher suites and
 ALPN protocols. curl_cffi uses libcurl under the hood and correctly impersonates a
 real browser (Chrome 120), bypassing the anti-bot protection.
 """
-import logging
 import asyncio
+import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from curl_cffi import requests as curl_requests
 
@@ -162,7 +162,7 @@ class YFinanceProvider(BaseMarketDataProvider):
         """
         return Bar(
             symbol=symbol.upper(),
-            timestamp=to_ny(datetime.fromtimestamp(int(ts_arr[index]), tz=timezone.utc)),
+            timestamp=to_ny(datetime.fromtimestamp(int(ts_arr[index]), tz=UTC)),
             open=float(opens[index]) if opens[index] is not None else 0.0,
             high=float(highs[index]) if highs[index] is not None else 0.0,
             low=float(lows[index]) if lows[index] is not None else 0.0,
@@ -210,9 +210,9 @@ class YFinanceProvider(BaseMarketDataProvider):
                 or 0
             )
             try:
-                ts = datetime.fromtimestamp(int(ts_epoch), tz=timezone.utc) if ts_epoch else datetime.now(timezone.utc)
+                ts = datetime.fromtimestamp(int(ts_epoch), tz=UTC) if ts_epoch else datetime.now(UTC)
             except (TypeError, ValueError, OSError):
-                ts = datetime.now(timezone.utc)
+                ts = datetime.now(UTC)
 
             quote = Quote(
                 symbol=symbol.upper(),
@@ -341,7 +341,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                 # meaningfully "boundary-aligned" the same way, so this
                 # check would misfire on real daily bars.
                 if interval.endswith("m") and i == len(ts_arr) - 1:
-                    ts = datetime.fromtimestamp(int(ts_arr[i]), tz=timezone.utc)
+                    ts = datetime.fromtimestamp(int(ts_arr[i]), tz=UTC)
                     is_flat_zero_volume = (
                         opens[i] == highs[i] == lows[i] == closes[i]
                         and (volumes[i] or 0) == 0
@@ -382,7 +382,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                     quote = Quote(
                         symbol=symbol_upper,
                         price=float(item.get("regularMarketPrice", 0.0)),
-                        timestamp=to_ny(datetime.fromtimestamp(item.get("regularMarketTime", 0), timezone.utc)),
+                        timestamp=to_ny(datetime.fromtimestamp(item.get("regularMarketTime", 0), UTC)),
                         provider=self.name,
                         data_status=DataStatus.DELAYED,
                         bid=item.get("bid"),
@@ -395,7 +395,7 @@ class YFinanceProvider(BaseMarketDataProvider):
                     results[symbol] = Quote(
                         symbol=symbol_upper,
                         price=0.0,
-                        timestamp=to_ny(datetime.now(timezone.utc)),
+                        timestamp=to_ny(datetime.now(UTC)),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -442,7 +442,7 @@ class YFinanceProvider(BaseMarketDataProvider):
         try:
             chart = self._fetch_chart(symbol, interval="1d", range_="1d")
             meta = self._meta(chart)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             is_open = bool(meta.get("marketState") in ("REGULAR", "PRE", "POST"))
             status = MarketStatus(
                 symbol=symbol.upper(),

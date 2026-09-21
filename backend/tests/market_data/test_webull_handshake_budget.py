@@ -45,7 +45,7 @@ class TestWebullHandshakeBudget(unittest.TestCase):
         )
         proc = subprocess.run([sys.executable, "-c", _SCRIPT], cwd=_ROOT, env=env,
                               capture_output=True, text=True, timeout=120)
-        out = [l for l in proc.stdout.splitlines() if l.startswith("WEBULL_CONSTRUCTIONS=")]
+        out = [line for line in proc.stdout.splitlines() if line.startswith("WEBULL_CONSTRUCTIONS=")]
         self.assertTrue(out, f"probe did not run:\n{proc.stderr[-800:]}")
         # == 1 (not <= 1): the probe must actually construct Webull, otherwise a
         # misconfigured run would pass vacuously.

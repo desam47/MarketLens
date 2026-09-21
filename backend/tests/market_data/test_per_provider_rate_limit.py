@@ -21,8 +21,8 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.market_data.services.manager import (
-    _PerProviderRateLimiter,
     _get_per_provider_rate_limit,
+    _PerProviderRateLimiter,
 )
 
 
@@ -227,11 +227,24 @@ class TestRedisSharedBudget(unittest.TestCase):
         store: dict[str, dict[str, float]] = {}
 
         class FakePipe:
-            def __init__(self): self.ops = []
-            def zremrangebyscore(self, k, lo, hi): self.ops.append(("zrem", k, lo, hi)); return self
-            def zcard(self, k): self.ops.append(("zcard", k)); return self
-            def zadd(self, k, mapping): self.ops.append(("zadd", k, mapping)); return self
-            def expire(self, k, s): self.ops.append(("expire", k, s)); return self
+            def __init__(self):
+                self.ops = []
+
+            def zremrangebyscore(self, k, lo, hi):
+                self.ops.append(("zrem", k, lo, hi))
+                return self
+
+            def zcard(self, k):
+                self.ops.append(("zcard", k))
+                return self
+
+            def zadd(self, k, mapping):
+                self.ops.append(("zadd", k, mapping))
+                return self
+
+            def expire(self, k, s):
+                self.ops.append(("expire", k, s))
+                return self
             def execute(self):
                 out = []
                 for op in self.ops:

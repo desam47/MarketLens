@@ -340,7 +340,7 @@ class TestRunTurnActions(_DBBase):
         )
         with patch("backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")), \
              patch("backend.nl_search.executor.execute_query", side_effect=[first, second]):
-            mock_ai = self._mock_complete(
+            self._mock_complete(
                 '{"reply": "ok", "grounded": true, "action": "run_screen", '
                 '"action_query": "overbought"}',
                 '{"reply": "ok", "grounded": true}',

@@ -2,10 +2,15 @@
 API endpoints for strategy selection
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
+
+from backend.api.ttl_cache import _strategy_cache, _strategy_history_cache
+
+from ...engines.timeframe import Timeframe
+from ...strategy.strategy_selector import StrategySelector
 
 # Reuse the seeded, live-updated engines from the other routers so the strategy
 # selector operates on the same state the rest of the API sees. This prevents the
@@ -16,9 +21,6 @@ from fastapi import APIRouter, HTTPException
 from ..multitimeframe.router import get_engine as get_mtf_engine
 from ..regime.router import get_engine as get_regime_engine
 from ..trend.router import get_engine as get_trend_engine
-from ...engines.timeframe import Timeframe
-from ...strategy.strategy_selector import StrategySelector
-from backend.api.ttl_cache import _strategy_cache, _strategy_history_cache
 
 logger = logging.getLogger(__name__)
 

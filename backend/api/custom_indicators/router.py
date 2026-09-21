@@ -7,13 +7,13 @@ CRUD for user-defined indicators. Indicators are scoped either globally
 import json
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.database import SessionLocal, get_db
+from backend.database import get_db
 from backend.models import CustomIndicator
 
 logger = logging.getLogger(__name__)
@@ -31,50 +31,50 @@ VALID_FORMULA_TYPES = {
 class CustomIndicatorCreate(BaseModel):
     name: str = Field(..., max_length=100)
     slug: str = Field(..., max_length=50, pattern=r"^[a-z0-9_-]+$")
-    description: Optional[str] = None
+    description: str | None = None
     formula_type: str = Field(default="custom")
     parameters: dict[str, Any] = Field(default_factory=dict)
-    color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
-    line_width: Optional[float] = None
-    line_style: Optional[str] = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    line_width: float | None = None
+    line_style: str | None = None
     separate_pane: bool = False
-    pane_height: Optional[int] = None
+    pane_height: int | None = None
     is_overlay: bool = True
     z_index: int = 0
-    watchlist_id: Optional[int] = None
+    watchlist_id: int | None = None
 
 
 class CustomIndicatorUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    formula_type: Optional[str] = None
-    parameters: Optional[dict[str, Any]] = None
-    color: Optional[str] = None
-    line_width: Optional[float] = None
-    line_style: Optional[str] = None
-    separate_pane: Optional[bool] = None
-    pane_height: Optional[int] = None
-    is_overlay: Optional[bool] = None
-    z_index: Optional[int] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    description: str | None = None
+    formula_type: str | None = None
+    parameters: dict[str, Any] | None = None
+    color: str | None = None
+    line_width: float | None = None
+    line_style: str | None = None
+    separate_pane: bool | None = None
+    pane_height: int | None = None
+    is_overlay: bool | None = None
+    z_index: int | None = None
+    is_active: bool | None = None
 
 
 class CustomIndicatorResponse(BaseModel):
     id: int
     name: str
     slug: str
-    description: Optional[str]
+    description: str | None
     formula_type: str
     parameters: dict[str, Any]
-    color: Optional[str]
-    line_width: Optional[float]
-    line_style: Optional[str]
+    color: str | None
+    line_width: float | None
+    line_style: str | None
     separate_pane: bool
-    pane_height: Optional[int]
+    pane_height: int | None
     is_overlay: bool
     z_index: int
     is_active: bool
-    watchlist_id: Optional[int]
+    watchlist_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -121,7 +121,7 @@ def _validate_formula_type(formula_type: str) -> None:
 
 @router.get("", response_model=list[CustomIndicatorResponse])
 def list_indicators(
-    watchlist_id: Optional[int] = Query(default=None, description="Filter by watchlist"),
+    watchlist_id: int | None = Query(default=None, description="Filter by watchlist"),
     active_only: bool = Query(default=True),
     db: Session = Depends(get_db),
 ):

@@ -6,15 +6,14 @@ constraint detection in upsert_bars is exercised end-to-end. We attach
 the Base.metadata to the new engine and create only the bars table.
 """
 import os
+import sqlite3
 import sys
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, call, patch
-
-import sqlite3
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
@@ -310,8 +309,8 @@ class TestFromTsToTsCap(unittest.TestCase):
 
     def _spy_now(self):
         """Patch ``datetime.now`` with a fixed time for deterministic testing."""
-        import unittest.mock
         import datetime
+        import unittest.mock
         original = datetime.datetime
         class FixedDatetime(original):
             @staticmethod
@@ -323,9 +322,9 @@ class TestFromTsToTsCap(unittest.TestCase):
         """Build a mock Session that records the cumulative filter chain
         as SQLAlchemy filter conditions are added. We use a list of args
         that the chain accumulates via .filter()."""
-        from unittest.mock import MagicMock, call
+        from unittest.mock import MagicMock
+
         from backend.repositories import bar_repository
-        from backend.models.market_data_sql import BarModel
 
         # Prime the cache so we don't hit sqlite_master.
         bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = True
@@ -347,8 +346,9 @@ class TestFromTsToTsCap(unittest.TestCase):
 
     def test_from_ts_no_to_ts_no_limit_is_unbounded(self):
         """With from_ts but no to_ts or limit, no implicit to_ts cap is added."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db, chain = self._make_db_with_filter_capture()
 
@@ -367,8 +367,9 @@ class TestFromTsToTsCap(unittest.TestCase):
 
     def test_resampled_with_explicit_limit_not_capped(self):
         """When ``limit`` is supplied, no implicit to_ts filter is added."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db, chain = self._make_db_with_filter_capture()
 
@@ -387,8 +388,9 @@ class TestFromTsToTsCap(unittest.TestCase):
 
     def test_resampled_with_to_ts_not_overridden(self):
         """When ``to_ts`` is provided explicitly, it is used as-is."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db, chain = self._make_db_with_filter_capture()
 
@@ -404,8 +406,9 @@ class TestFromTsToTsCap(unittest.TestCase):
 
     def test_1m_fast_path_not_affected(self):
         """The 1m path does not apply any implicit to_ts filter either."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db, chain = self._make_db_with_filter_capture()
 
@@ -443,8 +446,9 @@ class TestWideningHours(unittest.TestCase):
 
     def test_1wk_from_ts_not_widened(self):
         """1wk fetch uses from_ts as-is — no lower-bound widening."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -475,8 +479,9 @@ class TestWideningHours(unittest.TestCase):
 
     def test_1d_from_ts_not_widened(self):
         """1d fetch uses from_ts as-is — no lower-bound widening."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -506,8 +511,9 @@ class TestWideningHours(unittest.TestCase):
 
     def test_1m_path_not_widened(self):
         """1m fast path uses the original from_ts without widening."""
-        from backend.repositories import bar_repository
         from datetime import datetime
+
+        from backend.repositories import bar_repository
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -621,9 +627,10 @@ class TestUniqueConstraintCache(unittest.TestCase):
         still runs (and the cache priming is real). Subsequent cache hits
         don't reach the wrapper.
         """
-        from backend.repositories import bar_repository
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
+
+        from backend.repositories import bar_repository
 
         engine = create_engine("sqlite:///:memory:")
         Session = sessionmaker(bind=engine)
@@ -936,7 +943,7 @@ class TestUpsertBarsBulkWrite(unittest.TestCase):
         bars = self._bars(10)
         bars[7].volume = None  # violates NOT NULL for one row mid-batch
         with Session() as db:
-            with self.assertRaises(Exception):
+            with self.assertRaises(IntegrityError):
                 bar_repository.upsert_bars(db, bars)
             db.rollback()
         with Session() as db:

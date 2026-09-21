@@ -88,6 +88,7 @@ class TestRegisterSqlitePragmasIdempotent(unittest.TestCase):
 
     def test_idempotent_on_sqlite_engine(self):
         import tempfile
+
         from backend.database.db import _register_sqlite_pragmas
         # WAL mode requires a real on-disk DB; an in-memory SQLite DB
         # only supports 'memory' journal mode. Use a tempfile instead.
@@ -122,7 +123,7 @@ class TestRegisterSqlitePragmasSkipsNonSqlite(unittest.TestCase):
     """
 
     def test_non_sqlite_url_is_noop(self):
-        from backend.database.db import _is_sqlite_url, _register_sqlite_pragmas
+        from backend.database.db import _is_sqlite_url
         # sqlite://memory: in-memory DB → still sqlite. The function
         # only short-circuits on non-sqlite URLs. Use a synthetic
         # non-sqlite URL with the register method to confirm the check

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import statistics
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.config.settings import settings
 from backend.utils.timezone import NY
@@ -31,7 +31,7 @@ _MAX_PENDING = 900  # hard cap so a persistent DB failure can't OOM us
 def _to_epoch_s(ts) -> float:
     """datetime (naive = NY) / aware datetime / epoch number -> epoch seconds."""
     if ts is None:
-        return datetime.now(timezone.utc).timestamp()
+        return datetime.now(UTC).timestamp()
     if isinstance(ts, (int, float)):
         # heuristic: ms vs s
         return float(ts) / 1000.0 if ts > 1e11 else float(ts)
@@ -39,11 +39,11 @@ def _to_epoch_s(ts) -> float:
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=NY)
         return ts.timestamp()
-    return datetime.now(timezone.utc).timestamp()
+    return datetime.now(UTC).timestamp()
 
 
 def _epoch_s_to_naive_ny(sec: float) -> datetime:
-    return datetime.fromtimestamp(sec, tz=timezone.utc).astimezone(NY).replace(tzinfo=None)
+    return datetime.fromtimestamp(sec, tz=UTC).astimezone(NY).replace(tzinfo=None)
 
 
 class TapeEngine:

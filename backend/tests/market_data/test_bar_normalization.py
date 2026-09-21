@@ -17,11 +17,11 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
-from backend.models.market_data import Bar, DataStatus
 from backend.market_data.services.ingestion_service import (
-    _normalize_1h_bar,
     _normalize_1d_bar,
+    _normalize_1h_bar,
 )
+from backend.models.market_data import Bar, DataStatus
 
 
 def _bar(ts: datetime, timeframe: str = "1h") -> Bar:

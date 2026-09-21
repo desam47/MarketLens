@@ -4,8 +4,8 @@ Tests for ``backend.repositories.experiment_repository``.
 import json
 import os
 import sys
-import unittest
 import tempfile
+import unittest
 from datetime import datetime
 
 from sqlalchemy import create_engine

@@ -61,10 +61,10 @@ class TestYFinanceProvider(unittest.TestCase):
     def test_get_quote_failure(self, mock_fetch_chart):
         """Test quote retrieval failure handling"""
         # Mock _fetch_chart to raise so get_quote propagates the exception
-        mock_fetch_chart.side_effect = Exception("Network error")
+        mock_fetch_chart.side_effect = RuntimeError("Network error")
 
         # Test that exception is raised
-        with self.assertRaises(Exception):
+        with self.assertRaises(RuntimeError):
             self.provider.get_quote("INVALID")
 
     @patch.object(YFinanceProvider, '_fetch_chart')

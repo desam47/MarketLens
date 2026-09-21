@@ -227,7 +227,6 @@ class TestCircuitBreakerEdgeCases(unittest.TestCase):
 
     def test_transitions_log_info(self):
         """State transitions emit INFO-level log records (smoke test)."""
-        import logging
         cb = CircuitBreaker(name="log_test", failure_threshold=1, recovery_timeout=0.01)
         with self.assertLogs("backend.market_data.circuit_breaker", level="INFO") as log_ctx:
             with self.assertRaises(RuntimeError):

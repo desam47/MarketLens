@@ -15,22 +15,21 @@ import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from tenacity import (
     retry,
     retry_if_exception,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
 
 from backend.models.market_data import Bar
 
-from ..circuit_breaker import CircuitBreaker, CircuitBreakerOpen, CircuitState
+from ..circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from ..provider import MarketDataProvider
-from ._providers import _settings, get_settings, redis
+from ._providers import _settings, get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -468,7 +467,8 @@ def _correlation_id_placeholder() -> str:
                 )
                 _corr_id_fn = get_correlation_id
             except Exception:
-                _corr_id_fn = lambda: "-"  # type: ignore[assignment]
+                def _corr_id_fn():
+                    return "-"  # type: ignore[assignment]
         fn = _corr_id_fn
     return fn() or "-"
 
@@ -629,4 +629,4 @@ def _newest_bar_age_seconds(bars: list[Bar]) -> float | None:
     newest_aware = _ensure_aware(newest)
     if newest_aware is None:
         return None
-    return (datetime.now(timezone.utc) - newest_aware).total_seconds()
+    return (datetime.now(UTC) - newest_aware).total_seconds()

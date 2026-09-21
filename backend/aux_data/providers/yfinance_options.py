@@ -15,9 +15,6 @@ average IV, total volume, and unusual-activity classification are all
 computed from the raw DataFrames in this module.
 """
 import logging
-from datetime import datetime
-
-from backend.utils.timezone import now_ny
 
 import pandas as pd
 
@@ -28,6 +25,7 @@ from backend.models.aux_data import (
     OptionsType,
     UnusualActivity,
 )
+from backend.utils.timezone import now_ny
 
 from ..provider import OptionsProvider
 

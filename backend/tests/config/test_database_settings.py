@@ -9,7 +9,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from backend.config.settings import DatabaseSettings, _DB_URL
+from backend.config.settings import _DB_URL, DatabaseSettings
 
 
 class TestDatabaseUrlNormalisation(unittest.TestCase):

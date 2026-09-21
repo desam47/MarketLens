@@ -11,7 +11,6 @@ import asyncio
 import hashlib
 import unittest
 
-
 from backend.api.cache import CacheMiddleware
 
 
@@ -136,6 +135,7 @@ class TestCacheMiddlewareIntegration(unittest.TestCase):
         from datetime import datetime
 
         from starlette.testclient import TestClient
+
         from backend.api.main import app
         from backend.api.ttl_cache import _quote_cache
         from backend.database import SessionLocal

@@ -6,7 +6,6 @@ Drawings are scoped to a symbol+timeframe.
 """
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -32,65 +31,65 @@ class DrawingToolCreate(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
     timeframe: str = Field(..., min_length=1, max_length=10)
     drawing_type: str
-    label: Optional[str] = None
-    color: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
-    line_width: Optional[float] = Field(default=None, ge=0.5, le=10)
-    line_style: Optional[str] = None
-    font_size: Optional[int] = Field(default=None, ge=8, le=72)
-    opacity: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    label: str | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    line_width: float | None = Field(default=None, ge=0.5, le=10)
+    line_style: str | None = None
+    font_size: int | None = Field(default=None, ge=8, le=72)
+    opacity: float | None = Field(default=None, ge=0.0, le=1.0)
     start_timestamp: str  # ISO 8601
     start_price: float
-    end_timestamp: Optional[str] = None
-    end_price: Optional[float] = None
-    fib_levels: Optional[str] = None  # comma-separated: "0,0.236,0.382,1.0"
-    top_price: Optional[float] = None
-    bottom_price: Optional[float] = None
+    end_timestamp: str | None = None
+    end_price: float | None = None
+    fib_levels: str | None = None  # comma-separated: "0,0.236,0.382,1.0"
+    top_price: float | None = None
+    bottom_price: float | None = None
     is_visible: bool = True
     is_locked: bool = False
     extend_left: bool = False
     extend_right: bool = False
-    watchlist_id: Optional[int] = None
+    watchlist_id: int | None = None
 
 
 class DrawingToolUpdate(BaseModel):
-    label: Optional[str] = None
-    color: Optional[str] = None
-    line_width: Optional[float] = None
-    line_style: Optional[str] = None
-    font_size: Optional[int] = None
-    opacity: Optional[float] = None
-    start_timestamp: Optional[str] = None
-    start_price: Optional[float] = None
-    end_timestamp: Optional[str] = None
-    end_price: Optional[float] = None
-    fib_levels: Optional[str] = None
-    top_price: Optional[float] = None
-    bottom_price: Optional[float] = None
-    is_visible: Optional[bool] = None
-    is_locked: Optional[bool] = None
-    extend_left: Optional[bool] = None
-    extend_right: Optional[bool] = None
+    label: str | None = None
+    color: str | None = None
+    line_width: float | None = None
+    line_style: str | None = None
+    font_size: int | None = None
+    opacity: float | None = None
+    start_timestamp: str | None = None
+    start_price: float | None = None
+    end_timestamp: str | None = None
+    end_price: float | None = None
+    fib_levels: str | None = None
+    top_price: float | None = None
+    bottom_price: float | None = None
+    is_visible: bool | None = None
+    is_locked: bool | None = None
+    extend_left: bool | None = None
+    extend_right: bool | None = None
 
 
 class DrawingToolResponse(BaseModel):
     id: int
-    watchlist_id: Optional[int]
+    watchlist_id: int | None
     symbol: str
     timeframe: str
     drawing_type: str
-    label: Optional[str]
-    color: Optional[str]
-    line_width: Optional[float]
-    line_style: Optional[str]
-    font_size: Optional[int]
-    opacity: Optional[float]
+    label: str | None
+    color: str | None
+    line_width: float | None
+    line_style: str | None
+    font_size: int | None
+    opacity: float | None
     start_timestamp: str
     start_price: float
-    end_timestamp: Optional[str]
-    end_price: Optional[float]
-    fib_levels: Optional[str]
-    top_price: Optional[float]
-    bottom_price: Optional[float]
+    end_timestamp: str | None
+    end_price: float | None
+    fib_levels: str | None
+    top_price: float | None
+    bottom_price: float | None
     is_visible: bool
     is_locked: bool
     extend_left: bool
@@ -116,7 +115,7 @@ def _validate_drawing_type(drawing_type: str) -> None:
         )
 
 
-def _validate_line_style(line_style: Optional[str]) -> None:
+def _validate_line_style(line_style: str | None) -> None:
     if line_style is not None and line_style not in VALID_LINE_STYLES:
         raise HTTPException(
             status_code=400,
@@ -129,10 +128,10 @@ def _validate_line_style(line_style: Optional[str]) -> None:
 
 @router.get("", response_model=list[DrawingToolResponse])
 def list_drawings(
-    symbol: Optional[str] = Query(default=None, max_length=10),
-    timeframe: Optional[str] = Query(default=None, max_length=10),
-    watchlist_id: Optional[int] = Query(default=None),
-    drawing_type: Optional[str] = Query(default=None),
+    symbol: str | None = Query(default=None, max_length=10),
+    timeframe: str | None = Query(default=None, max_length=10),
+    watchlist_id: int | None = Query(default=None),
+    drawing_type: str | None = Query(default=None),
     visible_only: bool = Query(default=True),
     db: Session = Depends(get_db),
 ):

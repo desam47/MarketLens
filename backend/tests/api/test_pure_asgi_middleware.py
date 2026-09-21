@@ -10,13 +10,12 @@ the rewrite is provably equivalent: apart from the structural check at the botto
 they hold for the old implementation too.
 """
 import asyncio
+import hashlib
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from starlette.middleware.base import BaseHTTPMiddleware
-
-import hashlib
 
 from backend.api.cache import CacheMiddleware
 from backend.api.rate_limit import InMemoryRateLimiter, RateLimitMiddleware

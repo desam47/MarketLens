@@ -18,13 +18,12 @@ Usage:
         log.info("scanning")  # emits symbol=AAPL, timeframe=1d in JSON payload
 """
 import logging
-import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
+from ..api.structured_logging import get_logger
 from .correlation_id import CorrelationIdMiddleware
-from ..api.structured_logging import JsonFormatter, get_logger
 
 __all__ = [
     "CorrelationIdMiddleware",

@@ -17,8 +17,8 @@ are no longer stored; they are derived from 1m bars at read time.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 
 from backend.models.market_data import Bar, DataStatus
 from backend.utils.timezone import NY
@@ -114,8 +114,8 @@ def _bucket_start_1d(dt: datetime) -> datetime:
 def _bucket_start_1wk(dt: datetime) -> datetime:
     """ISO week boundary: Monday 00:00 UTC of the bar's ISO week."""
     try:
-        dt_utc = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        dt_utc = dt_utc.astimezone(timezone.utc)
+        dt_utc = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        dt_utc = dt_utc.astimezone(UTC)
     except Exception:
         dt_utc = dt
     monday = dt_utc - timedelta(days=dt_utc.weekday())

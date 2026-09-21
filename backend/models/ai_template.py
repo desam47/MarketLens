@@ -10,13 +10,11 @@ mirrors the existing ``SYSTEM_PROMPT`` constant in ``backend.ai.prompt``,
 so users always have a known-good starting point.
 """
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
-
 
 # Hard cap on the system-prompt body. Anything longer is almost
 # certainly an attempt to bloat the model context or hide prompt
@@ -57,13 +55,13 @@ class AITemplate(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(MAX_NAME_LEN), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    user_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     # JSON list of variable names that appear as {{name}} in the system
     # prompt. Validated against the analysis context at request time.
     # Stored as a JSON-encoded string for SQLite compatibility.
-    variables_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    variables_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)

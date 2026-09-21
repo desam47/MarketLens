@@ -20,7 +20,7 @@ correctly tracks the failure and opens the circuit.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 
@@ -166,9 +166,9 @@ class FinnhubProvider(BaseMarketDataProvider):
             if price == 0.0 and data.get("pc", 0.0) == 0.0:
                 raise ValueError(f"No quote data for {symbol}")
 
-            ts = datetime.fromtimestamp(data.get("t", 0), tz=timezone.utc)
+            ts = datetime.fromtimestamp(data.get("t", 0), tz=UTC)
             if ts.year < 1970:
-                ts = datetime.now(timezone.utc)
+                ts = datetime.now(UTC)
 
             quote = Quote(
                 symbol=symbol.upper(),
@@ -220,7 +220,7 @@ class FinnhubProvider(BaseMarketDataProvider):
 
             return Bar(
                 symbol=symbol.upper(),
-                timestamp=datetime.fromtimestamp(timestamps[idx], tz=timezone.utc),
+                timestamp=datetime.fromtimestamp(timestamps[idx], tz=UTC),
                 open=float(data["o"][idx]) if data.get("o") else 0.0,
                 high=float(data["h"][idx]) if data.get("h") else 0.0,
                 low=float(data["l"][idx]) if data.get("l") else 0.0,
@@ -243,7 +243,7 @@ class FinnhubProvider(BaseMarketDataProvider):
         tier. The ``datetime.now()`` target ensures the returned bar is the
         most recent 1m bar available.
         """
-        return self.get_bar(symbol, timeframe, datetime.now(timezone.utc))
+        return self.get_bar(symbol, timeframe, datetime.now(UTC))
 
     def get_historical_bars(
         self,
@@ -261,7 +261,7 @@ class FinnhubProvider(BaseMarketDataProvider):
         """
         try:
             resolution = _resolve_resolution(timeframe)
-            now_ts = int(datetime.now(timezone.utc).timestamp())
+            now_ts = int(datetime.now(UTC).timestamp())
             duration = _range_to_seconds(range_)
             from_ts = max(0, now_ts - duration)
 
@@ -295,7 +295,7 @@ class FinnhubProvider(BaseMarketDataProvider):
                 bars.append(
                     Bar(
                         symbol=symbol.upper(),
-                        timestamp=datetime.fromtimestamp(timestamps[i], tz=timezone.utc),
+                        timestamp=datetime.fromtimestamp(timestamps[i], tz=UTC),
                         open=float(opens[i]) if opens and opens[i] is not None else 0.0,
                         high=float(highs[i]) if highs and highs[i] is not None else 0.0,
                         low=float(lows[i]) if lows and lows[i] is not None else 0.0,
@@ -351,7 +351,7 @@ class FinnhubProvider(BaseMarketDataProvider):
                 results[symbol.upper()] = Quote(
                     symbol=symbol.upper(),
                     price=0.0,
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     provider=self.name,
                     data_status=DataStatus.ERROR,
                 )
@@ -364,7 +364,7 @@ class FinnhubProvider(BaseMarketDataProvider):
         try:
             data = self._get("market-status", {"exchange": "US"})
             is_open = data.get("session") == "regular"
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             status = MarketStatus(
                 symbol=symbol.upper(),

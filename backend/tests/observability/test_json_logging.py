@@ -12,9 +12,7 @@ Validates:
 """
 import json
 import logging
-import os
 import sys
-import tempfile
 from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
@@ -122,7 +120,6 @@ class TestJsonFormatter:
             get_extra_fields,
             with_context,
         )
-        from io import StringIO
 
         stream = StringIO()
         handler = logging.StreamHandler(stream)
@@ -131,7 +128,7 @@ class TestJsonFormatter:
         handler.addFilter(f)
 
         # Verify extra fields are set inside the context block
-        extra_before = get_extra_fields()
+        get_extra_fields()
         with with_context(symbol="MSFT", timeframe="1d"):
             extra_inside = get_extra_fields()
             # Directly verify the filter injects attributes
@@ -152,7 +149,6 @@ class TestJsonFormatter:
             CorrelationIdFilter,
             with_context,
         )
-        from io import StringIO
 
         stream = StringIO()
         handler = logging.StreamHandler(stream)
@@ -280,7 +276,6 @@ class TestConfigureLogging:
     @contextmanager
     def _isolated_logging(tmp_path: Path):
         """Temporarily remove all handlers from root logger, yield, restore."""
-        from contextlib import contextmanager
 
         root = logging.getLogger()
         saved_handlers = list(root.handlers[:])

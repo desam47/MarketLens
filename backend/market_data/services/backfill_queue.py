@@ -179,8 +179,8 @@ def enqueue_backfill(symbol: str) -> str | None:
             return None
 
         from backend.database import SessionLocal
-        from backend.models import BackfillJob
         from backend.market_data.services.backfill_service import backfill_symbol_task
+        from backend.models import BackfillJob
 
         # RQ's Job ID validator only allows letters, numbers, underscores
         # and dashes — a colon-separated id embedding the raw symbol (this

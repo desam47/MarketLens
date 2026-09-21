@@ -72,7 +72,7 @@ class MACDIndicator(BaseIndicator):
                     if min_len > 0:
                         aligned_macd = aligned_macd[-min_len:]
                         aligned_signal = aligned_signal[-min_len:]
-                        histogram = [macd - sig for macd, sig in zip(aligned_macd, aligned_signal)]
+                        histogram = [macd - sig for macd, sig in zip(aligned_macd, aligned_signal, strict=False)]
                         self.values = histogram.copy()  # Store histogram as main values
                         return self.values.copy()
 

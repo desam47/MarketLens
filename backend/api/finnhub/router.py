@@ -36,7 +36,7 @@ async def health_check(service: Annotated[FinnhubService, Depends(_service)], re
         await asyncio.to_thread(service.get_company_profile, "AAPL")
         return {"status": "ok", "provider": "finnhub"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Finnhub unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"Finnhub unavailable: {e}") from e
 
 
 @router.get("/company/{symbol}")
@@ -51,9 +51,9 @@ async def get_company_profile(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return profile
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/metrics/{symbol}")
@@ -68,9 +68,9 @@ async def get_company_metrics(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return metrics
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/financials/{symbol}")
@@ -85,9 +85,9 @@ async def get_company_financials(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return financials
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/news/{symbol}")
@@ -108,9 +108,9 @@ async def get_company_news(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return news
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/market-news")
@@ -125,9 +125,9 @@ async def get_market_news(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return news
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/recommendations/{symbol}")
@@ -142,9 +142,9 @@ async def get_analyst_recommendations(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return recommendations
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/insider/{symbol}")
@@ -165,9 +165,9 @@ async def get_insider_sentiment(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return sentiment
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @router.get("/peers/{symbol}")
@@ -182,6 +182,6 @@ async def get_peers(
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return {"symbol": symbol.upper(), "peers": peers}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e

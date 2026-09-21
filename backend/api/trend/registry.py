@@ -43,7 +43,6 @@ _TREND_TIMEFRAMES = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w
 _WARMUP_SYMBOLS: tuple[str, ...] = ()
 try:
     # Import lazily to avoid circular imports at module-load time.
-    from backend.market_data.services.ingestion_service import ingestion_service
 
     # At import time ingestion_service.symbols is empty (not yet started),
     # so we keep _WARMUP_SYMBOLS as () and let warmup_engines() resolve

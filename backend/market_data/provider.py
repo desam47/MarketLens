@@ -1,9 +1,8 @@
 """
 Market data provider interface and base classes
 """
-import logging
-import traceback
 import json
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any

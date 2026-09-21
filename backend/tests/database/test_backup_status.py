@@ -15,6 +15,7 @@ class TestBackupStatusEndpoint(unittest.TestCase):
         # Importing app lazily so conftest.py's autouse fixtures have
         # a chance to run first.
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
 

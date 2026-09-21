@@ -151,12 +151,13 @@ _wb_client.ApiClient.set_stream_logger = _patched_set_stream_logger
 # back down immediately after.
 logging.getLogger("webull.core.http.response").setLevel(logging.WARNING)
 
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta  # noqa: E402
 
-from backend.config.settings import settings as _settings
-from backend.models.market_data import (
+from backend.config.settings import settings as _settings  # noqa: E402
+from backend.engines.market_calendar import (  # noqa: E402
+    classify_bar_session as _classify_bar_session,  # noqa: E402
+)
+from backend.models.market_data import (  # noqa: E402
     Bar,
     DataStatus,
     MarketStatus,
@@ -164,10 +165,10 @@ from backend.models.market_data import (
     ProviderStatus,
     Quote,
 )
-from backend.engines.market_calendar import classify_bar_session as _classify_bar_session
-from backend.utils.timezone import to_ny, NY as _NY_TZ
+from backend.utils.timezone import NY as _NY_TZ  # noqa: E402
+from backend.utils.timezone import to_ny  # noqa: E402
 
-from ..provider import BaseMarketDataProvider
+from ..provider import BaseMarketDataProvider  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -283,16 +284,16 @@ def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
     ``backend.utils.timezone`` and the Alpaca provider's ``_ts_to_ny()``.
     """
     if ms is None:
-        return to_ny(datetime.now(timezone.utc))
+        return to_ny(datetime.now(UTC))
 
     # Numeric path: epoch milliseconds.
     if isinstance(ms, (int, float)):
         try:
             return to_ny(
-                datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+                datetime.fromtimestamp(float(ms) / 1000.0, tz=UTC)
             )
         except (TypeError, ValueError, OSError):
-            return to_ny(datetime.now(timezone.utc))
+            return to_ny(datetime.now(UTC))
 
     # String path: ISO 8601 with trailing ``+0000`` or ``+00:00`` (Webull
     # omits the colon in the UTC offset). ``fromisoformat`` pre-3.11 does
@@ -303,12 +304,12 @@ def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
     try:
         dt = datetime.fromisoformat(text)
     except (TypeError, ValueError):
-        return to_ny(datetime.now(timezone.utc))
+        return to_ny(datetime.now(UTC))
 
     # Normalise to UTC-aware, then convert to naive NY.
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return to_ny(dt.astimezone(timezone.utc))
+        dt = dt.replace(tzinfo=UTC)
+    return to_ny(dt.astimezone(UTC))
 
 
 def _extended_hours_quote_fields(field: dict) -> dict:
@@ -433,8 +434,8 @@ class WebullProvider(BaseMarketDataProvider):
         # The official SDK handles HMAC signing and token refresh internally.
         # The ApiClient is already imported at module load (to install our
         # log-path patch); only the trade/data clients are imported lazily.
-        from webull.trade.trade_client import TradeClient as _TradeClient
         from webull.data.data_client import DataClient as _DataClient
+        from webull.trade.trade_client import TradeClient as _TradeClient
 
         # Determine sandbox vs production.
         use_sandbox = _settings.webull.use_sandbox
@@ -530,7 +531,7 @@ class WebullProvider(BaseMarketDataProvider):
                     results[sym_upper] = Quote(
                         symbol=sym_upper,
                         price=0.0,
-                        timestamp=to_ny(datetime.now(timezone.utc)),
+                        timestamp=to_ny(datetime.now(UTC)),
                         provider=self.name,
                         data_status=DataStatus.ERROR,
                     )
@@ -543,7 +544,7 @@ class WebullProvider(BaseMarketDataProvider):
                 s.upper(): Quote(
                     symbol=s.upper(),
                     price=0.0,
-                    timestamp=to_ny(datetime.now(timezone.utc)),
+                    timestamp=to_ny(datetime.now(UTC)),
                     provider=self.name,
                     data_status=DataStatus.ERROR,
                 )
@@ -694,7 +695,7 @@ class WebullProvider(BaseMarketDataProvider):
         Each page costs 1 API call and is subject to the 100 req/min rate
         limit. 10 pages = ~16 trading days.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         end_ts = _end_ts if _end_ts is not None else now
         start_ts = _start_ts  # informational only; not passed to Webull
 
@@ -723,7 +724,7 @@ class WebullProvider(BaseMarketDataProvider):
             # it NY-aware first (matching ny_to_utc()'s convention) before
             # converting to UTC.
             end_ts_aware = end_ts.replace(tzinfo=_NY_TZ) if end_ts.tzinfo is None else end_ts
-            page_end_ms = int(end_ts_aware.astimezone(timezone.utc).timestamp() * 1000)
+            page_end_ms = int(end_ts_aware.astimezone(UTC).timestamp() * 1000)
 
             # NOTE: do NOT set start_time — Webull's M1 endpoint returns 0 bars
             # whenever start_time is present in the query string.
@@ -829,7 +830,7 @@ class WebullProvider(BaseMarketDataProvider):
         timeframe: str = "1d",
         range_: str = "3mo",
         include_extended_hours: bool = False,
-    ) -> dict[str, list["Bar"]]:
+    ) -> dict[str, list[Bar]]:
         """Fetch historical bars for multiple symbols in a single API call.
 
         Uses POST /market-data/stock/batch-bars which shares the same 60/min
@@ -903,10 +904,10 @@ class WebullProvider(BaseMarketDataProvider):
                 # Malformed/empty response for this chunk: skip silently and
                 # let subsequent chunks / the fallback provider cover it.
 
-            result: dict[str, list["Bar"]] = {}
+            result: dict[str, list[Bar]] = {}
             for sym in sym_list:
                 rows = rows_by_symbol.get(sym, [])
-                bars: list["Bar"] = []
+                bars: list[Bar] = []
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
@@ -989,7 +990,7 @@ class WebullProvider(BaseMarketDataProvider):
                 next_close=None,  # not available in snapshot
                 timezone="America/New_York",
                 provider=self.name,
-                timestamp=to_ny(datetime.now(timezone.utc)),
+                timestamp=to_ny(datetime.now(UTC)),
             )
             self._reset_error_state()
             return status
@@ -1019,14 +1020,14 @@ class WebullProvider(BaseMarketDataProvider):
             return ProviderStatus(
                 provider_name=self.name,
                 is_healthy=True,
-                timestamp=to_ny(datetime.now(timezone.utc)),
+                timestamp=to_ny(datetime.now(UTC)),
             )
         except Exception as e:
             return ProviderStatus(
                 provider_name=self.name,
                 is_healthy=False,
                 error_message=str(e),
-                timestamp=to_ny(datetime.now(timezone.utc)),
+                timestamp=to_ny(datetime.now(UTC)),
             )
 
 

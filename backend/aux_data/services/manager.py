@@ -13,9 +13,6 @@ The manager mirrors the ``MarketDataManager`` pattern from Phase 2:
 """
 import logging
 import time
-from datetime import datetime
-
-from backend.utils.timezone import now_ny
 from typing import Literal
 
 from backend.config.settings import settings as _settings
@@ -25,6 +22,7 @@ from backend.models.aux_data import (
     NewsResponse,
     OptionsResponse,
 )
+from backend.utils.timezone import now_ny
 
 from ..provider import FundamentalProvider, NewsProvider, OptionsProvider
 from ..providers import (

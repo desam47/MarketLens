@@ -18,17 +18,16 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from datetime import datetime
-
-from backend.utils.timezone import now_ny
 
 from backend.ai.analyze import analyze_symbol
+
 # RQ workers run these tasks in loop-less processes, so the async
 # analyze_symbol is bridged with run_sync rather than awaited.
 from backend.ai.sync_bridge import run_sync
 from backend.api.ai_templates.router import resolve_and_render
 from backend.database import SessionLocal
 from backend.models import AIAnalysisJob
+from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
 

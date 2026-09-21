@@ -14,7 +14,7 @@ end-to-end review:
 import asyncio
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
@@ -266,12 +266,12 @@ class TestSeedCheck(_DbCase, unittest.IsolatedAsyncioTestCase):
 
     async def test_shallow_history_is_not_requeued_within_a_day_of_a_job(self):
         self._bar("AAPL", "1d", datetime.now() - timedelta(days=30))
-        self._job("AAPL", datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1))
+        self._job("AAPL", datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=1))
         self.assertEqual(await self._enqueued(), [])
 
     async def test_shallow_history_is_retried_after_the_retry_window(self):
         self._bar("AAPL", "1d", datetime.now() - timedelta(days=30))
-        self._job("AAPL", datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=3))
+        self._job("AAPL", datetime.now(UTC).replace(tzinfo=None) - timedelta(days=3))
         self.assertEqual(await self._enqueued(), ["AAPL"])
 
     async def test_only_the_shallow_symbol_of_two_is_queued(self):

@@ -142,7 +142,7 @@ class TestSupportResistanceEngine(unittest.TestCase):
                        SRType.PIVOT_PP, SRType.PIVOT_S1, SRType.PIVOT_S2,
                        SRType.PIVOT_S3]
                 present = [prices[s] for s in seq if s in prices]
-                for a, b in zip(present, present[1:]):
+                for a, b in zip(present, present[1:], strict=False):
                     self.assertGreater(a, b, f"at bar {idx}: pivot sequence must be decreasing")
 
     def test_prev_day_levels_with_timestamps(self):

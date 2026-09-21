@@ -66,14 +66,9 @@ from datetime import timedelta
 
 from backend.ai.analyze import analyze_symbol
 from backend.ai.chat_symbols import resolve_turn_symbols
-from backend.config.settings import settings
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
 from backend.ai.market_baseline import build_market_baseline
-# Chat runs its sync generator helpers on loop-less worker threads
-# (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
-# bridged with run_sync/stream_sync rather than awaited.
-from backend.ai.sync_bridge import run_sync, stream_sync
 from backend.ai.prompt import (
     CHAT_CONTINUATION_SYSTEM_PROMPT,
     CHAT_SYSTEM_PROMPT,
@@ -82,6 +77,12 @@ from backend.ai.prompt import (
     parse_chat_reply,
 )
 from backend.ai.reply_stream import ReplyExtractor
+
+# Chat runs its sync generator helpers on loop-less worker threads
+# (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
+# bridged with run_sync/stream_sync rather than awaited.
+from backend.ai.sync_bridge import run_sync, stream_sync
+from backend.config.settings import settings
 from backend.models import AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository

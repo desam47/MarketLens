@@ -21,12 +21,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from backend.utils.timezone import now_ny
-
 from backend.config.settings import settings as _settings
 from backend.models import BacktestRun
 from backend.repositories.backtest_repository import BacktestRepository
 from backend.repositories.experiment_repository import ExperimentRepository
+from backend.utils.timezone import now_ny
 
 from .engine import BacktestConfig, BacktestEngine
 from .overfit import compute_overfit_report

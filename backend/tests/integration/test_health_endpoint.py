@@ -36,6 +36,7 @@ class TestHealthEndpoint(unittest.TestCase):
     def setUp(self) -> None:
         # Import inside setUp so env vars are set first.
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
 
         self.client = TestClient(app)
@@ -71,6 +72,7 @@ class TestSystemStatusEndpoint(unittest.TestCase):
 
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
 
@@ -86,6 +88,7 @@ class TestOpenAPISchema(unittest.TestCase):
 
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
 
@@ -113,6 +116,7 @@ class TestMiddlewareOrder(unittest.TestCase):
 
     def setUp(self) -> None:
         from fastapi.testclient import TestClient
+
         from backend.api.main import app
         self.client = TestClient(app)
 
