@@ -1104,6 +1104,8 @@ h4 {
 .calendar-dividend { background: var(--success); }
 .calendar-ex_dividend { background: var(--warning); color: #111827; }
 .calendar-empty { margin-top: 1rem; text-align: center; color: var(--text-muted); }
+.earnings-badge { display: inline-block; padding: 0.18rem 0.45rem; border-radius: 999px; background: #475569; color: white; font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
+.earnings-imminent { background: var(--warning); color: #111827; }
 
 .info-text { color: var(--info); }
 .error-text { color: var(--danger); }
@@ -7517,6 +7519,46 @@ a.news-headline:hover {
 
 .risk-summary-card strong {
   font-size: 1.35rem;
+}
+
+.risk-earnings-card {
+  margin-bottom: 1rem;
+}
+
+.risk-earnings-window {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.risk-earnings-window select {
+  margin-left: 0.35rem;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.2rem 0.35rem;
+}
+
+.risk-earnings-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.risk-earnings-warning,
+.risk-earnings-cell-warning {
+  color: #111827;
+  background: var(--warning);
+}
+
+.risk-earnings-warning {
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.risk-earnings-cell-warning {
+  font-weight: 700;
 }
 
 .risk-layout-grid {

@@ -14,6 +14,7 @@ jest.mock('../services/api', () => ({
     getScanResult: jest.fn(),
     getMTFSnapshot: jest.fn(),
     getTape: jest.fn(),
+    getSymbolCalendar: jest.fn(),
   },
 }));
 
@@ -60,6 +61,7 @@ describe('SymbolPage', () => {
     mockApi.getAnalysisBars.mockResolvedValue({ bars: [] } as never);
     mockApi.getMTFSnapshot.mockResolvedValue({ snapshot: null } as never);
     mockApi.getTape.mockResolvedValue({ snapshot: null } as never);
+    mockApi.getSymbolCalendar.mockResolvedValue({ symbol: 'AAPL', events: [], provider: 'test', timestamp: '2026-09-21T12:00:00Z' } as never);
   });
 
   it('clears prior-symbol score data while the new scan is loading', async () => {

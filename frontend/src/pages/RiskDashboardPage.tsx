@@ -1,8 +1,11 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api, { Bar } from '../services/api';
+import { earningsDaysAway } from '../components/EarningsBadge';
 
 const STORAGE_KEY = 'marketlens.risk.positions';
+const EARNINGS_WINDOW_KEY = 'marketlens.risk.earnings-warning-days';
 const TRADING_DAYS = 252;
+const EARNINGS_WARNING_WINDOWS = [3, 7, 14, 30];
 
 export interface ManualPosition {
   id: string;
@@ -21,6 +24,7 @@ interface PositionSnapshot extends ManualPosition {
   stopRisk: number | null;
   weight: number;
   volatility: number | null;
+  earningsDays: number | null;
   bars: Bar[];
   returns: Map<string, number>;
   dataError?: string;
@@ -55,6 +59,11 @@ function readPositions(): ManualPosition[] {
   } catch {
     return [];
   }
+}
+
+function readEarningsWarningDays(): number {
+  const value = Number(window.localStorage.getItem(EARNINGS_WINDOW_KEY));
+  return EARNINGS_WARNING_WINDOWS.includes(value) ? value : 7;
 }
 
 function finite(value: unknown): value is number {
@@ -195,10 +204,15 @@ export function RiskDashboardPage() {
   const [entryPrice, setEntryPrice] = useState('');
   const [stopPrice, setStopPrice] = useState('');
   const [sector, setSector] = useState('');
+  const [earningsWarningDays, setEarningsWarningDays] = useState(readEarningsWarningDays);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(positions));
   }, [positions]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EARNINGS_WINDOW_KEY, String(earningsWarningDays));
+  }, [earningsWarningDays]);
 
   const loadRiskData = useCallback(async () => {
     if (!positions.length) {
@@ -208,10 +222,11 @@ export function RiskDashboardPage() {
     setLoading(true);
     setError(null);
     const loaded = await Promise.all(positions.map(async (position): Promise<PositionSnapshot> => {
-      const [quoteResult, barsResult, fundamentalsResult] = await Promise.allSettled([
+      const [quoteResult, barsResult, fundamentalsResult, calendarResult] = await Promise.allSettled([
         api.getQuote(position.symbol),
         api.getAnalysisBars(position.symbol, '1d', 90),
         position.sector ? Promise.resolve(null) : api.getFundamentals(position.symbol),
+        api.getSymbolCalendar(position.symbol),
       ]);
       const quote = quoteResult.status === 'fulfilled' ? getQuotePrice(quoteResult.value) : null;
       const bars = barsResult.status === 'fulfilled' && Array.isArray(barsResult.value.bars) ? barsResult.value.bars : [];
@@ -225,6 +240,9 @@ export function RiskDashboardPage() {
       const resolvedSector = position.sector || fundamentals?.data?.sector || null;
       const returns = returnsForBars(bars);
       const volatilityDaily = standardDeviation(Array.from(returns.values()));
+      const earningsDays = calendarResult.status === 'fulfilled'
+        ? earningsDaysAway(calendarResult.value.events)
+        : null;
       return {
         ...position,
         sector: resolvedSector,
@@ -234,6 +252,7 @@ export function RiskDashboardPage() {
         stopRisk,
         weight: 0,
         volatility: volatilityDaily == null ? null : volatilityDaily * Math.sqrt(TRADING_DAYS) * 100,
+        earningsDays,
         bars,
         returns,
         dataError: quoteResult.status === 'rejected' && barsResult.status === 'rejected' ? 'Market data unavailable' : undefined,
@@ -248,6 +267,10 @@ export function RiskDashboardPage() {
   useEffect(() => { void loadRiskData(); }, [loadRiskData]);
 
   const stats = useMemo(() => calculatePortfolioStats(snapshots), [snapshots]);
+  const upcomingEarnings = useMemo(
+    () => snapshots.filter(item => item.earningsDays != null && item.earningsDays >= 0 && item.earningsDays <= earningsWarningDays),
+    [snapshots, earningsWarningDays],
+  );
 
   const addPosition = (event: FormEvent) => {
     event.preventDefault();
@@ -319,8 +342,16 @@ export function RiskDashboardPage() {
             <div className="card risk-summary-card"><span>Maximum drawdown</span><strong>{stats.maxDrawdown == null ? '—' : stats.maxDrawdown > 0 ? `-${stats.maxDrawdown.toFixed(1)}%` : '0.0%'}</strong><small>{stats.maxDrawdownDollar == null ? 'Need shared history' : `${fmtMoney(stats.maxDrawdownDollar)} at current size`}</small></div>
           </div>
 
+          <section className="card risk-earnings-card">
+            <div className="risk-card-heading">
+              <h2>Earnings risk</h2>
+              <label className="risk-earnings-window">Warn within <select value={earningsWarningDays} onChange={event => setEarningsWarningDays(Number(event.target.value))}>{EARNINGS_WARNING_WINDOWS.map(days => <option key={days} value={days}>{days} days</option>)}</select></label>
+            </div>
+            {upcomingEarnings.length === 0 ? <p className="info-text">No tracked positions have a provider-estimated earnings date within {earningsWarningDays} days.</p> : <div className="risk-earnings-list">{upcomingEarnings.map(item => <span className="risk-earnings-warning" key={item.id}><strong>{item.symbol}</strong> reports {item.earningsDays === 0 ? 'today' : `in ${item.earningsDays} day${item.earningsDays === 1 ? '' : 's'}`}</span>)}</div>}
+          </section>
+
           <div className="risk-layout-grid">
-            <section className="card risk-positions-card"><div className="risk-card-heading"><h2>Positions</h2><span>{snapshots.length} tracked</span></div><div className="risk-table-wrap"><table className="risk-table"><thead><tr><th>Symbol</th><th>Quantity</th><th>Price</th><th>Exposure</th><th>Weight</th><th>P&amp;L</th><th>Stop risk</th><th>Volatility</th><th /></tr></thead><tbody>{snapshots.map(item => <tr key={item.id}><td><strong>{item.symbol}</strong><small className={`risk-side-${item.side}`}>{item.side}</small>{item.dataError && <small className="risk-data-warning">Data unavailable</small>}</td><td>{item.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td><td>{fmtMoney(item.currentPrice, 2)}</td><td>{fmtMoney(item.marketValue)}</td><td>{item.weight.toFixed(1)}%</td><td className={item.pnl != null && item.pnl >= 0 ? 'risk-positive' : 'risk-negative'}>{fmtMoney(item.pnl)}</td><td>{fmtMoney(item.stopRisk)}</td><td>{item.volatility == null ? '—' : `${item.volatility.toFixed(1)}%`}</td><td><button className="risk-remove" onClick={() => removePosition(item.id)} aria-label={`Remove ${item.symbol}`}>×</button></td></tr>)}</tbody></table></div></section>
+            <section className="card risk-positions-card"><div className="risk-card-heading"><h2>Positions</h2><span>{snapshots.length} tracked</span></div><div className="risk-table-wrap"><table className="risk-table"><thead><tr><th>Symbol</th><th>Quantity</th><th>Price</th><th>Exposure</th><th>Weight</th><th>P&amp;L</th><th>Stop risk</th><th>Volatility</th><th>Earnings</th><th /></tr></thead><tbody>{snapshots.map(item => <tr key={item.id}><td><strong>{item.symbol}</strong><small className={`risk-side-${item.side}`}>{item.side}</small>{item.dataError && <small className="risk-data-warning">Data unavailable</small>}</td><td>{item.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td><td>{fmtMoney(item.currentPrice, 2)}</td><td>{fmtMoney(item.marketValue)}</td><td>{item.weight.toFixed(1)}%</td><td className={item.pnl != null && item.pnl >= 0 ? 'risk-positive' : 'risk-negative'}>{fmtMoney(item.pnl)}</td><td>{fmtMoney(item.stopRisk)}</td><td>{item.volatility == null ? '—' : `${item.volatility.toFixed(1)}%`}</td><td className={item.earningsDays != null && item.earningsDays >= 0 && item.earningsDays <= earningsWarningDays ? 'risk-earnings-cell-warning' : ''}>{item.earningsDays == null ? '—' : item.earningsDays < 0 ? 'Reported' : item.earningsDays === 0 ? 'Today' : `In ${item.earningsDays}d`}</td><td><button className="risk-remove" onClick={() => removePosition(item.id)} aria-label={`Remove ${item.symbol}`}>×</button></td></tr>)}</tbody></table></div></section>
             <section className="card risk-sector-card"><div className="risk-card-heading"><h2>Sector exposure</h2><span>by market value</span></div>{stats.sectorExposure.map(item => <div className="risk-bar-row" key={item.sector}><div><span>{item.sector}</span><strong>{item.weight.toFixed(1)}%</strong></div><div className="risk-bar"><span style={{ width: `${Math.min(100, item.weight)}%` }} /></div><small>{fmtMoney(item.value)}</small></div>)}</section>
           </div>
 

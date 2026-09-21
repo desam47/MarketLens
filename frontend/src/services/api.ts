@@ -1593,6 +1593,10 @@ class ApiService {
     return this.fetch<WatchlistCalendar>(`/calendar/watchlist/${watchlistId}`);
   }
 
+  async getSymbolCalendar(symbol: string): Promise<{ symbol: string; events: CalendarEvent[]; provider: string; timestamp: string }> {
+    return this.fetch(`/calendar/symbol/${symbol.toUpperCase()}`);
+  }
+
   async createWatchlist(name: string, description?: string): Promise<Watchlist> {
     return this.fetch<Watchlist>('/watchlists/', {
       method: 'POST',

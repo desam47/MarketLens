@@ -7,7 +7,7 @@ import os
 import sys
 import time
 import unittest
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -222,6 +222,21 @@ class TestAuxiliaryAlertBaselines(unittest.TestCase):
         with patch("backend.market_data.services.finnhub_service.finnhub_service") as service:
             service.get_insider_sentiment.return_value = rows
             self.assertIsNone(self.engine._build_aux_payload("insider_sentiment_change", "AAPL"))
+
+    def test_earnings_payload_uses_the_next_provider_estimate(self):
+        with patch("backend.market_data.services.calendar_service.events_for_symbol") as events:
+            events.return_value = [
+                {"symbol": "AAPL", "event_type": "earnings", "date": (date.today() + timedelta(days=3)).isoformat()},
+            ]
+            payload = self.engine._build_aux_payload("earnings_approaching", "AAPL")
+        self.assertEqual(payload["days_until"], 3)
+
+    def test_earnings_alert_only_fires_once_per_estimated_date(self):
+        alert = _make_alert(condition_type="earnings_approaching", parameter="7")
+        value = {"days_until": 3, "earnings_date": "2026-09-24"}
+        with patch.object(self.engine, "_persist_trigger"):
+            self.assertTrue(self.engine._try_fire(alert, 150.0, extra_value=value))
+            self.assertFalse(self.engine._try_fire(alert, 150.0, extra_value=value))
 
 
 class TestAlertsEngineQuoteDispatchIntegration(unittest.TestCase):

@@ -49,6 +49,7 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "news_arrival",
     "insider_sentiment_change",
     "options_activity_change",
+    "earnings_approaching",
 )
 
 
@@ -466,6 +467,18 @@ def _eval_options_activity_change(parameter: str, value: object) -> bool:
     return False
 
 
+def _eval_earnings_approaching(parameter: str, value: object) -> bool:
+    """Fire when the provider-estimated earnings date is within the requested window."""
+    if not isinstance(value, dict):
+        return False
+    try:
+        window_days = int(parameter)
+    except (TypeError, ValueError):
+        return False
+    days_until = value.get("days_until")
+    return isinstance(days_until, int) and 0 <= days_until <= max(0, window_days)
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -489,6 +502,7 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "news_arrival": _eval_news_arrival,
     "insider_sentiment_change": _eval_insider_sentiment_change,
     "options_activity_change": _eval_options_activity_change,
+    "earnings_approaching": _eval_earnings_approaching,
 }
 
 

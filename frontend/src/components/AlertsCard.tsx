@@ -30,6 +30,7 @@ const CONDITIONS: { value: string; label: string; hint: string }[] = [
   { value: 'news_arrival', label: 'News arrival', hint: 'minimum relevance 0–1 (e.g. 0.5)' },
   { value: 'insider_sentiment_change', label: 'Insider sentiment change', hint: 'minimum sentiment delta (e.g. 0.2)' },
   { value: 'options_activity_change', label: 'Options activity change', hint: 'minimum volume/OI change % (e.g. 50)' },
+  { value: 'earnings_approaching', label: 'Earnings approaching', hint: 'days before estimated earnings' },
   { value: 'signal_profile', label: 'Signal profile', hint: 'Use Signal Alert Center for guided filters' },
 ];
 
@@ -108,6 +109,8 @@ function conditionLabel(c: string, p: string): React.ReactNode {
       return <>insider sentiment Δ ≥ {p || '0.2'}</>;
     case 'options_activity_change':
       return <>options volume/OI Δ ≥ {p || '50'}%</>;
+    case 'earnings_approaching':
+      return <>earnings expected within {p} days</>;
     default:
       return <>{c}({p})</>;
   }
@@ -353,6 +356,11 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
               <option value="risk_off">Risk off</option>
               <option value="neutral">Neutral</option>
               <option value="transition">Transition</option>
+            </select>
+          ) : conditionType === 'earnings_approaching' ? (
+            <select value={parameter} onChange={e => setParameter(e.target.value)} disabled={submitting}>
+              <option value="" disabled>Select lead time…</option>
+              {[3, 7, 14, 30].map(days => <option key={days} value={days}>{days} days</option>)}
             </select>
           ) : (
             <input

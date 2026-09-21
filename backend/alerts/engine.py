@@ -28,6 +28,7 @@ from datetime import UTC, date, datetime, timedelta
 from backend.database import SessionLocal
 from backend.market_data.services.engine_seeder import engine_registry
 from backend.models import Alert, AlertTrigger
+from backend.utils.timezone import now_ny
 
 from .conditions import (
     build_alignment_payload,
@@ -79,6 +80,7 @@ AUX_CONDITIONS: tuple[str, ...] = (
     "news_arrival",
     "insider_sentiment_change",
     "options_activity_change",
+    "earnings_approaching",
 )
 
 BAR_CONDITIONS: tuple[str, ...] = (
@@ -435,6 +437,27 @@ class AlertsEngine:
                 "previous_volume": previous["volume"],
                 "previous_open_interest": previous["open_interest"],
             }
+        if condition_type == "earnings_approaching":
+            from backend.market_data.services.calendar_service import events_for_symbol
+
+            today = now_ny().date()
+            earnings = sorted(
+                (
+                    event
+                    for event in events_for_symbol(symbol)
+                    if event.get("event_type") == "earnings"
+                    and event.get("date")
+                    and date.fromisoformat(event["date"]) >= today
+                ),
+                key=lambda event: event["date"],
+            )
+            if not earnings:
+                return {"days_until": None, "earnings_date": None}
+            event = earnings[0]
+            return {
+                "days_until": (date.fromisoformat(event["date"]) - today).days,
+                "earnings_date": event["date"],
+            }
         return None
 
     # --- Price callback (called from engine_registry, any thread) -------
@@ -588,7 +611,12 @@ class AlertsEngine:
             return False
 
         # Check dedup window.
-        key = (alert.id, alert.symbol.upper())
+        dedup_symbol = alert.symbol.upper()
+        if alert.condition_type == "earnings_approaching" and isinstance(extra_value, dict):
+            earnings_date = extra_value.get("earnings_date")
+            if isinstance(earnings_date, str):
+                dedup_symbol = f"{dedup_symbol}:{earnings_date}"
+        key = (alert.id, dedup_symbol)
         with self._lock:
             last = self._fired_at.get(key, 0)
             window = DEDUP_WINDOW_SECONDS
@@ -598,6 +626,8 @@ class AlertsEngine:
                     window = max(60, int(profile.get("cooldown_minutes", 60)) * 60)
                 except (TypeError, ValueError, json.JSONDecodeError, AttributeError):
                     pass
+            if alert.condition_type == "earnings_approaching" and last:
+                return False
             if time.time() - last < window:
                 return False
             self._fired_at[key] = time.time()
@@ -710,6 +740,16 @@ class AlertsEngine:
                 else:
                     observed = str(extra_value)
                 message = f"{alert.symbol}: options activity changed"
+            elif alert.condition_type == "earnings_approaching":
+                if isinstance(extra_value, dict):
+                    days_until = extra_value.get("days_until")
+                    earnings_date = extra_value.get("earnings_date")
+                    observed = f"earnings={earnings_date}, days_until={days_until}"
+                    timing = "today" if days_until == 0 else f"in {days_until} day{'s' if days_until != 1 else ''}"
+                else:
+                    observed = str(extra_value)
+                    timing = f"within {alert.parameter} days"
+                message = f"{alert.symbol}: earnings expected {timing}"
             elif alert.condition_type == "signal_profile":
                 observed = str(extra_value)
                 try:

@@ -8,6 +8,7 @@ import api, {
   TapeSnapshot,
   Transition,
   MarketQuote,
+  CalendarEvent,
 } from '../services/api';
 import { formatETDate, formatETDateTime } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
@@ -20,6 +21,7 @@ import { TapePressureCard } from '../components/TapePressureCard';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
+import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
@@ -445,10 +447,11 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
   const pageCount = Math.max(1, Math.ceil(bars.length / BARS_PER_PAGE));
   const pageStart = page * BARS_PER_PAGE;
   const pageBars = bars.slice(pageStart, pageStart + BARS_PER_PAGE);
+  const latestBarTimestamp = bars[0]?.timestamp;
 
   useEffect(() => {
     setPage(0);
-  }, [bars[0]?.timestamp]);
+  }, [latestBarTimestamp]);
 
   // Backend returns newest→oldest (desc=True), so index 0 is already latest
   return (
@@ -521,6 +524,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
   const [transitions, setTransitions] = useState<Transition[]>([]);
@@ -568,6 +572,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const tapeRequestSymbolRef = useRef<string>(symbol);
 
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
+  useEffect(() => {
+    let cancelled = false;
+    api.getSymbolCalendar(symbol).then(result => { if (!cancelled) setCalendarEvents(result.events); }).catch(() => { if (!cancelled) setCalendarEvents([]); });
+    return () => { cancelled = true; };
+  }, [symbol]);
   const [chartMode, setChartMode] = useState<'single' | 'multi'>('single');
   const currentSymbolRef = useRef(symbol);
   const analysisContextRef = useRef({ symbol, timeframe });
@@ -974,7 +983,7 @@ const fetchBars = useCallback(async () => {
     <div className="symbol-page">
       <div className="dashboard-header">
         <div>
-          <h1>{symbol} Analysis</h1>
+          <h1>{symbol} Analysis <EarningsBadge events={calendarEvents} /></h1>
           <p className="subtitle">
             {quote?.price != null ? (
               <>

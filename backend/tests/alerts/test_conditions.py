@@ -14,6 +14,7 @@ from backend.alerts.conditions import (
     _eval_breakdown,
     _eval_breakout,
     _eval_divergence,
+    _eval_earnings_approaching,
     _eval_full_timeframe_alignment,
     _eval_insider_sentiment_change,
     _eval_market_regime_change,
@@ -255,6 +256,12 @@ class TestConditionEvaluators(unittest.TestCase):
             )
         )
 
+    def test_earnings_approaching_respects_the_lead_time(self):
+        self.assertTrue(_eval_earnings_approaching("7", {"days_until": 7}))
+        self.assertTrue(_eval_earnings_approaching("7", {"days_until": 0}))
+        self.assertFalse(_eval_earnings_approaching("7", {"days_until": 8}))
+        self.assertFalse(_eval_earnings_approaching("7", {"days_until": -1}))
+
     # --- divergence ----------------------------------------------------
 
     def test_negative_divergence_price_up_rsi_down(self):
@@ -397,6 +404,7 @@ class TestEvaluateDispatcher(unittest.TestCase):
             "news_arrival",
             "insider_sentiment_change",
             "options_activity_change",
+            "earnings_approaching",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 

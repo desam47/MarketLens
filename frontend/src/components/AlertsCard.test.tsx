@@ -210,4 +210,20 @@ describe('AlertsCard signal parameter picker', () => {
       name: 'AAPL alignment', symbol: 'AAPL', condition_type: 'full_timeframe_alignment', parameter: '',
     }));
   });
+
+  it('creates an earnings alert with a selected lead-time window', async () => {
+    mockApi.createAlert.mockResolvedValue(alert({ condition_type: 'earnings_approaching', parameter: '7' }) as any);
+    render(<AlertsCard />);
+    await screen.findByText('No alerts configured.');
+
+    fireEvent.change(screen.getByLabelText('Alert Name'), { target: { value: 'AAPL earnings' } });
+    fireEvent.change(screen.getByPlaceholderText('AAPL'), { target: { value: 'AAPL' } });
+    fireEvent.change(screen.getByDisplayValue('Signal equals'), { target: { value: 'earnings_approaching' } });
+    fireEvent.change(screen.getByDisplayValue('Select lead time…'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alert' }));
+
+    await waitFor(() => expect(mockApi.createAlert).toHaveBeenCalledWith({
+      name: 'AAPL earnings', symbol: 'AAPL', condition_type: 'earnings_approaching', parameter: '7',
+    }));
+  });
 });

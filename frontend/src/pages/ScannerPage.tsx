@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import api, { FilterSpec, ScanResult, Watchlist } from '../services/api';
+import api, { CalendarEvent, FilterSpec, ScanResult, Watchlist } from '../services/api';
 import { FilterBuilder } from '../components/FilterBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
 import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { EarningsBadge } from '../components/EarningsBadge';
 
 interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
@@ -96,6 +97,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [symbolsLoading, setSymbolsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasRunScan, setHasRunScan] = useState(false);
+  const [eventsBySymbol, setEventsBySymbol] = useState<Record<string, CalendarEvent[]>>({});
 
   const fetchWatchlists = useCallback(async () => {
     setLoading(true);
@@ -144,6 +146,15 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   useEffect(() => {
     void fetchSymbols();
   }, [fetchSymbols]);
+
+  useEffect(() => {
+    if (selectedWatchlist == null) { setEventsBySymbol({}); return; }
+    api.getWatchlistCalendar(selectedWatchlist)
+      .then(calendar => setEventsBySymbol(calendar.events.reduce<Record<string, CalendarEvent[]>>((all, event) => {
+        (all[event.symbol] ||= []).push(event); return all;
+      }, {})))
+      .catch(() => setEventsBySymbol({}));
+  }, [selectedWatchlist]);
 
   const handleResults = useCallback((next: ScanResult[]) => {
     setResults(next);
@@ -262,6 +273,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                 {sortedResults.map(result => (
                   <button className="scanner-result-row" key={result.symbol} onClick={() => onSelectSymbol(result.symbol)}>
                     <strong>{result.symbol}</strong>
+                    <EarningsBadge events={eventsBySymbol[result.symbol] || []} />
                     <span className={result.total_score >= 0 ? 'scanner-score-positive' : 'scanner-score-negative'}>{result.total_score >= 0 ? '+' : ''}{result.total_score.toFixed(1)}</span>
                     <span className="scanner-result-reason">{matchReason(result)}</span>
                     <MarketDataFreshnessBadge
