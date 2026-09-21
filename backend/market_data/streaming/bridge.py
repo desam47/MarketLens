@@ -31,6 +31,8 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, as
         symbol, price=price, volume=volume, timestamp=ts, bid=bid, ask=ask,
         bid_size=bid_size, ask_size=ask_size,
     )
+    if payload is None:
+        return
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)
@@ -48,6 +50,8 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
     from backend.market_data.streaming.live_quotes import live_quote_cache
 
     payload = live_quote_cache.update(symbol, price=price, volume=size, timestamp=ts, event_type="trade")
+    if payload is None:
+        return
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)
@@ -82,6 +86,8 @@ def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
         symbol, price=price, timestamp=ts, bid=bid, ask=ask,
         bid_size=bid_size, ask_size=ask_size, event_type="bbo",
     )
+    if payload is None:
+        return
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)

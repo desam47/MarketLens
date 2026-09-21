@@ -177,6 +177,7 @@ body {
 .market-data-freshness-delayed { color: var(--warning); }
 .market-data-freshness-cached { color: var(--info); }
 .market-data-freshness-stale { color: #fb923c; }
+.market-data-freshness-reconnecting { color: var(--warning); }
 .market-data-freshness-unavailable { color: var(--text-muted); }
 
 @media (max-width: 768px) {

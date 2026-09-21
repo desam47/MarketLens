@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import api, { LiveQuoteUpdateData, RealtimeEvent, RealtimeSubscriber } from '../services/api';
+import api, { LiveQuoteUpdateData, RealtimeConnectionStatus, RealtimeEvent, RealtimeSubscriber } from '../services/api';
 
 /** Subscribe to one shared realtime socket for the supplied symbol set. */
 export function useLiveQuotes(symbols: string[]) {
   const [quotes, setQuotes] = useState<Record<string, LiveQuoteUpdateData>>({});
-  const [status, setStatus] = useState<'connecting' | 'open' | 'closed'>('closed');
+  const [status, setStatus] = useState<RealtimeConnectionStatus>('closed');
   const subscriberRef = useRef<RealtimeSubscriber | null>(null);
   const normalized = Array.from(new Set(symbols.map(s => s.trim().toUpperCase()).filter(Boolean))).sort();
   const key = normalized.join(',');

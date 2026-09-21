@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStartupMode } from '../contexts/StartupModeContext';
 
 type Freshness = 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable';
-type BadgeState = 'live' | 'delayed' | 'cached' | 'stale' | 'unavailable';
+type BadgeState = 'live' | 'delayed' | 'cached' | 'stale' | 'reconnecting' | 'unavailable';
 
 interface MarketDataFreshnessBadgeProps {
   dataStatus?: string | null;
@@ -10,6 +10,8 @@ interface MarketDataFreshnessBadgeProps {
   timestamp?: string | null;
   ageSeconds?: number | null;
   showAge?: boolean;
+  connectionStatus?: 'connecting' | 'open' | 'closed' | 'reconnecting';
+  staleAfterSeconds?: number;
 }
 
 const labels: Record<BadgeState, string> = {
@@ -17,6 +19,7 @@ const labels: Record<BadgeState, string> = {
   delayed: 'Delayed',
   cached: 'Cached',
   stale: 'Stale',
+  reconnecting: 'Reconnecting',
   unavailable: 'Unavailable',
 };
 
@@ -70,18 +73,40 @@ export function MarketDataFreshnessBadge({
   timestamp,
   ageSeconds,
   showAge = false,
+  connectionStatus,
+  staleAfterSeconds = 15,
 }: MarketDataFreshnessBadgeProps) {
   const startupMode = useStartupMode();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!timestamp || !showAge) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, [timestamp, showAge]);
+  const computedAge = ageSeconds ?? (timestamp ? (now - Date.parse(timestamp)) / 1000 : null);
   const sourceState = stateFromDataStatus(dataStatus) ?? stateFromFreshness(freshness);
+  const connectionState: BadgeState | null = connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
+    ? 'reconnecting'
+    : connectionStatus === 'closed'
+    ? 'stale'
+    : null;
+  const staleByAge = dataStatus?.toUpperCase() === 'LIVE'
+    && computedAge != null
+    && Number.isFinite(computedAge)
+    && computedAge > staleAfterSeconds;
   // API mode deliberately does not update providers. A status persisted from
   // a previous full run must never be presented as currently live.
   const state = startupMode === 'api' && sourceState !== 'unavailable'
     ? (sourceState === 'stale' ? 'stale' : 'cached')
-    : sourceState;
+    : staleByAge ? 'stale' : connectionState ?? sourceState;
   const label = startupMode === 'api' ? `Paused · ${labels[state]}` : labels[state];
-  const age = showAge ? formatAge(ageSeconds, timestamp) : null;
+  const age = showAge ? formatAge(computedAge, timestamp) : null;
   const title = startupMode === 'api'
     ? 'STARTUP_MODE=api is active, so live market-data updates are paused.'
+    : connectionState
+    ? `Realtime connection: ${connectionStatus}`
+    : staleByAge
+    ? `No live quote received for ${Math.round(computedAge ?? 0)} seconds.`
     : dataStatus
     ? `Market-data status: ${dataStatus}`
     : freshness

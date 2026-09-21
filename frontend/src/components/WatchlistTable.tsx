@@ -2,12 +2,14 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import api, {
   LiveQuoteUpdateData,
+  RealtimeConnectionStatus,
   RealtimeEvent,
   WatchlistScanResult,
   RelativeStrengthData,
   RelativeStrengthSignal,
 } from '../services/api';
 import { formatETTime } from './chartMath';
+import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import {
   fmt,
   fmtPrice,
@@ -269,6 +271,7 @@ export function WatchlistTable({
   );
   const liveSymbolsKey = liveSymbols.join(',');
   const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteUpdateData>>({});
+  const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
 
   // Use the same direct realtime subscriber lifecycle as Dashboard and
   // Symbol Page. One socket subscribes to every symbol currently displayed
@@ -281,9 +284,11 @@ export function WatchlistTable({
       if (event.type !== 'quote_update') return;
       setLiveQuotes(previous => ({ ...previous, [event.symbol]: event.data }));
     });
+    const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
     liveSymbols.forEach(symbol => subscriber.subscribeQuote(symbol));
     return () => {
       unsubscribe();
+      unsubscribeStatus();
       liveSymbols.forEach(symbol => subscriber.unsubscribeQuote(symbol));
       subscriber.disconnect();
     };
@@ -519,6 +524,10 @@ export function WatchlistTable({
   }
 
   const useVirtual = sorted.length > VIRT_THRESHOLD;
+  const latestLiveQuote = Object.values(liveQuotes).reduce<LiveQuoteUpdateData | null>(
+    (latest, quote) => !latest || (quote.received_at ?? 0) > (latest.received_at ?? 0) ? quote : latest,
+    null,
+  );
 
   return (
     <div className="watchlist-table-container">
@@ -529,6 +538,12 @@ export function WatchlistTable({
             Scanned {formatETTime(scanTimestamp)}
           </span>
         )}
+        <MarketDataFreshnessBadge
+          dataStatus={latestLiveQuote ? 'LIVE' : 'STALE'}
+          timestamp={latestLiveQuote?.timestamp}
+          showAge
+          connectionStatus={quoteConnectionStatus}
+        />
         <select
           className="rs-benchmark-select"
           value={rsBenchmark}

@@ -12,9 +12,9 @@
  *   const { latestBars, connectionStatus } = useMarketStream([sub]);
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import api, { BarUpdateData, RealtimeEvent } from '../services/api';
+import api, { BarUpdateData, RealtimeConnectionStatus, RealtimeEvent } from '../services/api';
 
-export type ConnectionStatus = 'connecting' | 'open' | 'closed';
+export type ConnectionStatus = RealtimeConnectionStatus;
 
 export interface MarketSub {
   symbol: string;

@@ -10,9 +10,10 @@ import api, {
   MarketQuote,
   CalendarEvent,
   RealtimeEvent,
+  RealtimeConnectionStatus,
   LiveQuoteUpdateData,
 } from '../services/api';
-import { formatETDate, formatETDateTime } from '../components/chartMath';
+import { formatETDate, formatETDateTime, parseET } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
 import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 // import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
@@ -523,10 +524,58 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
   );
 });
 
+/** Merge one streamed trade into the active 1-minute candle.
+ *
+ * API bars arrive newest first. Webull trade volume is the size of that
+ * individual print, so it can safely be accumulated into the local bar;
+ * snapshot volume is cumulative and is deliberately not used here.
+ */
+function mergeLiveTradeIntoMinuteBars(bars: Bar[], live: LiveQuoteUpdateData): Bar[] {
+  if (live.price == null || live.event_type !== 'trade') return bars;
+  const tickTime = parseET(live.timestamp).getTime();
+  if (!Number.isFinite(tickTime)) return bars;
+
+  const bucketMs = Math.floor(tickTime / 60_000) * 60_000;
+  const timestamp = new Date(bucketMs).toISOString();
+  const size = typeof live.volume === 'number' && Number.isFinite(live.volume)
+    ? Math.max(0, live.volume)
+    : 0;
+  const index = bars.findIndex(bar => Math.floor(parseET(bar.timestamp).getTime() / 60_000) * 60_000 === bucketMs);
+
+  if (index >= 0) {
+    const existing = bars[index];
+    const updated: Bar = {
+      ...existing,
+      high: Math.max(existing.high, live.price),
+      low: Math.min(existing.low, live.price),
+      close: live.price,
+      volume: existing.volume + size,
+      data_status: 'LIVE',
+      source: 'webull_stream',
+    };
+    const next = [...bars];
+    next[index] = updated;
+    return next;
+  }
+
+  const newBar: Bar = {
+    timestamp,
+    open: live.price,
+    high: live.price,
+    low: live.price,
+    close: live.price,
+    volume: size,
+    data_status: 'LIVE',
+    source: 'webull_stream',
+  };
+  return [...bars, newBar].sort((a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime());
+}
+
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
+  const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
@@ -548,6 +597,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [bars, setBars] = useState<Bar[]>([]);
   const [barsLoading, setBarsLoading] = useState(true);
+  const lastLiveTradeKeyRef = useRef<string | null>(null);
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(true);
@@ -916,6 +966,7 @@ const fetchBars = useCallback(async () => {
     setPrevClose(null);
     setDivergences([]);
     setBars([]);
+    lastLiveTradeKeyRef.current = null;
   }, [symbol, timeframe]);
 
   useEffect(() => {
@@ -923,11 +974,24 @@ const fetchBars = useCallback(async () => {
     // REST remains a slow fallback; live Webull snapshots/trades arrive over
     // the shared realtime channel whenever streaming is available.
     const id = setInterval(fetchQuote, 30000);
-    const subscriber = api.createRealtimeSubscriber();
+    const subscriber = api.createRealtimeSubscriber?.();
+    if (!subscriber) {
+      return () => clearInterval(id);
+    }
     const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
       if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
       const live = event.data;
       setLiveQuote(live);
+      // Build the active 1-minute candle locally from trade prints. BBO and
+      // snapshot events update the quote panel, but must not be counted as
+      // bar volume because their volume semantics differ.
+      if (analysisContextRef.current.timeframe === '1m' && live.event_type === 'trade') {
+        const tradeKey = `${event.symbol}:${live.timestamp}:${live.price}:${live.volume}`;
+        if (lastLiveTradeKeyRef.current !== tradeKey) {
+          lastLiveTradeKeyRef.current = tradeKey;
+          setBars(previous => mergeLiveTradeIntoMinuteBars(previous, live));
+        }
+      }
       setQuote(previous => ({
         ...(previous || { symbol: symbol.toUpperCase() }),
         symbol: symbol.toUpperCase(),
@@ -940,10 +1004,12 @@ const fetchBars = useCallback(async () => {
         data_status: 'LIVE',
       }));
     });
+    const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
     subscriber.subscribeQuote(symbol);
     return () => {
       clearInterval(id);
       unsubscribe();
+      unsubscribeStatus();
       subscriber.unsubscribeQuote(symbol);
       subscriber.disconnect();
     };
@@ -1062,6 +1128,8 @@ const fetchBars = useCallback(async () => {
                 <MarketDataFreshnessBadge
                   dataStatus={quote.data_status}
                   timestamp={quote.timestamp}
+                  showAge
+                  connectionStatus={quoteConnectionStatus}
                 />
               </>
             ) : '—'}
@@ -1069,6 +1137,8 @@ const fetchBars = useCallback(async () => {
               <MarketDataFreshnessBadge
                 dataStatus={quote?.data_status}
                 timestamp={quote?.timestamp}
+                showAge
+                connectionStatus={quoteConnectionStatus}
               />
             )}
           </p>

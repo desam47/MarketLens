@@ -19,7 +19,7 @@ class LiveQuoteCache:
                volume: float | None = None, bid: float | None = None,
                ask: float | None = None, bid_size: float | None = None,
                ask_size: float | None = None, provider: str = "webull",
-               event_type: str = "snapshot") -> dict[str, Any]:
+               event_type: str = "snapshot") -> dict[str, Any] | None:
         symbol = symbol.upper()
         with self._lock:
             previous = self._values.get(symbol, {})
@@ -34,6 +34,13 @@ class LiveQuoteCache:
             "received_at": time.time(), "provider": provider, "event_type": event_type,
         }
         with self._lock:
+            # Webull can replay a message after reconnect. Suppress an exact
+            # duplicate before it fans out to every browser and tape engine.
+            if previous and all(previous.get(key) == payload.get(key) for key in (
+                "price", "volume", "bid", "ask", "bid_size", "ask_size",
+                "timestamp", "provider", "event_type",
+            )):
+                return None
             self._values[symbol] = payload
             self._updated[symbol] = time.monotonic()
             if len(self._values) > self._max_symbols:

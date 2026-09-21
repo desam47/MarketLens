@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData, RealtimeEvent, LiveQuoteUpdateData } from '../services/api';
+import api, { RegimeData, TrendData, ConfluenceData, StrategyData, MarketContextData, SectorData, RealtimeEvent, LiveQuoteUpdateData, RealtimeConnectionStatus } from '../services/api';
 import { RegimeCard } from '../components/RegimeCard';
 import { TrendCard } from '../components/TrendCard';
 import { ConfluenceCard } from '../components/ConfluenceCard';
@@ -177,6 +177,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
     timestamp: string | null;
   } | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
+  const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
   useEffect(() => {
     const subscriber = api.createRealtimeSubscriber?.();
     if (!subscriber) return;
@@ -184,9 +185,11 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
       setLiveQuote(event.data);
     });
+    const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
     subscriber.subscribeQuote(symbol);
     return () => {
       unsubscribe();
+      unsubscribeStatus();
       subscriber.unsubscribeQuote(symbol);
       subscriber.disconnect();
     };
@@ -657,6 +660,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                 dataStatus={liveQuote ? 'LIVE' : 'STALE'}
                 timestamp={effectiveQuote.timestamp}
                 showAge
+                connectionStatus={quoteConnectionStatus}
               />
             </div>
           )}

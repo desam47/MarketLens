@@ -776,6 +776,8 @@ export interface LiveQuoteUpdateData {
   event_type: string;
 }
 
+export type RealtimeConnectionStatus = 'connecting' | 'open' | 'closed' | 'reconnecting';
+
 export type RealtimeEvent =
   | { type: 'bar_update'; symbol: string; timeframe: string; data: BarUpdateData }
   | { type: 'quote_update'; symbol: string; data: LiveQuoteUpdateData }
@@ -797,12 +799,12 @@ export class RealtimeSubscriber {
   private subs: Set<string> = new Set();
   private quoteSubs: Set<string> = new Set();
   private listeners: Set<(evt: RealtimeEvent) => void> = new Set();
-  private statusListeners: Set<(status: 'connecting' | 'open' | 'closed') => void> = new Set();
+  private statusListeners: Set<(status: RealtimeConnectionStatus) => void> = new Set();
   private reconnectAttempts = 0;
   private pingTimer: number | null = null;
   private reconnectTimer: number | null = null;
   private explicitlyClosed = false;
-  private currentStatus: 'connecting' | 'open' | 'closed' = 'closed';
+  private currentStatus: RealtimeConnectionStatus = 'closed';
 
   constructor(wsUrl: string) {
     this.wsUrl = wsUrl;
@@ -907,7 +909,7 @@ export class RealtimeSubscriber {
     return () => this.listeners.delete(listener);
   }
 
-  onStatus(listener: (status: 'connecting' | 'open' | 'closed') => void): () => void {
+  onStatus(listener: (status: RealtimeConnectionStatus) => void): () => void {
     this.statusListeners.add(listener);
     listener(this.currentStatus);
     return () => this.statusListeners.delete(listener);
@@ -935,7 +937,7 @@ export class RealtimeSubscriber {
 
   private scheduleReconnect(): void {
     if (this.explicitlyClosed) return;
-    this.setStatus('closed');
+    this.setStatus('reconnecting');
     const delay = Math.min(10000, 500 * Math.pow(2, this.reconnectAttempts));
     this.reconnectAttempts += 1;
     this.reconnectTimer = window.setTimeout(() => {
@@ -944,7 +946,7 @@ export class RealtimeSubscriber {
     }, delay);
   }
 
-  private setStatus(status: 'connecting' | 'open' | 'closed'): void {
+  private setStatus(status: RealtimeConnectionStatus): void {
     this.currentStatus = status;
     for (const l of Array.from(this.statusListeners)) l(status);
   }
