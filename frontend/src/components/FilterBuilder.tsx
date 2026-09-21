@@ -265,6 +265,15 @@ const FILTER_DEFS: FilterDef[] = [
       { key: 'max_pct', label: 'Max Relative Strength %', type: 'number', default: -1, min: -100, max: 100, step: 0.5 },
     ],
   },
+  {
+    type: 'exclude_earnings_within_days',
+    label: 'Exclude Upcoming Earnings',
+    description: 'Exclude symbols with a provider-estimated earnings date inside this window',
+    paramDefs: [{
+      key: 'days', label: 'Exclude Within', type: 'select', default: '7',
+      options: [{ value: '3', label: '3 days' }, { value: '7', label: '7 days' }, { value: '14', label: '14 days' }, { value: '30', label: '30 days' }],
+    }],
+  },
 ];
 
 const TYPE_TO_DEF = Object.fromEntries(FILTER_DEFS.map(d => [d.type, d]));

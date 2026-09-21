@@ -83,4 +83,16 @@ describe('FilterBuilder auto-apply debounce', () => {
     expect(mockApi.applyFilter).toHaveBeenCalledTimes(1);
     expect(onResults).toHaveBeenCalledTimes(1);
   });
+
+  it('adds the provider-backed upcoming-earnings exclusion with its default window', () => {
+    render(<FilterBuilder symbols={['AAPL']} onResults={jest.fn()} onClear={jest.fn()} />);
+    open();
+    fireEvent.change(document.querySelector('.filter-type-select') as HTMLSelectElement, {
+      target: { value: 'exclude_earnings_within_days' },
+    });
+    fireEvent.click(screen.getByText('+ Add Filter'));
+
+    expect(document.querySelector('.filter-item-type')).toHaveTextContent('Exclude Upcoming Earnings');
+    expect(screen.getByDisplayValue('7 days')).toBeInTheDocument();
+  });
 });

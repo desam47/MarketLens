@@ -465,6 +465,7 @@ class TestScannerFilterAPI(unittest.TestCase):
         self.assertIn("daily_bullish", types)
         self.assertIn("trend_score_gt", types)
         self.assertIn("mtf_alignment", types)
+        self.assertIn("exclude_earnings_within_days", types)
 
     def test_filter_returns_matching_results(self):
         aapl = _make_result("AAPL", scores={"momentum": 80.0, "volume": 60.0})

@@ -24,7 +24,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.api.ttl_cache import _scan_cache, ttl_cached
+from backend.market_data.services.calendar_service import events_for_symbol
 from backend.repositories.watchlist_repository import WatchlistRepository
+from backend.utils.timezone import now_ny
 
 from ...market_data.services.manager import market_data_manager
 from ...scanner.filters import (
@@ -43,6 +45,7 @@ router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 
 # All timestamps in responses → America/New_York (EST/EDT auto-handled).
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
+_EARNINGS_EXCLUSION_FILTER = "exclude_earnings_within_days"
 
 
 def _to_dashboard_tz(value: datetime | None) -> str:
@@ -246,6 +249,44 @@ def _build_filter(filters: list[_FilterRequest], match: str):
     return AndFilter(built)
 
 
+def _split_earnings_exclusion(filters: list[_FilterRequest]) -> tuple[list[_FilterRequest], int | None]:
+    """Extract the scanner's provider-backed earnings exclusion constraint."""
+    standard: list[_FilterRequest] = []
+    days: int | None = None
+    for item in filters:
+        if item.type.lower() != _EARNINGS_EXCLUSION_FILTER:
+            standard.append(item)
+            continue
+        try:
+            value = int(item.params.get("days", 7))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Earnings exclusion days must be an integer") from exc
+        if not 0 <= value <= 180:
+            raise HTTPException(status_code=400, detail="Earnings exclusion days must be between 0 and 180")
+        days = value if days is None else min(days, value)
+    return standard, days
+
+
+def _without_upcoming_earnings(results: list[ScanResult], days: int) -> list[ScanResult]:
+    today = now_ny().date()
+    included: list[ScanResult] = []
+    for result in results:
+        has_upcoming_earnings = False
+        for event in events_for_symbol(result.symbol):
+            if event.get("event_type") != "earnings" or not event.get("date"):
+                continue
+            try:
+                days_until = (datetime.fromisoformat(event["date"]).date() - today).days
+            except ValueError:
+                continue
+            if 0 <= days_until <= days:
+                has_upcoming_earnings = True
+                break
+        if not has_upcoming_earnings:
+            included.append(result)
+    return included
+
+
 def _scoped_cache(symbols: list[str] | None) -> list[ScanResult]:
     """Return cached scan results, narrowed to ``symbols`` when given.
 
@@ -322,7 +363,7 @@ def _empty_rankings(engine: RankingEngine) -> list[_NamedRankingResponse]:
 @router.get("/filter-types", response_model=list[str])
 async def list_filter_types():
     """List the filter ``type`` strings accepted by ``POST /api/scanner/filter``."""
-    return default_registry.list_types()
+    return [*default_registry.list_types(), _EARNINGS_EXCLUSION_FILTER]
 
 
 @router.post("/filter", response_model=list[_ScanResultResponse])
@@ -336,7 +377,8 @@ async def filter_scan_results(
     response reflects the latest data) and the result set is scoped to
     them. Otherwise every cached symbol is eligible.
     """
-    f = _build_filter(filter_body.filters, filter_body.match)
+    standard_filters, earnings_exclusion_days = _split_earnings_exclusion(filter_body.filters)
+    f = _build_filter(standard_filters, filter_body.match)
 
     if symbols:
         # Only scan symbols that aren't already cached — avoids duplicating
@@ -349,6 +391,8 @@ async def filter_scan_results(
         return []
 
     matched = [r for r in cache if f.matches(r)]
+    if earnings_exclusion_days is not None:
+        matched = await asyncio.to_thread(_without_upcoming_earnings, matched, earnings_exclusion_days)
     return [_result_to_dict(r) for r in matched]
 
 
@@ -364,7 +408,8 @@ async def get_named_rankings(
     An optional filter narrows the candidate set before ranking, and an
     optional ``symbols`` scope narrows it to those symbols only.
     """
-    f = _build_filter(filter_body.filters, filter_body.match)
+    standard_filters, earnings_exclusion_days = _split_earnings_exclusion(filter_body.filters)
+    f = _build_filter(standard_filters, filter_body.match)
 
     if symbols:
         # Only scan symbols that aren't already cached — avoids duplicating
@@ -376,7 +421,12 @@ async def get_named_rankings(
     if not cache:
         return _empty_rankings(engine)
 
-    ranked = engine.rank(cache, top_n=top_n, filter=f)
+    candidates = (
+        await asyncio.to_thread(_without_upcoming_earnings, cache, earnings_exclusion_days)
+        if earnings_exclusion_days is not None
+        else cache
+    )
+    ranked = engine.rank(candidates, top_n=top_n, filter=f)
     return [_serialize_named_ranking(rr) for rr in ranked.values()]
 
 
