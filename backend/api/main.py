@@ -197,7 +197,6 @@ async def lifespan(app: FastAPI):
                 on_stream_snapshot,
                 on_stream_trade,
             )
-            from backend.alerts.engine import alerts_engine
             from backend.market_data.streaming.webull_stream import get_webull_stream_client
 
             _stream = get_webull_stream_client()
