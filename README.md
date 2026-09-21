@@ -996,7 +996,8 @@ git push origin v2.2.0  # push the tag to the remote
 | No version tag in history yet        | `v0.0.0+g.54448ba`            |
 
 Every stamped value includes the exact Git commit time, for example:
-`Version: v2.1.0+3.g54448ba (2026-09-21 16:30:45)`.
+`v2.1.0+3.g54448ba (2026-09-21 16:30:45)`. The System Health page presents
+it as `Version: v2.1.0+3.g54448ba (2026-09-21 16:30:45)`.
 
 The hash suffix (`g54448ba`) is the short git commit so you always know
 which commit the running server is from.

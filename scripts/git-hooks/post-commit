@@ -15,7 +15,7 @@
 # hook file belongs to the ruff/mypy framework (`pre-commit install`
 # overwrites .git/hooks/pre-commit), so the two never collide.
 #
-# Format:  Version: <version> (YYYY-MM-DD HH:MM:SS)
+# Format:  <version> (YYYY-MM-DD HH:MM:SS)
 #
 # The timestamp comes from Git's commit object, not the clock when this hook
 # happens to run. That makes it an exact, stable record of when the code was
@@ -67,6 +67,6 @@ else
 fi
 
 COMMITTED_AT=$(git show -s --format='%cd' --date=format-local:'%Y-%m-%d %H:%M:%S' HEAD)
-printf 'Version: %s (%s)\n' "$VERSION" "$COMMITTED_AT" > "$VERSION_FILE"
+printf '%s (%s)\n' "$VERSION" "$COMMITTED_AT" > "$VERSION_FILE"
 
 echo "version.txt stamped: $(cat "$VERSION_FILE")"
