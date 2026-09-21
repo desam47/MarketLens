@@ -35,6 +35,25 @@ function formatTimestamp(timestamp: string | null | undefined): string {
   }).format(date);
 }
 
+/** Match the compact version stamp convention while keeping all UI times ET. */
+function formatVersionStyleTimestamp(timestamp: string | null | undefined): string {
+  if (!timestamp) return 'Never';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(timestamp);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? '';
+  return `${value('year')}-${value('month')}-${value('day')} ${value('hour')}:${value('minute')}:${value('second')}`;
+}
+
 function freshnessStatus(seconds: number | null | undefined): { label: string; className: string } {
   if (seconds == null || !Number.isFinite(seconds)) return { label: 'Unknown', className: 'status-warning' };
   if (seconds <= 60) return { label: 'Fresh', className: 'status-ok' };
@@ -201,7 +220,7 @@ const IngestionCard = memo(function IngestionCard({
           {ingestionStatus.last_quote_updates && (() => {
             const lastUpdate = Object.values(ingestionStatus.last_quote_updates)[0];
             return (
-              <p><strong>Last Quote Update:</strong> {String(lastUpdate || 'Never')}</p>
+              <p><strong>Last Quote Update:</strong> {formatVersionStyleTimestamp(lastUpdate)}</p>
             );
           })()}
           <div className="toggle-row">
