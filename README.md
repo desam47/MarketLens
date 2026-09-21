@@ -227,13 +227,18 @@ This creates all tables in `marketlens.db` and seeds the default AI prompt templ
 
 ```bash
 ./start.sh
-# OR manually (always from project root):
-python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001 --reload
+# OR, with the same .env-aware behavior:
+python scripts/run.py
 ```
 
-`./start.sh` also starts the background workers (step 4a) automatically. If
-you used the manual uvicorn command instead, start them yourself — without
-this, AI analysis and ticker backfill (step 6) will queue but never run:
+Both commands read `HOST`, `PORT`, `REACT_APP_API_BASE_URL`, `REDIS_URL`, and
+`REDIS_ENABLED` from the root `.env` (or from explicitly exported environment
+variables). They pass the API URL to the frontend and stop all child processes
+cleanly on `Ctrl+C`. When Redis is disabled, workers are skipped.
+
+If you run Uvicorn manually instead, start workers yourself when Redis is
+enabled — without them, AI analysis and ticker backfill (step 6) queue but do
+not run:
 
 ```bash
 rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers   # AI analysis jobs
@@ -244,7 +249,7 @@ rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker m
 default worker forks a process per job, and this project's webull provider
 SDK reproducibly segfaults the forked child.
 
-Interactive docs: http://localhost:5001/docs
+Interactive docs: `http://localhost:<PORT>/docs` (port `5001` by default).
 
 ### 5. Start the frontend
 
@@ -1011,7 +1016,7 @@ This happens when the backend runs from the `backend/` directory instead of the 
 
 1. Run `lsof -i :5001` to confirm only one backend instance
 2. Check `curl http://localhost:5001/api/scanner/top-movers?direction=bullish` — if it returns SPY, ingestion is reading from the wrong DB
-3. Fix: always start with `./start.sh` or `python3 -m uvicorn backend.api.main:app ...` from the project root
+3. Fix: always start with `./start.sh` or `python scripts/run.py` from the project root
 4. Delete the stray `backend/marketlens.db` file if it exists
 
 ### "Empty watchlist shows up in sidebar"
@@ -1034,6 +1039,6 @@ Run `DELETE FROM watchlists WHERE is_active=0` or use the UI to delete it. The `
 
 ### "Frontend can't reach backend"
 
-1. Confirm backend is running: `curl http://localhost:5001/api/health`
-2. Check `REACT_APP_API_BASE_URL` in `.env` — must be `http://localhost:5001/api`
+1. Confirm the backend is running at the `HOST` / `PORT` configured in `.env`.
+2. Check `REACT_APP_API_BASE_URL` in `.env` points to that backend's `/api` URL.
 3. Rebuild frontend if the env var changed: `cd frontend && npm run build`

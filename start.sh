@@ -1,85 +1,114 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
-# MarketLens startup script
-# Always run from the project root (this script's parent directory).
-# This ensures DATABASE_URL, .env, and all relative paths resolve correctly.
-# ─────────────────────────────────────────────────────────────────────────────
+# Start the local backend, frontend, and optional workers from the repository
+# root. Configuration is read without sourcing .env, so credential values are
+# never evaluated as shell code.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "📁 Working directory: $(pwd)"
+config_value() {
+    local key="$1"
+    local default_value="$2"
+    local value="${!key:-}"
 
-# Start the backend on port 5001
-echo "🚀 Starting backend on http://127.0.0.1:5001 ..."
-# --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
-# lifespan: migrations, cache flush, provider handshakes, engine seeding). Absolute path: the
-# relative "backend/tests/*" misses everything below backend/tests/<pkg>/.
-python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port 5001 --reload --reload-exclude "$SCRIPT_DIR/backend/tests" &
+    if [[ -z "$value" && -f "$SCRIPT_DIR/.env" ]]; then
+        value="$(awk -v key="$key" '
+            index($0, key "=") == 1 {
+                sub(/^[^=]*=/, "")
+                sub(/\r$/, "")
+                print
+                exit
+            }
+        ' "$SCRIPT_DIR/.env")"
+    fi
 
+    printf '%s' "${value:-$default_value}"
+}
+
+BACKEND_HOST="$(config_value HOST "0.0.0.0")"
+BACKEND_PORT="$(config_value PORT "5001")"
+if ! [[ "$BACKEND_PORT" =~ ^[0-9]+$ ]] || ((BACKEND_PORT < 1 || BACKEND_PORT > 65535)); then
+    echo "PORT must be an integer between 1 and 65535, got '$BACKEND_PORT'." >&2
+    exit 1
+fi
+
+DISPLAY_HOST="$BACKEND_HOST"
+if [[ "$DISPLAY_HOST" == "0.0.0.0" || "$DISPLAY_HOST" == "::" ]]; then
+    DISPLAY_HOST="localhost"
+elif [[ "$DISPLAY_HOST" == *:* && "$DISPLAY_HOST" != \[* ]]; then
+    DISPLAY_HOST="[$DISPLAY_HOST]"
+fi
+
+BACKEND_URL="http://$DISPLAY_HOST:$BACKEND_PORT"
+API_BASE_URL="$(config_value REACT_APP_API_BASE_URL "$BACKEND_URL/api")"
+REDIS_URL="$(config_value REDIS_URL "redis://localhost:6379/0")"
+REDIS_ENABLED="$(config_value REDIS_ENABLED "true")"
+PIDS=()
+
+cleanup() {
+    local status=$?
+    trap - EXIT INT TERM
+    echo "\n🛑 Shutting down..."
+    for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    wait "${PIDS[@]}" 2>/dev/null || true
+    exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
+echo "📁 Working directory: $SCRIPT_DIR"
+echo "🚀 Starting backend on $BACKEND_URL ..."
+# Reload excludes tests so editing them does not restart the whole application.
+python -m uvicorn backend.api.main:app \
+    --host "$BACKEND_HOST" \
+    --port "$BACKEND_PORT" \
+    --reload \
+    --reload-exclude "$SCRIPT_DIR/backend/tests" &
 BACKEND_PID=$!
-echo "Backend PID: $BACKEND_PID"
+PIDS+=("$BACKEND_PID")
 
-# Start the frontend (requires separate terminal in most setups)
-# If running via CRA:
-if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
-    echo "🚀 Starting frontend on http://localhost:3000 ..."
-    cd frontend && npm start &
-    FRONTEND_PID=$!
-    echo "Frontend PID: $FRONTEND_PID"
-    cd "$SCRIPT_DIR"
+if [[ -d "frontend" && -f "frontend/package.json" ]]; then
+    if command -v npm >/dev/null 2>&1; then
+        echo "🎨 Starting frontend on http://localhost:3000 (API: $API_BASE_URL) ..."
+        (
+            cd frontend
+            BROWSER=none REACT_APP_API_BASE_URL="$API_BASE_URL" npm start
+        ) &
+        PIDS+=("$!")
+    else
+        echo "⚠️  npm was not found — backend is running without the frontend."
+    fi
 fi
 
-# RQ workers — AI analysis jobs (marketlens-workers) and symbol-history
-# backfill (marketlens-backfill, run twice for the old concurrency-cap-of-2
-# equivalent). Without these, POST /api/ai/jobs and adding a ticker to a
-# watchlist both silently queue a job that nothing ever consumes — found via
-# a 2026-09-08 completeness audit: this script (and every other documented
-# run path in the repo) started only the API + frontend, never a worker, so
-# background jobs never processed by default under a normal `./start.sh`.
-# Soft-fail if `rq`/Redis isn't set up — the app still runs without workers,
-# it just won't process background jobs (foreground quote/bar/chart data is
-# unaffected either way).
-WORKER_PIDS=()
-if command -v rq >/dev/null 2>&1; then
-    echo "🚀 Starting AI analysis worker (marketlens-workers) ..."
-    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers &
-    WORKER_PIDS+=($!)
-    echo "🚀 Starting backfill worker (marketlens-backfill x1) ..."
-    # One backfill worker, not two. Two workers run backfill jobs concurrently
-    # and, together with the live 1m ingestion loop, all instantiate a Webull
-    # provider at once — enough to trip Webull's REST 429 (TOO_MANY_REQUESTS)
-    # on the /openapi/config token endpoint, which starves the live 1m bar
-    # feed and leaves the "latest bar" frozen. One worker serializes the
-    # heavy historical fetches so the live loop keeps quota to write fresh
-    # 1m bars. (Reverting to 2 just requires duplicating the line below.)
-    rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill &
-    WORKER_PIDS+=($!)
-else
-    echo "⚠️  'rq' CLI not found — skipping background workers."
-    echo "    AI analysis jobs and ticker backfills will queue but not run"
-    echo "    until you install it (pip install rq) and restart."
-fi
+case "$(printf '%s' "$REDIS_ENABLED" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+        if command -v rq >/dev/null 2>&1; then
+            echo "🚀 Starting AI analysis worker (marketlens-workers) ..."
+            rq worker --url "$REDIS_URL" --worker-class rq.worker.SimpleWorker marketlens-workers &
+            PIDS+=("$!")
+            echo "🚀 Starting backfill worker (marketlens-backfill x1) ..."
+            rq worker --url "$REDIS_URL" --worker-class rq.worker.SimpleWorker marketlens-backfill &
+            PIDS+=("$!")
+        else
+            echo "⚠️  'rq' CLI not found — skipping background workers."
+        fi
+        ;;
+    *)
+        echo "ℹ️  Redis is disabled — skipping background workers."
+        ;;
+esac
 
 echo ""
 echo "✅ MarketLens started!"
-echo "   Backend:  http://127.0.0.1:5001"
+echo "   Backend:  $BACKEND_URL"
 echo "   Frontend: http://localhost:3000"
-if [ ${#WORKER_PIDS[@]} -gt 0 ]; then
-    echo "   Workers:  ${#WORKER_PIDS[@]} running (AI jobs + backfill)"
-fi
-echo ""
+echo "   API Docs: $BACKEND_URL/docs"
 echo "Press Ctrl+C to stop all services."
 
-# Wait for any process to exit
-# "${WORKER_PIDS[@]}" inside an already-double-quoted string still splits
-# into separate words per element (bash's @-array quirk survives nesting),
-# which broke trap's argument parsing — it saw extra "signal name"
-# arguments instead of one command string (confirmed live: "trap: 19282:
-# invalid signal specification" on the very first ./start.sh run after
-# this file added worker processes). "${WORKER_PIDS[*]}" joins into one
-# plain string first, which trap's single command-string argument expects.
-WORKER_PIDS_STR="${WORKER_PIDS[*]}"
-trap "kill $BACKEND_PID $FRONTEND_PID $WORKER_PIDS_STR 2>/dev/null; exit" INT TERM
-wait
+wait "$BACKEND_PID"

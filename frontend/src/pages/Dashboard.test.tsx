@@ -50,4 +50,19 @@ describe('Dashboard layouts', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save layout' }));
     expect(screen.getByText('Market context card')).toBeInTheDocument();
   });
+
+  it('shows a helpful empty state when the dashboard has no trend data', async () => {
+    render(<Dashboard symbol="SPY" onSymbolChange={jest.fn()} />);
+
+    expect(await screen.findByText('No trend data available')).toBeInTheDocument();
+  });
+
+  it('keeps the dashboard usable when trend loading fails', async () => {
+    jest.spyOn(api, 'getTrends').mockRejectedValue(new Error('Trend provider timed out'));
+
+    render(<Dashboard symbol="SPY" onSymbolChange={jest.fn()} />);
+
+    expect(await screen.findByText(/Failed to load trends: Trend provider timed out/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Market Analysis Dashboard' })).toBeInTheDocument();
+  });
 });

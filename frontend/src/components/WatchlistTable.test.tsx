@@ -190,3 +190,19 @@ describe('narrow viewport', () => {
     await waitFor(() => expect(screen.getAllByRole('columnheader')).toHaveLength(6));
   });
 });
+
+describe('empty and error states', () => {
+  it('explains when the selected watchlist has no symbols', async () => {
+    await renderTable([]);
+
+    expect(screen.getByText('No symbols in this watchlist.')).toBeInTheDocument();
+  });
+
+  it('shows a failed or timed-out scanner request instead of an empty table', async () => {
+    mockApi.getWatchlistScan.mockRejectedValue(new Error('Watchlist scan timed out'));
+
+    render(<WatchlistTable watchlistId={1} onSelectSymbol={jest.fn()} />);
+
+    expect(await screen.findByText(/Watchlist scan timed out/)).toBeInTheDocument();
+  });
+});
