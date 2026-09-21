@@ -661,6 +661,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                 timestamp={effectiveQuote.timestamp}
                 showAge
                 connectionStatus={quoteConnectionStatus}
+                provider={liveQuote?.provider}
               />
             </div>
           )}

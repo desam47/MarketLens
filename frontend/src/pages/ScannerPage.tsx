@@ -280,6 +280,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                       dataStatus={result.quote?.data_status}
                       freshness={result.explanation?.data_freshness?.status}
                       timestamp={result.quote?.timestamp ?? result.timestamp}
+                      provider={result.quote?.provider ?? result.explanation?.data_freshness?.provider}
                     />
                     <span className="scanner-result-price">{result.quote?.price != null ? `$${result.quote.price.toFixed(2)}` : '—'}</span>
                   </button>

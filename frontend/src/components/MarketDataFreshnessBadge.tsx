@@ -12,6 +12,7 @@ interface MarketDataFreshnessBadgeProps {
   showAge?: boolean;
   connectionStatus?: 'connecting' | 'open' | 'closed' | 'reconnecting';
   staleAfterSeconds?: number;
+  provider?: string | null;
 }
 
 const labels: Record<BadgeState, string> = {
@@ -75,6 +76,7 @@ export function MarketDataFreshnessBadge({
   showAge = false,
   connectionStatus,
   staleAfterSeconds = 15,
+  provider,
 }: MarketDataFreshnessBadgeProps) {
   const startupMode = useStartupMode();
   const [now, setNow] = useState(() => Date.now());
@@ -101,6 +103,7 @@ export function MarketDataFreshnessBadge({
     : staleByAge ? 'stale' : connectionState ?? sourceState;
   const label = startupMode === 'api' ? `Paused · ${labels[state]}` : labels[state];
   const age = showAge ? formatAge(computedAge, timestamp) : null;
+  const providerLabel = provider ? provider.toUpperCase() : null;
   const title = startupMode === 'api'
     ? 'STARTUP_MODE=api is active, so live market-data updates are paused.'
     : connectionState
@@ -116,7 +119,7 @@ export function MarketDataFreshnessBadge({
   return (
     <span className={`market-data-freshness market-data-freshness-${state}`} title={title}>
       <span className="market-data-freshness-dot" />
-      {label}{age ? ` · ${age}` : ''}
+      {label}{providerLabel ? ` · ${providerLabel}` : ''}{age ? ` · ${age}` : ''}
     </span>
   );
 }

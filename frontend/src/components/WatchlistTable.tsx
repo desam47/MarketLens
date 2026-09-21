@@ -543,6 +543,7 @@ export function WatchlistTable({
           timestamp={latestLiveQuote?.timestamp}
           showAge
           connectionStatus={quoteConnectionStatus}
+          provider={latestLiveQuote?.provider}
         />
         <select
           className="rs-benchmark-select"
