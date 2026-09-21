@@ -30,6 +30,18 @@ mkdir -p logs
 
 BACKEND_PORT=5001
 FRONTEND_PORT=3000
+# Prefer the project's configured Python (currently the pyenv 3.12
+# interpreter). On this machine `python3` resolves to Homebrew Python 3.14,
+# which does not have the application's Uvicorn dependency installed.
+# PYTHON_BIN remains overridable for a virtual environment or another local
+# interpreter when needed.
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
+
+if ! "$PYTHON_BIN" -m uvicorn --version >/dev/null 2>&1; then
+    echo "$(date): $PYTHON_BIN cannot import uvicorn; backend was not started" >> logs/restart_dev.log
+    echo "Unable to start backend: $PYTHON_BIN cannot import uvicorn." >&2
+    exit 1
+fi
 
 # Give the HTTP response for the request that triggered this a moment to
 # actually reach the client before we kill the process serving it.
@@ -67,7 +79,7 @@ sleep 1
 # start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
 # only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
 # the suite) still reloaded the server.
-nohup python3 -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
+nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
     --reload-exclude "$SCRIPT_DIR/backend/tests" \
     >> logs/backend.log 2>&1 &
 disown
