@@ -26,6 +26,17 @@ def _env_value(name: str, default: str) -> str:
     return os.environ.get(name) or _DOTENV_VALUES.get(name) or default
 
 
+def _debug_value() -> bool:
+    """Read a valid debug value, preferring the local file over host noise."""
+    raw_value = _DOTENV_VALUES.get("DEBUG") or os.environ.get("DEBUG") or "false"
+    normalized = raw_value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"DEBUG must be a boolean, got {raw_value!r}")
+
+
 def _display_host(host: str) -> str:
     """Return a browser-reachable representation of a listening host."""
     if host in {"0.0.0.0", "::"}:
@@ -37,6 +48,8 @@ def _display_host(host: str) -> str:
 class LocalConfig:
     host: str
     port: int
+    frontend_port: int
+    debug: bool
     api_base_url: str
     redis_url: str
     redis_enabled: bool
@@ -45,17 +58,29 @@ class LocalConfig:
     def backend_url(self) -> str:
         return f"http://{_display_host(self.host)}:{self.port}"
 
+    @property
+    def frontend_url(self) -> str:
+        return f"http://localhost:{self.frontend_port}"
+
+
+def _port_value(name: str, default: str) -> int:
+    raw_port = _env_value(name, default)
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be an integer, got {raw_port!r}") from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"{name} must be between 1 and 65535, got {port}")
+    return port
+
 
 def load_config() -> LocalConfig:
     """Load validated startup values from the environment and root ``.env``."""
     host = _env_value("HOST", "0.0.0.0")
-    raw_port = _env_value("PORT", "5001")
-    try:
-        port = int(raw_port)
-    except ValueError as exc:
-        raise SystemExit(f"PORT must be an integer, got {raw_port!r}") from exc
-    if not 1 <= port <= 65535:
-        raise SystemExit(f"PORT must be between 1 and 65535, got {port}")
+    port = _port_value("PORT", "5001")
+    frontend_port = _port_value("FRONTEND_PORT", "3000")
+    if port == frontend_port:
+        raise SystemExit("PORT and FRONTEND_PORT must use different values")
 
     backend_url = f"http://{_display_host(host)}:{port}"
     redis_enabled = _env_value("REDIS_ENABLED", "true").lower() in {
@@ -67,10 +92,24 @@ def load_config() -> LocalConfig:
     return LocalConfig(
         host=host,
         port=port,
+        frontend_port=frontend_port,
+        debug=_debug_value(),
         api_base_url=_env_value("REACT_APP_API_BASE_URL", f"{backend_url}/api"),
         redis_url=_env_value("REDIS_URL", "redis://localhost:6379/0"),
         redis_enabled=redis_enabled,
     )
+
+
+def _backend_env(config: LocalConfig) -> dict[str, str]:
+    """Pin child settings so unrelated parent-shell variables cannot override .env."""
+    return {
+        **os.environ,
+        "DEBUG": str(config.debug).lower(),
+        "HOST": config.host,
+        "PORT": str(config.port),
+        "REDIS_URL": config.redis_url,
+        "REDIS_ENABLED": str(config.redis_enabled).lower(),
+    }
 
 
 def start_backend(config: LocalConfig) -> subprocess.Popen:
@@ -92,18 +131,20 @@ def start_backend(config: LocalConfig) -> subprocess.Popen:
             str(ROOT / "backend" / "tests"),
         ],
         cwd=ROOT,
+        env=_backend_env(config),
     )
 
 
 def start_frontend(config: LocalConfig) -> subprocess.Popen:
     """Start React with the configured backend API URL."""
-    print(f"🎨 Starting frontend on http://localhost:3000 (API: {config.api_base_url})")
+    print(f"🎨 Starting frontend on {config.frontend_url} (API: {config.api_base_url})")
     return subprocess.Popen(
         ["npm", "start"],
         cwd=ROOT / "frontend",
         env={
             **os.environ,
             "BROWSER": "none",
+            "PORT": str(config.frontend_port),
             "REACT_APP_API_BASE_URL": config.api_base_url,
         },
     )
@@ -134,8 +175,8 @@ def start_workers(config: LocalConfig) -> list[subprocess.Popen]:
     print("🚀 Starting AI analysis worker (marketlens-workers)")
     print("🚀 Starting backfill worker (marketlens-backfill x1)")
     return [
-        subprocess.Popen([*worker_args, "marketlens-workers"], cwd=ROOT),
-        subprocess.Popen([*worker_args, "marketlens-backfill"], cwd=ROOT),
+        subprocess.Popen([*worker_args, "marketlens-workers"], cwd=ROOT, env=_backend_env(config)),
+        subprocess.Popen([*worker_args, "marketlens-backfill"], cwd=ROOT, env=_backend_env(config)),
     ]
 
 
@@ -175,7 +216,7 @@ def main() -> None:
 
         print("\n✅ Services running:")
         print(f"   • Backend API:  {config.backend_url}")
-        print("   • Frontend:     http://localhost:3000")
+        print(f"   • Frontend:     {config.frontend_url}")
         print(f"   • API Docs:     {config.backend_url}/docs")
         print("Press Ctrl+C to stop all services.")
         backend.wait()

@@ -231,10 +231,11 @@ This creates all tables in `marketlens.db` and seeds the default AI prompt templ
 python scripts/run.py
 ```
 
-Both commands read `HOST`, `PORT`, `REACT_APP_API_BASE_URL`, `REDIS_URL`, and
-`REDIS_ENABLED` from the root `.env` (or from explicitly exported environment
-variables). They pass the API URL to the frontend and stop all child processes
-cleanly on `Ctrl+C`. When Redis is disabled, workers are skipped.
+Both commands read `HOST`, `PORT`, `FRONTEND_PORT`, `REACT_APP_API_BASE_URL`,
+`REDIS_URL`, and `REDIS_ENABLED` from the root `.env` (or from explicitly
+exported environment variables). They pass the API URL and a separate frontend
+port to CRA, then stop all child processes cleanly on `Ctrl+C`. When Redis is
+disabled, workers are skipped.
 
 If you run Uvicorn manually instead, start workers yourself when Redis is
 enabled — without them, AI analysis and ticker backfill (step 6) queue but do
