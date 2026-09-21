@@ -95,7 +95,7 @@ Local bounded retention and BBO/tape playback are implemented. Replaying derived
 
 ### 10. Better live market scanner — [~] Partial
 
-Breakouts, volume, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. Explicit VWAP/EMA alignment and event-driven scan refreshes remain.
+Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. Event-driven scan refreshes remain.
 
 - Breakouts
 - Volume spikes
@@ -179,9 +179,9 @@ Provider labels, freshness, live/stale state, fallback state, and auxiliary-data
 - Volatility
 - Maximum drawdown
 
-### 17. Trade journal — [~] Partial
+### 17. Trade journal — [x] Done
 
-Manual journal entries, screenshots, P&L, review notes, local persistence, and signal attachment are implemented. Automatic attachment of live tape and full market context remains.
+Manual journal entries, screenshots, P&L, review notes, local persistence, signal attachment, and automatic live market-context attachment are implemented.
 
 - Thesis
 - Entry and exit
@@ -194,7 +194,7 @@ Manual journal entries, screenshots, P&L, review notes, local persistence, and s
 
 ### 18. Historical replay — [~] Partial
 
-Candle replay, signal timing, performance summaries, and tick replay are implemented. Simulated entries/exits with stop/target tracking remain.
+Candle replay, signal timing, performance summaries, tick replay, simulated entries/exits, stop/target tracking, and simulated outcomes are implemented. Exact tick-level signal reconstruction remains.
 
 - Candle-by-candle replay
 - Tick-level replay
