@@ -2,6 +2,7 @@ import React, { useState, useEffect, lazy, Suspense } from 'react';
 import api from './services/api';
 import { Dashboard } from './pages/Dashboard';
 import { PageErrorBoundary } from './components/PageErrorBoundary';
+import { StartupModeNotice } from './components/StartupModeNotice';
 import './styles/App.css';
 
 // Phase 3.6.6: code-split all non-dashboard pages.
@@ -37,6 +38,7 @@ export default function App() {
   // want without disturbing (or being disturbed by) the rest of the app.
   // Lifted to App (not page-local) so it survives nav-tab switches.
   const [hubSymbol, setHubSymbol] = useState<string>('SPY');
+  const [startupMode, setStartupMode] = useState<'full' | 'api' | null>(null);
 
   useEffect(() => {
     // Fetch the first populated watchlist and set its first symbol as default.
@@ -57,6 +59,19 @@ export default function App() {
     }).catch(() => {
       // Network error — stay on SPY so the dashboard still renders.
     });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getSystemStatus()
+      .then(status => {
+        if (!cancelled) setStartupMode(status.startup_mode);
+      })
+      .catch(() => {
+        // The banner is supplementary; keep the application usable when
+        // a backend is still starting or an older server omits this route.
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -199,6 +214,7 @@ export default function App() {
         </ul>
       </nav>
       <main className="main-content">
+        <StartupModeNotice startupMode={startupMode} />
         {renderPage()}
       </main>
     </div>

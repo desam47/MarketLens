@@ -57,9 +57,19 @@ class TimeframesRequest(BaseModel):
     timeframes: list[str]
 
 
+def _require_full_startup_mode() -> None:
+    """Refuse live-ingestion actions while local API-only mode is active."""
+    if _settings.startup_mode == "api":
+        raise HTTPException(
+            status_code=409,
+            detail="Market-data ingestion is disabled while STARTUP_MODE=api. Set STARTUP_MODE=full and restart.",
+        )
+
+
 @router.post("/ingestion/start")
 async def start_ingestion(background_tasks: BackgroundTasks):
     """Start the market data ingestion service"""
+    _require_full_startup_mode()
     if not ingestion_service.is_running:
         background_tasks.add_task(ingestion_service.start)
         return {"message": "Market data ingestion service started"}
@@ -81,6 +91,7 @@ async def toggle_ingestion(background_tasks: BackgroundTasks):
     Returns the new state so the caller can update its UI without a
     follow-up ``GET /ingestion/status`` call.
     """
+    _require_full_startup_mode()
     if ingestion_service.is_running:
         ingestion_service.stop()
         return {"is_running": False, "message": "Ingestion service stopped"}

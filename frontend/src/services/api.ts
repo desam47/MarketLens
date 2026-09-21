@@ -155,6 +155,7 @@ export interface SystemStatus {
   service: string;
   version: string;
   debug: boolean;
+  startup_mode: 'full' | 'api';
   market_data_provider: string;
   market_data_fallback_providers: string[];
   ai_enabled: boolean;

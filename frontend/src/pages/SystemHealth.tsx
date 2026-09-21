@@ -94,6 +94,12 @@ const SystemConfigCard = memo(function SystemConfigCard({
           )}
           {systemStatus && (
             <>
+              <p>
+                <strong>Startup Mode:</strong>{' '}
+                <span className={`status-badge ${systemStatus.startup_mode === 'api' ? 'status-warning' : 'status-ok'}`}>
+                  {systemStatus.startup_mode.toUpperCase()}
+                </span>
+              </p>
               <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
               <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
               <p><strong>Version:</strong> {systemStatus.version}</p>
@@ -107,6 +113,12 @@ const SystemConfigCard = memo(function SystemConfigCard({
             systemStatus.market_data_fallback_providers.length > 0 && (
             <p><strong>Fallback Provider(s):</strong> {systemStatus.market_data_fallback_providers.join(', ')}</p>
           )}
+          <p>
+            <strong>Startup Mode:</strong>{' '}
+            <span className={`status-badge ${systemStatus.startup_mode === 'api' ? 'status-warning' : 'status-ok'}`}>
+              {systemStatus.startup_mode.toUpperCase()}
+            </span>
+          </p>
           <p><strong>Debug Mode:</strong> {systemStatus.debug ? 'Yes' : 'No'}</p>
           <p><strong>AI Enabled:</strong> {systemStatus.ai_enabled ? 'Yes' : 'No'}</p>
           <p><strong>Version:</strong> {systemStatus.version}</p>
@@ -123,12 +135,14 @@ const IngestionCard = memo(function IngestionCard({
   loading,
   error,
   toggling,
+  apiMode,
   onToggle,
 }: {
   ingestionStatus: IngestionStatus | null;
   loading: boolean;
   error: string | null;
   toggling: boolean;
+  apiMode: boolean;
   onToggle: () => void;
 }) {
   return (
@@ -164,13 +178,15 @@ const IngestionCard = memo(function IngestionCard({
               <input
                 type="checkbox"
                 checked={!!ingestionStatus.is_running}
-                disabled={toggling}
+                disabled={toggling || apiMode}
                 onChange={onToggle}
               />
               <span className="toggle-slider" />
             </label>
             <span className="toggle-label">
-              {toggling
+              {apiMode
+                ? 'API mode — live ingestion is disabled. Set STARTUP_MODE=full and restart.'
+                : toggling
                 ? 'Switching…'
                 : ingestionStatus.is_running
                 ? 'Ingestion is ON — click to stop'
@@ -396,7 +412,7 @@ export function SystemHealth() {
   }, [fetchAll]);
 
   const handleToggle = useCallback(async () => {
-    if (toggling || !ingestionStatus) return;
+    if (toggling || !ingestionStatus || systemStatus?.startup_mode === 'api') return;
     setToggling(true);
     try {
       const result = await api.toggleIngestion();
@@ -409,7 +425,7 @@ export function SystemHealth() {
     } finally {
       setToggling(false);
     }
-  }, [toggling, ingestionStatus]);
+  }, [toggling, ingestionStatus, systemStatus?.startup_mode]);
 
   const handleRestart = useCallback(async () => {
     if (restarting) return;
@@ -480,6 +496,7 @@ export function SystemHealth() {
           loading={ingestionLoading}
           error={ingestionError}
           toggling={toggling}
+          apiMode={systemStatus?.startup_mode === 'api'}
           onToggle={handleToggle}
         />
 
