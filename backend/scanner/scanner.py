@@ -365,6 +365,16 @@ class Scanner:
         return sum(values) / len(values) if values else None
 
     @staticmethod
+    def _ema(values: list[float], period: int) -> float | None:
+        if len(values) < period:
+            return None
+        alpha = 2.0 / (period + 1)
+        value = sum(values[:period]) / period
+        for price in values[period:]:
+            value = alpha * price + (1 - alpha) * value
+        return value
+
+    @staticmethod
     def _stddev(values: list[float]) -> float | None:
         if not values:
             return None
@@ -385,6 +395,7 @@ class Scanner:
             "volatility_5_pct",
             "volatility_20_pct",
             "relative_strength",
+            "vwap_20", "ema_9", "ema_20", "ema_50", "ema_alignment", "ema_crossover",
         ):
             result.add_indicator(key, None)
         for period in (10, 20, 50):
@@ -442,6 +453,19 @@ class Scanner:
                 result.add_indicator(f"sma_{period}", None)
                 result.add_indicator(f"price_vs_sma_{period}_pct", None)
         result.add_indicator("sma", moving_averages)
+
+        for period in (9, 20, 50):
+            result.add_indicator(f"ema_{period}", self._ema(closes, period))
+        ema9, ema20, ema50 = (result.indicator_values.get(f"ema_{p}") for p in (9, 20, 50))
+        alignment = "neutral"
+        if all(isinstance(v, (int, float)) for v in (ema9, ema20, ema50)):
+            alignment = "bullish" if ema9 > ema20 > ema50 else "bearish" if ema9 < ema20 < ema50 else "neutral"
+        result.add_indicator("ema_alignment", alignment)
+        result.add_indicator("ema_crossover", "bullish" if isinstance(ema9, (int, float)) and isinstance(ema20, (int, float)) and ema9 > ema20 else "bearish" if isinstance(ema9, (int, float)) and isinstance(ema20, (int, float)) and ema9 < ema20 else "neutral")
+        vwap_bars = bars[-min(20, len(bars)):]
+        notional = sum(((float(b.high) + float(b.low) + float(b.close)) / 3.0) * max(0.0, float(b.volume or 0)) for b in vwap_bars)
+        total_volume = sum(max(0.0, float(b.volume or 0)) for b in vwap_bars)
+        result.add_indicator("vwap_20", notional / total_volume if total_volume else None)
 
         # Breakout/breakdown levels exclude the current bar. This avoids
         # making every symbol with a new all-time high look like a breakout
@@ -796,6 +820,19 @@ class Scanner:
                 elif relative_strength <= -1.0:
                     signals.append("RELATIVE_STRENGTH_UNDERPERFORMER")
 
+            if result.indicator_values.get("ema_alignment") == "bullish":
+                signals.append("EMA_BULLISH_ALIGNMENT")
+            elif result.indicator_values.get("ema_alignment") == "bearish":
+                signals.append("EMA_BEARISH_ALIGNMENT")
+            if result.indicator_values.get("ema_crossover") == "bullish":
+                signals.append("EMA_BULLISH_CROSSOVER")
+            elif result.indicator_values.get("ema_crossover") == "bearish":
+                signals.append("EMA_BEARISH_CROSSOVER")
+            vwap = result.indicator_values.get("vwap_20")
+            current_price = result.indicator_values.get("price")
+            if isinstance(current_price, (int, float)) and isinstance(vwap, (int, float)):
+                signals.append("ABOVE_VWAP" if current_price >= vwap else "BELOW_VWAP")
+
             # Tape (Time & Sales) order-flow signals — only when the tape
             # subsystem is enabled and streaming (best-effort; a cold
             # engine just returns neutral / zero counts).
@@ -821,22 +858,22 @@ class Scanner:
                     # composable filter endpoint can evaluate the same shared
                     # microstructure snapshot without additional stream work.
                     result.indicator_values.update({
-                        "tape_pressure": snap["pressure"],
-                        "tape_block_count": snap["block_count_5m"],
-                        "tape_acceleration": snap["tape_accel"],
-                        "tape_trade_velocity": snap["trade_velocity"],
-                        "tape_volume_acceleration": snap["volume_accel"],
-                        "tape_recent_buy_ratio": snap["recent_buy_ratio"],
+                        "tape_pressure": snap.get("pressure", "neutral"),
+                        "tape_block_count": snap.get("block_count_5m", 0),
+                        "tape_acceleration": snap.get("tape_accel"),
+                        "tape_trade_velocity": snap.get("trade_velocity"),
+                        "tape_volume_acceleration": snap.get("volume_accel"),
+                        "tape_recent_buy_ratio": snap.get("recent_buy_ratio"),
                     })
-                    if snap["pressure"] == "heavy_buy":
+                    if snap.get("pressure") == "heavy_buy":
                         signals.append("HEAVY_BUY_PRESSURE")
-                    elif snap["pressure"] == "heavy_sell":
+                    elif snap.get("pressure") == "heavy_sell":
                         signals.append("HEAVY_SELL_PRESSURE")
-                    if snap["block_count_5m"] > 0:
+                    if snap.get("block_count_5m", 0) > 0:
                         signals.append("BLOCK_ACTIVITY")
-                    if isinstance(snap["tape_accel"], (int, float)) and snap["tape_accel"] >= 1.5:
+                    if isinstance(snap.get("tape_accel"), (int, float)) and snap["tape_accel"] >= 1.5:
                         signals.append("TRADE_RATE_SPIKE")
-                    if isinstance(snap["volume_accel"], (int, float)) and snap["volume_accel"] >= 1.5:
+                    if isinstance(snap.get("volume_accel"), (int, float)) and snap["volume_accel"] >= 1.5:
                         signals.append("LIVE_VOLUME_ACCELERATION")
                 except Exception:  # noqa: BLE001
                     pass

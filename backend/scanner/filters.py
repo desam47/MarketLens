@@ -579,6 +579,49 @@ class VolatilityExpansion(Filter):
         return f"volatility expansion (5/20 ratio ≥ {self.min_ratio:.2f})"
 
 
+class PriceAboveVWAP(Filter):
+    def __init__(self, min_distance_pct: float = 0.0):
+        self.min_distance_pct = float(min_distance_pct)
+
+    def matches(self, result: ScanResult) -> bool:
+        price, vwap = _price(result), result.indicator_values.get("vwap_20")
+        return isinstance(price, (int, float)) and isinstance(vwap, (int, float)) and price >= vwap * (1 + self.min_distance_pct / 100)
+
+    def describe(self) -> str:
+        return "price above VWAP (20 bars)"
+
+
+class PriceBelowVWAP(PriceAboveVWAP):
+    def matches(self, result: ScanResult) -> bool:
+        price, vwap = _price(result), result.indicator_values.get("vwap_20")
+        return isinstance(price, (int, float)) and isinstance(vwap, (int, float)) and price <= vwap * (1 - self.min_distance_pct / 100)
+
+    def describe(self) -> str:
+        return "price below VWAP (20 bars)"
+
+
+class EMAAlignment(Filter):
+    def __init__(self, direction: str = "bullish"):
+        self.direction = direction.lower()
+
+    def matches(self, result: ScanResult) -> bool:
+        return result.indicator_values.get("ema_alignment") == self.direction
+
+    def describe(self) -> str:
+        return f"EMA 9/20/50 alignment = {self.direction}"
+
+
+class EMACrossover(Filter):
+    def __init__(self, direction: str = "bullish"):
+        self.direction = direction.lower()
+
+    def matches(self, result: ScanResult) -> bool:
+        return result.indicator_values.get("ema_crossover") == self.direction
+
+    def describe(self) -> str:
+        return f"EMA 9/20 crossover = {self.direction}"
+
+
 class RelativeStrengthAbove(Filter):
     """Symbol return outperforms a configured benchmark by a percentage."""
 
@@ -749,6 +792,10 @@ _FILTER_REGISTRY: dict[str, type[Filter]] = {
     "volatility_expansion": VolatilityExpansion,
     "relative_strength_above": RelativeStrengthAbove,
     "relative_strength_below": RelativeStrengthBelow,
+    "price_above_vwap": PriceAboveVWAP,
+    "price_below_vwap": PriceBelowVWAP,
+    "ema_alignment": EMAAlignment,
+    "ema_crossover": EMACrossover,
     "tight_spread": TightSpread,
     "spread_widening": SpreadWidening,
     "tape_pressure": TapePressure,

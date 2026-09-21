@@ -266,6 +266,26 @@ const FILTER_DEFS: FilterDef[] = [
     ],
   },
   {
+    type: 'price_above_vwap', label: 'Price Above VWAP',
+    description: 'Price is above the 20-bar volume-weighted average price',
+    paramDefs: [{ key: 'min_distance_pct', label: 'Min Distance %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 }],
+  },
+  {
+    type: 'price_below_vwap', label: 'Price Below VWAP',
+    description: 'Price is below the 20-bar volume-weighted average price',
+    paramDefs: [{ key: 'min_distance_pct', label: 'Min Distance %', type: 'number', default: 0, min: 0, max: 100, step: 0.1 }],
+  },
+  {
+    type: 'ema_alignment', label: 'EMA Alignment',
+    description: 'EMA 9, 20, and 50 are aligned in one direction',
+    paramDefs: [{ key: 'direction', label: 'Direction', type: 'select', default: 'bullish', options: [{ value: 'bullish', label: 'Bullish' }, { value: 'bearish', label: 'Bearish' }] }],
+  },
+  {
+    type: 'ema_crossover', label: 'EMA Crossover',
+    description: 'EMA 9 is above or below EMA 20',
+    paramDefs: [{ key: 'direction', label: 'Direction', type: 'select', default: 'bullish', options: [{ value: 'bullish', label: 'Bullish' }, { value: 'bearish', label: 'Bearish' }] }],
+  },
+  {
     type: 'tight_spread',
     label: 'Tight Spread',
     description: 'Live best-bid/offer spread is within the selected width',
@@ -328,6 +348,7 @@ const FILTER_DEFS: FilterDef[] = [
 ];
 
 const TYPE_TO_DEF = Object.fromEntries(FILTER_DEFS.map(d => [d.type, d]));
+const SORTED_FILTER_DEFS = [...FILTER_DEFS].sort((left, right) => left.label.localeCompare(right.label));
 
 // ---------------------------------------------------------------------------
 // Props
@@ -551,7 +572,7 @@ export function FilterBuilder({
               onClick={e => e.stopPropagation()}
               title={activeDef?.description}
             >
-              {FILTER_DEFS.map(def => (
+              {SORTED_FILTER_DEFS.map(def => (
                 <option key={def.type} value={def.type}>{def.label}</option>
               ))}
             </select>
