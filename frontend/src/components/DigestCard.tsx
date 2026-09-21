@@ -139,6 +139,7 @@ export function DigestCard() {
       {error && (
         <div className="digest-error">
           <span>⚠️ {error}</span>
+          <button className="btn btn-small data-state-retry" onClick={() => void fetchDigest(session)}>Retry</button>
         </div>
       )}
 

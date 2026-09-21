@@ -273,6 +273,7 @@ export function NLSearchBar({ onSelectSymbol, placeholder = 'e.g. strongest bull
       {error && (
         <div className="nl-error">
           <span>⚠️ {error}</span>
+          <button className="btn btn-small data-state-retry" onClick={() => void search(query)}>Retry</button>
         </div>
       )}
 

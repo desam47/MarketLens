@@ -64,6 +64,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
   const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -127,7 +128,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
     })();
 
     return () => { cancelled = true; };
-  }, [alertTriggerId]);
+  }, [alertTriggerId, sessionAttempt]);
 
   const handleClear = useCallback(async () => {
     setClearing(true);
@@ -297,7 +298,12 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
         </p>
       </div>
 
-      {error && <div className="chat-panel-error">⚠️ {error}</div>}
+      {error && (
+        <div className="chat-panel-error">
+          ⚠️ {error}
+          <button className="btn btn-small data-state-retry" onClick={() => setSessionAttempt(attempt => attempt + 1)}>Retry</button>
+        </div>
+      )}
 
       <div className="chat-message-list" ref={listRef}>
         {loading && <p className="info-text">Opening chat…</p>}

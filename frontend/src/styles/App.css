@@ -1088,6 +1088,12 @@ h4 {
   font-style: italic;
 }
 
+.data-state-retry {
+  display: block;
+  margin: -0.75rem auto 1rem;
+  font-style: normal;
+}
+
 .info-text { color: var(--info); }
 .error-text { color: var(--danger); }
 
@@ -3050,6 +3056,23 @@ h4 {
 .scanner-result-reason, .scanner-result-price { color: var(--text-muted); font-size: 0.75rem; }
 .scanner-result-price { text-align: right; }
 .scanner-empty { margin-top: 1rem; color: var(--text-muted); }
+
+@media (max-width: 600px) {
+  .scanner-result-row {
+    grid-template-columns: 3.5rem 3.5rem minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .scanner-result-row .scanner-result-reason {
+    grid-column: 1 / -1;
+    line-height: 1.35;
+  }
+
+  .scanner-result-row .scanner-result-price {
+    grid-column: 3;
+    text-align: left;
+  }
+}
 
 @media (max-width: 900px) {
   .scanner-layout { grid-template-columns: 1fr; }

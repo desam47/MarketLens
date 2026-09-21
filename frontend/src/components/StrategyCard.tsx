@@ -5,6 +5,7 @@ import { formatETDateTime } from './chartMath';
 interface StrategyCardProps {
   strategy: StrategyData | null;
   error?: string | null;
+  onRetry?: () => void;
 }
 
 const strategyIcons: Record<string, string> = {
@@ -29,12 +30,13 @@ const strategyColors: Record<string, string> = {
   position: '#84cc16',
 };
 
-export const StrategyCard = memo(function StrategyCard({ strategy, error }: StrategyCardProps) {
+export const StrategyCard = memo(function StrategyCard({ strategy, error, onRetry }: StrategyCardProps) {
   if (error) {
     return (
       <div className="card strategy-card card-error">
         <h2>Strategy Recommendation</h2>
         <p className="empty-state">⚠ Failed to load: {error}</p>
+        {onRetry && <button className="btn btn-small data-state-retry" onClick={onRetry}>Retry</button>}
       </div>
     );
   }

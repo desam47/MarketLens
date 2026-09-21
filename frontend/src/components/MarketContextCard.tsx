@@ -21,14 +21,16 @@ const indexLabels: Record<string, string> = {
 interface MarketContextCardProps {
   context: MarketContextData | null;
   error?: string | null;
+  onRetry?: () => void;
 }
 
-export const MarketContextCard = memo(function MarketContextCard({ context, error }: MarketContextCardProps) {
+export const MarketContextCard = memo(function MarketContextCard({ context, error, onRetry }: MarketContextCardProps) {
   if (error) {
     return (
       <div className="card market-context-card card-error">
         <h2>Market Context</h2>
         <p className="empty-state">⚠ Failed to load: {error}</p>
+        {onRetry && <button className="btn btn-small data-state-retry" onClick={onRetry}>Retry</button>}
       </div>
     );
   }

@@ -300,6 +300,7 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
       {error && (
         <div className="ai-error">
           <p>⚠️ {error}</p>
+          <button className="btn btn-small data-state-retry" onClick={runAnalysis}>Retry</button>
         </div>
       )}
 

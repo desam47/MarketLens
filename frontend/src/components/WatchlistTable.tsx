@@ -461,6 +461,7 @@ export function WatchlistTable({
     return (
       <div className="watchlist-table-container">
         <p className="empty-state">⚠ {error}</p>
+        <button className="btn btn-small data-state-retry" onClick={() => void fetchData()}>Retry scan</button>
       </div>
     );
   }

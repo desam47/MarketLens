@@ -179,7 +179,7 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
         </button>
       </div>
 
-      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={() => void fetchWatchlists()} />}
       {info && (
         <div className="info-banner" onClick={() => setInfo(null)} role="status">
           {info}
@@ -334,7 +334,10 @@ export function WatchlistPage({ onSelectSymbol }: WatchlistPageProps) {
               />
             </>
           ) : (
-            <p className="empty-state">Select or create a watchlist to view symbols</p>
+            <div className="empty-state">
+              <p>{watchlists.length === 0 ? 'No watchlists yet.' : 'Select a watchlist to view its symbols.'}</p>
+              {watchlists.length === 0 && <p>Create one above to start organizing your symbols.</p>}
+            </div>
           )}
       </div>
     </div>

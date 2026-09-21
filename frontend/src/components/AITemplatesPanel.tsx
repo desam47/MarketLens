@@ -352,7 +352,7 @@ export function AITemplatesPanel({ symbol, timeframe }: AITemplatesPanelProps) {
         )}
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="error-banner">{error}<button className="btn btn-small data-state-retry" onClick={() => void fetchTemplates()}>Retry</button></div>}
       {runMessage && <div className={`info-banner ${runMessage.startsWith('Error') ? 'error-banner' : ''}`}>{runMessage}</div>}
 
       {/* ── List view ─────────────────────────────────────────────── */}

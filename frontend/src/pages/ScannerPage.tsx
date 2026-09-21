@@ -3,6 +3,7 @@ import api, { FilterSpec, ScanResult, Watchlist } from '../services/api';
 import { FilterBuilder } from '../components/FilterBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
 import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
+import { ErrorBanner } from '../components/ErrorBanner';
 
 interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
@@ -92,24 +93,61 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [presetName, setPresetName] = useState('');
   const [presetVersion, setPresetVersion] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [symbolsLoading, setSymbolsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasRunScan, setHasRunScan] = useState(false);
 
-  useEffect(() => {
-    api.getWatchlists().then(data => {
+  const fetchWatchlists = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.getWatchlists();
       setWatchlists(data);
       if (data.length > 0) setSelectedWatchlist(data[0].id);
-    }).catch(e => setError(e.message || 'Failed to load watchlists')).finally(() => setLoading(false));
+      else setSelectedWatchlist(null);
+    } catch (err: any) {
+      setWatchlists([]);
+      setSelectedWatchlist(null);
+      setError(err?.message || 'Failed to load watchlists');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedWatchlist == null) { setSymbols([]); return; }
-    api.getWatchlistSymbols(selectedWatchlist)
-      .then(rows => setSymbols(rows.filter(row => row.is_enabled).map(row => row.symbol)))
-      .catch(e => setError(e.message || 'Failed to load watchlist symbols'));
+    void fetchWatchlists();
+  }, [fetchWatchlists]);
+
+  const fetchSymbols = useCallback(async () => {
+    if (selectedWatchlist == null) {
+      setSymbols([]);
+      setSymbolsLoading(false);
+      setResults([]);
+      setHasRunScan(false);
+      return;
+    }
+    setSymbolsLoading(true);
+    setError(null);
+    setResults([]);
+    setHasRunScan(false);
+    try {
+      const rows = await api.getWatchlistSymbols(selectedWatchlist);
+      setSymbols(rows.filter(row => row.is_enabled).map(row => row.symbol));
+    } catch (err: any) {
+      setSymbols([]);
+      setError(err?.message || 'Failed to load watchlist symbols');
+    } finally {
+      setSymbolsLoading(false);
+    }
   }, [selectedWatchlist]);
+
+  useEffect(() => {
+    void fetchSymbols();
+  }, [fetchSymbols]);
 
   const handleResults = useCallback((next: ScanResult[]) => {
     setResults(next);
+    setHasRunScan(true);
     setError(null);
   }, []);
 
@@ -146,6 +184,11 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     [results],
   );
 
+  const retryLoad = () => {
+    if (selectedWatchlist == null) void fetchWatchlists();
+    else void fetchSymbols();
+  };
+
   return (
     <div className="scanner-page">
       <div className="page-title-row">
@@ -159,8 +202,14 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
         </select>
       </div>
 
-      {error && <div className="filter-error">{error}</div>}
-      {!loading && symbols.length === 0 && <div className="card scanner-empty">Add enabled symbols to a watchlist to scan them.</div>}
+      {error && <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={retryLoad} />}
+      {loading || symbolsLoading ? (
+        <div className="card scanner-empty" role="status">Loading scan universe…</div>
+      ) : watchlists.length === 0 ? (
+        <div className="card scanner-empty"><strong>No watchlists yet.</strong><br />Create a watchlist and add symbols before running a scan.</div>
+      ) : symbols.length === 0 ? (
+        <div className="card scanner-empty"><strong>No enabled symbols.</strong><br />Add or enable symbols in this watchlist to scan them.</div>
+      ) : null}
 
       <div className="scanner-layout">
         <div>
@@ -169,7 +218,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
               key={presetVersion}
               symbols={symbols}
               onResults={handleResults}
-              onClear={() => setResults([])}
+              onClear={() => { setResults([]); setHasRunScan(false); }}
               initialFilters={currentFilters}
               initialMatch={currentMatch}
               onFiltersChange={handleFiltersChange}
@@ -202,7 +251,13 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
 
           <div className="card scanner-results-card">
             <div className="scanner-results-header"><h2>Matches</h2><span>{results.length} symbols</span></div>
-            {sortedResults.length === 0 ? <p className="empty-state">Apply a filter to see matching symbols.</p> : (
+            {sortedResults.length === 0 ? (
+              <p className="empty-state">
+                {hasRunScan || currentFilters.length > 0
+                  ? 'No symbols matched this scan. Adjust a filter or choose another saved scan.'
+                  : 'Choose a quick scan or add filters to search your watchlist.'}
+              </p>
+            ) : (
               <div className="scanner-results-list">
                 {sortedResults.map(result => (
                   <button className="scanner-result-row" key={result.symbol} onClick={() => onSelectSymbol(result.symbol)}>

@@ -428,8 +428,13 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
       )}
 
       {loadError && (
-        <div className="error-text">⚠ Failed to load alerts: {loadError}</div>
+        <div className="error-text">
+          ⚠ Failed to load alerts: {loadError}
+          <button className="btn btn-small data-state-retry" onClick={() => { void refreshAlerts(); void refreshTriggers(); }}>Retry</button>
+        </div>
       )}
+
+      {loading && !loadError && <p className="empty-state" role="status">Loading alerts…</p>}
 
       {!loading && !loadError && alerts.length === 0 && (
         <p className="empty-state">No alerts configured.</p>

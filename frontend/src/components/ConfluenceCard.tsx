@@ -7,6 +7,7 @@ interface ConfluenceCardProps {
   error?: string | null;
   selectedPreset: string;
   onPresetChange: (preset: string) => void;
+  onRetry?: () => void;
 }
 
 const directionColors: Record<string, string> = {
@@ -135,7 +136,7 @@ function getExplanation(confluence: ConfluenceData): string {
   return `${alignment}% alignment across ${coverage}% of the configured timeframes supports this ${directionLabel(confluence.direction).toLowerCase()} bias.`;
 }
 
-export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange }: ConfluenceCardProps) {
+export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, selectedPreset, onPresetChange, onRetry }: ConfluenceCardProps) {
   // Hooks must run unconditionally on every render of this component
   // instance, so this has to sit above the early returns below (a
   // conditional useMemo would change hook count between a null and a
@@ -156,6 +157,7 @@ export const ConfluenceCard = memo(function ConfluenceCard({ confluence, error, 
           <PresetSelector selectedPreset={selectedPreset} onPresetChange={onPresetChange} />
         </div>
         <p className="empty-state">⚠ Failed to load: {error}</p>
+        {onRetry && <button className="btn btn-small data-state-retry" onClick={onRetry}>Retry</button>}
       </div>
     );
   }

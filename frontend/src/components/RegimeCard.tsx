@@ -6,6 +6,7 @@ interface RegimeCardProps {
   regime: RegimeData | null;
   sectorData?: SectorData | null;
   error?: string | null;
+  onRetry?: () => void;
 }
 
 // Phase 8: spec-compliant regime color map.
@@ -17,12 +18,13 @@ const regimeColors: Record<string, string> = {
   unknown: '#9ca3af',    // gray — insufficient data
 };
 
-export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error }: RegimeCardProps) {
+export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, onRetry }: RegimeCardProps) {
   if (error) {
     return (
       <div className="card regime-card card-error">
         <h2>Market Regime</h2>
         <p className="empty-state">⚠ Failed to load: {error}</p>
+        {onRetry && <button className="btn btn-small data-state-retry" onClick={onRetry}>Retry</button>}
       </div>
     );
   }

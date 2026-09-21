@@ -558,13 +558,13 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   const renderDashboardSection = (section: DashboardSectionId): React.ReactNode => {
     switch (section) {
       case 'regime':
-        return regimeLoading && !regime ? <SkeletonCard rows={4} /> : <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} />;
+        return regimeLoading && !regime ? <SkeletonCard rows={4} /> : <RegimeCard regime={regime} sectorData={sectorData} error={regimeError} onRetry={fetchRegime} />;
       case 'market_context':
-        return marketContextLoading && !marketContext ? <SkeletonCard rows={3} /> : <MarketContextCard context={marketContext} error={marketContextError} />;
+        return marketContextLoading && !marketContext ? <SkeletonCard rows={3} /> : <MarketContextCard context={marketContext} error={marketContextError} onRetry={fetchMarketContext} />;
       case 'confluence':
-        return confluenceLoading && !confluence ? <SkeletonCard rows={5} /> : <ConfluenceCard confluence={confluence} error={confluenceError} selectedPreset={selectedPreset} onPresetChange={setSelectedPreset} />;
+        return confluenceLoading && !confluence ? <SkeletonCard rows={5} /> : <ConfluenceCard confluence={confluence} error={confluenceError} selectedPreset={selectedPreset} onPresetChange={setSelectedPreset} onRetry={fetchConfluence} />;
       case 'strategy':
-        return strategyLoading && !strategy ? <SkeletonCard rows={3} /> : <StrategyCard strategy={strategy} error={strategyError} />;
+        return strategyLoading && !strategy ? <SkeletonCard rows={3} /> : <StrategyCard strategy={strategy} error={strategyError} onRetry={fetchStrategy} />;
       case 'trends':
         return (
           <div className="trends-section">
@@ -581,7 +581,12 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
               </>
             )}
             {trends.length === 0 && !trendsLoading && !trendsError && <p className="empty-state">No trend data available</p>}
-            {trendsError && <p className="empty-state">⚠ Failed to load trends: {trendsError}</p>}
+            {trendsError && (
+              <div className="empty-state">
+                <p>⚠ Failed to load trends: {trendsError}</p>
+                <button className="btn btn-small data-state-retry" onClick={fetchTrends}>Retry</button>
+              </div>
+            )}
           </div>
         );
       case 'movers':

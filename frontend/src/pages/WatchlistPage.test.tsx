@@ -15,7 +15,8 @@ describe('WatchlistPage empty and error states', () => {
 
     render(<WatchlistPage onSelectSymbol={jest.fn()} />);
 
-    expect(await screen.findByText('Select or create a watchlist to view symbols')).toBeInTheDocument();
+    expect(await screen.findByText('No watchlists yet.')).toBeInTheDocument();
+    expect(screen.getByText('Create one above to start organizing your symbols.')).toBeInTheDocument();
     expect(screen.queryByText('Watchlist table')).not.toBeInTheDocument();
   });
 
