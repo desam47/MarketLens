@@ -2357,6 +2357,11 @@ class MarketDataIngestionService:
         # bare naive value according to their own convention. Passing the raw
         # value here is what pinned the regime signal 4-5h in the past.
         for q in fresh_quotes:
+            # REST quote ingestion is the explicit fallback path when the
+            # Webull stream is unavailable; expose that state to opted-in
+            # symbol-status alerts without touching the live quote cache.
+            from backend.alerts.engine import alerts_engine
+            alerts_engine.evaluate_symbol_data_status(q.symbol, "rest_fallback", q.price)
             notified = engine_registry.dispatch_quote(
                 symbol=q.symbol,
                 price=q.price,

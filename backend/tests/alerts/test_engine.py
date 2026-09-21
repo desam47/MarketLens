@@ -20,6 +20,7 @@ from backend.alerts.engine import (
     PRICE_CONDITIONS,
     MICROSTRUCTURE_CONDITIONS,
     STREAM_CONDITIONS,
+    SYMBOL_STATUS_CONDITIONS,
     AlertsEngine,
 )
 
@@ -68,6 +69,7 @@ class TestConditionGroupConstants(unittest.TestCase):
             set(PRICE_CONDITIONS) | set(BAR_CONDITIONS) | set(AUX_CONDITIONS)
             | set(MICROSTRUCTURE_CONDITIONS) | {"signal_equals"}
             | set(STREAM_CONDITIONS)
+            | set(SYMBOL_STATUS_CONDITIONS)
         )
         self.assertEqual(set(VALID_CONDITION_TYPES), covered)
 

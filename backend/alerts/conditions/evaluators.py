@@ -58,6 +58,7 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "trade_rate_spike",
     "live_volume_acceleration",
     "stream_status",
+    "symbol_data_status",
 )
 
 
@@ -530,6 +531,10 @@ def _eval_stream_status(parameter: str, value: object) -> bool:
     return isinstance(value, dict) and value.get("status") == (parameter or "disconnected").lower()
 
 
+def _eval_symbol_data_status(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and value.get("status") == (parameter or "rest_fallback").lower()
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -561,6 +566,7 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "trade_rate_spike": _eval_trade_rate_spike,
     "live_volume_acceleration": _eval_live_volume_acceleration,
     "stream_status": _eval_stream_status,
+    "symbol_data_status": _eval_symbol_data_status,
 }
 
 

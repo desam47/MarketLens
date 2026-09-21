@@ -87,6 +87,7 @@ MICROSTRUCTURE_CONDITIONS: tuple[str, ...] = (
     "tape_pressure_reversal", "trade_rate_spike", "live_volume_acceleration",
 )
 STREAM_CONDITIONS: tuple[str, ...] = ("stream_status",)
+SYMBOL_STATUS_CONDITIONS: tuple[str, ...] = ("symbol_data_status",)
 
 BAR_CONDITIONS: tuple[str, ...] = (
     TREND_CONDITIONS
@@ -258,7 +259,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache[alert.id] = alert
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS + SYMBOL_STATUS_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -300,7 +301,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache.pop(alert.id, None)
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS + SYMBOL_STATUS_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -554,6 +555,14 @@ class AlertsEngine:
             alerts = [a for a in self._alerts_cache.values() if a.is_enabled and a.condition_type == "stream_status"]
         for alert in alerts:
             self._try_fire(alert, None, extra_value={"status": status.lower()})
+
+    def evaluate_symbol_data_status(self, symbol: str, status: str, price: float | None = None) -> None:
+        if not self._started:
+            return
+        with self._lock:
+            alerts = [a for a in self._alerts_cache.values() if a.is_enabled and a.symbol.upper() == symbol.upper() and a.condition_type in SYMBOL_STATUS_CONDITIONS]
+        for alert in alerts:
+            self._try_fire(alert, price, extra_value={"status": status.lower(), "symbol": symbol.upper()})
 
     # --- Bar callback (called from engine_registry, any thread) -----------
 
