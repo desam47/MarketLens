@@ -2361,7 +2361,13 @@ class MarketDataIngestionService:
             # Webull stream is unavailable; expose that state to opted-in
             # symbol-status alerts without touching the live quote cache.
             from backend.alerts.engine import alerts_engine
-            alerts_engine.evaluate_symbol_data_status(q.symbol, "rest_fallback", q.price)
+            try:
+                from backend.market_data.streaming.webull_stream import get_webull_stream_client
+                stream = get_webull_stream_client()
+                data_status = "live" if stream is not None and stream.is_live(q.symbol) else "stale" if stream is not None else "rest_fallback"
+            except Exception:  # noqa: BLE001
+                data_status = "rest_fallback"
+            alerts_engine.evaluate_symbol_data_status(q.symbol, data_status, q.price)
             notified = engine_registry.dispatch_quote(
                 symbol=q.symbol,
                 price=q.price,
