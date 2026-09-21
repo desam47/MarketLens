@@ -33,6 +33,8 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, as
     )
     if payload is None:
         return
+    from backend.services.tick_replay import tick_replay_store
+    tick_replay_store.record(symbol, payload)
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)
@@ -53,6 +55,8 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
     payload = live_quote_cache.update(symbol, price=price, volume=size, timestamp=ts, event_type="trade")
     if payload is None:
         return
+    from backend.services.tick_replay import tick_replay_store
+    tick_replay_store.record(symbol, payload)
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)
@@ -90,6 +94,8 @@ def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
     )
     if payload is None:
         return
+    from backend.services.tick_replay import tick_replay_store
+    tick_replay_store.record(symbol, payload)
     try:
         from backend.api.realtime.ws_router import publish_live_quote
         publish_live_quote(symbol, payload)

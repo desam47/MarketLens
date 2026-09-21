@@ -2034,6 +2034,10 @@ class ApiService {
     return this.fetch<TapeResponse>(`/tape/${encodeURIComponent(symbol)}`);
   }
 
+  async getTickReplay(symbol: string, limit = 2000): Promise<TickReplayResponse> {
+    return this.fetch<TickReplayResponse>(`/tape/${encodeURIComponent(symbol)}/replay?limit=${limit}`);
+  }
+
   // Phase 17: Natural-language search
   async nlSearch(
     payload: {
@@ -2534,6 +2538,13 @@ export interface TapeResponse {
   snapshot: TapeSnapshot;
   as_of: string;
 }
+
+export interface TickReplayEvent {
+  symbol: string; price: number | null; volume: number | null; bid: number | null; ask: number | null;
+  bid_size: number | null; ask_size: number | null; spread_bps: number | null;
+  timestamp: string | null; event_type: string;
+}
+export interface TickReplayResponse { symbol: string; events: TickReplayEvent[]; retained: number; }
 
 export interface ChatSession {
   id: number;

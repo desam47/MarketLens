@@ -3,6 +3,7 @@ import { HistoricalReplayPanel } from '../components/HistoricalReplayPanel';
 import { HistoricalSignalCard } from '../components/HistoricalSignalCard';
 import { SignalResearchDashboard } from '../components/SignalResearchDashboard';
 import { SignalAlertCenter } from '../components/SignalAlertCenter';
+import { TickReplayPanel } from '../components/TickReplayPanel';
 
 export function HistoricalSignalsPage() {
   useEffect(() => {
@@ -30,6 +31,7 @@ export function HistoricalSignalsPage() {
       </div>
       <SignalAlertCenter />
       <HistoricalReplayPanel />
+      <TickReplayPanel />
       <SignalResearchDashboard />
       <HistoricalSignalCard />
     </div>

@@ -82,4 +82,14 @@ async def get_tape_bars_endpoint(
         db.close()
 
 
+@router.get("/{symbol}/replay")
+async def get_tick_replay(symbol: str, limit: int = Query(default=2_000, ge=1, le=10_000)):
+    """Return locally retained live events, oldest first, with no provider fetch."""
+    _require_enabled()
+    from backend.services.tick_replay import tick_replay_store
+
+    events = tick_replay_store.get(symbol, limit)
+    return {"symbol": symbol.upper(), "events": events, "retained": len(events)}
+
+
 __all__ = ["router"]
