@@ -407,6 +407,7 @@ class TestEvaluateDispatcher(unittest.TestCase):
             "earnings_approaching",
             "spread_widening", "bid_ask_imbalance", "large_print_activity",
             "tape_pressure_reversal", "trade_rate_spike", "live_volume_acceleration",
+            "stream_status",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 

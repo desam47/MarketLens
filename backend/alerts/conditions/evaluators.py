@@ -57,6 +57,7 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "tape_pressure_reversal",
     "trade_rate_spike",
     "live_volume_acceleration",
+    "stream_status",
 )
 
 
@@ -525,6 +526,10 @@ def _eval_live_volume_acceleration(parameter: str, value: object) -> bool:
     return isinstance(value, dict) and isinstance(value.get("volume_accel"), (int, float)) and value["volume_accel"] >= _micro_threshold(parameter, 1.5)
 
 
+def _eval_stream_status(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and value.get("status") == (parameter or "disconnected").lower()
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -555,6 +560,7 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "tape_pressure_reversal": _eval_tape_pressure_reversal,
     "trade_rate_spike": _eval_trade_rate_spike,
     "live_volume_acceleration": _eval_live_volume_acceleration,
+    "stream_status": _eval_stream_status,
 }
 
 

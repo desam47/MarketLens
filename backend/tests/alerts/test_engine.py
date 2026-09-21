@@ -19,6 +19,7 @@ from backend.alerts.engine import (
     DEDUP_WINDOW_SECONDS,
     PRICE_CONDITIONS,
     MICROSTRUCTURE_CONDITIONS,
+    STREAM_CONDITIONS,
     AlertsEngine,
 )
 
@@ -66,6 +67,7 @@ class TestConditionGroupConstants(unittest.TestCase):
         covered = (
             set(PRICE_CONDITIONS) | set(BAR_CONDITIONS) | set(AUX_CONDITIONS)
             | set(MICROSTRUCTURE_CONDITIONS) | {"signal_equals"}
+            | set(STREAM_CONDITIONS)
         )
         self.assertEqual(set(VALID_CONDITION_TYPES), covered)
 

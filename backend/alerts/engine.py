@@ -86,6 +86,7 @@ MICROSTRUCTURE_CONDITIONS: tuple[str, ...] = (
     "spread_widening", "bid_ask_imbalance", "large_print_activity",
     "tape_pressure_reversal", "trade_rate_spike", "live_volume_acceleration",
 )
+STREAM_CONDITIONS: tuple[str, ...] = ("stream_status",)
 
 BAR_CONDITIONS: tuple[str, ...] = (
     TREND_CONDITIONS
@@ -257,7 +258,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache[alert.id] = alert
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -273,6 +274,8 @@ class AlertsEngine:
                     self._microstructure_alert_ids[sym].append(alert.id)
                 if not already_registered:
                     engine_registry.register("microstructure", sym, self._on_microstructure)
+            elif alert.condition_type in STREAM_CONDITIONS:
+                pass
             elif alert.condition_type in BAR_CONDITIONS:
                 if not hasattr(self, "_bar_alert_ids"):
                     self._bar_alert_ids = defaultdict(list)
@@ -297,7 +300,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache.pop(alert.id, None)
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS + STREAM_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -542,6 +545,15 @@ class AlertsEngine:
             snapshot["bid_ask_imbalance"] = round((bid_size - ask_size) / (bid_size + ask_size), 3)
         for alert in alerts:
             self._try_fire(alert, snapshot.get("price"), extra_value=snapshot)
+
+    def evaluate_stream_status(self, status: str) -> None:
+        """Fire opted-in stream health alerts without querying a provider."""
+        if not self._started:
+            return
+        with self._lock:
+            alerts = [a for a in self._alerts_cache.values() if a.is_enabled and a.condition_type == "stream_status"]
+        for alert in alerts:
+            self._try_fire(alert, None, extra_value={"status": status.lower()})
 
     # --- Bar callback (called from engine_registry, any thread) -----------
 

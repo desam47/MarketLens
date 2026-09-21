@@ -37,6 +37,7 @@ const CONDITIONS: { value: string; label: string; hint: string }[] = [
   { value: 'tape_pressure_reversal', label: 'Tape-pressure reversal (live)', hint: 'buy, sell, or any' },
   { value: 'trade_rate_spike', label: 'Trade-rate spike (live)', hint: 'minimum acceleration (e.g. 1.5)' },
   { value: 'live_volume_acceleration', label: 'Live volume acceleration', hint: 'minimum acceleration (e.g. 1.5)' },
+  { value: 'stream_status', label: 'Webull stream status', hint: 'connected or disconnected' },
   { value: 'signal_profile', label: 'Signal profile', hint: 'Use Signal Alert Center for guided filters' },
 ];
 
@@ -129,6 +130,8 @@ function conditionLabel(c: string, p: string): React.ReactNode {
       return <>live trade rate ≥ {p || '1.5'}× baseline</>;
     case 'live_volume_acceleration':
       return <>live volume ≥ {p || '1.5'}× baseline</>;
+    case 'stream_status':
+      return <>Webull stream is {p || 'disconnected'}</>;
     default:
       return <>{c}({p})</>;
   }

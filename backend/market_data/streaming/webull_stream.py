@@ -272,8 +272,14 @@ class WebullStreamClient:
 
     def _teardown_client(self) -> None:
         global _teardowns_in_flight
+        was_connected = self._connected
         c, self._client = self._client, None
         self._connected = False
+        if was_connected and self.on_status:
+            try:
+                self.on_status("disconnected")
+            except Exception:  # noqa: BLE001
+                pass
         if c is None:
             return
 
