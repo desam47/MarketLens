@@ -4,6 +4,7 @@ Repository for Experiment CRUD and query helpers.
 Mirrors the ``BacktestRepository`` style: self-managed SQLAlchemy
 session, method-per-query, returns ORM objects (no DTOs).
 """
+
 from datetime import datetime
 
 from sqlalchemy import desc
@@ -72,11 +73,7 @@ class ExperimentRepository:
     # --- Reads -----------------------------------------------------------
 
     def get(self, experiment_id: int) -> Experiment | None:
-        return (
-            self.db.query(Experiment)
-            .filter(Experiment.id == experiment_id)
-            .first()
-        )
+        return self.db.query(Experiment).filter(Experiment.id == experiment_id).first()
 
     def list_experiments(
         self,
@@ -86,11 +83,7 @@ class ExperimentRepository:
         q = self.db.query(Experiment)
         if status is not None:
             q = q.filter(Experiment.status == status)
-        return (
-            q.order_by(desc(Experiment.created_at))
-            .limit(limit)
-            .all()
-        )
+        return q.order_by(desc(Experiment.created_at)).limit(limit).all()
 
     # --- Updates ---------------------------------------------------------
 
@@ -162,6 +155,7 @@ class ExperimentRepository:
         run_ids: "list[int]",
     ) -> Experiment | None:
         import json
+
         exp = self.get(experiment_id)
         if exp is None:
             return None
@@ -181,6 +175,7 @@ class ExperimentRepository:
         # Cascade: delete all BacktestRuns that belong to this experiment.
         # run_ids are stored as a JSON array on the Experiment row.
         import json
+
         run_ids: list[int] = []
         if exp.run_ids_json:
             try:
@@ -189,11 +184,7 @@ class ExperimentRepository:
                 run_ids = []
 
         for rid in run_ids:
-            run = (
-                self.db.query(BacktestRun)
-                .filter(BacktestRun.id == rid)
-                .first()
-            )
+            run = self.db.query(BacktestRun).filter(BacktestRun.id == rid).first()
             if run:
                 self.db.delete(run)
 
@@ -209,6 +200,7 @@ class ExperimentRepository:
     ) -> list[BacktestRun]:
         """Return all BacktestRun rows linked to this experiment."""
         import json
+
         exp = self.get(experiment_id)
         if exp is None:
             return []
@@ -220,11 +212,7 @@ class ExperimentRepository:
                 return []
         if not run_ids:
             return []
-        return (
-            self.db.query(BacktestRun)
-            .filter(BacktestRun.id.in_(run_ids))
-            .all()
-        )
+        return self.db.query(BacktestRun).filter(BacktestRun.id.in_(run_ids)).all()
 
     def get_regime_breakdown(
         self,
@@ -246,11 +234,7 @@ class ExperimentRepository:
         if not run_ids:
             return _empty_breakdown()
 
-        trades = (
-            self.db.query(BacktestTrade)
-            .filter(BacktestTrade.run_id.in_(run_ids))
-            .all()
-        )
+        trades = self.db.query(BacktestTrade).filter(BacktestTrade.run_id.in_(run_ids)).all()
 
         buckets: dict[str, list[BacktestTrade]] = {
             "risk_on": [],
@@ -264,10 +248,7 @@ class ExperimentRepository:
                 regime = "unknown"
             buckets[regime].append(t)
 
-        return {
-            regime: _regime_stats(trades)
-            for regime, trades in buckets.items()
-        }
+        return {regime: _regime_stats(trades) for regime, trades in buckets.items()}
 
 
 # --- Helpers ------------------------------------------------------------

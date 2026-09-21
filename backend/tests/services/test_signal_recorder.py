@@ -7,6 +7,7 @@ Tests cover:
   - record_from_recent_bars (happy path + dedup)
   - outcome math (return_at_bar, mfe_mae)
 """
+
 import os
 import sys
 import unittest
@@ -39,8 +40,13 @@ class BarRow:
 
 # Helper to create a BarRow
 def _make_bar_row(
-    symbol: str, ts: datetime, close: float, high: float, low: float,
-    volume: float = 1_000_000.0, open_: float | None = None,
+    symbol: str,
+    ts: datetime,
+    close: float,
+    high: float,
+    low: float,
+    volume: float = 1_000_000.0,
+    open_: float | None = None,
 ):
     return BarRow(
         symbol=symbol,
@@ -54,7 +60,6 @@ def _make_bar_row(
 
 
 class TestSignalRecorderRecordSignal(unittest.TestCase):
-
     def setUp(self):
         self.engine = create_engine(
             "sqlite:///:memory:",
@@ -67,16 +72,17 @@ class TestSignalRecorderRecordSignal(unittest.TestCase):
         self.recorder = SignalRecorder()
         # Patch SessionLocal in the recorder module to use our test engine
         from backend.services import signal_recorder as rec_mod
-        self._sessionlocal_patch = patch.object(
-            rec_mod, "SessionLocal", lambda: self.Session()
-        )
+
+        self._sessionlocal_patch = patch.object(rec_mod, "SessionLocal", lambda: self.Session())
         self._sessionlocal_patch.start()
         self.addCleanup(self._sessionlocal_patch.stop)
 
     def tearDown(self):
         self.engine.dispose()
 
-    @patch("backend.services.signal_recorder.SignalRecorder._get_market_regime", return_value="risk_on")
+    @patch(
+        "backend.services.signal_recorder.SignalRecorder._get_market_regime", return_value="risk_on"
+    )
     def test_record_signal_inserts_row(self, _mock_regime):
         sig = self.recorder.record_signal(
             symbol="AAPL",
@@ -109,9 +115,7 @@ class TestSignalRecorderRecordSignal(unittest.TestCase):
         ts = datetime(2025, 1, 1)
         # Insert via repo first
         with self.Session() as db:
-            existing = HistoricalSignal(
-                symbol="AAPL", timeframe="1d", timestamp=ts, price=150.0
-            )
+            existing = HistoricalSignal(symbol="AAPL", timeframe="1d", timestamp=ts, price=150.0)
             db.add(existing)
             db.commit()
         # Recorder should skip
@@ -120,7 +124,6 @@ class TestSignalRecorderRecordSignal(unittest.TestCase):
 
 
 class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
-
     def setUp(self):
         self.engine = create_engine(
             "sqlite:///:memory:",
@@ -131,9 +134,8 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.recorder = SignalRecorder()
         from backend.services import signal_recorder as rec_mod
-        self._sessionlocal_patch = patch.object(
-            rec_mod, "SessionLocal", lambda: self.Session()
-        )
+
+        self._sessionlocal_patch = patch.object(rec_mod, "SessionLocal", lambda: self.Session())
         self._sessionlocal_patch.start()
         self.addCleanup(self._sessionlocal_patch.stop)
 
@@ -148,13 +150,20 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             close = close_start * (1 + 0.01 * i)
             high = close * 1.005
             low = close * 0.995
-            bars.append(dict(
-                symbol=symbol, timeframe="1d",
-                timestamp=ts, open=close - 0.5, high=high,
-                low=low, close=close,
-                volume=1_000_000, provider="test",
-                data_status="historical",
-            ))
+            bars.append(
+                dict(
+                    symbol=symbol,
+                    timeframe="1d",
+                    timestamp=ts,
+                    open=close - 0.5,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=1_000_000,
+                    provider="test",
+                    data_status="historical",
+                )
+            )
         with self.Session() as db:
             db.bulk_insert_mappings(BarModel, bars)
             db.commit()
@@ -162,8 +171,11 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
     def _seed_signal(self, symbol: str, ts: datetime, price: float, return_5b=None):
         with self.Session() as db:
             sig = HistoricalSignal(
-                symbol=symbol, timeframe="1d", timestamp=ts,
-                price=price, trend_state="bullish",
+                symbol=symbol,
+                timeframe="1d",
+                timestamp=ts,
+                price=price,
+                trend_state="bullish",
                 _outcome_missing=True,
             )
             db.add(sig)
@@ -219,13 +231,20 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         for i in range(10):
             ts = anchor_ts + timedelta(days=i + 1)
             close = 100.0 + i
-            bars.append(dict(
-                symbol="AAPL", timeframe="1d",
-                timestamp=ts, open=close - 0.5, high=close + 0.5,
-                low=close - 0.5, close=close,
-                volume=1_000_000, provider="test",
-                data_status="historical",
-            ))
+            bars.append(
+                dict(
+                    symbol="AAPL",
+                    timeframe="1d",
+                    timestamp=ts,
+                    open=close - 0.5,
+                    high=close + 0.5,
+                    low=close - 0.5,
+                    close=close,
+                    volume=1_000_000,
+                    provider="test",
+                    data_status="historical",
+                )
+            )
         with self.Session() as db:
             db.bulk_insert_mappings(BarModel, bars)
             db.commit()
@@ -272,13 +291,20 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             ts = aapl_anchor + timedelta(days=i)
             close = 100.0 + i
             with self.Session() as db:
-                db.add(BarModel(
-                    symbol="AAPL", timeframe="1d",
-                    timestamp=ts, open=close - 0.1, high=close + 0.1,
-                    low=close - 0.1, close=close,
-                    volume=1_000_000, provider="test",
-                    data_status="historical",
-                ))
+                db.add(
+                    BarModel(
+                        symbol="AAPL",
+                        timeframe="1d",
+                        timestamp=ts,
+                        open=close - 0.1,
+                        high=close + 0.1,
+                        low=close - 0.1,
+                        close=close,
+                        volume=1_000_000,
+                        provider="test",
+                        data_status="historical",
+                    )
+                )
                 db.commit()
 
         # MSFT: signal at Jan 1 + 15 future bars → partial fill (5b+10b filled, 20b None)
@@ -288,13 +314,20 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             ts = msft_anchor + timedelta(days=i)
             close = 100.0 + i
             with self.Session() as db:
-                db.add(BarModel(
-                    symbol="MSFT", timeframe="1d",
-                    timestamp=ts, open=close - 0.1, high=close + 0.1,
-                    low=close - 0.1, close=close,
-                    volume=1_000_000, provider="test",
-                    data_status="historical",
-                ))
+                db.add(
+                    BarModel(
+                        symbol="MSFT",
+                        timeframe="1d",
+                        timestamp=ts,
+                        open=close - 0.1,
+                        high=close + 0.1,
+                        low=close - 0.1,
+                        close=close,
+                        volume=1_000_000,
+                        provider="test",
+                        data_status="historical",
+                    )
+                )
                 db.commit()
 
         updated = self.recorder.backfill_outcomes(batch_size=50)
@@ -306,16 +339,16 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             msft_sig = db.query(HistoricalSignal).filter_by(symbol="MSFT").first()
 
         self.assertIsNotNone(aapl_sig)
-        self.assertIsNotNone(aapl_sig.return_5b)        # 5 bars → 5b filled
-        self.assertIsNone(aapl_sig.return_10b)           # <10 bars → None
-        self.assertIsNone(aapl_sig.return_20b)           # <20 bars → None
-        self.assertIsNotNone(aapl_sig.mfe)               # MFE needs 1 bar → filled
+        self.assertIsNotNone(aapl_sig.return_5b)  # 5 bars → 5b filled
+        self.assertIsNone(aapl_sig.return_10b)  # <10 bars → None
+        self.assertIsNone(aapl_sig.return_20b)  # <20 bars → None
+        self.assertIsNotNone(aapl_sig.mfe)  # MFE needs 1 bar → filled
         self.assertIsNotNone(aapl_sig.mae)
 
         self.assertIsNotNone(msft_sig)
-        self.assertIsNotNone(msft_sig.return_5b)         # 15 bars → 5b filled
-        self.assertIsNotNone(msft_sig.return_10b)        # 15 bars → 10b filled
-        self.assertIsNone(msft_sig.return_20b)           # <20 bars → None
+        self.assertIsNotNone(msft_sig.return_5b)  # 15 bars → 5b filled
+        self.assertIsNotNone(msft_sig.return_10b)  # 15 bars → 10b filled
+        self.assertIsNone(msft_sig.return_20b)  # <20 bars → None
         self.assertIsNotNone(msft_sig.mfe)
         self.assertIsNotNone(msft_sig.mae)
 
@@ -336,26 +369,40 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             ts = anchor + timedelta(days=i)
             close = price + i
             with self.Session() as db:
-                db.add(BarModel(
-                    symbol="AAPL", timeframe="1d",
-                    timestamp=ts, open=close - 0.1, high=close + 0.1,
-                    low=close - 0.1, close=close,
-                    volume=1_000_000, provider="test",
-                    data_status="historical",
-                ))
+                db.add(
+                    BarModel(
+                        symbol="AAPL",
+                        timeframe="1d",
+                        timestamp=ts,
+                        open=close - 0.1,
+                        high=close + 0.1,
+                        low=close - 0.1,
+                        close=close,
+                        volume=1_000_000,
+                        provider="test",
+                        data_status="historical",
+                    )
+                )
                 db.commit()
 
         # Signal B at Jan 7 (1 future bar)
         sig_b_ts = datetime(2025, 1, 7)
         self._seed_signal("AAPL", sig_b_ts, price)
         with self.Session() as db:
-            db.add(BarModel(
-                symbol="AAPL", timeframe="1d",
-                timestamp=datetime(2025, 1, 8),
-                open=110.1, high=110.2, low=110.0, close=110.1,
-                volume=1_000_000, provider="test",
-                data_status="historical",
-            ))
+            db.add(
+                BarModel(
+                    symbol="AAPL",
+                    timeframe="1d",
+                    timestamp=datetime(2025, 1, 8),
+                    open=110.1,
+                    high=110.2,
+                    low=110.0,
+                    close=110.1,
+                    volume=1_000_000,
+                    provider="test",
+                    data_status="historical",
+                )
+            )
             db.commit()
 
         updated = self.recorder.backfill_outcomes(batch_size=50)
@@ -374,17 +421,17 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         # Signal A (Jan 1): 5 bars available
         self.assertEqual(sigs[0].timestamp, anchor)
         self.assertIsNotNone(sigs[0].return_5b)
-        self.assertIsNone(sigs[0].return_10b)   # only 5 bars
+        self.assertIsNone(sigs[0].return_10b)  # only 5 bars
         self.assertIsNone(sigs[0].return_20b)
         self.assertIsNotNone(sigs[0].mfe)
         self.assertIsNotNone(sigs[0].mae)
 
         # Signal B (Jan 7): 1 bar available → only MFE/MAE
         self.assertEqual(sigs[1].timestamp, sig_b_ts)
-        self.assertIsNone(sigs[1].return_5b)    # 1 bar not enough for 5b
+        self.assertIsNone(sigs[1].return_5b)  # 1 bar not enough for 5b
         self.assertIsNone(sigs[1].return_10b)
         self.assertIsNone(sigs[1].return_20b)
-        self.assertIsNotNone(sigs[1].mfe)        # 1 bar → MFE/MAE filled
+        self.assertIsNotNone(sigs[1].mfe)  # 1 bar → MFE/MAE filled
         self.assertIsNotNone(sigs[1].mae)
 
 
@@ -401,9 +448,8 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         self.recorder = SignalRecorder()
         from backend.services import signal_recorder as rec_mod
-        self._sessionlocal_patch = patch.object(
-            rec_mod, "SessionLocal", lambda: self.Session()
-        )
+
+        self._sessionlocal_patch = patch.object(rec_mod, "SessionLocal", lambda: self.Session())
         self._sessionlocal_patch.start()
         self.addCleanup(self._sessionlocal_patch.stop)
 
@@ -417,11 +463,16 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         base = datetime(2025, 3, 1, 9, 30)
         bars = [
             BarModel(
-                symbol=sym, timeframe=tf,
+                symbol=sym,
+                timeframe=tf,
                 timestamp=base + timedelta(minutes=i),
-                open=100.0 + i * 0.1, high=100.5 + i * 0.1,
-                low=99.5 + i * 0.1, close=100.2 + i * 0.1,
-                volume=10_000, provider="test", data_status="historical",
+                open=100.0 + i * 0.1,
+                high=100.5 + i * 0.1,
+                low=99.5 + i * 0.1,
+                close=100.2 + i * 0.1,
+                volume=10_000,
+                provider="test",
+                data_status="historical",
             )
             for i in range(300)
         ]
@@ -458,10 +509,16 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         base = datetime(2025, 1, 1)
         bars = [
             BarModel(
-                symbol=sym, timeframe=tf,
+                symbol=sym,
+                timeframe=tf,
                 timestamp=base + timedelta(days=i),
-                open=100.0, high=101.0, low=99.0, close=100.0,
-                volume=1_000_000, provider="test", data_status="historical",
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                volume=1_000_000,
+                provider="test",
+                data_status="historical",
             )
             for i in range(50)
         ]
@@ -486,10 +543,16 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         base = datetime(2025, 3, 1, 9, 30)
         bars = [
             BarModel(
-                symbol=sym, timeframe=tf,
+                symbol=sym,
+                timeframe=tf,
                 timestamp=base + timedelta(minutes=i),
-                open=100.0, high=101.0, low=99.0, close=100.0,
-                volume=10_000, provider="test", data_status="historical",
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                volume=10_000,
+                provider="test",
+                data_status="historical",
             )
             for i in range(200)
         ]
@@ -506,7 +569,6 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
 
 
 class TestSignalRecorderHelpers(unittest.TestCase):
-
     def setUp(self):
         self.engine = create_engine(
             "sqlite:///:memory:",
@@ -520,13 +582,19 @@ class TestSignalRecorderHelpers(unittest.TestCase):
         self.engine.dispose()
 
     def test_return_at_bar_exact(self):
-        bars = [_make_bar_row("AAPL", datetime(2025, 1, i + 1), 100.0 + i * 5, 105.0, 95.0) for i in range(20)]
+        bars = [
+            _make_bar_row("AAPL", datetime(2025, 1, i + 1), 100.0 + i * 5, 105.0, 95.0)
+            for i in range(20)
+        ]
         # Anchor price = 100.0, bar[4] = 120.0 → (120-100)/100 = 20%
         result = self.recorder._return_at_bar(bars, 100.0, 5)
         self.assertAlmostEqual(result, 20.0)
 
     def test_return_at_bar_insufficient_bars(self):
-        bars = [_make_bar_row("AAPL", datetime(2025, 1, i + 1), 100.0 + i, 105.0, 95.0) for i in range(3)]
+        bars = [
+            _make_bar_row("AAPL", datetime(2025, 1, i + 1), 100.0 + i, 105.0, 95.0)
+            for i in range(3)
+        ]
         result = self.recorder._return_at_bar(bars, 100.0, 5)
         self.assertIsNone(result)
 
@@ -537,11 +605,11 @@ class TestSignalRecorderHelpers(unittest.TestCase):
         for i in range(20):
             close = 100.0
             high = 108.0 if i == 8 else 101.0  # peak at i=8
-            low = 93.0 if i == 12 else 99.5   # trough at i=12
+            low = 93.0 if i == 12 else 99.5  # trough at i=12
             bars.append(_make_bar_row("AAPL", datetime(2025, 1, i + 1), close, high, low))
         mfe, mae = self.recorder._mfe_mae(bars, 100.0)
-        self.assertAlmostEqual(mfe, 8.0)   # (108-100)/100*100
-        self.assertAlmostEqual(mae, -7.0)   # (93-100)/100*100
+        self.assertAlmostEqual(mfe, 8.0)  # (108-100)/100*100
+        self.assertAlmostEqual(mae, -7.0)  # (93-100)/100*100
 
     def test_mfe_mae_empty_bars(self):
         mfe, mae = self.recorder._mfe_mae([], 100.0)

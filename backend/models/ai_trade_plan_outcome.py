@@ -14,6 +14,7 @@ time_horizon's holding window says so.
 actionable entry/stop/targets (``TradePlan._check_consistency`` clears
 those fields for a non-entry call), so there's nothing to grade.
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, Index, Integer, String, Text
@@ -60,7 +61,9 @@ class AITradePlanOutcome(Base):
     risk_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_ny, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=now_ny, index=True
+    )
 
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="open", index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -68,9 +71,7 @@ class AITradePlanOutcome(Base):
     hit_target_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
-    __table_args__ = (
-        Index("ix_ai_trade_plan_outcomes_symbol_status", "symbol", "status"),
-    )
+    __table_args__ = (Index("ix_ai_trade_plan_outcomes_symbol_status", "symbol", "status"),)
 
     def __repr__(self):
         return (

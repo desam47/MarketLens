@@ -11,6 +11,7 @@ Covers:
   - is_available() returns True/False based on _data_client presence
   - Credentials are never logged or included in responses
 """
+
 import json
 import os
 import sys
@@ -30,10 +31,17 @@ from backend.market_data.providers.webull_provider import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakeWebullSettings:
     """Fake settings object matching the real WebullSettings shape."""
-    def __init__(self, app_key: str = "test_key", app_secret: str = "test_secret",
-                 use_sandbox: bool = True, enabled: bool = True):
+
+    def __init__(
+        self,
+        app_key: str = "test_key",
+        app_secret: str = "test_secret",
+        use_sandbox: bool = True,
+        enabled: bool = True,
+    ):
         self.app_key = app_key
         self.app_secret = app_secret
         self.use_sandbox = use_sandbox
@@ -46,6 +54,7 @@ def _make_provider(data_client_mock: MagicMock) -> WebullProvider:
     Patches the provider's __init__ so the SDK is never loaded and the
     provided data client mock is used directly.
     """
+
     def fake_init(self):
         self.name = "webull"
         self._settings = _FakeWebullSettings()
@@ -64,8 +73,7 @@ class TestWebullAuthErrors(unittest.TestCase):
     def test_missing_credentials_raises_auth_error(self):
         """Missing app_key raises WebullAuthError at init."""
         fake_settings = _FakeWebullSettings(app_key="", app_secret="test_secret")
-        with patch.object(_webull_module, "_settings",
-                          MagicMock(webull=fake_settings)):
+        with patch.object(_webull_module, "_settings", MagicMock(webull=fake_settings)):
             with self.assertRaises(WebullAuthError) as ctx:
                 WebullProvider()
         self.assertIn("must be set", str(ctx.exception))
@@ -73,8 +81,7 @@ class TestWebullAuthErrors(unittest.TestCase):
     def test_missing_secret_raises_auth_error(self):
         """Missing app_secret raises WebullAuthError at init."""
         fake_settings = _FakeWebullSettings(app_key="test_key", app_secret="")
-        with patch.object(_webull_module, "_settings",
-                          MagicMock(webull=fake_settings)):
+        with patch.object(_webull_module, "_settings", MagicMock(webull=fake_settings)):
             with self.assertRaises(WebullAuthError) as ctx:
                 WebullProvider()
         self.assertIn("must be set", str(ctx.exception))
@@ -96,17 +103,20 @@ class TestGetQuote(unittest.TestCase):
 
     def test_quote_fields_parsed_correctly(self):
         import time as _time
+
         now_ms = int(_time.time() * 1000)
-        p = self._make_provider([
-            {
-                "symbol": "AAPL",
-                "price": 185.50,
-                "bid": 185.45,
-                "ask": 185.55,
-                "volume": 42_000_000,
-                "quote_time": now_ms,
-            }
-        ])
+        p = self._make_provider(
+            [
+                {
+                    "symbol": "AAPL",
+                    "price": 185.50,
+                    "bid": 185.45,
+                    "ask": 185.55,
+                    "volume": 42_000_000,
+                    "quote_time": now_ms,
+                }
+            ]
+        )
         q = p.get_quote("aapl")
         self.assertEqual(q.symbol, "AAPL")
         self.assertEqual(q.price, 185.50)
@@ -131,9 +141,9 @@ class TestGetQuote(unittest.TestCase):
     def test_quote_parses_decimal_string_volume(self):
         """Regression: Webull can return volume as a decimal-formatted
         string ('57259716.57259716'), which int() rejects outright."""
-        p = self._make_provider([
-            {"symbol": "TSLA", "price": 430.0, "volume": "57259716.57259716", "quote_time": 0}
-        ])
+        p = self._make_provider(
+            [{"symbol": "TSLA", "price": 430.0, "volume": "57259716.57259716", "quote_time": 0}]
+        )
         q = p.get_quote("tsla")
         self.assertEqual(q.volume, 57259716)
 
@@ -156,9 +166,7 @@ class TestGetRecentTicks(unittest.TestCase):
 
         result = p.get_recent_ticks("aapl", count=200)
 
-        mock_data.market_data.get_tick.assert_called_once_with(
-            "AAPL", "US_STOCK", count="200"
-        )
+        mock_data.market_data.get_tick.assert_called_once_with("AAPL", "US_STOCK", count="200")
         self.assertIs(result, mock_resp)
 
     def test_default_count_is_200(self):
@@ -167,9 +175,7 @@ class TestGetRecentTicks(unittest.TestCase):
 
         p.get_recent_ticks("TSLA")
 
-        mock_data.market_data.get_tick.assert_called_once_with(
-            "TSLA", "US_STOCK", count="200"
-        )
+        mock_data.market_data.get_tick.assert_called_once_with("TSLA", "US_STOCK", count="200")
 
 
 # ---------------------------------------------------------------------------
@@ -190,9 +196,7 @@ class TestGetFundamentalsMethods(unittest.TestCase):
 
         result = p.get_financial_indicators("aapl")
 
-        mock_data.fundamentals.get_financials_indicators.assert_called_once_with(
-            "AAPL", "US_STOCK"
-        )
+        mock_data.fundamentals.get_financials_indicators.assert_called_once_with("AAPL", "US_STOCK")
         self.assertIs(result, mock_resp)
 
     def test_get_fund_brief_calls_sdk_with_upper_symbol(self):
@@ -223,12 +227,29 @@ class TestGetHistoricalBars(unittest.TestCase):
 
     def test_bars_parsed_from_response(self):
         import time as _time
+
         t1 = int(_time.time() * 1000)
         t2 = int((_time.time() - 86400) * 1000)
-        p = self._make_provider([
-            {"time": t1, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000000},
-            {"time": t2, "open": 99.0, "high": 100.0, "low": 98.5, "close": 99.5, "volume": 900000},
-        ])
+        p = self._make_provider(
+            [
+                {
+                    "time": t1,
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000000,
+                },
+                {
+                    "time": t2,
+                    "open": 99.0,
+                    "high": 100.0,
+                    "low": 98.5,
+                    "close": 99.5,
+                    "volume": 900000,
+                },
+            ]
+        )
         bars = p.get_historical_bars("spy", timeframe="1d", range_="5d")
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[0].symbol, "SPY")
@@ -246,11 +267,27 @@ class TestGetHistoricalBars(unittest.TestCase):
 
     def test_bars_skips_rows_with_missing_timestamp(self):
         import time as _time
+
         now = int(_time.time() * 1000)
-        p = self._make_provider([
-            {"time": now, "open": 50.0, "high": 51.0, "low": 49.0, "close": 50.5, "volume": 500000},
-            {"open": 60.0, "high": 61.0, "low": 59.0, "close": 60.0, "volume": 600000},  # missing time → uses now
-        ])
+        p = self._make_provider(
+            [
+                {
+                    "time": now,
+                    "open": 50.0,
+                    "high": 51.0,
+                    "low": 49.0,
+                    "close": 50.5,
+                    "volume": 500000,
+                },
+                {
+                    "open": 60.0,
+                    "high": 61.0,
+                    "low": 59.0,
+                    "close": 60.0,
+                    "volume": 600000,
+                },  # missing time → uses now
+            ]
+        )
         bars = p.get_historical_bars("dia")
         # Provider includes all rows; rows without a timestamp get datetime.now
         self.assertEqual(len(bars), 2)
@@ -263,11 +300,20 @@ class TestGetHistoricalBars(unittest.TestCase):
         Must parse via float() first, matching the pattern already used
         for extend_hour_volume."""
         import time as _time
+
         t1 = int(_time.time() * 1000)
-        p = self._make_provider([
-            {"time": t1, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
-             "volume": "57259716.57259716"},
-        ])
+        p = self._make_provider(
+            [
+                {
+                    "time": t1,
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "volume": "57259716.57259716",
+                },
+            ]
+        )
         bars = p.get_historical_bars("tsla", timeframe="1d", range_="5d")
         self.assertEqual(len(bars), 1)
         self.assertEqual(bars[0].volume, 57259716)
@@ -297,6 +343,7 @@ class TestTimeframeInference(unittest.TestCase):
         from datetime import timedelta
 
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=60 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "1m")
@@ -305,6 +352,7 @@ class TestTimeframeInference(unittest.TestCase):
         from datetime import timedelta
 
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=300 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "5m")
@@ -313,6 +361,7 @@ class TestTimeframeInference(unittest.TestCase):
         from datetime import timedelta
 
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=900 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "15m")
@@ -321,12 +370,14 @@ class TestTimeframeInference(unittest.TestCase):
         from datetime import timedelta
 
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         bars = [base + timedelta(seconds=3600 * i) for i in range(10)]
         self.assertEqual(_infer_actual_timeframe("M1", bars), "1h")
 
     def test_falls_back_to_timespan_when_too_few_bars(self):
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         self.assertEqual(_infer_actual_timeframe("M1", []), "1m")
         self.assertEqual(_infer_actual_timeframe("M5", []), "5m")
 
@@ -335,6 +386,7 @@ class TestTimeframeInference(unittest.TestCase):
         from datetime import timedelta
 
         from backend.market_data.providers.webull_provider import _infer_actual_timeframe
+
         base = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
         # 9 1-minute bars + 1 big gap, then 9 more
         bars = [base + timedelta(seconds=60 * i) for i in range(9)]
@@ -346,15 +398,21 @@ class TestTimeframeInference(unittest.TestCase):
         ``timeframe`` field should be re-stamped to "5m" so storage
         downstream reflects the actual resolution."""
         import time as _time
+
         # Build 5 bars spaced 5 minutes apart (simulating free-tier M5 data)
         now_ms = int(_time.time() * 1000)
         rows = []
         for i in range(5):
-            rows.append({
-                "time": now_ms - (300_000 * i),
-                "open": 100.0, "high": 101.0, "low": 99.0,
-                "close": 100.5, "volume": 1000000,
-            })
+            rows.append(
+                {
+                    "time": now_ms - (300_000 * i),
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000000,
+                }
+            )
         mock_data = MagicMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -371,14 +429,20 @@ class TestTimeframeInference(unittest.TestCase):
     def test_provider_keeps_1m_for_true_1m_data(self):
         """When the response is genuinely 1m, the timeframe stays as 1m."""
         import time as _time
+
         now_ms = int(_time.time() * 1000)
         rows = []
         for i in range(5):
-            rows.append({
-                "time": now_ms - (60_000 * i),
-                "open": 100.0, "high": 101.0, "low": 99.0,
-                "close": 100.5, "volume": 1000000,
-            })
+            rows.append(
+                {
+                    "time": now_ms - (60_000 * i),
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.5,
+                    "volume": 1000000,
+                }
+            )
         mock_data = MagicMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -398,15 +462,28 @@ class TestGetBatchQuotes(unittest.TestCase):
     def test_batch_quotes_parses_multi_symbol_response(self):
         """get_batch_quotes should parse a snapshot list into per-symbol Quote objects."""
         import time as _time
+
         now_ms = int(_time.time() * 1000)
         mock_data = MagicMock()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = [
-            {"symbol": "AAPL", "price": 150.0, "bid": 149.9, "ask": 150.1,
-             "volume": 1_000_000, "quote_time": now_ms},
-            {"symbol": "MSFT", "price": 300.0, "bid": 299.9, "ask": 300.1,
-             "volume": 500_000, "quote_time": now_ms},
+            {
+                "symbol": "AAPL",
+                "price": 150.0,
+                "bid": 149.9,
+                "ask": 150.1,
+                "volume": 1_000_000,
+                "quote_time": now_ms,
+            },
+            {
+                "symbol": "MSFT",
+                "price": 300.0,
+                "bid": 299.9,
+                "ask": 300.1,
+                "volume": 500_000,
+                "quote_time": now_ms,
+            },
         ]
         mock_resp.text = json.dumps(mock_resp.json.return_value)
         mock_data.market_data.get_snapshot.return_value = mock_resp
@@ -420,6 +497,7 @@ class TestGetBatchQuotes(unittest.TestCase):
         """Same regression as TestGetQuote's decimal-string-volume case,
         for the batch snapshot path."""
         import time as _time
+
         now_ms = int(_time.time() * 1000)
         mock_data = MagicMock()
         mock_resp = MagicMock()
@@ -436,6 +514,7 @@ class TestGetBatchQuotes(unittest.TestCase):
     def test_batch_quotes_partial_response_fills_missing_with_error_quotes(self):
         """If the snapshot omits some symbols, those symbols get zero-price error Quotes."""
         import time as _time
+
         now_ms = int(_time.time() * 1000)
         mock_data = MagicMock()
         mock_resp = MagicMock()
@@ -494,18 +573,16 @@ class TestGetMarketStatus(unittest.TestCase):
         return _make_provider(mock_data)
 
     def test_market_status_open(self):
-        p = self._make_provider([
-            {"symbol": "AAPL", "marketStatus": "OPEN", "marketState": "OPEN"}
-        ])
+        p = self._make_provider([{"symbol": "AAPL", "marketStatus": "OPEN", "marketState": "OPEN"}])
         s = p.get_market_status("AAPL")
         self.assertEqual(s.symbol, "AAPL")
         self.assertTrue(s.is_open)
         self.assertEqual(s.timezone, "America/New_York")
 
     def test_market_status_closed(self):
-        p = self._make_provider([
-            {"symbol": "TSLA", "marketStatus": "CLOSED", "marketState": "CLOSED"}
-        ])
+        p = self._make_provider(
+            [{"symbol": "TSLA", "marketStatus": "CLOSED", "marketState": "CLOSED"}]
+        )
         s = p.get_market_status("TSLA")
         self.assertFalse(s.is_open)
 
@@ -546,8 +623,7 @@ class TestCredentialsNotLeaked(unittest.TestCase):
         The error message must never echo back the (empty) credentials.
         """
         fake_settings = _FakeWebullSettings(app_key="", app_secret="")
-        with patch.object(_webull_module, "_settings",
-                          MagicMock(webull=fake_settings)):
+        with patch.object(_webull_module, "_settings", MagicMock(webull=fake_settings)):
             with self.assertRaises(WebullAuthError) as ctx:
                 WebullProvider()
         msg = str(ctx.exception)
@@ -582,7 +658,10 @@ class TestExtendedHoursBars(unittest.TestCase):
     def test_include_extended_hours_requests_pre_rth_ath(self):
         p = self._make_provider([])
         p.get_historical_bars(
-            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+            "aapl",
+            timeframe="1m",
+            range_="1d",
+            include_extended_hours=True,
         )
         _, kwargs = p._data_client.market_data.get_history_bar.call_args
         self.assertEqual(kwargs.get("trading_sessions"), ["PRE", "RTH", "ATH"])
@@ -594,7 +673,10 @@ class TestExtendedHoursBars(unittest.TestCase):
         timeframe')."""
         p = self._make_provider([])
         p.get_historical_bars(
-            "aapl", timeframe="1d", range_="5d", include_extended_hours=True,
+            "aapl",
+            timeframe="1d",
+            range_="5d",
+            include_extended_hours=True,
         )
         _, kwargs = p._data_client.market_data.get_history_bar.call_args
         self.assertIsNone(kwargs.get("trading_sessions"))
@@ -604,7 +686,10 @@ class TestExtendedHoursBars(unittest.TestCase):
         trading_sessions survives that path too, not just the single-page one."""
         p = self._make_provider([])
         p.get_historical_bars(
-            "aapl", timeframe="1m", range_="15d", include_extended_hours=True,
+            "aapl",
+            timeframe="1m",
+            range_="15d",
+            include_extended_hours=True,
         )
         _, kwargs = p._data_client.market_data.get_history_bar.call_args
         self.assertEqual(kwargs.get("trading_sessions"), ["PRE", "RTH", "ATH"])
@@ -613,32 +698,47 @@ class TestExtendedHoursBars(unittest.TestCase):
         """A bar timestamped 08:45 ET (naive NY, this module's convention)
         must be classified 'premarket' (04:00-09:30 ET)."""
         from datetime import datetime as _dt
+
         ts_ms = int(_dt(2026, 9, 9, 8, 45, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
-        p = self._make_provider([
-            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
-        ])
+        p = self._make_provider(
+            [
+                {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+            ]
+        )
         bars = p.get_historical_bars(
-            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+            "aapl",
+            timeframe="1m",
+            range_="1d",
+            include_extended_hours=True,
         )
         self.assertEqual(bars[0].session, "premarket")
 
     def test_session_classification_regular(self):
         from datetime import datetime as _dt
+
         ts_ms = int(_dt(2026, 9, 9, 10, 0, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
-        p = self._make_provider([
-            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
-        ])
+        p = self._make_provider(
+            [
+                {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+            ]
+        )
         bars = p.get_historical_bars("aapl", timeframe="1m", range_="1d")
         self.assertEqual(bars[0].session, "regular")
 
     def test_session_classification_after_hours(self):
         from datetime import datetime as _dt
+
         ts_ms = int(_dt(2026, 9, 9, 17, 30, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
-        p = self._make_provider([
-            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
-        ])
+        p = self._make_provider(
+            [
+                {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+            ]
+        )
         bars = p.get_historical_bars(
-            "aapl", timeframe="1m", range_="1d", include_extended_hours=True,
+            "aapl",
+            timeframe="1m",
+            range_="1d",
+            include_extended_hours=True,
         )
         self.assertEqual(bars[0].session, "after_hours")
 
@@ -648,10 +748,13 @@ class TestExtendedHoursBars(unittest.TestCase):
         tagging is independent of whether extended hours were requested
         (Webull just wouldn't return a PRE/ATH row in that case)."""
         from datetime import datetime as _dt
+
         ts_ms = int(_dt(2026, 9, 9, 11, 0, tzinfo=_webull_module._NY_TZ).timestamp() * 1000)
-        p = self._make_provider([
-            {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
-        ])
+        p = self._make_provider(
+            [
+                {"time": ts_ms, "open": 1, "high": 1, "low": 1, "close": 1, "volume": 100},
+            ]
+        )
         bars = p.get_historical_bars("aapl", timeframe="1m", range_="1d")
         self.assertEqual(bars[0].session, "regular")
 
@@ -689,8 +792,9 @@ class TestRecentWindowBarCount(unittest.TestCase):
 
     def test_batch_15m_requests_30_bars_not_a_full_day(self):
         p = self._provider({"result": []})
-        p.get_historical_bars_batch(["AAPL", "MSFT"], "1m", range_="15m",
-                                    include_extended_hours=True)
+        p.get_historical_bars_batch(
+            ["AAPL", "MSFT"], "1m", range_="15m", include_extended_hours=True
+        )
         _, kwargs = p._data_client.market_data.get_batch_history_bar.call_args
         self.assertEqual(kwargs["count"], "30")
         self.assertEqual(kwargs["trading_sessions"], ["PRE", "RTH", "ATH"])
@@ -705,8 +809,7 @@ class TestRecentWindowBarCount(unittest.TestCase):
         """_fetch_1m_paginated used to ignore its ``count`` and recompute the
         target from _RANGE_DAYS, so fixing only the batch path was not enough."""
         p = self._provider([])
-        p.get_historical_bars("aapl", timeframe="1m", range_="15m",
-                              include_extended_hours=True)
+        p.get_historical_bars("aapl", timeframe="1m", range_="15m", include_extended_hours=True)
         self.assertEqual(p._data_client.market_data.get_history_bar.call_count, 1)
         _, kwargs = p._data_client.market_data.get_history_bar.call_args
         self.assertEqual(kwargs["count"], "30")
@@ -719,8 +822,7 @@ class TestRecentWindowBarCount(unittest.TestCase):
 
     def test_multi_day_pagination_is_unchanged(self):
         p = self._provider([])
-        p.get_historical_bars("aapl", timeframe="1m", range_="5d",
-                              include_extended_hours=True)
+        p.get_historical_bars("aapl", timeframe="1m", range_="5d", include_extended_hours=True)
         _, kwargs = p._data_client.market_data.get_history_bar.call_args
         self.assertEqual(kwargs["count"], "1200")  # page size cap, as before
 
@@ -744,16 +846,18 @@ class TestExtendedHoursQuotes(unittest.TestCase):
         self.assertTrue(kwargs.get("extend_hour_required"))
 
     def test_get_quote_parses_extended_hours_fields(self):
-        p = self._make_snapshot_provider({
-            "symbol": "AAPL",
-            "price": "150.00",
-            "extend_hour_last_price": "151.25",
-            "extend_hour_change": "1.25",
-            "extend_hour_change_ratio": "0.0084",
-            "extend_hour_high": "151.50",
-            "extend_hour_low": "150.90",
-            "extend_hour_volume": "12345",
-        })
+        p = self._make_snapshot_provider(
+            {
+                "symbol": "AAPL",
+                "price": "150.00",
+                "extend_hour_last_price": "151.25",
+                "extend_hour_change": "1.25",
+                "extend_hour_change_ratio": "0.0084",
+                "extend_hour_high": "151.50",
+                "extend_hour_low": "150.90",
+                "extend_hour_volume": "12345",
+            }
+        )
         quote = p.get_quote("aapl")
         self.assertEqual(quote.extended_hours_price, 151.25)
         self.assertEqual(quote.extended_hours_change, 1.25)
@@ -838,8 +942,12 @@ class TestSetFileLoggerDedup(unittest.TestCase):
         fake_self_1 = MagicMock()
         fake_self_2 = MagicMock()
         with patch.object(_webull_module, "_orig_set_file_logger") as orig:
-            _webull_module._patched_set_file_logger(fake_self_1, "/tmp/some.log", logger_name="webull.core")
-            _webull_module._patched_set_file_logger(fake_self_2, "/tmp/some.log", logger_name="webull.data")
+            _webull_module._patched_set_file_logger(
+                fake_self_1, "/tmp/some.log", logger_name="webull.core"
+            )
+            _webull_module._patched_set_file_logger(
+                fake_self_2, "/tmp/some.log", logger_name="webull.data"
+            )
         self.assertEqual(orig.call_count, 2)
 
 

@@ -1,6 +1,7 @@
 """
 Timeframe/candle engine for aggregating market data
 """
+
 import logging
 from collections import OrderedDict
 from datetime import datetime, timedelta
@@ -28,8 +29,10 @@ def _ensure_aware(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=NY)
     return dt.astimezone(UTC)
 
+
 class Timeframe(StrEnum):
     """Supported timeframes"""
+
     TICK = "tick"
     ONE_MINUTE = "1m"
     TWO_MINUTE = "2m"
@@ -44,12 +47,18 @@ class Timeframe(StrEnum):
     ONE_WEEK = "1wk"
     ONE_MONTH = "1mo"
 
+
 class Candle:
     """Represents a single OHLCV candle"""
 
-    def __init__(self, symbol: str, timeframe: Timeframe,
-                 open_time: datetime, close_time: datetime,
-                 session_type: SessionType | None = None):
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        open_time: datetime,
+        close_time: datetime,
+        session_type: SessionType | None = None,
+    ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.open_time = open_time
@@ -70,8 +79,7 @@ class Candle:
         # Phase 4: session type at the time this candle was opened.
         self.session_type = session_type
 
-    def update(self, price: float, volume: float,
-               timestamp: datetime, provider: str = ""):
+    def update(self, price: float, volume: float, timestamp: datetime, provider: str = ""):
         """Update candle with new tick data"""
         if self.open is None:
             self.open = price
@@ -118,13 +126,16 @@ class Candle:
             volume=int(self.volume),
             timeframe=self.timeframe.value,
             provider=self.provider or "unknown",
-            data_status=self.data_status
+            data_status=self.data_status,
         )
 
     def __repr__(self):
-        return (f"Candle({self.symbol} {self.timeframe.value} "
-                f"O:{self.open} H:{self.high} L:{self.low} C:{self.close} "
-                f"V:{self.volume} {'closed' if self.is_closed else 'open'})")
+        return (
+            f"Candle({self.symbol} {self.timeframe.value} "
+            f"O:{self.open} H:{self.high} L:{self.low} C:{self.close} "
+            f"V:{self.volume} {'closed' if self.is_closed else 'open'})"
+        )
+
 
 # Most tick timestamps a TimeframeEngine remembers for duplicate detection. Each entry
 # costs ~90 bytes and the set used to grow forever: ~52k entries/day across 25 symbols
@@ -155,7 +166,7 @@ class _BoundedSeen:
             return
         items[timestamp] = None
         if len(items) > self.maxlen:
-            items.popitem(last=False)   # O(1); a plain dict's "first key" degrades as it churns
+            items.popitem(last=False)  # O(1); a plain dict's "first key" degrades as it churns
 
     def clear(self) -> None:
         self._items.clear()
@@ -195,8 +206,7 @@ class TimeframeEngine:
             self._last_candle_open[timeframe] = None
             self._seen_candle_starts[timeframe] = set()
 
-    def _get_candle_start_time(self, timestamp: datetime,
-                               timeframe: Timeframe) -> datetime:
+    def _get_candle_start_time(self, timestamp: datetime, timeframe: Timeframe) -> datetime:
         """Calculate the start time for a candle given a timestamp"""
         # Normalize to aware UTC so candle-start comparisons later in this
         # module (gap detection) work even when callers pass naive datetimes.
@@ -243,8 +253,7 @@ class TimeframeEngine:
             # Default to 1 minute
             return timestamp.replace(second=0, microsecond=0)
 
-    def _get_candle_end_time(self, start_time: datetime,
-                             timeframe: Timeframe) -> datetime:
+    def _get_candle_end_time(self, start_time: datetime, timeframe: Timeframe) -> datetime:
         """Calculate the end time for a candle given its start time"""
         if timeframe == Timeframe.TICK:
             return start_time
@@ -307,8 +316,7 @@ class TimeframeEngine:
         """Convert a timestamp to US/Eastern for session/holiday checks."""
         return self.calendar.to_et(dt)
 
-    def update_tick(self, price: float, volume: float,
-                    timestamp: datetime, provider: str = ""):
+    def update_tick(self, price: float, volume: float, timestamp: datetime, provider: str = ""):
         """Process a new tick and update all timeframes.
 
         Phase 4 additions: duplicate detection (same exact tick timestamp seen
@@ -328,7 +336,8 @@ class TimeframeEngine:
             self.duplicate_count += 1
             logger.debug(
                 "Duplicate tick for %s at %s — skipping",
-                self.symbol, timestamp,
+                self.symbol,
+                timestamp,
             )
             return
         self._seen_timestamps.add(timestamp)
@@ -377,7 +386,9 @@ class TimeframeEngine:
                         self.gap_count += 1
                         logger.debug(
                             "Gap detected in %s %s: %s between candles",
-                            self.symbol, timeframe.value, actual_step,
+                            self.symbol,
+                            timeframe.value,
+                            actual_step,
                         )
 
                     # --- Phase 4: incomplete detection ---
@@ -405,16 +416,13 @@ class TimeframeEngine:
 
             # Update the current candle
             if self.current_candles[timeframe] is not None:
-                self.current_candles[timeframe].update(
-                    price, volume, timestamp, provider
-                )
+                self.current_candles[timeframe].update(price, volume, timestamp, provider)
 
     def get_current_candle(self, timeframe: Timeframe) -> Candle | None:
         """Get the current (open) candle for a timeframe"""
         return self.current_candles.get(timeframe)
 
-    def get_closed_candles(self, timeframe: Timeframe,
-                           limit: int | None = None) -> list[Candle]:
+    def get_closed_candles(self, timeframe: Timeframe, limit: int | None = None) -> list[Candle]:
         """Get closed candles for a timeframe"""
         candles = self.candles.get(timeframe, [])
         if limit is not None:
@@ -426,8 +434,7 @@ class TimeframeEngine:
         candles = self.get_closed_candles(timeframe)
         return candles[-1] if candles else None
 
-    def get_candles_as_bars(self, timeframe: Timeframe,
-                            limit: int | None = None) -> list[Bar]:
+    def get_candles_as_bars(self, timeframe: Timeframe, limit: int | None = None) -> list[Bar]:
         """Get candles as Bar models"""
         candles = self.get_closed_candles(timeframe, limit)
         bars = []
@@ -471,6 +478,7 @@ class TimeframeEngine:
         self.incomplete_count = 0
         self.subscribers.clear()
 
+
 class MultiSymbolTimeframeEngine:
     """Timeframe engine that handles multiple symbols"""
 
@@ -483,8 +491,9 @@ class MultiSymbolTimeframeEngine:
             self.engines[symbol] = TimeframeEngine(symbol)
         return self.engines[symbol]
 
-    def update_tick(self, symbol: str, price: float, volume: float,
-                    timestamp: datetime, provider: str = ""):
+    def update_tick(
+        self, symbol: str, price: float, volume: float, timestamp: datetime, provider: str = ""
+    ):
         """Update tick for a specific symbol"""
         engine = self.get_engine(symbol)
         engine.update_tick(price, volume, timestamp, provider)
@@ -497,6 +506,7 @@ class MultiSymbolTimeframeEngine:
         """Reset all engines"""
         for engine in self.engines.values():
             engine.reset()
+
 
 # Global instance for easy access
 multi_symbol_timeframe_engine = MultiSymbolTimeframeEngine()

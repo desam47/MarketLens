@@ -5,6 +5,7 @@ Mirrors ``AlertRepository`` style: a self-managed SQLAlchemy session
 plus a method-per-query interface. Returns ORM objects (not DTOs);
 serialization is the router's job.
 """
+
 from collections.abc import Iterable
 from datetime import datetime
 
@@ -31,12 +32,7 @@ class BacktestRepository:
         return self.db.query(BacktestRun).filter(BacktestRun.id == run_id).first()
 
     def list_runs(self, limit: int = 50) -> list[BacktestRun]:
-        return (
-            self.db.query(BacktestRun)
-            .order_by(desc(BacktestRun.created_at))
-            .limit(limit)
-            .all()
-        )
+        return self.db.query(BacktestRun).order_by(desc(BacktestRun.created_at)).limit(limit).all()
 
     # --- Run writes -----------------------------------------------------
 

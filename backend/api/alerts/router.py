@@ -1,6 +1,7 @@
 """
 Alert API endpoints.
 """
+
 import asyncio
 from datetime import datetime
 
@@ -28,9 +29,7 @@ class AlertCreate(BaseModel):
 
     def model_post_init(self, _):
         if self.condition_type not in VALID_CONDITION_TYPES:
-            raise ValueError(
-                f"condition_type must be one of {list(VALID_CONDITION_TYPES)}"
-            )
+            raise ValueError(f"condition_type must be one of {list(VALID_CONDITION_TYPES)}")
 
 
 class AlertUpdate(BaseModel):
@@ -41,9 +40,7 @@ class AlertUpdate(BaseModel):
 
     def model_post_init(self, _):
         if self.condition_type is not None and self.condition_type not in VALID_CONDITION_TYPES:
-            raise ValueError(
-                f"condition_type must be one of {list(VALID_CONDITION_TYPES)}"
-            )
+            raise ValueError(f"condition_type must be one of {list(VALID_CONDITION_TYPES)}")
 
 
 class AlertResponse(BaseModel):
@@ -198,6 +195,7 @@ async def retry_alert_delivery(delivery_id: int, db: Session = Depends(get_db)):
     if delivery is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
     from backend.notifications import retry_delivery
+
     await asyncio.to_thread(retry_delivery, delivery_id)
     db.expire_all()
     refreshed = await asyncio.to_thread(repo.get_delivery, delivery_id)
@@ -217,6 +215,7 @@ async def test_alert_delivery(
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
     from backend.notifications.delivery import send_test_delivery
+
     try:
         result = await asyncio.to_thread(send_test_delivery, alert, payload.channel)
     except ValueError as exc:
@@ -247,9 +246,7 @@ async def update_alert(
         raise HTTPException(status_code=404, detail="Alert not found")
 
     # Capture old state for engine registration management.
-    was_price_alert = existing.condition_type in (
-        "price_above", "price_below", "pct_change_above"
-    )
+    was_price_alert = existing.condition_type in ("price_above", "price_below", "pct_change_above")
 
     def _do_update():
         return repo.update(
@@ -264,9 +261,7 @@ async def update_alert(
     if updated is None:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    is_price_alert = updated.condition_type in (
-        "price_above", "price_below", "pct_change_above"
-    )
+    is_price_alert = updated.condition_type in ("price_above", "price_below", "pct_change_above")
 
     if was_price_alert and (not is_price_alert or not updated.is_enabled):
         await asyncio.to_thread(alerts_engine.unregister_for_alert, existing)

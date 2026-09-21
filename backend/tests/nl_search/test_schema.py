@@ -1,4 +1,5 @@
 """Tests for the NL search controlled query schema."""
+
 import unittest
 
 from pydantic import ValidationError
@@ -11,7 +12,6 @@ from backend.nl_search.schema import (
 
 
 class TestNLFiltersDefaults(unittest.TestCase):
-
     def test_default_ranking(self):
         f = NLFilters()
         self.assertEqual(f.ranking, "strongest_bullish")
@@ -34,7 +34,6 @@ class TestNLFiltersDefaults(unittest.TestCase):
 
 
 class TestNLFiltersCrossValidation(unittest.TestCase):
-
     def test_trend_min_gt_trend_max_raises(self):
         with self.assertRaises(ValidationError) as ctx:
             NLFilters(trend_min=80, trend_max=20)
@@ -65,7 +64,6 @@ class TestNLFiltersCrossValidation(unittest.TestCase):
 
 
 class TestNLFiltersSignalsAllowlist(unittest.TestCase):
-
     def test_unknown_signals_are_stripped(self):
         f = NLFilters(signals=["RSI_OVERSOLD", "UNKNOWN_SIGNAL", "HIGH_VOLUME"])
         self.assertEqual(f.signals, ["RSI_OVERSOLD", "HIGH_VOLUME"])
@@ -84,7 +82,6 @@ class TestNLFiltersSignalsAllowlist(unittest.TestCase):
 
 
 class TestNLFiltersLiterals(unittest.TestCase):
-
     def test_timeframe_must_be_literal(self):
         f = NLFilters(timeframe="1d")
         self.assertEqual(f.timeframe, "1d")
@@ -103,9 +100,13 @@ class TestNLFiltersLiterals(unittest.TestCase):
 
     def test_ranking_all_valid(self):
         for r in [
-            "strongest_bullish", "strongest_bearish", "strongest_momentum",
-            "biggest_improvement", "biggest_deterioration",
-            "best_mtf_alignment", "strongest_relative_strength",
+            "strongest_bullish",
+            "strongest_bearish",
+            "strongest_momentum",
+            "biggest_improvement",
+            "biggest_deterioration",
+            "best_mtf_alignment",
+            "strongest_relative_strength",
         ]:
             f = NLFilters(ranking=r)
             self.assertEqual(f.ranking, r)
@@ -144,7 +145,6 @@ class TestNLFiltersLiterals(unittest.TestCase):
 
 
 class TestNLFiltersNumericRanges(unittest.TestCase):
-
     def test_trend_min_out_of_range_low(self):
         with self.assertRaises(ValidationError):
             NLFilters(trend_min=-1)
@@ -171,7 +171,6 @@ class TestNLFiltersNumericRanges(unittest.TestCase):
 
 
 class TestScannedResultItem(unittest.TestCase):
-
     def test_required_fields(self):
         item = ScannedResultItem(symbol="AAPL", total_score=75.0, rank=1, signals=[])
         self.assertEqual(item.symbol, "AAPL")
@@ -188,7 +187,6 @@ class TestScannedResultItem(unittest.TestCase):
 
 
 class TestNLSearchResponse(unittest.TestCase):
-
     def test_required_fields(self):
         resp = NLSearchResponse(
             query="strongest bullish stocks",

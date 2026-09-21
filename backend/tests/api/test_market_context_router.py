@@ -3,6 +3,7 @@ Phase 22 — Tests for /api/market-context/* endpoints:
   - GET /api/market-context/current
   - GET /api/market-context/history
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -18,11 +19,11 @@ def _clear_context_cache():
     poisons its cache read.
     """
     from backend.api.ttl_cache import _context_cache
+
     _context_cache.pop("market_context", None)
 
 
 class TestMarketContextCurrent(unittest.TestCase):
-
     def setUp(self):
         _clear_context_cache()
 
@@ -35,16 +36,18 @@ class TestMarketContextCurrent(unittest.TestCase):
         mock_engine = MagicMock()
         # Router calls engine.get_current_context() → to_dict()
         mock_engine.get_current_context.return_value = MagicMock(
-            to_dict=MagicMock(return_value={
-                "regime": "bullish",
-                "confidence": 0.82,
-                "trend_strength": 0.7,
-                "momentum": 0.5,
-                "volatility_state": "normal",
-                "sub_regimes": {},
-                "contributing_factors": {},
-                "timestamp": "2024-01-01T00:00:00Z",
-            })
+            to_dict=MagicMock(
+                return_value={
+                    "regime": "bullish",
+                    "confidence": 0.82,
+                    "trend_strength": 0.7,
+                    "momentum": 0.5,
+                    "volatility_state": "normal",
+                    "sub_regimes": {},
+                    "contributing_factors": {},
+                    "timestamp": "2024-01-01T00:00:00Z",
+                }
+            )
         )
         mock_get_engine.return_value = mock_engine
 
@@ -63,13 +66,18 @@ class TestMarketContextCurrent(unittest.TestCase):
 
         mock_engine = MagicMock()
         mock_engine.get_current_context.return_value = MagicMock(
-            to_dict=MagicMock(return_value={
-                "regime": "bearish", "confidence": 0.75,
-                "trend_strength": 0.6, "momentum": -0.3,
-                "volatility_state": "high",
-                "sub_regimes": {}, "contributing_factors": {},
-                "timestamp": "2024-01-01T00:00:00Z",
-            })
+            to_dict=MagicMock(
+                return_value={
+                    "regime": "bearish",
+                    "confidence": 0.75,
+                    "trend_strength": 0.6,
+                    "momentum": -0.3,
+                    "volatility_state": "high",
+                    "sub_regimes": {},
+                    "contributing_factors": {},
+                    "timestamp": "2024-01-01T00:00:00Z",
+                }
+            )
         )
         mock_get_engine.return_value = mock_engine
 
@@ -80,7 +88,6 @@ class TestMarketContextCurrent(unittest.TestCase):
 
 
 class TestMarketContextHistory(unittest.TestCase):
-
     def setUp(self):
         _clear_context_cache()
 
@@ -93,16 +100,18 @@ class TestMarketContextHistory(unittest.TestCase):
         mock_engine = MagicMock()
         mock_hist = [
             MagicMock(
-                to_dict=MagicMock(return_value={
-                    "regime": "bullish",
-                    "confidence": 0.8,
-                    "trend_strength": 0.7,
-                    "momentum": 0.5,
-                    "volatility_state": "normal",
-                    "sub_regimes": {},
-                    "contributing_factors": {},
-                    "timestamp": f"2024-01-{i:02d}T00:00:00Z",
-                })
+                to_dict=MagicMock(
+                    return_value={
+                        "regime": "bullish",
+                        "confidence": 0.8,
+                        "trend_strength": 0.7,
+                        "momentum": 0.5,
+                        "volatility_state": "normal",
+                        "sub_regimes": {},
+                        "contributing_factors": {},
+                        "timestamp": f"2024-01-{i:02d}T00:00:00Z",
+                    }
+                )
             )
             for i in range(1, 11)
         ]

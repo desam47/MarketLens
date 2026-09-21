@@ -31,6 +31,7 @@ If Redis is disabled (``REDIS_ENABLED=false``) or unavailable, every
 function here degrades to a no-op / ``None`` return so callers don't have
 to special-case it — same contract as ``backend/ai/background.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,11 +62,13 @@ def get_backfill_queue() -> Any:
     if _QUEUE is not None:
         return _QUEUE
     from backend.ai.background import get_redis
+
     client = get_redis()
     if client is None:
         return None
     try:
         from rq import Queue
+
         _QUEUE = Queue(
             settings.background.backfill_queue_name,
             connection=client,
@@ -105,6 +108,7 @@ def _in_flight_job_id(symbol: str) -> str | None:
         if latest is None or latest.status not in ("queued", "started"):
             return None
         from backend.ai.background import get_redis
+
         client = get_redis()
         if client is None:
             # Can't confirm with RQ — trust the DB row rather than risk a
@@ -112,6 +116,7 @@ def _in_flight_job_id(symbol: str) -> str | None:
             return latest.job_id
         try:
             from rq.job import Job
+
             rq_job = Job.fetch(latest.job_id, connection=client)
             if rq_job.get_status() in _ACTIVE_RQ_STATUSES:
                 return latest.job_id
@@ -161,6 +166,7 @@ def enqueue_backfill(symbol: str) -> str | None:
         return None
 
     from backend.ai.background import get_redis
+
     client = get_redis()
     lock_key = f"backfill:enqueue-lock:{symbol}"
     lock_acquired = False
@@ -168,10 +174,14 @@ def enqueue_backfill(symbol: str) -> str | None:
         try:
             lock_acquired = bool(client.set(lock_key, "1", nx=True, ex=10))
             if not lock_acquired:
-                logger.debug(f"enqueue_backfill: {symbol} enqueue lock held by another caller — skipping")
+                logger.debug(
+                    f"enqueue_backfill: {symbol} enqueue lock held by another caller — skipping"
+                )
                 return None
         except Exception as e:
-            logger.debug(f"enqueue_backfill: lock attempt for {symbol} failed, proceeding without it: {e}")
+            logger.debug(
+                f"enqueue_backfill: lock attempt for {symbol} failed, proceeding without it: {e}"
+            )
 
     try:
         if _in_flight_job_id(symbol) is not None:
@@ -243,15 +253,19 @@ def _orphan_reason(client: Any, job_id: str) -> str | None:
     try:
         rq_job = Job.fetch(job_id, connection=client)
     except NoSuchJobError:
-        return "backfill job lost from the queue (worker crash or a Redis flush) before it completed"
+        return (
+            "backfill job lost from the queue (worker crash or a Redis flush) before it completed"
+        )
     except Exception:  # noqa: BLE001
         return None  # Redis unreachable etc.: absence of an answer is not proof the job is gone
     status = rq_job.get_status()
-    status = getattr(status, "value", status)       # RQ 2.x returns a JobStatus enum
+    status = getattr(status, "value", status)  # RQ 2.x returns a JobStatus enum
     if status in _ACTIVE_RQ_STATUSES:
         return None
     detail = ((rq_job.exc_info or "").strip().splitlines() or [""])[-1][:300]
-    return f"RQ reports the job as {status} and it never updated its row" + (f": {detail}" if detail else "")
+    return f"RQ reports the job as {status} and it never updated its row" + (
+        f": {detail}" if detail else ""
+    )
 
 
 def reap_orphaned_jobs(min_age: timedelta = _ORPHAN_MIN_AGE) -> int:
@@ -314,7 +328,9 @@ def cancel_backfill(symbol: str) -> bool:
     try:
         record = (
             db.query(BackfillJob)
-            .filter(BackfillJob.symbol == symbol.upper(), BackfillJob.status.in_(["queued", "started"]))
+            .filter(
+                BackfillJob.symbol == symbol.upper(), BackfillJob.status.in_(["queued", "started"])
+            )
             .order_by(BackfillJob.created_at.desc())
             .first()
         )
@@ -322,18 +338,23 @@ def cancel_backfill(symbol: str) -> bool:
             return False
 
         from backend.ai.background import get_redis
+
         client = get_redis()
         if client is not None:
             try:
                 from rq.job import Job
+
                 rq_job = Job.fetch(record.job_id, connection=client)
                 rq_status = rq_job.get_status()
                 if rq_status == "started":
                     try:
                         from rq.command import send_stop_job_command
+
                         send_stop_job_command(client, record.job_id)
                     except Exception as e:
-                        logger.debug(f"cancel_backfill: stop signal for {record.job_id} failed: {e}")
+                        logger.debug(
+                            f"cancel_backfill: stop signal for {record.job_id} failed: {e}"
+                        )
                 elif rq_status in ("queued", "deferred", "scheduled"):
                     rq_job.cancel()
             except Exception as e:
@@ -373,10 +394,12 @@ def get_backfill_job_status(symbol: str) -> dict[str, Any] | None:
 
         if record.status in ("queued", "started"):
             from backend.ai.background import get_redis
+
             client = get_redis()
             if client is not None:
                 try:
                     from rq.job import Job
+
                     rq_job = Job.fetch(record.job_id, connection=client)
                     rq_status = rq_job.get_status()
                     # Only trust RQ to move queued->started here — terminal

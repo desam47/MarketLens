@@ -15,6 +15,7 @@ This module provides:
 The shim (``manager.py``) re-exports these names so test patches against
 ``manager._settings`` and ``manager.redis`` are visible everywhere.
 """
+
 import redis as _redis_lib
 
 from backend.config.settings import settings as _real_settings
@@ -36,6 +37,7 @@ def get_settings():
     we fall back to the local module-level ``_settings``.
     """
     import sys
+
     try:
         return sys.modules[__package__ + ".manager"]._settings
     except (KeyError, AttributeError):
@@ -50,6 +52,7 @@ def get_redis():
     module to be visible here.
     """
     import sys
+
     try:
         return sys.modules[__package__ + ".manager"].redis
     except (KeyError, AttributeError):
@@ -67,10 +70,12 @@ def get_redis_cache():
     not yet loaded.
     """
     import sys
+
     try:
         return sys.modules[__package__ + ".manager"]._redis_cache
     except (KeyError, AttributeError):
         # Defer the import to break the circular dependency
         # (_providers → cache → _providers would be a cycle).
         from backend.market_data.services.cache import _redis_cache as _fallback
+
         return _fallback

@@ -3,6 +3,7 @@
 MarketLens - Start both backend and frontend
 Run: python3 run.py
 """
+
 import os
 import subprocess
 import sys
@@ -11,26 +12,37 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 
+
 def start_backend():
     """Start FastAPI backend"""
     print("🚀 Starting backend on http://localhost:5001")
     return subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "backend.api.main:app",
-         "--host", "0.0.0.0", "--port", "5001", "--reload",
-         # editing a test must not restart the server and re-run its whole lifespan. Absolute:
-         # the relative "backend/tests/*" misses everything below backend/tests/<pkg>/.
-         "--reload-exclude", str(ROOT / "backend" / "tests")],
-        cwd=ROOT
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "backend.api.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "5001",
+            "--reload",
+            # editing a test must not restart the server and re-run its whole lifespan. Absolute:
+            # the relative "backend/tests/*" misses everything below backend/tests/<pkg>/.
+            "--reload-exclude",
+            str(ROOT / "backend" / "tests"),
+        ],
+        cwd=ROOT,
     )
+
 
 def start_frontend():
     """Start React frontend"""
     print("🎨 Starting frontend on http://localhost:3000")
     return subprocess.Popen(
-        ["npm", "start"],
-        cwd=ROOT / "frontend",
-        env={**os.environ, "BROWSER": "none"}
+        ["npm", "start"], cwd=ROOT / "frontend", env={**os.environ, "BROWSER": "none"}
     )
+
 
 def start_workers():
     """Start the RQ background workers — AI analysis jobs and symbol-history
@@ -47,6 +59,7 @@ def start_workers():
     installed; the app still runs, it just won't process background jobs.
     """
     import shutil
+
     if shutil.which("rq") is None:
         print("⚠️  'rq' CLI not found — skipping background workers.")
         print("   AI analysis jobs and ticker backfills will queue but not")
@@ -60,9 +73,32 @@ def start_workers():
         # process per job, and this project's webull provider SDK
         # reproducibly segfaults the forked child — see
         # backend/workers/backfill_worker.py's module docstring.
-        subprocess.Popen(["rq", "worker", "--url", redis_url, "--worker-class", "rq.worker.SimpleWorker", "marketlens-workers"], cwd=ROOT),
-        subprocess.Popen(["rq", "worker", "--url", redis_url, "--worker-class", "rq.worker.SimpleWorker", "marketlens-backfill"], cwd=ROOT),
+        subprocess.Popen(
+            [
+                "rq",
+                "worker",
+                "--url",
+                redis_url,
+                "--worker-class",
+                "rq.worker.SimpleWorker",
+                "marketlens-workers",
+            ],
+            cwd=ROOT,
+        ),
+        subprocess.Popen(
+            [
+                "rq",
+                "worker",
+                "--url",
+                redis_url,
+                "--worker-class",
+                "rq.worker.SimpleWorker",
+                "marketlens-backfill",
+            ],
+            cwd=ROOT,
+        ),
     ]
+
 
 def main():
     print("=" * 60)
@@ -108,6 +144,7 @@ def main():
             frontend.terminate()
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     main()

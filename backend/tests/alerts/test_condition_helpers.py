@@ -9,6 +9,7 @@ mean of every bar for the symbol with all timeframes mixed together. They only r
 a caller omits the pre-computed value (payloads.py computes it correctly), which is why
 it went unnoticed — and there were no tests.
 """
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -27,7 +28,7 @@ class _DbCase(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
         BarModel.__table__.create(engine)
         self.Session = sessionmaker(bind=engine)
-        patcher = patch.object(helpers, "SessionLocal", self.Session)   # never touch the real DB
+        patcher = patch.object(helpers, "SessionLocal", self.Session)  # never touch the real DB
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(engine.dispose)
@@ -36,9 +37,22 @@ class _DbCase(unittest.TestCase):
         """rows: (high, low, volume) oldest -> newest, one bar per day."""
         with self.Session() as db:
             for i, (high, low, volume) in enumerate(rows):
-                db.add(BarModel(symbol=symbol, timeframe=timeframe, open=low, high=high, low=low,
-                                close=high, volume=volume, timestamp=T0 + timedelta(days=i),
-                                provider="t", data_status="HISTORICAL", source="raw", session="regular"))
+                db.add(
+                    BarModel(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        open=low,
+                        high=high,
+                        low=low,
+                        close=high,
+                        volume=volume,
+                        timestamp=T0 + timedelta(days=i),
+                        provider="t",
+                        data_status="HISTORICAL",
+                        source="raw",
+                        session="regular",
+                    )
+                )
             db.commit()
 
 
@@ -48,12 +62,12 @@ class TestLookbackIsActuallyRespected(_DbCase):
         rows = [(1000, 900, 10)] + [(100 + (i % 11), 99, 10) for i in range(30)] + [(999, 998, 10)]
         self.add_bars("AAPL", "1d", rows)
         result = helpers._compute_highest_high("AAPL", "1d", 20)
-        self.assertEqual(result, 110)   # not 1000 (history) and not 999 (the current bar)
+        self.assertEqual(result, 110)  # not 1000 (history) and not 999 (the current bar)
 
     def test_lowest_low_is_over_the_last_n_bars_not_the_whole_history(self):
         rows = [(50, 1, 10)] + [(100, 90 + (i % 5), 10) for i in range(30)] + [(100, 2, 10)]
         self.add_bars("AAPL", "1d", rows)
-        self.assertEqual(helpers._compute_lowest_low("AAPL", "1d", 20), 90)   # not 1, not 2
+        self.assertEqual(helpers._compute_lowest_low("AAPL", "1d", 20), 90)  # not 1, not 2
 
     def test_the_current_bar_is_excluded(self):
         self.add_bars("AAPL", "1d", [(10, 5, 100)] * 5 + [(500, 1, 999_999)])
@@ -62,7 +76,7 @@ class TestLookbackIsActuallyRespected(_DbCase):
         self.assertEqual(helpers._compute_avg_volume("AAPL", 5, "1d"), 100)
 
     def test_only_the_lookback_window_counts(self):
-        vols = [1_000_000] * 10 + [100] * 20 + [50]            # old huge bars, then 20 small, then current
+        vols = [1_000_000] * 10 + [100] * 20 + [50]  # old huge bars, then 20 small, then current
         self.add_bars("AAPL", "1d", [(10, 5, v) for v in vols])
         self.assertEqual(helpers._compute_avg_volume("AAPL", 20, "1d"), 100)
 
@@ -82,7 +96,7 @@ class TestLookbackIsActuallyRespected(_DbCase):
         self.assertIsNone(helpers._compute_highest_high("NOPE", "1d", 20))
         self.assertIsNone(helpers._compute_lowest_low("NOPE", "1d", 20))
         self.assertIsNone(helpers._compute_avg_volume("NOPE", 20, "1d"))
-        self.add_bars("ONE", "1d", [(10, 5, 100)])              # only the "current" bar, no history
+        self.add_bars("ONE", "1d", [(10, 5, 100)])  # only the "current" bar, no history
         self.assertIsNone(helpers._compute_highest_high("ONE", "1d", 20))
 
 
@@ -92,20 +106,38 @@ class TestEvaluatorsUseTheCorrectFallback(_DbCase):
     def test_breakout_fires_when_price_beats_the_recent_high_not_the_all_time_high(self):
         rows = [(1000, 900, 10)] + [(100 + (i % 11), 99, 10) for i in range(30)] + [(105, 104, 10)]
         self.add_bars("AAPL", "1d", rows)
-        self.assertTrue(evaluators._eval_breakout("20", {"current_price": 111.0, "symbol": "AAPL", "timeframe": "1d"}))
-        self.assertFalse(evaluators._eval_breakout("20", {"current_price": 109.0, "symbol": "AAPL", "timeframe": "1d"}))
+        self.assertTrue(
+            evaluators._eval_breakout(
+                "20", {"current_price": 111.0, "symbol": "AAPL", "timeframe": "1d"}
+            )
+        )
+        self.assertFalse(
+            evaluators._eval_breakout(
+                "20", {"current_price": 109.0, "symbol": "AAPL", "timeframe": "1d"}
+            )
+        )
 
     def test_breakdown_fires_below_the_recent_low(self):
         rows = [(50, 1, 10)] + [(100, 90 + (i % 5), 10) for i in range(30)] + [(95, 94, 10)]
         self.add_bars("AAPL", "1d", rows)
-        self.assertTrue(evaluators._eval_breakdown("20", {"current_price": 89.0, "symbol": "AAPL", "timeframe": "1d"}))
-        self.assertFalse(evaluators._eval_breakdown("20", {"current_price": 91.0, "symbol": "AAPL", "timeframe": "1d"}))
+        self.assertTrue(
+            evaluators._eval_breakdown(
+                "20", {"current_price": 89.0, "symbol": "AAPL", "timeframe": "1d"}
+            )
+        )
+        self.assertFalse(
+            evaluators._eval_breakdown(
+                "20", {"current_price": 91.0, "symbol": "AAPL", "timeframe": "1d"}
+            )
+        )
 
     def test_volume_spike_compares_against_the_same_timeframes_average(self):
         self.add_bars("AAPL", "1d", [(10, 5, 1_000)] * 22)
-        self.add_bars("AAPL", "1m", [(10, 5, 500_000)] * 22)     # would drag a mixed average way up
+        self.add_bars("AAPL", "1m", [(10, 5, 500_000)] * 22)  # would drag a mixed average way up
         spike = evaluators._eval_volume_spike if hasattr(evaluators, "_eval_volume_spike") else None
-        fn = spike or next(getattr(evaluators, n) for n in dir(evaluators) if n.startswith("_eval_volume"))
+        fn = spike or next(
+            getattr(evaluators, n) for n in dir(evaluators) if n.startswith("_eval_volume")
+        )
         self.assertTrue(fn("2.0", {"current_volume": 2_500, "symbol": "AAPL", "timeframe": "1d"}))
         self.assertFalse(fn("2.0", {"current_volume": 1_500, "symbol": "AAPL", "timeframe": "1d"}))
 

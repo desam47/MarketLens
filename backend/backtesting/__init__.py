@@ -8,6 +8,7 @@ each fired signal as a trade with forward 1d/5d/20d returns.
 Exports the process-wide ``BacktestEngine`` singleton imported by the
 API router.
 """
+
 from .engine import BacktestEngine, backtest_engine
 
 __all__ = ["BacktestEngine", "backtest_engine"]

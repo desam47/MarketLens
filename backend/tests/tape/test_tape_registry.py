@@ -1,4 +1,5 @@
 """Tests for backend.api.tape.registry."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -26,13 +27,15 @@ class TestTapeRegistry(unittest.TestCase):
     def test_get_tape_engine_registers_for_trade_dispatch(self, _seed):
         e = registry.get_tape_engine("MSFT")
         # a dispatch_trade for MSFT must now reach the engine
-        engine_registry.dispatch_trade("MSFT", price=400.0, size=100,
-                                       timestamp=__import__("time").time(), side="buy")
+        engine_registry.dispatch_trade(
+            "MSFT", price=400.0, size=100, timestamp=__import__("time").time(), side="buy"
+        )
         self.assertEqual(e.get_snapshot()["trade_count"], 1)
 
     @patch("backend.api.tape.registry._seed_from_webull_ticks", return_value=0)
     def test_persist_once_drains_engines(self, _seed):
         import time as _t
+
         e = registry.get_tape_engine("NVDA")
         base = _t.time() - 5
         for i in range(20):
@@ -69,19 +72,20 @@ class TestSeedFromWebullTicks(unittest.TestCase):
         mock_resp.status_code = 200
         mock_resp.json.return_value = []
 
-        with patch(
-            "backend.market_data.services.manager.get_cached_provider",
-            return_value=mock_provider,
-        ), patch(
-            "backend.market_data.services.providers._call_provider",
-            return_value=mock_resp,
-        ) as mock_call:
+        with (
+            patch(
+                "backend.market_data.services.manager.get_cached_provider",
+                return_value=mock_provider,
+            ),
+            patch(
+                "backend.market_data.services.providers._call_provider",
+                return_value=mock_resp,
+            ) as mock_call,
+        ):
             engine = TapeEngine("AAPL")
             n = registry._seed_from_webull_ticks("AAPL", engine)
 
-        mock_call.assert_called_once_with(
-            mock_provider, "get_recent_ticks", "AAPL", count=200
-        )
+        mock_call.assert_called_once_with(mock_provider, "get_recent_ticks", "AAPL", count=200)
         mock_provider._data_client.market_data.get_tick.assert_not_called()
         self.assertEqual(n, 0)
 

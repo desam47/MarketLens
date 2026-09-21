@@ -1,6 +1,7 @@
 """
 Unit tests for the condition evaluator dispatcher.
 """
+
 import json
 import os
 import sys
@@ -34,7 +35,6 @@ from backend.alerts.conditions import (
 
 
 class TestConditionEvaluators(unittest.TestCase):
-
     # --- signal_equals ---------------------------------------------------
 
     def test_signal_equals_true(self):
@@ -249,7 +249,11 @@ class TestConditionEvaluators(unittest.TestCase):
     def test_options_activity_change_checks_volume_and_open_interest(self):
         self.assertTrue(_eval_options_activity_change("50", {"volume_change_pct": 60}))
         self.assertTrue(_eval_options_activity_change("50", {"open_interest_change_pct": -55}))
-        self.assertFalse(_eval_options_activity_change("50", {"volume_change_pct": 10, "open_interest_change_pct": 20}))
+        self.assertFalse(
+            _eval_options_activity_change(
+                "50", {"volume_change_pct": 10, "open_interest_change_pct": 20}
+            )
+        )
 
     # --- divergence ----------------------------------------------------
 
@@ -305,7 +309,6 @@ class TestConditionEvaluators(unittest.TestCase):
 
 
 class TestMarketRegimeChange(unittest.TestCase):
-
     def test_regime_change_fires_on_risk_on_to_risk_off(self):
         """RISK_ON → RISK_OFF triggers the alert."""
         value = {"current_regime": "RISK_ON", "previous_regime": "RISK_OFF"}
@@ -372,16 +375,28 @@ class TestMarketRegimeChange(unittest.TestCase):
 
 
 class TestEvaluateDispatcher(unittest.TestCase):
-
     def test_valid_condition_types_exported(self):
         expected = {
-            "signal_equals", "price_above", "price_below", "pct_change_above",
-            "trend_crosses_above_70", "trend_crosses_below_70",
-            "trend_direction_changes", "trend_strengthens", "trend_weakens",
-            "full_timeframe_alignment", "timeframe_conflict",
-            "volume_expansion", "divergence", "breakout", "breakdown",
-            "market_regime_change", "signal_profile", "news_arrival",
-            "insider_sentiment_change", "options_activity_change",
+            "signal_equals",
+            "price_above",
+            "price_below",
+            "pct_change_above",
+            "trend_crosses_above_70",
+            "trend_crosses_below_70",
+            "trend_direction_changes",
+            "trend_strengthens",
+            "trend_weakens",
+            "full_timeframe_alignment",
+            "timeframe_conflict",
+            "volume_expansion",
+            "divergence",
+            "breakout",
+            "breakdown",
+            "market_regime_change",
+            "signal_profile",
+            "news_arrival",
+            "insider_sentiment_change",
+            "options_activity_change",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 
@@ -402,13 +417,15 @@ class TestEvaluateDispatcher(unittest.TestCase):
         self.assertFalse(evaluate("pct_change_above", "3.0", 1.0))
 
     def test_signal_profile_filters_direction_score_strength_regime_and_timeframe(self):
-        profile = json.dumps({
-            "direction": "bullish",
-            "min_score": 70,
-            "min_strength": 0.7,
-            "market_regime": "risk_on",
-            "timeframe": "1d",
-        })
+        profile = json.dumps(
+            {
+                "direction": "bullish",
+                "min_score": 70,
+                "min_strength": 0.7,
+                "market_regime": "risk_on",
+                "timeframe": "1d",
+            }
+        )
         value = {
             "current": 80,
             "current_direction": "bullish",
@@ -422,17 +439,31 @@ class TestEvaluateDispatcher(unittest.TestCase):
 
     def test_dispatcher_trend_crosses_above_70(self):
         self.assertTrue(evaluate("trend_crosses_above_70", "", {"current": 72.0, "previous": 68.0}))
-        self.assertFalse(evaluate("trend_crosses_above_70", "", {"current": 65.0, "previous": 60.0}))
+        self.assertFalse(
+            evaluate("trend_crosses_above_70", "", {"current": 65.0, "previous": 60.0})
+        )
 
     def test_dispatcher_trend_crosses_below_70(self):
         self.assertTrue(evaluate("trend_crosses_below_70", "", {"current": 68.0, "previous": 72.0}))
-        self.assertFalse(evaluate("trend_crosses_below_70", "", {"current": 75.0, "previous": 80.0}))
+        self.assertFalse(
+            evaluate("trend_crosses_below_70", "", {"current": 75.0, "previous": 80.0})
+        )
 
     def test_dispatcher_trend_direction_changes(self):
-        self.assertTrue(evaluate("trend_direction_changes", "",
-                                 {"current_direction": "bullish", "previous_direction": "bearish"}))
-        self.assertFalse(evaluate("trend_direction_changes", "",
-                                 {"current_direction": "bullish", "previous_direction": "bullish"}))
+        self.assertTrue(
+            evaluate(
+                "trend_direction_changes",
+                "",
+                {"current_direction": "bullish", "previous_direction": "bearish"},
+            )
+        )
+        self.assertFalse(
+            evaluate(
+                "trend_direction_changes",
+                "",
+                {"current_direction": "bullish", "previous_direction": "bullish"},
+            )
+        )
 
     def test_dispatcher_trend_strengthens(self):
         self.assertTrue(evaluate("trend_strengthens", "5", {"current": 60.0, "previous": 50.0}))
@@ -451,46 +482,72 @@ class TestEvaluateDispatcher(unittest.TestCase):
         self.assertFalse(evaluate("timeframe_conflict", "", ["bullish", "bullish"]))
 
     def test_dispatcher_volume_expansion(self):
-        self.assertTrue(evaluate("volume_expansion", "2.0", {"current_volume": 100000, "avg_volume": 40000}))
-        self.assertFalse(evaluate("volume_expansion", "2.0", {"current_volume": 50000, "avg_volume": 40000}))
+        self.assertTrue(
+            evaluate("volume_expansion", "2.0", {"current_volume": 100000, "avg_volume": 40000})
+        )
+        self.assertFalse(
+            evaluate("volume_expansion", "2.0", {"current_volume": 50000, "avg_volume": 40000})
+        )
 
     def test_dispatcher_divergence_negative(self):
-        self.assertTrue(evaluate("divergence", "negative", {"price_change_pct": 2.5, "rsi_like": 45.0}))
-        self.assertFalse(evaluate("divergence", "negative", {"price_change_pct": -2.5, "rsi_like": 55.0}))
+        self.assertTrue(
+            evaluate("divergence", "negative", {"price_change_pct": 2.5, "rsi_like": 45.0})
+        )
+        self.assertFalse(
+            evaluate("divergence", "negative", {"price_change_pct": -2.5, "rsi_like": 55.0})
+        )
 
     def test_dispatcher_divergence_positive(self):
-        self.assertTrue(evaluate("divergence", "positive", {"price_change_pct": -2.5, "rsi_like": 55.0}))
-        self.assertFalse(evaluate("divergence", "positive", {"price_change_pct": 2.5, "rsi_like": 45.0}))
+        self.assertTrue(
+            evaluate("divergence", "positive", {"price_change_pct": -2.5, "rsi_like": 55.0})
+        )
+        self.assertFalse(
+            evaluate("divergence", "positive", {"price_change_pct": 2.5, "rsi_like": 45.0})
+        )
 
     def test_dispatcher_breakout(self):
         self.assertTrue(evaluate("breakout", "20", {"current_price": 155.0, "highest_high": 150.0}))
-        self.assertFalse(evaluate("breakout", "20", {"current_price": 145.0, "highest_high": 150.0}))
+        self.assertFalse(
+            evaluate("breakout", "20", {"current_price": 145.0, "highest_high": 150.0})
+        )
 
     def test_dispatcher_breakdown(self):
         self.assertTrue(evaluate("breakdown", "20", {"current_price": 145.0, "lowest_low": 150.0}))
         self.assertFalse(evaluate("breakdown", "20", {"current_price": 155.0, "lowest_low": 150.0}))
 
     def test_dispatcher_market_regime_change_fires(self):
-        self.assertTrue(evaluate(
-            "market_regime_change", "",
-            {"current_regime": "RISK_ON", "previous_regime": "RISK_OFF"},
-        ))
+        self.assertTrue(
+            evaluate(
+                "market_regime_change",
+                "",
+                {"current_regime": "RISK_ON", "previous_regime": "RISK_OFF"},
+            )
+        )
 
     def test_dispatcher_market_regime_change_no_fire_on_same(self):
-        self.assertFalse(evaluate(
-            "market_regime_change", "",
-            {"current_regime": "RISK_ON", "previous_regime": "RISK_ON"},
-        ))
+        self.assertFalse(
+            evaluate(
+                "market_regime_change",
+                "",
+                {"current_regime": "RISK_ON", "previous_regime": "RISK_ON"},
+            )
+        )
 
     def test_dispatcher_market_regime_change_filter_to_regime(self):
-        self.assertTrue(evaluate(
-            "market_regime_change", "risk_off",
-            {"current_regime": "RISK_OFF", "previous_regime": "RISK_ON"},
-        ))
-        self.assertFalse(evaluate(
-            "market_regime_change", "risk_on",
-            {"current_regime": "RISK_OFF", "previous_regime": "RISK_ON"},
-        ))
+        self.assertTrue(
+            evaluate(
+                "market_regime_change",
+                "risk_off",
+                {"current_regime": "RISK_OFF", "previous_regime": "RISK_ON"},
+            )
+        )
+        self.assertFalse(
+            evaluate(
+                "market_regime_change",
+                "risk_on",
+                {"current_regime": "RISK_OFF", "previous_regime": "RISK_ON"},
+            )
+        )
 
     def test_dispatcher_unknown_condition_returns_false(self):
         self.assertFalse(evaluate("unknown_condition", "foo", None))

@@ -2,6 +2,7 @@
 Strategy selector that chooses optimal trading strategies based on
 market regime, trend analysis, and multi-timeframe confluence.
 """
+
 import logging
 from datetime import datetime
 from enum import StrEnum
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class StrategyType(StrEnum):
     """Types of trading strategies"""
+
     TREND_FOLLOWING = "trend_following"
     MEAN_REVERSION = "mean_reversion"
     BREAKOUT = "breakout"
@@ -31,16 +33,18 @@ class StrategyType(StrEnum):
 class StrategySignal:
     """Represents a selected trading strategy with parameters"""
 
-    def __init__(self,
-                 symbol: str,
-                 strategy_type: StrategyType,
-                 confidence: float,  # 0.0 to 1.0
-                 timeframe: str,  # Primary timeframe to trade
-                 parameters: dict[str, Any],
-                 regime_signal: RegimeSignal,
-                 trend_signal: TrendSignal | None = None,
-                 confluence_signal: ConfluenceSignal | None = None,
-                 timestamp: datetime = None):
+    def __init__(
+        self,
+        symbol: str,
+        strategy_type: StrategyType,
+        confidence: float,  # 0.0 to 1.0
+        timeframe: str,  # Primary timeframe to trade
+        parameters: dict[str, Any],
+        regime_signal: RegimeSignal,
+        trend_signal: TrendSignal | None = None,
+        confluence_signal: ConfluenceSignal | None = None,
+        timestamp: datetime = None,
+    ):
         self.symbol = symbol
         self.strategy_type = strategy_type
         self.confidence = confidence
@@ -52,8 +56,10 @@ class StrategySignal:
         self.timestamp = timestamp or datetime.now()
 
     def __repr__(self):
-        return (f"StrategySignal({self.symbol} {self.strategy_type.value} "
-                f"conf:{self.confidence:.2f} tf:{self.timeframe})")
+        return (
+            f"StrategySignal({self.symbol} {self.strategy_type.value} "
+            f"conf:{self.confidence:.2f} tf:{self.timeframe})"
+        )
 
 
 class StrategySelector:
@@ -73,29 +79,31 @@ class StrategySelector:
             StrategyType.TREND_FOLLOWING: {
                 "base": {"fast_ma": 9, "slow_ma": 21, "atr_period": 14},
                 "strong_trend": {"fast_ma": 5, "slow_ma": 13, "atr_period": 10},
-                "weak_trend": {"fast_ma": 12, "slow_ma": 26, "atr_period": 20}
+                "weak_trend": {"fast_ma": 12, "slow_ma": 26, "atr_period": 20},
             },
             StrategyType.MEAN_REVERSION: {
                 "base": {"rsi_period": 14, "bb_std": 2.0, "lookback": 20},
                 "high_vol": {"rsi_period": 10, "bb_std": 2.5, "lookback": 15},
-                "low_vol": {"rsi_period": 20, "bb_std": 1.5, "lookback": 25}
+                "low_vol": {"rsi_period": 20, "bb_std": 1.5, "lookback": 25},
             },
             StrategyType.BREAKOUT: {
                 "base": {"bb_period": 20, "vol_threshold": 1.5, "momentum_period": 10},
                 "squeeze": {"bb_period": 20, "vol_threshold": 1.2, "momentum_period": 8},
-                "strong_vol": {"bb_period": 25, "vol_threshold": 2.0, "momentum_period": 15}
+                "strong_vol": {"bb_period": 25, "vol_threshold": 2.0, "momentum_period": 15},
             },
             StrategyType.MOMENTUM: {
                 "base": {"rsi_period": 14, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9},
                 "strong": {"rsi_period": 10, "macd_fast": 8, "macd_slow": 21, "macd_signal": 7},
-                "weak": {"rsi_period": 20, "macd_fast": 16, "macd_slow": 34, "macd_signal": 12}
-            }
+                "weak": {"rsi_period": 20, "macd_fast": 16, "macd_slow": 34, "macd_signal": 12},
+            },
         }
 
-    def select_strategy(self,
-                       regime_signal: RegimeSignal,
-                       trend_signal: TrendSignal | None = None,
-                       confluence_signal: ConfluenceSignal | None = None) -> StrategySignal:
+    def select_strategy(
+        self,
+        regime_signal: RegimeSignal,
+        trend_signal: TrendSignal | None = None,
+        confluence_signal: ConfluenceSignal | None = None,
+    ) -> StrategySignal:
         """
         Select optimal strategy based on market analysis
 
@@ -121,7 +129,7 @@ class StrategySelector:
                 regime_signal=None,
                 trend_signal=trend_signal,
                 confluence_signal=confluence_signal,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
 
         try:
@@ -158,7 +166,7 @@ class StrategySelector:
                 parameters=parameters,
                 regime_signal=regime_signal,
                 trend_signal=trend_signal,
-                confluence_signal=confluence_signal
+                confluence_signal=confluence_signal,
             )
 
             # Store in history
@@ -179,7 +187,7 @@ class StrategySelector:
                 timeframe="1h",
                 parameters=self.strategy_params[StrategyType.MEAN_REVERSION]["base"],
                 regime_signal=regime_signal,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
 
     def _get_base_strategy_from_regime(self, regime: MarketRegime) -> StrategyType:
@@ -201,8 +209,9 @@ class StrategySelector:
         }
         return regime_map.get(regime, StrategyType.MEAN_REVERSION)
 
-    def _adjust_for_trend(self, base_strategy: StrategyType,
-                         trend_signal: TrendSignal | None) -> StrategyType:
+    def _adjust_for_trend(
+        self, base_strategy: StrategyType, trend_signal: TrendSignal | None
+    ) -> StrategyType:
         """Adjust strategy based on trend strength and direction"""
         if not trend_signal:
             return base_strategy
@@ -221,8 +230,9 @@ class StrategySelector:
 
         return base_strategy
 
-    def _adjust_for_confluence(self, base_strategy: StrategyType,
-                              confluence_signal: ConfluenceSignal | None) -> StrategyType:
+    def _adjust_for_confluence(
+        self, base_strategy: StrategyType, confluence_signal: ConfluenceSignal | None
+    ) -> StrategyType:
         """Adjust strategy based on multi-timeframe alignment"""
         if not confluence_signal:
             return base_strategy
@@ -239,11 +249,13 @@ class StrategySelector:
 
         return base_strategy
 
-    def _get_strategy_parameters(self,
-                                strategy_type: StrategyType,
-                                regime_signal: RegimeSignal,
-                                trend_signal: TrendSignal | None,
-                                confluence_signal: ConfluenceSignal | None) -> dict[str, Any]:
+    def _get_strategy_parameters(
+        self,
+        strategy_type: StrategyType,
+        regime_signal: RegimeSignal,
+        trend_signal: TrendSignal | None,
+        confluence_signal: ConfluenceSignal | None,
+    ) -> dict[str, Any]:
         """Get parameters optimized for current market conditions"""
         # Get base parameters
         params = self.strategy_params.get(strategy_type, {}).get("base", {}).copy()
@@ -283,10 +295,12 @@ class StrategySelector:
 
         return params
 
-    def _select_optimal_timeframe(self,
-                                 regime_signal: RegimeSignal,
-                                 trend_signal: TrendSignal | None,
-                                 confluence_signal: ConfluenceSignal | None) -> str:
+    def _select_optimal_timeframe(
+        self,
+        regime_signal: RegimeSignal,
+        trend_signal: TrendSignal | None,
+        confluence_signal: ConfluenceSignal | None,
+    ) -> str:
         """Select the optimal timeframe to trade based on analysis"""
         # Default timeframes by regime (Phase 8: 4 spec names)
         regime_timeframes = {
@@ -302,11 +316,8 @@ class StrategySelector:
         # Adjust based on trend signal timeframe if available and strong
         if trend_signal and trend_signal.confidence > 0.7:
             # Use the trend signal's timeframe if it's strong
-            tf_map = {
-                "1m": "1m", "5m": "5m", "15m": "15m",
-                "1h": "1h", "4h": "4h", "1d": "1d"
-            }
-            trend_tf = getattr(trend_signal.timeframe, 'value', str(trend_signal.timeframe))
+            tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
+            trend_tf = getattr(trend_signal.timeframe, "value", str(trend_signal.timeframe))
             if trend_tf in tf_map:
                 # Weight toward higher timeframe if strong trend
                 if trend_signal.confidence > 0.8:
@@ -320,10 +331,12 @@ class StrategySelector:
 
         return base_timeframe
 
-    def _calculate_strategy_confidence(self,
-                                     regime_signal: RegimeSignal,
-                                     trend_signal: TrendSignal | None,
-                                     confluence_signal: ConfluenceSignal | None) -> float:
+    def _calculate_strategy_confidence(
+        self,
+        regime_signal: RegimeSignal,
+        trend_signal: TrendSignal | None,
+        confluence_signal: ConfluenceSignal | None,
+    ) -> float:
         """Calculate confidence in the selected strategy"""
         confidences = []
 
@@ -336,7 +349,9 @@ class StrategySelector:
 
         # Confluence confidence (derived from alignment and strength)
         if confluence_signal:
-            confluence_confidence = (confluence_signal.alignment_score + confluence_signal.strength) / 2
+            confluence_confidence = (
+                confluence_signal.alignment_score + confluence_signal.strength
+            ) / 2
             confidences.append(confluence_confidence)
 
         # Weighted average (regime gets highest weight as it's the foundation)
@@ -353,7 +368,7 @@ class StrategySelector:
             TrendDirection.UPTREND: 1,
             TrendDirection.DOWNTREND: -1,
             TrendDirection.SIDEWAYS: 0,
-            TrendDirection.UNKNOWN: 0
+            TrendDirection.UNKNOWN: 0,
         }
         base_score = direction_map.get(trend_signal.direction, 0)
 
@@ -362,7 +377,7 @@ class StrategySelector:
             TrendStrength.WEAK: 0.5,
             TrendStrength.MODERATE: 0.75,
             TrendStrength.STRONG: 1.0,
-            TrendStrength.VERY_STRONG: 1.0
+            TrendStrength.VERY_STRONG: 1.0,
         }
         strength_factor = strength_map.get(trend_signal.strength, 0.5)
 

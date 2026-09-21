@@ -12,6 +12,7 @@ Note: ``op.drop_column`` is a no-op on this repo's SQLite/Alembic setup
 own downgrade too), so the downgrade assertion checks the revision
 pointer, not the physical column.
 """
+
 import os
 import subprocess
 import sys
@@ -28,13 +29,20 @@ def _alembic(*args: str, db_url: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "MARKETLENS_DB_OVERRIDE": db_url}
     return subprocess.run(
         [sys.executable, "-m", "alembic", *args],
-        cwd=_ROOT, env=env, capture_output=True, text=True, timeout=120,
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
 
 
 def _sqlite(db_path: str, sql: str) -> str:
     return subprocess.run(
-        ["sqlite3", db_path, sql], capture_output=True, text=True, timeout=30,
+        ["sqlite3", db_path, sql],
+        capture_output=True,
+        text=True,
+        timeout=30,
     ).stdout.strip()
 
 
@@ -58,10 +66,13 @@ class TestChatSessionScopeMigration(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
         # Seed: 2 plain sessions + 1 opened from an alert trigger.
-        _sqlite(self.db_path, (
-            "INSERT INTO chat_sessions (symbol, alert_trigger_id) VALUES "
-            "('AAPL', NULL), ('SPY', NULL), ('NVDA', 42);"
-        ))
+        _sqlite(
+            self.db_path,
+            (
+                "INSERT INTO chat_sessions (symbol, alert_trigger_id) VALUES "
+                "('AAPL', NULL), ('SPY', NULL), ('NVDA', 42);"
+            ),
+        )
 
         # Apply the scope migration.
         r = _alembic("upgrade", _POST, db_url=self.db_url)
@@ -72,15 +83,21 @@ class TestChatSessionScopeMigration(unittest.TestCase):
 
         # No NULLs, correct classification.
         self.assertEqual(
-            _sqlite(self.db_path, "SELECT count(*) FROM chat_sessions WHERE scope IS NULL;"), "0")
+            _sqlite(self.db_path, "SELECT count(*) FROM chat_sessions WHERE scope IS NULL;"), "0"
+        )
         self.assertEqual(
-            _sqlite(self.db_path,
-                    "SELECT scope FROM chat_sessions WHERE alert_trigger_id IS NOT NULL;"),
-            "alert")
+            _sqlite(
+                self.db_path, "SELECT scope FROM chat_sessions WHERE alert_trigger_id IS NOT NULL;"
+            ),
+            "alert",
+        )
         self.assertEqual(
-            _sqlite(self.db_path,
-                    "SELECT DISTINCT scope FROM chat_sessions WHERE alert_trigger_id IS NULL;"),
-            "symbol")
+            _sqlite(
+                self.db_path,
+                "SELECT DISTINCT scope FROM chat_sessions WHERE alert_trigger_id IS NULL;",
+            ),
+            "symbol",
+        )
 
     def test_downgrade_runs_and_moves_pointer_back(self):
         self.assertEqual(_alembic("upgrade", _POST, db_url=self.db_url).returncode, 0)

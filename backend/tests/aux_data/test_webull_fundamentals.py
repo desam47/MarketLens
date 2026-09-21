@@ -4,6 +4,7 @@ get_financials_indicators returns
   {"currency": "US", "values": {"<metric>": [{"fiscal_year", "fiscal_period", "value"}]}}
 get_fund_brief returns {"issuer": "Apple Inc"}
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -33,6 +34,7 @@ class _FakeFundamentals:
     trip the real "webull" circuit breaker's shared, module-level state and
     affect other tests or live traffic.
     """
+
     name = "webull_fundamentals_fake"
 
     def __init__(self, values=None, issuer="Apple Inc", raise_ind=False, raise_brief=False):
@@ -69,18 +71,20 @@ class TestWebullFundamentalsProvider(unittest.TestCase):
     def test_maps_diluted_eps_latest_quarter(self):
         # The real get_financials_indicators key set is per-share ratios;
         # only diluted_eps_incl_extra maps to a FundamentalsItem field.
-        fake = _FakeFundamentals(values={
-            "diluted_eps_incl_extra": _series((2025, 4, "1.5"), (2026, 3, "2.02")),
-            "roe": _series((2026, 3, "1.6")),        # no FundamentalsItem home
-            "net_margin": _series((2026, 3, "0.24")),
-        })
+        fake = _FakeFundamentals(
+            values={
+                "diluted_eps_incl_extra": _series((2025, 4, "1.5"), (2026, 3, "2.02")),
+                "roe": _series((2026, 3, "1.6")),  # no FundamentalsItem home
+                "net_margin": _series((2026, 3, "0.24")),
+            }
+        )
         with _patch_client(fake):
             prov = WebullFundamentalsProvider()
             out = prov.get_fundamentals("AAPL")
         d = out.data
         self.assertEqual(out.provider, "webull_fundamentals")
         self.assertEqual(d.company_name, "Apple Inc")
-        self.assertEqual(d.eps, 2.02)          # newest quarter, not 1.5
+        self.assertEqual(d.eps, 2.02)  # newest quarter, not 1.5
         self.assertTrue(prov._is_healthy)
 
     def test_both_calls_fail_raises(self):

@@ -109,17 +109,21 @@ def _timeframe_agreement(trend_signals: dict[str, Any]) -> dict[str, Any]:
             side = "neutral"
             neutral += 1
         confidence = _number(signal.get("confidence"))
-        timeframes.append({
-            "timeframe": timeframe,
-            "direction": side,
-            "raw_direction": raw_direction,
-            "confidence": round(confidence, 4) if confidence is not None else None,
-        })
+        timeframes.append(
+            {
+                "timeframe": timeframe,
+                "direction": side,
+                "raw_direction": raw_direction,
+                "confidence": round(confidence, 4) if confidence is not None else None,
+            }
+        )
 
     total = len(timeframes)
     dominant_count = max((bullish, bearish, neutral), default=0)
-    dominant = "bullish" if dominant_count == bullish and bullish else (
-        "bearish" if dominant_count == bearish and bearish else "neutral"
+    dominant = (
+        "bullish"
+        if dominant_count == bullish and bullish
+        else ("bearish" if dominant_count == bearish and bearish else "neutral")
     )
     return {
         "bullish": bullish,
@@ -164,68 +168,119 @@ def build_signal_explanation(result, previous_result=None) -> dict[str, Any]:
     rsi = _number(indicators.get("rsi"))
     if rsi is not None:
         rsi_direction = "bullish" if rsi < 30 else "bearish" if rsi > 70 else "neutral"
-        rsi_context = "oversold" if rsi < 30 else "overbought" if rsi > 70 else "in the neutral range"
-        drivers.append(_driver(
-            "rsi", "RSI", round(rsi, 2), rsi_direction,
-            f"RSI is {rsi_context} at {rsi:.1f}.",
-            "bullish" if rsi < 30 else "bearish" if rsi > 70 else "context",
-        ))
+        rsi_context = (
+            "oversold" if rsi < 30 else "overbought" if rsi > 70 else "in the neutral range"
+        )
+        drivers.append(
+            _driver(
+                "rsi",
+                "RSI",
+                round(rsi, 2),
+                rsi_direction,
+                f"RSI is {rsi_context} at {rsi:.1f}.",
+                "bullish" if rsi < 30 else "bearish" if rsi > 70 else "context",
+            )
+        )
 
     macd = _number(indicators.get("macd"))
     if macd is not None:
-        drivers.append(_driver(
-            "macd", "MACD histogram", round(macd, 4), _direction(macd, epsilon=0.00001),
-            f"MACD histogram is {'above' if macd > 0 else 'below' if macd < 0 else 'at'} zero.",
-            "bullish" if macd > 0 else "bearish" if macd < 0 else "context",
-        ))
+        drivers.append(
+            _driver(
+                "macd",
+                "MACD histogram",
+                round(macd, 4),
+                _direction(macd, epsilon=0.00001),
+                f"MACD histogram is {'above' if macd > 0 else 'below' if macd < 0 else 'at'} zero.",
+                "bullish" if macd > 0 else "bearish" if macd < 0 else "context",
+            )
+        )
 
     adx = _number(indicators.get("adx"))
     if adx is not None:
-        drivers.append(_driver(
-            "adx", "ADX", round(adx, 2), "neutral",
-            f"ADX at {adx:.1f} indicates {'a strong' if adx >= 50 else 'a developing' if adx >= 25 else 'a weak'} trend.",
-            "context",
-        ))
+        drivers.append(
+            _driver(
+                "adx",
+                "ADX",
+                round(adx, 2),
+                "neutral",
+                f"ADX at {adx:.1f} indicates {'a strong' if adx >= 50 else 'a developing' if adx >= 25 else 'a weak'} trend.",
+                "context",
+            )
+        )
 
     for period in (20, 50, 200):
         sma = _number(indicators.get(f"sma_{period}"))
         distance = _number(indicators.get(f"price_vs_sma_{period}_pct"))
         if sma is not None and distance is not None:
             side = _direction(distance, epsilon=0.05)
-            drivers.append(_driver(
-                f"sma_{period}", f"SMA {period}", round(sma, 2), side,
-                f"Price is {abs(distance):.1f}% {'above' if distance >= 0 else 'below'} the {period}-period moving average.",
-                side,
-            ))
+            drivers.append(
+                _driver(
+                    f"sma_{period}",
+                    f"SMA {period}",
+                    round(sma, 2),
+                    side,
+                    f"Price is {abs(distance):.1f}% {'above' if distance >= 0 else 'below'} the {period}-period moving average.",
+                    side,
+                )
+            )
 
     volume_ratio = _number(indicators.get("volume_ratio"))
     if volume_ratio is not None:
-        drivers.append(_driver(
-            "volume_ratio", "Relative volume", round(volume_ratio, 2),
-            "bullish" if volume_ratio >= 1.5 else "neutral",
-            f"Current volume is {volume_ratio:.1f}× the 20-period average.",
-            "bullish" if volume_ratio >= 1.5 else "context",
-        ))
+        drivers.append(
+            _driver(
+                "volume_ratio",
+                "Relative volume",
+                round(volume_ratio, 2),
+                "bullish" if volume_ratio >= 1.5 else "neutral",
+                f"Current volume is {volume_ratio:.1f}× the 20-period average.",
+                "bullish" if volume_ratio >= 1.5 else "context",
+            )
+        )
 
     relative_strength = _number(indicators.get("relative_strength"))
     if relative_strength is not None:
-        drivers.append(_driver(
-            "relative_strength", "Relative strength", round(relative_strength, 2),
-            _direction(relative_strength, epsilon=0.1),
-            f"The symbol is {'outperforming' if relative_strength >= 0 else 'underperforming'} its configured benchmark by {abs(relative_strength):.1f}%.",
-            "bullish" if relative_strength > 0 else "bearish" if relative_strength < 0 else "context",
-        ))
+        drivers.append(
+            _driver(
+                "relative_strength",
+                "Relative strength",
+                round(relative_strength, 2),
+                _direction(relative_strength, epsilon=0.1),
+                f"The symbol is {'outperforming' if relative_strength >= 0 else 'underperforming'} its configured benchmark by {abs(relative_strength):.1f}%.",
+                "bullish"
+                if relative_strength > 0
+                else "bearish"
+                if relative_strength < 0
+                else "context",
+            )
+        )
 
     for signal in signals:
         if not any(driver["key"] == f"signal:{signal}" for driver in drivers):
-            signal_direction = "bullish" if any(word in signal for word in ("BULLISH", "BREAKOUT", "OUTPERFORMER", "BUY", "REVERSAL")) else (
-                "bearish" if any(word in signal for word in ("BEARISH", "BREAKDOWN", "UNDERPERFORMER", "SELL")) else "neutral"
+            signal_direction = (
+                "bullish"
+                if any(
+                    word in signal
+                    for word in ("BULLISH", "BREAKOUT", "OUTPERFORMER", "BUY", "REVERSAL")
+                )
+                else (
+                    "bearish"
+                    if any(
+                        word in signal
+                        for word in ("BEARISH", "BREAKDOWN", "UNDERPERFORMER", "SELL")
+                    )
+                    else "neutral"
+                )
             )
-            drivers.append(_driver(
-                f"signal:{signal}", _label(signal), signal, signal_direction,
-                f"{_label(signal)} was triggered by the current scan conditions.",
-                signal_direction,
-            ))
+            drivers.append(
+                _driver(
+                    f"signal:{signal}",
+                    _label(signal),
+                    signal,
+                    signal_direction,
+                    f"{_label(signal)} was triggered by the current scan conditions.",
+                    signal_direction,
+                )
+            )
 
     agreement = _timeframe_agreement(result.trend_signals or {})
     signed_score = result.calculate_signed_total_score()

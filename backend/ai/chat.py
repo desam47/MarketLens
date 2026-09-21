@@ -52,6 +52,7 @@ degrade to a stored assistant message explaining that (grounded=False)
 rather than an HTTP error or a crashed request. Every tool call
 inherits the same contract — none of them raise either.
 """
+
 from __future__ import annotations
 
 import logging
@@ -111,25 +112,32 @@ _NEWS_INTENT = re.compile(
     r"\b(news|headline|catalyst|announc\w+|report\w*|filing|earnings|upgrade|"
     r"downgrade|analyst|rating|price target|what happened|sell[- ]?off|selloff|"
     r"rall\w+|spik\w+|plung\w+|surg\w+|why (is|did|are|has|s|'s)\b|"
-    r"mov\w+ (on|because|after|due))\b", re.I)
+    r"mov\w+ (on|because|after|due))\b",
+    re.I,
+)
 _FUNDA_INTENT = re.compile(
     r"\b(fundamental\w*|valuation|p/?e\b|pe ratio|peg\b|eps\b|revenue|sales|"
     r"profit\w*|margin\w*|balance sheet|debt|cash ?flow|fcf\b|dividend|yield|"
-    r"market ?cap|book value|financ\w+|forward pe|multiple|buyback)\b", re.I)
+    r"market ?cap|book value|financ\w+|forward pe|multiple|buyback)\b",
+    re.I,
+)
 _MARKET_INTENT = re.compile(
     r"\b(market|markets|s&p|spx|spy\b|nasdaq|dow\b|russell|indices|index|"
     r"regime|risk[- ]?on|risk[- ]?off|breadth|rotation|macro|the fed|rates|"
     r"vix\b|sentiment|overall|broad(er)?|environment|backdrop|my (watchlist|"
-    r"names|book|portfolio))\b", re.I)
+    r"names|book|portfolio))\b",
+    re.I,
+)
 _STATS_INTENT = re.compile(
     r"\b(win[- ]?rate|hit[- ]?rate|historical\w*|backtest|track record|"
-    r"how often|batting average|expectancy|sample size|base rate)\b", re.I)
+    r"how often|batting average|expectancy|sample size|base rate)\b",
+    re.I,
+)
 # A turn that might use the alert/watchlist action tools needs
 # active_alerts (for delete_alert to find a real id) even when it's a
 # focused single-ticker question that would otherwise skip the market
 # baseline — force it on regardless of the market-wide gate below.
-_ACTION_INTENT = re.compile(
-    r"\b(alert\w*|notify|remind\w*|watch ?list\w*|track\w*)\b", re.I)
+_ACTION_INTENT = re.compile(r"\b(alert\w*|notify|remind\w*|watch ?list\w*|track\w*)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -142,7 +150,8 @@ _ACTION_INTENT = re.compile(
 # misfires on remove_from_watchlist ("remove AAPL from my watchlist")
 # or a non-destructive mention ("what's on my watchlist").
 _DELETE_WATCHLIST_FALLBACK = re.compile(
-    r"\b(delete|remove|clear|trash|get rid of)\b[^.!?]{0,20}\bwatch ?list\b", re.I)
+    r"\b(delete|remove|clear|trash|get rid of)\b[^.!?]{0,20}\bwatch ?list\b", re.I
+)
 
 # Same rationale, for the turn AFTER a server-authored confirmation
 # question (``_confirm_prompt``): confirmed live 2026-09-11 that the
@@ -153,10 +162,12 @@ _DELETE_WATCHLIST_FALLBACK = re.compile(
 # turn, so the follow-up executes deterministically instead of trusting
 # the model to remember and restate the pending action correctly.
 _AFFIRM_INTENT = re.compile(
-    r"^\s*(yes\b|yep\b|yeah\b|yup\b|confirm(ed)?\b|do it\b|go ahead\b|sure\b|ok(ay)?\b)", re.I)
+    r"^\s*(yes\b|yep\b|yeah\b|yup\b|confirm(ed)?\b|do it\b|go ahead\b|sure\b|ok(ay)?\b)", re.I
+)
 _CONFIRM_DELETE_WATCHLIST_RE = re.compile(r'^Delete the watchlist "(?P<name>.+)"\? This removes')
 _CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
-    r'^Remove (?P<sym>\S+)(?: from "(?P<wl>[^"]+)")?\? Say yes to confirm\.$')
+    r'^Remove (?P<sym>\S+)(?: from "(?P<wl>[^"]+)")?\? Say yes to confirm\.$'
+)
 
 # "How many watchlists do I have" / "what are my watchlists" / "what's
 # on my watchlist" — the model is never told the trader's actual
@@ -170,7 +181,9 @@ _CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
 _WATCHLIST_LIST_INTENT = re.compile(
     r"how many watchlists?\b|"
     r"\b(which|what)\b.{0,20}\bwatchlists?\b|"
-    r"\blist\b.{0,10}\bwatchlists?\b", re.I)
+    r"\blist\b.{0,10}\bwatchlists?\b",
+    re.I,
+)
 
 # "What tickers/symbols are in <name>" / "what's in the <name> watchlist" —
 # same rationale as _WATCHLIST_LIST_INTENT, but for a *specific* named
@@ -207,7 +220,7 @@ _WATCHLIST_CONTENTS_INTENT = re.compile(
 # is the actual safety net, not this regex.
 _NAMED_WATCHLIST_RE = re.compile(
     r'["“](?P<name1>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)["”]?\s+watch\s?lists?\b'
-    r'|(?:\bmy\s+|\bthe\s+)(?P<name2>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b'
+    r"|(?:\bmy\s+|\bthe\s+)(?P<name2>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b"
     r'|\bwatch\s?lists?\s+(?:called|named)\s+["“]?(?P<name3>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)["”]?(?=[\s,;:\?\.!]|$)',
     re.I,
 )
@@ -222,7 +235,8 @@ _NAMED_WATCHLIST_RE = re.compile(
 # Setups" — since search tries alternatives in order at the first
 # position they succeed, never backtracking to a later, better one.
 _NAMED_WATCHLIST_LEADING_RE = re.compile(
-    r'^(?P<name>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b', re.I,
+    r"^(?P<name>[A-Za-z][A-Za-z0-9 &\'.\-]{0,40}?)\s+watch\s?lists?\b",
+    re.I,
 )
 
 
@@ -260,6 +274,7 @@ def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
         return []
     return [s.symbol for s in wl.symbols if s.is_enabled]
 
+
 # Short-lived per-symbol context cache — a burst of follow-ups about one
 # name rebuilt the whole scan + aux-data each turn.
 _CTX_TTL = 12.0
@@ -289,7 +304,10 @@ def _build_context_cached(sym: str, *, news: bool, funda: bool, diverg: bool) ->
             _ctx_cache.move_to_end(key)
             return hit[1]
     ctx = build_context(
-        sym, include_news=news, include_fundamentals=funda, include_divergence=diverg,
+        sym,
+        include_news=news,
+        include_fundamentals=funda,
+        include_divergence=diverg,
     ).compact()
     with _ctx_lock:
         _ctx_cache[key] = (now, ctx)
@@ -382,9 +400,8 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
     # answered deterministically in _generate_reply without an AI call
     # or per-symbol context build at all — skip here so this doesn't
     # silently upgrade those into a full multi-ticker AI turn instead).
-    if (
-        not _WATCHLIST_CONTENTS_INTENT.search(user_content)
-        and not _WATCHLIST_LIST_INTENT.search(user_content)
+    if not _WATCHLIST_CONTENTS_INTENT.search(user_content) and not _WATCHLIST_LIST_INTENT.search(
+        user_content
     ):
         named_wl_symbols = _resolve_named_watchlist_symbols(repo.db, user_content)
         if named_wl_symbols:
@@ -485,8 +502,15 @@ def answer_chat_message(
     try:
         turn = _prepare_turn(repo, session_id, user_content)
         reply_text, grounded, screened = _generate_reply(
-            repo.db, turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
-            turn.user_content, turn.alert_context, turn.capped, turn.base,
+            repo.db,
+            turn.symbol_blocks,
+            turn.unavailable,
+            turn.market_baseline,
+            turn.transcript,
+            turn.user_content,
+            turn.alert_context,
+            turn.capped,
+            turn.base,
         )
         grounded = grounded and not turn.unavailable  # deterministic fail-safe
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
@@ -501,9 +525,7 @@ def answer_chat_message(
         repo.close()
 
 
-def stream_chat_message(
-    session_id: int, user_content: str
-) -> Iterator[tuple]:
+def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
     Yields, in order:
@@ -519,9 +541,14 @@ def stream_chat_message(
     repo = ChatRepository()
     try:
         turn = _prepare_turn(repo, session_id, user_content)
-        yield ("meta", {
-            "focus": turn.focus, "partial": turn.partial, "unavailable": turn.unavailable,
-        })
+        yield (
+            "meta",
+            {
+                "focus": turn.focus,
+                "partial": turn.partial,
+                "unavailable": turn.unavailable,
+            },
+        )
 
         final_text: str | None = None
         grounded = False
@@ -535,12 +562,14 @@ def stream_chat_message(
         except Exception as e:  # noqa: BLE001 — mirror _generate_reply's contract
             logger.warning("Chat stream generation raised: %s", e)
             final_text, grounded = (
-                "Something went wrong reaching the AI provider — please try again.", False,
+                "Something went wrong reaching the AI provider — please try again.",
+                False,
             )
 
         if final_text is None:
             final_text, grounded = (
-                "AI is currently unavailable, so I can't answer that right now.", False,
+                "AI is currently unavailable, so I can't answer that right now.",
+                False,
             )
         grounded = grounded and not turn.unavailable
         msg = repo.add_message(session_id, "assistant", final_text)
@@ -573,7 +602,9 @@ def _availability(ctx: dict) -> dict:
         "has_price": ctx.get("price") is not None,
         "has_rsi": momentum.get("rsi") is not None,
         "has_support_resistance": bool(ctx.get("support_resistance")),
-        "note": "" if warm else (
+        "note": ""
+        if warm
+        else (
             "not in your watchlist — live price / indicators only, "
             "no multi-timeframe trend or confidence"
         ),
@@ -629,9 +660,14 @@ def _complete_and_parse(prompt: str, system: str, max_tokens: int, model: str | 
     failure_reason = "ai_error"
     for attempt in range(_CHAT_PARSE_RETRIES + 1):
         try:
-            resp = run_sync(ai_manager.complete(
-                prompt=prompt, system=system, max_tokens=max_tokens, model=model,
-            ))
+            resp = run_sync(
+                ai_manager.complete(
+                    prompt=prompt,
+                    system=system,
+                    max_tokens=max_tokens,
+                    model=model,
+                )
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("Chat AI call raised (attempt %d): %s", attempt + 1, e)
             failure_reason = "ai_error"
@@ -694,12 +730,20 @@ def _generate_reply(
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     prompt = build_chat_prompt(
-        symbol_blocks, unavailable, market_baseline, transcript,
-        user_content, alert_context,
-        capped_note=_capped_note(capped, symbol_blocks), token_budget=budget,
+        symbol_blocks,
+        unavailable,
+        market_baseline,
+        transcript,
+        user_content,
+        alert_context,
+        capped_note=_capped_note(capped, symbol_blocks),
+        token_budget=budget,
     )
     parsed, failure_reason = _complete_and_parse(
-        prompt, CHAT_SYSTEM_PROMPT, 500, ai_manager.settings.chat_model or None,
+        prompt,
+        CHAT_SYSTEM_PROMPT,
+        500,
+        ai_manager.settings.chat_model or None,
     )
     if parsed is None:
         if failure_reason == "ai_error":
@@ -707,8 +751,14 @@ def _generate_reply(
         return "I couldn't process that — could you rephrase?", False, []
 
     return _run_turn_actions(
-        db, parsed, symbol_blocks, unavailable, market_baseline, transcript,
-        user_content, alert_context,
+        db,
+        parsed,
+        symbol_blocks,
+        unavailable,
+        market_baseline,
+        transcript,
+        user_content,
+        alert_context,
     )
 
 
@@ -738,7 +788,8 @@ def _watchlist_list_reply(db) -> str:
         return f"You have 1 watchlist: {_describe(watchlists[0])}."
     return (
         f"You have {len(watchlists)} watchlists: "
-        + "; ".join(_describe(wl) for wl in watchlists) + "."
+        + "; ".join(_describe(wl) for wl in watchlists)
+        + "."
     )
 
 
@@ -783,7 +834,8 @@ def _fallback_action(user_content: str, symbol_blocks: list[dict]) -> str | None
 
 
 def _fallback_confirmation(
-    user_content: str, transcript: list[tuple[str, str]],
+    user_content: str,
+    transcript: list[tuple[str, str]],
 ) -> tuple[str, str | None, str | None] | None:
     """A deterministic ``(action, action_symbol, action_watchlist)`` to
     use when the trader just said yes to the app's OWN previous
@@ -809,8 +861,11 @@ def _fallback_confirmation(
 
 
 def _finalize_parsed(
-    db, parsed, symbol_blocks: list[dict],
-    user_content: str = "", transcript: list[tuple[str, str]] | None = None,
+    db,
+    parsed,
+    symbol_blocks: list[dict],
+    user_content: str = "",
+    transcript: list[tuple[str, str]] | None = None,
 ) -> tuple[str, bool, list[str]]:
     """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded, screened)``.
 
@@ -869,9 +924,14 @@ def _action_was_executed(parsed) -> bool:
 
 
 def _run_turn_actions(
-    db, parsed, symbol_blocks: list[dict], unavailable: list[str],
-    market_baseline: dict | None, transcript: list[tuple[str, str]],
-    user_content: str, alert_context: dict | None,
+    db,
+    parsed,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
+    transcript: list[tuple[str, str]],
+    user_content: str,
+    alert_context: dict | None,
 ) -> tuple[str, bool, list[str]]:
     """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
     the trader's own message hints at more than one request (see
@@ -900,16 +960,22 @@ def _run_turn_actions(
 
     for _ in range(_MAX_CHAIN_STEPS - 1):
         continuation = (
-            "Original request: " + user_content + "\n"
-            "Already executed: " + " ".join(texts)
+            "Original request: " + user_content + "\nAlready executed: " + " ".join(texts)
         )
         budget = max(2000, ai_manager.settings.max_tokens - 500)
         prompt = build_chat_prompt(
-            symbol_blocks, unavailable, market_baseline, transcript,
-            continuation, alert_context, token_budget=budget,
+            symbol_blocks,
+            unavailable,
+            market_baseline,
+            transcript,
+            continuation,
+            alert_context,
+            token_budget=budget,
         )
         next_parsed, failure_reason = _complete_and_parse(
-            prompt, CHAT_CONTINUATION_SYSTEM_PROMPT, 300,
+            prompt,
+            CHAT_CONTINUATION_SYSTEM_PROMPT,
+            300,
             ai_manager.settings.chat_model or None,
         )
         if next_parsed is None:
@@ -920,7 +986,11 @@ def _run_turn_actions(
             break
 
         step_text, step_grounded, step_screened = _finalize_parsed(
-            db, next_parsed, symbol_blocks, user_content, transcript,
+            db,
+            next_parsed,
+            symbol_blocks,
+            user_content,
+            transcript,
         )
         texts.append(step_text)
         all_grounded = all_grounded and step_grounded
@@ -949,9 +1019,14 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         and turn.base
         and set(turn.unavailable) == {s.upper() for s in turn.base}
     ):
-        yield ("result", (
-            f"I don't have enough data on {turn.unavailable[0]} yet to answer that.", False, [],
-        ))
+        yield (
+            "result",
+            (
+                f"I don't have enough data on {turn.unavailable[0]} yet to answer that.",
+                False,
+                [],
+            ),
+        )
         return
 
     if not turn.symbol_blocks:
@@ -966,16 +1041,26 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
             return
 
     if not ai_manager.enabled:
-        yield ("result", (
-            "AI is currently unavailable, so I can't answer that right now.", False, [],
-        ))
+        yield (
+            "result",
+            (
+                "AI is currently unavailable, so I can't answer that right now.",
+                False,
+                [],
+            ),
+        )
         return
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     prompt = build_chat_prompt(
-        turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
-        turn.user_content, turn.alert_context,
-        capped_note=_capped_note(turn.capped, turn.symbol_blocks), token_budget=budget,
+        turn.symbol_blocks,
+        turn.unavailable,
+        turn.market_baseline,
+        turn.transcript,
+        turn.user_content,
+        turn.alert_context,
+        capped_note=_capped_note(turn.capped, turn.symbol_blocks),
+        token_budget=budget,
     )
 
     chat_model = ai_manager.settings.chat_model or None
@@ -994,7 +1079,10 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
             if ai_manager.settings.chat_streaming:
                 for chunk in stream_sync(
                     ai_manager.stream(
-                        prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500, model=chat_model,
+                        prompt,
+                        system=CHAT_SYSTEM_PROMPT,
+                        max_tokens=500,
+                        model=chat_model,
                     )
                 ):
                     raw += chunk
@@ -1004,7 +1092,10 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
             else:
                 resp = run_sync(
                     ai_manager.complete(
-                        prompt, system=CHAT_SYSTEM_PROMPT, max_tokens=500, model=chat_model,
+                        prompt,
+                        system=CHAT_SYSTEM_PROMPT,
+                        max_tokens=500,
+                        model=chat_model,
                     )
                 )
                 raw = resp.text or ""
@@ -1031,10 +1122,19 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
         yield ("result", (failure_message, False, []))
         return
 
-    yield ("result", _run_turn_actions(
-        db, parsed, turn.symbol_blocks, turn.unavailable, turn.market_baseline, turn.transcript,
-        turn.user_content, turn.alert_context,
-    ))
+    yield (
+        "result",
+        _run_turn_actions(
+            db,
+            parsed,
+            turn.symbol_blocks,
+            turn.unavailable,
+            turn.market_baseline,
+            turn.transcript,
+            turn.user_content,
+            turn.alert_context,
+        ),
+    )
 
 
 def _format_trade_plan(plan) -> str:
@@ -1113,9 +1213,13 @@ _DESTRUCTIVE_ACTIONS = {"delete_alert", "remove_from_watchlist", "delete_watchli
 # no point paying for a rebuild the baseline's own content wouldn't
 # reflect anyway.
 _BASELINE_MUTATING_ACTIONS = {
-    "create_alert", "modify_alert", "delete_alert",
-    "add_to_watchlist", "remove_from_watchlist",
-    "create_watchlist", "delete_watchlist",
+    "create_alert",
+    "modify_alert",
+    "delete_alert",
+    "add_to_watchlist",
+    "remove_from_watchlist",
+    "create_watchlist",
+    "delete_watchlist",
 }
 
 
@@ -1147,8 +1251,7 @@ def _confirm_prompt(db, parsed) -> str:
                 return f"You have more than one watchlist ({names}) — which one should I delete?"
             name = wl.name if wl is not None else "that watchlist"
         return (
-            f'Delete the watchlist "{name}"? This removes every ticker in it — '
-            "say yes to confirm."
+            f'Delete the watchlist "{name}"? This removes every ticker in it — say yes to confirm.'
         )
     return "That's a destructive action — please confirm first."  # pragma: no cover — defensive
 
@@ -1220,12 +1323,15 @@ def _create_alert(db, parsed) -> tuple[str, bool]:
     if not symbol or not condition_type or not parameter:
         return (
             "I need a ticker, a condition, and a threshold to set that alert — "
-            "try again with specifics (e.g. \"tell me when AAPL breaks above 200\").",
+            'try again with specifics (e.g. "tell me when AAPL breaks above 200").',
             False,
         )
     label = parsed.action_label or f"{symbol} {condition_type.replace('_', ' ')}"
     alert = AlertRepository(db).create(
-        name=label, symbol=symbol, condition_type=condition_type, parameter=parameter,
+        name=label,
+        symbol=symbol,
+        condition_type=condition_type,
+        parameter=parameter,
     )
     return (
         f'Done — alert "{alert.name}" set for {symbol} '
@@ -1305,7 +1411,9 @@ def _remove_from_watchlist(db, parsed) -> tuple[str, bool]:
     # ticker that's only on one of the trader's lists resolves cleanly
     # even if they have several lists overall (see _resolve_watchlist).
     wl, ambiguous, candidates = _resolve_watchlist(
-        db, parsed.action_watchlist, containing_symbol=symbol,
+        db,
+        parsed.action_watchlist,
+        containing_symbol=symbol,
     )
     if ambiguous:
         names = ", ".join(c.name for c in candidates)
@@ -1384,8 +1492,11 @@ def _run_backtest(db, parsed) -> tuple[str, bool]:
 
     end = now_ny()
     config = BacktestConfig(
-        symbol=symbol, start_date=end - timedelta(days=180), end_date=end,
-        signals=list(DEFAULT_SIGNALS), timeframe="1d",
+        symbol=symbol,
+        start_date=end - timedelta(days=180),
+        end_date=end,
+        signals=list(DEFAULT_SIGNALS),
+        timeframe="1d",
     )
     run_id = backtest_engine.run(config)
     run = BacktestRepository(db).get_run(run_id)
@@ -1414,13 +1525,14 @@ def _set_entity_type(db, parsed) -> tuple[str, bool]:
     # symbol on exactly one of the trader's lists resolves cleanly even
     # with several lists overall.
     wl, ambiguous, candidates = _resolve_watchlist(
-        db, parsed.action_watchlist, containing_symbol=symbol,
+        db,
+        parsed.action_watchlist,
+        containing_symbol=symbol,
     )
     if ambiguous:
         names = ", ".join(c.name for c in candidates)
         return (
-            f"{symbol} is on more than one watchlist ({names}) — "
-            "which one should I update?",
+            f"{symbol} is on more than one watchlist ({names}) — which one should I update?",
             True,
         )
     if wl is None:
@@ -1428,7 +1540,9 @@ def _set_entity_type(db, parsed) -> tuple[str, bool]:
             return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".', False
         return f"{symbol} isn't on any of your watchlists.", False
     updated = WatchlistRepository(db).update_symbol_in_watchlist(
-        wl.id, symbol, entity_type=entity_type,
+        wl.id,
+        symbol,
+        entity_type=entity_type,
     )
     if updated is None:
         return f"{symbol} wasn't in {wl.name}.", False
@@ -1468,7 +1582,8 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
 
     try:
         filters, extras, _parser_used = parse_query(
-            query, base={"scope": "watchlist", "watchlist_id": watchlist_id},
+            query,
+            base={"scope": "watchlist", "watchlist_id": watchlist_id},
         )
         result = execute_query(filters, extras=extras, watchlist_id=watchlist_id, db=db)
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
@@ -1481,7 +1596,8 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
         return (
             f"No matches for {result.filter_description} across your "
             f"{result.universe_size} watched symbols.",
-            True, [],
+            True,
+            [],
         )
 
     shown = result.top_n[:5]
@@ -1489,8 +1605,7 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
     more = f", +{len(result.top_n) - 5} more" if len(result.top_n) > 5 else ""
     plural = "es" if result.matched_count != 1 else ""
     return (
-        f"{result.matched_count} match{plural} for {result.filter_description}: "
-        f"{items}{more}.",
+        f"{result.matched_count} match{plural} for {result.filter_description}: {items}{more}.",
         True,
         [r.symbol for r in shown],
     )

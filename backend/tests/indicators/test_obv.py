@@ -1,6 +1,7 @@
 """
 Tests for On-Balance Volume (OBV) indicator
 """
+
 import unittest
 
 from backend.indicators.obv import OBVIndicator

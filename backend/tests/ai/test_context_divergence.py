@@ -10,6 +10,7 @@ TestDivergencesEndpoint — doesn't attempt either) so the assertion
 is exact: build_context()'s divergence dict must equal the engine's
 own .to_dict() output for the most recent detected divergence.
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -37,15 +38,18 @@ def _fake_bars(n: int = 60) -> list[dict]:
     base = datetime(2026, 1, 1, tzinfo=UTC)
     return [
         {
-            "open": 100.0 + i, "high": 101.0 + i, "low": 99.0 + i,
-            "close": 100.5 + i, "volume": 1_000_000, "timestamp": base,
+            "open": 100.0 + i,
+            "high": 101.0 + i,
+            "low": 99.0 + i,
+            "close": 100.5 + i,
+            "volume": 1_000_000,
+            "timestamp": base,
         }
         for i in range(n)
     ]
 
 
 class TestBuildContextDivergence(unittest.TestCase):
-
     @patch("backend.divergence.DivergenceEngine.detect")
     @patch("backend.analysis.series.load_bars")
     @patch("backend.api.trend.registry.get_engine")
@@ -60,20 +64,30 @@ class TestBuildContextDivergence(unittest.TestCase):
         older = Divergence(
             type=DivergenceType.BULLISH_RSI,
             direction=DivergenceDirection.BULLISH,
-            symbol="AAPL", timeframe="1d",
-            pivot_a_index=5, pivot_b_index=20,
-            pivot_a_price=95.0, pivot_b_price=90.0,
-            pivot_a_indicator=25.0, pivot_b_indicator=35.0,
-            timestamp=datetime(2026, 1, 5, tzinfo=UTC), strength=0.6,
+            symbol="AAPL",
+            timeframe="1d",
+            pivot_a_index=5,
+            pivot_b_index=20,
+            pivot_a_price=95.0,
+            pivot_b_price=90.0,
+            pivot_a_indicator=25.0,
+            pivot_b_indicator=35.0,
+            timestamp=datetime(2026, 1, 5, tzinfo=UTC),
+            strength=0.6,
         )
         newest = Divergence(
             type=DivergenceType.BEARISH_RSI,
             direction=DivergenceDirection.BEARISH,
-            symbol="AAPL", timeframe="1d",
-            pivot_a_index=30, pivot_b_index=55,
-            pivot_a_price=110.0, pivot_b_price=120.0,
-            pivot_a_indicator=75.0, pivot_b_indicator=65.0,
-            timestamp=datetime(2026, 2, 1, tzinfo=UTC), strength=0.8,
+            symbol="AAPL",
+            timeframe="1d",
+            pivot_a_index=30,
+            pivot_b_index=55,
+            pivot_a_price=110.0,
+            pivot_b_price=120.0,
+            pivot_a_indicator=75.0,
+            pivot_b_indicator=65.0,
+            timestamp=datetime(2026, 2, 1, tzinfo=UTC),
+            strength=0.8,
         )
         mock_detect.return_value = [older, newest]
 
@@ -113,9 +127,7 @@ class TestBuildContextDivergence(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_include_divergence_false_skips_the_extra_bar_load(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_include_divergence_false_skips_the_extra_bar_load(self, mock_scanner, mock_get_engine):
         """include_divergence=False must skip divergence's own
         load_bars call. Support/resistance (section 7, unconditional)
         also calls load_bars with the same (symbol, timeframe) args

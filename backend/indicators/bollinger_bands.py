@@ -1,6 +1,7 @@
 """
 Bollinger Bands indicator
 """
+
 from typing import Any
 
 from .base_indicator import BaseIndicator
@@ -31,7 +32,7 @@ class BollingerBandsIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = [float(d['close']) for d in data]
+        closes = [float(d["close"]) for d in data]
 
         # Calculate the middle band (SMA) directly off the closes — do NOT
         # delegate to ``self.sma.calculate()`` because that method mutates
@@ -41,7 +42,7 @@ class BollingerBandsIndicator(BaseIndicator):
         # input data on every fresh call.
         middle_band: list[float] = []
         for i in range(self.period - 1, len(closes)):
-            window = closes[i - self.period + 1:i + 1]
+            window = closes[i - self.period + 1 : i + 1]
             middle_band.append(sum(window) / self.period)
 
         # Calculate standard deviation and bands
@@ -53,10 +54,10 @@ class BollingerBandsIndicator(BaseIndicator):
         for i, middle_value in enumerate(middle_band):
             # Map back to the closes index.
             closes_idx = i + self.period - 1
-            period_closes = closes[closes_idx - self.period + 1:closes_idx + 1]
+            period_closes = closes[closes_idx - self.period + 1 : closes_idx + 1]
             mean = sum(period_closes) / self.period
             variance = sum((x - mean) ** 2 for x in period_closes) / self.period
-            std_dev = variance ** 0.5
+            std_dev = variance**0.5
 
             # Calculate bands
             upper_value = middle_value + (self.std_dev * std_dev)
@@ -107,14 +108,15 @@ class BollingerBandsIndicator(BaseIndicator):
             Welford subtract-and-add steps.
           - Once warm, ``variance = M2 / period`` and ``std_dev = sqrt(variance)``.
         """
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         # ---- State init ----
-        if not hasattr(self, '_window'):
+        if not hasattr(self, "_window"):
             from collections import deque
+
             self._window: deque[float] = deque()
-            self._sum: float = 0.0          # sum of values in window
-            self._sum_sq: float = 0.0       # sum of squares in window
+            self._sum: float = 0.0  # sum of values in window
+            self._sum_sq: float = 0.0  # sum of squares in window
 
         # ---- Add the new value ----
         self._window.append(close_price)
@@ -141,15 +143,12 @@ class BollingerBandsIndicator(BaseIndicator):
         variance = (self._sum_sq / n) - (mean * mean)
         if variance < 0.0:
             variance = 0.0
-        std_dev = variance ** 0.5
+        std_dev = variance**0.5
 
         upper = mean + self.std_dev * std_dev
         lower = mean - self.std_dev * std_dev
         bandwidth = (upper - lower) / mean if mean != 0.0 else 0.0
-        percent_b = (
-            (close_price - lower) / (upper - lower)
-            if upper != lower else 0.0
-        )
+        percent_b = (close_price - lower) / (upper - lower) if upper != lower else 0.0
 
         # ---- Append to the historical series ----
         self.middle_band.append(mean)
@@ -164,9 +163,9 @@ class BollingerBandsIndicator(BaseIndicator):
     def get_bands(self) -> dict:
         """Get all Bollinger Bands values"""
         return {
-            'upper': self.upper_band.copy(),
-            'middle': self.middle_band.copy(),
-            'lower': self.lower_band.copy(),
-            'bandwidth': self.bandwidth.copy(),
-            'percent_b': self.percent_b.copy()
+            "upper": self.upper_band.copy(),
+            "middle": self.middle_band.copy(),
+            "lower": self.lower_band.copy(),
+            "bandwidth": self.bandwidth.copy(),
+            "percent_b": self.percent_b.copy(),
         }

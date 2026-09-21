@@ -4,6 +4,7 @@ API endpoints for drawing tools (Phase 2.3.5).
 CRUD for chart drawing annotations (trend lines, Fibonacci, rectangles, etc.).
 Drawings are scoped to a symbol+timeframe.
 """
+
 import logging
 from datetime import datetime
 
@@ -19,13 +20,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/drawing-tools", tags=["drawing-tools"])
 
 VALID_DRAWING_TYPES = {
-    "trend_line", "horizontal_line", "fib_retracement",
-    "rectangle", "arrow", "text", "channel", "pitchfork", "gann_fan",
+    "trend_line",
+    "horizontal_line",
+    "fib_retracement",
+    "rectangle",
+    "arrow",
+    "text",
+    "channel",
+    "pitchfork",
+    "gann_fan",
 }
 VALID_LINE_STYLES = {"solid", "dashed", "dotted"}
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────
+
 
 class DrawingToolCreate(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=10)
@@ -102,6 +111,7 @@ class DrawingToolResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
+
 def _to_response(model: DrawingTool) -> DrawingToolResponse:
     return DrawingToolResponse.model_validate(model)
 
@@ -125,6 +135,7 @@ def _validate_line_style(line_style: str | None) -> None:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
+
 
 @router.get("", response_model=list[DrawingToolResponse])
 def list_drawings(

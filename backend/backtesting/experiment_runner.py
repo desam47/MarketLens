@@ -13,6 +13,7 @@ across rolling windows). The Strategy Lab wants one pair of
 in-sample / validation / OOS slices per experiment so the overfit
 detector can compare all three.
 """
+
 from __future__ import annotations
 
 import json
@@ -108,6 +109,7 @@ def _split_slices(
 
 def _seconds(s: float):
     from datetime import timedelta
+
     return timedelta(seconds=s)
 
 
@@ -172,8 +174,11 @@ def run_experiment(config: ExperimentConfig) -> int:
         symbols_csv = ",".join(s.upper() for s in config.symbols)
 
         slices = _split_slices(
-            config.start_date, config.end_date,
-            config.n_splits, config.val_pct, config.oos_pct,
+            config.start_date,
+            config.end_date,
+            config.n_splits,
+            config.val_pct,
+            config.oos_pct,
         )
         # Pad missing slices (e.g. when OOS would be too short) with None.
         is_slice = next((s for s in slices if s[0] == "in_sample"), None)
@@ -307,7 +312,8 @@ def _tag_run_slice(run_id: int, slice_name: str) -> None:
         elif slice_name == "validation":
             # Encode via error field as a private marker; clear later.
             repo.update_run_status(
-                run_id, status="completed",
+                run_id,
+                status="completed",
                 out_of_sample=True,
                 error="__slice:validation",
             )

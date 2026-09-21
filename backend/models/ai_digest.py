@@ -4,6 +4,7 @@ AI Digest model (Version 4, AI feature 2: daily/session AI digest).
 One row per generated digest run (premarket or close). Mirrors
 AIAnalysisJob's "one row per run, JSON blob for the rich part" shape.
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text
@@ -38,15 +39,17 @@ class AIDigest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow,
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
     )
     market_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
     narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow,
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
     )
 
-    __table_args__ = (
-        Index("ix_ai_digests_session_generated", "session", "generated_at"),
-    )
+    __table_args__ = (Index("ix_ai_digests_session_generated", "session", "generated_at"),)

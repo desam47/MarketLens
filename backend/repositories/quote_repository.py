@@ -8,6 +8,7 @@ service. Quotes previously used raw ``QuoteModel`` ORM access directly in
 ``ingestion_service.py`` while bars went through ``bar_repository`` —
 moved here 2026-09-17 for consistency (no behavior change).
 """
+
 import logging
 
 from sqlalchemy.orm import Session
@@ -47,7 +48,8 @@ def _model_to_quote(row: QuoteModel) -> Quote:
         # Defensive: handle legacy data written with non-enum values (e.g. 'ok').
         logger.warning(
             "Unknown data_status '%s' for %s quote; treating as LIVE",
-            row.data_status, row.symbol,
+            row.data_status,
+            row.symbol,
         )
         status = DataStatus.LIVE
     return Quote(
@@ -103,9 +105,7 @@ def delete_quotes_for_symbol(symbol: str) -> int:
         return 0
     db = SessionLocal()
     try:
-        count = db.query(QuoteModel).filter(
-            QuoteModel.symbol == symbol.upper()
-        ).delete()
+        count = db.query(QuoteModel).filter(QuoteModel.symbol == symbol.upper()).delete()
         db.commit()
         return count
     finally:
@@ -122,9 +122,9 @@ def delete_market_status_for_symbol(symbol: str) -> int:
         return 0
     db = SessionLocal()
     try:
-        count = db.query(MarketStatusModel).filter(
-            MarketStatusModel.symbol == symbol.upper()
-        ).delete()
+        count = (
+            db.query(MarketStatusModel).filter(MarketStatusModel.symbol == symbol.upper()).delete()
+        )
         db.commit()
         return count
     finally:

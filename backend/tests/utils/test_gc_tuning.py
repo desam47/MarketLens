@@ -6,6 +6,7 @@ with the app's ~540k long-lived startup objects it cost ~99 ms and stalled the w
 API every few minutes (2 stalls / 6 min on the live server, each matched to a
 generation-2 collection). Freezing the startup heap removes those objects from it.
 """
+
 import gc
 import inspect
 import time
@@ -23,10 +24,12 @@ def _full_collect_ms() -> float:
 
 class TestFreezeStartupHeap(unittest.TestCase):
     def setUp(self):
-        self.addCleanup(gc.unfreeze)  # don't leave a permanent generation behind in the test process
+        self.addCleanup(
+            gc.unfreeze
+        )  # don't leave a permanent generation behind in the test process
 
     def test_a_frozen_heap_no_longer_costs_a_full_collection(self):
-        heap = [[i] for i in range(400_000)]           # long-lived tracked containers
+        heap = [[i] for i in range(400_000)]  # long-lived tracked containers
         self.addCleanup(heap.clear)
         before = min(_full_collect_ms() for _ in range(3))
         frozen = gc_tuning.freeze_startup_heap()
@@ -41,7 +44,7 @@ class TestFreezeStartupHeap(unittest.TestCase):
 
         thing = Thing()
         ref = weakref.ref(thing)
-        gc_tuning.freeze_startup_heap()                # thing is now in the permanent generation
+        gc_tuning.freeze_startup_heap()  # thing is now in the permanent generation
         del thing
         self.assertIsNone(ref(), "acyclic frozen objects must still be freed by refcounting")
 
@@ -50,10 +53,10 @@ class TestFreezeStartupHeap(unittest.TestCase):
             pass
 
         a, b = Node(), Node()
-        a.other, b.other = b, a                        # a reference cycle, only the GC can free it
+        a.other, b.other = b, a  # a reference cycle, only the GC can free it
         ref = weakref.ref(a)
-        del a, b                                       # now unreachable garbage
-        gc_tuning.freeze_startup_heap()                # must collect it first, not freeze it
+        del a, b  # now unreachable garbage
+        gc_tuning.freeze_startup_heap()  # must collect it first, not freeze it
         self.assertIsNone(ref(), "startup garbage should have been collected, not frozen")
 
     def test_idempotent_and_returns_a_count(self):

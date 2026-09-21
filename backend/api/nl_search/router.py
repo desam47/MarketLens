@@ -10,6 +10,7 @@ The endpoint never returns 500 for expected failures (AI off, empty
 cache, invalid query, unparseable AI reply). The failure-mode contract
 mirrors ``POST /api/ai/analyze``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -108,15 +109,17 @@ def _maybe_explain(
     try:
         # No per-call temperature override — uses the configured
         # AI_TEMPERATURE like every other AI call in the app.
-        resp = run_sync(ai_manager.complete(
-            prompt=build_explain_prompt(
-                query=query,
-                filter_description=filter_description,
-                entries=entries,
-            ),
-            system=NL_EXPLAIN_PROMPT,
-            max_tokens=300,
-        ))
+        resp = run_sync(
+            ai_manager.complete(
+                prompt=build_explain_prompt(
+                    query=query,
+                    filter_description=filter_description,
+                    entries=entries,
+                ),
+                system=NL_EXPLAIN_PROMPT,
+                max_tokens=300,
+            )
+        )
     except Exception as e:
         logger.warning("AI explanation call raised: %s", e)
         return None, False
@@ -147,8 +150,7 @@ async def nl_search(
     Optionally asks the AI for a 1-2 sentence summary of the result
     list when ``explain=True`` (the default).
     """
-    logger.info("NL search query=%r top_n=%r explain=%r",
-                body.query, body.top_n, body.explain)
+    logger.info("NL search query=%r top_n=%r explain=%r", body.query, body.top_n, body.explain)
 
     # --- Step 1: derive the filter schema ---
     # parse_query() may call out to the AI provider (the async manager,

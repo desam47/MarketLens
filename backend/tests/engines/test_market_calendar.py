@@ -4,13 +4,14 @@ Tests for the US equity market calendar.
 Covers: trading-day classification, holiday list correctness, session-type
 boundaries (premarket/regular/after-hours/closed), and DST handling.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.engines.market_calendar import (
     SessionType,

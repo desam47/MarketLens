@@ -1,19 +1,19 @@
 """
 Tests for MarketContextEngine — Phase 8 spec §1.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.regime.market_context_engine import MarketContextEngine, MarketContextSignal
 from backend.regime.market_regime_engine import MarketRegime
 
 
 class TestMarketContextEngine(unittest.TestCase):
-
     def setUp(self):
         self.engine = MarketContextEngine()
 
@@ -59,57 +59,67 @@ class TestMarketContextEngine(unittest.TestCase):
     def test_aggregate_risk_on_3_of_4(self):
         """3+ RISK_ON sub-regimes → RISK_ON (threshold=3)."""
         # Inject pre-built RegimeSignals into sub-engines via a helper
-        self._inject_regimes({
-            "SPY": MarketRegime.RISK_ON,
-            "QQQ": MarketRegime.RISK_ON,
-            "IWM": MarketRegime.RISK_ON,
-            "VIXY": MarketRegime.NEUTRAL,
-        })
+        self._inject_regimes(
+            {
+                "SPY": MarketRegime.RISK_ON,
+                "QQQ": MarketRegime.RISK_ON,
+                "IWM": MarketRegime.RISK_ON,
+                "VIXY": MarketRegime.NEUTRAL,
+            }
+        )
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "risk_on")
         self.assertGreater(confidence, 0)
 
     def test_aggregate_risk_off_3_of_4(self):
         """3+ RISK_OFF sub-regimes → RISK_OFF."""
-        self._inject_regimes({
-            "SPY": MarketRegime.RISK_OFF,
-            "QQQ": MarketRegime.RISK_OFF,
-            "IWM": MarketRegime.NEUTRAL,
-            "VIXY": MarketRegime.RISK_OFF,
-        })
+        self._inject_regimes(
+            {
+                "SPY": MarketRegime.RISK_OFF,
+                "QQQ": MarketRegime.RISK_OFF,
+                "IWM": MarketRegime.NEUTRAL,
+                "VIXY": MarketRegime.RISK_OFF,
+            }
+        )
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "risk_off")
 
     def test_aggregate_neutral_3_of_4(self):
         """3+ NEUTRAL sub-regimes → NEUTRAL."""
-        self._inject_regimes({
-            "SPY": MarketRegime.NEUTRAL,
-            "QQQ": MarketRegime.NEUTRAL,
-            "IWM": MarketRegime.NEUTRAL,
-            "VIXY": MarketRegime.RISK_ON,
-        })
+        self._inject_regimes(
+            {
+                "SPY": MarketRegime.NEUTRAL,
+                "QQQ": MarketRegime.NEUTRAL,
+                "IWM": MarketRegime.NEUTRAL,
+                "VIXY": MarketRegime.RISK_ON,
+            }
+        )
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "neutral")
 
     def test_aggregate_mixed_goes_transition(self):
         """Mixed sub-regimes → TRANSITION."""
-        self._inject_regimes({
-            "SPY": MarketRegime.RISK_ON,
-            "QQQ": MarketRegime.RISK_OFF,
-            "IWM": MarketRegime.NEUTRAL,
-            "VIXY": MarketRegime.RISK_ON,
-        })
+        self._inject_regimes(
+            {
+                "SPY": MarketRegime.RISK_ON,
+                "QQQ": MarketRegime.RISK_OFF,
+                "IWM": MarketRegime.NEUTRAL,
+                "VIXY": MarketRegime.RISK_ON,
+            }
+        )
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "transition")
 
     def test_aggregate_2_and_2_goes_transition(self):
         """2 RISK_ON + 2 RISK_OFF → TRANSITION (no consensus)."""
-        self._inject_regimes({
-            "SPY": MarketRegime.RISK_ON,
-            "QQQ": MarketRegime.RISK_ON,
-            "IWM": MarketRegime.RISK_OFF,
-            "VIXY": MarketRegime.RISK_OFF,
-        })
+        self._inject_regimes(
+            {
+                "SPY": MarketRegime.RISK_ON,
+                "QQQ": MarketRegime.RISK_ON,
+                "IWM": MarketRegime.RISK_OFF,
+                "VIXY": MarketRegime.RISK_OFF,
+            }
+        )
         regime, confidence, factors = self.engine._aggregate(self.engine._collect_sub_regimes())
         self.assertEqual(regime, "transition")
 
@@ -179,6 +189,7 @@ class TestMarketContextEngine(unittest.TestCase):
         """Override the regime_history of each sub-engine to short-circuit
         _collect_sub_regimes for deterministic aggregation tests."""
         from backend.regime.market_regime_engine import RegimeSignal
+
         ts = datetime.now()
         for sym, reg in mapping.items():
             sig = RegimeSignal(
@@ -193,5 +204,5 @@ class TestMarketContextEngine(unittest.TestCase):
             self.engine.sub_engines[sym].regime_history = [sig]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 """
 SuperTrend indicator
 """
+
 from typing import Any
 
 from .atr import ATRIndicator
@@ -28,11 +29,11 @@ class SuperTrendIndicator(BaseIndicator):
     day-old flip the same as a month-old, well-confirmed trend.
     """
 
-    def __init__(self, atr_period: int = 10, multiplier: float = 3.0,
-                 confirmation: int = 0):
-        super().__init__("SuperTrend", {"atr_period": atr_period,
-                                        "multiplier": multiplier,
-                                        "confirmation": confirmation})
+    def __init__(self, atr_period: int = 10, multiplier: float = 3.0, confirmation: int = 0):
+        super().__init__(
+            "SuperTrend",
+            {"atr_period": atr_period, "multiplier": multiplier, "confirmation": confirmation},
+        )
         self.atr_period = atr_period
         self.multiplier = multiplier
         self.confirmation = confirmation
@@ -67,9 +68,9 @@ class SuperTrendIndicator(BaseIndicator):
 
         true_ranges: list[float] = []
         for i in range(1, len(data)):
-            high = float(data[i]['high'])
-            low = float(data[i]['low'])
-            prev_close = float(data[i - 1]['close'])
+            high = float(data[i]["high"])
+            low = float(data[i]["low"])
+            prev_close = float(data[i - 1]["close"])
             true_range = max(
                 high - low,
                 abs(high - prev_close),
@@ -85,7 +86,7 @@ class SuperTrendIndicator(BaseIndicator):
                 atr_values.append(None)
             elif i == self.atr_period - 1:
                 # Seed with simple average of first `period` TRs
-                atr = sum(true_ranges[i - self.atr_period + 1:i + 1]) / self.atr_period
+                atr = sum(true_ranges[i - self.atr_period + 1 : i + 1]) / self.atr_period
                 atr_values.append(atr)
             else:
                 prev_atr = atr_values[-1]
@@ -113,9 +114,9 @@ class SuperTrendIndicator(BaseIndicator):
             return []
 
         # Extract prices
-        highs = [float(d['high']) for d in data]
-        lows = [float(d['low']) for d in data]
-        closes = [float(d['close']) for d in data]
+        highs = [float(d["high"]) for d in data]
+        lows = [float(d["low"]) for d in data]
+        closes = [float(d["close"]) for d in data]
 
         # Reset confirmation state for a fresh calculate()
         self._confirm_count = 0
@@ -161,9 +162,14 @@ class SuperTrendIndicator(BaseIndicator):
                     self.prev_supertrend = basic_lb
 
                 self.band_distance_atr = (
-                    (closes[i] - self.prev_supertrend) / atr if self.prev_direction
-                    else (self.prev_supertrend - closes[i]) / atr
-                ) if atr > 0 else 0.0
+                    (
+                        (closes[i] - self.prev_supertrend) / atr
+                        if self.prev_direction
+                        else (self.prev_supertrend - closes[i]) / atr
+                    )
+                    if atr > 0
+                    else 0.0
+                )
 
                 supertrend_values.append(self.prev_supertrend)
             else:
@@ -216,9 +222,14 @@ class SuperTrendIndicator(BaseIndicator):
                 self._prev_final_lb = final_lb
 
                 self.band_distance_atr = (
-                    (closes[i] - self.prev_supertrend) / atr if self.prev_direction
-                    else (self.prev_supertrend - closes[i]) / atr
-                ) if atr > 0 else 0.0
+                    (
+                        (closes[i] - self.prev_supertrend) / atr
+                        if self.prev_direction
+                        else (self.prev_supertrend - closes[i]) / atr
+                    )
+                    if atr > 0
+                    else 0.0
+                )
 
                 supertrend_values.append(self.prev_supertrend)
 
@@ -243,14 +254,18 @@ class SuperTrendIndicator(BaseIndicator):
         bars) is inherently stateful and must remain; only the ATR
         computation is now O(1).
         """
-        high = float(new_data['high'])
-        low = float(new_data['low'])
-        close = float(new_data['close'])
+        high = float(new_data["high"])
+        low = float(new_data["low"])
+        close = float(new_data["close"])
 
         # ---- O(1) ATR from the composed indicator ----
-        atr = self._atr_indicator.update({
-            'high': high, 'low': low, 'close': close,
-        })
+        atr = self._atr_indicator.update(
+            {
+                "high": high,
+                "low": low,
+                "close": close,
+            }
+        )
         if atr is None:
             # ATRIndicator still warming up — not enough TRs for a smoothed ATR yet.
             return None
@@ -271,9 +286,14 @@ class SuperTrendIndicator(BaseIndicator):
             self.prev_direction = not (close < basic_lb)
             self.prev_supertrend = basic_lb if self.prev_direction else basic_ub
             self.band_distance_atr = (
-                (close - self.prev_supertrend) / atr if self.prev_direction
-                else (self.prev_supertrend - close) / atr
-            ) if atr > 0 else 0.0
+                (
+                    (close - self.prev_supertrend) / atr
+                    if self.prev_direction
+                    else (self.prev_supertrend - close) / atr
+                )
+                if atr > 0
+                else 0.0
+            )
             self.values.append(self.prev_supertrend)
             self.is_uptrend = self.prev_direction
             return self.prev_supertrend
@@ -320,9 +340,14 @@ class SuperTrendIndicator(BaseIndicator):
         self._prev_final_lb = final_lb
 
         self.band_distance_atr = (
-            (close - self.prev_supertrend) / atr if self.prev_direction
-            else (self.prev_supertrend - close) / atr
-        ) if atr > 0 else 0.0
+            (
+                (close - self.prev_supertrend) / atr
+                if self.prev_direction
+                else (self.prev_supertrend - close) / atr
+            )
+            if atr > 0
+            else 0.0
+        )
 
         self.values.append(self.prev_supertrend)
         self.is_uptrend = self.prev_direction

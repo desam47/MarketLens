@@ -1,6 +1,7 @@
 """
 Watchlist API endpoints
 """
+
 import logging
 from datetime import datetime
 from io import StringIO
@@ -23,6 +24,7 @@ from ..dependencies import get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlists", tags=["watchlists"])
+
 
 def _start_symbol_tracking_and_backfill(symbol: str) -> str | None:
     """Register a freshly-added symbol for live tracking and enqueue its
@@ -50,25 +52,31 @@ def _start_symbol_tracking_and_backfill(symbol: str) -> str | None:
     """
     symbol = symbol.upper()
     from backend.market_data.services.ingestion_service import ingestion_service
+
     ingestion_service.register_symbol(symbol)
 
     if not _settings.market_data.backfill_on_add:
         return None
     from backend.market_data.services.backfill_queue import enqueue_backfill
+
     return enqueue_backfill(symbol)
+
 
 # Pydantic models for request/response
 class WatchlistBase(BaseModel):
     name: str
     description: str | None = None
 
+
 class WatchlistCreate(WatchlistBase):
     pass
+
 
 class WatchlistUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     is_active: bool | None = None
+
 
 class WatchlistResponse(WatchlistBase):
     model_config = ConfigDict(from_attributes=True)
@@ -85,13 +93,16 @@ class WatchlistResponse(WatchlistBase):
         # offset so the browser parses the value as NY local time.
         return format_edt_iso(value)
 
+
 class WatchlistSymbolBase(BaseModel):
     symbol: str
     is_enabled: bool = True
     entity_type: Literal["stock", "etf"] | None = None
 
+
 class WatchlistSymbolCreate(WatchlistSymbolBase):
     pass
+
 
 class WatchlistSymbolResponse(WatchlistSymbolBase):
     model_config = ConfigDict(from_attributes=True)
@@ -132,6 +143,7 @@ class ImportResponse(BaseModel):
     skipped: list[str]
     errors: list[str]
 
+
 # Watchlist endpoints
 @router.get("/", response_model=list[WatchlistResponse])
 def get_watchlists(active_only: bool = False, db: Session = Depends(get_db)):
@@ -145,6 +157,7 @@ def get_watchlists(active_only: bool = False, db: Session = Depends(get_db)):
     to count symbols per watchlist.
     """
     from backend.models.watchlist import WatchlistSymbol
+
     repo = WatchlistRepository(db)
     watchlists = repo.get_watchlists(active_only=active_only)
 
@@ -173,11 +186,13 @@ def get_watchlists(active_only: bool = False, db: Session = Depends(get_db)):
         result.append(data)
     return result
 
+
 @router.post("/", response_model=WatchlistResponse, status_code=status.HTTP_201_CREATED)
 def create_watchlist(watchlist: WatchlistCreate, db: Session = Depends(get_db)):
     """Create a new watchlist"""
     repo = WatchlistRepository(db)
     return repo.create_watchlist(name=watchlist.name, description=watchlist.description)
+
 
 @router.get("/{watchlist_id}", response_model=WatchlistResponse)
 def get_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
@@ -187,6 +202,7 @@ def get_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return watchlist
+
 
 @router.put("/{watchlist_id}", response_model=WatchlistResponse)
 def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session = Depends(get_db)):
@@ -202,6 +218,7 @@ def update_watchlist(watchlist_id: int, watchlist: WatchlistUpdate, db: Session 
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return updated_watchlist
 
+
 @router.delete("/{watchlist_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     """Delete a watchlist and purge per-symbol data for any symbol that
@@ -216,8 +233,7 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     # Capture the symbols that are about to be removed with the watchlist
     # so we can decide which need per-symbol purge afterwards.
     symbols_in_watchlist = [
-        s.symbol.upper()
-        for s in repo.get_watchlist_symbols(watchlist_id, enabled_only=False)
+        s.symbol.upper() for s in repo.get_watchlist_symbols(watchlist_id, enabled_only=False)
     ]
     success = repo.delete_watchlist(watchlist_id)
     if not success:
@@ -227,6 +243,7 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     # but the next ingestion tick re-ingests them with the stale symbol list.
     try:
         from backend.market_data.services.ingestion_service import ingestion_service
+
         ingestion_service.refresh_symbols_from_watchlist()
     except Exception as e:
         logger.debug(f"ingestion refresh before watchlist delete failed: {e}")
@@ -253,7 +270,9 @@ def delete_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
 
 # Watchlist symbol endpoints
 @router.get("/{watchlist_id}/symbols", response_model=list[WatchlistSymbolResponse])
-def get_watchlist_symbols(watchlist_id: int, enabled_only: bool = True, db: Session = Depends(get_db)):
+def get_watchlist_symbols(
+    watchlist_id: int, enabled_only: bool = True, db: Session = Depends(get_db)
+):
     """Get all symbols in a watchlist"""
     repo = WatchlistRepository(db)
     # First check if watchlist exists
@@ -263,8 +282,15 @@ def get_watchlist_symbols(watchlist_id: int, enabled_only: bool = True, db: Sess
     symbols = repo.get_watchlist_symbols(watchlist_id, enabled_only=enabled_only)
     return symbols
 
-@router.post("/{watchlist_id}/symbols", response_model=WatchlistSymbolResponse, status_code=status.HTTP_201_CREATED)
-def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db: Session = Depends(get_db)):
+
+@router.post(
+    "/{watchlist_id}/symbols",
+    response_model=WatchlistSymbolResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_symbol_to_watchlist(
+    watchlist_id: int, symbol: WatchlistSymbolCreate, db: Session = Depends(get_db)
+):
     """Add a symbol to a watchlist.
 
     If the symbol is newly added OR re-enabled from a disabled row, it
@@ -293,6 +319,7 @@ def add_symbol_to_watchlist(watchlist_id: int, symbol: WatchlistSymbolCreate, db
         _start_symbol_tracking_and_backfill(symbol.symbol.upper())
     return watchlist_symbol
 
+
 @router.delete("/{watchlist_id}/symbols/{symbol}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
     """Remove a symbol from a watchlist.
@@ -312,6 +339,7 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     symbol_upper = symbol.upper()
     try:
         from backend.market_data.services.backfill_queue import cancel_backfill
+
         if cancel_backfill(symbol_upper):
             logger.debug(f"cancelled in-flight backfill job for {symbol_upper}")
     except Exception as e:
@@ -320,10 +348,9 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     # "duplicate" of its now-deleted historical signals.
     try:
         from backend.services.signal_recorder import signal_recorder
+
         signal_recorder._last_recorded = {
-            (s, tf, ts): ts
-            for (s, tf, ts) in signal_recorder._last_recorded
-            if s != symbol_upper
+            (s, tf, ts): ts for (s, tf, ts) in signal_recorder._last_recorded if s != symbol_upper
         }
     except Exception as e:
         logger.debug(f"signal_recorder cache cleanup skipped: {e}")
@@ -332,6 +359,7 @@ def remove_symbol_from_watchlist(watchlist_id: int, symbol: str, db: Session = D
     # but the next ingestion tick re-ingests them with the stale symbol list.
     try:
         from backend.market_data.services.ingestion_service import ingestion_service
+
         ingestion_service.refresh_symbols_from_watchlist()
     except Exception as e:
         logger.debug(f"ingestion refresh before purge failed: {e}")
@@ -358,6 +386,7 @@ class BackfillStatusResponse(BaseModel):
     """Latest backfill job status for a symbol — see
     ``backend.market_data.services.backfill_queue.get_backfill_job_status``.
     """
+
     symbol: str
     job_id: str
     status: str
@@ -381,6 +410,7 @@ def get_symbol_backfill_status(symbol: str):
     or ``backfill_on_add`` is off).
     """
     from backend.market_data.services.backfill_queue import get_backfill_job_status
+
     status_dict = get_backfill_job_status(symbol.upper())
     if status_dict is None:
         raise HTTPException(status_code=404, detail="No backfill job found for this symbol")
@@ -401,6 +431,7 @@ def enable_symbol_in_watchlist(watchlist_id: int, symbol: str, db: Session = Dep
     # Return the updated symbol
     watchlist_symbol = repo.get_watchlist_symbol(watchlist_id, symbol)
     return watchlist_symbol
+
 
 @router.put("/{watchlist_id}/symbols/{symbol}/disable", response_model=WatchlistSymbolResponse)
 def disable_symbol_in_watchlist(watchlist_id: int, symbol: str, db: Session = Depends(get_db)):
@@ -444,8 +475,11 @@ def update_watchlist_symbol(
         raise HTTPException(status_code=404, detail="Symbol not found in watchlist")
     return updated
 
+
 @router.put("/{watchlist_id}/symbols/reorder", response_model=list[WatchlistSymbolResponse])
-def reorder_watchlist_symbols(watchlist_id: int, symbol_order: list[str], db: Session = Depends(get_db)):
+def reorder_watchlist_symbols(
+    watchlist_id: int, symbol_order: list[str], db: Session = Depends(get_db)
+):
     """Reorder symbols in a watchlist"""
     repo = WatchlistRepository(db)
     # First check if watchlist exists
@@ -480,16 +514,15 @@ def search_watchlist_symbols(
         raise HTTPException(status_code=404, detail="Watchlist not found")
     needle = q.upper()
     matches = [
-        s for s in repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+        s
+        for s in repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
         if needle in s.symbol.upper()
     ]
     return matches
 
 
 @router.post("/{watchlist_id}/import", response_model=ImportResponse)
-def import_watchlist_symbols(
-    watchlist_id: int, body: ImportRequest, db: Session = Depends(get_db)
-):
+def import_watchlist_symbols(watchlist_id: int, body: ImportRequest, db: Session = Depends(get_db)):
     """Bulk import symbols into a watchlist.
 
     Each input symbol is uppercased and trimmed. Symbols that are already
@@ -568,9 +601,7 @@ def export_watchlist(
         return PlainTextResponse(
             buf.getvalue(),
             media_type="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename=watchlist_{watchlist_id}.csv"
-            },
+            headers={"Content-Disposition": f"attachment; filename=watchlist_{watchlist_id}.csv"},
         )
 
     # JSON path: reuse the response model to keep the shape consistent.
@@ -579,6 +610,7 @@ def export_watchlist(
 
 class BackfillResponse(BaseModel):
     """Result of a manual backfill trigger."""
+
     symbols: list[str]
     status: str
 

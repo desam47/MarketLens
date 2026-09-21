@@ -13,6 +13,7 @@ exact bug class — a sync AI call blocking the whole event loop — was
 found and fixed in NL search earlier this session; not reintroducing
 it here).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,6 +49,7 @@ class CreateSessionRequest(BaseModel):
             return None
         v = v.strip()
         return v or None
+
     # "Clear conversation" support: force a brand-new session instead
     # of reusing the most recent one for this symbol. The old session
     # and its messages are left untouched (not deleted) — same
@@ -169,18 +171,25 @@ async def get_session_for_symbol(
         from backend.models import ChatSession
 
         if symbol is None:
+
             def query():
-                return (repo.db.query(ChatSession)
-                            .filter(ChatSession.scope == "universal")
-                            .order_by(ChatSession.updated_at.desc())
-                            .first())
+                return (
+                    repo.db.query(ChatSession)
+                    .filter(ChatSession.scope == "universal")
+                    .order_by(ChatSession.updated_at.desc())
+                    .first()
+                )
         else:
             sym = symbol.upper()
+
             def query():
-                return (repo.db.query(ChatSession)
-                            .filter(ChatSession.symbol == sym, ChatSession.scope == "symbol")
-                            .order_by(ChatSession.updated_at.desc())
-                            .first())
+                return (
+                    repo.db.query(ChatSession)
+                    .filter(ChatSession.symbol == sym, ChatSession.scope == "symbol")
+                    .order_by(ChatSession.updated_at.desc())
+                    .first()
+                )
+
         session = await asyncio.to_thread(query)
         if session is None:
             where = symbol.upper() if symbol else "the universal chat"
@@ -211,7 +220,9 @@ async def clear_sessions(
     repo = ChatRepository()
     try:
         sessions, messages = await asyncio.to_thread(
-            repo.delete_sessions, scope=scope, alert_trigger_id=alert_trigger_id,
+            repo.delete_sessions,
+            scope=scope,
+            alert_trigger_id=alert_trigger_id,
         )
         return ClearHistoryResponse(deleted_sessions=sessions, deleted_messages=messages)
     finally:
@@ -250,10 +261,16 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         repo.close()
 
     message, grounded, focus, partial, unavailable = await asyncio.to_thread(
-        answer_chat_message, session_id, payload.content,
+        answer_chat_message,
+        session_id,
+        payload.content,
     )
     return _message_to_response(
-        message, grounded=grounded, focus=focus, partial=partial, unavailable=unavailable,
+        message,
+        grounded=grounded,
+        focus=focus,
+        partial=partial,
+        unavailable=unavailable,
     )
 
 
@@ -350,8 +367,11 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                     yield _sse(
                         "final",
                         _message_to_response(
-                            message, grounded=grounded, focus=focus,
-                            partial=partial, unavailable=unavailable,
+                            message,
+                            grounded=grounded,
+                            focus=focus,
+                            partial=partial,
+                            unavailable=unavailable,
                         ).model_dump(),
                     )
                 elif kind == "error":

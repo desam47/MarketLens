@@ -1,6 +1,7 @@
 """
 Phase 18 — FastAPI router tests for /api/aux-data/*.
 """
+
 import os
 import sys
 import unittest
@@ -16,7 +17,6 @@ client = TestClient(app)
 
 
 class TestAuxDataEndpoints(unittest.TestCase):
-
     def setUp(self):
         # Force all three categories off for the duration of each test,
         # then restore the real values in tearDown so this class can't
@@ -26,9 +26,7 @@ class TestAuxDataEndpoints(unittest.TestCase):
 
         self._mgr_module = mgr_module
         aux = mgr_module._settings.aux_data
-        self._saved_enabled = (
-            aux.news.enabled, aux.fundamentals.enabled, aux.options.enabled
-        )
+        self._saved_enabled = (aux.news.enabled, aux.fundamentals.enabled, aux.options.enabled)
         aux.news.enabled = False
         aux.fundamentals.enabled = False
         aux.options.enabled = False
@@ -59,14 +57,14 @@ class TestAuxDataEndpoints(unittest.TestCase):
 
     def test_news_endpoint_200_when_enabled(self):
         from backend.aux_data.services import manager as mgr_module
+
         mgr_module._settings.aux_data.news.enabled = True
         try:
-            with patch(
-                "backend.aux_data.services.manager.AuxDataManager.get_news"
-            ) as mock_get:
+            with patch("backend.aux_data.services.manager.AuxDataManager.get_news") as mock_get:
                 from datetime import datetime
 
                 from backend.models.aux_data import NewsItem, NewsResponse
+
                 mock_get.return_value = NewsResponse(
                     symbol="AAPL",
                     items=[
@@ -92,6 +90,7 @@ class TestAuxDataEndpoints(unittest.TestCase):
 
     def test_fundamentals_endpoint_200_when_enabled(self):
         from backend.aux_data.services import manager as mgr_module
+
         mgr_module._settings.aux_data.fundamentals.enabled = True
         try:
             with patch(
@@ -100,6 +99,7 @@ class TestAuxDataEndpoints(unittest.TestCase):
                 from datetime import datetime
 
                 from backend.models.aux_data import FundamentalsItem, FundamentalsResponse
+
                 mock_get.return_value = FundamentalsResponse(
                     symbol="AAPL",
                     data=FundamentalsItem(
@@ -120,14 +120,14 @@ class TestAuxDataEndpoints(unittest.TestCase):
 
     def test_options_endpoint_200_when_enabled(self):
         from backend.aux_data.services import manager as mgr_module
+
         mgr_module._settings.aux_data.options.enabled = True
         try:
-            with patch(
-                "backend.aux_data.services.manager.AuxDataManager.get_options"
-            ) as mock_get:
+            with patch("backend.aux_data.services.manager.AuxDataManager.get_options") as mock_get:
                 from datetime import datetime
 
                 from backend.models.aux_data import OptionsResponse
+
                 mock_get.return_value = OptionsResponse(
                     symbol="AAPL",
                     expirations=["2026-12-18"],

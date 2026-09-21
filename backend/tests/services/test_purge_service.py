@@ -4,6 +4,7 @@ Tests for backend.services.purge_service.
 Verifies that ``purge_symbol_from_database`` removes every per-symbol row
 from every table that has a symbol column.
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,6 +40,7 @@ SYM_PREFIX = "ZZPURGE"
 def _unique_symbol() -> str:
     """Generate a unique test symbol so tests don't conflict."""
     import uuid
+
     return f"{SYM_PREFIX}{uuid.uuid4().hex[:6].upper()}"
 
 
@@ -146,6 +148,7 @@ def _insert_ai_job(db, symbol: str) -> AIAnalysisJob:
 
 def _insert_backfill_job(db, symbol: str) -> BackfillJob:
     import uuid
+
     job = BackfillJob(
         job_id=f"backfill:{symbol}:{uuid.uuid4().hex[:8]}",
         symbol=symbol,
@@ -343,13 +346,16 @@ def test_purge_removes_backtest_runs(test_symbol):
         run = _insert_backtest_run(db, sym)
         # Add a trade manually since the cascade is via ORM only.
         from backend.models import BacktestTrade
+
         for _ in range(3):
-            db.add(BacktestTrade(
-                run_id=run.id,
-                signal="BULLISH_TREND",
-                entry_date=datetime.utcnow(),
-                entry_price=100.0,
-            ))
+            db.add(
+                BacktestTrade(
+                    run_id=run.id,
+                    signal="BULLISH_TREND",
+                    entry_date=datetime.utcnow(),
+                    entry_price=100.0,
+                )
+            )
         db.commit()
     finally:
         db.close()
@@ -389,7 +395,12 @@ def test_purge_all_tables_at_once(test_symbol):
         _insert_backfill_job(db, sym)
         run = _insert_backtest_run(db, sym)
         from backend.models import BacktestTrade
-        db.add(BacktestTrade(run_id=run.id, signal="X", entry_date=datetime.utcnow(), entry_price=100.0))
+
+        db.add(
+            BacktestTrade(
+                run_id=run.id, signal="X", entry_date=datetime.utcnow(), entry_price=100.0
+            )
+        )
         _insert_drawing(db, sym)
         db.commit()
     finally:
@@ -467,7 +478,8 @@ def test_purge_safe_handles_unknown_table_gracefully(monkeypatch, test_symbol):
     from backend.services import purge_service
 
     monkeypatch.setattr(
-        purge_service, "_delete_bars",
+        purge_service,
+        "_delete_bars",
         lambda db, symbol: (_ for _ in ()).throw(RuntimeError("simulated")),
     )
 

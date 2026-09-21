@@ -1,4 +1,5 @@
 """Tests for the drawing-tools API router."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +18,7 @@ def client():
 def _clear_drawings():
     """Wipe the drawing_tools table before/after each test."""
     from backend.database import SessionLocal
+
     db = SessionLocal()
     try:
         db.query(DrawingTool).delete()

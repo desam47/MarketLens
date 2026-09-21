@@ -19,6 +19,7 @@ Fixed by calling the engine the way the existing, working
     resistances by SRType semantics (a swing_high is resistance by
     definition, regardless of where the latest close sits).
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -50,22 +51,25 @@ def _fake_bars(n: int = 60) -> list[dict]:
     bars = []
     for i in range(n):
         close = 100.0 + i * 0.5
-        bars.append({
-            "open": close - 0.3, "high": close + 1.0, "low": close - 1.0,
-            "close": close, "volume": 1_000_000, "timestamp": base,
-        })
+        bars.append(
+            {
+                "open": close - 0.3,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1_000_000,
+                "timestamp": base,
+            }
+        )
     # load_bars returns desc=True (newest first) — reverse so index 0
     # is the highest close, matching real ordering.
     return list(reversed(bars))
 
 
 class TestBuildContextSupportResistance(unittest.TestCase):
-
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_populates_supports_and_resistances_from_real_bars(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_populates_supports_and_resistances_from_real_bars(self, mock_scanner, mock_get_engine):
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
 
@@ -104,13 +108,26 @@ class TestBuildContextSupportResistance(unittest.TestCase):
             ctx = build_context("AAPL", "1d")
 
         structural_supports = {
-            "today_low", "prev_day_low", "this_week_low", "prev_week_low",
-            "week_52_low", "pivot_pp", "pivot_s1", "pivot_s2", "pivot_s3",
+            "today_low",
+            "prev_day_low",
+            "this_week_low",
+            "prev_week_low",
+            "week_52_low",
+            "pivot_pp",
+            "pivot_s1",
+            "pivot_s2",
+            "pivot_s3",
             "swing_low",
         }
         structural_resistances = {
-            "today_high", "prev_day_high", "this_week_high", "prev_week_high",
-            "week_52_high", "pivot_r1", "pivot_r2", "pivot_r3",
+            "today_high",
+            "prev_day_high",
+            "this_week_high",
+            "prev_week_high",
+            "week_52_high",
+            "pivot_r1",
+            "pivot_r2",
+            "pivot_r3",
             "swing_high",
         }
         for level in ctx.support_resistance["supports"]:

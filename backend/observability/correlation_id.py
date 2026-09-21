@@ -6,6 +6,7 @@ for each request and makes them available throughout the request lifecycle
 for logging and tracing purposes. It integrates with the structured logging
 system so every log line automatically includes the request's correlation ID.
 """
+
 import uuid
 from collections.abc import Callable
 
@@ -26,8 +27,10 @@ def _get_set_correlation_id():
 
             _logging_ctx = _set
         except ImportError:
+
             def _logging_ctx(*_):
                 return None  # no-op fallback
+
     return _logging_ctx
 
 

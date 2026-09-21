@@ -5,6 +5,7 @@ Validates the response shape, the WAL mode reporting, the Litestream
 reachability field, and graceful degradation when Litestream is not
 running.
 """
+
 import unittest
 
 
@@ -17,6 +18,7 @@ class TestBackupStatusEndpoint(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_endpoint_returns_200(self):
@@ -38,8 +40,11 @@ class TestBackupStatusEndpoint(unittest.TestCase):
             "litestream_generation",
             "litestream_dbs",
         }
-        self.assertEqual(expected_keys.issubset(data.keys()), True,
-                         f"missing keys: {expected_keys - set(data.keys())}")
+        self.assertEqual(
+            expected_keys.issubset(data.keys()),
+            True,
+            f"missing keys: {expected_keys - set(data.keys())}",
+        )
 
     def test_journal_mode_is_wal(self):
         """The live engine should be in WAL mode after Phase 3.3.1."""
@@ -72,6 +77,7 @@ class TestSafeBackupStatusGracefulDegradation(unittest.TestCase):
     def test_returns_dict_with_journal_mode_on_real_engine(self):
         """On the real SQLite engine the helper returns a populated dict."""
         from backend.api.system.router import _safe_backup_status
+
         result = _safe_backup_status()
         # The live DB must return a real dict (not None).
         self.assertIsNotNone(result)

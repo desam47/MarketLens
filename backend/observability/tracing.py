@@ -5,6 +5,7 @@ This module sets up OpenTelemetry tracing with OTLP exporter for
 distributed tracing across services. It provides automatic instrumentation
 for FastAPI, SQLAlchemy, Redis, and HTTP clients.
 """
+
 import logging
 import os
 
@@ -44,7 +45,7 @@ def initialize_tracing() -> None:
     global _tracer
 
     # Skip if tracing is disabled
-    tracing_enabled = getattr(_settings.observability, 'tracing_enabled', False)
+    tracing_enabled = getattr(_settings.observability, "tracing_enabled", False)
     logger.info(f"OpenTelemetry tracing enabled check: {tracing_enabled}")
     if not tracing_enabled:
         logger.info("OpenTelemetry tracing is disabled")
@@ -52,11 +53,13 @@ def initialize_tracing() -> None:
 
     try:
         # Create resource with service information
-        resource = Resource.create({
-            "service.name": _settings.app_name,
-            "service.version": _settings.app_version,
-            "service.instance.id": f"{_settings.app_name}-{os.getpid()}",
-        })
+        resource = Resource.create(
+            {
+                "service.name": _settings.app_name,
+                "service.version": _settings.app_version,
+                "service.instance.id": f"{_settings.app_name}-{os.getpid()}",
+            }
+        )
 
         # Set up tracer provider
         provider = TracerProvider(resource=resource)
@@ -77,10 +80,7 @@ def initialize_tracing() -> None:
         # Instrument libraries
         _instrument_libraries()
 
-        logger.info(
-            f"OpenTelemetry tracing initialized with OTLP at "
-            f"{_get_otlp_endpoint()}"
-        )
+        logger.info(f"OpenTelemetry tracing initialized with OTLP at {_get_otlp_endpoint()}")
         logger.info(f"Tracer initialized: {_tracer}")
 
     except Exception as e:
@@ -128,7 +128,7 @@ def shutdown_tracing() -> None:
     """
     try:
         tracer_provider = trace.get_tracer_provider()
-        if hasattr(tracer_provider, 'shutdown'):
+        if hasattr(tracer_provider, "shutdown"):
             tracer_provider.shutdown()
         logger.info("OpenTelemetry tracing shut down")
     except Exception as e:

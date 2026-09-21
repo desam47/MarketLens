@@ -1,6 +1,7 @@
 """
 Tests for ROC (Rate of Change) indicator
 """
+
 import unittest
 
 from backend.indicators.roc import ROCIndicator

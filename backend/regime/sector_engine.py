@@ -4,6 +4,7 @@ Sector Engine — maps a symbol to its sector and computes alignment score.
 Phase 8 spec: symbol → sector → sector ETF. Compare stock trend,
 sector trend, and market (SPY) trend to produce an alignment score.
 """
+
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -117,24 +118,26 @@ SECTOR_ETFS: dict[str, str] = {
 # Data structures
 # ------------------------------------------------------------------
 
+
 class AlignmentLevel(StrEnum):
-    PERFECT = "perfect"      # all 3 agree
-    MAJORITY = "majority"    # 2/3 agree
-    SPLIT = "split"          # 1/3
+    PERFECT = "perfect"  # all 3 agree
+    MAJORITY = "majority"  # 2/3 agree
+    SPLIT = "split"  # 1/3
     CONFLICTING = "conflicting"  # no agreement
 
 
 @dataclass
 class SectorSignal:
     """Phase 8: sector alignment signal for a single symbol."""
+
     symbol: str
     sector: str
     sector_etf: str | None
-    stock_trend: str          # TrendDirection.value string
-    sector_trend: str        # TrendDirection.value string
-    market_trend: str         # TrendDirection.value string
-    alignment_score: float   # 0.0..1.0
-    alignment_level: str     # AlignmentLevel.value
+    stock_trend: str  # TrendDirection.value string
+    sector_trend: str  # TrendDirection.value string
+    market_trend: str  # TrendDirection.value string
+    alignment_score: float  # 0.0..1.0
+    alignment_level: str  # AlignmentLevel.value
     contributing_factors: dict[str, Any]
     timestamp: datetime
 
@@ -157,6 +160,7 @@ class SectorSignal:
 # SectorEngine
 # ------------------------------------------------------------------
 
+
 class SectorEngine:
     """
     Runs three TrendEngines (stock, sector ETF, SPY) and produces
@@ -168,10 +172,13 @@ class SectorEngine:
       0.0  — fully conflicting or insufficient data
     """
 
-    def __init__(self, symbol: str,
-                 stock_engine: TrendEngine | None = None,
-                 sector_engine: TrendEngine | None = None,
-                 market_engine: TrendEngine | None = None):
+    def __init__(
+        self,
+        symbol: str,
+        stock_engine: TrendEngine | None = None,
+        sector_engine: TrendEngine | None = None,
+        market_engine: TrendEngine | None = None,
+    ):
         self.symbol = symbol.upper()
         self.sector = SECTOR_MAP.get(self.symbol, "Unknown")
         self.sector_etf = SECTOR_ETFS.get(self.sector)
@@ -181,28 +188,25 @@ class SectorEngine:
         # ETF, SPY) are looked up via the shared registry so any other
         # component that also needs SPY or XLK gets the same instance.
         self._stock_eng = stock_engine if stock_engine is not None else TrendEngine(self.symbol)
-        self._sector_eng = sector_engine if sector_engine is not None else (
-            TrendEngine(self.sector_etf) if self.sector_etf else None
+        self._sector_eng = (
+            sector_engine
+            if sector_engine is not None
+            else (TrendEngine(self.sector_etf) if self.sector_etf else None)
         )
         self._market_eng = market_engine if market_engine is not None else TrendEngine("SPY")
 
         self._signals: list[SectorSignal] = []
 
-    def update(self,
-               price: float,
-               volume: float,
-               timestamp: datetime,
-               provider: str = "internal") -> None:
+    def update(
+        self, price: float, volume: float, timestamp: datetime, provider: str = "internal"
+    ) -> None:
         """Feed a price tick into the appropriate TrendEngine."""
         self._stock_eng.update(price, volume, timestamp, provider)
         if self._sector_eng:
             self._sector_eng.update(price, volume, timestamp, provider)
         self._market_eng.update(price, volume, timestamp, provider)
 
-    def update_all(self,
-                   prices: dict[str, float],
-                   volume: float,
-                   timestamp: datetime) -> None:
+    def update_all(self, prices: dict[str, float], volume: float, timestamp: datetime) -> None:
         """Feed prices for all three engines at once."""
         for sym, price in prices.items():
             if sym == self.symbol:
@@ -212,8 +216,7 @@ class SectorEngine:
             elif sym == "SPY":
                 self._market_eng.update(price, volume, timestamp, "internal")
 
-    def get_current_signal(self,
-                           timestamp: datetime | None = None) -> SectorSignal:
+    def get_current_signal(self, timestamp: datetime | None = None) -> SectorSignal:
         """Compute and return the current sector signal."""
         ts = timestamp or datetime.now(UTC)
 
@@ -221,9 +224,7 @@ class SectorEngine:
         sector_trend = self._get_trend_str(self._sector_eng) if self._sector_eng else "unknown"
         market_trend = self._get_trend_str(self._market_eng)
 
-        score, level, factors = self._compute_alignment(
-            stock_trend, sector_trend, market_trend
-        )
+        score, level, factors = self._compute_alignment(stock_trend, sector_trend, market_trend)
 
         signal = SectorSignal(
             symbol=self.symbol,

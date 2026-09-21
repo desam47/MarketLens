@@ -6,6 +6,7 @@ break: async *single-flight* (N concurrent misses for a key run the wrapped
 function once) and safe handling of failures / cancellation. Until now the
 suite had no tests for it at all.
 """
+
 import asyncio
 import gc
 import unittest

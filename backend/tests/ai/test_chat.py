@@ -11,6 +11,7 @@ test_bar_repository.py) so this never touches the real marketlens.db;
 resolve_turn_symbols / build_market_baseline / build_context are patched
 so no network or scanner state is needed.
 """
+
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,8 +25,12 @@ from backend.ai.provider import AIResponse
 from backend.models import Alert, AlertTrigger, ChatMessage, ChatSession
 
 WARM_CTX = {"price": 150.0, "trend_state": {"direction": "up"}, "momentum": {"rsi": 55}}
-COLD_CTX = {"price": 12.0, "momentum": {"rsi": 60}, "market_structure": {"score": 7},
-            "trend_transition": {"delta": 3}}
+COLD_CTX = {
+    "price": 12.0,
+    "momentum": {"rsi": 60},
+    "market_structure": {"score": 7},
+    "trend_transition": {"delta": 3},
+}
 
 
 def _reply(text='{"reply": "ok", "grounded": true}'):
@@ -39,9 +44,11 @@ def _astream(chunks):
     call result through stream_sync(), so the stub must hand back a real
     async iterator (not iter([...]), which has no __anext__).
     """
+
     async def _gen():
         for c in chunks:
             yield c
+
     return _gen()
 
 
@@ -50,10 +57,12 @@ class _Base(unittest.TestCase):
         # chat.py now keeps a 12s per-symbol context cache — reset it so
         # a patched build_context isn't shadowed by an earlier test's result
         from backend.ai import chat as _chat_mod
+
         _chat_mod._ctx_cache.clear()
 
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         for model in (ChatSession, ChatMessage, Alert, AlertTrigger):
             model.__table__.create(self.engine, checkfirst=True)
@@ -64,11 +73,13 @@ class _Base(unittest.TestCase):
 
         # Default stubs — each test overrides what it needs.
         self.mock_resolve = patch(
-            "backend.ai.chat.resolve_turn_symbols", return_value=([], False)).start()
+            "backend.ai.chat.resolve_turn_symbols", return_value=([], False)
+        ).start()
         self.addCleanup(patch.stopall)
         self.mock_baseline = patch(
             "backend.ai.chat.build_market_baseline",
-            return_value={"regime_live": {"regime": "risk_on"}}).start()
+            return_value={"regime_live": {"regime": "risk_on"}},
+        ).start()
 
         self.db = self.Session()
         self.session = self._make_session(symbol="AAPL")
@@ -103,7 +114,9 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "AAPL up.", "grounded": true}'))
 
-        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "how's AAPL")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session.id, "how's AAPL"
+        )
 
         self.assertTrue(grounded)
         self.assertEqual(focus, ["AAPL"])
@@ -117,9 +130,13 @@ class TestUniversalTurn(_Base):
         self.mock_resolve.return_value = ([], False)
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "Risk-on tape.", "grounded": true}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply('{"reply": "Risk-on tape.", "grounded": true}')
+        )
 
-        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "how's the market")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session.id, "how's the market"
+        )
 
         mock_ctx.assert_not_called()
         self.assertEqual(focus, [])
@@ -144,7 +161,8 @@ class TestUniversalTurn(_Base):
         answer_chat_message(self.session.id, "how's the market")
 
         self.assertEqual(
-            mock_ai.complete.call_args.kwargs["model"], "openai_compatible:auto/best-free",
+            mock_ai.complete.call_args.kwargs["model"],
+            "openai_compatible:auto/best-free",
         )
 
     @patch("backend.ai.chat.ai_manager")
@@ -188,15 +206,21 @@ class TestUniversalTurn(_Base):
         mock_ctx.side_effect = InsufficientDataError("no data for RIVN")
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "No engine for RIVN.", "grounded": false}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply('{"reply": "No engine for RIVN.", "grounded": false}')
+        )
 
-        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "what about RIVN")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session.id, "what about RIVN"
+        )
 
         self.assertEqual(unavailable, ["RIVN"])
         self.assertEqual(focus, [])
         self.assertFalse(grounded)
-        self.assertIn("<unavailable_symbols>RIVN</unavailable_symbols>",
-                      mock_ai.complete.call_args.kwargs["prompt"])
+        self.assertIn(
+            "<unavailable_symbols>RIVN</unavailable_symbols>",
+            mock_ai.complete.call_args.kwargs["prompt"],
+        )
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
@@ -227,7 +251,9 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
 
-        msg, grounded, focus, partial, unavailable = answer_chat_message(self.session.id, "AAPL vs RIVN")
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session.id, "AAPL vs RIVN"
+        )
 
         self.assertEqual(focus, ["AAPL"])
         self.assertEqual(unavailable, ["RIVN"])
@@ -246,8 +272,9 @@ class TestUniversalTurn(_Base):
 
         answer_chat_message(self.session.id, "compare five things")
 
-        self.assertIn("more tickers than I can dig into",
-                      mock_ai.complete.call_args.kwargs["prompt"])
+        self.assertIn(
+            "more tickers than I can dig into", mock_ai.complete.call_args.kwargs["prompt"]
+        )
 
 
 class TestDegradeContract(_Base):
@@ -267,7 +294,9 @@ class TestDegradeContract(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=AIResponse(text="not json", provider="ollama", model="x"))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(text="not json", provider="ollama", model="x")
+        )
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertFalse(grounded)
 
@@ -293,10 +322,12 @@ class TestDegradeContract(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(side_effect=[
-            AIResponse(text="not json", provider="ollama", model="x"),
-            _reply('{"reply": "AAPL looks fine.", "grounded": true}'),
-        ])
+        mock_ai.complete = AsyncMock(
+            side_effect=[
+                AIResponse(text="not json", provider="ollama", model="x"),
+                _reply('{"reply": "AAPL looks fine.", "grounded": true}'),
+            ]
+        )
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertTrue(grounded)
         self.assertEqual(msg.content, "AAPL looks fine.")
@@ -309,7 +340,9 @@ class TestDegradeContract(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=AIResponse(text="not json", provider="ollama", model="x"))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(text="not json", provider="ollama", model="x")
+        )
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
         self.assertFalse(grounded)
         self.assertIn("couldn't process", msg.content.lower())
@@ -344,8 +377,12 @@ class TestAlertContext(_Base):
         alert = Alert(name="T", symbol="AAPL", condition_type="price_above", parameter="100")
         self.db.add(alert)
         self.db.commit()
-        trig = AlertTrigger(alert_id=alert.id, symbol="AAPL", message="AAPL crossed 100",
-                            ai_commentary="A bullish breakout.")
+        trig = AlertTrigger(
+            alert_id=alert.id,
+            symbol="AAPL",
+            message="AAPL crossed 100",
+            ai_commentary="A bullish breakout.",
+        )
         self.db.add(trig)
         self.db.commit()
         s = self._make_session(symbol="AAPL", alert_trigger_id=trig.id, scope="alert")
@@ -372,10 +409,14 @@ class TestReanalysisTool(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "Let me check.", "grounded": true, "wants_reanalysis": true}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "Let me check.", "grounded": true, "wants_reanalysis": true}'
+            )
+        )
         mock_analyze.return_value = AnalysisResponse(
-            summary="Strong momentum.", trend="bullish", confidence=0.82)
+            summary="Strong momentum.", trend="bullish", confidence=0.82
+        )
 
         msg, grounded, *_ = answer_chat_message(self.session.id, "re-run the analysis")
 
@@ -394,13 +435,22 @@ class TestReanalysisTool(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "Let me check.", "grounded": true, "wants_reanalysis": true}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "Let me check.", "grounded": true, "wants_reanalysis": true}'
+            )
+        )
         mock_analyze.return_value = AnalysisResponse(
-            summary="Strong momentum.", trend="bullish", confidence=0.82,
+            summary="Strong momentum.",
+            trend="bullish",
+            confidence=0.82,
             trade_plan=TradePlan(
-                recommendation="buy", conviction="high", time_horizon="swing",
-                entry_zone_low=218.5, entry_zone_high=220.0, stop_loss=212.0,
+                recommendation="buy",
+                conviction="high",
+                time_horizon="swing",
+                entry_zone_low=218.5,
+                entry_zone_high=220.0,
+                stop_loss=212.0,
                 targets=[228.0, 235.5],
                 thesis="Reclaimed the 20d SMA with rising volume.",
                 invalidation="Close below 212 invalidates the setup.",
@@ -419,13 +469,16 @@ class TestReanalysisTool(_Base):
     @patch("backend.ai.chat.analyze_symbol")
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
-    def test_multi_symbol_reanalysis_without_target_is_rejected(self, mock_ctx, mock_ai, mock_analyze):
+    def test_multi_symbol_reanalysis_without_target_is_rejected(
+        self, mock_ctx, mock_ai, mock_analyze
+    ):
         self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "checking", "grounded": true, "wants_reanalysis": true}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply('{"reply": "checking", "grounded": true, "wants_reanalysis": true}')
+        )
 
         msg, grounded, *_ = answer_chat_message(self.session.id, "re-run it")
 
@@ -440,11 +493,15 @@ class TestReanalysisTool(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "x", "grounded": true, "wants_reanalysis": true, '
-            '"reanalysis_symbol": "MSFT"}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "x", "grounded": true, "wants_reanalysis": true, '
+                '"reanalysis_symbol": "MSFT"}'
+            )
+        )
         mock_analyze.return_value = AnalysisResponse(
-            summary="Neutral and range-bound.", trend="neutral", confidence=0.5)
+            summary="Neutral and range-bound.", trend="neutral", confidence=0.5
+        )
 
         answer_chat_message(self.session.id, "re-run MSFT officially")
         mock_analyze.assert_called_once_with("MSFT")
@@ -457,8 +514,9 @@ class TestReanalysisTool(_Base):
         mock_ctx.return_value.compact.return_value = WARM_CTX
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "x", "grounded": true, "wants_reanalysis": true}'))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply('{"reply": "x", "grounded": true, "wants_reanalysis": true}')
+        )
         mock_analyze.return_value = UncertaintyResponse(summary="AI analysis is disabled")
 
         msg, grounded, *_ = answer_chat_message(self.session.id, "re-run the analysis")
@@ -550,6 +608,7 @@ class TestStreamChatMessage(_Base):
 
     def _drain(self, session_id, content):
         from backend.ai.chat import stream_chat_message
+
         return list(stream_chat_message(session_id, content))
 
     @patch("backend.ai.chat.ai_manager")
@@ -558,9 +617,13 @@ class TestStreamChatMessage(_Base):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = True
-        mock_ai.stream.return_value = _astream([
-            '```json\n{"reply": "The market ', 'looks calm', '.", "grounded": true}\n```',
-        ])
+        mock_ai.stream.return_value = _astream(
+            [
+                '```json\n{"reply": "The market ',
+                "looks calm",
+                '.", "grounded": true}\n```',
+            ]
+        )
 
         events = self._drain(self.session.id, "how's the market")
         kinds = [e[0] for e in events]
@@ -576,6 +639,7 @@ class TestStreamChatMessage(_Base):
         self.assertTrue(grounded)
         # persisted exactly once
         from backend.repositories.chat_repository import ChatRepository
+
         repo = ChatRepository()
         try:
             rows = repo.get_messages(self.session.id, 50)
@@ -602,10 +666,12 @@ class TestStreamChatMessage(_Base):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = False
-        mock_ai.complete = AsyncMock(side_effect=[
-            AIResponse(text="not json", provider="ollama", model="x"),
-            _reply('{"reply": "one shot", "grounded": true}'),
-        ])
+        mock_ai.complete = AsyncMock(
+            side_effect=[
+                AIResponse(text="not json", provider="ollama", model="x"),
+                _reply('{"reply": "one shot", "grounded": true}'),
+            ]
+        )
 
         events = self._drain(self.session.id, "how's the market")
         self.assertEqual(mock_ai.complete.call_count, 2)
@@ -653,12 +719,17 @@ class TestStreamChatMessage(_Base):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = True
-        mock_ai.stream.return_value = _astream([
-            '{"reply": "hold on", "grounded": false, ',
-            '"wants_reanalysis": true, "reanalysis_symbol": "AAPL"}',
-        ])
+        mock_ai.stream.return_value = _astream(
+            [
+                '{"reply": "hold on", "grounded": false, ',
+                '"wants_reanalysis": true, "reanalysis_symbol": "AAPL"}',
+            ]
+        )
         mock_analyze.return_value = AnalysisResponse(
-            symbol="AAPL", trend="bullish", confidence=0.8, summary="Fresh run done.",
+            symbol="AAPL",
+            trend="bullish",
+            confidence=0.8,
+            summary="Fresh run done.",
         )
 
         events = self._drain(self.session.id, "re-run the full analysis on AAPL")
@@ -676,6 +747,7 @@ class TestTranscriptClip(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
         from backend.repositories.chat_repository import ChatRepository
+
         repo = ChatRepository()
         try:
             repo.add_message(self.session.id, "user", "X" * 5000)
@@ -694,8 +766,11 @@ class TestPruneContextStatsGating(unittest.TestCase):
     (keep_stats), same as the rest of _prune_context's trimming."""
 
     def _ctx(self, **extra):
-        base = {"price": 150.0, "historical_signal_stats": {"total": 10},
-                "track_record": {"sample_size": 3, "win_rate": 0.67}}
+        base = {
+            "price": 150.0,
+            "historical_signal_stats": {"total": 10},
+            "track_record": {"sample_size": 3, "win_rate": 0.67},
+        }
         base.update(extra)
         return base
 

@@ -3,6 +3,7 @@ The suite must never enqueue a real backfill: ``enqueue_backfill`` talks to the 
 RQ worker runs the job for real (provider calls plus ~14,000 bars written to the live database).
 The watchlist add/import tests did that on every run.
 """
+
 import unittest
 
 from backend.market_data.services import backfill_queue

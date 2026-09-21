@@ -1,6 +1,7 @@
 """
 Relative Strength Index (RSI) indicator
 """
+
 from typing import Any, cast
 
 import numpy as np
@@ -23,7 +24,7 @@ class RSIIndicator(BaseIndicator):
             return []
 
         # Extract close prices as numpy array
-        closes = np.array([float(d['close']) for d in data])
+        closes = np.array([float(d["close"]) for d in data])
 
         # Calculate price changes (vectorized)
         changes = np.diff(closes)
@@ -33,8 +34,8 @@ class RSIIndicator(BaseIndicator):
         losses = np.maximum(-changes, 0)
 
         # Calculate initial average gain and loss (vectorized)
-        avg_gain = np.mean(gains[:self.period])
-        avg_loss = np.mean(losses[:self.period])
+        avg_gain = np.mean(gains[: self.period])
+        avg_loss = np.mean(losses[: self.period])
 
         # Calculate RSI
         rsi_values: list[float | None] = [None] * self.period  # First 'period' values are undefined
@@ -71,10 +72,10 @@ class RSIIndicator(BaseIndicator):
         per bar. This version maintains ``avg_gain`` and ``avg_loss`` as
         instance state and updates them in O(1) per bar.
         """
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         # ---- Warmup: collect enough data to seed the first RSI ----
-        if not hasattr(self, '_price_history'):
+        if not hasattr(self, "_price_history"):
             self._price_history = []
             self._prev_close: float | None = None
             self._avg_gain: float | None = None
@@ -93,8 +94,8 @@ class RSIIndicator(BaseIndicator):
                 if len(self._price_history) >= self.period * 2:
                     gains = self._price_history[0::2]
                     losses = self._price_history[1::2]
-                    self._avg_gain = sum(gains[:self.period]) / self.period
-                    self._avg_loss = sum(losses[:self.period]) / self.period
+                    self._avg_gain = sum(gains[: self.period]) / self.period
+                    self._avg_loss = sum(losses[: self.period]) / self.period
                     # Compute the first RSI value from those seed averages
                     # so callers see a value the moment we have enough data.
                     if self._avg_loss == 0:

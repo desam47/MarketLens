@@ -7,6 +7,7 @@ bullish, 92-99% of all rows on every timeframe carried a score shared with 10+ s
 win rate built on them measured nothing. ``signal_replay`` replays the stored bars, oldest first,
 through a private trend engine instead.
 """
+
 import math
 import unittest
 from datetime import datetime, timedelta
@@ -71,37 +72,78 @@ class _Db(unittest.TestCase):
 
     def _store_bars(self, symbol, timeframe, bars):
         with self.Session() as db:
-            db.bulk_save_objects([
-                BarModel(symbol=symbol, timeframe=timeframe, timestamp=b.timestamp,
-                         open=b.close, high=b.close + 0.5, low=b.close - 0.5, close=b.close,
-                         volume=b.volume, provider="test", data_status="historical")
-                for b in bars
-            ])
+            db.bulk_save_objects(
+                [
+                    BarModel(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        timestamp=b.timestamp,
+                        open=b.close,
+                        high=b.close + 0.5,
+                        low=b.close - 0.5,
+                        close=b.close,
+                        volume=b.volume,
+                        provider="test",
+                        data_status="historical",
+                    )
+                    for b in bars
+                ]
+            )
             db.commit()
 
     def _signals(self, symbol, timeframe):
         with self.Session() as db:
-            return (db.query(HistoricalSignal)
-                    .filter_by(symbol=symbol, timeframe=timeframe)
-                    .order_by(HistoricalSignal.timestamp.asc()).all())
+            return (
+                db.query(HistoricalSignal)
+                .filter_by(symbol=symbol, timeframe=timeframe)
+                .order_by(HistoricalSignal.timestamp.asc())
+                .all()
+            )
 
     def _stamped(self, symbol="RELA", timeframe="1d", n=450, extra_orphan=True):
         bars = _bars(n)
         self._store_bars(symbol, timeframe, bars)
         with self.Session() as db:
             for i, b in enumerate(bars):
-                db.add(HistoricalSignal(
-                    symbol=symbol, timeframe=timeframe, timestamp=b.timestamp, price=b.close,
-                    trend_score=-5.0, trend_state="neutral", strength=0.05, momentum=-5.0,
-                    structure="neutral", market_regime="risk_on", strategy_version="v1",
-                    data_quality="good", return_5b=0.5 + i * 0.001, return_10b=1.0, return_20b=2.0,
-                    mfe=3.0, mae=-1.0))
-            if extra_orphan:                        # a signal whose bar was pruned away
-                db.add(HistoricalSignal(
-                    symbol=symbol, timeframe=timeframe, timestamp=_DAY0 - timedelta(days=30),
-                    price=90.0, trend_score=-5.0, trend_state="neutral", strength=0.05,
-                    momentum=-5.0, structure="neutral", market_regime="risk_on",
-                    strategy_version="v1", data_quality="good", return_5b=0.1))
+                db.add(
+                    HistoricalSignal(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        timestamp=b.timestamp,
+                        price=b.close,
+                        trend_score=-5.0,
+                        trend_state="neutral",
+                        strength=0.05,
+                        momentum=-5.0,
+                        structure="neutral",
+                        market_regime="risk_on",
+                        strategy_version="v1",
+                        data_quality="good",
+                        return_5b=0.5 + i * 0.001,
+                        return_10b=1.0,
+                        return_20b=2.0,
+                        mfe=3.0,
+                        mae=-1.0,
+                    )
+                )
+            if extra_orphan:  # a signal whose bar was pruned away
+                db.add(
+                    HistoricalSignal(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        timestamp=_DAY0 - timedelta(days=30),
+                        price=90.0,
+                        trend_score=-5.0,
+                        trend_state="neutral",
+                        strength=0.05,
+                        momentum=-5.0,
+                        structure="neutral",
+                        market_regime="risk_on",
+                        strategy_version="v1",
+                        data_quality="good",
+                        return_5b=0.1,
+                    )
+                )
             db.commit()
         return bars
 
@@ -110,8 +152,9 @@ class TestReplayScores(unittest.TestCase):
     def test_scores_vary_bar_to_bar_and_follow_the_trend(self):
         bars = _bars()
         scores = replay_trend_scores("REPLAYA", "1d", bars)
-        labelled = [(b.timestamp, scores[b.timestamp]) for b in bars
-                    if scores[b.timestamp] is not None]
+        labelled = [
+            (b.timestamp, scores[b.timestamp]) for b in bars if scores[b.timestamp] is not None
+        ]
         self.assertGreater(len(labelled), 200)
         self.assertGreater(len({round(s, 3) for _, s in labelled}), 100, "one stamped score")
         states = {label_columns(s)["trend_state"] for _, s in labelled}
@@ -125,8 +168,10 @@ class TestReplayScores(unittest.TestCase):
     def test_the_warm_up_bars_are_unlabelled(self):
         bars = _bars()
         scores = replay_trend_scores("REPLAYB", "1d", bars)
-        self.assertEqual([b.timestamp for b in bars if scores[b.timestamp] is None][:REPLAY_WARMUP_BARS],
-                         [b.timestamp for b in bars[:REPLAY_WARMUP_BARS]])
+        self.assertEqual(
+            [b.timestamp for b in bars if scores[b.timestamp] is None][:REPLAY_WARMUP_BARS],
+            [b.timestamp for b in bars[:REPLAY_WARMUP_BARS]],
+        )
         self.assertTrue(all(scores[b.timestamp] is not None for b in bars[REPLAY_WARMUP_BARS:]))
 
     def test_no_look_ahead_a_bar_ignores_everything_after_it(self):
@@ -138,8 +183,9 @@ class TestReplayScores(unittest.TestCase):
 
     def test_is_repeatable(self):
         bars = _bars(300)
-        self.assertEqual(replay_trend_scores("REPLAYD", "1d", bars),
-                         replay_trend_scores("REPLAYD", "1d", bars))
+        self.assertEqual(
+            replay_trend_scores("REPLAYD", "1d", bars), replay_trend_scores("REPLAYD", "1d", bars)
+        )
 
     def test_an_unsupported_timeframe_yields_no_scores(self):
         bars = _bars(50)
@@ -156,8 +202,9 @@ class TestReplayScores(unittest.TestCase):
 
         def skip_one(engine, timestamp, only_timeframe=None):
             from backend.utils.timezone import ny_to_utc
+
             if timestamp == ny_to_utc(skipped):
-                return None                       # emits nothing: the last signal is now stale
+                return None  # emits nothing: the last signal is now stale
             return real(engine, timestamp, only_timeframe=only_timeframe)
 
         with patch.object(TrendEngine, "_generate_trend_signals", skip_one):
@@ -173,9 +220,13 @@ class TestReplayLeavesLiveStateAlone(unittest.TestCase):
         live.update_tick(101.0, 500, datetime(2026, 9, 18, 15, 59))
         multi_symbol_timeframe_engine.engines["LIVESYM"] = live
         self.addCleanup(multi_symbol_timeframe_engine.engines.pop, "LIVESYM", None)
+
         def snapshot():
-            return ({tf: len(c) for tf, c in live.candles.items()}, dict(live._last_candle_open),
-                    {tf: getattr(c, "close", None) for tf, c in live.current_candles.items()})
+            return (
+                {tf: len(c) for tf, c in live.candles.items()},
+                dict(live._last_candle_open),
+                {tf: getattr(c, "close", None) for tf, c in live.current_candles.items()},
+            )
 
         before = snapshot()
         replay_trend_scores("LIVESYM", "1d", _bars(260))
@@ -185,9 +236,10 @@ class TestReplayLeavesLiveStateAlone(unittest.TestCase):
     def test_no_scratch_aggregator_is_left_behind_even_when_the_replay_fails(self):
         replay_trend_scores("REPLAYG", "1d", _bars(60))
         with patch("backend.trend.trend_engine.TrendEngine.update", side_effect=RuntimeError("x")):
-            replay_trend_scores("REPLAYG", "1d", _bars(60))     # every bar swallowed
-        self.assertEqual([k for k in multi_symbol_timeframe_engine.engines
-                          if k.startswith("__replay__")], [])
+            replay_trend_scores("REPLAYG", "1d", _bars(60))  # every bar swallowed
+        self.assertEqual(
+            [k for k in multi_symbol_timeframe_engine.engines if k.startswith("__replay__")], []
+        )
 
 
 class TestLabelColumns(unittest.TestCase):
@@ -198,9 +250,17 @@ class TestLabelColumns(unittest.TestCase):
         self.assertEqual(label_columns(-29.99)["trend_state"], "neutral")
 
     def test_no_score_is_unknown_not_neutral(self):
-        self.assertEqual(label_columns(None), {
-            "trend_score": None, "trend_state": None, "strength": None, "momentum": None,
-            "structure": None, "market_regime": None})
+        self.assertEqual(
+            label_columns(None),
+            {
+                "trend_score": None,
+                "trend_state": None,
+                "strength": None,
+                "momentum": None,
+                "structure": None,
+                "market_regime": None,
+            },
+        )
 
     def test_the_regime_is_never_stamped(self):
         self.assertIsNone(label_columns(55.0)["market_regime"])
@@ -218,7 +278,9 @@ class TestBulkRecorderUsesTheReplay(_Db):
         bars = _bars()
         self._store_bars("BULKA", "1d", bars)
         with patch.object(SignalRecorder, "_get_market_regime", return_value="risk_on"):
-            self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKA", timeframe="1d"), 450)
+            self.assertEqual(
+                self.recorder.backfill_signals_for_symbol("BULKA", timeframe="1d"), 450
+            )
 
         rows = self._signals("BULKA", "1d")
         expected = replay_trend_scores("BULKA", "1d", bars)
@@ -232,7 +294,7 @@ class TestBulkRecorderUsesTheReplay(_Db):
         self._store_bars("BULKB", "1d", _bars())
         self.recorder.backfill_signals_for_symbol("BULKB", timeframe="1d")
         rows = self._signals("BULKB", "1d")
-        self.assertEqual(len(rows), 450)          # one per bar: startup hygiene compares counts
+        self.assertEqual(len(rows), 450)  # one per bar: startup hygiene compares counts
         head, tail = rows[:REPLAY_WARMUP_BARS], rows[REPLAY_WARMUP_BARS:]
         self.assertEqual({(r.trend_score, r.trend_state) for r in head}, {(None, None)})
         self.assertTrue(all(r.trend_score is not None for r in tail))
@@ -243,10 +305,10 @@ class TestBulkRecorderUsesTheReplay(_Db):
         self.recorder.backfill_signals_for_symbol("BULKC", timeframe="1d")
         full = {r.timestamp: r.trend_score for r in self._signals("BULKC", "1d")}
 
-        with self.Session() as db:                  # lose the last 5 signals, keep every bar
+        with self.Session() as db:  # lose the last 5 signals, keep every bar
             db.query(HistoricalSignal).filter(
-                HistoricalSignal.symbol == "BULKC",
-                HistoricalSignal.timestamp >= bars[-5].timestamp).delete()
+                HistoricalSignal.symbol == "BULKC", HistoricalSignal.timestamp >= bars[-5].timestamp
+            ).delete()
             db.commit()
         self.recorder._last_recorded.clear()
         self.assertEqual(self.recorder.backfill_signals_for_symbol("BULKC", timeframe="1d"), 5)
@@ -262,8 +324,11 @@ class TestBulkRecorderUsesTheReplay(_Db):
 
 def _hourly_bars(n: int = 300) -> list[SimpleNamespace]:
     return [
-        SimpleNamespace(timestamp=datetime(2024, 1, 2, 8) + timedelta(hours=i), close=_price(i, 200),
-                        volume=1_000_000 + (i % 5) * 20_000)
+        SimpleNamespace(
+            timestamp=datetime(2024, 1, 2, 8) + timedelta(hours=i),
+            close=_price(i, 200),
+            volume=1_000_000 + (i % 5) * 20_000,
+        )
         for i in range(n)
     ]
 
@@ -328,11 +393,19 @@ class TestBarReplayIsBoundedAndIncremental(unittest.TestCase):
             multi_symbol_timeframe_engine.engines.pop("__plain__", None)
         want = []
         for i, b in enumerate(bars):
-            engine.update(price=b.close, volume=int(b.volume), timestamp=b.timestamp,
-                          only_timeframe=Timeframe.ONE_DAY)
+            engine.update(
+                price=b.close,
+                volume=int(b.volume),
+                timestamp=b.timestamp,
+                only_timeframe=Timeframe.ONE_DAY,
+            )
             sig = engine.get_current_trend(Timeframe.ONE_DAY)
-            ok = (sig is not None and sig.score is not None and i >= REPLAY_WARMUP_BARS
-                  and sig.timestamp == ny_to_utc(b.timestamp))
+            ok = (
+                sig is not None
+                and sig.score is not None
+                and i >= REPLAY_WARMUP_BARS
+                and sig.timestamp == ny_to_utc(b.timestamp)
+            )
             want.append(float(sig.score) if ok else None)
         self.assertEqual(got, want)
 
@@ -363,7 +436,9 @@ class TestLiveRecording(_Db):
     def test_every_closed_bar_gets_the_replayed_score(self):
         bars = _bars(300)
         self._store_bars("LIVEA", "1d", bars)
-        n = self.recorder.record_from_recent_bars(["LIVEA"], now=_daily_close(bars[-1]) + timedelta(hours=1))
+        n = self.recorder.record_from_recent_bars(
+            ["LIVEA"], now=_daily_close(bars[-1]) + timedelta(hours=1)
+        )
         self.assertEqual(n, 300)
         self.assertEqual(self._scores("LIVEA"), replay_trend_scores("LIVEA", "1d", bars))
 
@@ -383,17 +458,23 @@ class TestLiveRecording(_Db):
         """Its close moves while it forms; a tick the engine has seen cannot be taken back."""
         bars = _bars(300)
         self._store_bars("LIVEC", "1d", bars)
-        self.recorder.record_from_recent_bars(["LIVEC"], now=bars[-1].timestamp + timedelta(hours=6))
+        self.recorder.record_from_recent_bars(
+            ["LIVEC"], now=bars[-1].timestamp + timedelta(hours=6)
+        )
         self.assertEqual(self.recorder._replays[("LIVEC", "1d")].last_ts, bars[-2].timestamp)
 
     def test_bar_by_bar_recording_equals_one_batch_replay(self):
         bars = _bars(330)
         self._store_bars("LIVED", "1d", bars[:250])
-        self.recorder.record_from_recent_bars(["LIVED"], now=_daily_close(bars[249]) + timedelta(hours=1))
+        self.recorder.record_from_recent_bars(
+            ["LIVED"], now=_daily_close(bars[249]) + timedelta(hours=1)
+        )
         for lo in range(250, 330, 9):
-            chunk = bars[lo:lo + 9]
+            chunk = bars[lo : lo + 9]
             self._store_bars("LIVED", "1d", chunk)
-            self.recorder.record_from_recent_bars(["LIVED"], now=_daily_close(chunk[-1]) + timedelta(hours=1))
+            self.recorder.record_from_recent_bars(
+                ["LIVED"], now=_daily_close(chunk[-1]) + timedelta(hours=1)
+            )
         self.assertEqual(self._scores("LIVED"), replay_trend_scores("LIVED", "1d", bars))
         self.assertEqual(len(self._signals("LIVED", "1d")), 330)
 
@@ -410,13 +491,17 @@ class TestLiveRecording(_Db):
     def test_only_a_fresh_row_records_the_regime(self):
         bars = _bars(260)
         self._store_bars("LIVEF", "1d", bars)
-        self.recorder.record_from_recent_bars(["LIVEF"], now=_daily_close(bars[-1]) + timedelta(minutes=5))
+        self.recorder.record_from_recent_bars(
+            ["LIVEF"], now=_daily_close(bars[-1]) + timedelta(minutes=5)
+        )
         rows = self._signals("LIVEF", "1d")
         self.assertEqual(rows[-1].market_regime, "risk_on")
         self.assertEqual({r.market_regime for r in rows[:-1]}, {None}, "today's regime on old bars")
 
         self._store_bars("LIVEG", "1d", bars)
-        self.recorder.record_from_recent_bars(["LIVEG"], now=_daily_close(bars[-1]) + timedelta(hours=3))
+        self.recorder.record_from_recent_bars(
+            ["LIVEG"], now=_daily_close(bars[-1]) + timedelta(hours=3)
+        )
         self.assertEqual({r.market_regime for r in self._signals("LIVEG", "1d")}, {None})
 
     def test_the_seeding_budget_seeds_one_pair_a_cycle_cheapest_timeframe_first(self):
@@ -426,11 +511,17 @@ class TestLiveRecording(_Db):
         now = datetime(2026, 1, 1)
         counts = lambda: (len(self._signals("LIVEH", "1d")), len(self._signals("LIVEH", "1h")))  # noqa: E731
 
-        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260)
+        self.assertEqual(
+            self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260
+        )
         self.assertEqual(counts(), (260, 0), "the daily pair is cheaper and goes first")
-        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260)
+        self.assertEqual(
+            self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260
+        )
         self.assertEqual(counts(), (260, 260))
-        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 0)
+        self.assertEqual(
+            self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 0
+        )
 
     def test_one_pairs_failure_does_not_stop_the_others_and_is_retried(self):
         bars = _bars(260)
@@ -444,9 +535,13 @@ class TestLiveRecording(_Db):
                 raise RuntimeError("database is locked")
             return real(rec, db, symbol, *a, **k)
 
-        with patch.object(SignalRecorder, "_insert_rows", flaky), \
-             self.assertLogs("backend.services.signal_recorder", "ERROR"):
-            self.assertEqual(self.recorder.record_from_recent_bars(["FAILA", "FAILB"], now=now), 260)
+        with (
+            patch.object(SignalRecorder, "_insert_rows", flaky),
+            self.assertLogs("backend.services.signal_recorder", "ERROR"),
+        ):
+            self.assertEqual(
+                self.recorder.record_from_recent_bars(["FAILA", "FAILB"], now=now), 260
+            )
         self.assertEqual(len(self._signals("FAILA", "1d")), 0)
         self.assertEqual(len(self._signals("FAILB", "1d")), 260)
 
@@ -468,7 +563,12 @@ class TestLiveRecording(_Db):
     def test_a_pair_whose_only_bar_is_still_forming_writes_nothing(self):
         bar = _bars(1)[0]
         self._store_bars("LIVEJ", "1d", [bar])
-        self.assertEqual(self.recorder.record_from_recent_bars(["LIVEJ"], now=bar.timestamp + timedelta(hours=1)), 0)
+        self.assertEqual(
+            self.recorder.record_from_recent_bars(
+                ["LIVEJ"], now=bar.timestamp + timedelta(hours=1)
+            ),
+            0,
+        )
         self.assertEqual(self._signals("LIVEJ", "1d"), [])
 
     def test_no_symbols_is_a_no_op(self):
@@ -480,21 +580,39 @@ class TestHygieneIgnoresAFormingBar(_Db):
 
     def _minute_bars(self, now):
         last_open = now.replace(second=0, microsecond=0)
-        return [SimpleNamespace(timestamp=last_open - timedelta(minutes=i), close=100.0 + i * 0.01,
-                                volume=1000) for i in range(30, -1, -1)]
+        return [
+            SimpleNamespace(
+                timestamp=last_open - timedelta(minutes=i), close=100.0 + i * 0.01, volume=1000
+            )
+            for i in range(30, -1, -1)
+        ]
 
     def _sign(self, symbol, bars):
         with self.Session() as db:
-            db.add_all([HistoricalSignal(symbol=symbol, timeframe="1m", timestamp=b.timestamp,
-                                         price=b.close, strategy_version="v1", data_quality="good")
-                        for b in bars])
+            db.add_all(
+                [
+                    HistoricalSignal(
+                        symbol=symbol,
+                        timeframe="1m",
+                        timestamp=b.timestamp,
+                        price=b.close,
+                        strategy_version="v1",
+                        data_quality="good",
+                    )
+                    for b in bars
+                ]
+            )
             db.commit()
 
     def _run(self, symbol):
         from backend.api import main_helpers
 
-        with patch.object(main_helpers, "SessionLocal", lambda: self.Session()), \
-             patch.object(main_helpers.signal_recorder, "backfill_signals_for_symbol", return_value=0) as bf:
+        with (
+            patch.object(main_helpers, "SessionLocal", lambda: self.Session()),
+            patch.object(
+                main_helpers.signal_recorder, "backfill_signals_for_symbol", return_value=0
+            ) as bf,
+        ):
             main_helpers._fill_signal_gaps(symbol)
         return bf
 
@@ -503,7 +621,7 @@ class TestHygieneIgnoresAFormingBar(_Db):
 
         bars = self._minute_bars(now_ny())
         self._store_bars("HYGA", "1m", bars)
-        self._sign("HYGA", bars[:-1])                   # every closed bar signed, the forming one not
+        self._sign("HYGA", bars[:-1])  # every closed bar signed, the forming one not
         self._run("HYGA").assert_not_called()
 
     def test_a_closed_bar_without_a_signal_still_is(self):
@@ -511,7 +629,7 @@ class TestHygieneIgnoresAFormingBar(_Db):
 
         bars = self._minute_bars(now_ny())
         self._store_bars("HYGB", "1m", bars)
-        self._sign("HYGB", bars[:-6] + bars[-5:-1])     # one closed bar (bars[-6]) is missing
+        self._sign("HYGB", bars[:-6] + bars[-5:-1])  # one closed bar (bars[-6]) is missing
         self._run("HYGB").assert_called_once()
 
 
@@ -524,7 +642,7 @@ class TestRelabelSignals(_Db):
             stats = relabel_signals(db, "RELA", "1d")
         self.assertEqual(stats["rows"], 451)
         self.assertEqual(stats["labelled"], 450 - REPLAY_WARMUP_BARS)
-        self.assertEqual(stats["unlabelled"], REPLAY_WARMUP_BARS + 1)     # warm-up + the orphan
+        self.assertEqual(stats["unlabelled"], REPLAY_WARMUP_BARS + 1)  # warm-up + the orphan
 
         expected = replay_trend_scores("RELA", "1d", bars)
         rows = self._signals("RELA", "1d")
@@ -533,10 +651,13 @@ class TestRelabelSignals(_Db):
             r = by_ts[b.timestamp]
             self.assertEqual(r.trend_score, expected[b.timestamp])
             self.assertIsNone(r.market_regime)
-            self.assertEqual(r.price, b.close)                       # untouched
-            self.assertIsNotNone(r.return_5b)                        # untouched
-        self.assertEqual((rows[0].trend_score, rows[0].trend_state, rows[0].market_regime),
-                         (None, None, None), "the orphan has no bar to replay")
+            self.assertEqual(r.price, b.close)  # untouched
+            self.assertIsNotNone(r.return_5b)  # untouched
+        self.assertEqual(
+            (rows[0].trend_score, rows[0].trend_state, rows[0].market_regime),
+            (None, None, None),
+            "the orphan has no bar to replay",
+        )
         self.assertGreaterEqual(len({r.trend_state for r in rows if r.trend_state}), 2)
 
     def test_second_run_changes_nothing(self):
@@ -562,7 +683,9 @@ class TestRelabelSignals(_Db):
         self._stamped()
         with self.Session() as db:
             relabel_signals(db, "RELA", "1d")
-        self.assertEqual(chunked, [(r.timestamp, r.trend_score) for r in self._signals("RELA", "1d")])
+        self.assertEqual(
+            chunked, [(r.timestamp, r.trend_score) for r in self._signals("RELA", "1d")]
+        )
 
     def _reset(self):
         with self.Session() as db:
@@ -601,8 +724,17 @@ class TestLabelBackup(_Db):
 
         self._stamped()
         with self.Session() as db:
-            original = {r.id: (r.trend_score, r.trend_state, r.strength, r.momentum, r.structure,
-                               r.market_regime) for r in db.query(HistoricalSignal).all()}
+            original = {
+                r.id: (
+                    r.trend_score,
+                    r.trend_state,
+                    r.strength,
+                    r.momentum,
+                    r.structure,
+                    r.market_regime,
+                )
+                for r in db.query(HistoricalSignal).all()
+            }
         fd, path = tempfile.mkstemp(suffix=".csv.gz")
         os.close(fd)
         self.addCleanup(os.unlink, path)
@@ -614,8 +746,17 @@ class TestLabelBackup(_Db):
             self.assertEqual(restore_labels(db, path, chunk_size=50), 451)
 
         with self.Session() as db:
-            restored = {r.id: (r.trend_score, r.trend_state, r.strength, r.momentum, r.structure,
-                               r.market_regime) for r in db.query(HistoricalSignal).all()}
+            restored = {
+                r.id: (
+                    r.trend_score,
+                    r.trend_state,
+                    r.strength,
+                    r.momentum,
+                    r.structure,
+                    r.market_regime,
+                )
+                for r in db.query(HistoricalSignal).all()
+            }
         self.assertEqual(restored, original)
 
     def test_none_labels_survive_the_round_trip(self):
@@ -627,7 +768,7 @@ class TestLabelBackup(_Db):
         os.close(fd)
         self.addCleanup(os.unlink, path)
         with self.Session() as db:
-            relabel_signals(db, "RELA", "1d")            # warm-up rows become all-None
+            relabel_signals(db, "RELA", "1d")  # warm-up rows become all-None
             export_labels(db, path)
             db.query(HistoricalSignal).update({"trend_state": "bullish", "trend_score": 99.0})
             db.commit()

@@ -7,6 +7,7 @@ this provider **raises** so ``AuxDataManager`` falls through to the
 yfinance provider — the manager only advances the chain on an exception,
 not on an empty response.
 """
+
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -72,14 +73,16 @@ class FinnhubNewsProvider(NewsProvider):
                 else now_ny()
             )
             related = str(a.get("related") or "").upper().split(",")
-            items.append(NewsItem(
-                headline=headline,
-                source=a.get("source") or "Finnhub",
-                timestamp=ts,
-                symbol=sym,
-                relevance=0.75 if sym in related else 0.55,
-                url=a.get("url") or None,
-            ))
+            items.append(
+                NewsItem(
+                    headline=headline,
+                    source=a.get("source") or "Finnhub",
+                    timestamp=ts,
+                    symbol=sym,
+                    relevance=0.75 if sym in related else 0.55,
+                    url=a.get("url") or None,
+                )
+            )
 
         self._mark_ok()
         return NewsResponse(symbol=sym, items=items, provider=self.name, timestamp=now_ny())

@@ -11,6 +11,7 @@ Public surface:
 - :func:`execute_query` — runs a validated :class:`NLFilters` against the
   scanner cache and returns a ranked slice.
 """
+
 from ...nl_search.executor import execute_query
 from ...nl_search.parser import parse_query
 from ...nl_search.schema import NLFilters, NLSearchResponse, ScannedResultItem

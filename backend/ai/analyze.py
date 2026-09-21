@@ -23,6 +23,7 @@ Per spec:
 - If insufficient data → uncertainty response
 - Do not make AI issue trade orders
 """
+
 from __future__ import annotations
 
 import logging
@@ -69,11 +70,20 @@ def _data_quality(ctx: AnalysisContext) -> float:
     price, etc.) are always present by construction, so they don't count.
     """
     optional_fields = [
-        ctx.timeframe_scores, ctx.trend_state, ctx.market_structure,
-        ctx.market_regime, ctx.relative_strength, ctx.sector_alignment,
-        ctx.support_resistance, ctx.trend_transition,
-        ctx.historical_signal_stats, ctx.news, ctx.fundamentals,
-        ctx.divergence, ctx.tape, ctx.track_record,
+        ctx.timeframe_scores,
+        ctx.trend_state,
+        ctx.market_structure,
+        ctx.market_regime,
+        ctx.relative_strength,
+        ctx.sector_alignment,
+        ctx.support_resistance,
+        ctx.trend_transition,
+        ctx.historical_signal_stats,
+        ctx.news,
+        ctx.fundamentals,
+        ctx.divergence,
+        ctx.tape,
+        ctx.track_record,
     ]
     populated = sum(1 for f in optional_fields if f)
     return populated / len(optional_fields)
@@ -99,7 +109,9 @@ def _adaptive_temperature(ctx: AnalysisContext) -> float:
 _ANALYSIS_TTL = 45.0
 _ANALYSIS_CACHE_MAX_ENTRIES = 128
 
-_analysis_cache: OrderedDict[tuple, tuple[float, AnalysisResponse | UncertaintyResponse]] = OrderedDict()
+_analysis_cache: OrderedDict[tuple, tuple[float, AnalysisResponse | UncertaintyResponse]] = (
+    OrderedDict()
+)
 _cache_lock = threading.Lock()
 
 
@@ -211,8 +223,13 @@ async def analyze_symbol(
     # aren't served a stale no-peer result.
     if system_prompt_override is None:
         cache_key = _cache_key(
-            symbol, timeframe, advisory,
-            portfolio_symbols, model, max_tokens, temperature,
+            symbol,
+            timeframe,
+            advisory,
+            portfolio_symbols,
+            model,
+            max_tokens,
+            temperature,
         )
         now = time.monotonic()
         with _cache_lock:
@@ -230,7 +247,8 @@ async def analyze_symbol(
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
         result = _uncertainty(
-            f"Quantitative data not available: {e}", reason_enum="insufficient_data",
+            f"Quantitative data not available: {e}",
+            reason_enum="insufficient_data",
         )
         _cache_result(cache_key, result)
         return result
@@ -241,7 +259,10 @@ async def analyze_symbol(
 
     # --- Step 2: build the LLM request (prompt/temperature/response_format) ---
     system_prompt, final_temperature, response_format = _build_request(
-        ctx, system_prompt_override, advisory, temperature,
+        ctx,
+        system_prompt_override,
+        advisory,
+        temperature,
     )
 
     # --- Step 3: ask the LLM ---
@@ -300,7 +321,9 @@ def _build_request(
     # O11: request JSON mode when the chain supports it (gated on the
     # whole chain so a structured-capable fallback still gets mode when
     # it ends up answering). See f1afc3c / chain_supports_structured_output.
-    response_format = make_analysis_response_format() if ai_manager.chain_supports_structured_output() else None
+    response_format = (
+        make_analysis_response_format() if ai_manager.chain_supports_structured_output() else None
+    )
     return system_prompt, final_temperature, response_format
 
 
@@ -326,7 +349,9 @@ def _finalize_analysis(
             msg = f"AI providers unavailable (tried: {ai_resp.provider})"
             reason = "providers_unavailable"
         logger.info("AI unavailable for %s: %s", symbol, msg)
-        result = _uncertainty(msg, reason_enum=reason, provider=ai_resp.provider, model=ai_resp.model)
+        result = _uncertainty(
+            msg, reason_enum=reason, provider=ai_resp.provider, model=ai_resp.model
+        )
         _cache_result(cache_key, result)
         return result
 
@@ -369,7 +394,8 @@ def _finalize_analysis(
     )
     if capped_confidence is not None:
         parsed.confidence = _calibrate_confidence(
-            capped_confidence, ctx.track_record,
+            capped_confidence,
+            ctx.track_record,
         )
         if raw_confidence != parsed.confidence:
             parsed.confidence_declared = raw_confidence
@@ -456,8 +482,13 @@ async def analyze_symbol_stream(
     # --- cache check (O4) ---
     if system_prompt_override is None:
         cache_key = _cache_key(
-            symbol, timeframe, advisory,
-            portfolio_symbols, model, max_tokens, temperature,
+            symbol,
+            timeframe,
+            advisory,
+            portfolio_symbols,
+            model,
+            max_tokens,
+            temperature,
         )
         now = time.monotonic()
         with _cache_lock:
@@ -465,12 +496,15 @@ async def analyze_symbol_stream(
             if hit is not None and now - hit[0] < _ANALYSIS_TTL:
                 _analysis_cache.move_to_end(cache_key)
                 cached = hit[1]
-                yield ("meta", {
-                    "symbol": cached.symbol,
-                    "timeframe": cached.timeframe,
-                    "track_record": getattr(cached, "track_record", {}) or {},
-                    "model": getattr(cached, "model", None),
-                })
+                yield (
+                    "meta",
+                    {
+                        "symbol": cached.symbol,
+                        "timeframe": cached.timeframe,
+                        "track_record": getattr(cached, "track_record", {}) or {},
+                        "model": getattr(cached, "model", None),
+                    },
+                )
                 yield ("delta", cached.summary or "")
                 yield ("final", _result_to_dict(cached))
                 return
@@ -483,28 +517,38 @@ async def analyze_symbol_stream(
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
         result = _uncertainty(
-            f"Quantitative data not available: {e}", reason_enum="insufficient_data",
+            f"Quantitative data not available: {e}",
+            reason_enum="insufficient_data",
         )
         _cache_result(cache_key, result)
-        yield ("meta", {
-            "symbol": symbol.upper(),
-            "timeframe": timeframe,
-            "track_record": {},
-            "model": model,
-        })
+        yield (
+            "meta",
+            {
+                "symbol": symbol.upper(),
+                "timeframe": timeframe,
+                "track_record": {},
+                "model": model,
+            },
+        )
         yield ("final", _result_to_dict(result))
         return
 
     system_prompt, final_temperature, response_format = _build_request(
-        ctx, system_prompt_override, advisory, temperature,
+        ctx,
+        system_prompt_override,
+        advisory,
+        temperature,
     )
 
-    yield ("meta", {
-        "symbol": ctx.symbol,
-        "timeframe": ctx.timeframe,
-        "track_record": ctx.track_record or {},
-        "model": model,
-    })
+    yield (
+        "meta",
+        {
+            "symbol": ctx.symbol,
+            "timeframe": ctx.timeframe,
+            "track_record": ctx.track_record or {},
+            "model": model,
+        },
+    )
 
     # --- stream the LLM ---
     accumulated: list[str] = []
@@ -530,7 +574,10 @@ async def analyze_symbol_stream(
         if not accumulated:
             # Nothing was emitted — the stream couldn't start. Surface an
             # error frame rather than silently returning nothing.
-            yield ("error", "The analysis stream could not be started; retry, or use POST /api/ai/analyze for a blocking reply.")
+            yield (
+                "error",
+                "The analysis stream could not be started; retry, or use POST /api/ai/analyze for a blocking reply.",
+            )
             return
         # Partial text already shown — fall through and finalize what we have.
 
@@ -541,9 +588,13 @@ async def analyze_symbol_stream(
         # complete()'s equivalent all-failed path), not a guess from
         # whichever provider happened to answer a DIFFERENT request last.
         prov = "disabled" if not ai_manager.enabled else "none"
-        ai_resp = AIResponse(text=None, provider=prov, model=model or ai_manager.settings.model, structured=False)
+        ai_resp = AIResponse(
+            text=None, provider=prov, model=model or ai_manager.settings.model, structured=False
+        )
     else:
-        prov = attribution.provider or (ai_manager.settings.provider if ai_manager.enabled else "disabled")
+        prov = attribution.provider or (
+            ai_manager.settings.provider if ai_manager.enabled else "disabled"
+        )
         mod = attribution.model or (model or ai_manager.settings.model)
         ai_resp = AIResponse(text=text, provider=prov, model=mod, structured=attribution.structured)
 
@@ -653,16 +704,14 @@ def _log_trend_disagreements(
 
     if engine_bearish and ai_bullish:
         logger.warning(
-            "AI bullish for %s but engine direction is %r. "
-            "Check supporting_factors: %s",
+            "AI bullish for %s but engine direction is %r. Check supporting_factors: %s",
             symbol,
             ctx_direction,
             response.supporting_factors[:3],
         )
     elif engine_bullish and ai_bearish:
         logger.warning(
-            "AI bearish for %s but engine direction is %r. "
-            "Check supporting_factors: %s",
+            "AI bearish for %s but engine direction is %r. Check supporting_factors: %s",
             symbol,
             ctx_direction,
             response.supporting_factors[:3],

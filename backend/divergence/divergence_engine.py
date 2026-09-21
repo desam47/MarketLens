@@ -19,6 +19,7 @@ divergences are anchored on confirmed price pivots, not on every bar.
 Historical-only — at every pivot, only data available at that
 timestamp is consulted.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -58,6 +59,7 @@ class Divergence:
     ``strength`` is a 0..1 score combining pivot prominence and
     indicator distance; higher = stronger / more trustworthy.
     """
+
     type: DivergenceType
     direction: DivergenceDirection
     symbol: str
@@ -158,19 +160,29 @@ class DivergenceEngine:
         out: list[Divergence] = []
         if rsi is not None:
             out.extend(
-                self._scan_rsi(highs, lows, rsi, swing_highs, swing_lows,
-                               timestamps, symbol, timeframe)
+                self._scan_rsi(
+                    highs, lows, rsi, swing_highs, swing_lows, timestamps, symbol, timeframe
+                )
             )
         if macd is not None:
             out.extend(
-                self._scan_macd(highs, lows, macd, swing_highs, swing_lows,
-                                timestamps, symbol, timeframe)
+                self._scan_macd(
+                    highs, lows, macd, swing_highs, swing_lows, timestamps, symbol, timeframe
+                )
             )
         if volumes is not None:
             out.extend(
-                self._scan_volume(highs, lows, closes, volumes,
-                                  swing_highs, swing_lows,
-                                  timestamps, symbol, timeframe)
+                self._scan_volume(
+                    highs,
+                    lows,
+                    closes,
+                    volumes,
+                    swing_highs,
+                    swing_lows,
+                    timestamps,
+                    symbol,
+                    timeframe,
+                )
             )
         # Sort by the *later* pivot index so the latest divergences are last
         out.sort(key=lambda d: d.pivot_b_index)
@@ -183,7 +195,7 @@ class DivergenceEngine:
         out: list[int] = []
         lb = self.pivot_lookback
         for i in range(lb, n - lb):
-            window_max = max(highs[i - lb: i + lb + 1])
+            window_max = max(highs[i - lb : i + lb + 1])
             if highs[i] == window_max:
                 # Use a uniqueness guard: a "flat top" counts as one pivot
                 if not out or i - out[-1] > lb:
@@ -195,7 +207,7 @@ class DivergenceEngine:
         out: list[int] = []
         lb = self.pivot_lookback
         for i in range(lb, n - lb):
-            window_min = min(lows[i - lb: i + lb + 1])
+            window_min = min(lows[i - lb : i + lb + 1])
             if lows[i] == window_min:
                 if not out or i - out[-1] > lb:
                     out.append(i)
@@ -220,12 +232,20 @@ class DivergenceEngine:
             if not self._price_moved_enough(highs[a], highs[b]):
                 continue
             if highs[b] > highs[a] and rsi[b] < rsi[a]:
-                out.append(self._make(
-                    DivergenceType.BEARISH_RSI,
-                    a, b, highs[a], highs[b], rsi[a], rsi[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BEARISH_RSI,
+                        a,
+                        b,
+                        highs[a],
+                        highs[b],
+                        rsi[a],
+                        rsi[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         # Bullish: price lower-low, RSI higher-low
         for a, b in self._consecutive_pairs(swing_lows):
             if b - a > self.max_pivots_apart:
@@ -233,12 +253,20 @@ class DivergenceEngine:
             if not self._price_moved_enough(lows[a], lows[b]):
                 continue
             if lows[b] < lows[a] and rsi[b] > rsi[a]:
-                out.append(self._make(
-                    DivergenceType.BULLISH_RSI,
-                    a, b, lows[a], lows[b], rsi[a], rsi[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BULLISH_RSI,
+                        a,
+                        b,
+                        lows[a],
+                        lows[b],
+                        rsi[a],
+                        rsi[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         return out
 
     def _scan_macd(
@@ -259,24 +287,40 @@ class DivergenceEngine:
             if not self._price_moved_enough(highs[a], highs[b]):
                 continue
             if highs[b] > highs[a] and macd[b] < macd[a]:
-                out.append(self._make(
-                    DivergenceType.BEARISH_MACD,
-                    a, b, highs[a], highs[b], macd[a], macd[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BEARISH_MACD,
+                        a,
+                        b,
+                        highs[a],
+                        highs[b],
+                        macd[a],
+                        macd[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         for a, b in self._consecutive_pairs(swing_lows):
             if b - a > self.max_pivots_apart:
                 continue
             if not self._price_moved_enough(lows[a], lows[b]):
                 continue
             if lows[b] < lows[a] and macd[b] > macd[a]:
-                out.append(self._make(
-                    DivergenceType.BULLISH_MACD,
-                    a, b, lows[a], lows[b], macd[a], macd[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BULLISH_MACD,
+                        a,
+                        b,
+                        lows[a],
+                        lows[b],
+                        macd[a],
+                        macd[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         return out
 
     def _scan_volume(
@@ -301,24 +345,40 @@ class DivergenceEngine:
             if not self._price_moved_enough(closes[a], closes[b]):
                 continue
             if closes[b] > closes[a] and volumes[b] < volumes[a]:
-                out.append(self._make(
-                    DivergenceType.BEARISH_VOLUME,
-                    a, b, closes[a], closes[b], volumes[a], volumes[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BEARISH_VOLUME,
+                        a,
+                        b,
+                        closes[a],
+                        closes[b],
+                        volumes[a],
+                        volumes[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         for a, b in self._consecutive_pairs(swing_lows):
             if b - a > self.max_pivots_apart:
                 continue
             if not self._price_moved_enough(closes[a], closes[b]):
                 continue
             if closes[b] < closes[a] and volumes[b] < volumes[a]:
-                out.append(self._make(
-                    DivergenceType.BULLISH_VOLUME,
-                    a, b, closes[a], closes[b], volumes[a], volumes[b],
-                    timestamps[b] if timestamps else None,
-                    symbol, timeframe,
-                ))
+                out.append(
+                    self._make(
+                        DivergenceType.BULLISH_VOLUME,
+                        a,
+                        b,
+                        closes[a],
+                        closes[b],
+                        volumes[a],
+                        volumes[b],
+                        timestamps[b] if timestamps else None,
+                        symbol,
+                        timeframe,
+                    )
+                )
         return out
 
     def _consecutive_pairs(self, indices: Sequence[int]) -> list[tuple[int, int]]:
@@ -332,11 +392,15 @@ class DivergenceEngine:
     def _make(
         self,
         t: DivergenceType,
-        a: int, b: int,
-        price_a: float, price_b: float,
-        ind_a: float, ind_b: float,
+        a: int,
+        b: int,
+        price_a: float,
+        price_b: float,
+        ind_a: float,
+        ind_b: float,
         ts: datetime | None,
-        symbol: str, timeframe: str,
+        symbol: str,
+        timeframe: str,
     ) -> Divergence:
         # Strength: combine the relative price move and the relative
         # indicator distance; cap to [0, 1].

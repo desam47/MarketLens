@@ -11,6 +11,7 @@ The validator returns a structured result instead of raising so callers
 (e.g. the watchlist import endpoint) can build per-symbol error reports
 without a single bad ticker aborting the whole batch.
 """
+
 from pydantic import BaseModel
 
 from backend.market_data.services.manager import market_data_manager

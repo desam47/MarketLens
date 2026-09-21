@@ -5,6 +5,7 @@ Fundamentals are fetched from ``yf.Ticker.info`` which returns a flat dict
 of company metrics. Field names map directly to the Yahoo Finance API
 schema; unavailable fields are left as ``None``.
 """
+
 import logging
 
 from pydantic import ValidationError
@@ -18,20 +19,41 @@ logger = logging.getLogger(__name__)
 
 # Fields we read from ``yf.Ticker.info``.
 _INFO_MAPPING: list[str] = [
-    "longName", "shortName", "sector", "industry",
-    "marketCap", "sharesOutstanding",
-    "totalRevenue", "netIncomeToCommon",
-    "trailingEps", "forwardEps", "earningsGrowth", "revenueGrowth",
-    "trailingPE", "forwardPE", "pegRatio", "priceToBook", "priceToSalesTrailing12Months",
-    "totalDebt", "totalCash", "debtToEquity", "currentRatio",
-    "dividendYield", "payoutRatio",
+    "longName",
+    "shortName",
+    "sector",
+    "industry",
+    "marketCap",
+    "sharesOutstanding",
+    "totalRevenue",
+    "netIncomeToCommon",
+    "trailingEps",
+    "forwardEps",
+    "earningsGrowth",
+    "revenueGrowth",
+    "trailingPE",
+    "forwardPE",
+    "pegRatio",
+    "priceToBook",
+    "priceToSalesTrailing12Months",
+    "totalDebt",
+    "totalCash",
+    "debtToEquity",
+    "currentRatio",
+    "dividendYield",
+    "payoutRatio",
     # Found live 2026-09-10: these are the real yfinance .info key
     # names (verified directly against AAPL's raw info dict) — the
     # "heldBy*" names below were wrong and always missing, so
     # institutional/insider ownership was None for every symbol.
-    "heldPercentInsiders", "heldPercentInstitutions", "shortPercentOfFloat",
-    "targetMeanPrice", "recommendationKey",
-    "beta", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
+    "heldPercentInsiders",
+    "heldPercentInstitutions",
+    "shortPercentOfFloat",
+    "targetMeanPrice",
+    "recommendationKey",
+    "beta",
+    "fiftyTwoWeekHigh",
+    "fiftyTwoWeekLow",
 ]
 
 
@@ -135,7 +157,9 @@ class YFinanceFundamentalsProvider(FundamentalProvider):
                 raise
             logger.info(
                 "Dropping invalid fundamentals field(s) %s for %s: %s",
-                bad_fields, kwargs.get("symbol"), e,
+                bad_fields,
+                kwargs.get("symbol"),
+                e,
             )
             cleaned = {k: (None if k in bad_fields else v) for k, v in kwargs.items()}
             try:

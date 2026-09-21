@@ -6,6 +6,7 @@ available, and a sleep-loop heartbeat under-reports GIL convoys 10x), so the
 tests check the property that matters: a stall produces a report naming the
 blocking function, on the right thread, and healthy loops produce nothing.
 """
+
 import asyncio
 import gc
 import os
@@ -40,9 +41,9 @@ class TestWatchdogDetection(unittest.IsolatedAsyncioTestCase):
 
     async def test_reports_a_blocking_call_and_names_it(self):
         wd = self._start(threshold_ms=30.0)
-        await asyncio.sleep(0.05)              # let it tick a few times first
-        _block_the_loop(0.25)                  # stalls the loop
-        await asyncio.sleep(0.15)              # loop recovers; watchdog reports
+        await asyncio.sleep(0.05)  # let it tick a few times first
+        _block_the_loop(0.25)  # stalls the loop
+        await asyncio.sleep(0.15)  # loop recovers; watchdog reports
         self.assertGreaterEqual(wd.stall_count, 1)
         report = wd.reports[-1]
         self.assertGreaterEqual(report["stall_ms"], 150)
@@ -104,13 +105,15 @@ class TestGcTiming(unittest.IsolatedAsyncioTestCase):
         Bounded on purpose: an earlier version grew the heap in a loop until a full
         collection was slow enough, which under machine load could run for minutes.
         """
-        heap = [[i] for i in range(600_000)]                 # ~600k tracked containers
+        heap = [[i] for i in range(600_000)]  # ~600k tracked containers
         self.addCleanup(heap.clear)
         t = time.perf_counter()
         gc.collect()
         ms = (time.perf_counter() - t) * 1000
         if ms < target_ms:
-            self.skipTest(f"full collection of the test heap took only {ms:.0f} ms (< {target_ms:.0f})")
+            self.skipTest(
+                f"full collection of the test heap took only {ms:.0f} ms (< {target_ms:.0f})"
+            )
         return heap
 
     async def test_records_collections_with_generation_and_duration(self):
@@ -130,13 +133,15 @@ class TestGcTiming(unittest.IsolatedAsyncioTestCase):
         wd.start()
         self.addCleanup(wd.stop)
         await asyncio.sleep(0.05)
-        gc.collect()                                          # runs on the loop thread, GIL held
+        gc.collect()  # runs on the loop thread, GIL held
         await asyncio.sleep(0.2)
         self.assertGreaterEqual(wd.stall_count, 1)
         overlap = wd.reports[-1]["gc_overlap"]
         self.assertTrue(overlap, "the report should name the overlapping collection")
         self.assertEqual(overlap[0]["generation"], 2)
-        self.assertGreaterEqual(overlap[0]["ms"], 12)   # the heap guarantees a >= 20 ms full collection
+        self.assertGreaterEqual(
+            overlap[0]["ms"], 12
+        )  # the heap guarantees a >= 20 ms full collection
 
     async def test_no_gc_attribution_for_a_non_gc_stall(self):
         wd = LoopLagWatchdog(asyncio.get_running_loop(), threshold_ms=30.0, gc_report_ms=50.0)
@@ -191,9 +196,15 @@ class TestShutdownSafety(unittest.TestCase):
     def test_interpreter_exits_promptly_with_the_watchdog_still_enabled(self):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         env = dict(os.environ, PYTHONPATH=root)
-        for _ in range(4):                  # it was intermittent: repeat
-            proc = subprocess.run([sys.executable, "-c", self._SCRIPT], cwd=root, env=env,
-                                  capture_output=True, text=True, timeout=30)
+        for _ in range(4):  # it was intermittent: repeat
+            proc = subprocess.run(
+                [sys.executable, "-c", self._SCRIPT],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             self.assertIn("EXIT_OK", proc.stdout, proc.stderr[-600:])
             self.assertEqual(proc.returncode, 0)
 
@@ -263,7 +274,9 @@ class TestEndpointValidation(unittest.TestCase):
 
         client = TestClient(app)
         for bad in (0, 5, 10_000, -1):
-            r = client.post("/api/system/loop_lag_watchdog", json={"enabled": True, "threshold_ms": bad})
+            r = client.post(
+                "/api/system/loop_lag_watchdog", json={"enabled": True, "threshold_ms": bad}
+            )
             self.assertEqual(r.status_code, 422, bad)
 
     def test_get_reports_the_off_state(self):
@@ -271,7 +284,9 @@ class TestEndpointValidation(unittest.TestCase):
 
         wd_mod.disable()
         body = TestClient(app).get("/api/system/loop_lag_watchdog").json()
-        self.assertEqual(set(body), {"enabled", "threshold_ms", "stall_count", "gc", "recent_stalls"})
+        self.assertEqual(
+            set(body), {"enabled", "threshold_ms", "stall_count", "gc", "recent_stalls"}
+        )
         self.assertFalse(body["enabled"])
 
 

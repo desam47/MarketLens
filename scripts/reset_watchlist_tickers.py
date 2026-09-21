@@ -18,6 +18,7 @@ Use ``show`` at any time to inspect the current state without writing.
 
 Run from the repo root.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -101,7 +102,9 @@ def delete() -> None:
         deleted = len(dump)
 
         print(f"Backed up {deleted} symbol row(s) to {backup_path}")
-        print(f"Deleted all {deleted} WatchlistSymbol row(s) across {len(watchlists)} watchlist(s).")
+        print(
+            f"Deleted all {deleted} WatchlistSymbol row(s) across {len(watchlists)} watchlist(s)."
+        )
         print("Watchlists themselves were NOT deleted — only their tickers.")
         print(f"Latest backup: {backup_path}")
     finally:
@@ -110,7 +113,8 @@ def delete() -> None:
 
 def re_add() -> None:
     backups = sorted(
-        f for f in os.listdir(_BACKUP_DIR)
+        f
+        for f in os.listdir(_BACKUP_DIR)
         if f.startswith("watchlist_reset_backup_") and f.endswith(".json")
     )
     if not backups:

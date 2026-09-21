@@ -2,6 +2,7 @@
 Market Data API Routes
 Endpoints for controlling data ingestion and accessing historical data
 """
+
 import asyncio
 import logging
 from datetime import datetime
@@ -33,6 +34,7 @@ def _to_dashboard_tz(value: datetime | None) -> str:
 
     return format_edt_iso(value) or ""
 
+
 class IngestionStatusResponse(BaseModel):
     is_running: bool
     symbols: list[str]
@@ -42,14 +44,18 @@ class IngestionStatusResponse(BaseModel):
     last_bar_updates: dict[str, dict[str, str]]
     last_status_updates: dict[str, str]
 
+
 class SymbolRequest(BaseModel):
     symbol: str
+
 
 class SymbolsRequest(BaseModel):
     symbols: list[str]
 
+
 class TimeframesRequest(BaseModel):
     timeframes: list[str]
+
 
 @router.post("/ingestion/start")
 async def start_ingestion(background_tasks: BackgroundTasks):
@@ -60,11 +66,13 @@ async def start_ingestion(background_tasks: BackgroundTasks):
     else:
         return {"message": "Ingestion service is already running"}
 
+
 @router.post("/ingestion/stop")
 async def stop_ingestion():
     """Stop the market data ingestion service"""
     ingestion_service.stop()
     return {"message": "Market data ingestion service stopped"}
+
 
 @router.post("/ingestion/toggle")
 async def toggle_ingestion(background_tasks: BackgroundTasks):
@@ -84,6 +92,7 @@ async def toggle_ingestion(background_tasks: BackgroundTasks):
     background_tasks.add_task(ingestion_service.start)
     return {"is_running": True, "message": "Ingestion service started"}
 
+
 @router.get("/ingestion/status", response_model=IngestionStatusResponse)
 async def get_ingestion_status():
     """Get the status of the ingestion service"""
@@ -101,14 +110,21 @@ async def get_ingestion_status():
         symbols=list(ingestion_service.symbols),
         watchlists=watchlists,
         timeframes=list(ingestion_service.timeframes),
-        last_quote_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
-                          for k, v in quote_updates.items()},
-        last_bar_updates={symbol: {tf: _to_dashboard_tz(ts) if ts != datetime.min else ""
-                                 for tf, ts in timeframes.items()}
-                         for symbol, timeframes in bar_updates.items()},
-        last_status_updates={k: _to_dashboard_tz(v) if v != datetime.min else ""
-                           for k, v in status_updates.items()}
+        last_quote_updates={
+            k: _to_dashboard_tz(v) if v != datetime.min else "" for k, v in quote_updates.items()
+        },
+        last_bar_updates={
+            symbol: {
+                tf: _to_dashboard_tz(ts) if ts != datetime.min else ""
+                for tf, ts in timeframes.items()
+            }
+            for symbol, timeframes in bar_updates.items()
+        },
+        last_status_updates={
+            k: _to_dashboard_tz(v) if v != datetime.min else "" for k, v in status_updates.items()
+        },
     )
+
 
 @router.post("/ingestion/symbols")
 async def update_symbols(request: SymbolsRequest):
@@ -119,7 +135,9 @@ async def update_symbols(request: SymbolsRequest):
         if symbol not in ingestion_service.last_quote_update:
             ingestion_service.last_quote_update[symbol] = datetime.min
             ingestion_service.last_status_update[symbol] = datetime.min
-            ingestion_service.last_bar_update[symbol] = {tf: datetime.min for tf in ingestion_service.timeframes}
+            ingestion_service.last_bar_update[symbol] = {
+                tf: datetime.min for tf in ingestion_service.timeframes
+            }
     return {"message": f"Updated symbols to: {request.symbols}"}
 
 
@@ -154,6 +172,7 @@ async def update_timeframes(request: TimeframesRequest):
                 ingestion_service.last_bar_update[symbol][tf] = datetime.min
     return {"message": f"Updated timeframes to: {request.timeframes}"}
 
+
 @router.get("/quote/{symbol}", response_model=Quote)
 async def get_latest_quote(symbol: str):
     """Get the latest quote for a symbol.
@@ -174,6 +193,7 @@ async def get_latest_quote(symbol: str):
     _quote_cache[key] = quote
     return quote
 
+
 @router.get("/quote/{symbol}/history", response_model=list[Quote])
 async def get_quote_history(
     symbol: str,
@@ -184,6 +204,7 @@ async def get_quote_history(
 ):
     """Get historical quotes for a symbol (most recent ``limit``, max 1000)"""
     return await asyncio.to_thread(ingestion_service.get_quote_history, symbol.upper(), limit)
+
 
 def _local_latest_bar(symbol: str, timeframe: str) -> Bar | None:
     """Tiers 1-2 of the latest-bar lookup: Redis cache, then the database.
@@ -242,6 +263,7 @@ async def get_latest_bar(symbol: str, timeframe: str):
             detail=f"No bar data found for {symbol} {timeframe}: {e}",
         ) from e
 
+
 @router.get("/bars/{symbol}", response_model=dict[str, Bar])
 async def get_latest_bars(symbol: str):
     """Get latest bars for all timeframes for a symbol.
@@ -270,6 +292,7 @@ async def get_latest_bars(symbol: str):
             logger.debug("latest bar unavailable from the provider chain; omitted", exc_info=True)
     # Keep the response in timeframe order, as the sequential loop produced.
     return {tf: bars[tf] for tf in timeframes if tf in bars}
+
 
 @router.get("/status/{symbol}", response_model=MarketStatus)
 async def get_market_status(symbol: str):

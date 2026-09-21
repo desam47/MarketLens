@@ -5,6 +5,7 @@ Tests for ``backend.backtesting.experiment_runner`` helpers.
 I/O and can be tested directly. Full integration (running an experiment
 end-to-end) is covered by the API integration tests.
 """
+
 import os
 import sys
 import unittest
@@ -26,20 +27,20 @@ class TestSplitSlices(unittest.TestCase):
 
     def test_default_20_20_split(self):
         start = datetime(2025, 1, 1)
-        end   = datetime(2025, 12, 31)
+        end = datetime(2025, 12, 31)
         slices = _split_slices(start, end, n_splits=3, val_pct=0.20, oos_pct=0.20)
         names = [s[0] for s in slices]
         self.assertEqual(names, ["in_sample", "validation", "out_of_sample"])
 
     def test_slices_are_contiguous(self):
         start = datetime(2025, 1, 1)
-        end   = datetime(2025, 6, 1)
+        end = datetime(2025, 6, 1)
         slices = _split_slices(start, end, n_splits=3, val_pct=0.20, oos_pct=0.20)
-        is_end   = slices[0][2]
-        val_end  = slices[1][2]
-        oos_end  = slices[2][2]
-        self.assertEqual(is_end,   slices[1][1])   # IS.end == Val.start
-        self.assertEqual(val_end,   slices[2][1])   # Val.end == OOS.start
+        is_end = slices[0][2]
+        val_end = slices[1][2]
+        oos_end = slices[2][2]
+        self.assertEqual(is_end, slices[1][1])  # IS.end == Val.start
+        self.assertEqual(val_end, slices[2][1])  # Val.end == OOS.start
         self.assertEqual(oos_end - start, (end - start) / 3)  # OOS.end = window boundary
 
     def test_empty_range_returns_empty_list(self):
@@ -49,12 +50,12 @@ class TestSplitSlices(unittest.TestCase):
     def test_val_pct_zero_no_validation_slice(self):
         # When val_pct=0, the validation slice is 0-length but still present.
         start = datetime(2025, 1, 1)
-        end   = datetime(2025, 12, 31)
+        end = datetime(2025, 12, 31)
         slices = _split_slices(start, end, n_splits=3, val_pct=0.0, oos_pct=0.2)
         # val_end == is_end (zero-length slice)
         self.assertEqual(slices[0][0], "in_sample")
         self.assertEqual(slices[1][0], "validation")
-        self.assertEqual(slices[1][1], slices[0][2])   # val_start == is_end
+        self.assertEqual(slices[1][1], slices[0][2])  # val_start == is_end
 
 
 class TestAggregateMetrics(unittest.TestCase):
@@ -62,16 +63,16 @@ class TestAggregateMetrics(unittest.TestCase):
 
     def _mock_run(self, win_rate, avg_return, sharpe, total_signals):
         run = MagicMock()
-        run.win_rate_1d    = win_rate
-        run.avg_return_1d  = avg_return
-        run.avg_return_5d  = None
+        run.win_rate_1d = win_rate
+        run.avg_return_1d = avg_return
+        run.avg_return_5d = None
         run.avg_return_20d = None
         run.median_return_1d = None
-        run.sharpe_ratio   = sharpe
-        run.profit_factor  = None
-        run.max_drawdown   = None
+        run.sharpe_ratio = sharpe
+        run.profit_factor = None
+        run.max_drawdown = None
         run.signal_frequency = None
-        run.total_signals  = total_signals
+        run.total_signals = total_signals
         return run
 
     def test_mean_win_rate_across_runs(self):

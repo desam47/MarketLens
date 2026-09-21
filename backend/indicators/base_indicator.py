@@ -1,6 +1,7 @@
 """
 Base technical indicator class
 """
+
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
@@ -86,8 +87,7 @@ class IndicatorEngine:
         """
         if kind not in cls._KIND_MAP:
             raise ValueError(
-                f"Unknown indicator kind '{kind}'. "
-                f"Valid kinds: {sorted(cls._KIND_MAP)}"
+                f"Unknown indicator kind '{kind}'. Valid kinds: {sorted(cls._KIND_MAP)}"
             )
         # Lazy import — concrete classes are loaded only when needed.
         from . import adx as _adx

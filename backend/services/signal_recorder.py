@@ -15,6 +15,7 @@ The forward-outcome calculation is fully isolated from the live engine:
 it only reads stored ``BarModel`` rows. If 20 future bars don't exist
 yet, the function leaves the row alone and returns it to the queue.
 """
+
 import bisect
 import json
 import logging
@@ -37,7 +38,9 @@ logger = logging.getLogger(__name__)
 SEED_BUDGET_SECONDS = 3.0
 SEED_MAX_BARS = 50000
 # Cheapest first: the coarse timeframes have the fewest bars and the most durable signals.
-_SEED_ORDER = {tf: i for i, tf in enumerate(["1wk", "1d", "4h", "1h", "30m", "15m", "5m", "3m", "2m", "1m"])}
+_SEED_ORDER = {
+    tf: i for i, tf in enumerate(["1wk", "1d", "4h", "1h", "30m", "15m", "5m", "3m", "2m", "1m"])
+}
 # A row written this soon after its bar closed may carry today's market regime.
 _FRESH = timedelta(minutes=15)
 
@@ -118,9 +121,7 @@ class SignalRecorder:
                 self._last_recorded[key] = ts
                 return None
 
-            confidence_json = (
-                json.dumps(confidence_inputs) if confidence_inputs else None
-            )
+            confidence_json = json.dumps(confidence_inputs) if confidence_inputs else None
 
             signal = repo.create(
                 symbol=sym,
@@ -183,15 +184,11 @@ class SignalRecorder:
             # Bulk pre-fetch of all future bars for all (symbol, timeframe)
             # pairs in the candidate set, starting from the earliest anchor
             # so we can serve every signal in the batch.
-            future_bars_by_pair = self._bulk_prefetch_future_bars(
-                db, candidates
-            )
+            future_bars_by_pair = self._bulk_prefetch_future_bars(db, candidates)
 
             # Compute outcomes in Python; persist via a single commit.
             for signal in candidates:
-                if self._compute_outcome_for_signal(
-                    signal, repo, future_bars_by_pair
-                ):
+                if self._compute_outcome_for_signal(signal, repo, future_bars_by_pair):
                     updated += 1
             db.commit()
         except Exception as e:
@@ -214,10 +211,7 @@ class SignalRecorder:
         already set are left alone. For 1d signals, the anchor timestamp
         is normalized to midnight to match the canonical daily bar.
         """
-        missing: list[HistoricalSignal] = [
-            s for s in candidates
-            if s.price is None or s.price <= 0
-        ]
+        missing: list[HistoricalSignal] = [s for s in candidates if s.price is None or s.price <= 0]
         if not missing:
             return
 
@@ -225,6 +219,7 @@ class SignalRecorder:
         # This is still fewer round-trips than the previous per-signal
         # _price_at() approach (which was N queries for N missing prices).
         from collections import defaultdict
+
         by_pair: dict[tuple[str, str], list[HistoricalSignal]] = defaultdict(list)
         for s in missing:
             ts = s.timestamp
@@ -268,6 +263,7 @@ class SignalRecorder:
             return {}
 
         from collections import defaultdict
+
         # Track the earliest anchor per (symbol, timeframe) so the bulk
         # query grabs everything the batch will ever need.
         earliest_anchor: dict[tuple[str, str], datetime] = {}
@@ -293,6 +289,7 @@ class SignalRecorder:
                 )
             )
         from sqlalchemy import or_
+
         rows = (
             db.query(BarModel)
             .filter(or_(*pair_clauses))
@@ -368,16 +365,19 @@ class SignalRecorder:
                     if replay is None:
                         unseeded.append((symbol, timeframe))
                     elif replay.last_ts is None or last_bar > replay.last_ts:
-                        recorded += self._guarded(db, symbol, timeframe, self._advance_pair,
-                                                  replay, now)
+                        recorded += self._guarded(
+                            db, symbol, timeframe, self._advance_pair, replay, now
+                        )
                 unseeded.sort(key=lambda p: _SEED_ORDER.get(p[1], len(_SEED_ORDER)))
                 for n, (symbol, timeframe) in enumerate(unseeded):
                     if n and time.monotonic() >= deadline:
-                        logger.debug("signal recorder: %d pairs wait for the next cycle",
-                                     len(unseeded) - n)
+                        logger.debug(
+                            "signal recorder: %d pairs wait for the next cycle", len(unseeded) - n
+                        )
                         break
-                    recorded += self._guarded(db, symbol, timeframe, self._seed_pair,
-                                              SEED_MAX_BARS, now)
+                    recorded += self._guarded(
+                        db, symbol, timeframe, self._seed_pair, SEED_MAX_BARS, now
+                    )
         except Exception as e:
             logger.error(f"record_from_recent_bars failed: {e}")
             db.rollback()
@@ -393,7 +393,6 @@ class SignalRecorder:
             db.rollback()
             logger.error(f"signal recorder: {symbol}/{timeframe} failed: {e}")
             return 0
-
 
     def backfill_signals_for_symbol(
         self,
@@ -438,17 +437,16 @@ class SignalRecorder:
             else:
                 # Iterate per timeframe so each gets its own max_bars budget.
                 timeframes = [
-                    tf for (tf,) in
-                    db.query(BarModel.timeframe)
-                      .filter(BarModel.symbol == sym)
-                      .distinct()
-                      .all()
+                    tf
+                    for (tf,) in db.query(BarModel.timeframe)
+                    .filter(BarModel.symbol == sym)
+                    .distinct()
+                    .all()
                 ]
                 # Order timeframes so shorter (denser) ones go first — they
                 # produce the most rows for the budget. 1d/1wk go last so
                 # the cap doesn't get eaten by sub-hour bars.
-                order = ["1m", "2m", "3m", "5m", "15m", "30m",
-                         "1h", "4h", "1d", "1wk"]
+                order = ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"]
                 timeframes.sort(key=lambda t: order.index(t) if t in order else 99)
 
             for tf in timeframes:
@@ -458,9 +456,7 @@ class SignalRecorder:
             db.rollback()
         finally:
             db.close()
-        logger.info(
-            f"backfill_signals_for_symbol({sym}): recorded {recorded} new signals"
-        )
+        logger.info(f"backfill_signals_for_symbol({sym}): recorded {recorded} new signals")
         return recorded
 
     def _bulk_record_bars(
@@ -482,8 +478,9 @@ class SignalRecorder:
         """Replay the pair's closed bars, write the ones without a row, keep the engine so
         ``_advance_pair`` can carry on from the last bar."""
         rows = (
-            db.query(BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low,
-                     BarModel.volume)
+            db.query(
+                BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low, BarModel.volume
+            )
             .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
             .order_by(BarModel.timestamp.desc())
             .limit(max_bars)
@@ -494,25 +491,30 @@ class SignalRecorder:
         if not closed:
             return 0
         existing = {
-            ts for (ts,) in db.query(HistoricalSignal.timestamp)
-            .filter(HistoricalSignal.symbol == symbol, HistoricalSignal.timeframe == timeframe,
-                    HistoricalSignal.timestamp >= closed[0].timestamp)
+            ts
+            for (ts,) in db.query(HistoricalSignal.timestamp)
+            .filter(
+                HistoricalSignal.symbol == symbol,
+                HistoricalSignal.timeframe == timeframe,
+                HistoricalSignal.timestamp >= closed[0].timestamp,
+            )
             .all()
         }
         replay = BarReplay(symbol, timeframe)
         scored = [(bar, replay.feed(bar)) for bar in closed]
         written = self._insert_rows(
-            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now)
+            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now
+        )
         self._replays[(symbol, timeframe)] = replay
         return written
 
-    def _advance_pair(self, db, symbol: str, timeframe: str, replay: BarReplay, now: datetime) -> int:
+    def _advance_pair(
+        self, db, symbol: str, timeframe: str, replay: BarReplay, now: datetime
+    ) -> int:
         """Feed the bars that closed since the last cycle and write their rows."""
-        q = (
-            db.query(BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low,
-                     BarModel.volume)
-            .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
-        )
+        q = db.query(
+            BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low, BarModel.volume
+        ).filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
         if replay.last_ts is not None:
             q = q.filter(BarModel.timestamp > replay.last_ts)
         new = []
@@ -523,14 +525,19 @@ class SignalRecorder:
         if not new:
             return 0
         existing = {
-            ts for (ts,) in db.query(HistoricalSignal.timestamp)
-            .filter(HistoricalSignal.symbol == symbol, HistoricalSignal.timeframe == timeframe,
-                    HistoricalSignal.timestamp.in_([r.timestamp for r in new]))
+            ts
+            for (ts,) in db.query(HistoricalSignal.timestamp)
+            .filter(
+                HistoricalSignal.symbol == symbol,
+                HistoricalSignal.timeframe == timeframe,
+                HistoricalSignal.timestamp.in_([r.timestamp for r in new]),
+            )
             .all()
         }
         scored = [(bar, replay.feed(bar)) for bar in new]
         return self._insert_rows(
-            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now)
+            db, symbol, timeframe, [(b, sc) for b, sc in scored if b.timestamp not in existing], now
+        )
 
     def _insert_rows(self, db, symbol: str, timeframe: str, scored, now: datetime) -> int:
         """Bulk-insert one signal per ``(bar, score)``. A row written within
@@ -546,24 +553,28 @@ class SignalRecorder:
                 if not regime_loaded:
                     regime, regime_loaded = self._get_market_regime(), True
                 label["market_regime"] = regime
-            objects.append(HistoricalSignal(
-                symbol=symbol,
-                timestamp=bar.timestamp,
-                timeframe=timeframe,
-                price=float(bar.close or 0),
-                **label,
-                relative_strength=None,
-                sector_alignment=None,
-                volume_state=self._classify_volume(bar),
-                confidence_inputs=json.dumps({
-                    "bar_close": float(bar.close or 0),
-                    "bar_high": float(bar.high or 0),
-                    "bar_low": float(bar.low or 0),
-                }),
-                strategy_version="v1",
-                data_quality="good",
-                _outcome_missing=True,
-            ))
+            objects.append(
+                HistoricalSignal(
+                    symbol=symbol,
+                    timestamp=bar.timestamp,
+                    timeframe=timeframe,
+                    price=float(bar.close or 0),
+                    **label,
+                    relative_strength=None,
+                    sector_alignment=None,
+                    volume_state=self._classify_volume(bar),
+                    confidence_inputs=json.dumps(
+                        {
+                            "bar_close": float(bar.close or 0),
+                            "bar_high": float(bar.high or 0),
+                            "bar_low": float(bar.low or 0),
+                        }
+                    ),
+                    strategy_version="v1",
+                    data_quality="good",
+                    _outcome_missing=True,
+                )
+            )
         try:
             db.bulk_save_objects(objects, return_defaults=False)
             db.commit()
@@ -572,7 +583,6 @@ class SignalRecorder:
             logger.error(f"_insert_rows({symbol}, {timeframe}, n={len(objects)}) failed: {e}")
             raise
         return len(objects)
-
 
     def _classify_volume(self, bar) -> str:
         """Crude volume classification — no historical baseline here."""
@@ -592,6 +602,7 @@ class SignalRecorder:
         """
         try:
             from backend.api.market_context.router import get_engine
+
             engine = get_engine()
             snap = engine.get_current_context()
             if snap is None:
@@ -628,10 +639,7 @@ class SignalRecorder:
             # direct callers (tests) and any rows the bulk pass missed.
             anchor_price = self._price_at(db, signal.symbol, signal.timeframe, signal.timestamp)
             if anchor_price is None or anchor_price <= 0:
-                logger.debug(
-                    f"Cannot compute outcomes for signal {signal.id}: "
-                    f"no price at anchor"
-                )
+                logger.debug(f"Cannot compute outcomes for signal {signal.id}: no price at anchor")
                 return False
             signal.price = anchor_price
 
@@ -662,7 +670,7 @@ class SignalRecorder:
                 # strictly greater than anchor_ts.
                 keys = [b.timestamp for b in bucket]
                 idx = bisect.bisect_right(keys, anchor_ts)
-                future_bars = bucket[idx:idx + REQUIRED_FORWARD_BARS]
+                future_bars = bucket[idx : idx + REQUIRED_FORWARD_BARS]
         else:
             future_bars = (
                 db.query(BarModel)
@@ -723,9 +731,7 @@ class SignalRecorder:
         )
         return True
 
-    def _return_at_bar(
-        self, future_bars: list, anchor_price: float, n_bars: int
-    ) -> float | None:
+    def _return_at_bar(self, future_bars: list, anchor_price: float, n_bars: int) -> float | None:
         """% return from anchor close to bar at index n_bars."""
         if len(future_bars) < n_bars:
             return None
@@ -734,9 +740,7 @@ class SignalRecorder:
             return None
         return (close - anchor_price) / anchor_price * 100.0
 
-    def _mfe_mae(
-        self, future_bars: list, anchor_price: float
-    ) -> tuple[float | None, float | None]:
+    def _mfe_mae(self, future_bars: list, anchor_price: float) -> tuple[float | None, float | None]:
         """Maximum favorable / adverse excursion as % of anchor price.
 
         MFE = best (max) high over the forward window.
@@ -752,9 +756,7 @@ class SignalRecorder:
         mae = (min(lows) - anchor_price) / anchor_price * 100.0
         return mfe, mae
 
-    def _price_at(
-        self, db, symbol: str, timeframe: str, ts: datetime
-    ) -> float | None:
+    def _price_at(self, db, symbol: str, timeframe: str, ts: datetime) -> float | None:
         """Return the close price for the matching bar, or None.
 
         For 1d, normalise the timestamp to midnight so we look up the

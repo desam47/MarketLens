@@ -6,6 +6,7 @@ All HTTP calls are mocked. We exercise the public API surface
 ``get_market_status``, ``is_available``) plus error-handling
 behaviour (HTTP 429, 4xx, 5xx, empty responses).
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -13,7 +14,9 @@ from unittest.mock import MagicMock, patch
 from backend.market_data.providers.finnhub_provider import FinnhubProvider
 
 
-def _mock_response(status_code=200, json_data=None, text="", content_type="application/json") -> MagicMock:
+def _mock_response(
+    status_code=200, json_data=None, text="", content_type="application/json"
+) -> MagicMock:
     """Build a requests.Response-like mock with .ok, .status_code, .json()."""
     resp = MagicMock()
     resp.status_code = status_code
@@ -33,10 +36,19 @@ class TestFinnhubProviderQuote(unittest.TestCase):
 
     @patch("backend.market_data.providers.finnhub_provider.requests.get")
     def test_get_quote_returns_quote_with_price(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "c": 150.50, "d": 1.5, "dp": 1.0, "h": 151.0,
-            "l": 149.0, "o": 149.5, "pc": 149.0, "t": 1700000000
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "c": 150.50,
+                "d": 1.5,
+                "dp": 1.0,
+                "h": 151.0,
+                "l": 149.0,
+                "o": 149.5,
+                "pc": 149.0,
+                "t": 1700000000,
+            },
+        )
         quote = self.provider.get_quote("AAPL")
         self.assertEqual(quote.symbol, "AAPL")
         self.assertEqual(quote.price, 150.50)
@@ -47,10 +59,19 @@ class TestFinnhubProviderQuote(unittest.TestCase):
     def test_get_quote_handles_free_tier_no_bid_ask(self, mock_get):
         # Finnhub free tier /quote returns only `c` (close), not `b`/`a`.
         # Provider must accept None for bid/ask without raising.
-        mock_get.return_value = _mock_response(200, {
-            "c": 325.13, "d": 8.28, "dp": 2.61, "h": 327.30,
-            "l": 314.73, "o": 316.98, "pc": 316.85, "t": 1700000000
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "c": 325.13,
+                "d": 8.28,
+                "dp": 2.61,
+                "h": 327.30,
+                "l": 314.73,
+                "o": 316.98,
+                "pc": 316.85,
+                "t": 1700000000,
+            },
+        )
         quote = self.provider.get_quote("AAPL")
         self.assertEqual(quote.price, 325.13)
         self.assertIsNone(quote.bid)
@@ -85,15 +106,18 @@ class TestFinnhubProviderBars(unittest.TestCase):
 
     @patch("backend.market_data.providers.finnhub_provider.requests.get")
     def test_get_historical_bars_returns_bar_list(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "s": "ok",
-            "t": [1700000000, 1700086400],
-            "o": [100.0, 101.0],
-            "h": [101.5, 102.0],
-            "l": [99.5, 100.5],
-            "c": [101.0, 101.5],
-            "v": [1000000, 1500000],
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "s": "ok",
+                "t": [1700000000, 1700086400],
+                "o": [100.0, 101.0],
+                "h": [101.5, 102.0],
+                "l": [99.5, 100.5],
+                "c": [101.0, 101.5],
+                "v": [1000000, 1500000],
+            },
+        )
         bars = self.provider.get_historical_bars("AAPL", timeframe="1d", range_="3mo")
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[0].open, 100.0)
@@ -108,11 +132,18 @@ class TestFinnhubProviderBars(unittest.TestCase):
 
     @patch("backend.market_data.providers.finnhub_provider.requests.get")
     def test_get_latest_bar_returns_one_bar(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "s": "ok",
-            "t": [1700000000],
-            "o": [100.0], "h": [101.0], "l": [99.0], "c": [100.5], "v": [1000000]
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "s": "ok",
+                "t": [1700000000],
+                "o": [100.0],
+                "h": [101.0],
+                "l": [99.0],
+                "c": [100.5],
+                "v": [1000000],
+            },
+        )
         bar = self.provider.get_latest_bar("AAPL", "1d")
         self.assertEqual(bar.close, 100.5)
         self.assertEqual(bar.timeframe, "1d")
@@ -120,8 +151,10 @@ class TestFinnhubProviderBars(unittest.TestCase):
     def test_unsupported_timeframe_raises(self):
         with self.assertRaises(ValueError):
             # Force resolution lookup to fail by patching a private helper
-            with patch("backend.market_data.providers.finnhub_provider._resolve_resolution",
-                       side_effect=ValueError("Unsupported timeframe '7y'")):
+            with patch(
+                "backend.market_data.providers.finnhub_provider._resolve_resolution",
+                side_effect=ValueError("Unsupported timeframe '7y'"),
+            ):
                 self.provider.get_historical_bars("AAPL", timeframe="7y")
 
 
@@ -156,8 +189,12 @@ class TestFinnhubProviderBatchQuotes(unittest.TestCase):
     def test_batch_quotes_honours_rate_limiter(self, mock_get_breaker, mock_rl, mock_get):
         """Each symbol must call _rate_limiter.acquire before the HTTP request."""
         mock_get_breaker.return_value.call.return_value = MagicMock(
-            price=150.0, bid=None, ask=None, data_status=MagicMock(value="DELAYED"),
-            timestamp=datetime.now(UTC), symbol="AAPL",
+            price=150.0,
+            bid=None,
+            ask=None,
+            data_status=MagicMock(value="DELAYED"),
+            timestamp=datetime.now(UTC),
+            symbol="AAPL",
             provider="finnhub",
         )
         result = self.provider.get_batch_quotes(["AAPL", "SPY", "QQQ"])
@@ -194,7 +231,8 @@ class TestFinnhubProviderMarketStatus(unittest.TestCase):
         # Free tier quirk: /market-status returns 200 OK with HTML body.
         # Provider must raise cleanly so the chain can fall through.
         mock_get.return_value = _mock_response(
-            200, text="<!DOCTYPE html><html>...</html>",
+            200,
+            text="<!DOCTYPE html><html>...</html>",
             content_type="text/html; charset=utf-8",
         )
         with self.assertRaises(RuntimeError) as ctx:

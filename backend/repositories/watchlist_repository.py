@@ -28,9 +28,11 @@ class WatchlistRepository:
 
     def get_watchlist_by_name(self, name: str) -> Watchlist | None:
         """Get a watchlist by name"""
-        return self.db.query(Watchlist).filter(
-            and_(Watchlist.name == name, Watchlist.is_active)
-        ).first()
+        return (
+            self.db.query(Watchlist)
+            .filter(and_(Watchlist.name == name, Watchlist.is_active))
+            .first()
+        )
 
     def create_watchlist(self, name: str, description: str | None = None) -> Watchlist:
         """Create a new watchlist"""
@@ -40,9 +42,13 @@ class WatchlistRepository:
         self.db.refresh(watchlist)
         return watchlist
 
-    def update_watchlist(self, watchlist_id: int, name: str | None = None,
-                        description: str | None = None,
-                        is_active: bool | None = None) -> Watchlist | None:
+    def update_watchlist(
+        self,
+        watchlist_id: int,
+        name: str | None = None,
+        description: str | None = None,
+        is_active: bool | None = None,
+    ) -> Watchlist | None:
         """Update an existing watchlist"""
         watchlist = self.get_watchlist(watchlist_id)
         if watchlist:
@@ -69,15 +75,17 @@ class WatchlistRepository:
         if not watchlist:
             return False
         # Hard delete the children first to satisfy the FK constraint.
-        self.db.query(WatchlistSymbol).filter(
-            WatchlistSymbol.watchlist_id == watchlist_id
-        ).delete(synchronize_session=False)
+        self.db.query(WatchlistSymbol).filter(WatchlistSymbol.watchlist_id == watchlist_id).delete(
+            synchronize_session=False
+        )
         self.db.delete(watchlist)
         self.db.commit()
         return True
 
     # Watchlist symbol operations
-    def get_watchlist_symbols(self, watchlist_id: int, enabled_only: bool = True) -> list[WatchlistSymbol]:
+    def get_watchlist_symbols(
+        self, watchlist_id: int, enabled_only: bool = True
+    ) -> list[WatchlistSymbol]:
         """Get all symbols in a watchlist"""
         query = self.db.query(WatchlistSymbol).filter(WatchlistSymbol.watchlist_id == watchlist_id)
         if enabled_only:
@@ -97,9 +105,7 @@ class WatchlistRepository:
             query = query.filter(WatchlistSymbol.is_enabled)
         return query.order_by(WatchlistSymbol.position).all()
 
-    def get_watchlist_symbol_count(
-        self, watchlist_id: int, enabled_only: bool = True
-    ) -> int:
+    def get_watchlist_symbol_count(self, watchlist_id: int, enabled_only: bool = True) -> int:
         """Count symbols in a watchlist (enabled-only by default).
 
         Used by the import endpoint to enforce
@@ -115,16 +121,24 @@ class WatchlistRepository:
 
     def get_watchlist_symbol(self, watchlist_id: int, symbol: str) -> WatchlistSymbol | None:
         """Get a specific symbol in a watchlist"""
-        return self.db.query(WatchlistSymbol).filter(
-            and_(
-                WatchlistSymbol.watchlist_id == watchlist_id,
-                WatchlistSymbol.symbol == symbol.upper()
+        return (
+            self.db.query(WatchlistSymbol)
+            .filter(
+                and_(
+                    WatchlistSymbol.watchlist_id == watchlist_id,
+                    WatchlistSymbol.symbol == symbol.upper(),
+                )
             )
-        ).first()
+            .first()
+        )
 
-    def add_symbol_to_watchlist(self, watchlist_id: int, symbol: str,
-                               position: int | None = None,
-                               entity_type: str | None = None) -> tuple[WatchlistSymbol, bool, bool]:
+    def add_symbol_to_watchlist(
+        self,
+        watchlist_id: int,
+        symbol: str,
+        position: int | None = None,
+        entity_type: str | None = None,
+    ) -> tuple[WatchlistSymbol, bool, bool]:
         """Add a symbol to a watchlist.
 
         Returns a tuple ``(WatchlistSymbol, is_new_row, did_reenable)``.
@@ -157,9 +171,12 @@ class WatchlistRepository:
         # Determine position if not provided
         if position is None:
             # Get the highest position and add 1
-            max_position = self.db.query(
-                func.max(WatchlistSymbol.position)
-            ).filter(WatchlistSymbol.watchlist_id == watchlist_id).scalar() or -1
+            max_position = (
+                self.db.query(func.max(WatchlistSymbol.position))
+                .filter(WatchlistSymbol.watchlist_id == watchlist_id)
+                .scalar()
+                or -1
+            )
             position = max_position + 1
 
         watchlist_symbol = WatchlistSymbol(
@@ -191,10 +208,12 @@ class WatchlistRepository:
         """
         result = (
             self.db.query(func.count(WatchlistSymbol.id))
-            .filter(and_(
-                WatchlistSymbol.symbol == symbol.upper(),
-                WatchlistSymbol.is_enabled.is_(True),
-            ))
+            .filter(
+                and_(
+                    WatchlistSymbol.symbol == symbol.upper(),
+                    WatchlistSymbol.is_enabled.is_(True),
+                )
+            )
             .scalar()
         )
         return (result or 0) > 0
@@ -254,7 +273,10 @@ class WatchlistRepository:
 
     def get_next_position(self, watchlist_id: int) -> int:
         """Get the next available position for a watchlist"""
-        max_position = self.db.query(
-            func.max(WatchlistSymbol.position)
-        ).filter(WatchlistSymbol.watchlist_id == watchlist_id).scalar() or -1
+        max_position = (
+            self.db.query(func.max(WatchlistSymbol.position))
+            .filter(WatchlistSymbol.watchlist_id == watchlist_id)
+            .scalar()
+            or -1
+        )
         return max_position + 1

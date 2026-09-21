@@ -1,6 +1,7 @@
 """
 Tests for market scanner
 """
+
 import asyncio
 import os
 import sys
@@ -9,14 +10,13 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.models.market_data import Bar, DataStatus, Quote
 from backend.scanner.scanner import Scanner, ScanResult
 
 
 class TestScanner(unittest.TestCase):
-
     def setUp(self):
         self.scanner = Scanner()
 
@@ -80,7 +80,7 @@ class TestScanner(unittest.TestCase):
         expected = (80.0 + 60.0) / 2
         self.assertEqual(result.calculate_total_score(), expected)
 
-    @patch('backend.scanner.scanner.market_data_manager')
+    @patch("backend.scanner.scanner.market_data_manager")
     def test_scan_symbol_success(self, mock_market_data_manager):
         """Test successful symbol scanning"""
         # Setup mock quote
@@ -90,7 +90,7 @@ class TestScanner(unittest.TestCase):
             timestamp=datetime.now(),
             provider="yahoo_finance",
             data_status=DataStatus.DELAYED,
-            volume=1000000
+            volume=1000000,
         )
         mock_market_data_manager.get_quote.return_value = mock_quote
 
@@ -107,7 +107,7 @@ class TestScanner(unittest.TestCase):
         # Verify market data manager was called
         mock_market_data_manager.get_quote.assert_called_once_with("AAPL")
 
-    @patch('backend.scanner.scanner.market_data_manager')
+    @patch("backend.scanner.scanner.market_data_manager")
     def test_scan_symbol_failure(self, mock_market_data_manager):
         """Test symbol scanning when market data fails"""
         # Setup mock to raise exception
@@ -133,14 +133,12 @@ class TestScanner(unittest.TestCase):
             timestamp=datetime.now(),
             provider="yahoo_finance",
             data_status=DataStatus.DELAYED,
-            volume=1000000
+            volume=1000000,
         )
 
         # When the manager returns an empty history list, history-derived
         # indicators should be present-but-None.
-        with patch(
-            'backend.scanner.scanner.market_data_manager'
-        ) as mock_manager:
+        with patch("backend.scanner.scanner.market_data_manager") as mock_manager:
             mock_manager.get_quote.return_value = result.quote
             mock_manager.get_latest_bar.return_value = None
             mock_manager.get_historical_bars.return_value = []
@@ -201,9 +199,7 @@ class TestScanner(unittest.TestCase):
                 )
             )
 
-        with patch(
-            'backend.scanner.scanner.market_data_manager'
-        ) as mock_manager:
+        with patch("backend.scanner.scanner.market_data_manager") as mock_manager:
             mock_manager.get_quote.return_value = result.quote
             mock_manager.get_latest_bar.return_value = bars[-1]
             mock_manager.get_historical_bars.return_value = bars
@@ -224,8 +220,11 @@ class TestScanner(unittest.TestCase):
         """Scanner exposes the windows consumed by the saved scan filters."""
         result = ScanResult("AAPL", datetime.now())
         result.quote = Quote(
-            symbol="AAPL", price=130.0, timestamp=datetime.now(),
-            provider="yahoo_finance", data_status=DataStatus.DELAYED,
+            symbol="AAPL",
+            price=130.0,
+            timestamp=datetime.now(),
+            provider="yahoo_finance",
+            data_status=DataStatus.DELAYED,
             volume=2_000_000,
         )
 
@@ -233,24 +232,43 @@ class TestScanner(unittest.TestCase):
         benchmark: list[Bar] = []
         for i in range(60):
             close = 100.0 + i * 0.25
-            bars.append(Bar(
-                symbol="AAPL", timestamp=datetime(2025, 1, 1) + timedelta(days=i),
-                open=close - 0.2, high=close + 0.4, low=close - 0.4,
-                close=close, volume=1_000_000, timeframe="1d",
-                provider="yahoo_finance", data_status=DataStatus.HISTORICAL,
-            ))
-            benchmark.append(Bar(
-                symbol="SPY", timestamp=datetime(2025, 1, 1) + timedelta(days=i),
-                open=100.0, high=100.2, low=99.8, close=100.0,
-                volume=1_000_000, timeframe="1d",
-                provider="yahoo_finance", data_status=DataStatus.HISTORICAL,
-            ))
+            bars.append(
+                Bar(
+                    symbol="AAPL",
+                    timestamp=datetime(2025, 1, 1) + timedelta(days=i),
+                    open=close - 0.2,
+                    high=close + 0.4,
+                    low=close - 0.4,
+                    close=close,
+                    volume=1_000_000,
+                    timeframe="1d",
+                    provider="yahoo_finance",
+                    data_status=DataStatus.HISTORICAL,
+                )
+            )
+            benchmark.append(
+                Bar(
+                    symbol="SPY",
+                    timestamp=datetime(2025, 1, 1) + timedelta(days=i),
+                    open=100.0,
+                    high=100.2,
+                    low=99.8,
+                    close=100.0,
+                    volume=1_000_000,
+                    timeframe="1d",
+                    provider="yahoo_finance",
+                    data_status=DataStatus.HISTORICAL,
+                )
+            )
 
         # Make the current quote a confirmed breakout and volume expansion.
         bars[-1] = bars[-1].model_copy(update={"high": 130.5, "close": 130.0, "volume": 2_000_000})
         with patch("backend.scanner.scanner.market_data_manager"):
             self.scanner._calculate_indicators(
-                result, "AAPL", bars, {"SPY": benchmark},
+                result,
+                "AAPL",
+                bars,
+                {"SPY": benchmark},
             )
 
         self.assertIsNotNone(result.indicator_values["sma_20"])
@@ -275,9 +293,7 @@ class TestScanner(unittest.TestCase):
 
         # Empty history should still result in None indicators without
         # raising.
-        with patch(
-            'backend.scanner.scanner.market_data_manager'
-        ) as mock_manager:
+        with patch("backend.scanner.scanner.market_data_manager") as mock_manager:
             mock_manager.get_quote.return_value = result.quote
             mock_manager.get_latest_bar.return_value = None
             mock_manager.get_historical_bars.return_value = []
@@ -292,13 +308,7 @@ class TestScanner(unittest.TestCase):
         """Test score calculation"""
         result = ScanResult("AAPL", datetime.now())
         # Set some indicator values
-        result.indicator_values = {
-            "adx": 30,
-            "macd": 10,
-            "close": 200,
-            "volume": 500000,
-            "rsi": 40
-        }
+        result.indicator_values = {"adx": 30, "macd": 10, "close": 200, "volume": 500000, "rsi": 40}
 
         # Calculate scores
         self.scanner._calculate_scores(result)
@@ -324,13 +334,13 @@ class TestScanner(unittest.TestCase):
         result.indicator_values = {
             "rsi": 25,  # Oversold
             "macd": 5,  # Positive MACD
-            "volume": 1500000  # High volume
+            "volume": 1500000,  # High volume
         }
         # Set trend signals
         result.trend_signals = {
             "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
             "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.9}
+            "ONE_DAY": {"direction": "uptrend", "confidence": 0.9},
         }
 
         # Generate signals
@@ -353,10 +363,13 @@ class TestScanner(unittest.TestCase):
 
     @patch("backend.config.settings.settings.tape")
     @patch("backend.api.tape.registry.get_tape_engine")
-    def test_generate_signals_includes_tape_pressure_and_blocks(self, mock_get_engine, mock_tape_cfg):
+    def test_generate_signals_includes_tape_pressure_and_blocks(
+        self, mock_get_engine, mock_tape_cfg
+    ):
         mock_tape_cfg.enabled = True
         mock_get_engine.return_value.get_snapshot.return_value = {
-            "pressure": "heavy_buy", "block_count_5m": 3,
+            "pressure": "heavy_buy",
+            "block_count_5m": 3,
         }
         result = ScanResult("AAPL", datetime.now())
         result.indicator_values = {"rsi": 50}
@@ -365,7 +378,7 @@ class TestScanner(unittest.TestCase):
         self.assertIn("HEAVY_BUY_PRESSURE", result.signals)
         self.assertIn("BLOCK_ACTIVITY", result.signals)
 
-    @patch('backend.scanner.scanner.market_data_manager')
+    @patch("backend.scanner.scanner.market_data_manager")
     def test_scan_symbols(self, mock_market_data_manager):
         """Test scanning multiple symbols.
 
@@ -373,6 +386,7 @@ class TestScanner(unittest.TestCase):
         return real Quote/Bar objects so that downstream arithmetic in
         _calculate_indicators and TrendEngine.update() succeeds.
         """
+
         # Real Quote factory for the batch call path.
         def make_quote(symbol: str) -> Quote:
             return Quote(
@@ -388,15 +402,20 @@ class TestScanner(unittest.TestCase):
             return Bar(
                 symbol=symbol,
                 timestamp=datetime.now(),
-                open=100.0, high=105.0, low=95.0, close=102.0,
-                volume=1000000, timeframe="1d",
-                provider="yahoo_finance", data_status=DataStatus.DELAYED,
+                open=100.0,
+                high=105.0,
+                low=95.0,
+                close=102.0,
+                volume=1000000,
+                timeframe="1d",
+                provider="yahoo_finance",
+                data_status=DataStatus.DELAYED,
             )
 
         # scan_symbols() calls get_batch_quotes / get_batch_historical_bars first.
-        mock_market_data_manager.get_batch_quotes.side_effect = (
-            lambda symbols: {s: make_quote(s) for s in symbols}
-        )
+        mock_market_data_manager.get_batch_quotes.side_effect = lambda symbols: {
+            s: make_quote(s) for s in symbols
+        }
         # get_batch_historical_bars is async now — scan_symbols awaits it.
         mock_market_data_manager.get_batch_historical_bars = AsyncMock(return_value={})
         # Individual call paths (fallback / indicator enrichment).
@@ -497,5 +516,6 @@ class TestScanner(unittest.TestCase):
         no_signals = self.scanner.get_signals_for_symbol("NONEXISTENT")
         self.assertEqual(no_signals, [])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

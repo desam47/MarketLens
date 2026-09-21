@@ -1,6 +1,7 @@
 """
 Tests for Bollinger Bands indicator
 """
+
 import unittest
 
 from backend.indicators.bollinger_bands import BollingerBandsIndicator
@@ -20,11 +21,13 @@ class TestBollingerBandsIndicator(unittest.TestCase):
             block = i // 5
             offset = 2.0 if block % 2 == 0 else -2.0
             close = base + offset
-            bars.append({
-                "close": close,
-                "high": close + 0.5,
-                "low": close - 0.5,
-            })
+            bars.append(
+                {
+                    "close": close,
+                    "high": close + 0.5,
+                    "low": close - 0.5,
+                }
+            )
         return bars
 
     def _latest(self, key: str) -> float:
@@ -95,7 +98,9 @@ class TestBollingerBandsIndicator(unittest.TestCase):
             self.assertEqual(len(calc_vals), len(online_vals))
             for i, (cv, ov) in enumerate(zip(calc_vals, online_vals, strict=True)):
                 self.assertAlmostEqual(
-                    cv, ov, places=9,
+                    cv,
+                    ov,
+                    places=9,
                     msg=f"{key}[{i}]: update()={ov:.9f} vs calculate()={cv:.9f}",
                 )
 

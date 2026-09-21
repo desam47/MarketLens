@@ -1,6 +1,7 @@
 """
 Market data models for MarketLens
 """
+
 from datetime import datetime
 from enum import StrEnum
 
@@ -16,9 +17,10 @@ class DataStatus(StrEnum):
     STALE = "STALE"
     ERROR = "ERROR"
     # Phase 4 additions — emitted by TimeframeEngine for data-quality issues.
-    GAP = "GAP"                  # expected bar missing (gap between consecutive candles)
-    INCOMPLETE = "INCOMPLETE"    # bar arrived with fewer ticks than expected
-    DUPLICATE = "DUPLICATE"      # tick with same (timeframe, timestamp) seen twice
+    GAP = "GAP"  # expected bar missing (gap between consecutive candles)
+    INCOMPLETE = "INCOMPLETE"  # bar arrived with fewer ticks than expected
+    DUPLICATE = "DUPLICATE"  # tick with same (timeframe, timestamp) seen twice
+
 
 class Quote(BaseModel):
     symbol: str
@@ -49,6 +51,7 @@ class Quote(BaseModel):
     def _ser_ext_ts(self, ts: datetime | None) -> str | None:
         return format_edt_iso(ts) if ts is not None else None
 
+
 class Bar(BaseModel):
     symbol: str
     timestamp: datetime
@@ -77,6 +80,7 @@ class Bar(BaseModel):
         # the value correctly regardless of browser timezone.
         return format_edt_iso(ts)
 
+
 class MarketStatus(BaseModel):
     symbol: str
     is_open: bool
@@ -91,6 +95,7 @@ class MarketStatus(BaseModel):
         # Emit as America/New_York ISO with explicit offset (e.g. -04:00 / -05:00)
         # so JavaScript parses it correctly regardless of browser timezone.
         return format_edt_iso(ts)
+
 
 class ProviderStatus(BaseModel):
     provider_name: str
@@ -116,6 +121,7 @@ class ProviderStatus(BaseModel):
         # Emit as America/New_York ISO with explicit offset (e.g. -04:00 / -05:00)
         # so JavaScript parses it correctly regardless of browser timezone.
         return format_edt_iso(ts)
+
 
 class ProviderCapabilities(BaseModel):
     provider_name: str

@@ -1,6 +1,7 @@
 """
 Rate of Change (ROC) indicator
 """
+
 import logging
 from typing import Any, cast
 
@@ -22,7 +23,7 @@ class ROCIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = [float(d['close']) for d in data]
+        closes = [float(d["close"]) for d in data]
 
         # Calculate ROC: ((Current Close - Close n periods ago) / Close n periods ago) * 100
         roc_values: list[float | None] = [None] * self.period  # First 'period' values are undefined
@@ -40,10 +41,10 @@ class ROCIndicator(BaseIndicator):
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update ROC with new data point"""
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         # Initialize price history if needed
-        if not hasattr(self, '_price_history'):
+        if not hasattr(self, "_price_history"):
             self._price_history = []
 
         self._price_history.append(close_price)
@@ -54,13 +55,11 @@ class ROCIndicator(BaseIndicator):
 
         # Keep recent history for efficiency
         if len(self._price_history) > self.period + 10:
-            self._price_history = self._price_history[-(self.period + 10):]
+            self._price_history = self._price_history[-(self.period + 10) :]
 
         # Calculate ROC with current history
         try:
-            result = self.calculate([
-                {'close': price} for price in self._price_history
-            ])
+            result = self.calculate([{"close": price} for price in self._price_history])
             if result:
                 latest_value = result[-1]
                 self.values.append(latest_value)

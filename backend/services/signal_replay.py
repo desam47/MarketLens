@@ -13,6 +13,7 @@ bar. Nothing after a bar can influence that bar's score, so there is no look-ahe
 The first ``REPLAY_WARMUP_BARS`` bars are not labelled: the indicator stack (EMA-200 and friends)
 is still converging and its score there depends on where the replay happened to start.
 """
+
 import logging
 from collections.abc import Iterable
 from datetime import datetime, timedelta
@@ -34,7 +35,11 @@ BULLISH_AT = 30.0
 BEARISH_AT = -30.0
 
 _NO_LABEL: dict[str, Any] = {
-    "trend_score": None, "trend_state": None, "strength": None, "momentum": None, "structure": None,
+    "trend_score": None,
+    "trend_state": None,
+    "strength": None,
+    "momentum": None,
+    "structure": None,
     "market_regime": None,
 }
 
@@ -80,8 +85,19 @@ _VALUES_KEPT = 500
 #     takes a daily engine from 41 MB to 1 MB and halves the time per bar.
 
 # How long a bar's candle is open, by timeframe. Bars are stamped with their OPEN time.
-_BAR_MINUTES = {"1m": 1, "2m": 2, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120,
-                "4h": 240, "1d": 1440, "1wk": 10080}
+_BAR_MINUTES = {
+    "1m": 1,
+    "2m": 2,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "1d": 1440,
+    "1wk": 10080,
+}
 
 
 def bar_length(timeframe: str) -> timedelta:
@@ -103,6 +119,7 @@ def is_closed(bar_ts: datetime, timeframe: str, now: datetime | None = None) -> 
     """
     if now is None:
         from backend.utils.timezone import now_ny
+
         now = now_ny()
     return bar_end(bar_ts, timeframe) <= now
 
@@ -156,18 +173,29 @@ class BarReplay:
         score = None
         try:
             self._engine.update(
-                price=float(bar.close or 0.0), volume=int(bar.volume or 0),
-                timestamp=bar.timestamp, only_timeframe=self._tf,
+                price=float(bar.close or 0.0),
+                volume=int(bar.volume or 0),
+                timestamp=bar.timestamp,
+                only_timeframe=self._tf,
             )
             signal = self._engine.get_current_trend(self._tf)
             # ``get_current_trend`` is the LAST signal ever emitted: unless it is this bar's,
             # the engine produced nothing for it and the score belongs to an earlier bar.
-            if (signal is not None and signal.score is not None and index >= self.warmup
-                    and signal.timestamp == ny_to_utc(bar.timestamp)):
+            if (
+                signal is not None
+                and signal.score is not None
+                and index >= self.warmup
+                and signal.timestamp == ny_to_utc(bar.timestamp)
+            ):
                 score = float(signal.score)
         except Exception:  # noqa: BLE001 - one unscorable bar must not sink the replay
-            logger.debug("replay %s/%s: bar %s unscorable", self.symbol, self.timeframe,
-                         bar.timestamp, exc_info=True)
+            logger.debug(
+                "replay %s/%s: bar %s unscorable",
+                self.symbol,
+                self.timeframe,
+                bar.timestamp,
+                exc_info=True,
+            )
         for candles in self._engine.timeframe_engine.candles.values():
             if len(candles) > _CANDLES_KEPT:
                 del candles[:-_CANDLES_KEPT]
@@ -180,7 +208,10 @@ class BarReplay:
 
 
 def replay_trend_scores(
-    symbol: str, timeframe: str, bars: Iterable[Any], warmup: int = REPLAY_WARMUP_BARS,
+    symbol: str,
+    timeframe: str,
+    bars: Iterable[Any],
+    warmup: int = REPLAY_WARMUP_BARS,
 ) -> dict[datetime, float | None]:
     """``{bar timestamp: trend score}`` for ``bars`` (oldest first, closed, each with
     ``timestamp``, ``close`` and ``volume``). The score is None for warm-up bars, for bars the
@@ -199,8 +230,9 @@ def _same(old: Any, new: Any) -> bool:
     return old == new
 
 
-def relabel_signals(db, symbol: str, timeframe: str, chunk_size: int = 5000,
-                    dry_run: bool = False) -> dict[str, int]:
+def relabel_signals(
+    db, symbol: str, timeframe: str, chunk_size: int = 5000, dry_run: bool = False
+) -> dict[str, int]:
     """Rewrite the label columns of every stored signal of one (symbol, timeframe) from a replay
     of that pair's stored bars. Forward outcomes and prices are not touched: they come from the
     bars alone and were never wrong.
@@ -226,11 +258,20 @@ def relabel_signals(db, symbol: str, timeframe: str, chunk_size: int = 5000,
     )
     scores = replay_trend_scores(sym, timeframe, bars)
 
-    rows = db.query(
-        HistoricalSignal.id, HistoricalSignal.timestamp, HistoricalSignal.trend_score,
-        HistoricalSignal.trend_state, HistoricalSignal.strength, HistoricalSignal.momentum,
-        HistoricalSignal.structure, HistoricalSignal.market_regime,
-    ).filter(HistoricalSignal.symbol == sym, HistoricalSignal.timeframe == timeframe).all()
+    rows = (
+        db.query(
+            HistoricalSignal.id,
+            HistoricalSignal.timestamp,
+            HistoricalSignal.trend_score,
+            HistoricalSignal.trend_state,
+            HistoricalSignal.strength,
+            HistoricalSignal.momentum,
+            HistoricalSignal.structure,
+            HistoricalSignal.market_regime,
+        )
+        .filter(HistoricalSignal.symbol == sym, HistoricalSignal.timeframe == timeframe)
+        .all()
+    )
 
     stats = {"rows": len(rows), "changed": 0, "labelled": 0, "unlabelled": 0}
     pending: list[dict[str, Any]] = []

@@ -14,6 +14,7 @@ SPY 1d signals (if any) are stale because the live ingestion loop no
 longer tracks SPY/QQQ (2026-09-02 regime-symbol removal). We keep
 the 1d bars but delete the 1d signals.
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,10 +72,7 @@ def delete_signals_for(conn, combos: list[tuple[str, str]]) -> int:
     total = 0
     for sym, tf in combos:
         result = conn.execute(
-            text(
-                "DELETE FROM historical_signals "
-                "WHERE symbol = :sym AND timeframe = :tf"
-            ),
+            text("DELETE FROM historical_signals WHERE symbol = :sym AND timeframe = :tf"),
             {"sym": sym, "tf": tf},
         )
         log.info(f"  Deleted {result.rowcount} signals for {sym} {tf}")

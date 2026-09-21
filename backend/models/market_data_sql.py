@@ -9,6 +9,7 @@ from backend.database import Base
 
 class QuoteModel(Base):
     """SQLAlchemy model for storing market quotes"""
+
     __tablename__ = "quotes"
 
     # No ``index=True`` on ``id`` or on a column that already leads a composite
@@ -27,8 +28,8 @@ class QuoteModel(Base):
 
     # Composite indexes for common queries
     __table_args__ = (
-        Index('ix_quotes_symbol_timestamp', 'symbol', 'timestamp'),
-        Index('ix_quotes_provider_symbol', 'provider', 'symbol'),
+        Index("ix_quotes_symbol_timestamp", "symbol", "timestamp"),
+        Index("ix_quotes_provider_symbol", "provider", "symbol"),
     )
 
     def __repr__(self):
@@ -37,6 +38,7 @@ class QuoteModel(Base):
 
 class BarModel(Base):
     """SQLAlchemy model for storing OHLCV bars/candles"""
+
     __tablename__ = "bars"
 
     # No ``index=True`` on ``id`` or on a column that already leads a composite
@@ -83,10 +85,12 @@ class BarModel(Base):
     # from the previous ``ix_bars_timeframe_source`` order. See Alembic
     # migration ``rename_bars_index_to_source_timeframe``.
     __table_args__ = (
-        Index('ix_bars_symbol_timeframe_timestamp', 'symbol', 'timeframe', 'timestamp', unique=True),
-        Index('ix_bars_provider_symbol', 'provider', 'symbol'),
-        Index('ix_bars_timeframe_timestamp', 'timeframe', 'timestamp'),
-        Index('ix_bars_source_timeframe', 'source', 'timeframe'),
+        Index(
+            "ix_bars_symbol_timeframe_timestamp", "symbol", "timeframe", "timestamp", unique=True
+        ),
+        Index("ix_bars_provider_symbol", "provider", "symbol"),
+        Index("ix_bars_timeframe_timestamp", "timeframe", "timestamp"),
+        Index("ix_bars_source_timeframe", "source", "timeframe"),
     )
 
     def __repr__(self):
@@ -101,6 +105,7 @@ class TapeBarModel(Base):
     ``TAPE_RETENTION_DAYS``). ``signed_volume`` = ``buy_volume`` -
     ``sell_volume``; ``block_count`` = prints over the block threshold.
     """
+
     __tablename__ = "tape_bars"
 
     # No ``index=True`` on ``id`` or on a column that already leads a composite
@@ -123,17 +128,18 @@ class TapeBarModel(Base):
     vwap = Column(Float, nullable=True)
     provider = Column(String(50), nullable=False, server_default="webull_stream")
 
-    __table_args__ = (
-        Index('ix_tape_bars_symbol_timestamp', 'symbol', 'timestamp', unique=True),
-    )
+    __table_args__ = (Index("ix_tape_bars_symbol_timestamp", "symbol", "timestamp", unique=True),)
 
     def __repr__(self):
-        return (f"<TapeBarModel(symbol='{self.symbol}', timestamp='{self.timestamp}', "
-                f"signed_volume={self.signed_volume}, trades={self.trade_count})>")
+        return (
+            f"<TapeBarModel(symbol='{self.symbol}', timestamp='{self.timestamp}', "
+            f"signed_volume={self.signed_volume}, trades={self.trade_count})>"
+        )
 
 
 class MarketStatusModel(Base):
     """SQLAlchemy model for storing market status information"""
+
     __tablename__ = "market_status"
 
     # No ``index=True`` on ``id`` or on a column that already leads a composite
@@ -150,9 +156,7 @@ class MarketStatusModel(Base):
     timestamp = Column(DateTime, nullable=False, index=True)
 
     # Indexes
-    __table_args__ = (
-        Index('ix_market_status_symbol_timestamp', 'symbol', 'timestamp'),
-    )
+    __table_args__ = (Index("ix_market_status_symbol_timestamp", "symbol", "timestamp"),)
 
     def __repr__(self):
         return f"<MarketStatusModel(symbol='{self.symbol}', is_open={self.is_open}, timestamp='{self.timestamp}')>"
@@ -160,6 +164,7 @@ class MarketStatusModel(Base):
 
 class ProviderStatusModel(Base):
     """SQLAlchemy model for storing provider health/status information"""
+
     __tablename__ = "provider_status"
 
     # No ``index=True`` on ``id`` or on a column that already leads a composite
@@ -176,9 +181,7 @@ class ProviderStatusModel(Base):
     timestamp = Column(DateTime, nullable=False, index=True)
 
     # Indexes
-    __table_args__ = (
-        Index('ix_provider_status_provider_timestamp', 'provider_name', 'timestamp'),
-    )
+    __table_args__ = (Index("ix_provider_status_provider_timestamp", "provider_name", "timestamp"),)
 
     def __repr__(self):
         return f"<ProviderStatusModel(provider='{self.provider_name}', healthy={self.is_healthy}, timestamp='{self.timestamp}')>"

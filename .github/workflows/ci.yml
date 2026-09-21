@@ -40,6 +40,14 @@ jobs:
       - name: Ruff (format check)
         run: ruff format --check backend/ scripts/
 
+      - name: Verify Alembic schema completeness
+        run: |
+          audit_dir="$(mktemp -d "$GITHUB_WORKSPACE/.alembic-check.XXXXXX")"
+          trap 'rm -rf "$audit_dir"' EXIT
+          export MARKETLENS_DB_OVERRIDE="sqlite:///$audit_dir/marketlens.db"
+          alembic upgrade head
+          alembic check
+
   # ------------------------------------------------------------------
   # Type check (advisory — not blocking)
   # ------------------------------------------------------------------

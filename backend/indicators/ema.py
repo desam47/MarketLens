@@ -1,6 +1,7 @@
 """
 Exponential Moving Average (EMA) indicator
 """
+
 from typing import Any
 
 import numpy as np
@@ -23,7 +24,7 @@ class EMAIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = np.array([float(d['close']) for d in data])
+        closes = np.array([float(d["close"]) for d in data])
         period = self.period
         multiplier = 2 / (period + 1)
         alpha = multiplier
@@ -40,17 +41,17 @@ class EMAIndicator(BaseIndicator):
         beta_seq = beta ** np.arange(len(closes))
 
         # Compute s = convolve(c, beta_seq, mode='full') and take first len(closes) elements
-        s = np.convolve(c, beta_seq, mode='full')[:len(closes)]
+        s = np.convolve(c, beta_seq, mode="full")[: len(closes)]
 
         # Compute term = sma * beta^{i - (period-1)} for each i
         exponents = np.arange(len(closes)) - (period - 1)
-        term = sma * (beta ** exponents)
+        term = sma * (beta**exponents)
 
         # Full EMA array (including values before period-1, which we will discard)
         ema_full = term + s
 
         # Extract the valid EMA values (from index period-1 to end)
-        ema_result = ema_full[period-1:]
+        ema_result = ema_full[period - 1 :]
         ema_list = ema_result.tolist()
 
         # Update state for update() method
@@ -72,7 +73,7 @@ class EMAIndicator(BaseIndicator):
         ``period`` closes, then apply the standard smoothing formula
         for every subsequent bar.
         """
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         if not hasattr(self, "_warmup_buffer"):
             self._warmup_buffer: list[float] = []

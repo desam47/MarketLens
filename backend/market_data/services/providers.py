@@ -10,6 +10,7 @@ singleton.
 test patches at ``backend.market_data.services.manager._settings`` and
 ``backend.market_data.services.manager.redis`` propagate here.
 """
+
 import logging
 import threading
 import time
@@ -241,7 +242,9 @@ def _get_alpaca_class() -> type[MarketDataProvider] | None:
     if not alpaca_settings.enabled:
         return None
     if not alpaca_settings.api_key or not alpaca_settings.secret_key:
-        logger.warning("Alpaca provider enabled but ALPACA_API_KEY or ALPACA_SECRET_KEY is not set — skipping registration")
+        logger.warning(
+            "Alpaca provider enabled but ALPACA_API_KEY or ALPACA_SECRET_KEY is not set — skipping registration"
+        )
         return None
     return AlpacaProvider
 
@@ -326,7 +329,8 @@ class _PerProviderRateLimiter:
                 if time.monotonic() >= deadline:
                     logger.warning(
                         "Rate limiter for %s: waited %.0fs, proceeding anyway",
-                        provider_name, self._MAX_WAIT_SECONDS,
+                        provider_name,
+                        self._MAX_WAIT_SECONDS,
                     )
                     return
                 time.sleep(min(wait, 1.0))
@@ -399,6 +403,7 @@ def _provider_retry():
     HTTP 429 rate-limit errors are NOT retried — the circuit breaker handles
     backoff.  Other transient errors (503, network timeouts) are retried once.
     """
+
     def _should_retry(exc: BaseException) -> bool:
         if isinstance(exc, CircuitBreakerOpen):
             return False
@@ -465,10 +470,13 @@ def _correlation_id_placeholder() -> str:
                 from backend.observability.logging_enhanced import (
                     get_correlation_id,
                 )
+
                 _corr_id_fn = get_correlation_id
             except Exception:
+
                 def _corr_id_fn():
                     return "-"  # type: ignore[assignment]
+
         fn = _corr_id_fn
     return fn() or "-"
 
@@ -498,26 +506,33 @@ def _call_provider(
     call_started = time.monotonic()
     logger.debug(
         "provider_call_start provider=%s method=%s symbol=%s correlation_id=%s",
-        provider_name, method_name, symbol, _correlation_id_placeholder(),
+        provider_name,
+        method_name,
+        symbol,
+        _correlation_id_placeholder(),
     )
     try:
-        result = _provider_call_with_breaker(
-            provider_name, breaker, method, *args, **kwargs
-        )
+        result = _provider_call_with_breaker(provider_name, breaker, method, *args, **kwargs)
     except Exception as exc:
         latency_ms = (time.monotonic() - call_started) * 1000.0
         logger.debug(
             "provider_call_fail provider=%s method=%s symbol=%s "
             "latency_ms=%.2f correlation_id=%s error_type=%s",
-            provider_name, method_name, symbol, latency_ms,
-            _correlation_id_placeholder(), type(exc).__name__,
+            provider_name,
+            method_name,
+            symbol,
+            latency_ms,
+            _correlation_id_placeholder(),
+            type(exc).__name__,
         )
         raise
     latency_ms = (time.monotonic() - call_started) * 1000.0
     logger.debug(
-        "provider_call_ok provider=%s method=%s symbol=%s "
-        "latency_ms=%.2f correlation_id=%s",
-        provider_name, method_name, symbol, latency_ms,
+        "provider_call_ok provider=%s method=%s symbol=%s latency_ms=%.2f correlation_id=%s",
+        provider_name,
+        method_name,
+        symbol,
+        latency_ms,
         _correlation_id_placeholder(),
     )
     return result
@@ -546,26 +561,30 @@ def _call_provider_direct(
     call_started = time.monotonic()
     logger.debug(
         "provider_call_start provider=%s method=%s correlation_id=%s",
-        provider_name, method.__name__, _correlation_id_placeholder(),
+        provider_name,
+        method.__name__,
+        _correlation_id_placeholder(),
     )
     try:
-        result = _provider_call_with_breaker(
-            provider_name, breaker, method, *args, **kwargs
-        )
+        result = _provider_call_with_breaker(provider_name, breaker, method, *args, **kwargs)
     except Exception as exc:
         latency_ms = (time.monotonic() - call_started) * 1000.0
         logger.debug(
             "provider_call_fail provider=%s method=%s "
             "latency_ms=%.2f correlation_id=%s error_type=%s",
-            provider_name, method.__name__, latency_ms,
-            _correlation_id_placeholder(), type(exc).__name__,
+            provider_name,
+            method.__name__,
+            latency_ms,
+            _correlation_id_placeholder(),
+            type(exc).__name__,
         )
         raise
     latency_ms = (time.monotonic() - call_started) * 1000.0
     logger.debug(
-        "provider_call_ok provider=%s method=%s "
-        "latency_ms=%.2f correlation_id=%s",
-        provider_name, method.__name__, latency_ms,
+        "provider_call_ok provider=%s method=%s latency_ms=%.2f correlation_id=%s",
+        provider_name,
+        method.__name__,
+        latency_ms,
         _correlation_id_placeholder(),
     )
     return result
@@ -618,6 +637,7 @@ def _ensure_aware(dt) -> datetime | None:
     could compare two different zones and under-report staleness by 4-5h.
     """
     from backend.utils.timezone import ny_to_utc
+
     return ny_to_utc(dt)
 
 

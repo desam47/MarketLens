@@ -76,7 +76,11 @@ def _feed_warmup_bars(engine: TrendEngine, symbol: str, tf: Timeframe, bars) -> 
     if failed:
         logger.warning(
             "Trend warmup %s/%s: engine rejected %d of %d bars (last error: %r)",
-            symbol, tf.value, failed, len(bars), last_error,
+            symbol,
+            tf.value,
+            failed,
+            len(bars),
+            last_error,
         )
     return seeded
 
@@ -97,10 +101,14 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
     """
     db = SessionLocal()
     try:
-        rn = func.row_number().over(
-            partition_by=BarModel.timeframe,
-            order_by=BarModel.timestamp.desc(),
-        ).label("rn")
+        rn = (
+            func.row_number()
+            .over(
+                partition_by=BarModel.timeframe,
+                order_by=BarModel.timestamp.desc(),
+            )
+            .label("rn")
+        )
         subq = (
             db.query(BarModel, rn)
             .filter(
@@ -110,12 +118,7 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
             .subquery()
         )
         bm = aliased(BarModel, subq)
-        rows = (
-            db.query(bm)
-            .filter(subq.c.rn <= 200)
-            .order_by(bm.timestamp.asc())
-            .all()
-        )
+        rows = db.query(bm).filter(subq.c.rn <= 200).order_by(bm.timestamp.asc()).all()
         seeded = 0
         by_tf: dict[str, list] = {}
         for bar in rows:
@@ -128,10 +131,7 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
                 continue
             seeded += _feed_warmup_bars(engine, symbol, tf, bars)
             if bars:
-                logger.debug(
-                    f"Seeded {symbol}/{tf_str} with {len(bars)} bars "
-                    "(full OHLCV warmup)"
-                )
+                logger.debug(f"Seeded {symbol}/{tf_str} with {len(bars)} bars (full OHLCV warmup)")
         return seeded
     finally:
         db.close()
@@ -176,10 +176,14 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
         # window — see _seed_from_bar_model for why a flat LIMIT on a single
         # ascending order doesn't work here (deep-history timeframes like
         # 1d/1wk would starve shorter ones of their share of the cap).
-        rn = func.row_number().over(
-            partition_by=(BarModel.symbol, BarModel.timeframe),
-            order_by=BarModel.timestamp.desc(),
-        ).label("rn")
+        rn = (
+            func.row_number()
+            .over(
+                partition_by=(BarModel.symbol, BarModel.timeframe),
+                order_by=BarModel.timestamp.desc(),
+            )
+            .label("rn")
+        )
         subq = (
             db.query(BarModel, rn)
             .filter(
@@ -189,12 +193,7 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
             .subquery()
         )
         bm = aliased(BarModel, subq)
-        rows = (
-            db.query(bm)
-            .filter(subq.c.rn <= 200)
-            .order_by(bm.timestamp.asc())
-            .all()
-        )
+        rows = db.query(bm).filter(subq.c.rn <= 200).order_by(bm.timestamp.asc()).all()
     finally:
         db.close()
 
@@ -267,6 +266,7 @@ def warmup_engines() -> dict[str, int]:
     # populated its list after this module was imported.
     try:
         from backend.market_data.services.ingestion_service import ingestion_service
+
         symbols = tuple(ingestion_service.symbols) if ingestion_service.symbols else _WARMUP_SYMBOLS
     except Exception:
         symbols = _WARMUP_SYMBOLS
@@ -275,10 +275,7 @@ def warmup_engines() -> dict[str, int]:
     results = _batch_seed_engines(symbols)
     for sym, count in results.items():
         if count:
-            logger.info(
-                f"Warmed up trend engine for {sym} "
-                f"({count} bars seeded from BarModel)"
-            )
+            logger.info(f"Warmed up trend engine for {sym} ({count} bars seeded from BarModel)")
     return results
 
 
@@ -314,9 +311,6 @@ def get_engine(symbol: str) -> TrendEngine:
                     "trend API will return 'unknown' until bars are ingested"
                 )
         else:
-            logger.info(
-                f"Seeded trend engine for {symbol} with {bar_count} bars "
-                "(full OHLCV)"
-            )
+            logger.info(f"Seeded trend engine for {symbol} with {bar_count} bars (full OHLCV)")
 
     return _engines[symbol]

@@ -17,6 +17,7 @@ connection fails at startup, enqueue is a no-op that returns ``None``
 so callers can degrade gracefully. The same function is always available —
 callers don't have to special-case.
 """
+
 from __future__ import annotations
 
 import json
@@ -51,6 +52,7 @@ def get_redis() -> Any:
         return _REDIS
     try:
         import redis as redis_lib
+
         client = redis_lib.Redis.from_url(
             settings.redis.url,
             password=settings.redis.password or None,
@@ -82,6 +84,7 @@ def get_queue() -> Any:
         return None
     try:
         from rq import Queue
+
         _QUEUE = Queue(
             settings.background.queue_name,
             connection=client,
@@ -215,9 +218,7 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
 
     db = SessionLocal()
     try:
-        record = (
-            db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
-        )
+        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
         if record is None:
             return None
 
@@ -266,6 +267,7 @@ def _safe_rq_status(job_id: str) -> str | None:
         return None
     try:
         from rq.job import Job
+
         rq_job = Job.fetch(job_id, connection=client)
         status = rq_job.get_status()
         if status in ("queued", "started", "finished", "failed"):

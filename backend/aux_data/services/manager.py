@@ -11,6 +11,7 @@ The manager mirrors the ``MarketDataManager`` pattern from Phase 2:
   - first-healthy wins
   - graceful degradation (empty response + status, never raises)
 """
+
 import logging
 import time
 from typing import Literal
@@ -103,8 +104,10 @@ class _CategoryManager:
             cls = _PROVIDER_CLASSES.get(name)
             if cls is None:
                 logger.warning(
-                    "Provider '%s' for %s not registered — skipping. "
-                    "Known: %s", name, self.category, list(_PROVIDER_CLASSES),
+                    "Provider '%s' for %s not registered — skipping. Known: %s",
+                    name,
+                    self.category,
+                    list(_PROVIDER_CLASSES),
                 )
                 continue
             try:
@@ -112,7 +115,9 @@ class _CategoryManager:
             except Exception as exc:
                 logger.warning(
                     "Failed to instantiate %s provider '%s': %s",
-                    self.category, name, exc,
+                    self.category,
+                    name,
+                    exc,
                 )
 
     def _get_config(self):
@@ -136,7 +141,10 @@ class _CategoryManager:
                 last_exc = exc
                 logger.warning(
                     "%s.%s failed for %s: %s",
-                    prov.name, method_name, args, exc,
+                    prov.name,
+                    method_name,
+                    args,
+                    exc,
                 )
                 continue
         # All providers failed — return an empty response
@@ -145,9 +153,12 @@ class _CategoryManager:
 
     def _empty_response(self, symbol: str):
         if self.provider_type is NewsProvider:
-            return NewsResponse(symbol=symbol.upper(), items=[], provider="none", timestamp=now_ny())
+            return NewsResponse(
+                symbol=symbol.upper(), items=[], provider="none", timestamp=now_ny()
+            )
         if self.provider_type is FundamentalProvider:
             from backend.models.aux_data import FundamentalsItem
+
             return FundamentalsResponse(
                 symbol=symbol.upper(),
                 data=FundamentalsItem(symbol=symbol.upper()),
@@ -168,13 +179,16 @@ class AuxDataManager:
     def get_news(self, symbol: str, limit: int = 20) -> NewsResponse:
         if not self.news.is_enabled():
             logger.info("News provider is disabled (AUX_NEWS_ENABLED=false)")
-            return NewsResponse(symbol=symbol.upper(), items=[], provider="disabled", timestamp=now_ny())
+            return NewsResponse(
+                symbol=symbol.upper(), items=[], provider="disabled", timestamp=now_ny()
+            )
         return self.news._dispatch("get_news", symbol, limit)
 
     def get_fundamentals(self, symbol: str) -> FundamentalsResponse:
         if not self.fundamentals.is_enabled():
             logger.info("Fundamentals provider is disabled (AUX_FUNDAMENTALS_ENABLED=false)")
             from backend.models.aux_data import FundamentalsItem
+
             return FundamentalsResponse(
                 symbol=symbol.upper(),
                 data=FundamentalsItem(symbol=symbol.upper()),

@@ -13,6 +13,7 @@ Coverage:
   - Provider subscribe/unsubscribe API (for ws_router integration)
   - Provider registration
 """
+
 import asyncio
 import unittest
 from datetime import UTC, datetime
@@ -98,6 +99,7 @@ class TestTimeframeResolution(unittest.TestCase):
 
     def test_resolve_feed_defaults_to_iex(self):
         from alpaca.data.enums import DataFeed
+
         assert _resolve_feed("iex") == DataFeed.IEX
         assert _resolve_feed("") == DataFeed.IEX
         assert _resolve_feed("unknown") == DataFeed.IEX
@@ -199,7 +201,9 @@ class TestAlpacaProviderBars(unittest.TestCase):
 
     def test_get_historical_bars_returns_bars(self):
         b1 = _sdk_bar(o=100.0, h=101.5, l=99.5, c=101.0, v=1000)
-        b2 = _sdk_bar(ts=datetime(2024, 1, 15, 14, 31, tzinfo=UTC), o=101.0, h=102.0, l=100.5, c=101.5, v=1500)
+        b2 = _sdk_bar(
+            ts=datetime(2024, 1, 15, 14, 31, tzinfo=UTC), o=101.0, h=102.0, l=100.5, c=101.5, v=1500
+        )
         self._mock_data_client.get_stock_bars.return_value = _barset(bars=[b1, b2])
 
         bars = self.provider.get_historical_bars("AAPL", timeframe="1d", range_="5d")
@@ -235,10 +239,11 @@ class TestAlpacaProviderBars(unittest.TestCase):
     def test_get_bar_uses_uncapped_window_for_historical_ts(self):
         """Historical timestamps (outside recent zone) must NOT have end capped."""
         from datetime import timedelta
+
         yesterday = datetime.now(UTC) - timedelta(days=1)
-        self._mock_data_client.get_stock_bars.return_value = _barset(bars=[
-            _sdk_bar(ts=yesterday, c=150.0, v=1000)
-        ])
+        self._mock_data_client.get_stock_bars.return_value = _barset(
+            bars=[_sdk_bar(ts=yesterday, c=150.0, v=1000)]
+        )
 
         self.provider.get_bar("AAPL", "1d", yesterday)
 
@@ -381,8 +386,12 @@ class TestAlpacaWebSocketClient(unittest.TestCase):
 
     def test_subscribe_with_no_credentials_is_noop(self):
         client = AlpacaWebSocketClient(
-            api_key="", secret_key="", data_tier="iex", paper=True,
-            on_bar=MagicMock(), on_status_change=MagicMock(),
+            api_key="",
+            secret_key="",
+            data_tier="iex",
+            paper=True,
+            on_bar=MagicMock(),
+            on_status_change=MagicMock(),
         )
         # Should not raise, should not start a thread.
         client.subscribe("AAPL", "1m")
@@ -392,6 +401,7 @@ class TestAlpacaWebSocketClient(unittest.TestCase):
         self.client.subscribe("AAPL", "1m")
         # Give the thread a moment to spin up.
         import time
+
         for _ in range(20):
             if self.client._thread is not None:
                 break
@@ -427,8 +437,12 @@ class TestAlpacaWebSocketBarHandling(unittest.TestCase):
         self.addCleanup(self._stream_patcher.stop)
 
         self.client = AlpacaWebSocketClient(
-            api_key="k", secret_key="s", data_tier="iex", paper=True,
-            on_bar=on_bar, on_status_change=MagicMock(),
+            api_key="k",
+            secret_key="s",
+            data_tier="iex",
+            paper=True,
+            on_bar=on_bar,
+            on_status_change=MagicMock(),
         )
 
     def test_handle_bar_event(self):
@@ -457,6 +471,7 @@ class TestAlpacaProviderRegistration(unittest.TestCase):
             mock_s.alpaca.api_key = "key"
             mock_s.alpaca.secret_key = "secret"
             from backend.market_data.services.providers import _get_alpaca_class
+
             cls = _get_alpaca_class()
             self.assertIs(cls, AlpacaProvider)
 
@@ -466,6 +481,7 @@ class TestAlpacaProviderRegistration(unittest.TestCase):
             mock_s.alpaca.api_key = "key"
             mock_s.alpaca.secret_key = "secret"
             from backend.market_data.services.providers import _get_alpaca_class
+
             self.assertIsNone(_get_alpaca_class())
 
     def test_not_registered_when_credentials_missing(self):
@@ -474,6 +490,7 @@ class TestAlpacaProviderRegistration(unittest.TestCase):
             mock_s.alpaca.api_key = ""
             mock_s.alpaca.secret_key = "secret"
             from backend.market_data.services.providers import _get_alpaca_class
+
             self.assertIsNone(_get_alpaca_class())
 
 
@@ -508,7 +525,10 @@ class TestAlpacaProviderSubscribeAPI(unittest.TestCase):
         self.addCleanup(self._stream_patcher.stop)
 
     def test_subscribe_with_no_credentials_is_noop(self):
-        with patch("backend.market_data.providers.alpaca_provider._settings", _settings_mock(api_key="", secret_key="")):
+        with patch(
+            "backend.market_data.providers.alpaca_provider._settings",
+            _settings_mock(api_key="", secret_key=""),
+        ):
             provider = AlpacaProvider()
             provider.subscribe("AAPL", "1m")
             self.assertIsNone(provider._ws_client)

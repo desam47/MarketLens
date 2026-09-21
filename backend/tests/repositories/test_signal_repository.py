@@ -3,6 +3,7 @@ Tests for SignalRepository.
 
 Uses an in-memory SQLite per test so signals are fully isolated.
 """
+
 import os
 import sys
 import unittest
@@ -18,7 +19,6 @@ from backend.repositories.signal_repository import SignalRepository
 
 
 class TestSignalRepository(unittest.TestCase):
-
     def setUp(self):
         self.engine = create_engine(
             "sqlite:///:memory:",
@@ -202,7 +202,7 @@ class TestSignalRepository(unittest.TestCase):
 
     def test_get_signals_needing_outcomes_returns_null_return_5b(self):
         self._create_signal(symbol="AAPL", return_5b=None)  # needs outcome
-        self._create_signal(symbol="MSFT", return_5b=1.0)   # has outcome
+        self._create_signal(symbol="MSFT", return_5b=1.0)  # has outcome
         with self.Session() as db:
             rows = self._repo(db).get_signals_needing_outcomes(limit=10)
         self.assertEqual(len(rows), 1)
@@ -242,8 +242,11 @@ class TestSignalRepository(unittest.TestCase):
         with self.Session() as db:
             result = self._repo(db).update_outcomes(
                 signal_id=99999,
-                return_5b=1.0, return_10b=2.0, return_20b=3.0,
-                mfe=1.0, mae=-0.5,
+                return_5b=1.0,
+                return_10b=2.0,
+                return_20b=3.0,
+                mfe=1.0,
+                mae=-0.5,
             )
         self.assertIsNone(result)
 
@@ -272,20 +275,32 @@ class TestSignalRepository(unittest.TestCase):
     def test_get_performance_by_regime_aggregates_returns(self):
         # Two risk_on signals with known returns
         self._create_signal(
-            symbol="AAPL", market_regime="risk_on",
-            return_5b=1.0, return_10b=2.0, return_20b=4.0,
-            mfe=3.0, mae=-1.0,
+            symbol="AAPL",
+            market_regime="risk_on",
+            return_5b=1.0,
+            return_10b=2.0,
+            return_20b=4.0,
+            mfe=3.0,
+            mae=-1.0,
         )
         self._create_signal(
-            symbol="MSFT", market_regime="risk_on",
-            return_5b=3.0, return_10b=4.0, return_20b=6.0,
-            mfe=5.0, mae=-2.0,
+            symbol="MSFT",
+            market_regime="risk_on",
+            return_5b=3.0,
+            return_10b=4.0,
+            return_20b=6.0,
+            mfe=5.0,
+            mae=-2.0,
         )
         # risk_off signal should not affect risk_on aggregation
         self._create_signal(
-            symbol="GOOGL", market_regime="risk_off",
-            return_5b=-1.0, return_10b=-2.0, return_20b=-3.0,
-            mfe=1.0, mae=-4.0,
+            symbol="GOOGL",
+            market_regime="risk_off",
+            return_5b=-1.0,
+            return_10b=-2.0,
+            return_20b=-3.0,
+            mfe=1.0,
+            mae=-4.0,
         )
         with self.Session() as db:
             rows = self._repo(db).get_performance_by_regime()

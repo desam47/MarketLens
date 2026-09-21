@@ -1,6 +1,7 @@
 """
 Tests for SuperTrend indicator
 """
+
 import unittest
 
 from backend.indicators.supertrend import SuperTrendIndicator
@@ -17,12 +18,14 @@ class TestSuperTrendIndicator(unittest.TestCase):
         bars = []
         for i in range(n):
             base = 100.0 + i * 0.5
-            bars.append({
-                "open": base,
-                "high": base + 1.0,
-                "low": base - 1.0,
-                "close": base + 0.3,
-            })
+            bars.append(
+                {
+                    "open": base,
+                    "high": base + 1.0,
+                    "low": base - 1.0,
+                    "close": base + 0.3,
+                }
+            )
         return bars
 
     def test_supertrend_calculation(self):
@@ -72,10 +75,12 @@ class TestSuperTrendIndicator(unittest.TestCase):
         calc_last = calc.values[-1]
         online_last = self.indicator.values[-1]
         last_close = data[-1]["close"]
-        self.assertLess(calc_last, last_close,
-                        "Offline SuperTrend should be below close in uptrend")
-        self.assertLess(online_last, last_close,
-                        "Online SuperTrend should be below close in uptrend")
+        self.assertLess(
+            calc_last, last_close, "Offline SuperTrend should be below close in uptrend"
+        )
+        self.assertLess(
+            online_last, last_close, "Online SuperTrend should be below close in uptrend"
+        )
         # Direction flag should both be True (uptrend).
         self.assertTrue(calc.is_uptrend)
         self.assertTrue(self.indicator.is_uptrend)

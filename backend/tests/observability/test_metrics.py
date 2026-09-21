@@ -1,4 +1,5 @@
 """Tests for backend/observability/metrics.py"""
+
 import sys
 import unittest
 

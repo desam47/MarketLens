@@ -13,6 +13,7 @@ Or, if you're running inside the project (with the venv active)::
 
     python -m backend.workers.ai_worker
 """
+
 from __future__ import annotations
 
 import json
@@ -96,11 +97,13 @@ def analyze_symbol_task(
             db.close()
 
     try:
-        result = run_sync(analyze_symbol(
-            symbol=symbol,
-            timeframe=timeframe,
-            system_prompt_override=rendered_system,
-        ))
+        result = run_sync(
+            analyze_symbol(
+                symbol=symbol,
+                timeframe=timeframe,
+                system_prompt_override=rendered_system,
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI analysis job %s failed", job_id)
         _update_status(job_id, "failed", error=str(exc) + "\n" + traceback.format_exc())
@@ -147,11 +150,13 @@ def _run_direct(
         finally:
             db.close()
 
-    result = run_sync(analyze_symbol(
-        symbol=symbol,
-        timeframe=timeframe,
-        system_prompt_override=rendered_system,
-    ))
+    result = run_sync(
+        analyze_symbol(
+            symbol=symbol,
+            timeframe=timeframe,
+            system_prompt_override=rendered_system,
+        )
+    )
     return {
         "summary": result.summary,
         "trend": result.trend,
@@ -200,9 +205,7 @@ def _update_status(
     """Update the AIAnalysisJob row for ``job_id``."""
     db = SessionLocal()
     try:
-        record = (
-            db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
-        )
+        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
         if record is None:
             return
         record.status = status

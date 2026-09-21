@@ -1,6 +1,7 @@
 """
 Alert repository for data access operations.
 """
+
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, desc, func, inspect
@@ -25,20 +26,11 @@ class AlertRepository:
 
     def get_all(self) -> list[Alert]:
         """All alerts, newest first."""
-        return (
-            self.db.query(Alert)
-            .order_by(desc(Alert.created_at))
-            .all()
-        )
+        return self.db.query(Alert).order_by(desc(Alert.created_at)).all()
 
     def get_all_enabled(self) -> list[Alert]:
         """All enabled alerts."""
-        return (
-            self.db.query(Alert)
-            .filter(Alert.is_enabled)
-            .order_by(desc(Alert.created_at))
-            .all()
-        )
+        return self.db.query(Alert).filter(Alert.is_enabled).order_by(desc(Alert.created_at)).all()
 
     def get_by_id(self, alert_id: int) -> Alert | None:
         return self.db.query(Alert).filter(Alert.id == alert_id).first()

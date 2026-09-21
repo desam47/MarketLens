@@ -25,6 +25,7 @@ same target, which nests correctly inside this fixture's patch and
 takes precedence for their duration — this fixture's default never
 overrides a test's own explicit mock.
 """
+
 from unittest.mock import patch
 
 import pytest
@@ -37,11 +38,16 @@ from backend.utils.timezone import now_ny
 def _disable_real_aux_data_calls():
     with patch("backend.aux_data.services.manager.aux_data_manager") as mock_mgr:
         mock_mgr.get_news.return_value = NewsResponse(
-            symbol="TEST", items=[], provider="disabled", timestamp=now_ny(),
+            symbol="TEST",
+            items=[],
+            provider="disabled",
+            timestamp=now_ny(),
         )
         mock_mgr.get_fundamentals.return_value = FundamentalsResponse(
-            symbol="TEST", data=FundamentalsItem(symbol="TEST"),
-            provider="disabled", timestamp=now_ny(),
+            symbol="TEST",
+            data=FundamentalsItem(symbol="TEST"),
+            provider="disabled",
+            timestamp=now_ny(),
         )
         yield
 

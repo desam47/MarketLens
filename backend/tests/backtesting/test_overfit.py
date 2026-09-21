@@ -4,6 +4,7 @@ Tests for ``backend.backtesting.overfit``.
 Validates ``compute_overfit_report`` against known cases:
 healthy strategy, suspicious IS results, OOS degradation, and sign flips.
 """
+
 import os
 import sys
 import unittest

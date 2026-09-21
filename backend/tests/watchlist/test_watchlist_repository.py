@@ -1,20 +1,20 @@
 """
 Tests for WatchlistRepository
 """
+
 import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.models.watchlist import Watchlist, WatchlistSymbol
 from backend.repositories.watchlist_repository import WatchlistRepository
 
 
 class TestWatchlistRepository(unittest.TestCase):
-
     def setUp(self):
         # Create a mock database session
         self.mock_db = MagicMock()
@@ -69,7 +69,9 @@ class TestWatchlistRepository(unittest.TestCase):
         self.mock_db.refresh = MagicMock()
 
         # Patch Watchlist constructor
-        with patch('backend.repositories.watchlist_repository.Watchlist', return_value=mock_watchlist):
+        with patch(
+            "backend.repositories.watchlist_repository.Watchlist", return_value=mock_watchlist
+        ):
             # Test
             result = self.repo.create_watchlist("Test Watchlist", "A test watchlist")
 
@@ -92,7 +94,10 @@ class TestWatchlistRepository(unittest.TestCase):
         self.mock_db.refresh = MagicMock()
 
         # Patch WatchlistSymbol constructor
-        with patch('backend.repositories.watchlist_repository.WatchlistSymbol', return_value=mock_watchlist_symbol):
+        with patch(
+            "backend.repositories.watchlist_repository.WatchlistSymbol",
+            return_value=mock_watchlist_symbol,
+        ):
             # Test
             result, is_new, did_reenable = self.repo.add_symbol_to_watchlist(1, "AAPL")
 
@@ -191,7 +196,9 @@ class TestWatchlistRepository(unittest.TestCase):
         mock_symbol_googl.watchlist_id = 1
         mock_symbol_googl.symbol = "GOOGL"
 
-        self.repo.get_watchlist_symbol = MagicMock(side_effect=[mock_symbol_googl, mock_symbol_aapl])
+        self.repo.get_watchlist_symbol = MagicMock(
+            side_effect=[mock_symbol_googl, mock_symbol_aapl]
+        )
         self.mock_db.commit = MagicMock()
 
         # Test
@@ -205,8 +212,9 @@ class TestWatchlistRepository(unittest.TestCase):
         self.repo.get_watchlist_symbol.assert_any_call(1, "AAPL")
         # Check positions were set correctly
         self.assertEqual(mock_symbol_googl.position, 0)  # First in list
-        self.assertEqual(mock_symbol_aapl.position, 1)   # Second in list
+        self.assertEqual(mock_symbol_aapl.position, 1)  # Second in list
         self.mock_db.commit.assert_called_once()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

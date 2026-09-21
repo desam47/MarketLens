@@ -10,6 +10,7 @@ Phase 17 — Execute a validated ``NLFilters`` against the scanner cache.
 5. Serialises each surviving result into a ``ScannedResultItem``.
 6. Returns the full matched list (for counting) and the ranked slice.
 """
+
 from __future__ import annotations
 
 import logging
@@ -164,10 +165,7 @@ def _resolve_watchlist_symbols(
         if wl is None:
             return []
 
-        symbols = [
-            ws.symbol
-            for ws in repo.get_watchlist_symbols(wl.id, enabled_only=True)
-        ]
+        symbols = [ws.symbol for ws in repo.get_watchlist_symbols(wl.id, enabled_only=True)]
         return symbols
     finally:
         if close:
@@ -197,15 +195,11 @@ def _build_filter(
 
     # --- Timeframe + direction ---
     if f.timeframe is not None and f.direction is not None:
-        tf_dir = TimeframeDirection(
-            f.timeframe, _SCANNER_DIR, min_confidence=f.min_confidence
-        )
+        tf_dir = TimeframeDirection(f.timeframe, _SCANNER_DIR, min_confidence=f.min_confidence)
         add(tf_dir, f"{f.timeframe}={f.direction} (conf≥{f.min_confidence})")
     elif f.direction is not None:
         # Direction without a specific timeframe — default to daily.
-        tf_dir = TimeframeDirection(
-            "1d", _SCANNER_DIR, min_confidence=f.min_confidence
-        )
+        tf_dir = TimeframeDirection("1d", _SCANNER_DIR, min_confidence=f.min_confidence)
         add(tf_dir, f"1d={f.direction} (conf≥{f.min_confidence})")
 
     # --- Trend score ---
@@ -333,10 +327,7 @@ def _scan_result_to_item(r: ScanResult) -> ScannedResultItem:
         rsi=r.indicator_values.get("rsi"),
         macd=r.indicator_values.get("macd"),
         adx=r.indicator_values.get("adx"),
-        price=(
-            r.indicator_values.get("price")
-            or (r.quote.price if r.quote else None)
-        ),
+        price=(r.indicator_values.get("price") or (r.quote.price if r.quote else None)),
     )
 
 

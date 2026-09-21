@@ -10,6 +10,7 @@ Covers the standard OWASP/Mozilla baseline:
   - Permissions-Policy
   - Cross-Origin-Resource-Policy / Cross-Origin-Opener-Policy
 """
+
 import os
 import sys
 import unittest
@@ -69,6 +70,7 @@ class TestSecurityHeadersPresent(unittest.TestCase):
     def test_429_responses_still_get_headers(self):
         """Rate-limited responses also receive security headers."""
         from backend.api.main import _write_limiter
+
         _write_limiter.reset()
         # Exhaust the write-rate-limit window with POST requests. Stub start(): a real one left the
         # shared ingestion service's daemon thread running for the rest of the session.
@@ -94,6 +96,7 @@ class TestSecurityHeadersConfigurable(unittest.TestCase):
     def test_hsts_enabled_via_settings(self):
         """When ``SECURITY_HSTS_ENABLED=true`` is set, HSTS is sent."""
         from backend.config.settings import SecuritySettings
+
         custom = SecuritySettings(
             hsts_enabled=True,
             hsts_max_age_seconds=63072000,
@@ -111,6 +114,7 @@ class TestSecurityHeadersConfigurable(unittest.TestCase):
 
     def test_custom_csp_value(self):
         from backend.config.settings import SecuritySettings
+
         custom = SecuritySettings(
             csp_enabled=True,
             csp_value="default-src 'self'",
@@ -122,6 +126,7 @@ class TestSecurityHeadersConfigurable(unittest.TestCase):
 
     def test_csp_disabled(self):
         from backend.config.settings import SecuritySettings
+
         custom = SecuritySettings(csp_enabled=False)
         with patch("backend.config.settings.settings.security", custom):
             resp = self.client.get("/api/health")

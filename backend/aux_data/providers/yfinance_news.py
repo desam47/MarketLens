@@ -13,6 +13,7 @@ article's real fields live under ``content``: ``title``,
 falls back to the same neutral 0.5 the old code used when that field
 was absent.
 """
+
 import logging
 from datetime import datetime
 
@@ -59,10 +60,10 @@ class YFinanceNewsProvider(NewsProvider):
 
                 provider_info = content.get("provider") or {}
                 source = (
-                    provider_info.get("displayName")
-                    if isinstance(provider_info, dict)
-                    else None
-                ) or content.get("publisher") or "Unknown"
+                    (provider_info.get("displayName") if isinstance(provider_info, dict) else None)
+                    or content.get("publisher")
+                    or "Unknown"
+                )
 
                 # No related-tickers concept exists in the new payload
                 # shape — always the same neutral score the old code
@@ -71,9 +72,7 @@ class YFinanceNewsProvider(NewsProvider):
 
                 url_info = content.get("canonicalUrl") or content.get("clickThroughUrl")
                 article_url = (
-                    url_info.get("url")
-                    if isinstance(url_info, dict)
-                    else url_info
+                    url_info.get("url") if isinstance(url_info, dict) else url_info
                 ) or content.get("link")
 
                 items.append(

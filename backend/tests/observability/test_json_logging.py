@@ -10,6 +10,7 @@ Validates:
 - LOG_LEVEL env var is honored by configure_logging()
 - RotatingFileHandler writes to logs/marketlens.log
 """
+
 import json
 import logging
 import sys
@@ -38,7 +39,9 @@ class TestJsonFormatter:
         assert "\n" not in raw, f"Multi-line output: {raw!r}"
         return json.loads(raw)
 
-    def _make_record(self, msg: str = "test message", extra: dict | None = None) -> logging.LogRecord:
+    def _make_record(
+        self, msg: str = "test message", extra: dict | None = None
+    ) -> logging.LogRecord:
         """Create a minimal LogRecord for testing."""
         # Suppress mypy noise about the internal ctor
         record = logging.LogRecord(  # type: ignore[arg-type]
@@ -199,7 +202,9 @@ class TestConfigureLogging:
             root = logging.getLogger()
             assert root.level == logging.WARNING
 
-    def test_debug_flag_falls_back_when_no_env_var(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_debug_flag_falls_back_when_no_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         """Without LOG_LEVEL, debug=True → DEBUG, debug=False → INFO."""
         monkeypatch.delenv("LOG_LEVEL", raising=False)
         with self._isolated_logging(tmp_path):
@@ -208,7 +213,9 @@ class TestConfigureLogging:
             configure_logging(debug=True, enable_file=False)
             assert logging.getLogger().level == logging.DEBUG
 
-    def test_invalid_log_level_defaults_to_info(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_invalid_log_level_defaults_to_info(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         """Bogus LOG_LEVEL value falls back to INFO."""
         monkeypatch.setenv("LOG_LEVEL", "NOT_A_LEVEL")
         with self._isolated_logging(tmp_path):

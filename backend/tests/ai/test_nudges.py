@@ -6,13 +6,16 @@ _check_big_moves, _insert_nudge) rather than the asyncio sleep loop —
 mirrors test_digest_service.py's approach of testing the firing logic
 with no real waiting involved.
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 
 from backend.ai.nudges import NudgeService
 
 
-def _trigger(id_, symbol="NVDA", alert_name="NVDA breakout", message=None, commentary=None, observed=None):
+def _trigger(
+    id_, symbol="NVDA", alert_name="NVDA breakout", message=None, commentary=None, observed=None
+):
     t = MagicMock()
     t.id = id_
     t.symbol = symbol
@@ -50,8 +53,10 @@ class TestCheckAlertTriggers(unittest.TestCase):
         self.service._last_trigger_id = 0
         repo = MagicMock()
         repo.get_recent_triggers.return_value = [_trigger(5, message="fired")]
-        with patch("backend.repositories.alert_repository.AlertRepository", return_value=repo), \
-             patch.object(self.service, "_insert_nudge") as mock_insert:
+        with (
+            patch("backend.repositories.alert_repository.AlertRepository", return_value=repo),
+            patch.object(self.service, "_insert_nudge") as mock_insert,
+        ):
             self.service._check_alert_triggers()
         mock_insert.assert_called_once()
         self.assertIn("NVDA", mock_insert.call_args.args[0])
@@ -61,8 +66,10 @@ class TestCheckAlertTriggers(unittest.TestCase):
         self.service._last_trigger_id = 5
         repo = MagicMock()
         repo.get_recent_triggers.return_value = [_trigger(5), _trigger(3)]
-        with patch("backend.repositories.alert_repository.AlertRepository", return_value=repo), \
-             patch.object(self.service, "_insert_nudge") as mock_insert:
+        with (
+            patch("backend.repositories.alert_repository.AlertRepository", return_value=repo),
+            patch.object(self.service, "_insert_nudge") as mock_insert,
+        ):
             self.service._check_alert_triggers()
         mock_insert.assert_not_called()
         self.assertEqual(self.service._last_trigger_id, 5)
@@ -70,9 +77,14 @@ class TestCheckAlertTriggers(unittest.TestCase):
     def test_multiple_new_triggers_processed_in_id_order(self):
         self.service._last_trigger_id = 0
         repo = MagicMock()
-        repo.get_recent_triggers.return_value = [_trigger(7, symbol="TSLA"), _trigger(6, symbol="AAPL")]
-        with patch("backend.repositories.alert_repository.AlertRepository", return_value=repo), \
-             patch.object(self.service, "_insert_nudge") as mock_insert:
+        repo.get_recent_triggers.return_value = [
+            _trigger(7, symbol="TSLA"),
+            _trigger(6, symbol="AAPL"),
+        ]
+        with (
+            patch("backend.repositories.alert_repository.AlertRepository", return_value=repo),
+            patch.object(self.service, "_insert_nudge") as mock_insert,
+        ):
             self.service._check_alert_triggers()
         texts_in_order = [c.args[0] for c in mock_insert.call_args_list]
         self.assertIn("AAPL", texts_in_order[0])
@@ -80,7 +92,10 @@ class TestCheckAlertTriggers(unittest.TestCase):
         self.assertEqual(self.service._last_trigger_id, 7)
 
     def test_repo_error_does_not_raise(self):
-        with patch("backend.repositories.alert_repository.AlertRepository", side_effect=RuntimeError("db down")):
+        with patch(
+            "backend.repositories.alert_repository.AlertRepository",
+            side_effect=RuntimeError("db down"),
+        ):
             self.service._check_alert_triggers()  # must not raise
 
 
@@ -96,9 +111,11 @@ class TestCheckBigMoves(unittest.TestCase):
             result_objs[sym] = r
         scanner = MagicMock()
         scanner.scan_results = result_objs
-        with patch("backend.api.main_helpers._watched_symbols", return_value=list(scores.keys())), \
-             patch("backend.scanner.scanner.market_scanner", scanner), \
-             patch.object(self.service, "_insert_nudge") as mock_insert:
+        with (
+            patch("backend.api.main_helpers._watched_symbols", return_value=list(scores.keys())),
+            patch("backend.scanner.scanner.market_scanner", scanner),
+            patch.object(self.service, "_insert_nudge") as mock_insert,
+        ):
             self.service._check_big_moves(threshold, cooldown)
         return mock_insert
 
@@ -149,16 +166,21 @@ class TestInsertNudge(unittest.TestCase):
         repo.add_message.assert_called_once_with(1, "assistant", "hello")
 
     def test_repo_error_does_not_raise(self):
-        with patch("backend.repositories.chat_repository.ChatRepository", side_effect=RuntimeError("db down")):
+        with patch(
+            "backend.repositories.chat_repository.ChatRepository",
+            side_effect=RuntimeError("db down"),
+        ):
             NudgeService._insert_nudge("hello")  # must not raise
 
 
 class TestTick(unittest.TestCase):
     def test_disabled_skips_both_checks(self):
         service = NudgeService()
-        with patch("backend.ai.nudges.settings") as mock_settings, \
-             patch.object(service, "_check_alert_triggers") as mock_alerts, \
-             patch.object(service, "_check_big_moves") as mock_moves:
+        with (
+            patch("backend.ai.nudges.settings") as mock_settings,
+            patch.object(service, "_check_alert_triggers") as mock_alerts,
+            patch.object(service, "_check_big_moves") as mock_moves,
+        ):
             mock_settings.ai_nudges.enabled = False
             service._tick()
         mock_alerts.assert_not_called()

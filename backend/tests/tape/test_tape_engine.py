@@ -2,6 +2,7 @@
 Tests for backend.tape.tape_engine.TapeEngine — feed synthetic prints,
 assert the derived snapshot (pattern from test_trend_engine.py).
 """
+
 import time
 import unittest
 
@@ -18,8 +19,9 @@ class TestTapeEngine(unittest.TestCase):
     def test_signed_volume_and_buy_ratio(self):
         e = TapeEngine("AAPL")
         base = time.time() - 20
-        _feed(e, base, [(i * 0.4, 100 + i * 0.01, 200, "buy" if i % 5 else "sell")
-                        for i in range(50)])
+        _feed(
+            e, base, [(i * 0.4, 100 + i * 0.01, 200, "buy" if i % 5 else "sell") for i in range(50)]
+        )
         snap = e.get_snapshot(now_s=base + 20)
         self.assertGreater(snap["signed_volume"], 0)
         self.assertGreater(snap["buy_ratio"], 0.7)
@@ -29,8 +31,9 @@ class TestTapeEngine(unittest.TestCase):
     def test_heavy_sell_pressure(self):
         e = TapeEngine("AAPL")
         base = time.time() - 20
-        _feed(e, base, [(i * 0.4, 100 - i * 0.01, 200, "sell" if i % 6 else "buy")
-                        for i in range(48)])
+        _feed(
+            e, base, [(i * 0.4, 100 - i * 0.01, 200, "sell" if i % 6 else "buy") for i in range(48)]
+        )
         snap = e.get_snapshot(now_s=base + 20)
         self.assertLess(snap["signed_volume"], 0)
         self.assertEqual(snap["pressure"], "heavy_sell")
@@ -45,8 +48,18 @@ class TestTapeEngine(unittest.TestCase):
         e = TapeEngine("X")
         base = time.time() - 10
         # up moves -> buy, down moves -> sell; first defaults buy
-        _feed(e, base, [(0, 10.0, 100, None), (1, 10.1, 100, None), (2, 10.2, 100, None),
-                        (3, 10.1, 100, None), (4, 10.0, 100, None), (5, 9.9, 100, None)])
+        _feed(
+            e,
+            base,
+            [
+                (0, 10.0, 100, None),
+                (1, 10.1, 100, None),
+                (2, 10.2, 100, None),
+                (3, 10.1, 100, None),
+                (4, 10.0, 100, None),
+                (5, 9.9, 100, None),
+            ],
+        )
         snap = e.get_snapshot(now_s=base + 6)
         # 3 up/flat-first (buy) vs 3 down (sell)
         self.assertEqual(snap["buy_volume"], 300)
@@ -102,13 +115,13 @@ class TestTapeEngine(unittest.TestCase):
         e = TapeEngine("AAPL")
         base = time.time() - 10
         e.update(price=100.0, size=200, timestamp=base, side="buy")
-        e.note_price(101.5, base + 5)          # L1 snapshot, no trade
+        e.note_price(101.5, base + 5)  # L1 snapshot, no trade
         snap = e.get_snapshot(now_s=base + 6)
-        self.assertEqual(snap["last_price"], 101.5)   # reflects the snapshot
-        self.assertEqual(snap["trade_count"], 1)      # still just the one real print
+        self.assertEqual(snap["last_price"], 101.5)  # reflects the snapshot
+        self.assertEqual(snap["trade_count"], 1)  # still just the one real print
         self.assertEqual(snap["buy_volume"], 200)
         self.assertEqual(snap["sell_volume"], 0)
-        e.note_price("bad", base + 6)                  # ignored, no raise
+        e.note_price("bad", base + 6)  # ignored, no raise
         self.assertEqual(e.get_snapshot(now_s=base + 7)["last_price"], 101.5)
 
 

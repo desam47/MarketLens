@@ -1,5 +1,6 @@
 """Tests for backend.ai.reply_stream.ReplyExtractor — incremental
 decode of the JSON "reply" value from a growing raw completion."""
+
 import unittest
 
 from backend.ai.reply_stream import ReplyExtractor
@@ -19,13 +20,13 @@ def _stream(chunks):
 
 class TestReplyExtractor(unittest.TestCase):
     def test_skips_fence_and_leading_prose(self):
-        out, ex = _stream(['Here you go:\n```json\n{"reply": "Hello world"', '}\n```'])
+        out, ex = _stream(['Here you go:\n```json\n{"reply": "Hello world"', "}\n```"])
         self.assertEqual(out, "Hello world")
         self.assertTrue(ex.finished)
         self.assertEqual(ex.text, "Hello world")
 
     def test_streams_incrementally(self):
-        out, _ = _stream(['{"reply": "NVDA is ', 'showing ', 'strength"}'])
+        out, _ = _stream(['{"reply": "NVDA is ', "showing ", 'strength"}'])
         self.assertEqual(out, "NVDA is showing strength")
 
     def test_decodes_simple_escapes(self):

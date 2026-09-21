@@ -3,6 +3,7 @@ Tests for build_context()'s news/fundamentals sections (Phase 18
 aux-data — real, working News/Fundamentals providers that never
 reached the AI analysis prompt before this change).
 """
+
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -27,13 +28,10 @@ def _fake_scan_result() -> ScanResult:
 
 
 class TestBuildContextNews(unittest.TestCase):
-
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.aux_data.services.manager.aux_data_manager")
     @patch("backend.ai.context.market_scanner")
-    def test_news_items_populate_compact_shape(
-        self, mock_scanner, mock_aux, mock_get_engine
-    ):
+    def test_news_items_populate_compact_shape(self, mock_scanner, mock_aux, mock_get_engine):
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
         now = datetime.now(UTC)
@@ -125,9 +123,7 @@ class TestBuildContextNews(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_include_news_false_skips_the_call_entirely(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_include_news_false_skips_the_call_entirely(self, mock_scanner, mock_get_engine):
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
 
@@ -138,13 +134,10 @@ class TestBuildContextNews(unittest.TestCase):
 
 
 class TestBuildContextFundamentals(unittest.TestCase):
-
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.aux_data.services.manager.aux_data_manager")
     @patch("backend.ai.context.market_scanner")
-    def test_fundamentals_curated_subset_populates(
-        self, mock_scanner, mock_aux, mock_get_engine
-    ):
+    def test_fundamentals_curated_subset_populates(self, mock_scanner, mock_aux, mock_get_engine):
         mock_scanner.scan_symbol.return_value = _fake_scan_result()
         mock_get_engine.return_value = MagicMock(trend_history={})
         mock_aux.get_fundamentals.return_value = FundamentalsResponse(

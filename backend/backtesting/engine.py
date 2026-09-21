@@ -29,6 +29,7 @@ Phase 19 adds:
     ``build_indicator_values`` when ``ExperimentParameters`` is
     supplied, so a 25/75 RSI pair fires different signals than 30/70.
 """
+
 from __future__ import annotations
 
 import json
@@ -125,6 +126,7 @@ class WalkForwardConfig:
     Example: ``n_splits=4, test_pct=0.25`` gives 4 consecutive train/test
     pairs. Each test slice is OOS; each training slice is in-sample.
     """
+
     symbol: str
     start_date: datetime
     end_date: datetime
@@ -185,8 +187,10 @@ class BacktestEngine:
         # 2. Load bars in a fresh session so the long iteration
         #    doesn't hold a transaction open.
         bars = self._load_bars(
-            config.symbol, config.timeframe,
-            config.start_date, config.end_date,
+            config.symbol,
+            config.timeframe,
+            config.start_date,
+            config.end_date,
         )
 
         if len(bars) < MIN_BARS_FOR_RUN:
@@ -624,8 +628,11 @@ def _compute_metrics(trades: Sequence[BacktestTrade], total_bars: int) -> dict:
         return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2.0
 
     def _sum_if_present(label: str) -> list[float]:
-        return [getattr(t, f"return_{label}", None) or 0 for t in trades
-                if getattr(t, f"return_{label}", None) is not None]
+        return [
+            getattr(t, f"return_{label}", None) or 0
+            for t in trades
+            if getattr(t, f"return_{label}", None) is not None
+        ]
 
     one_d = _sum_if_present("1d")
     five_d = _sum_if_present("5d")

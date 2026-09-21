@@ -1,12 +1,13 @@
 """
 Tests for the composable Filter system (backend.scanner.filters).
 """
+
 import os
 import sys
 import unittest
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.scanner.filters import (
     ADXStrong,
@@ -79,7 +80,6 @@ def _result(
 
 
 class TestConcreteFilters(unittest.TestCase):
-
     def test_trend_score_gt(self):
         f = TrendScoreGt(50.0)
         r1 = _result(score=75.0)
@@ -95,41 +95,29 @@ class TestConcreteFilters(unittest.TestCase):
     def test_daily_bullish(self):
         f = DailyBullish(min_confidence=0.6)
         # Daily uptrend with confidence 0.8 → match
-        bullish = _result(trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.8}
-        })
+        bullish = _result(trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}})
         # Daily downtrend → no match
-        bearish = _result(trend_signals={
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9}
-        })
+        bearish = _result(trend_signals={"ONE_DAY": {"direction": "downtrend", "confidence": 0.9}})
         # Daily uptrend but low confidence → no match
-        weak = _result(trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.3}
-        })
+        weak = _result(trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.3}})
         self.assertTrue(f.matches(bullish))
         self.assertFalse(f.matches(bearish))
         self.assertFalse(f.matches(weak))
 
     def test_daily_bearish(self):
         f = DailyBearish(min_confidence=0.5)
-        match = _result(trend_signals={
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.6}
-        })
-        no_match = _result(trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.9}
-        })
+        match = _result(trend_signals={"ONE_DAY": {"direction": "downtrend", "confidence": 0.6}})
+        no_match = _result(trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.9}})
         self.assertTrue(f.matches(match))
         self.assertFalse(f.matches(no_match))
 
     def test_timeframe_direction_aliased(self):
         # 1h, 4h, 1d aliases
         f = TimeframeDirection("1h", "uptrend", min_confidence=0.7)
-        match = _result(trend_signals={
-            "ONE_HOUR": {"direction": "uptrend", "confidence": 0.8}
-        })
-        no_match = _result(trend_signals={
-            "ONE_HOUR": {"direction": "downtrend", "confidence": 0.8}
-        })
+        match = _result(trend_signals={"ONE_HOUR": {"direction": "uptrend", "confidence": 0.8}})
+        no_match = _result(
+            trend_signals={"ONE_HOUR": {"direction": "downtrend", "confidence": 0.8}}
+        )
         self.assertTrue(f.matches(match))
         self.assertFalse(f.matches(no_match))
 
@@ -139,41 +127,53 @@ class TestConcreteFilters(unittest.TestCase):
 
     def test_min_timeframe_bullish(self):
         f = MinTimeframeBullish(min_count=3)
-        match = _result(trend_signals={
-            "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
-            "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.9},
-        })
-        weak = _result(trend_signals={
-            "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
-        })
+        match = _result(
+            trend_signals={
+                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
+                "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
+                "ONE_DAY": {"direction": "uptrend", "confidence": 0.9},
+            }
+        )
+        weak = _result(
+            trend_signals={
+                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
+            }
+        )
         self.assertTrue(f.matches(match))
         self.assertFalse(f.matches(weak))
 
     def test_min_timeframe_bearish(self):
         f = MinTimeframeBearish(min_count=2)
-        match = _result(trend_signals={
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.6},
-            "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.7},
-        })
-        no_match = _result(trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.6},
-        })
+        match = _result(
+            trend_signals={
+                "ONE_DAY": {"direction": "downtrend", "confidence": 0.6},
+                "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.7},
+            }
+        )
+        no_match = _result(
+            trend_signals={
+                "ONE_DAY": {"direction": "uptrend", "confidence": 0.6},
+            }
+        )
         self.assertTrue(f.matches(match))
         self.assertFalse(f.matches(no_match))
 
     def test_mtf_alignment_bullish(self):
         f = MTFAlignment(min_timeframes=3)
-        aligned = _result(trend_signals={
-            "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
-            "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.7},
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.7},
-        })
-        conflict = _result(trend_signals={
-            "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
-            "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.7},
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.7},
-        })
+        aligned = _result(
+            trend_signals={
+                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
+                "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.7},
+                "ONE_DAY": {"direction": "uptrend", "confidence": 0.7},
+            }
+        )
+        conflict = _result(
+            trend_signals={
+                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.7},
+                "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.7},
+                "ONE_DAY": {"direction": "uptrend", "confidence": 0.7},
+            }
+        )
         self.assertTrue(f.matches(aligned))
         self.assertFalse(f.matches(conflict))
 
@@ -212,16 +212,18 @@ class TestConcreteFilters(unittest.TestCase):
 
     def test_composite_scanner_filters(self):
         r = _result(price=110.0, rsi=40.0)
-        r.indicator_values.update({
-            "rsi_previous": 30.0,
-            "price_change_pct": 1.5,
-            "volume_ratio": 2.0,
-            "volatility_ratio": 0.6,
-            "sma_20": 100.0,
-            "highest_high_20": 108.0,
-            "lowest_low_20": 90.0,
-            "rs_pct_SPY": 3.5,
-        })
+        r.indicator_values.update(
+            {
+                "rsi_previous": 30.0,
+                "price_change_pct": 1.5,
+                "volume_ratio": 2.0,
+                "volatility_ratio": 0.6,
+                "sma_20": 100.0,
+                "highest_high_20": 108.0,
+                "lowest_low_20": 90.0,
+                "rs_pct_SPY": 3.5,
+            }
+        )
         self.assertTrue(OversoldReversal(35, 2).matches(r))
         self.assertTrue(Breakout(20).matches(r))
         self.assertFalse(Breakdown(20).matches(r))
@@ -235,15 +237,14 @@ class TestConcreteFilters(unittest.TestCase):
 
 
 class TestComposition(unittest.TestCase):
-
     def test_and_filter(self):
         a = TrendScoreGt(50.0)
         b = DailyBullish()
         c = a & b
 
-        both = _result(score=75.0, trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.7}
-        })
+        both = _result(
+            score=75.0, trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.7}}
+        )
         only_score = _result(score=75.0)
         self.assertTrue(c.matches(both))
         self.assertFalse(c.matches(only_score))
@@ -283,9 +284,15 @@ class TestTrueFilter(unittest.TestCase):
 
     def test_matches_regardless_of_trend_signals(self):
         f = TrueFilter()
-        self.assertTrue(f.matches(_result(trend_signals={
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
-        })))
+        self.assertTrue(
+            f.matches(
+                _result(
+                    trend_signals={
+                        "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
+                    }
+                )
+            )
+        )
         self.assertTrue(f.matches(_result(trend_signals={})))
         self.assertTrue(f.matches(_result()))
 
@@ -294,7 +301,6 @@ class TestTrueFilter(unittest.TestCase):
 
 
 class TestRegistry(unittest.TestCase):
-
     def test_list_types(self):
         types = default_registry.list_types()
         self.assertIn("trend_score_gt", types)
@@ -307,9 +313,15 @@ class TestRegistry(unittest.TestCase):
     def test_build_true_filter(self):
         f = default_registry.build({"type": "true"})
         self.assertIsInstance(f, TrueFilter)
-        self.assertTrue(f.matches(_result(trend_signals={
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
-        })))
+        self.assertTrue(
+            f.matches(
+                _result(
+                    trend_signals={
+                        "ONE_DAY": {"direction": "downtrend", "confidence": 0.9},
+                    }
+                )
+            )
+        )
 
     def test_build(self):
         f = default_registry.build({"type": "trend_score_gt", "params": {"threshold": 60.0}})
@@ -329,22 +341,26 @@ class TestRegistry(unittest.TestCase):
             default_registry.build({"type": "trend_score_gt", "params": {"nope": 1}})
 
     def test_conjunction(self):
-        f = default_registry.build_conjunction([
-            {"type": "daily_bullish", "params": {"min_confidence": 0.5}},
-            {"type": "high_volume", "params": {"min_volume": 100_000}},
-        ])
+        f = default_registry.build_conjunction(
+            [
+                {"type": "daily_bullish", "params": {"min_confidence": 0.5}},
+                {"type": "high_volume", "params": {"min_volume": 100_000}},
+            ]
+        )
         self.assertIsInstance(f, AndFilter)
         # Should match a result that's both daily-bullish and high-volume
-        r = _result(volume=200_000, trend_signals={
-            "ONE_DAY": {"direction": "uptrend", "confidence": 0.6}
-        })
+        r = _result(
+            volume=200_000, trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.6}}
+        )
         self.assertTrue(f.matches(r))
 
     def test_disjunction(self):
-        f = default_registry.build_disjunction([
-            {"type": "rsi_oversold", "params": {"threshold": 30.0}},
-            {"type": "rsi_overbought", "params": {"threshold": 70.0}},
-        ])
+        f = default_registry.build_disjunction(
+            [
+                {"type": "rsi_oversold", "params": {"threshold": 30.0}},
+                {"type": "rsi_overbought", "params": {"threshold": 70.0}},
+            ]
+        )
         self.assertIsInstance(f, OrFilter)
         self.assertTrue(f.matches(_result(rsi=20.0)))
         self.assertTrue(f.matches(_result(rsi=80.0)))
@@ -352,7 +368,6 @@ class TestRegistry(unittest.TestCase):
 
 
 class TestApplyFilter(unittest.TestCase):
-
     def test_apply_filter(self):
         results = [
             _result("AAPL", score=80.0),

@@ -4,6 +4,7 @@ API endpoints for custom indicators (Phase 2.3.4).
 CRUD for user-defined indicators. Indicators are scoped either globally
 (watchlist_id is null) or to a single watchlist.
 """
+
 import json
 import logging
 from datetime import datetime
@@ -21,12 +22,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/custom-indicators", tags=["custom-indicators"])
 
 VALID_FORMULA_TYPES = {
-    "sma", "ema", "rsi", "macd", "bollinger", "atr", "vwap", "stdev",
-    "obv", "mfi", "stochastic", "williams_r", "cci", "adx", "aroon", "custom",
+    "sma",
+    "ema",
+    "rsi",
+    "macd",
+    "bollinger",
+    "atr",
+    "vwap",
+    "stdev",
+    "obv",
+    "mfi",
+    "stochastic",
+    "williams_r",
+    "cci",
+    "adx",
+    "aroon",
+    "custom",
 }
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────
+
 
 class CustomIndicatorCreate(BaseModel):
     name: str = Field(..., max_length=100)
@@ -81,6 +97,7 @@ class CustomIndicatorResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
+
 def _to_response(model: CustomIndicator) -> CustomIndicatorResponse:
     params = {}
     if model.parameters:
@@ -118,6 +135,7 @@ def _validate_formula_type(formula_type: str) -> None:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
+
 
 @router.get("", response_model=list[CustomIndicatorResponse])
 def list_indicators(

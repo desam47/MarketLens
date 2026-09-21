@@ -1,6 +1,7 @@
 """
 Market scanner and ranking system
 """
+
 import asyncio
 import inspect
 import logging
@@ -17,6 +18,7 @@ from ..observability import record_scan
 from .explanation import build_signal_explanation
 
 logger = logging.getLogger(__name__)
+
 
 class ScanResult:
     """Result of scanning a single symbol"""
@@ -64,8 +66,7 @@ class ScanResult:
             return 0.0
 
         weighted_sum = sum(
-            self.scores.get(name, 0) * weights.get(name, 0)
-            for name in self.scores.keys()
+            self.scores.get(name, 0) * weights.get(name, 0) for name in self.scores.keys()
         )
 
         # Normalise to a 0-100 scale by dividing by total weight and scaling.
@@ -95,10 +96,11 @@ class ScanResult:
         total_weight = sum(abs(weights.get(name, 0)) for name in self.scores.keys())
         if total_weight == 0:
             return 0.0
-        return sum(
-            self.scores.get(name, 0) * weights.get(name, 0)
-            for name in self.scores.keys()
-        ) / total_weight
+        return (
+            sum(self.scores.get(name, 0) * weights.get(name, 0) for name in self.scores.keys())
+            / total_weight
+        )
+
 
 class Scanner:
     """Market scanner that evaluates and ranks symbols"""
@@ -130,7 +132,7 @@ class Scanner:
             "volume": 0.15,
             "rsi": 0.10,
             "macd": 0.10,
-            "adx": 0.05
+            "adx": 0.05,
         }
 
     def scan_symbol(
@@ -161,27 +163,31 @@ class Scanner:
             # Update trend engine with recent data (we'd need historical data in practice)
             # For now, we'll use the quote to update
             if quote:
-                trend_engine.update(
-                    quote.price,
-                    quote.volume or 0,
-                    quote.timestamp,
-                    quote.provider
-                )
+                trend_engine.update(quote.price, quote.volume or 0, quote.timestamp, quote.provider)
 
                 # Get trend signals for multiple timeframes. Phase 3.9.7:
                 # hoist the import out of the loop so we don't pay the
                 # __import__ cost on every symbol × timeframe.
-                timeframes = ["ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE",
-                             "ONE_HOUR", "FOUR_HOUR", "ONE_DAY"]
+                timeframes = [
+                    "ONE_MINUTE",
+                    "FIVE_MINUTE",
+                    "FIFTEEN_MINUTE",
+                    "ONE_HOUR",
+                    "FOUR_HOUR",
+                    "ONE_DAY",
+                ]
                 for tf_str in timeframes:
                     tf = getattr(Timeframe, tf_str)
                     trend_signal = trend_engine.get_current_trend(tf)
                     if trend_signal:
-                        result.add_trend_signal(tf_str, {
-                            "direction": trend_signal.direction.value,
-                            "strength": trend_signal.strength.value,
-                            "confidence": trend_signal.confidence
-                        })
+                        result.add_trend_signal(
+                            tf_str,
+                            {
+                                "direction": trend_signal.direction.value,
+                                "strength": trend_signal.strength.value,
+                                "confidence": trend_signal.confidence,
+                            },
+                        )
 
             # Calculate technical indicators
             self._calculate_indicators(result, symbol, historical_bars, benchmark_bars)
@@ -277,9 +283,7 @@ class Scanner:
                 # Pull a 3-month daily history and feed it to the
                 # windowed indicators. Use pre-fetched bars if available,
                 # otherwise fetch via the market data manager.
-                self._populate_windowed_indicators(
-                    result, symbol, historical_bars, benchmark_bars
-                )
+                self._populate_windowed_indicators(result, symbol, historical_bars, benchmark_bars)
 
         except Exception as e:
             logger.error(f"Error calculating indicators for {symbol}: {e}")
@@ -370,9 +374,17 @@ class Scanner:
     def _set_unavailable_derived_indicators(self, result: ScanResult) -> None:
         """Keep the scanner response shape stable when history is unavailable."""
         for key in (
-            "rsi", "rsi_previous", "rsi_delta", "macd", "adx",
-            "price_change_pct", "volume_ratio", "volatility_ratio",
-            "volatility_5_pct", "volatility_20_pct", "relative_strength",
+            "rsi",
+            "rsi_previous",
+            "rsi_delta",
+            "macd",
+            "adx",
+            "price_change_pct",
+            "volume_ratio",
+            "volatility_ratio",
+            "volatility_5_pct",
+            "volatility_20_pct",
+            "relative_strength",
         ):
             result.add_indicator(key, None)
         for period in (10, 20, 50):
@@ -389,7 +401,14 @@ class Scanner:
             result.add_indicator(f"rs_pct_{benchmark}", None)
             result.add_indicator(f"symbol_return_pct_{benchmark}", None)
             result.add_indicator(f"benchmark_return_pct_{benchmark}", None)
-        for group in ("sma", "highest_high", "lowest_low", "rs_pct", "symbol_return_pct", "benchmark_return_pct"):
+        for group in (
+            "sma",
+            "highest_high",
+            "lowest_low",
+            "rs_pct",
+            "symbol_return_pct",
+            "benchmark_return_pct",
+        ):
             result.add_indicator(group, {})
 
     def _populate_derived_indicators(
@@ -436,8 +455,8 @@ class Scanner:
                 result.add_indicator(f"breakout_{period}", False)
                 result.add_indicator(f"breakdown_{period}", False)
                 continue
-            prior_high = max(highs[-period - 1:-1])
-            prior_low = min(lows[-period - 1:-1])
+            prior_high = max(highs[-period - 1 : -1])
+            prior_low = min(lows[-period - 1 : -1])
             highest_high[str(period)] = prior_high
             lowest_low[str(period)] = prior_low
             result.add_indicator(f"highest_high_{period}", prior_high)
@@ -466,12 +485,18 @@ class Scanner:
         # Realized volatility uses close-to-close returns. The ratio is the
         # central squeeze/expansion metric: <1 means contracting, >1 means
         # expanding relative to the 20-bar baseline.
-        returns = [((closes[i] / closes[i - 1]) - 1.0) * 100.0 for i in range(1, len(closes)) if closes[i - 1] > 0]
+        returns = [
+            ((closes[i] / closes[i - 1]) - 1.0) * 100.0
+            for i in range(1, len(closes))
+            if closes[i - 1] > 0
+        ]
         vol5 = self._stddev(returns[-5:]) if len(returns) >= 5 else None
         vol20 = self._stddev(returns[-20:]) if len(returns) >= 20 else None
         result.add_indicator("volatility_5_pct", vol5)
         result.add_indicator("volatility_20_pct", vol20)
-        result.add_indicator("volatility_ratio", vol5 / vol20 if vol5 is not None and vol20 and vol20 > 0 else None)
+        result.add_indicator(
+            "volatility_ratio", vol5 / vol20 if vol5 is not None and vol20 and vol20 > 0 else None
+        )
 
         # Price confirmation for an oversold reversal and the previous RSI
         # are computed alongside the existing RSI series below.
@@ -494,11 +519,17 @@ class Scanner:
         for benchmark in self._benchmark_symbols():
             bench = benchmark_bars.get(benchmark)
             if not bench:
-                bench = bars if benchmark.upper() == symbol.upper() else self._get_benchmark_bars(benchmark)
+                bench = (
+                    bars
+                    if benchmark.upper() == symbol.upper()
+                    else self._get_benchmark_bars(benchmark)
+                )
             benchmark_closes, _, _, _ = self._bar_values(bench or [])
             if len(closes) >= lookback + 1 and len(benchmark_closes) >= lookback + 1:
                 symbol_return = (closes[-1] / closes[-lookback - 1] - 1.0) * 100.0
-                benchmark_return = (benchmark_closes[-1] / benchmark_closes[-lookback - 1] - 1.0) * 100.0
+                benchmark_return = (
+                    benchmark_closes[-1] / benchmark_closes[-lookback - 1] - 1.0
+                ) * 100.0
                 rs_pct = symbol_return - benchmark_return
                 if primary_rs is None:
                     primary_rs = rs_pct
@@ -531,6 +562,7 @@ class Scanner:
         else:
             try:
                 from backend.database import SessionLocal
+
                 with SessionLocal() as db:
                     bars = market_data_manager.get_historical_bars(
                         symbol,
@@ -540,9 +572,7 @@ class Scanner:
                         db=db,
                     )
             except Exception as e:
-                logger.warning(
-                    f"DB-backed history lookup failed for {symbol}: {e}"
-                )
+                logger.warning(f"DB-backed history lookup failed for {symbol}: {e}")
                 # Fall back to a non-cached provider call.
                 try:
                     bars = market_data_manager.get_historical_bars(
@@ -552,9 +582,7 @@ class Scanner:
                         use_cache=False,
                     )
                 except Exception as e2:
-                    logger.warning(
-                        f"Provider history lookup failed for {symbol}: {e2}"
-                    )
+                    logger.warning(f"Provider history lookup failed for {symbol}: {e2}")
                     bars = []
 
         if not bars:
@@ -565,10 +593,7 @@ class Scanner:
 
         # Convert to the {"close", "high", "low"} dict shape that
         # BaseIndicator.calculate() expects.
-        bar_dicts = [
-            {"close": b.close, "high": b.high, "low": b.low}
-            for b in bars
-        ]
+        bar_dicts = [{"close": b.close, "high": b.high, "low": b.low} for b in bars]
 
         try:
             from backend.indicators import (
@@ -588,16 +613,12 @@ class Scanner:
             macd_series = MACDIndicator().calculate(bar_dicts)
             # MACD returns the histogram; the "current value" consumers
             # care about is the most recent histogram bar.
-            result.add_indicator(
-                "macd", macd_series[-1] if macd_series else None
-            )
+            result.add_indicator("macd", macd_series[-1] if macd_series else None)
 
             adx_series = ADXIndicator(period=14).calculate(bar_dicts)
             result.add_indicator("adx", adx_series[-1] if adx_series else None)
         except Exception as e:
-            logger.error(
-                f"Indicator calculation failed for {symbol}: {e}"
-            )
+            logger.error(f"Indicator calculation failed for {symbol}: {e}")
             result.add_indicator("rsi", None)
             result.add_indicator("macd", None)
             result.add_indicator("adx", None)
@@ -626,11 +647,11 @@ class Scanner:
                 if adx >= 75:
                     trend_score = 90 + (adx - 75) * 0.4  # 90-130, clamped to 100
                 elif adx >= 50:
-                    trend_score = 60 + (adx - 50) * 1.2   # 60-90
+                    trend_score = 60 + (adx - 50) * 1.2  # 60-90
                 elif adx >= 25:
-                    trend_score = 30 + (adx - 25) * 1.2   # 30-60
+                    trend_score = 30 + (adx - 25) * 1.2  # 30-60
                 else:
-                    trend_score = adx * 1.2               # 0-30
+                    trend_score = adx * 1.2  # 0-30
                 result.add_score("trend_strength", trend_score)
                 result.add_score("adx", adx)
             # else: skip — score will be missing rather than zero
@@ -679,11 +700,11 @@ class Scanner:
             rsi = result.indicator_values.get("rsi")
             if rsi is not None:
                 if rsi < 30:
-                    rsi_score = (30 - rsi) * 2    # 0..40, positive (bullish)
+                    rsi_score = (30 - rsi) * 2  # 0..40, positive (bullish)
                 elif rsi > 70:
-                    rsi_score = (70 - rsi) * 2    # negative (bearish): e.g. 80 → -20
+                    rsi_score = (70 - rsi) * 2  # negative (bearish): e.g. 80 → -20
                 else:
-                    rsi_score = 0                  # neutral zone
+                    rsi_score = 0  # neutral zone
                 result.add_score("rsi", rsi_score)
 
         except Exception as e:
@@ -782,11 +803,13 @@ class Scanner:
             # drains the repository on every call so repeated fetches waste
             # resources and can starve the live stream.
             from backend.config.settings import settings as _settings
+
             if _settings.tape.enabled:
                 try:
                     import time as _time
 
                     from backend.api.tape.registry import get_tape_engine
+
                     now = _time.monotonic()
                     cached = self._tape_cache.get(result.symbol)
                     if cached is not None and (now - cached[0]) < self._tape_cache_ttl:
@@ -812,6 +835,7 @@ class Scanner:
         """Scan multiple symbols and return results"""
         # Fetch historical bars and quotes for all symbols in batch to eliminate N+1 query problem
         from backend.database import SessionLocal
+
         batch_bars = {}
         batch_quotes = {}
         benchmark_symbols = self._benchmark_symbols()
@@ -843,7 +867,9 @@ class Scanner:
             batch_quotes = {}
 
         results = []
-        benchmark_bars = {benchmark: batch_bars.get(benchmark, []) for benchmark in benchmark_symbols}
+        benchmark_bars = {
+            benchmark: batch_bars.get(benchmark, []) for benchmark in benchmark_symbols
+        }
         for symbol in symbols:
             # Pass the pre-fetched bars and quote to avoid individual database/provider calls
             scan_kwargs = {"benchmark_bars": benchmark_bars} if any(benchmark_bars.values()) else {}
@@ -859,7 +885,9 @@ class Scanner:
         self.last_scan_time = datetime.now()
         return results
 
-    async def scan_symbols_async(self, symbols: list[str], max_concurrent: int = 8) -> list[ScanResult]:
+    async def scan_symbols_async(
+        self, symbols: list[str], max_concurrent: int = 8
+    ) -> list[ScanResult]:
         """Scan multiple symbols concurrently via asyncio.to_thread + asyncio.gather.
 
         Each :meth:`scan_symbol` is a blocking call (HTTP, DB read) so it is run on
@@ -916,12 +944,14 @@ class Scanner:
 
             # Runs on a worker thread (asyncio.to_thread below), so no
             # event loop here — bridge the async batch-bars call.
-            bars = run_sync(market_data_manager.get_batch_historical_bars(
-                symbols_with_benchmarks,
-                timeframe="1d",
-                range_="3mo",
-                use_cache=True,
-            ))
+            bars = run_sync(
+                market_data_manager.get_batch_historical_bars(
+                    symbols_with_benchmarks,
+                    timeframe="1d",
+                    range_="3mo",
+                    use_cache=True,
+                )
+            )
             quotes = market_data_manager.get_batch_quotes(symbols)
             benchmarks = {benchmark: bars.get(benchmark, []) for benchmark in benchmark_symbols}
             return bars, quotes, benchmarks
@@ -939,7 +969,9 @@ class Scanner:
         # and the DB pool when scanning a large watchlist.
         sem = asyncio.Semaphore(max_concurrent)
         try:
-            accepts_benchmark_bars = "benchmark_bars" in inspect.signature(self.scan_symbol).parameters
+            accepts_benchmark_bars = (
+                "benchmark_bars" in inspect.signature(self.scan_symbol).parameters
+            )
         except (TypeError, ValueError):
             accepts_benchmark_bars = True
 
@@ -978,6 +1010,7 @@ class Scanner:
         """
         try:
             from backend.alerts.engine import alerts_engine
+
             for result in results:
                 alerts_engine.evaluate_scan_result(result)
         except Exception:
@@ -1033,6 +1066,7 @@ class Scanner:
         """Get trading signals for a symbol"""
         result = self.scan_results.get(symbol)
         return result.signals if result else []
+
 
 # Global scanner instance
 market_scanner = Scanner()

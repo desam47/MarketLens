@@ -8,6 +8,7 @@ alert row, or a malformed AI reply all degrade to returning None
 exception — the caller is an RQ worker task with no one watching for
 a raised exception the way a request handler would.
 """
+
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,8 +16,14 @@ from backend.ai.alert_commentary import generate_commentary
 from backend.ai.provider import AIResponse
 
 
-def _mock_trigger(id=1, alert_id=1, symbol="AAPL", observed_value="150.5",
-                   message="AAPL: price above 150.00", ai_commentary=None):
+def _mock_trigger(
+    id=1,
+    alert_id=1,
+    symbol="AAPL",
+    observed_value="150.5",
+    message="AAPL: price above 150.00",
+    ai_commentary=None,
+):
     t = MagicMock()
     t.id = id
     t.alert_id = alert_id
@@ -28,8 +35,9 @@ def _mock_trigger(id=1, alert_id=1, symbol="AAPL", observed_value="150.5",
     return t
 
 
-def _mock_alert(id=1, name="AAPL price alert", symbol="AAPL",
-                 condition_type="price_above", parameter="150.00"):
+def _mock_alert(
+    id=1, name="AAPL price alert", symbol="AAPL", condition_type="price_above", parameter="150.00"
+):
     a = MagicMock()
     a.id = id
     a.name = name
@@ -62,7 +70,6 @@ def _make_session(trigger, alert):
 
 
 class TestGenerateCommentary(unittest.TestCase):
-
     @patch("backend.ai.alert_commentary.build_context")
     @patch("backend.ai.alert_commentary.ai_manager")
     @patch("backend.ai.alert_commentary.SessionLocal")
@@ -74,10 +81,13 @@ class TestGenerateCommentary(unittest.TestCase):
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.compact.return_value = {"price": 150.5}
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text='```json\n{"commentary": "Price crossed above the 150 threshold."}\n```',
-            provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text='```json\n{"commentary": "Price crossed above the 150 threshold."}\n```',
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
 
         result = generate_commentary(1)
 
@@ -113,17 +123,19 @@ class TestGenerateCommentary(unittest.TestCase):
     @patch("backend.ai.alert_commentary.build_context")
     @patch("backend.ai.alert_commentary.ai_manager")
     @patch("backend.ai.alert_commentary.SessionLocal")
-    def test_malformed_ai_reply_returns_none(
-        self, mock_session_cls, mock_ai, mock_build_context
-    ):
+    def test_malformed_ai_reply_returns_none(self, mock_session_cls, mock_ai, mock_build_context):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.compact.return_value = {}
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text="not json at all", provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text="not json at all",
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
 
         result = generate_commentary(1)
 
@@ -133,9 +145,7 @@ class TestGenerateCommentary(unittest.TestCase):
     @patch("backend.ai.alert_commentary.build_context")
     @patch("backend.ai.alert_commentary.ai_manager")
     @patch("backend.ai.alert_commentary.SessionLocal")
-    def test_ai_call_exception_returns_none(
-        self, mock_session_cls, mock_ai, mock_build_context
-    ):
+    def test_ai_call_exception_returns_none(self, mock_session_cls, mock_ai, mock_build_context):
         trigger = _mock_trigger()
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
@@ -149,9 +159,7 @@ class TestGenerateCommentary(unittest.TestCase):
 
     @patch("backend.ai.alert_commentary.ai_manager")
     @patch("backend.ai.alert_commentary.SessionLocal")
-    def test_build_context_failure_still_attempts_commentary(
-        self, mock_session_cls, mock_ai
-    ):
+    def test_build_context_failure_still_attempts_commentary(self, mock_session_cls, mock_ai):
         """InsufficientDataError (or any context-building failure)
         shouldn't give up entirely — fall back to alert/trigger facts
         alone rather than skipping the AI call."""
@@ -159,10 +167,13 @@ class TestGenerateCommentary(unittest.TestCase):
         alert = _mock_alert()
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text='```json\n{"commentary": "Fired on alert facts alone."}\n```',
-            provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text='```json\n{"commentary": "Fired on alert facts alone."}\n```',
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
 
         with patch(
             "backend.ai.alert_commentary.build_context",
@@ -186,14 +197,20 @@ class TestGenerateCommentary(unittest.TestCase):
         mock_session_cls.return_value = _make_session(trigger, alert)
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_build_context.return_value.compact.return_value = {}
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text='```json\n{"commentary": "ok"}\n```', provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text='```json\n{"commentary": "ok"}\n```',
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
 
         generate_commentary(1)
 
         mock_build_context.assert_called_once_with(
-            "AAPL", include_news=False, include_fundamentals=False,
+            "AAPL",
+            include_news=False,
+            include_fundamentals=False,
         )
 
 

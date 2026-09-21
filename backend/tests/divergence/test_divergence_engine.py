@@ -1,9 +1,10 @@
 """Tests for DivergenceEngine."""
+
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.divergence.divergence_engine import (
     DivergenceDirection,
@@ -59,7 +60,7 @@ def _bearish_rsi_setup() -> tuple:
     rsi = []
     for i in range(n):
         if i <= 3:
-            rsi.append(40.0 + i * 7.5)   # 40 → 62.5 at peak1
+            rsi.append(40.0 + i * 7.5)  # 40 → 62.5 at peak1
         elif i <= 9:
             rsi.append(62.5 - (i - 3) * 2.5)  # 62.5 → 42.5 at peak2
         else:
@@ -81,7 +82,7 @@ def _bullish_rsi_setup() -> tuple:
     for i in range(n):
         phase = i % 10
         if phase <= 3:
-            c = 120.0 - phase * 2.0     # falling phase
+            c = 120.0 - phase * 2.0  # falling phase
         else:
             c = 120.0 - (10 - phase) * 2.0  # rising phase
         # Two troughs at index 4 (105.0) and 10 (98.0 = lower)
@@ -97,7 +98,7 @@ def _bullish_rsi_setup() -> tuple:
     rsi = []
     for i in range(n):
         if i <= 4:
-            rsi.append(60.0 - i * 6.0)     # 60 → 36 at trough1
+            rsi.append(60.0 - i * 6.0)  # 60 → 36 at trough1
         elif i <= 10:
             rsi.append(36.0 + (i - 4) * 3.0)  # 36 → 54 at trough2 (higher)
         else:
@@ -106,7 +107,6 @@ def _bullish_rsi_setup() -> tuple:
 
 
 class TestDivergenceEngine(unittest.TestCase):
-
     def test_initialization_defaults(self):
         engine = DivergenceEngine()
         self.assertEqual(engine.pivot_lookback, 2)

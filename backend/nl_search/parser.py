@@ -16,6 +16,7 @@ deterministic) and only escalates to AI when the rules return
 endpoint never sees ``None`` unless the orchestrator itself fell
 back to a ``match_all=True`` default.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,84 +46,106 @@ logger = logging.getLogger(__name__)
 # already set by an earlier rule.
 _RULES: list[tuple[re.Pattern, dict | Callable[[re.Match[str]], dict]]] = [
     # Rankings
-    (re.compile(r"\bstrongest\s+bullish\b"),
-     {"ranking": "strongest_bullish", "direction": "bullish"}),
-    (re.compile(r"\bstrongest\s+bearish\b"),
-     {"ranking": "strongest_bearish", "direction": "bearish"}),
-    (re.compile(r"\bstrongest\s+momentum\b"),
-     {"ranking": "strongest_momentum"}),
-    (re.compile(r"\bbest\s+mtf\b|\bbest\s+multi[- ]timeframe\b"),
-     {"ranking": "best_mtf_alignment"}),
-    (re.compile(r"\bbiggest\s+improvement\b"),
-     {"ranking": "biggest_improvement"}),
-    (re.compile(r"\bbiggest\s+deterioration\b"),
-     {"ranking": "biggest_deterioration"}),
-    (re.compile(r"\bstrongest\s+relative\b"),
-     {"ranking": "strongest_relative_strength"}),
-
+    (
+        re.compile(r"\bstrongest\s+bullish\b"),
+        {"ranking": "strongest_bullish", "direction": "bullish"},
+    ),
+    (
+        re.compile(r"\bstrongest\s+bearish\b"),
+        {"ranking": "strongest_bearish", "direction": "bearish"},
+    ),
+    (re.compile(r"\bstrongest\s+momentum\b"), {"ranking": "strongest_momentum"}),
+    (
+        re.compile(r"\bbest\s+mtf\b|\bbest\s+multi[- ]timeframe\b"),
+        {"ranking": "best_mtf_alignment"},
+    ),
+    (re.compile(r"\bbiggest\s+improvement\b"), {"ranking": "biggest_improvement"}),
+    (re.compile(r"\bbiggest\s+deterioration\b"), {"ranking": "biggest_deterioration"}),
+    (re.compile(r"\bstrongest\s+relative\b"), {"ranking": "strongest_relative_strength"}),
     # Direction + timeframe
-    (re.compile(r"\bbullish\s+daily\b|\bdaily\s+bullish\b"),
-     {"timeframe": "1d", "direction": "bullish"}),
-    (re.compile(r"\bbearish\s+daily\b|\bdaily\s+bearish\b"),
-     {"timeframe": "1d", "direction": "bearish"}),
-    (re.compile(r"\bbullish\s+(\d{1,2})\s*h(?:our)?\b"),
-     lambda m: {"timeframe": f"{m.group(1)}h", "direction": "bullish"}),
-    (re.compile(r"\bbullish\s+(\d{1,2})\s*m(?:in)?\b"),
-     lambda m: {"timeframe": f"{m.group(1)}m", "direction": "bullish"}),
-    (re.compile(r"\bbearish\s+(\d{1,2})\s*h(?:our)?\b"),
-     lambda m: {"timeframe": f"{m.group(1)}h", "direction": "bearish"}),
-    (re.compile(r"\bbearish\s+(\d{1,2})\s*m(?:in)?\b"),
-     lambda m: {"timeframe": f"{m.group(1)}m", "direction": "bearish"}),
-
+    (
+        re.compile(r"\bbullish\s+daily\b|\bdaily\s+bullish\b"),
+        {"timeframe": "1d", "direction": "bullish"},
+    ),
+    (
+        re.compile(r"\bbearish\s+daily\b|\bdaily\s+bearish\b"),
+        {"timeframe": "1d", "direction": "bearish"},
+    ),
+    (
+        re.compile(r"\bbullish\s+(\d{1,2})\s*h(?:our)?\b"),
+        lambda m: {"timeframe": f"{m.group(1)}h", "direction": "bullish"},
+    ),
+    (
+        re.compile(r"\bbullish\s+(\d{1,2})\s*m(?:in)?\b"),
+        lambda m: {"timeframe": f"{m.group(1)}m", "direction": "bullish"},
+    ),
+    (
+        re.compile(r"\bbearish\s+(\d{1,2})\s*h(?:our)?\b"),
+        lambda m: {"timeframe": f"{m.group(1)}h", "direction": "bearish"},
+    ),
+    (
+        re.compile(r"\bbearish\s+(\d{1,2})\s*m(?:in)?\b"),
+        lambda m: {"timeframe": f"{m.group(1)}m", "direction": "bearish"},
+    ),
     # Transitions
-    (re.compile(r"\b(just|recently)\s+(turned|transitioned|became)\s+bullish\b"),
-     {"transition": "just_became_bullish"}),
-    (re.compile(r"\b(just|recently)\s+(turned|transitioned|became)\s+bearish\b"),
-     {"transition": "just_became_bearish"}),
+    (
+        re.compile(r"\b(just|recently)\s+(turned|transitioned|became)\s+bullish\b"),
+        {"transition": "just_became_bullish"},
+    ),
+    (
+        re.compile(r"\b(just|recently)\s+(turned|transitioned|became)\s+bearish\b"),
+        {"transition": "just_became_bearish"},
+    ),
     # Standalone "uptrend yet bearish 1h" pattern
     (re.compile(r"\buptrend\b"), {"transition": "just_became_bullish"}),
     (re.compile(r"\bdowntrend\b"), {"transition": "just_became_bearish"}),
-
     # Outperformance & SPY (case-insensitive on the benchmark symbol)
-    (re.compile(r"\boutperform(?:ing|ers?)?\s+([a-z]{1,5})\b"),
-     lambda m: {
-         "outperforms": m.group(1).upper(),
-         "ranking": "strongest_relative_strength",
-     }),
+    (
+        re.compile(r"\boutperform(?:ing|ers?)?\s+([a-z]{1,5})\b"),
+        lambda m: {
+            "outperforms": m.group(1).upper(),
+            "ranking": "strongest_relative_strength",
+        },
+    ),
     # SPY: only match the *left* half of a while-split. The full "bullish
     # while SPY is bearish" pattern is split by _split_clauses first, so
     # the left half becomes just "bullish" which doesn't tell us anything
     # SPY-specific. Detect the SPY token on the right half in
     # _apply_conflict_rules. But for queries like "bullish while SPY is
     # bearish" that don't get split, this rule still fires.
-    (re.compile(r"\bbullish\s+vs\s+bearish\s+spy\b"),
-     {"spy_bearish_while_stock_bullish": True, "direction": "bullish"}),
+    (
+        re.compile(r"\bbullish\s+vs\s+bearish\s+spy\b"),
+        {"spy_bearish_while_stock_bullish": True, "direction": "bullish"},
+    ),
     # Also match when the right (conflict) half of a while-split mentions SPY.
     # _apply_rules detects SPY in the conflict clause and sets
     # spy_bearish_while_stock_bullish there.
-    (re.compile(r"\bbullish\s+while\s+.*spy\b"),
-     {"spy_bearish_while_stock_bullish": True, "direction": "bullish"}),
-
+    (
+        re.compile(r"\bbullish\s+while\s+.*spy\b"),
+        {"spy_bearish_while_stock_bullish": True, "direction": "bullish"},
+    ),
     # Strength / volume
-    (re.compile(r"\bstrong\s+trend\b|\btrending\s+strong\b|\bstrong\s+trends?\b"),
-     {"adx_strong_above": 25.0}),
-    (re.compile(r"\b(?:strong|high)\s+volume\b"),
-     {"signals": ["HIGH_VOLUME"]}),
-
+    (
+        re.compile(r"\bstrong\s+trend\b|\btrending\s+strong\b|\bstrong\s+trends?\b"),
+        {"adx_strong_above": 25.0},
+    ),
+    (re.compile(r"\b(?:strong|high)\s+volume\b"), {"signals": ["HIGH_VOLUME"]}),
     # Numeric thresholds
-    (re.compile(r"\btrend\s+(?:score\s+)?(?:over|above|>=?|min)\s*(\d{1,3})\b"),
-     lambda m: {"trend_min": float(m.group(1))}),
-    (re.compile(r"\btrend\s+(?:score\s+)?(?:under|below|<=?|max)\s*(\d{1,3})\b"),
-     lambda m: {"trend_max": float(m.group(1))}),
-    (re.compile(r"\brsi\s+oversold\b|\boversold\b"),
-     {"rsi_oversold_below": 30.0}),
-    (re.compile(r"\brsi\s+overbought\b|\boverbought\b"),
-     {"rsi_overbought_above": 70.0}),
-
+    (
+        re.compile(r"\btrend\s+(?:score\s+)?(?:over|above|>=?|min)\s*(\d{1,3})\b"),
+        lambda m: {"trend_min": float(m.group(1))},
+    ),
+    (
+        re.compile(r"\btrend\s+(?:score\s+)?(?:under|below|<=?|max)\s*(\d{1,3})\b"),
+        lambda m: {"trend_max": float(m.group(1))},
+    ),
+    (re.compile(r"\brsi\s+oversold\b|\boversold\b"), {"rsi_oversold_below": 30.0}),
+    (re.compile(r"\brsi\s+overbought\b|\boverbought\b"), {"rsi_overbought_above": 70.0}),
     # MTF agreement
-    (re.compile(r"\b(?:all|every)\s+timeframes?\s+(?:aligned|agree|bullish)\b"),
-     {"mtf_alignment": True, "min_bullish_timeframes": 3}),
-
+    (
+        re.compile(r"\b(?:all|every)\s+timeframes?\s+(?:aligned|agree|bullish)\b"),
+        {"mtf_alignment": True, "min_bullish_timeframes": 3},
+    ),
     # Bare direction words with no timeframe/ranking qualifier — catches
     # the very common "bullish stocks" / "bearish stocks" / "show me
     # bearish" phrasing that no rule above matches, without paying an
@@ -132,10 +155,8 @@ _RULES: list[tuple[re.Pattern, dict | Callable[[re.Match[str]], dict]]] = [
     # Also sets `ranking` to match direction (AI already does this;
     # otherwise NLFilters' schema default of "strongest_bullish" would
     # silently rank a bearish query wrong-way).
-    (re.compile(r"\bbullish\b"),
-     {"direction": "bullish", "ranking": "strongest_bullish"}),
-    (re.compile(r"\bbearish\b"),
-     {"direction": "bearish", "ranking": "strongest_bearish"}),
+    (re.compile(r"\bbullish\b"), {"direction": "bullish", "ranking": "strongest_bullish"}),
+    (re.compile(r"\bbearish\b"), {"direction": "bearish", "ranking": "strongest_bearish"}),
 ]
 
 
@@ -206,9 +227,16 @@ def _apply_conflict_rules(conflict_clause: str, primary_direction: str = "bullis
 
     # Map common timeframe words to Timeframe literals.
     TF_WORDS = {
-        "daily": "1d", "day": "1d", "1d": "1d",
-        "hourly": "1h", "1h": "1h", "hour": "1h", "hours": "1h",
-        "weekly": "1w", "week": "1w", "1w": "1w",
+        "daily": "1d",
+        "day": "1d",
+        "1d": "1d",
+        "hourly": "1h",
+        "1h": "1h",
+        "hour": "1h",
+        "hours": "1h",
+        "weekly": "1w",
+        "week": "1w",
+        "1w": "1w",
     }
 
     # If the conflict clause starts with a direction word (e.g. "bearish 5m"),
@@ -243,7 +271,8 @@ def _apply_conflict_rules(conflict_clause: str, primary_direction: str = "bullis
 
 
 def parse_query_rule_based(
-    query: str, *,
+    query: str,
+    *,
     base: dict | None = None,
 ) -> tuple[NLFilters, dict | None] | None:
     """Return ``(NLFilters, extras)`` if at least one rule fired.
@@ -269,7 +298,7 @@ def parse_query_rule_based(
 
     extras: dict | None = None
     if conflict_clause is not None:
-        primary_direction = (f.direction if f.direction in ("bullish", "bearish") else "bullish")
+        primary_direction = f.direction if f.direction in ("bullish", "bearish") else "bullish"
         conflict_dict = _apply_conflict_rules(conflict_clause, primary_direction=primary_direction)
         if conflict_dict:
             extras = {"conflict": conflict_dict}
@@ -337,11 +366,13 @@ def parse_query_with_ai(query: str) -> NLFilters | None:
         # AI_TEMPERATURE like every other AI call in the app, rather
         # than special-casing this one as a "must be deterministic"
         # task.
-        resp = run_sync(ai_manager.complete(
-            prompt=build_translation_prompt(query),
-            system=NL_TRANSLATION_PROMPT,
-            max_tokens=400,
-        ))
+        resp = run_sync(
+            ai_manager.complete(
+                prompt=build_translation_prompt(query),
+                system=NL_TRANSLATION_PROMPT,
+                max_tokens=400,
+            )
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("AI translation call raised: %s", e)
         return None

@@ -4,6 +4,7 @@ Redis-based caching layer for market data.
 Kept separate from the manager so it can be tested independently and so
 the cache lifecycle (initialisation, pub/sub listener startup) is isolated.
 """
+
 import json
 import logging
 import threading
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
+
 
 def _bar_to_json(bar: Bar) -> str:
     """Serialize a single ``Bar`` to a JSON string.
@@ -62,15 +64,15 @@ def _quote_to_json(quote: Quote) -> str:
 # 1m cache key (we still cache 1m bars for the same window so the
 # resample path is faster on the next read).
 _BAR_CACHE_TTL: dict[str, int] = {
-    "1m":  60,       # 1m: every minute is a new bar
-    "5m":  120,      # 5m: refresh every 2 minutes
+    "1m": 60,  # 1m: every minute is a new bar
+    "5m": 120,  # 5m: refresh every 2 minutes
     "15m": 180,
     "30m": 240,
-    "1h":  300,
-    "4h":  360,      # 4h: refresh every 6 minutes
-    "1d":  600,      # 10 minutes — plan spec
-    "5d":  1200,     # 20 minutes
-    "1wk": 3600,     # 1 hour   — plan spec
+    "1h": 300,
+    "4h": 360,  # 4h: refresh every 6 minutes
+    "1d": 600,  # 10 minutes — plan spec
+    "5d": 1200,  # 20 minutes
+    "1wk": 3600,  # 1 hour   — plan spec
     "1mo": 3600,
 }
 
@@ -178,8 +180,7 @@ class RedisCache:
             self._client.setex(key, effective_ttl, data)
             self._enforce_size_limit("bars")
             logger.debug(
-                f"Cached {len(bars)} bars for {symbol}:{timeframe} "
-                f"(TTL={effective_ttl}s) in Redis"
+                f"Cached {len(bars)} bars for {symbol}:{timeframe} (TTL={effective_ttl}s) in Redis"
             )
             return True
         except Exception as e:
@@ -278,9 +279,7 @@ class RedisCache:
                 keys: list[str] = []
                 cursor = 0
                 while True:
-                    cursor, batch = self._client.scan(
-                        cursor=cursor, match=pattern, count=100
-                    )
+                    cursor, batch = self._client.scan(cursor=cursor, match=pattern, count=100)
                     keys.extend(batch)
                     if cursor == 0:
                         break
@@ -288,9 +287,7 @@ class RedisCache:
                     self._client.delete(*keys)
                     total_deleted += len(keys)
             if total_deleted:
-                logger.debug(
-                    f"Invalidated {total_deleted} cached bar keys for {symbol}"
-                )
+                logger.debug(f"Invalidated {total_deleted} cached bar keys for {symbol}")
             return total_deleted
         except Exception as e:
             logger.warning(f"Failed to invalidate bar cache for {symbol}: {e}")

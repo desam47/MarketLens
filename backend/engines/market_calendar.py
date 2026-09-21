@@ -13,6 +13,7 @@ those are not installed in this project and would add a heavy dependency for a
 list of 30 dates. The exchange rules themselves (weekend + holiday) are simple
 and fully covered here.
 """
+
 import logging
 from datetime import date, datetime, time
 from enum import StrEnum
@@ -30,10 +31,10 @@ EASTERN = ZoneInfo("America/New_York")
 class SessionType(StrEnum):
     """Equity session classification for a given moment in US/Eastern time."""
 
-    PREMARKET = "premarket"      # 04:00–09:30 ET
-    REGULAR = "regular"          # 09:30–16:00 ET
+    PREMARKET = "premarket"  # 04:00–09:30 ET
+    REGULAR = "regular"  # 09:30–16:00 ET
     AFTER_HOURS = "after_hours"  # 16:00–20:00 ET
-    CLOSED = "closed"            # weekend, holiday, or outside 04:00–20:00 ET
+    CLOSED = "closed"  # weekend, holiday, or outside 04:00–20:00 ET
 
 
 # Hardcoded NYSE holidays for 2023 through 2027.
@@ -41,64 +42,66 @@ class SessionType(StrEnum):
 # Includes observed-on-Monday / observed-on-Friday rules for weekend holidays. 2023 covers
 # the stored daily history (which starts 2023-09-18); before it was added, Thanksgiving and
 # Christmas 2023 read as unfillable "missing bars" on every backfill's gap check.
-_NYSE_HOLIDAYS: frozenset[date] = frozenset({
-    # 2023
-    date(2023, 1, 2),    # New Year's Day (observed — 1/1 is Sunday)
-    date(2023, 1, 16),   # Martin Luther King Jr. Day
-    date(2023, 2, 20),   # Presidents' Day
-    date(2023, 4, 7),    # Good Friday
-    date(2023, 5, 29),   # Memorial Day
-    date(2023, 6, 19),   # Juneteenth
-    date(2023, 7, 4),    # Independence Day
-    date(2023, 9, 4),    # Labor Day
-    date(2023, 11, 23),  # Thanksgiving
-    date(2023, 12, 25),  # Christmas
-    # 2024
-    date(2024, 1, 1),    # New Year's Day (Mon)
-    date(2024, 1, 15),   # Martin Luther King Jr. Day
-    date(2024, 2, 19),   # Presidents' Day
-    date(2024, 3, 29),   # Good Friday
-    date(2024, 5, 27),   # Memorial Day
-    date(2024, 6, 19),   # Juneteenth
-    date(2024, 7, 4),    # Independence Day
-    date(2024, 9, 2),    # Labor Day
-    date(2024, 11, 28),  # Thanksgiving
-    date(2024, 12, 25),  # Christmas
-    # 2025
-    date(2025, 1, 1),    # New Year's Day
-    date(2025, 1, 9),    # National Day of Mourning (President Carter) — special full closure
-    date(2025, 1, 20),   # MLK Day
-    date(2025, 2, 17),   # Presidents' Day
-    date(2025, 4, 18),   # Good Friday
-    date(2025, 5, 26),   # Memorial Day
-    date(2025, 6, 19),   # Juneteenth
-    date(2025, 7, 4),    # Independence Day
-    date(2025, 9, 1),    # Labor Day
-    date(2025, 11, 27),  # Thanksgiving
-    date(2025, 12, 25),  # Christmas
-    # 2026
-    date(2026, 1, 1),    # New Year's Day
-    date(2026, 1, 19),   # MLK Day
-    date(2026, 2, 16),   # Presidents' Day
-    date(2026, 4, 3),    # Good Friday
-    date(2026, 5, 25),   # Memorial Day
-    date(2026, 6, 19),   # Juneteenth
-    date(2026, 7, 3),    # Independence Day (observed — 7/4 is Saturday)
-    date(2026, 9, 7),    # Labor Day
-    date(2026, 11, 26),  # Thanksgiving
-    date(2026, 12, 25),  # Christmas
-    # 2027
-    date(2027, 1, 1),    # New Year's Day
-    date(2027, 1, 18),   # MLK Day
-    date(2027, 2, 15),   # Presidents' Day
-    date(2027, 3, 26),   # Good Friday
-    date(2027, 5, 31),   # Memorial Day
-    date(2027, 6, 18),   # Juneteenth (observed — 6/19 is Saturday)
-    date(2027, 7, 5),    # Independence Day (observed — 7/4 is Sunday)
-    date(2027, 9, 6),    # Labor Day
-    date(2027, 11, 25),  # Thanksgiving
-    date(2027, 12, 24),  # Christmas (observed — 12/25 is Saturday)
-})
+_NYSE_HOLIDAYS: frozenset[date] = frozenset(
+    {
+        # 2023
+        date(2023, 1, 2),  # New Year's Day (observed — 1/1 is Sunday)
+        date(2023, 1, 16),  # Martin Luther King Jr. Day
+        date(2023, 2, 20),  # Presidents' Day
+        date(2023, 4, 7),  # Good Friday
+        date(2023, 5, 29),  # Memorial Day
+        date(2023, 6, 19),  # Juneteenth
+        date(2023, 7, 4),  # Independence Day
+        date(2023, 9, 4),  # Labor Day
+        date(2023, 11, 23),  # Thanksgiving
+        date(2023, 12, 25),  # Christmas
+        # 2024
+        date(2024, 1, 1),  # New Year's Day (Mon)
+        date(2024, 1, 15),  # Martin Luther King Jr. Day
+        date(2024, 2, 19),  # Presidents' Day
+        date(2024, 3, 29),  # Good Friday
+        date(2024, 5, 27),  # Memorial Day
+        date(2024, 6, 19),  # Juneteenth
+        date(2024, 7, 4),  # Independence Day
+        date(2024, 9, 2),  # Labor Day
+        date(2024, 11, 28),  # Thanksgiving
+        date(2024, 12, 25),  # Christmas
+        # 2025
+        date(2025, 1, 1),  # New Year's Day
+        date(2025, 1, 9),  # National Day of Mourning (President Carter) — special full closure
+        date(2025, 1, 20),  # MLK Day
+        date(2025, 2, 17),  # Presidents' Day
+        date(2025, 4, 18),  # Good Friday
+        date(2025, 5, 26),  # Memorial Day
+        date(2025, 6, 19),  # Juneteenth
+        date(2025, 7, 4),  # Independence Day
+        date(2025, 9, 1),  # Labor Day
+        date(2025, 11, 27),  # Thanksgiving
+        date(2025, 12, 25),  # Christmas
+        # 2026
+        date(2026, 1, 1),  # New Year's Day
+        date(2026, 1, 19),  # MLK Day
+        date(2026, 2, 16),  # Presidents' Day
+        date(2026, 4, 3),  # Good Friday
+        date(2026, 5, 25),  # Memorial Day
+        date(2026, 6, 19),  # Juneteenth
+        date(2026, 7, 3),  # Independence Day (observed — 7/4 is Saturday)
+        date(2026, 9, 7),  # Labor Day
+        date(2026, 11, 26),  # Thanksgiving
+        date(2026, 12, 25),  # Christmas
+        # 2027
+        date(2027, 1, 1),  # New Year's Day
+        date(2027, 1, 18),  # MLK Day
+        date(2027, 2, 15),  # Presidents' Day
+        date(2027, 3, 26),  # Good Friday
+        date(2027, 5, 31),  # Memorial Day
+        date(2027, 6, 18),  # Juneteenth (observed — 6/19 is Saturday)
+        date(2027, 7, 5),  # Independence Day (observed — 7/4 is Sunday)
+        date(2027, 9, 6),  # Labor Day
+        date(2027, 11, 25),  # Thanksgiving
+        date(2027, 12, 24),  # Christmas (observed — 12/25 is Saturday)
+    }
+)
 
 # Years the table above is complete for.
 _HOLIDAY_YEARS: range = range(2023, 2028)
@@ -116,7 +119,9 @@ def _warn_if_holiday_table_is_stale(today: date | None = None) -> bool:
     logger.warning(
         "NYSE holiday table covers %d-%d but it is %d: holidays are being treated as trading "
         "days. Extend _NYSE_HOLIDAYS in backend/engines/market_calendar.py.",
-        _HOLIDAY_YEARS.start, _HOLIDAY_YEARS.stop - 1, today.year,
+        _HOLIDAY_YEARS.start,
+        _HOLIDAY_YEARS.stop - 1,
+        today.year,
     )
     return True
 

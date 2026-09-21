@@ -1,6 +1,7 @@
 """
 Alert and AlertTrigger SQLAlchemy models.
 """
+
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
@@ -14,6 +15,7 @@ class Alert(Base):
     Evaluated by AlertsEngine when fresh scanner results or live quotes arrive.
     The ``condition_type`` field drives which evaluator branch fires.
     """
+
     __tablename__ = "alerts"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -42,6 +44,7 @@ class AlertTrigger(Base):
     ``/api/alerts/active`` endpoint reads rows younger than 24 hours
     so dashboards can surface recent events.
     """
+
     __tablename__ = "alert_triggers"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -78,7 +81,9 @@ class AlertDelivery(Base):
     __tablename__ = "alert_deliveries"
 
     id = Column(Integer, primary_key=True, index=True)
-    trigger_id = Column(Integer, ForeignKey("alert_triggers.id", ondelete="CASCADE"), nullable=False, index=True)
+    trigger_id = Column(
+        Integer, ForeignKey("alert_triggers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     idempotency_key = Column(String(120), nullable=True, unique=True, index=True)
     channel = Column(String(20), nullable=False)
     status = Column(String(20), nullable=False, default="pending", index=True)

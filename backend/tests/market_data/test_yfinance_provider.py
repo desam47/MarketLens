@@ -1,6 +1,7 @@
 """
 Tests for Yahoo Finance market data provider
 """
+
 import json
 import os
 import sys
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.market_data.providers.yfinance_provider import YFinanceProvider
 from backend.models.market_data import (
@@ -24,11 +25,10 @@ from backend.models.market_data import (
 
 
 class TestYFinanceProvider(unittest.TestCase):
-
     def setUp(self):
         self.provider = YFinanceProvider()
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_quote_success(self, mock_fetch_chart):
         """Test successful quote retrieval"""
         # The provider calls _fetch_chart(...) then reads meta/regularMarketPrice
@@ -57,7 +57,7 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertEqual(quote.data_status, DataStatus.DELAYED)
         self.assertIsInstance(quote.timestamp, datetime)
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_quote_failure(self, mock_fetch_chart):
         """Test quote retrieval failure handling"""
         # Mock _fetch_chart to raise so get_quote propagates the exception
@@ -67,24 +67,26 @@ class TestYFinanceProvider(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.provider.get_quote("INVALID")
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_historical_bars_success(self, mock_fetch_chart):
         """Test successful historical bars retrieval"""
         import pandas as pd
 
-        dates = pd.date_range(end=datetime.now(), periods=5, freq='1D')
+        dates = pd.date_range(end=datetime.now(), periods=5, freq="1D")
         timestamps = [int(d.timestamp()) for d in dates]
         mock_fetch_chart.return_value = {
             "timestamp": timestamps,
             "indicators": {
-                "quote": [{
-                    "open":  [100.0, 101.0, 102.0, 103.0, 104.0],
-                    "high":  [105.0, 106.0, 107.0, 108.0, 109.0],
-                    "low":   [95.0, 96.0, 97.0, 98.0, 99.0],
-                    "close": [103.0, 104.0, 105.0, 106.0, 107.0],
-                    "volume": [1000, 1100, 1200, 1300, 1400],
-                }]
-            }
+                "quote": [
+                    {
+                        "open": [100.0, 101.0, 102.0, 103.0, 104.0],
+                        "high": [105.0, 106.0, 107.0, 108.0, 109.0],
+                        "low": [95.0, 96.0, 97.0, 98.0, 99.0],
+                        "close": [103.0, 104.0, 105.0, 106.0, 107.0],
+                        "volume": [1000, 1100, 1200, 1300, 1400],
+                    }
+                ]
+            },
         }
 
         # Test with explicit timeframe + range
@@ -104,35 +106,34 @@ class TestYFinanceProvider(unittest.TestCase):
         for i in range(len(bars) - 1):
             self.assertLess(bars[i].timestamp, bars[i + 1].timestamp)
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_historical_bars_empty(self, mock_fetch_chart):
         """Test that empty chart data returns an empty list without error"""
-        mock_fetch_chart.return_value = {
-            "timestamp": [],
-            "indicators": {"quote": [{}]}
-        }
+        mock_fetch_chart.return_value = {"timestamp": [], "indicators": {"quote": [{}]}}
 
         bars = self.provider.get_historical_bars("NOVALID", timeframe="1d", range_="5d")
         self.assertEqual(bars, [])
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_historical_bars_with_null_closes(self, mock_fetch_chart):
         """Null closes in chart data should be skipped rather than cause errors"""
         import pandas as pd
 
-        dates = pd.date_range(end=datetime.now(), periods=3, freq='1D')
+        dates = pd.date_range(end=datetime.now(), periods=3, freq="1D")
         timestamps = [int(d.timestamp()) for d in dates]
         mock_fetch_chart.return_value = {
             "timestamp": timestamps,
             "indicators": {
-                "quote": [{
-                    "open":  [100.0, None, 102.0],
-                    "high":  [105.0, 106.0, 107.0],
-                    "low":   [95.0, 96.0, 97.0],
-                    "close": [103.0, None, 105.0],  # middle bar has null close
-                    "volume": [1000, 1100, 1200],
-                }]
-            }
+                "quote": [
+                    {
+                        "open": [100.0, None, 102.0],
+                        "high": [105.0, 106.0, 107.0],
+                        "low": [95.0, 96.0, 97.0],
+                        "close": [103.0, None, 105.0],  # middle bar has null close
+                        "volume": [1000, 1100, 1200],
+                    }
+                ]
+            },
         }
 
         bars = self.provider.get_historical_bars("AAPL", timeframe="1d", range_="3d")
@@ -141,8 +142,10 @@ class TestYFinanceProvider(unittest.TestCase):
         for bar in bars:
             self.assertIsNotNone(bar.close)
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
-    def test_get_historical_bars_drops_boundary_aligned_flat_zero_volume_last_row(self, mock_fetch_chart):
+    @patch.object(YFinanceProvider, "_fetch_chart")
+    def test_get_historical_bars_drops_boundary_aligned_flat_zero_volume_last_row(
+        self, mock_fetch_chart
+    ):
         """A live-snapshot trailing row that happens to land exactly on a
         clean interval boundary (seconds == 0) must still be dropped.
 
@@ -158,7 +161,7 @@ class TestYFinanceProvider(unittest.TestCase):
         """
         import pandas as pd
 
-        dates = pd.date_range(end=datetime.now(), periods=3, freq='h')
+        dates = pd.date_range(end=datetime.now(), periods=3, freq="h")
         # Force the LAST timestamp onto an exact minute boundary (seconds=0)
         # — the whole point of this test is that the seconds-based check
         # alone would NOT catch this row.
@@ -166,14 +169,16 @@ class TestYFinanceProvider(unittest.TestCase):
         mock_fetch_chart.return_value = {
             "timestamp": timestamps,
             "indicators": {
-                "quote": [{
-                    "open":   [100.0, 101.0, 5.05],
-                    "high":   [105.0, 106.0, 5.05],
-                    "low":    [95.0, 96.0, 5.05],
-                    "close":  [103.0, 104.0, 5.05],  # last row: flat OHLC
-                    "volume": [1000, 1100, 0],        # last row: zero volume
-                }]
-            }
+                "quote": [
+                    {
+                        "open": [100.0, 101.0, 5.05],
+                        "high": [105.0, 106.0, 5.05],
+                        "low": [95.0, 96.0, 5.05],
+                        "close": [103.0, 104.0, 5.05],  # last row: flat OHLC
+                        "volume": [1000, 1100, 0],  # last row: zero volume
+                    }
+                ]
+            },
         }
 
         bars = self.provider.get_historical_bars("DVLT", timeframe="1h", range_="1d")
@@ -187,50 +192,54 @@ class TestYFinanceProvider(unittest.TestCase):
         zero-volume together indicate a synthetic snapshot."""
         import pandas as pd
 
-        dates = pd.date_range(end=datetime.now(), periods=2, freq='h')
+        dates = pd.date_range(end=datetime.now(), periods=2, freq="h")
         timestamps = [int(d.timestamp()) - (int(d.timestamp()) % 60) for d in dates]
-        with patch.object(YFinanceProvider, '_fetch_chart') as mock_fetch_chart:
+        with patch.object(YFinanceProvider, "_fetch_chart") as mock_fetch_chart:
             mock_fetch_chart.return_value = {
                 "timestamp": timestamps,
                 "indicators": {
-                    "quote": [{
-                        "open":   [100.0, 5.05],
-                        "high":   [105.0, 5.05],
-                        "low":    [95.0, 5.05],
-                        "close":  [103.0, 5.05],   # last row: flat OHLC...
-                        "volume": [1000, 500],      # ...but genuine volume
-                    }]
-                }
+                    "quote": [
+                        {
+                            "open": [100.0, 5.05],
+                            "high": [105.0, 5.05],
+                            "low": [95.0, 5.05],
+                            "close": [103.0, 5.05],  # last row: flat OHLC...
+                            "volume": [1000, 500],  # ...but genuine volume
+                        }
+                    ]
+                },
             }
             bars = self.provider.get_historical_bars("DVLT", timeframe="1h", range_="1d")
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[-1].close, 5.05)
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_historical_bars_unknown_timeframe_raises(self, mock_fetch_chart):
         """An unsupported timeframe string should raise ValueError from _resolve_interval"""
         mock_fetch_chart.return_value = {"timestamp": [], "indicators": {"quote": [{}]}}
         with self.assertRaises(ValueError):
             self.provider.get_historical_bars("AAPL", timeframe="INVALID_TF", range_="3mo")
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_historical_bars_passes_resolved_interval(self, mock_fetch_chart):
         """Verify timeframe→interval resolution reaches the network call."""
         import pandas as pd
 
-        dates = pd.date_range(end=datetime.now(), periods=3, freq='1D')
+        dates = pd.date_range(end=datetime.now(), periods=3, freq="1D")
         timestamps = [int(d.timestamp()) for d in dates]
         mock_fetch_chart.return_value = {
             "timestamp": timestamps,
             "indicators": {
-                "quote": [{
-                    "open":  [100.0, 101.0, 102.0],
-                    "high":  [105.0, 106.0, 107.0],
-                    "low":   [95.0, 96.0, 97.0],
-                    "close": [103.0, 104.0, 105.0],
-                    "volume": [1000, 1100, 1200],
-                }]
-            }
+                "quote": [
+                    {
+                        "open": [100.0, 101.0, 102.0],
+                        "high": [105.0, 106.0, 107.0],
+                        "low": [95.0, 96.0, 97.0],
+                        "close": [103.0, 104.0, 105.0],
+                        "volume": [1000, 1100, 1200],
+                    }
+                ]
+            },
         }
 
         # "1d" → "1d" (identity), "3mo" → "3mo" (identity)
@@ -241,26 +250,28 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertEqual(kwargs.get("range_"), "3mo")
         self.assertEqual(args[0], "AAPL")
 
-    @patch.object(YFinanceProvider, '_fetch_chart')
+    @patch.object(YFinanceProvider, "_fetch_chart")
     def test_get_latest_bar_success(self, mock_fetch_chart):
         """Test successful latest bar retrieval"""
         # Mock _fetch_chart to return controlled chart data
         import pandas as pd
 
         # Build a deterministic chart response matching what _rows() expects
-        dates = pd.date_range(end=datetime.now(), periods=5, freq='1D')
+        dates = pd.date_range(end=datetime.now(), periods=5, freq="1D")
         timestamps = [int(d.timestamp()) for d in dates]
         mock_fetch_chart.return_value = {
             "timestamp": timestamps,
             "indicators": {
-                "quote": [{
-                    "open":  [100, 101, 102, 103, 104],
-                    "high":  [105, 106, 107, 108, 109],
-                    "low":   [95, 96, 97, 98, 99],
-                    "close": [103, 104, 105, 106, 107],
-                    "volume": [1000, 1100, 1200, 1300, 1400],
-                }]
-            }
+                "quote": [
+                    {
+                        "open": [100, 101, 102, 103, 104],
+                        "high": [105, 106, 107, 108, 109],
+                        "low": [95, 96, 97, 98, 99],
+                        "close": [103, 104, 105, 106, 107],
+                        "volume": [1000, 1100, 1200, 1300, 1400],
+                    }
+                ]
+            },
         }
 
         # Test
@@ -291,20 +302,21 @@ class TestYFinanceProvider(unittest.TestCase):
 
     def test_is_available(self):
         """Test provider availability check"""
-        with patch.object(self.provider, 'get_quote') as mock_get_quote:
+        with patch.object(self.provider, "get_quote") as mock_get_quote:
             # Test when provider is healthy
             mock_get_quote.return_value = Quote(
                 symbol="AAPL",
                 price=150.0,
                 timestamp=datetime.now(),
                 provider="yahoo_finance",
-                data_status=DataStatus.DELAYED
+                data_status=DataStatus.DELAYED,
             )
             self.assertTrue(self.provider.is_available())
 
             # Test when provider fails
             mock_get_quote.side_effect = Exception("API error")
             self.assertFalse(self.provider.is_available())
+
 
 # ---------------------------------------------------------------------------
 # Batch quotes: Yahoo's v7 endpoint needs a session cookie + crumb
@@ -313,14 +325,27 @@ _MOD = "backend.market_data.providers.yfinance_provider"
 
 
 def _resp(status=200, body=None, text=None):
-    return SimpleNamespace(status_code=status, text=text if text is not None else json.dumps(body or {}))
+    return SimpleNamespace(
+        status_code=status, text=text if text is not None else json.dumps(body or {})
+    )
 
 
 def _quote_body(*symbols):
-    return {"quoteResponse": {"result": [
-        {"symbol": s, "regularMarketPrice": 100.0 + i, "regularMarketTime": 1789761600,
-         "bid": 99.0, "ask": 101.0, "regularMarketVolume": 1000}
-        for i, s in enumerate(symbols)]}}
+    return {
+        "quoteResponse": {
+            "result": [
+                {
+                    "symbol": s,
+                    "regularMarketPrice": 100.0 + i,
+                    "regularMarketTime": 1789761600,
+                    "bid": 99.0,
+                    "ask": 101.0,
+                    "regularMarketVolume": 1000,
+                }
+                for i, s in enumerate(symbols)
+            ]
+        }
+    }
 
 
 class TestBatchQuotesAuth(unittest.TestCase):
@@ -331,7 +356,7 @@ class TestBatchQuotesAuth(unittest.TestCase):
         self.provider = YFinanceProvider()
         self.crumb_fetches = 0
         self.quote_calls = []
-        self.quote_status = [200]           # popped per quote call; the last one repeats
+        self.quote_status = [200]  # popped per quote call; the last one repeats
         self.crumb_response = lambda: _resp(200, text="crumb-123")
         patcher = patch(f"{_MOD}.curl_requests")
         self.cr = patcher.start()
@@ -345,7 +370,8 @@ class TestBatchQuotesAuth(unittest.TestCase):
                 if "getcrumb" in url:
                     self.crumb_fetches += 1
                     return self.crumb_response()
-                return _resp(404, text="")   # fc.yahoo.com
+                return _resp(404, text="")  # fc.yahoo.com
+
             session.get.side_effect = sget
             return session
 
@@ -353,10 +379,13 @@ class TestBatchQuotesAuth(unittest.TestCase):
 
         def qget(url, **k):
             self.quote_calls.append((url, k))
-            status = self.quote_status.pop(0) if len(self.quote_status) > 1 else self.quote_status[0]
+            status = (
+                self.quote_status.pop(0) if len(self.quote_status) > 1 else self.quote_status[0]
+            )
             if status != 200:
                 return _resp(status, text='{"finance":{"error":{"code":"Unauthorized"}}}')
             return _resp(200, _quote_body(*k["params"]["symbols"].split(",")))
+
         self.cr.get.side_effect = qget
 
     def test_sends_the_crumb_and_cookie_and_parses_the_quotes(self):
@@ -377,7 +406,7 @@ class TestBatchQuotesAuth(unittest.TestCase):
 
     def test_crumb_is_refetched_after_its_ttl(self):
         self.provider.get_batch_quotes(["AAPL"])
-        self.provider._crumb_at -= 3601          # an hour and a second ago
+        self.provider._crumb_at -= 3601  # an hour and a second ago
         self.provider.get_batch_quotes(["AAPL"])
         self.assertEqual(self.crumb_fetches, 2)
 
@@ -393,12 +422,14 @@ class TestBatchQuotesAuth(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self.provider.get_batch_quotes(["AAPL"])
         self.assertIn("HTTP 401", str(ctx.exception))
-        self.assertEqual(len(self.quote_calls), 2)   # not an endless loop
+        self.assertEqual(len(self.quote_calls), 2)  # not an endless loop
 
     def test_a_failed_crumb_fetch_raises_a_clear_error(self):
-        for bad in (lambda: _resp(429, text="Too Many Requests"),
-                    lambda: _resp(200, text="<html>consent</html>"),
-                    lambda: _resp(200, text="")):
+        for bad in (
+            lambda: _resp(429, text="Too Many Requests"),
+            lambda: _resp(200, text="<html>consent</html>"),
+            lambda: _resp(200, text=""),
+        ):
             self.provider._crumb = None
             self.crumb_response = bad
             with self.assertRaises(RuntimeError) as ctx:
@@ -436,5 +467,5 @@ class TestBatchQuotesAuth(unittest.TestCase):
         self.assertEqual(self.crumb_fetches, 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ tests drive the layers as raw ASGI apps and pin the externally visible behaviour
 the rewrite is provably equivalent: apart from the structural check at the bottom
 they hold for the old implementation too.
 """
+
 import asyncio
 import hashlib
 import unittest
@@ -28,7 +29,10 @@ from backend.observability.logging_enhanced import get_correlation_id
 # ----------------------------------------------------------------- harness
 async def call(app, *, kind="http", method="GET", path="/x", headers=None, client=("1.2.3.4", 1)):
     scope = {
-        "type": kind, "method": method, "path": path, "query_string": b"",
+        "type": kind,
+        "method": method,
+        "path": path,
+        "query_string": b"",
         "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
     }
     if client is not None:
@@ -62,9 +66,15 @@ def make_app(extra_headers=(), status=200, body=b"ok", record=None):
     async def app(scope, receive, send):
         if record is not None:
             record(scope)
-        await send({"type": "http.response.start", "status": status,
-                    "headers": [(b"content-type", b"text/plain"), *extra_headers]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"text/plain"), *extra_headers],
+            }
+        )
         await send({"type": "http.response.body", "body": body})
+
     return app
 
 
@@ -86,8 +96,10 @@ class TestRequestCounter(unittest.IsolatedAsyncioTestCase):
 
     async def test_websocket_and_lifespan_scopes_are_not_counted(self):
         seen = []
+
         async def downstream(scope, receive, send):
             seen.append(scope["type"])
+
         with patch("backend.api.system.router.record_http_request") as rec:
             app = RequestCounterMiddleware(downstream)
             await call(app, kind="websocket")
@@ -117,7 +129,8 @@ class TestSetCorrelationIdClears(unittest.TestCase):
             self.assertIsNone(get_correlation_id())
 
         import contextvars
-        contextvars.copy_context().run(scenario)   # don't touch the test runner's own context
+
+        contextvars.copy_context().run(scenario)  # don't touch the test runner's own context
 
 
 class TestCorrelationId(unittest.IsolatedAsyncioTestCase):
@@ -152,19 +165,23 @@ class TestCorrelationId(unittest.IsolatedAsyncioTestCase):
 
     async def test_replaces_a_same_named_header_set_downstream_instead_of_duplicating(self):
         app = CorrelationIdMiddleware(
-            make_app(extra_headers=[(b"x-correlation-id", b"downstream")]), generator=lambda: "mine")
+            make_app(extra_headers=[(b"x-correlation-id", b"downstream")]), generator=lambda: "mine"
+        )
         _, sent = await call(app)
         ids = [v for k, v in raw_hdrs(sent) if k == "x-correlation-id"]
         self.assertEqual(ids, ["mine"])
 
     async def test_update_request_header_false_adds_no_header(self):
-        app = CorrelationIdMiddleware(make_app(), update_request_header=False, generator=lambda: "q")
+        app = CorrelationIdMiddleware(
+            make_app(), update_request_header=False, generator=lambda: "q"
+        )
         _, sent = await call(app)
         self.assertNotIn("x-correlation-id", hdrs(sent))
 
     async def test_websocket_scope_is_untouched(self):
         async def downstream(scope, receive, send):
             self.assertNotIn("state", scope)
+
         await call(CorrelationIdMiddleware(downstream), kind="websocket")
 
     async def test_concurrent_requests_keep_their_own_ids(self):
@@ -172,28 +189,41 @@ class TestCorrelationId(unittest.IsolatedAsyncioTestCase):
 
         async def downstream(scope, receive, send):
             mine = get_correlation_id()
-            await asyncio.sleep(0.01)                     # let the others interleave
+            await asyncio.sleep(0.01)  # let the others interleave
             seen[mine] = get_correlation_id()
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b""})
 
         app = CorrelationIdMiddleware(downstream)
-        await asyncio.gather(*[call(app, headers={"x-correlation-id": f"id-{i}"}) for i in range(25)])
+        await asyncio.gather(
+            *[call(app, headers={"x-correlation-id": f"id-{i}"}) for i in range(25)]
+        )
         self.assertEqual(seen, {f"id-{i}": f"id-{i}" for i in range(25)})
 
 
 # ----------------------------------------------------------- security headers
 def _sec_settings(**over):
-    base = dict(hsts_enabled=False, hsts_max_age_seconds=100, hsts_include_subdomains=False,
-                hsts_preload=False, csp_enabled=False, csp_value="", x_frame_options="DENY",
-                x_content_type_options=True, referrer_policy="no-referrer", permissions_policy="")
+    base = dict(
+        hsts_enabled=False,
+        hsts_max_age_seconds=100,
+        hsts_include_subdomains=False,
+        hsts_preload=False,
+        csp_enabled=False,
+        csp_value="",
+        x_frame_options="DENY",
+        x_content_type_options=True,
+        referrer_policy="no-referrer",
+        permissions_policy="",
+    )
     base.update(over)
     return SimpleNamespace(**base)
 
 
 class TestSecurityHeaders(unittest.IsolatedAsyncioTestCase):
     async def test_adds_the_baseline_and_leaves_status_and_body_alone(self):
-        app = SecurityHeadersMiddleware(make_app(status=201, body=b"made"), settings_obj=_sec_settings())
+        app = SecurityHeadersMiddleware(
+            make_app(status=201, body=b"made"), settings_obj=_sec_settings()
+        )
         _, sent = await call(app)
         h = hdrs(sent)
         self.assertEqual(start(sent)["status"], 201)
@@ -206,7 +236,9 @@ class TestSecurityHeaders(unittest.IsolatedAsyncioTestCase):
 
     async def test_never_clobbers_or_duplicates_a_header_the_app_already_set(self):
         app = SecurityHeadersMiddleware(
-            make_app(extra_headers=[(b"x-frame-options", b"SAMEORIGIN")]), settings_obj=_sec_settings())
+            make_app(extra_headers=[(b"x-frame-options", b"SAMEORIGIN")]),
+            settings_obj=_sec_settings(),
+        )
         _, sent = await call(app)
         frames = [v for k, v in raw_hdrs(sent) if k == "x-frame-options"]
         self.assertEqual(frames, ["SAMEORIGIN"])
@@ -221,11 +253,20 @@ class TestSecurityHeaders(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hdrs(second)["x-frame-options"], "SAMEORIGIN")
 
     async def test_optional_headers_follow_their_flags(self):
-        on = SecurityHeadersMiddleware(make_app(), settings_obj=_sec_settings(
-            hsts_enabled=True, hsts_include_subdomains=True, hsts_preload=True,
-            csp_enabled=True, csp_value="default-src 'self'"))
+        on = SecurityHeadersMiddleware(
+            make_app(),
+            settings_obj=_sec_settings(
+                hsts_enabled=True,
+                hsts_include_subdomains=True,
+                hsts_preload=True,
+                csp_enabled=True,
+                csp_value="default-src 'self'",
+            ),
+        )
         _, sent = await call(on)
-        self.assertEqual(hdrs(sent)["strict-transport-security"], "max-age=100; includeSubDomains; preload")
+        self.assertEqual(
+            hdrs(sent)["strict-transport-security"], "max-age=100; includeSubDomains; preload"
+        )
         self.assertEqual(hdrs(sent)["content-security-policy"], "default-src 'self'")
         off = SecurityHeadersMiddleware(make_app(), settings_obj=_sec_settings())
         _, sent = await call(off)
@@ -236,13 +277,16 @@ class TestSecurityHeaders(unittest.IsolatedAsyncioTestCase):
         async def bare(scope, receive, send):
             await send({"type": "http.response.start", "status": 204})
             await send({"type": "http.response.body", "body": b""})
+
         _, sent = await call(SecurityHeadersMiddleware(bare, settings_obj=_sec_settings()))
         self.assertEqual(hdrs(sent)["x-frame-options"], "DENY")
 
     async def test_websocket_scope_is_untouched_and_static_headers_still_exposed(self):
         seen = []
+
         async def downstream(scope, receive, send):
             seen.append(scope["type"])
+
         await call(SecurityHeadersMiddleware(downstream), kind="websocket")
         self.assertEqual(seen, ["websocket"])
         self.assertIn("Cross-Origin-Resource-Policy", SecurityHeadersMiddleware._static_headers())
@@ -269,8 +313,10 @@ class TestRateLimiterMiddleware(unittest.IsolatedAsyncioTestCase):
     async def test_websocket_and_lifespan_scopes_pass_straight_through(self):
         limiter = MagicMock()
         seen = []
+
         async def downstream(scope, receive, send):
             seen.append(scope["type"])
+
         mw = RateLimitMiddleware(downstream, limiter=limiter)
         await call(mw, kind="websocket")
         await call(mw, kind="lifespan")
@@ -280,7 +326,7 @@ class TestRateLimiterMiddleware(unittest.IsolatedAsyncioTestCase):
     async def test_429_short_circuits_with_json_retry_after_and_security_headers(self):
         called = []
         mw, limiter = self._mw(limit=1, downstream=make_app(record=lambda s: called.append(1)))
-        await call(mw, method="POST", path="/api/w")            # uses the budget
+        await call(mw, method="POST", path="/api/w")  # uses the budget
         scope, sent = await call(mw, method="POST", path="/api/w")
         h = hdrs(sent)
         self.assertEqual(start(sent)["status"], 429)
@@ -288,15 +334,21 @@ class TestRateLimiterMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h["retry-after"], "60")
         self.assertEqual(h["x-ratelimit-limit"], "1")
         self.assertEqual(h["x-ratelimit-remaining"], "0")
-        self.assertEqual(h["x-content-type-options"], "nosniff")     # inlined security baseline
+        self.assertEqual(h["x-content-type-options"], "nosniff")  # inlined security baseline
         self.assertIn(b"Too many requests", sent[1]["body"])
 
     async def test_allowed_response_keeps_downstream_headers_and_gains_the_budget_headers(self):
-        mw, _ = self._mw(limit=5, downstream=make_app(
-            extra_headers=[(b"x-ratelimit-remaining", b"stale"), (b"x-custom", b"1")]))
+        mw, _ = self._mw(
+            limit=5,
+            downstream=make_app(
+                extra_headers=[(b"x-ratelimit-remaining", b"stale"), (b"x-custom", b"1")]
+            ),
+        )
         _, sent = await call(mw, method="POST", path="/api/w")
         h = raw_hdrs(sent)
-        self.assertEqual([v for k, v in h if k == "x-ratelimit-remaining"], ["4"])   # replaced, not duplicated
+        self.assertEqual(
+            [v for k, v in h if k == "x-ratelimit-remaining"], ["4"]
+        )  # replaced, not duplicated
         self.assertEqual([v for k, v in h if k == "x-ratelimit-limit"], ["5"])
         self.assertIn(("x-custom", "1"), h)
 
@@ -314,7 +366,9 @@ class TestRateLimiterMiddleware(unittest.IsolatedAsyncioTestCase):
         mw, _ = self._mw(limiter=limiter)
         await call(mw, method="POST", path="/api/w", client=("9.8.7.6", 1))
         await call(mw, method="POST", path="/api/w", client=None)
-        self.assertEqual([c.args[0] for c in limiter.is_allowed.call_args_list], ["9.8.7.6", "unknown"])
+        self.assertEqual(
+            [c.args[0] for c in limiter.is_allowed.call_args_list], ["9.8.7.6", "unknown"]
+        )
 
 
 # ---------------------------------------------------------------- cache / ETag
@@ -322,7 +376,10 @@ def streaming_app(chunks=(b"a", b"b", b"c"), status=200, headers=()):
     async def app(scope, receive, send):
         await send({"type": "http.response.start", "status": status, "headers": list(headers)})
         for i, chunk in enumerate(chunks):
-            await send({"type": "http.response.body", "body": chunk, "more_body": i < len(chunks) - 1})
+            await send(
+                {"type": "http.response.body", "body": chunk, "more_body": i < len(chunks) - 1}
+            )
+
     return app
 
 
@@ -349,38 +406,52 @@ class TestCacheMiddlewareContract(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sent[1].get("more_body", False))
 
     async def test_a_matching_if_none_match_returns_a_bodiless_304_with_security_headers(self):
-        _, sent = await call(CacheMiddleware(make_app(body=b"hello")), path="/api/some/thing",
-                             headers={"If-None-Match": etag_of(b"hello")})
+        _, sent = await call(
+            CacheMiddleware(make_app(body=b"hello")),
+            path="/api/some/thing",
+            headers={"If-None-Match": etag_of(b"hello")},
+        )
         h = hdrs(sent)
         self.assertEqual(start(sent)["status"], 304)
         self.assertEqual(h["etag"], etag_of(b"hello"))
         self.assertEqual(h["cache-control"], "public, max-age=30")
-        self.assertEqual(h["x-content-type-options"], "nosniff")     # inlined baseline
+        self.assertEqual(h["x-content-type-options"], "nosniff")  # inlined baseline
         self.assertEqual(b"".join(m.get("body", b"") for m in sent[1:]), b"")
 
     async def test_a_stale_or_weak_validator_gets_the_full_response(self):
         for validator in (etag_of(b"other"), "W/" + etag_of(b"hello")):
-            _, sent = await call(CacheMiddleware(make_app(body=b"hello")), path="/api/some/thing",
-                                 headers={"If-None-Match": validator})
+            _, sent = await call(
+                CacheMiddleware(make_app(body=b"hello")),
+                path="/api/some/thing",
+                headers={"If-None-Match": validator},
+            )
             self.assertEqual(start(sent)["status"], 200, validator)
 
     async def test_non_200_responses_stream_through_untouched_with_chunk_boundaries(self):
         _, sent = await call(CacheMiddleware(streaming_app(status=404)), path="/api/some/thing")
         self.assertEqual(start(sent)["status"], 404)
         self.assertNotIn("etag", hdrs(sent))
-        self.assertEqual([m["type"] for m in sent], ["http.response.start"] + ["http.response.body"] * 3)
+        self.assertEqual(
+            [m["type"] for m in sent], ["http.response.start"] + ["http.response.body"] * 3
+        )
         self.assertEqual([m["body"] for m in sent[1:]], [b"a", b"b", b"c"])
         self.assertEqual([m["more_body"] for m in sent[1:]], [True, True, False])
 
     async def test_non_get_and_exempt_paths_stream_through_untouched(self):
-        for method, path in (("POST", "/api/some/thing"), ("HEAD", "/api/some/thing"),
-                             ("GET", "/api/health"), ("GET", "/docs")):
+        for method, path in (
+            ("POST", "/api/some/thing"),
+            ("HEAD", "/api/some/thing"),
+            ("GET", "/api/health"),
+            ("GET", "/docs"),
+        ):
             _, sent = await call(CacheMiddleware(streaming_app()), method=method, path=path)
             self.assertNotIn("etag", hdrs(sent), (method, path))
             self.assertEqual([m["body"] for m in sent[1:]], [b"a", b"b", b"c"], (method, path))
 
     async def test_duplicate_response_headers_are_preserved(self):
-        app = CacheMiddleware(make_app(extra_headers=[(b"set-cookie", b"a=1"), (b"set-cookie", b"b=2")]))
+        app = CacheMiddleware(
+            make_app(extra_headers=[(b"set-cookie", b"a=1"), (b"set-cookie", b"b=2")])
+        )
         _, sent = await call(app, path="/api/some/thing")
         self.assertEqual([v for k, v in raw_hdrs(sent) if k == "set-cookie"], ["a=1", "b=2"])
 
@@ -389,30 +460,47 @@ class TestCacheMiddlewareContract(unittest.IsolatedAsyncioTestCase):
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"x", "more_body": True})
             await send({"type": "http.response.pathsend", "path": "/tmp/f"})
+
         _, sent = await call(CacheMiddleware(app), path="/api/some/thing")
-        self.assertEqual([m["type"] for m in sent],
-                         ["http.response.start", "http.response.body", "http.response.pathsend"])
+        self.assertEqual(
+            [m["type"] for m in sent],
+            ["http.response.start", "http.response.body", "http.response.pathsend"],
+        )
         self.assertNotIn("etag", hdrs(sent))
 
     async def test_an_exception_before_anything_is_sent_propagates_and_sends_nothing(self):
         sent = []
+
         async def send(m):
             sent.append(m)
-        scope = {"type": "http", "method": "GET", "path": "/api/some/thing", "headers": [], "query_string": b""}
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/some/thing",
+            "headers": [],
+            "query_string": b"",
+        }
         with self.assertRaises(RuntimeError):
             await CacheMiddleware(raising_app)(scope, None, send)
         self.assertEqual(sent, [])
 
     async def test_websocket_scope_passes_through(self):
         seen = []
+
         async def downstream(scope, receive, send):
             seen.append(scope["type"])
+
         await call(CacheMiddleware(downstream), kind="websocket")
         self.assertEqual(seen, ["websocket"])
 
     async def test_per_path_durations(self):
-        for path, expected in (("/api/market-data/quote/AAPL", 0), ("/api/market-data/bars/AAPL", 300),
-                               ("/api/finnhub/x", 3600), ("/api/other", 30)):
+        for path, expected in (
+            ("/api/market-data/quote/AAPL", 0),
+            ("/api/market-data/bars/AAPL", 300),
+            ("/api/finnhub/x", 3600),
+            ("/api/other", 30),
+        ):
             _, sent = await call(CacheMiddleware(make_app()), path=path)
             self.assertEqual(hdrs(sent)["cache-control"], f"public, max-age={expected}", path)
 
@@ -433,7 +521,9 @@ class TestStackedLayers(unittest.IsolatedAsyncioTestCase):
 
         with patch("backend.api.system.router.record_http_request"):
             _, sent = await call(self._stack(streaming), method="POST", path="/api/w")
-        self.assertEqual([m["type"] for m in sent], ["http.response.start"] + ["http.response.body"] * 3)
+        self.assertEqual(
+            [m["type"] for m in sent], ["http.response.start"] + ["http.response.body"] * 3
+        )
         self.assertEqual([m["body"] for m in sent[1:]], [b"a", b"b", b"c"])
         self.assertEqual([m["more_body"] for m in sent[1:]], [True, True, False])
         h = hdrs(sent)
@@ -452,17 +542,21 @@ class TestStackedLayers(unittest.IsolatedAsyncioTestCase):
             h = hdrs(first)
             for name in ("x-correlation-id", "x-frame-options", "etag", "cache-control"):
                 self.assertIn(name, h, name)
-            _, second = await call(app, path="/api/some/thing", headers={"If-None-Match": h["etag"]})
+            _, second = await call(
+                app, path="/api/some/thing", headers={"If-None-Match": h["etag"]}
+            )
         self.assertEqual(start(second)["status"], 304)
         self.assertIn("x-frame-options", hdrs(second))
         self.assertEqual(rec.call_count, 2)
 
     async def test_the_request_body_reaches_the_app_unmodified(self):
         got = []
+
         async def echo(scope, receive, send):
             got.append((await receive())["body"])
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b""})
+
         with patch("backend.api.system.router.record_http_request"):
             await call(self._stack(echo), method="POST", path="/api/w")
         self.assertEqual(got, [b""])
@@ -472,14 +566,21 @@ class TestNoLongerBaseHTTPMiddleware(unittest.TestCase):
     """The point of the change: each BaseHTTPMiddleware layer cost ~180-190 us/request."""
 
     def test_the_five_layers_are_plain_asgi(self):
-        for cls in (RequestCounterMiddleware, CorrelationIdMiddleware, SecurityHeadersMiddleware,
-                    RateLimitMiddleware, CacheMiddleware):
+        for cls in (
+            RequestCounterMiddleware,
+            CorrelationIdMiddleware,
+            SecurityHeadersMiddleware,
+            RateLimitMiddleware,
+            CacheMiddleware,
+        ):
             self.assertFalse(issubclass(cls, BaseHTTPMiddleware), cls.__name__)
 
     def test_no_middleware_in_the_real_app_is_base_http_middleware(self):
         from backend.api.main import app
 
-        offenders = [m.cls.__name__ for m in app.user_middleware if issubclass(m.cls, BaseHTTPMiddleware)]
+        offenders = [
+            m.cls.__name__ for m in app.user_middleware if issubclass(m.cls, BaseHTTPMiddleware)
+        ]
         self.assertEqual(offenders, [], "a BaseHTTPMiddleware layer was added back to the stack")
 
 

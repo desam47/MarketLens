@@ -21,6 +21,7 @@ involved — just call ``_maybe_fire()`` with a mocked ``now_ny()``).
 Started from ``backend.api.main``'s lifespan hook, same lifecycle
 pattern as ``alerts_engine.startup()``.
 """
+
 from __future__ import annotations
 
 import asyncio

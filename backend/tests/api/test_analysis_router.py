@@ -5,6 +5,7 @@ Phase 22 — Tests for /api/analysis/* endpoints:
   - GET /api/analysis/{symbol}/divergences
   - GET /api/analysis/{symbol}/bars
 """
+
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -15,14 +16,18 @@ from backend.api.analysis.router import _to_dashboard_tz, _transitions_cache
 def _make_bar(close: float, ts: datetime) -> dict:
     """Mimic load_bars() output: a flat dict with OHLCV + timestamp."""
     return {
-        "open": close, "high": close + 1.0, "low": close - 1.0,
-        "close": close, "volume": 1_000_000, "timestamp": ts,
-        "source": "historical", "data_status": "historical",
+        "open": close,
+        "high": close + 1.0,
+        "low": close - 1.0,
+        "close": close,
+        "volume": 1_000_000,
+        "timestamp": ts,
+        "source": "historical",
+        "data_status": "historical",
     }
 
 
 class TestTransitionsEndpoint(unittest.TestCase):
-
     def setUp(self):
         # In-memory 30s-TTL cache keyed by symbol/timeframe/params; clear it so
         # each test exercises fresh logic rather than a stale cached payload.
@@ -37,8 +42,11 @@ class TestTransitionsEndpoint(unittest.TestCase):
         # Minimal bar set: 25 bars so sma_window=20 is satisfied
         mock_bars = [
             MagicMock(
-                open=100.0 + i, high=101.0 + i, low=99.0 + i,
-                close=100.5 + i, volume=1_000_000,
+                open=100.0 + i,
+                high=101.0 + i,
+                low=99.0 + i,
+                close=100.5 + i,
+                volume=1_000_000,
                 timestamp=datetime(2024, 1, 1, tzinfo=UTC),
             )
             for i in range(25)
@@ -73,9 +81,7 @@ class TestTransitionsEndpoint(unittest.TestCase):
         # "current" point anchored on the newest bar.
         base = datetime(2024, 1, 1, tzinfo=UTC)
         closes = [100.0 + i * 0.5 for i in range(25)] + [140.0, 180.0, 220.0, 260.0, 300.0]
-        bars_old_to_new = [
-            _make_bar(c, base + timedelta(days=i)) for i, c in enumerate(closes)
-        ]
+        bars_old_to_new = [_make_bar(c, base + timedelta(days=i)) for i, c in enumerate(closes)]
         # load_bars returns desc=True (newest→oldest), as the real repo does.
         mock_load_bars.return_value = list(reversed(bars_old_to_new))
 
@@ -110,10 +116,16 @@ class TestTransitionsEndpoint(unittest.TestCase):
 
         from backend.api.main import app
 
-        mock_repo.get_bars.return_value = [MagicMock(
-            open=100, high=101, low=99, close=100.5, volume=1_000_000,
-            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
-        )]
+        mock_repo.get_bars.return_value = [
+            MagicMock(
+                open=100,
+                high=101,
+                low=99,
+                close=100.5,
+                volume=1_000_000,
+                timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        ]
 
         client = TestClient(app)
         resp = client.get("/api/analysis/AAPL/transitions?timeframe=1d&window=5")
@@ -150,7 +162,6 @@ class TestTransitionsEndpoint(unittest.TestCase):
 
 
 class TestPriceRangeEndpoint(unittest.TestCase):
-
     @patch("backend.analysis.series.bar_repository")
     def test_returns_levels(self, mock_repo):
         from fastapi.testclient import TestClient
@@ -159,8 +170,11 @@ class TestPriceRangeEndpoint(unittest.TestCase):
 
         mock_bars = [
             MagicMock(
-                open=100.0, high=101.0, low=99.0,
-                close=100.5, volume=1_000_000,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1_000_000,
                 timestamp=datetime(2024, 1, i + 1, tzinfo=UTC),
             )
             for i in range(30)
@@ -186,10 +200,16 @@ class TestPriceRangeEndpoint(unittest.TestCase):
 
         from backend.api.main import app
 
-        mock_repo.get_bars.return_value = [MagicMock(
-            open=100, high=101, low=99, close=100.5, volume=1_000_000,
-            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
-        )]
+        mock_repo.get_bars.return_value = [
+            MagicMock(
+                open=100,
+                high=101,
+                low=99,
+                close=100.5,
+                volume=1_000_000,
+                timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        ]
 
         client = TestClient(app)
         resp = client.get("/api/analysis/AAPL/price-range")
@@ -202,7 +222,6 @@ class TestPriceRangeEndpoint(unittest.TestCase):
 
 
 class TestDivergencesEndpoint(unittest.TestCase):
-
     @patch("backend.analysis.series.bar_repository")
     def test_returns_divergences(self, mock_repo):
         from fastapi.testclient import TestClient
@@ -211,8 +230,11 @@ class TestDivergencesEndpoint(unittest.TestCase):
 
         mock_bars = [
             MagicMock(
-                open=100.0, high=101.0, low=99.0,
-                close=100.0 + i * 0.1, volume=1_000_000,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0 + i * 0.1,
+                volume=1_000_000,
                 timestamp=datetime(2024, 1, (i % 28) + 1, tzinfo=UTC),
             )
             for i in range(40)
@@ -233,10 +255,16 @@ class TestDivergencesEndpoint(unittest.TestCase):
 
         from backend.api.main import app
 
-        mock_repo.get_bars.return_value = [MagicMock(
-            open=100, high=101, low=99, close=100.5, volume=1_000_000,
-            timestamp=datetime(2024, 1, 1, tzinfo=UTC),
-        )]
+        mock_repo.get_bars.return_value = [
+            MagicMock(
+                open=100,
+                high=101,
+                low=99,
+                close=100.5,
+                volume=1_000_000,
+                timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        ]
 
         client = TestClient(app)
         resp = client.get("/api/analysis/AAPL/divergences")
@@ -248,9 +276,7 @@ class TestDivergencesEndpoint(unittest.TestCase):
     @patch("backend.api.analysis.router._macd_histogram_series")
     @patch("backend.api.analysis.router._rsi_series")
     @patch("backend.api.analysis.router._load_bars")
-    def test_newest_divergence_is_first_and_in_order(
-        self, mock_load_bars, mock_rsi, mock_macd
-    ):
+    def test_newest_divergence_is_first_and_in_order(self, mock_load_bars, mock_rsi, mock_macd):
         """Regresses the time-ordering bug where bars (newest→oldest from
         desc=True) were fed straight into the DivergenceEngine, which assumes
         chronological (older pivot = a, newer = b) order. That inverted every
@@ -286,10 +312,14 @@ class TestDivergencesEndpoint(unittest.TestCase):
 
         bars_old_to_new = [
             {
-                "open": closes[i], "high": highs[i], "low": lows[i],
-                "close": closes[i], "volume": volumes[i],
+                "open": closes[i],
+                "high": highs[i],
+                "low": lows[i],
+                "close": closes[i],
+                "volume": volumes[i],
                 "timestamp": timestamps[i],
-                "source": "historical", "data_status": "historical",
+                "source": "historical",
+                "data_status": "historical",
             }
             for i in range(n)
         ]
@@ -323,13 +353,13 @@ class TestDivergencesEndpoint(unittest.TestCase):
         # order. The bug returned it ascending (oldest first).
         seen = [d["timestamp"] for d in divs]
         self.assertEqual(
-            seen, sorted(seen, reverse=True),
+            seen,
+            sorted(seen, reverse=True),
             "divergences must be ordered newest-first",
         )
 
 
 class TestBarsEndpoint(unittest.TestCase):
-
     @patch("backend.analysis.series.bar_repository")
     def test_returns_bars(self, mock_repo):
         from fastapi.testclient import TestClient
@@ -338,8 +368,11 @@ class TestBarsEndpoint(unittest.TestCase):
 
         mock_bars = [
             MagicMock(
-                open=100.0, high=101.0, low=99.0,
-                close=100.5, volume=1_000_000,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1_000_000,
                 timestamp=datetime(2024, 1, i + 1, tzinfo=UTC),
             )
             for i in range(10)

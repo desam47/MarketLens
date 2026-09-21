@@ -5,6 +5,7 @@ Validates that ``ExperimentParameters`` defaults match
 ``IndicatorDefaults`` / ``TrendSignalWeights`` and that Pydantic
 field constraints reject out-of-range values.
 """
+
 import os
 import sys
 import unittest

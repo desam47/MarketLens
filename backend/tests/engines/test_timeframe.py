@@ -1,6 +1,7 @@
 """
 Tests for timeframe/candle engine
 """
+
 import os
 import sys
 import unittest
@@ -8,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.engines.market_calendar import SessionType, USMarketCalendar
 from backend.engines.timeframe import (
@@ -22,7 +23,6 @@ ET = ZoneInfo("America/New_York")
 
 
 class TestTimeframeEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.engine = TimeframeEngine(self.symbol)
@@ -73,7 +73,7 @@ class TestTimeframeEngine(unittest.TestCase):
             (150.0, 100, base_time),
             (151.0, 200, base_time + timedelta(seconds=10)),
             (149.0, 150, base_time + timedelta(seconds=20)),
-            (152.0, 300, base_time + timedelta(seconds=45))
+            (152.0, 300, base_time + timedelta(seconds=45)),
         ]
 
         for price, volume, timestamp in ticks:
@@ -91,8 +91,8 @@ class TestTimeframeEngine(unittest.TestCase):
         self.assertIsNotNone(current_candle)
         self.assertEqual(current_candle.open, 150.0)
         self.assertEqual(current_candle.high, 152.0)  # Highest price
-        self.assertEqual(current_candle.low, 149.0)   # Lowest price
-        self.assertEqual(current_candle.close, 152.0) # Last price
+        self.assertEqual(current_candle.low, 149.0)  # Lowest price
+        self.assertEqual(current_candle.close, 152.0)  # Last price
         self.assertEqual(current_candle.volume, 750)  # Total volume
 
     def test_minute_boundary_crossing(self):
@@ -186,6 +186,7 @@ class TestTimeframeEngine(unittest.TestCase):
         self.assertEqual(aapl_ticks[0].symbol, "AAPL")
         self.assertEqual(googl_ticks[0].symbol, "GOOGL")
 
+
 class TestCandleAggregation(unittest.TestCase):
     """Aggregation correctness for the spec's required pairs.
 
@@ -223,7 +224,7 @@ class TestCandleAggregation(unittest.TestCase):
         self.assertEqual(candle.high, 103.0)
         self.assertEqual(candle.low, 99.0)
         self.assertEqual(candle.close, 103.0)  # last tick INSIDE the 5m window
-        self.assertEqual(candle.volume, 500)    # 5 * 100
+        self.assertEqual(candle.volume, 500)  # 5 * 100
 
     def test_five_minute_to_fifteen_minute_aggregation(self):
         """16 contiguous 1m ticks → 15 land in 09:30-09:45 15m bar; the 16th closes it."""
@@ -321,9 +322,7 @@ class TestMissingCandles(unittest.TestCase):
         """
         self.engine.update_tick(100.0, 10, self.base + timedelta(seconds=15))
         self.engine.update_tick(101.0, 10, self.base + timedelta(seconds=45))
-        self.engine.update_tick(
-            102.0, 10, self.base + timedelta(minutes=1, seconds=15)
-        )
+        self.engine.update_tick(102.0, 10, self.base + timedelta(minutes=1, seconds=15))
         one_min = self.engine.get_closed_candles(Timeframe.ONE_MINUTE)
         # 09:30 candle is closed (no gap, contiguous); 09:31 is current.
         self.assertEqual(len(one_min), 1)
@@ -504,6 +503,7 @@ class TestCustomCalendarOverride(unittest.TestCase):
     def test_engine_uses_default_calendar(self):
         """No calendar arg → uses the global us_market_calendar."""
         from backend.engines.market_calendar import us_market_calendar
+
         e = TimeframeEngine("AAPL")
         self.assertIs(e.calendar, us_market_calendar)
 
@@ -514,5 +514,5 @@ class TestCustomCalendarOverride(unittest.TestCase):
         self.assertIs(e.calendar, custom)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

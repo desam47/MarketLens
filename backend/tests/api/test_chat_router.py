@@ -2,6 +2,7 @@
 Tests for /api/ai/chat/* — Version 4, AI feature 4 conversational chat
 panel endpoints.
 """
+
 import asyncio
 import threading
 import unittest
@@ -37,7 +38,6 @@ def _mock_message(id=1, session_id=1, role="user", content="hi"):
 
 
 class TestCreateOrGetSession(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
@@ -60,7 +60,9 @@ class TestCreateOrGetSession(unittest.TestCase):
         """No symbol in the body -> the single universal chat thread."""
         mock_repo = MagicMock()
         mock_repo.get_or_create_open_session.return_value = _mock_session(
-            id=7, symbol="*", scope="universal",
+            id=7,
+            symbol="*",
+            scope="universal",
         )
         mock_repo_cls.return_value = mock_repo
 
@@ -76,12 +78,14 @@ class TestCreateOrGetSession(unittest.TestCase):
     def test_creates_session_scoped_to_alert_trigger(self, mock_repo_cls):
         mock_repo = MagicMock()
         mock_repo.get_or_create_open_session.return_value = _mock_session(
-            symbol="AAPL", alert_trigger_id=42,
+            symbol="AAPL",
+            alert_trigger_id=42,
         )
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.post(
-            "/api/ai/chat/sessions", json={"symbol": "AAPL", "alert_trigger_id": 42},
+            "/api/ai/chat/sessions",
+            json={"symbol": "AAPL", "alert_trigger_id": 42},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -100,7 +104,8 @@ class TestCreateOrGetSession(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.post(
-            "/api/ai/chat/sessions", json={"symbol": "AAPL", "force_new": True},
+            "/api/ai/chat/sessions",
+            json={"symbol": "AAPL", "force_new": True},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -124,7 +129,6 @@ class TestCreateOrGetSession(unittest.TestCase):
 
 
 class TestGetMessages(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
@@ -159,25 +163,26 @@ class TestGetMessages(unittest.TestCase):
 
 
 class TestSendMessage(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
     @patch("backend.ai.chat.answer_chat_message")
     @patch("backend.api.ai.chat_router.ChatRepository")
-    def test_sends_message_and_returns_assistant_reply(
-        self, mock_repo_cls, mock_answer
-    ):
+    def test_sends_message_and_returns_assistant_reply(self, mock_repo_cls, mock_answer):
         mock_repo = MagicMock()
         mock_repo.get_session.return_value = _mock_session()
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
-            True, ["AAPL"], [], [],
+            True,
+            ["AAPL"],
+            [],
+            [],
         )
 
         resp = self.client.post(
-            "/api/ai/chat/sessions/1/messages", json={"content": "How's AAPL?"},
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?"},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -195,7 +200,8 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.post(
-            "/api/ai/chat/sessions/999/messages", json={"content": "hi"},
+            "/api/ai/chat/sessions/999/messages",
+            json={"content": "hi"},
         )
         self.assertEqual(resp.status_code, 404)
 
@@ -205,7 +211,8 @@ class TestSendMessage(unittest.TestCase):
             mock_repo.get_session.return_value = _mock_session()
             mock_repo_cls.return_value = mock_repo
             resp = self.client.post(
-                "/api/ai/chat/sessions/1/messages", json={"content": ""},
+                "/api/ai/chat/sessions/1/messages",
+                json={"content": ""},
             )
         self.assertEqual(resp.status_code, 422)
 
@@ -217,11 +224,15 @@ class TestSendMessage(unittest.TestCase):
         mock_repo_cls.return_value = mock_repo
         mock_answer.return_value = (
             _mock_message(id=2, role="assistant", content="I don't have enough data."),
-            False, [], [], ["RIVN"],
+            False,
+            [],
+            [],
+            ["RIVN"],
         )
 
         resp = self.client.post(
-            "/api/ai/chat/sessions/1/messages", json={"content": "What's the RSI?"},
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "What's the RSI?"},
         )
 
         self.assertEqual(resp.status_code, 200)
@@ -254,7 +265,6 @@ class TestSSEBackpressure(unittest.TestCase):
 
 
 class TestSendMessageStream(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
@@ -281,18 +291,27 @@ class TestSendMessageStream(unittest.TestCase):
         mock_repo = MagicMock()
         mock_repo.get_session.return_value = _mock_session()
         mock_repo_cls.return_value = mock_repo
-        mock_stream.return_value = iter([
-            ("meta", {"focus": ["AAPL"], "partial": [], "unavailable": []}),
-            ("delta", "AAPL looks "),
-            ("delta", "bullish."),
-            ("final", (
-                _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
-                True, ["AAPL"], [], [],
-            )),
-        ])
+        mock_stream.return_value = iter(
+            [
+                ("meta", {"focus": ["AAPL"], "partial": [], "unavailable": []}),
+                ("delta", "AAPL looks "),
+                ("delta", "bullish."),
+                (
+                    "final",
+                    (
+                        _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
+                        True,
+                        ["AAPL"],
+                        [],
+                        [],
+                    ),
+                ),
+            ]
+        )
 
         resp = self.client.post(
-            "/api/ai/chat/sessions/1/messages/stream", json={"content": "How's AAPL?"},
+            "/api/ai/chat/sessions/1/messages/stream",
+            json={"content": "How's AAPL?"},
         )
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/event-stream", resp.headers["content-type"])
@@ -313,13 +332,13 @@ class TestSendMessageStream(unittest.TestCase):
         mock_repo.get_session.return_value = None
         mock_repo_cls.return_value = mock_repo
         resp = self.client.post(
-            "/api/ai/chat/sessions/999/messages/stream", json={"content": "hi"},
+            "/api/ai/chat/sessions/999/messages/stream",
+            json={"content": "hi"},
         )
         self.assertEqual(resp.status_code, 404)
 
 
 class TestClearSessions(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 

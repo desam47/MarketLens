@@ -1,4 +1,5 @@
 """Phase 9 — divergence detection."""
+
 from .divergence_engine import (
     Divergence,
     DivergenceDirection,

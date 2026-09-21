@@ -1,6 +1,7 @@
 """
 Trend and market structure engine
 """
+
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -96,19 +97,24 @@ def _ensure_aware(dt: datetime) -> datetime:
         raise ValueError("timestamp must not be None")
     return ny_to_utc(dt)
 
+
 class TrendDirection(StrEnum):
     """Trend direction"""
+
     UPTREND = "uptrend"
     DOWNTREND = "downtrend"
     SIDEWAYS = "sideways"
     UNKNOWN = "unknown"
 
+
 class TrendStrength(StrEnum):
     """Trend strength"""
+
     WEAK = "weak"
     MODERATE = "moderate"
     STRONG = "strong"
     VERY_STRONG = "very_strong"
+
 
 class TrendClassification(StrEnum):
     """8-class trend classification per Phase 6 spec.
@@ -123,6 +129,7 @@ class TrendClassification(StrEnum):
         -70 to -100 = STRONG_BEARISH
         NO_SIGNAL           = data insufficient
     """
+
     STRONG_BULLISH = "strong_bullish"
     BULLISH = "bullish"
     WEAK_BULLISH = "weak_bullish"
@@ -170,6 +177,7 @@ def strength_to_float(strength: TrendStrength) -> float:
         TrendStrength.VERY_STRONG: 1.0,
     }.get(strength, 0.5)
 
+
 class TrendSignal:
     """Represents a trend signal.
 
@@ -179,12 +187,18 @@ class TrendSignal:
     callers that already match on ``TrendDirection``.
     """
 
-    def __init__(self, symbol: str, timeframe: Timeframe,
-                 direction: TrendDirection, strength: TrendStrength,
-                 confidence: float, timestamp: datetime,
-                 score: float | None = None,
-                 classification: TrendClassification | None = None,
-                 data_quality: str = "ok"):
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        direction: TrendDirection,
+        strength: TrendStrength,
+        confidence: float,
+        timestamp: datetime,
+        score: float | None = None,
+        classification: TrendClassification | None = None,
+        data_quality: str = "ok",
+    ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.direction = direction
@@ -206,9 +220,7 @@ class TrendSignal:
             self.score = float(score)
         # Phase 6: 8-class classification (derived from score)
         self.classification = (
-            classification
-            if classification is not None
-            else classify_score(self.score)
+            classification if classification is not None else classify_score(self.score)
         )
         # Phase 6: data quality stamp. Defaults to "ok" so existing callers
         # are unaffected; set by the engine when stale/duplicate/gap is hit.
@@ -216,9 +228,11 @@ class TrendSignal:
         self.indicators: dict[str, Any] = {}
 
     def __repr__(self):
-        return (f"TrendSignal({self.symbol} {self.timeframe.value} "
-                f"{self.direction.value} {self.classification.value} "
-                f"conf:{self.confidence:.2f})")
+        return (
+            f"TrendSignal({self.symbol} {self.timeframe.value} "
+            f"{self.direction.value} {self.classification.value} "
+            f"conf:{self.confidence:.2f})"
+        )
 
 
 @dataclass
@@ -230,16 +244,18 @@ class TrendSnapshot:
     consumption by scanners, dashboards, and backtests without needing to
     unpack enums.
     """
+
     symbol: str
     timeframe: Timeframe
     timestamp: datetime
-    direction: TrendClassification   # 8-class enum
-    score: float                   # -100..+100
-    strength: float                # 0.0..1.0
-    momentum: float                # ROC value (%)
-    structure: float              # Bollinger %B value
-    data_quality: str             # "ok" | "stale" | "duplicate" | "gap"
-    strategy_version: str         # from TrendSettings.strategy_version
+    direction: TrendClassification  # 8-class enum
+    score: float  # -100..+100
+    strength: float  # 0.0..1.0
+    momentum: float  # ROC value (%)
+    structure: float  # Bollinger %B value
+    data_quality: str  # "ok" | "stale" | "duplicate" | "gap"
+    strategy_version: str  # from TrendSettings.strategy_version
+
 
 class TrendEngine:
     """Engine for determining market trend across multiple timeframes"""
@@ -322,7 +338,8 @@ class TrendEngine:
             # normalise their signals by the current volatility regime.
             # (SuperTrend has its own internal ATR; this one is for scoring.)
             stack["atr"] = IndicatorEngine.create_indicator(
-                "atr", {"period": _TF_ATR_PERIOD.get(timeframe, defaults.adx_period)},
+                "atr",
+                {"period": _TF_ATR_PERIOD.get(timeframe, defaults.adx_period)},
             )
             # Add Phase 6 momentum + volume components for timeframes with
             # enough data to make them meaningful.
@@ -333,18 +350,18 @@ class TrendEngine:
                 Timeframe.FIVE_MINUTE,
             ):
                 stack["relative_volume"] = IndicatorEngine.create_indicator(
-                    "relative_volume", {"period": defaults.bollinger_period},
+                    "relative_volume",
+                    {"period": defaults.bollinger_period},
                 )
                 stack["roc"] = IndicatorEngine.create_indicator(
-                    "roc", {"period": 12},
+                    "roc",
+                    {"period": 12},
                 )
             # Sub-5m timeframes get a minimal set — no ADX, no supertrend,
             # no bollinger. 2m/3m follow the 1m pattern (just ema + rsi + macd).
             if timeframe in (Timeframe.ONE_MINUTE, Timeframe.TWO_MINUTE, Timeframe.THREE_MINUTE):
                 self.indicators[timeframe] = {
-                    k: v
-                    for k, v in stack.items()
-                    if k in ("ema_fast", "ema_slow", "rsi", "macd")
+                    k: v for k, v in stack.items() if k in ("ema_fast", "ema_slow", "rsi", "macd")
                 }
             elif timeframe == Timeframe.FIVE_MINUTE:
                 self.indicators[timeframe] = {
@@ -355,10 +372,15 @@ class TrendEngine:
             else:
                 self.indicators[timeframe] = stack
 
-    def update(self, price: float, volume: float,
-               timestamp: datetime, provider: str = "",
-               only_timeframe: Timeframe | None = None,
-               **_: object):
+    def update(
+        self,
+        price: float,
+        volume: float,
+        timestamp: datetime,
+        provider: str = "",
+        only_timeframe: Timeframe | None = None,
+        **_: object,
+    ):
         """Update trend engine with new market data.
 
         Phase 0 Principle 15 — data quality validated before analysis.
@@ -392,9 +414,10 @@ class TrendEngine:
             age = (now - self._last_update_time).total_seconds()
             if age > dq.stale_threshold_seconds:
                 logger.warning(
-                    "Data-quality [stale]: %s last tick was %.1fs ago "
-                    "(threshold %.1fs)",
-                    self.symbol, age, dq.stale_threshold_seconds,
+                    "Data-quality [stale]: %s last tick was %.1fs ago (threshold %.1fs)",
+                    self.symbol,
+                    age,
+                    dq.stale_threshold_seconds,
                 )
 
         # --- Duplicate check --------------------------------------------
@@ -402,7 +425,9 @@ class TrendEngine:
             if abs(price - self._last_price) <= dq.duplicate_price_tolerance:
                 logger.debug(
                     "Data-quality [duplicate]: %s price %s == last %s",
-                    self.symbol, price, self._last_price,
+                    self.symbol,
+                    price,
+                    self._last_price,
                 )
 
         # --- Gap check --------------------------------------------------
@@ -412,7 +437,9 @@ class TrendEngine:
                 logger.warning(
                     "Data-quality [gap]: %s incoming tick is %.1fs after "
                     "previous (threshold %.1fs)",
-                    self.symbol, incoming_gap, dq.max_tick_gap_seconds,
+                    self.symbol,
+                    incoming_gap,
+                    dq.max_tick_gap_seconds,
                 )
 
         # Update the timeframe engine with new tick (accumulates into candles).
@@ -509,12 +536,9 @@ class TrendEngine:
                 try:
                     indicator.update(data_point)
                 except Exception as e:
-                    logger.debug(
-                        f"Error updating {name} indicator for {timeframe}: {e}"
-                    )
+                    logger.debug(f"Error updating {name} indicator for {timeframe}: {e}")
 
-    def _generate_trend_signals(self, timestamp: datetime,
-                               only_timeframe: Timeframe | None = None):
+    def _generate_trend_signals(self, timestamp: datetime, only_timeframe: Timeframe | None = None):
         """Generate trend signals for each timeframe.
 
         ``only_timeframe`` restricts signal generation to a single timeframe —
@@ -538,9 +562,9 @@ class TrendEngine:
             except Exception as e:
                 logger.error(f"Error generating trend signal for {timeframe}: {e}")
 
-    def _analyze_timeframe_trend(self, timeframe: Timeframe,
-                                    indicators: dict[str, Any],
-                                    timestamp: datetime) -> TrendSignal | None:
+    def _analyze_timeframe_trend(
+        self, timeframe: Timeframe, indicators: dict[str, Any], timestamp: datetime
+    ) -> TrendSignal | None:
         """Analyze trend for a specific timeframe"""
         # Single pass: collect all indicator latest values AND
         # locate ATR/ADX/SuperTrend by name simultaneously.
@@ -567,7 +591,9 @@ class TrendEngine:
             return None
 
         # Analyze trend based on available indicators
-        result = self._calculate_trend(timeframe, indicator_values, atr_ind, adx_ind, supertrend_ind)
+        result = self._calculate_trend(
+            timeframe, indicator_values, atr_ind, adx_ind, supertrend_ind
+        )
         direction, strength, confidence, raw_score, classification = result
 
         return TrendSignal(
@@ -581,12 +607,14 @@ class TrendEngine:
             classification=classification,
         )
 
-    def _calculate_trend(self, timeframe: Timeframe,
-                         indicator_values: dict[str, float | None],
-                         atr_ind: BaseIndicator | None = None,
-                         adx_ind: BaseIndicator | None = None,
-                         supertrend_ind: BaseIndicator | None = None,
-                         ) -> tuple:
+    def _calculate_trend(
+        self,
+        timeframe: Timeframe,
+        indicator_values: dict[str, float | None],
+        atr_ind: BaseIndicator | None = None,
+        adx_ind: BaseIndicator | None = None,
+        supertrend_ind: BaseIndicator | None = None,
+    ) -> tuple:
         """Calculate trend direction, strength, and confidence from indicators."""
         weights_cfg = _settings.trend.signal_weights
 
@@ -658,9 +686,7 @@ class TrendEngine:
                     magnitude = max(0.2, min(1.0, band_dist / 3.0))
                 else:
                     magnitude = 1.0
-                components.append(
-                    (magnitude if st_is_up else -magnitude, weights_cfg.supertrend)
-                )
+                components.append((magnitude if st_is_up else -magnitude, weights_cfg.supertrend))
 
         # --- Component 6: Bollinger Bands market structure ---
         bb = indicator_values.get("bollinger_bands")
@@ -756,8 +782,9 @@ class TrendEngine:
             return self.trend_history[timeframe][-1]
         return None
 
-    def get_trend_history(self, timeframe: Timeframe,
-                         limit: int | None = None) -> list[TrendSignal]:
+    def get_trend_history(
+        self, timeframe: Timeframe, limit: int | None = None
+    ) -> list[TrendSignal]:
         """Get trend history for a timeframe"""
         history = self.trend_history.get(timeframe, [])
         if limit is not None:
@@ -842,7 +869,9 @@ class TrendEngine:
         total_weight = 0
 
         for timeframe, trend in trends.items():
-            weight = timeframe_weights.get(timeframe, 0.1)  # 0.1 is a safe default; overridden by settings
+            weight = timeframe_weights.get(
+                timeframe, 0.1
+            )  # 0.1 is a safe default; overridden by settings
             # Convert direction to numeric score
             if trend.direction == TrendDirection.UPTREND:
                 score = 1
@@ -900,6 +929,7 @@ class TrendEngine:
             )
 
         return None
+
 
 # Global trend engine factory
 def get_trend_engine(symbol: str) -> TrendEngine:

@@ -19,6 +19,7 @@ Gated end-to-end on ``settings.ai_trade_plan_tracking.enabled`` —
 capture, grading, and ``get_track_record()`` are all no-ops when it's
 off.
 """
+
 from __future__ import annotations
 
 import json
@@ -57,19 +58,21 @@ def record_trade_plan(symbol: str, parsed) -> None:
 
     db = SessionLocal()
     try:
-        db.add(AITradePlanOutcome(
-            symbol=symbol.upper(),
-            recommendation=plan.recommendation,
-            conviction=plan.conviction,
-            time_horizon=plan.time_horizon,
-            entry_zone_low=plan.entry_zone_low,
-            entry_zone_high=plan.entry_zone_high,
-            stop_loss=plan.stop_loss,
-            targets_json=json.dumps(plan.targets),
-            risk_reward=plan.risk_reward,
-            provider=parsed.provider,
-            model=parsed.model,
-        ))
+        db.add(
+            AITradePlanOutcome(
+                symbol=symbol.upper(),
+                recommendation=plan.recommendation,
+                conviction=plan.conviction,
+                time_horizon=plan.time_horizon,
+                entry_zone_low=plan.entry_zone_low,
+                entry_zone_high=plan.entry_zone_high,
+                stop_loss=plan.stop_loss,
+                targets_json=json.dumps(plan.targets),
+                risk_reward=plan.risk_reward,
+                provider=parsed.provider,
+                model=parsed.model,
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -233,7 +236,9 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
     try:
         rows = (
             db.query(AITradePlanOutcome)
-            .filter(AITradePlanOutcome.symbol == sym, AITradePlanOutcome.status.in_(("win", "loss")))
+            .filter(
+                AITradePlanOutcome.symbol == sym, AITradePlanOutcome.status.in_(("win", "loss"))
+            )
             .order_by(AITradePlanOutcome.resolved_at.desc())
             .limit(limit)
             .all()
@@ -293,7 +298,9 @@ def start_trade_plan_tracker() -> None:
         return
     _grading_stop.clear()
     _grading_thread = threading.Thread(
-        target=_grading_loop, name="trade-plan-grading", daemon=True,
+        target=_grading_loop,
+        name="trade-plan-grading",
+        daemon=True,
     )
     _grading_thread.start()
 

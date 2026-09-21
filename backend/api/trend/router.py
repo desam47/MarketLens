@@ -6,6 +6,7 @@ All TrendEngine instances are sourced from the shared registry
 multi-timeframe API, and any future consumer share the same warmed-up
 engine per symbol — no signal divergence from independent warmup paths.
 """
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -54,8 +55,8 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         "confidence": trend_signal.confidence,
         "score": trend_signal.score,
         "classification": trend_signal.classification.value
-            if hasattr(trend_signal.classification, "value")
-            else trend_signal.classification,
+        if hasattr(trend_signal.classification, "value")
+        else trend_signal.classification,
         "timestamp": _to_dashboard_tz(trend_signal.timestamp),
     }
 
@@ -184,8 +185,9 @@ async def get_trend_history(symbol: str, timeframe: str, limit: int | None = 100
 
 
 @router.post("/{symbol}/update/{timeframe}")
-async def update_trend(symbol: str, timeframe: str, price: float, volume: float,
-                       timestamp: str | None = None):
+async def update_trend(
+    symbol: str, timeframe: str, price: float, volume: float, timestamp: str | None = None
+):
     """Update trend engine with new market data"""
     try:
         from backend.engines.timeframe import Timeframe

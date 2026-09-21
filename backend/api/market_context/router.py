@@ -5,6 +5,7 @@ Surfaces the aggregate MarketContextSignal that combines SPY/QQQ/IWM/VIX
 sub-regimes. Single global engine (no symbol) — there's just one market
 context at a time.
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,6 +65,7 @@ def _seed_sub_engine(
     own_session = db is None
     if own_session:
         from backend.database import SessionLocal as _SessionLocal
+
         db = _SessionLocal()
     try:
         rows = (
@@ -130,10 +132,11 @@ def get_engine() -> MarketContextEngine:
         # open_price=...)`` — fixed kwargs, not positional.
         for sym in _engine._cfg.indices:
             engine_registry.register(
-                "quote", sym, lambda price, volume, timestamp, _s=sym, **_:
-                    _engine.update(
-                        price=price, volume=volume, timestamp=timestamp, symbol=_s
-                    )
+                "quote",
+                sym,
+                lambda price, volume, timestamp, _s=sym, **_: _engine.update(
+                    price=price, volume=volume, timestamp=timestamp, symbol=_s
+                ),
             )
     return _engine
 

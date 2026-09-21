@@ -7,6 +7,7 @@ Mirrors ``backend/api/trend/registry.py``: lazy construct on first
 Time & Sales (``market_data.get_tick``), then register for live ticks.
 ``warmup_tape_engines()`` pre-warms the watchlist at startup.
 """
+
 from __future__ import annotations
 
 import logging
@@ -74,7 +75,13 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
             size = r.get("volume") or r.get("size") or r.get("trade_volume")
             ts = r.get("trade_time") or r.get("timestamp") or r.get("time")
             raw_side = str(r.get("side") or r.get("direction") or "").lower()
-            side = "buy" if raw_side in ("1", "buy", "b") else "sell" if raw_side in ("2", "sell", "s") else None
+            side = (
+                "buy"
+                if raw_side in ("1", "buy", "b")
+                else "sell"
+                if raw_side in ("2", "sell", "s")
+                else None
+            )
             if price is None:
                 continue
             try:

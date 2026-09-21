@@ -3,6 +3,7 @@
 that writes a terminal status, so its ``BackfillJob`` row stayed ``started`` forever -- 17 such
 rows had piled up. The reaper reconciles them against RQ, conservatively.
 """
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -22,12 +23,13 @@ def _now():
 
 class TestReapOrphanedJobs(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                                    poolclass=StaticPool)
+        self.engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
         BackfillJob.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.addCleanup(self.engine.dispose)
-        self.rq = {}                                  # job_id -> RQ job mock, or an exception
+        self.rq = {}  # job_id -> RQ job mock, or an exception
         for target, obj in (
             ("backend.database.SessionLocal", self.Session),
             ("backend.ai.background.get_redis", MagicMock(return_value=object())),
@@ -47,12 +49,14 @@ class TestReapOrphanedJobs(unittest.TestCase):
         from rq.job import JobStatus
 
         job = MagicMock(exc_info=exc_info)
-        job.get_status.return_value = JobStatus(status)      # RQ 2.x returns the enum, not a str
+        job.get_status.return_value = JobStatus(status)  # RQ 2.x returns the enum, not a str
         return job
 
     def _row(self, job_id, status, age=timedelta(hours=2)):
         with self.Session() as db:
-            db.add(BackfillJob(job_id=job_id, symbol="AAPL", status=status, created_at=_now() - age))
+            db.add(
+                BackfillJob(job_id=job_id, symbol="AAPL", status=status, created_at=_now() - age)
+            )
             db.commit()
 
     def _get(self, job_id):
@@ -61,12 +65,14 @@ class TestReapOrphanedJobs(unittest.TestCase):
 
     def test_a_started_row_whose_worker_died_is_marked_failed(self):
         self._row("j1", "started")
-        self.rq["j1"] = self._rq_job("failed", "Moved to FailedJobRegistry, due to AbandonedJobError, at ...")
+        self.rq["j1"] = self._rq_job(
+            "failed", "Moved to FailedJobRegistry, due to AbandonedJobError, at ..."
+        )
         self.assertEqual(reap_orphaned_jobs(), 1)
         row = self._get("j1")
         self.assertEqual(row.status, "failed")
         self.assertIn("AbandonedJobError", row.error)
-        self.assertIn("reports the job as failed", row.error)     # not "JobStatus.FAILED"
+        self.assertIn("reports the job as failed", row.error)  # not "JobStatus.FAILED"
         self.assertIsNotNone(row.completed_at)
 
     def test_a_row_rq_has_no_record_of_is_marked_failed(self):
@@ -97,7 +103,7 @@ class TestReapOrphanedJobs(unittest.TestCase):
 
     def test_an_unreachable_redis_reaps_nothing(self):
         self._row("j1", "started")
-        self.rq["j1"] = ConnectionError("redis down")           # not proof the job is gone
+        self.rq["j1"] = ConnectionError("redis down")  # not proof the job is gone
         self.assertEqual(reap_orphaned_jobs(), 0)
         self.assertEqual(self._get("j1").status, "started")
 
@@ -113,7 +119,9 @@ class TestReapOrphanedJobs(unittest.TestCase):
         self.rq["dead"] = self._rq_job("failed")
         self.rq["alive"] = self._rq_job("started")
         self.assertEqual(reap_orphaned_jobs(), 1)
-        self.assertEqual((self._get("dead").status, self._get("alive").status), ("failed", "started"))
+        self.assertEqual(
+            (self._get("dead").status, self._get("alive").status), ("failed", "started")
+        )
 
 
 class TestReaperWiring(unittest.IsolatedAsyncioTestCase):
@@ -129,12 +137,16 @@ class TestReaperWiring(unittest.IsolatedAsyncioTestCase):
         svc._jittered_sleep = stop_after_one
         svc.is_running = True
         reaper = MagicMock(side_effect=RuntimeError("redis down"))
-        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
-             patch("backend.repositories.bar_repository.prune_bars_by_retention", return_value={}), \
-             patch("backend.repositories.status_retention.prune_status_tables", return_value={}), \
-             patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", reaper), \
-             patch("backend.repositories.signal_repository.prune_signals_by_retention", return_value={}), \
-             self.assertLogs("backend.market_data.services.ingestion_service", "ERROR") as cm:
+        with (
+            patch("backend.market_data.services.ingestion_service.SessionLocal"),
+            patch("backend.repositories.bar_repository.prune_bars_by_retention", return_value={}),
+            patch("backend.repositories.status_retention.prune_status_tables", return_value={}),
+            patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", reaper),
+            patch(
+                "backend.repositories.signal_repository.prune_signals_by_retention", return_value={}
+            ),
+            self.assertLogs("backend.market_data.services.ingestion_service", "ERROR") as cm,
+        ):
             await svc._retention_prune_loop()
         reaper.assert_called_once()
         self.assertTrue(any("orphaned backfill" in r.getMessage() for r in cm.records))

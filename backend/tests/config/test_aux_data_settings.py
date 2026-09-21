@@ -18,6 +18,7 @@ test_manager.py/test_router.py, which patch is_enabled()/the manager
 directly and never exercise the real env-var-to-settings path at all
 (which is exactly why this bug went uncaught).
 """
+
 import os
 import unittest
 from unittest.mock import patch
@@ -31,7 +32,6 @@ from backend.config.settings import (
 
 
 class TestAuxDataSettingsEnvBinding(unittest.TestCase):
-
     def test_news_enabled_defaults_false(self):
         """Isolated from both process env AND the real .env file (via
         _env_file=None) — this project's real .env has AUX_NEWS_ENABLED=true,
@@ -63,21 +63,27 @@ class TestAuxDataSettingsEnvBinding(unittest.TestCase):
             self.assertFalse(NewsAuxSettings(_env_file=None).enabled)
 
     def test_news_reads_primary_provider_and_rate_limit(self):
-        with patch.dict(os.environ, {
-            "AUX_NEWS_PRIMARY_PROVIDER": "some_other_provider",
-            "AUX_NEWS_RATE_LIMIT_PER_MINUTE": "42",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "AUX_NEWS_PRIMARY_PROVIDER": "some_other_provider",
+                "AUX_NEWS_RATE_LIMIT_PER_MINUTE": "42",
+            },
+        ):
             cfg = NewsAuxSettings()
             self.assertEqual(cfg.primary_provider, "some_other_provider")
             self.assertEqual(cfg.rate_limit_per_minute, 42)
 
     def test_aux_data_settings_nested_access_reflects_env(self):
         """The actual access path the app uses: settings.aux_data.news.enabled."""
-        with patch.dict(os.environ, {
-            "AUX_NEWS_ENABLED": "true",
-            "AUX_FUNDAMENTALS_ENABLED": "true",
-            "AUX_OPTIONS_ENABLED": "true",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "AUX_NEWS_ENABLED": "true",
+                "AUX_FUNDAMENTALS_ENABLED": "true",
+                "AUX_OPTIONS_ENABLED": "true",
+            },
+        ):
             cfg = AuxDataSettings()
             self.assertTrue(cfg.news.enabled)
             self.assertTrue(cfg.fundamentals.enabled)
@@ -95,6 +101,7 @@ class TestAuxDataSettingsEnvBinding(unittest.TestCase):
         moment .env's aux flags were flipped back to false, even though
         the settings binding itself was working correctly."""
         from backend.config.settings import AuxDataSettings, settings
+
         fresh = AuxDataSettings()
         self.assertEqual(settings.aux_data.news.enabled, fresh.news.enabled)
         self.assertEqual(settings.aux_data.fundamentals.enabled, fresh.fundamentals.enabled)

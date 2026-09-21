@@ -1,6 +1,7 @@
 """
 Market data provider interface and base classes
 """
+
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ProviderDataError(Exception):
     """Custom exception for errors occurring during market data retrieval or parsing"""
+
     def __init__(self, message: str, url: str | None = None):
         super().__init__(message)
         self.url = url
@@ -103,6 +105,7 @@ class MarketDataProvider(ABC):
     def is_available(self) -> bool:
         """Check if provider is available/healthy"""
 
+
 class BaseMarketDataProvider(MarketDataProvider):
     """Base implementation with common functionality"""
 
@@ -132,6 +135,7 @@ class BaseMarketDataProvider(MarketDataProvider):
     def get_provider_status(self) -> ProviderStatus:
         """Get provider health/status"""
         from datetime import datetime
+
         return ProviderStatus(
             provider_name=self.name,
             is_healthy=self._is_healthy,
@@ -139,7 +143,7 @@ class BaseMarketDataProvider(MarketDataProvider):
             rate_limit_remaining=None,
             last_success=datetime.now() if self._is_healthy else None,
             error_message=self._last_error,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
     def is_available(self) -> bool:

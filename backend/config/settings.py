@@ -27,12 +27,13 @@ _DB_URL = f"sqlite:///{_DB_PATH}"
 
 class RedisSettings(BaseSettings):
     """Redis configuration for caching and pub/sub."""
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="REDIS_", extra="ignore")
     url: str = Field(default="redis://localhost:6379/0")
     password: str | None = Field(default=None)
     # Cache TTL settings (in seconds)
     bar_data_ttl: int = Field(default=300)  # 5 minutes for bar data
-    quote_ttl: int = Field(default=60)      # 1 minute for quotes
+    quote_ttl: int = Field(default=60)  # 1 minute for quotes
     # Cache size limits (maximum number of keys)
     max_bar_keys: int = Field(default=1000)
     max_quote_keys: int = Field(default=1000)
@@ -42,6 +43,7 @@ class RedisSettings(BaseSettings):
 
 class BackgroundProcessingSettings(BaseSettings):
     """Phase 2.5 — Background AI analysis job queue (RQ)."""
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="BACKGROUND_", extra="ignore")
     enabled: bool = Field(default=True)
     # RQ queue name. Workers must be started with: rq worker --url redis://... <queue_name>
@@ -59,7 +61,10 @@ class BackgroundProcessingSettings(BaseSettings):
 
 class NotificationSettings(BaseSettings):
     """Optional server-side delivery settings for alert notifications."""
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="NOTIFICATIONS_", extra="ignore")
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="NOTIFICATIONS_", extra="ignore"
+    )
     enabled: bool = Field(default=True)
     request_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
     retry_max: int = Field(default=3, ge=0, le=10)
@@ -77,6 +82,7 @@ class FinnhubSettings(BaseSettings):
     Free tier: 30 req/sec rate limit, IP-based (no API key required).
     Providing an API key upgrades to 60 req/sec.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="FINNHUB_", extra="ignore")
     enabled: bool = Field(default=False)
     api_key: str = Field(default="")
@@ -91,6 +97,7 @@ class WebullSettings(BaseSettings):
     WEBULL_APP_KEY and WEBULL_APP_SECRET are set. The token is held
     in-process memory only and refreshed automatically on expiry.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="WEBULL_", extra="ignore")
     enabled: bool = Field(default=False)
     app_key: str = Field(default="")
@@ -152,6 +159,7 @@ class BackfillSettings(BaseSettings):
       - 1h primary=alpaca,  fallback=webull,yahoo_finance
       - 1d primary=alpaca,  fallback=webull,yahoo_finance
     """
+
     model_config = SettingsConfigDict(
         env_file=_ENV_FILE,
         env_prefix="BACKFILL_",
@@ -195,15 +203,9 @@ class BackfillSettings(BaseSettings):
     # in backfill_symbol_history — these settings just make the previously
     # hardcoded per-tier ceilings (15 / 365 / retention_days) tunable
     # independently of the overall retention policy.
-    tf_1m_days: int = Field(
-        default=15, validation_alias=AliasChoices("BACKFILL_1M_DAYS")
-    )
-    tf_1h_days: int = Field(
-        default=365, validation_alias=AliasChoices("BACKFILL_1H_DAYS")
-    )
-    tf_1d_days: int = Field(
-        default=1095, validation_alias=AliasChoices("BACKFILL_1D_DAYS")
-    )
+    tf_1m_days: int = Field(default=15, validation_alias=AliasChoices("BACKFILL_1M_DAYS"))
+    tf_1h_days: int = Field(default=365, validation_alias=AliasChoices("BACKFILL_1H_DAYS"))
+    tf_1d_days: int = Field(default=1095, validation_alias=AliasChoices("BACKFILL_1D_DAYS"))
 
     def get_1m_gapfill_providers(self) -> list[str]:
         """Comma-separated list of 1m gapfill providers from the .env."""
@@ -256,6 +258,7 @@ class RetentionSettings(BaseSettings):
     BACKFILL_1M/1H/1D_DAYS (15/365/1095) at +1 day, so nothing gets
     pruned right after backfill just fetched it.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="RETENTION_", extra="ignore")
 
     tf_1m_days: int = Field(default=16)
@@ -318,6 +321,7 @@ class AlpacaSettings(BaseSettings):
     ``ALPACA_API_KEY`` / ``ALPACA_SECRET_KEY``. The provider is skipped
     (not registered) when ``enabled=false`` or credentials are absent.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="ALPACA_", extra="ignore")
     enabled: bool = Field(default=False)
     api_key: str = Field(default="")
@@ -345,6 +349,7 @@ class AISettings(BaseSettings):
     ``api_key`` is sourced from the environment (``AI_API_KEY``) and
     must never be sent to the frontend — see ``AIManager.safe_config()``.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_", extra="ignore")
 
     enabled: bool = Field(default=False)
@@ -454,6 +459,7 @@ class DatabaseSettings(BaseSettings):
     If you need a different DB (tests, production Postgres), set the
     ``MARKETLENS_DB_OVERRIDE`` environment variable to the desired URL.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="DATABASE_", extra="ignore")
     # The URL is the hard-coded project-root path. The field validator below
     # forces this value, ignoring anything pydantic-settings read from env.
@@ -509,6 +515,7 @@ class TrendSignalWeights(BaseSettings):
     a real directional vote via DI+/DI- rather than only strength.
     Bollinger Bands is enabled (was 0.0) so the structure signal counts.
     """
+
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
     # EMA crossover — the spine of trend direction.
     ema: float = 0.25
@@ -530,6 +537,7 @@ class TrendSignalWeights(BaseSettings):
 
 class IndicatorDefaults(BaseSettings):
     """Default indicator periods used throughout the engine — Principle 12."""
+
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
     # RSI — default 14-period, used on every timeframe.
     rsi_period: int = 14
@@ -549,6 +557,7 @@ class IndicatorDefaults(BaseSettings):
 
 class TrendSettings(BaseSettings):
     """Settings that control TrendEngine behaviour and weighting."""
+
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
     # Score component weights (passed to TrendSignalWeights; sum not required to be 1).
     signal_weights: TrendSignalWeights = Field(default_factory=TrendSignalWeights)
@@ -582,8 +591,9 @@ class DataQualitySettings(BaseSettings):
     is the cutoff for flagging a tick as stale (older than the configured
     threshold at the time of arrival).
     """
+
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
-    max_tick_gap_seconds: float = 60.0   # > this gap between ticks => warn "gap"
+    max_tick_gap_seconds: float = 60.0  # > this gap between ticks => warn "gap"
     stale_threshold_seconds: float = 30.0  # ticks older than this => warn "stale"
     duplicate_price_tolerance: float = 1e-9  # |price - last_price| <= this => "duplicate"
 
@@ -599,6 +609,7 @@ class MultiTimeframeSettings(BaseSettings):
     module-level constants on the engine itself because they're
     configuration, not settings — they don't vary per environment.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MTF_", extra="ignore")
     # Which preset to use when the engine is constructed without one.
     # "day_trading" (5m/15m/1h/4h/1d) or "swing" (15m/1h/4h/1d/1w).
@@ -625,7 +636,10 @@ class MarketContextSettings(BaseSettings):
     The market-wide regime is derived by aggregating the sub-regimes of
     these four indices. VIX is treated inversely (high VIX → risk-off).
     """
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="MARKET_CONTEXT_", extra="ignore")
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="MARKET_CONTEXT_", extra="ignore"
+    )
     # Indices to analyze for the market-wide regime aggregate.
     indices: tuple[str, ...] = ("SPY", "QQQ", "IWM", "^VIX")
     # Number of sub-regimes that must agree for a consensus regime.
@@ -645,7 +659,10 @@ class RelativeStrengthSettings(BaseSettings):
     symbol's return delta over the lookback window and maps it to a
     classification band.
     """
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="RELATIVE_STRENGTH_", extra="ignore")
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="RELATIVE_STRENGTH_", extra="ignore"
+    )
     # Comma-separated benchmark symbols used for relative-strength
     # computation. Defaults to the SPY/QQQ pair from the Phase 8 spec;
     # override via ``RELATIVE_STRENGTH_BENCHMARKS=SPY,QQQ,IWM``.
@@ -673,6 +690,7 @@ class RelativeStrengthSettings(BaseSettings):
 
 class _AuxProviderCategorySettings(BaseSettings):
     """Shared fields for one Phase 18 provider category."""
+
     model_config = SettingsConfigDict(extra="ignore")
     enabled: bool = Field(default=False)
     primary_provider: str  # must be overridden
@@ -703,7 +721,9 @@ class NewsAuxSettings(_AuxProviderCategorySettings):
 
 
 class FundamentalsAuxSettings(_AuxProviderCategorySettings):
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_FUNDAMENTALS_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="AUX_FUNDAMENTALS_", extra="ignore"
+    )
     # yfinance stays primary — its .info scrape fills the full
     # FundamentalsItem. webull_fundamentals is wired as a fallback but
     # Webull's get_financials_indicators only carries 8 per-share ratios
@@ -734,6 +754,7 @@ class AuxDataSettings(BaseSettings):
     class-level prefix is inert (no scalar fields of its own to bind), kept
     only for consistency with every other settings class in this file.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AUX_", extra="ignore")
     news: NewsAuxSettings = Field(default_factory=NewsAuxSettings)
     fundamentals: FundamentalsAuxSettings = Field(default_factory=FundamentalsAuxSettings)
@@ -748,6 +769,7 @@ class SecuritySettings(BaseSettings):
     be set on deployments that are reachable exclusively over HTTPS.
     Enable ``hsts_enabled=True`` only after HTTPS is confirmed end-to-end.
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="SECURITY_", extra="ignore")
 
     # Strict-Transport-Security: only enable when HTTPS is enforced
@@ -798,7 +820,10 @@ class ObservabilitySettings(BaseSettings):
     structured logging. All settings can be overridden via environment
     variables with the OBSERVABILITY_ prefix.
     """
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="OBSERVABILITY_", extra="ignore")
+
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_prefix="OBSERVABILITY_", extra="ignore"
+    )
 
     # Tracing configuration
     tracing_enabled: bool = Field(default=False)
@@ -828,6 +853,7 @@ def _version_factory() -> str:
     """
     try:
         from backend.version import get_version
+
         return get_version()
     except Exception:
         return "dev"
@@ -835,6 +861,7 @@ def _version_factory() -> str:
 
 class DigestSettings(BaseSettings):
     """Version 4, AI feature 2 — daily/session AI digest scheduling."""
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_DIGEST_", extra="ignore")
     enabled: bool = Field(default=True)
     # Two fixed daily slots (ET), matching the "premarket"/"close" session
@@ -856,6 +883,7 @@ class TapeSettings(BaseSettings):
     signed volume / buy-sell pressure, tape speed, block detection. Off
     unless ``TAPE_ENABLED=true`` (and the Webull MQTT stream running).
     """
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="TAPE_", extra="ignore")
     enabled: bool = Field(default=False)
     window_seconds: int = Field(default=60, ge=5)
@@ -896,8 +924,11 @@ class AITradePlanTrackingSettings(BaseSettings):
     when off, analyze_symbol() captures nothing, no background grading
     thread runs, and context.py's track_record section stays empty.
     """
+
     model_config = SettingsConfigDict(
-        env_file=_ENV_FILE, env_prefix="AI_TRADE_PLAN_TRACKING_", extra="ignore",
+        env_file=_ENV_FILE,
+        env_prefix="AI_TRADE_PLAN_TRACKING_",
+        extra="ignore",
     )
     enabled: bool = Field(default=False)
     # How often the background grading pass re-checks open plans against
@@ -910,6 +941,7 @@ class NudgeSettings(BaseSettings):
     """Proactive chat nudges (2026-09-15) — the universal AI Hub chat is
     otherwise 100% reactive. Off unless ``AI_NUDGES_ENABLED=true``; when
     off, ``backend.ai.nudges.NudgeService`` never starts a loop."""
+
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_NUDGES_", extra="ignore")
     enabled: bool = Field(default=True)
     poll_interval_seconds: float = Field(default=45.0, ge=5.0)
@@ -926,7 +958,9 @@ class NudgeSettings(BaseSettings):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE, env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+    )
     app_name: str = "MarketLens"
     # ``app_version`` is written by the pre-commit hook to version.txt at
     # the repo root.  ``get_version()`` falls back to "dev" when the file

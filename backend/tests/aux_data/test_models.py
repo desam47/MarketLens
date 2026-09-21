@@ -1,6 +1,7 @@
 """
 Phase 18 — Pydantic model validation tests for the aux_data models.
 """
+
 import unittest
 from datetime import datetime
 
@@ -15,7 +16,6 @@ from backend.models.aux_data import (
 
 
 class TestNewsItem(unittest.TestCase):
-
     def test_basic_construction(self):
         item = NewsItem(
             headline="AAPL beats Q3 earnings",
@@ -32,20 +32,23 @@ class TestNewsItem(unittest.TestCase):
     def test_relevance_clamped(self):
         with self.assertRaises(ValueError):
             NewsItem(
-                headline="x", source="x",
+                headline="x",
+                source="x",
                 timestamp=datetime.utcnow(),
-                symbol="AAPL", relevance=1.5,
+                symbol="AAPL",
+                relevance=1.5,
             )
         with self.assertRaises(ValueError):
             NewsItem(
-                headline="x", source="x",
+                headline="x",
+                source="x",
                 timestamp=datetime.utcnow(),
-                symbol="AAPL", relevance=-0.1,
+                symbol="AAPL",
+                relevance=-0.1,
             )
 
 
 class TestFundamentalsItem(unittest.TestCase):
-
     def test_minimal_required(self):
         f = FundamentalsItem(symbol="AAPL")
         self.assertEqual(f.symbol, "AAPL")
@@ -85,7 +88,6 @@ class TestFundamentalsItem(unittest.TestCase):
 
 
 class TestOptionContract(unittest.TestCase):
-
     def test_construction(self):
         c = OptionContract(
             strike=200.0,
@@ -106,19 +108,22 @@ class TestOptionContract(unittest.TestCase):
     def test_delta_range(self):
         with self.assertRaises(ValueError):
             OptionContract(
-                strike=200.0, expiration="2026-12-18",
-                option_type=OptionsType.CALL, delta=2.0,
+                strike=200.0,
+                expiration="2026-12-18",
+                option_type=OptionsType.CALL,
+                delta=2.0,
             )
 
 
 class TestOptionsChain(unittest.TestCase):
-
     def test_construction(self):
         c1 = OptionContract(strike=200, expiration="2026-12-18", option_type=OptionsType.CALL)
         p1 = OptionContract(strike=200, expiration="2026-12-18", option_type=OptionsType.PUT)
         chain = OptionsChain(
-            symbol="AAPL", expiration="2026-12-18",
-            calls=[c1], puts=[p1],
+            symbol="AAPL",
+            expiration="2026-12-18",
+            calls=[c1],
+            puts=[p1],
             put_call_ratio=1.0,
         )
         self.assertEqual(chain.symbol, "AAPL")

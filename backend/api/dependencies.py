@@ -1,6 +1,7 @@
 """
 FastAPI dependencies for API routes
 """
+
 from collections.abc import Generator
 
 from sqlalchemy.orm import Session

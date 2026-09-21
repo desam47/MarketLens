@@ -1,4 +1,5 @@
 """Tests for the rule-based NL query parser."""
+
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -12,7 +13,6 @@ from backend.nl_search.parser import (
 
 
 class TestSplitClauses(unittest.TestCase):
-
     def test_split_on_but(self):
         left, right = _split_clauses("bullish daily but bearish 5m")
         self.assertEqual(left, "bullish daily")
@@ -35,7 +35,6 @@ class TestSplitClauses(unittest.TestCase):
 
 
 class TestApplyConflictRules(unittest.TestCase):
-
     def test_bearish_5m(self):
         result = _apply_conflict_rules("bearish 5m")
         self.assertEqual(result.get("timeframe"), "5m")
@@ -52,7 +51,6 @@ class TestApplyConflictRules(unittest.TestCase):
 
 
 class TestApplyRules(unittest.TestCase):
-
     def test_strongest_bullish(self):
         merged, conflict = _apply_rules("Show me the strongest bullish stocks.")
         self.assertEqual(merged["ranking"], "strongest_bullish")
@@ -155,7 +153,6 @@ class TestApplyRules(unittest.TestCase):
 
 
 class TestParseQueryRuleBased(unittest.TestCase):
-
     def test_strongest_bullish(self):
         result = parse_query_rule_based("Show me the strongest bullish stocks.")
         self.assertIsNotNone(result)
@@ -224,7 +221,7 @@ class TestBareDirectionFallbackRule(unittest.TestCase):
         self.assertEqual(f.ranking, "strongest_bullish")
 
     def test_more_specific_rule_still_wins(self):
-        """"strongest bearish stocks" already fires a more specific
+        """ "strongest bearish stocks" already fires a more specific
         rule earlier in the list; the bare fallback must not clobber
         it (setdefault semantics)."""
         result = parse_query_rule_based("strongest bearish stocks")
@@ -234,7 +231,7 @@ class TestBareDirectionFallbackRule(unittest.TestCase):
         self.assertEqual(f.direction, "bearish")
 
     def test_timeframe_qualified_bearish_unaffected(self):
-        """"bearish 5m" already sets timeframe via its own rule; the
+        """ "bearish 5m" already sets timeframe via its own rule; the
         bare fallback must not overwrite that with a timeframe-less
         direction-only match."""
         result = parse_query_rule_based("bearish 5m")
@@ -245,7 +242,6 @@ class TestBareDirectionFallbackRule(unittest.TestCase):
 
 
 class TestParseQuery(unittest.TestCase):
-
     def test_rule_based_used(self):
         f, extras, used = parse_query("strongest bullish stocks")
         self.assertEqual(used, "rules")
@@ -281,7 +277,8 @@ class TestParseQueryScopeOverride(unittest.TestCase):
     def test_rule_based_path_respects_market_scope(self):
         # "strongest bullish stocks" fires a rule on its own.
         f, _, used = parse_query(
-            "strongest bullish stocks", base={"scope": "market"},
+            "strongest bullish stocks",
+            base={"scope": "market"},
         )
         self.assertEqual(used, "rules")
         self.assertEqual(f.scope, "market")
@@ -319,7 +316,8 @@ class TestParseQueryScopeOverride(unittest.TestCase):
         force an unnecessary model_copy — same object semantics aside,
         the resulting value must still be correct."""
         f, _, used = parse_query(
-            "strongest bullish stocks", base={"scope": "watchlist"},
+            "strongest bullish stocks",
+            base={"scope": "watchlist"},
         )
         self.assertEqual(f.scope, "watchlist")
 

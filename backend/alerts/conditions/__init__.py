@@ -26,6 +26,7 @@ Adding a new condition:
   4. If the condition needs a price/bar callback, register it in
      ``AlertsEngine`` and handle it in ``_on_quote``.
 """
+
 from .evaluators import (
     _EVALUATORS,
     VALID_CONDITION_TYPES,

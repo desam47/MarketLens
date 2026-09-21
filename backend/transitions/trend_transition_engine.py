@@ -23,6 +23,7 @@ Historical-only: at every index ``i`` the engine uses only data points
 ``<= i``. The ``window`` and ``min_delta`` parameters are configurable
 so callers can tune the sensitivity per timeframe or use case.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -33,6 +34,7 @@ from enum import StrEnum
 
 class TransitionType(StrEnum):
     """The six spec-defined transition types."""
+
     BULLISH_ACCELERATION = "bullish_acceleration"
     BULLISH_WEAKENING = "bullish_weakening"
     BEARISH_ACCELERATION = "bearish_acceleration"
@@ -43,6 +45,7 @@ class TransitionType(StrEnum):
 
 class TransitionDirection(StrEnum):
     """Coarse-grained direction bucket; useful for ranking/filtering."""
+
     BULLISH = "bullish"
     BEARISH = "bearish"
     NEUTRAL = "neutral"
@@ -69,6 +72,7 @@ class TrendTransition:
     range, so magnitudes can exceed 100 in theory but in practice are
     bounded by the score range).
     """
+
     type: TransitionType
     direction: TransitionDirection
     symbol: str
@@ -199,9 +203,7 @@ class TrendTransitionEngine:
 
     # --- internals ---
 
-    def _classify(
-        self, prev: float, curr: float, delta: float
-    ) -> TransitionType | None:
+    def _classify(self, prev: float, curr: float, delta: float) -> TransitionType | None:
         """Classify a (prev, curr) score pair into a transition type.
 
         Returns ``None`` if the pair does not represent a meaningful
@@ -216,11 +218,7 @@ class TrendTransitionEngine:
             # Differentiate bullish vs bearish reversal by the sign of the
             # *delta* (a bullish reversal is rising into positive; a bearish
             # reversal is falling into negative).
-            return (
-                TransitionType.BULLISH_REVERSAL
-                if delta > 0
-                else TransitionType.BEARISH_REVERSAL
-            )
+            return TransitionType.BULLISH_REVERSAL if delta > 0 else TransitionType.BEARISH_REVERSAL
         if prev > self.reversal_threshold and curr < -self.reversal_threshold:
             return TransitionType.BEARISH_REVERSAL
 

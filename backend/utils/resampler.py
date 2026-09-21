@@ -15,6 +15,7 @@ Usage:
 Phase 3.1.1: the foundation of the 1m-only storage change. Higher TFs
 are no longer stored; they are derived from 1m bars at read time.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -59,6 +60,7 @@ _SUPPORTED = frozenset(_TF_MINUTES) | _CALENDAR_TIMEFRAMES
 
 
 # ---------------------------------------------------------------------- boundary
+
 
 def _floor_minute(dt: datetime, minutes: int) -> datetime:
     """Return the start of the containing `minutes`-aligned bucket.
@@ -140,6 +142,7 @@ def _bucket_start(dt: datetime, timeframe: str) -> datetime:
 
 # ---------------------------------------------------------------------- main
 
+
 def resample_ohlcv(bars: Iterable[Bar], target_tf: str) -> list[Bar]:
     """Aggregate 1m bars into `target_tf` bars.
 
@@ -162,8 +165,7 @@ def resample_ohlcv(bars: Iterable[Bar], target_tf: str) -> list[Bar]:
     # Validate target timeframe.
     if target_tf not in _SUPPORTED:
         raise ResampleError(
-            f"unsupported target timeframe: {target_tf!r}. "
-            f"Supported: {sorted(_SUPPORTED)}"
+            f"unsupported target timeframe: {target_tf!r}. Supported: {sorted(_SUPPORTED)}"
         )
 
     # Materialise, validate, sort.
@@ -234,17 +236,19 @@ def resample_ohlcv(bars: Iterable[Bar], target_tf: str) -> list[Bar]:
                     agg_low = m.low
                 agg_volume += m.volume
 
-        out.append(Bar(
-            symbol=symbol,
-            timestamp=bucket,
-            open=agg_open,
-            high=agg_high,
-            low=agg_low,
-            close=agg_close,
-            volume=agg_volume,
-            timeframe=target_tf,
-            provider=first.provider,
-            data_status=agg_status,
-            source="resampled",
-        ))
+        out.append(
+            Bar(
+                symbol=symbol,
+                timestamp=bucket,
+                open=agg_open,
+                high=agg_high,
+                low=agg_low,
+                close=agg_close,
+                volume=agg_volume,
+                timeframe=target_tf,
+                provider=first.provider,
+                data_status=agg_status,
+                source="resampled",
+            )
+        )
     return out

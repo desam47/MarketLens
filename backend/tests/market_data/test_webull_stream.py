@@ -3,6 +3,7 @@ Tests for backend.market_data.streaming.webull_stream.WebullStreamClient.
 
 The Webull SDK's DataStreamingClient is mocked — no MQTT, no network.
 """
+
 import logging
 import threading
 import time
@@ -48,7 +49,8 @@ class TestMessageMapping(unittest.TestCase):
     def setUp(self):
         self.snaps, self.trades = [], []
         self.client = WebullStreamClient(
-            "k", "s",
+            "k",
+            "s",
             on_snapshot=lambda *a: self.snaps.append(a),
             on_trade=lambda *a: self.trades.append(a),
         )
@@ -171,7 +173,7 @@ class TestTeardown(unittest.TestCase):
         release = threading.Event()
         self.addCleanup(release.set)
         sdk = MagicMock()
-        sdk.loop_stop.side_effect = lambda: release.wait(10)   # the SDK's 10 s sleep
+        sdk.loop_stop.side_effect = lambda: release.wait(10)  # the SDK's 10 s sleep
         c = self._client_with(sdk)
         with patch.object(webull_stream, "_TEARDOWN_WAIT_S", 0.2):
             t0 = time.monotonic()
@@ -227,7 +229,7 @@ class TestExpectedStopLogFilter(unittest.TestCase):
         with patch.object(webull_stream, "_teardowns_in_flight", 0):
             r = self._record(self.MSG)
             f.filter(r)
-            self.assertEqual(r.levelno, logging.ERROR)   # a real loop failure stays an error
+            self.assertEqual(r.levelno, logging.ERROR)  # a real loop failure stays an error
 
     def test_other_errors_during_a_teardown_stay_errors(self):
         f = webull_stream._ExpectedStopFilter()
@@ -237,8 +239,12 @@ class TestExpectedStopLogFilter(unittest.TestCase):
             self.assertEqual(r.levelno, logging.ERROR)
 
     def test_is_installed_on_the_sdk_logger(self):
-        self.assertTrue(any(isinstance(f, webull_stream._ExpectedStopFilter)
-                            for f in logging.getLogger("webull.data").filters))
+        self.assertTrue(
+            any(
+                isinstance(f, webull_stream._ExpectedStopFilter)
+                for f in logging.getLogger("webull.data").filters
+            )
+        )
 
 
 class TestFactory(unittest.TestCase):
@@ -253,9 +259,11 @@ class TestFactory(unittest.TestCase):
     def test_returns_instance_when_enabled_and_credentialed(self):
         from backend.config.settings import settings
 
-        with patch.object(settings.webull, "streaming_enabled", True), \
-             patch.object(settings.webull, "app_key", "k"), \
-             patch.object(settings.webull, "app_secret", "s"):
+        with (
+            patch.object(settings.webull, "streaming_enabled", True),
+            patch.object(settings.webull, "app_key", "k"),
+            patch.object(settings.webull, "app_secret", "s"),
+        ):
             c = get_webull_stream_client()
         self.assertIsInstance(c, WebullStreamClient)
 

@@ -6,6 +6,7 @@ Single-flight is now a DB+RQ check (backend/models/backfill_job.py rows,
 confirmed against RQ job status) instead of an in-process primitive — see
 backfill_queue.py's module docstring for the rationale.
 """
+
 import os
 import sys
 import threading
@@ -18,7 +19,6 @@ from backend.market_data.services import backfill_queue
 
 
 class TestGetBackfillQueue(unittest.TestCase):
-
     def setUp(self):
         backfill_queue.reset_for_tests()
 
@@ -53,7 +53,6 @@ class TestGetBackfillQueue(unittest.TestCase):
 
 
 class TestEnqueueBackfill(unittest.TestCase):
-
     def setUp(self):
         backfill_queue.reset_for_tests()
 
@@ -68,7 +67,9 @@ class TestEnqueueBackfill(unittest.TestCase):
         fake_queue = MagicMock()
         with (
             patch.object(backfill_queue, "get_backfill_queue", return_value=fake_queue),
-            patch.object(backfill_queue, "_in_flight_job_id", return_value="backfill:AAPL:existing"),
+            patch.object(
+                backfill_queue, "_in_flight_job_id", return_value="backfill:AAPL:existing"
+            ),
         ):
             result = backfill_queue.enqueue_backfill("AAPL")
         self.assertIsNone(result)
@@ -116,10 +117,11 @@ class TestEnqueueBackfill(unittest.TestCase):
 
 
 class TestInFlightJobId(unittest.TestCase):
-
     def _db_returning(self, latest_job):
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = latest_job
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+            latest_job
+        )
         return mock_db
 
     def test_none_when_no_prior_job(self):
@@ -178,7 +180,9 @@ class TestGetBackfillJobStatus(unittest.TestCase):
 
     def _db_returning(self, record):
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = record
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+            record
+        )
         return mock_db
 
     def test_returns_none_when_no_job_exists(self):
@@ -188,10 +192,19 @@ class TestGetBackfillJobStatus(unittest.TestCase):
 
     def test_returns_dict_shape_for_terminal_status(self):
         record = MagicMock(
-            symbol="AAPL", job_id="backfill-abc", status="completed",
-            tier1_written=10, tier2_written=5, tier3_written=2,
-            gaps_found=0, gaps_filled=0, result=None, error=None,
-            created_at=None, started_at=None, completed_at=None,
+            symbol="AAPL",
+            job_id="backfill-abc",
+            status="completed",
+            tier1_written=10,
+            tier2_written=5,
+            tier3_written=2,
+            gaps_found=0,
+            gaps_filled=0,
+            result=None,
+            error=None,
+            created_at=None,
+            started_at=None,
+            completed_at=None,
         )
         db = self._db_returning(record)
         with patch("backend.database.SessionLocal", return_value=db):
@@ -202,10 +215,19 @@ class TestGetBackfillJobStatus(unittest.TestCase):
 
     def test_parses_result_json(self):
         record = MagicMock(
-            symbol="AAPL", job_id="backfill-abc", status="partial",
-            tier1_written=1, tier2_written=1, tier3_written=1,
-            gaps_found=2, gaps_filled=1, result='{"1d": {"gaps_found": 2}}',
-            error=None, created_at=None, started_at=None, completed_at=None,
+            symbol="AAPL",
+            job_id="backfill-abc",
+            status="partial",
+            tier1_written=1,
+            tier2_written=1,
+            tier3_written=1,
+            gaps_found=2,
+            gaps_filled=1,
+            result='{"1d": {"gaps_found": 2}}',
+            error=None,
+            created_at=None,
+            started_at=None,
+            completed_at=None,
         )
         db = self._db_returning(record)
         with patch("backend.database.SessionLocal", return_value=db):
@@ -262,17 +284,20 @@ class TestGetBackfillJobStatus(unittest.TestCase):
 
 
 class TestCancelBackfill(unittest.TestCase):
-
     def test_returns_false_when_nothing_to_cancel(self):
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+            None
+        )
         with patch("backend.database.SessionLocal", return_value=mock_db):
             self.assertFalse(backfill_queue.cancel_backfill("AAPL"))
 
     def test_marks_row_failed_when_in_flight_job_found(self):
         record = MagicMock(status="queued", job_id="backfill:AAPL:1")
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = record
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = (
+            record
+        )
         with (
             patch("backend.database.SessionLocal", return_value=mock_db),
             patch("backend.ai.background.get_redis", return_value=None),
@@ -315,6 +340,16 @@ class TestConcurrentEnqueueSingleFlight(unittest.TestCase):
 
     def setUp(self):
         import uuid
+
+        # These two tests deliberately exercise a real RQ queue and Redis
+        # lock. Redis is optional for local development and is intentionally
+        # disabled in the regular CI suite, so make that dependency explicit
+        # instead of reporting a misleading queue assertion failure.
+        from backend.ai.background import get_redis
+
+        if get_redis() is None:
+            self.skipTest("requires an available Redis-backed RQ queue")
+
         backfill_queue.reset_for_tests()
         self.symbol = f"ZZRACE{uuid.uuid4().hex[:6].upper()}"
         self._rq_job_ids: list[str] = []
@@ -322,6 +357,7 @@ class TestConcurrentEnqueueSingleFlight(unittest.TestCase):
     def tearDown(self):
         from backend.database import SessionLocal
         from backend.models import BackfillJob
+
         db = SessionLocal()
         try:
             db.query(BackfillJob).filter(BackfillJob.symbol == self.symbol).delete()
@@ -331,9 +367,11 @@ class TestConcurrentEnqueueSingleFlight(unittest.TestCase):
         # Clean up the real RQ job(s) so they don't linger in Redis.
         try:
             from backend.ai.background import get_redis
+
             client = get_redis()
             if client is not None:
                 from rq.job import Job
+
                 for job_id in self._rq_job_ids:
                     try:
                         Job.fetch(job_id, connection=client).delete()
@@ -361,17 +399,20 @@ class TestConcurrentEnqueueSingleFlight(unittest.TestCase):
         successes = [r for r in results if r is not None]
         self._rq_job_ids.extend(successes)
         self.assertEqual(
-            len(successes), 1,
+            len(successes),
+            1,
             f"expected exactly one enqueue to win the race, got {results}",
         )
 
         from backend.database import SessionLocal
         from backend.models import BackfillJob
+
         db = SessionLocal()
         try:
             rows = db.query(BackfillJob).filter(BackfillJob.symbol == self.symbol.upper()).all()
             self.assertEqual(
-                len(rows), 1,
+                len(rows),
+                1,
                 "exactly one BackfillJob row should exist after the race",
             )
         finally:
@@ -393,6 +434,7 @@ class TestConcurrentEnqueueSingleFlight(unittest.TestCase):
         # here for the unrelated reason that a job is now legitimately
         # in flight).
         from backend.ai.background import get_redis
+
         client = get_redis()
         if client is not None:
             self.assertIsNone(client.get(f"backfill:enqueue-lock:{self.symbol.upper()}"))

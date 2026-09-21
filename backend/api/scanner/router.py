@@ -12,6 +12,7 @@ moderately expensive. There is no background cache — the scanner's
 internal ``scan_results`` dict holds the last result per symbol for
 subsequent quick reads.
 """
+
 import asyncio
 import logging
 from datetime import datetime
@@ -51,6 +52,7 @@ def _to_dashboard_tz(value: datetime | None) -> str:
 
 
 # --- Response models ---------------------------------------------------
+
 
 class _QuoteResponse(BaseModel):
     symbol: str
@@ -112,17 +114,20 @@ class _FilterRequest(BaseModel):
 
         {"type": "daily_bullish", "params": {"min_confidence": 0.6}}
     """
+
     type: str
     params: dict[str, Any] = Field(default_factory=dict)
 
 
 class _FilterBody(BaseModel):
     """Request body for /filter and /rankings endpoints."""
+
     filters: list[_FilterRequest] = Field(default_factory=list)
     match: str = Field(default="AND", description="AND or OR")
 
 
 # --- Helpers -----------------------------------------------------------
+
 
 def _quote_to_dict(quote) -> _QuoteResponse | None:
     if quote is None:
@@ -310,6 +315,7 @@ def _empty_rankings(engine: RankingEngine) -> list[_NamedRankingResponse]:
 # ``/filter-types`` to the symbol-scanner endpoint and try to scan
 # a stock called "filter-types".
 
+
 @router.get("/filter-types", response_model=list[str])
 async def list_filter_types():
     """List the filter ``type`` strings accepted by ``POST /api/scanner/filter``."""
@@ -377,9 +383,7 @@ async def list_ranking_categories():
     return default_ranking_engine.CATEGORIES
 
 
-def _resolve_watchlist_symbols(
-    repo: WatchlistRepository, watchlist_id: int | None
-) -> list[str]:
+def _resolve_watchlist_symbols(repo: WatchlistRepository, watchlist_id: int | None) -> list[str]:
     """Resolve the symbol scope for a top-movers scan.
 
     Shared by ``/top-movers`` and ``/top-movers/combined`` so both scan
@@ -422,7 +426,9 @@ def _rank_entries(
 async def get_top_movers(
     direction: str = Query("bullish", pattern="^(bullish|bearish)$"),
     limit: int = Query(10, ge=0, le=50),
-    watchlist_id: int | None = Query(None, description="Watchlist to scan (defaults to first active)"),
+    watchlist_id: int | None = Query(
+        None, description="Watchlist to scan (defaults to first active)"
+    ),
     db: Session = Depends(get_db),
 ):
     """Return the top N strongest-bullish or strongest-bearish symbols.
@@ -457,7 +463,9 @@ class _TopMoversCombinedResponse(BaseModel):
 @router.get("/top-movers/combined", response_model=_TopMoversCombinedResponse)
 async def get_top_movers_combined(
     limit: int = Query(10, ge=0, le=50),
-    watchlist_id: int | None = Query(None, description="Watchlist to scan (defaults to first active)"),
+    watchlist_id: int | None = Query(
+        None, description="Watchlist to scan (defaults to first active)"
+    ),
     db: Session = Depends(get_db),
 ):
     """Return strongest-bullish and strongest-bearish symbols from one scan.
@@ -501,7 +509,9 @@ async def get_watchlist_rankings(
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    watchlist_symbols = await asyncio.to_thread(repo.get_watchlist_symbols, watchlist_id, enabled_only=True)
+    watchlist_symbols = await asyncio.to_thread(
+        repo.get_watchlist_symbols, watchlist_id, enabled_only=True
+    )
     if not watchlist_symbols:
         return _empty_rankings(engine)
 
@@ -514,6 +524,7 @@ async def get_watchlist_rankings(
 
 
 # --- Symbol-level endpoints -------------------------------------------
+
 
 async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
     """Run the full scan pipeline and notify the alerts engine.
@@ -543,7 +554,9 @@ async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
     try:
         historical_bars = await asyncio.to_thread(
             market_data_manager.get_historical_bars,
-            symbol, timeframe="1d", range_="3mo",
+            symbol,
+            timeframe="1d",
+            range_="3mo",
         )
     except Exception:
         historical_bars = None
@@ -552,10 +565,13 @@ async def _scan_and_notify(symbol: str) -> _ScanResultResponse:
     except Exception:
         quote = None
     result = await asyncio.to_thread(
-        market_scanner.scan_symbol, symbol,
-        historical_bars=historical_bars, quote=quote,
+        market_scanner.scan_symbol,
+        symbol,
+        historical_bars=historical_bars,
+        quote=quote,
     )
     from backend.alerts.engine import alerts_engine
+
     alerts_engine.evaluate_scan_result(result)
     return _result_to_dict(result)
 
@@ -589,9 +605,7 @@ async def scan_symbol(
             try:
                 from backend.services.signal_recorder import signal_recorder
 
-                stats = await asyncio.to_thread(
-                    signal_recorder.get_stats, symbol.upper(), "1d"
-                )
+                stats = await asyncio.to_thread(signal_recorder.get_stats, symbol.upper(), "1d")
             except Exception as exc:  # pragma: no cover - DB/provider dependent
                 logger.debug("Historical signal stats unavailable for %s: %s", symbol, exc)
                 stats = None
@@ -637,6 +651,7 @@ async def get_signals_for_symbol(symbol: str):
 
 # --- Watchlist endpoints ----------------------------------------------
 
+
 @router.get("/watchlist/{watchlist_id}", response_model=_RankedResponse)
 async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
     """Scan every enabled symbol in ``watchlist_id`` and return them ranked.
@@ -657,11 +672,11 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
     # Pull BOTH enabled and disabled rows so the UI can manage them.
-    all_rows = await asyncio.to_thread(repo.get_all_watchlist_symbols, watchlist_id, include_disabled=True)
+    all_rows = await asyncio.to_thread(
+        repo.get_all_watchlist_symbols, watchlist_id, include_disabled=True
+    )
     if not all_rows:
-        return _RankedResponse(
-            timestamp="", count=0, results=[]
-        )
+        return _RankedResponse(timestamp="", count=0, results=[])
 
     enabled_rows = [ws for ws in all_rows if ws.is_enabled]
     disabled_rows = [ws for ws in all_rows if not ws.is_enabled]
@@ -699,19 +714,21 @@ async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
             entry.entity_type = ws.entity_type or "stock"
             results.append(entry)
         else:
-            results.append(_ScanResultResponse(
-                symbol=ws.symbol,
-                timestamp="",
-                quote=None,
-                indicator_values={},
-                scores={},
-                total_score=0.0,
-                rank=None,
-                signals=[],
-                trend_signals={},
-                is_enabled=False,
-                entity_type=ws.entity_type or "stock",
-            ))
+            results.append(
+                _ScanResultResponse(
+                    symbol=ws.symbol,
+                    timestamp="",
+                    quote=None,
+                    indicator_values={},
+                    scores={},
+                    total_score=0.0,
+                    rank=None,
+                    signals=[],
+                    trend_signals={},
+                    is_enabled=False,
+                    entity_type=ws.entity_type or "stock",
+                )
+            )
 
     last_scan = market_scanner.last_scan_time
     return _RankedResponse(
@@ -737,7 +754,9 @@ async def scan_watchlist_top(
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    watchlist_symbols = await asyncio.to_thread(repo.get_watchlist_symbols, watchlist_id, enabled_only=True)
+    watchlist_symbols = await asyncio.to_thread(
+        repo.get_watchlist_symbols, watchlist_id, enabled_only=True
+    )
     if not watchlist_symbols:
         return []
 
@@ -748,7 +767,7 @@ async def scan_watchlist_top(
     by_symbol = {r.symbol.upper(): r for r in market_scanner.scan_results.values()}
     out: list[_ScanResultResponse] = []
     top = limit if limit > 0 else len(ranked)
-    for sym, _score in ranked[: top]:
+    for sym, _score in ranked[:top]:
         result = by_symbol.get(sym.upper())
         if result is not None:
             out.append(_result_to_dict(result))

@@ -20,6 +20,7 @@ Produces:
     {"ts":"2026-08-26T18:40:00.000Z","level":"INFO","logger":"backend.regime",
      "message":"engine updated","symbol":"AAPL","price":313.45}
 """
+
 import json
 import logging
 import os
@@ -32,12 +33,33 @@ from typing import Any
 # Standard LogRecord attributes that we don't want to spill into the JSON
 # payload. Anything else passed via `extra={...}` is treated as structured
 # context and emitted as a top-level field.
-_RESERVED_LOGRECORD_KEYS = frozenset({
-    "args", "asctime", "created", "exc_info", "exc_text", "filename",
-    "funcName", "levelname", "levelno", "lineno", "message", "module",
-    "msecs", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
-})
+_RESERVED_LOGRECORD_KEYS = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "taskName",
+    }
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -46,9 +68,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         # Build the base payload from the record.
         payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(
-                timespec="milliseconds"
-            ),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -139,8 +159,10 @@ def configure_logging(
         level = _resolve_log_level(log_level)
     else:
         env_level = os.environ.get("LOG_LEVEL")
-        level = _resolve_log_level(env_level) if env_level else (
-            logging.DEBUG if debug else logging.INFO
+        level = (
+            _resolve_log_level(env_level)
+            if env_level
+            else (logging.DEBUG if debug else logging.INFO)
         )
 
     json_formatter = JsonFormatter()

@@ -11,6 +11,7 @@ A single ``BacktestRun`` can belong to multiple experiments (e.g.
 avoid a many-to-many join table, run IDs are stored as a JSON array in
 ``run_ids_json``.
 """
+
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, UniqueConstraint
@@ -27,10 +28,9 @@ class Experiment(Base):
     JSON array so the front-end can fetch individual rows for per-symbol
     detail without a join table.
     """
+
     __tablename__ = "experiments"
-    __table_args__ = (
-        UniqueConstraint("name", "strategy_version"),
-    )
+    __table_args__ = (UniqueConstraint("name", "strategy_version"),)
 
     id = Column(Integer, primary_key=True, index=True)
     # Human-readable experiment name, e.g. "RSI(7) vs RSI(14) comparison"

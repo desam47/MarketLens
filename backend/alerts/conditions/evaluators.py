@@ -10,6 +10,7 @@ The ``evaluate`` function is the public dispatcher that maps a
 logged and return False rather than raising — the engine shouldn't crash
 on a misconfigured alert.
 """
+
 import json
 import logging
 from collections.abc import Callable
@@ -52,6 +53,7 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
 
 
 # --- Signal / price conditions (original) --------------------------------
+
 
 def _eval_signal_equals(parameter: str, value: object) -> bool:
     """Fires when the scanner's signal list contains ``parameter``.
@@ -101,6 +103,7 @@ def _eval_pct_change_above(parameter: str, value: object) -> bool:
 
 
 # --- Trend conditions -----------------------------------------------------
+
 
 def _eval_trend_crosses_above_70(parameter: str, value: object) -> bool:
     """Fires when trend score crosses above 70 (from below or from 70).
@@ -194,6 +197,7 @@ def _eval_trend_weakens(parameter: str, value: object) -> bool:
 
 # --- Multi-timeframe conditions -------------------------------------------
 
+
 def _eval_full_timeframe_alignment(parameter: str, value: object) -> bool:
     """Fires when all timeframes agree on the same trend direction.
 
@@ -224,6 +228,7 @@ def _eval_timeframe_conflict(parameter: str, value: object) -> bool:
 
 # --- Volume / price-pattern conditions ------------------------------------
 
+
 def _eval_volume_expansion(parameter: str, value: object) -> bool:
     """Fires when current volume is N× the average volume over a lookback.
 
@@ -248,7 +253,9 @@ def _eval_volume_expansion(parameter: str, value: object) -> bool:
         symbol = value.get("symbol")
         if not symbol:
             return False
-        avg_volume = _compute_avg_volume(symbol, lookback=20, timeframe=value.get("timeframe", "1d"))
+        avg_volume = _compute_avg_volume(
+            symbol, lookback=20, timeframe=value.get("timeframe", "1d")
+        )
         if avg_volume is None or avg_volume <= 0:
             return False
 
@@ -389,14 +396,22 @@ def _eval_signal_profile(parameter: str, value: object) -> bool:
     if not isinstance(score, (int, float)):
         return False
     try:
-        min_score = float(profile.get("min_score")) if profile.get("min_score") not in (None, "") else None
-        min_strength = float(profile.get("min_strength")) if profile.get("min_strength") not in (None, "") else None
+        min_score = (
+            float(profile.get("min_score")) if profile.get("min_score") not in (None, "") else None
+        )
+        min_strength = (
+            float(profile.get("min_strength"))
+            if profile.get("min_strength") not in (None, "")
+            else None
+        )
     except (TypeError, ValueError):
         return False
     if min_score is not None and abs(float(score)) < max(0.0, min_score):
         return False
     strength = value.get("strength")
-    if min_strength is not None and (not isinstance(strength, (int, float)) or float(strength) < max(0.0, min_strength)):
+    if min_strength is not None and (
+        not isinstance(strength, (int, float)) or float(strength) < max(0.0, min_strength)
+    ):
         return False
     regime = str(profile.get("market_regime") or "any").strip().lower()
     current_regime = str(value.get("current_regime") or "").lower()

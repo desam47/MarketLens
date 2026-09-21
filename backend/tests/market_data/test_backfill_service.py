@@ -13,6 +13,7 @@ See test_backfill_queue.py for the single-flight coverage that replaced
 this file's old cross-loop tests (now enforced via a DB+RQ check upstream
 of enqueue, not an in-process primitive).
 """
+
 import os
 import sys
 import unittest
@@ -31,8 +32,13 @@ class TestNoLeftoverLockMachinery(unittest.TestCase):
     the module docstring)."""
 
     def test_no_lock_helpers(self):
-        for name in ("_get_lock", "_get_backfill_semaphore", "_backfill_locks",
-                     "_lock_guards_by_loop", "_backfill_semaphores_by_loop"):
+        for name in (
+            "_get_lock",
+            "_get_backfill_semaphore",
+            "_backfill_locks",
+            "_lock_guards_by_loop",
+            "_backfill_semaphores_by_loop",
+        ):
             self.assertFalse(
                 hasattr(backfill_service, name),
                 f"backfill_service.{name} should not exist anymore",
@@ -56,7 +62,8 @@ class TestCountContiguousSpans(unittest.TestCase):
 
     def test_single_gap(self):
         self.assertEqual(
-            backfill_service._count_contiguous_spans([datetime(2026, 1, 2)], "1d"), 1,
+            backfill_service._count_contiguous_spans([datetime(2026, 1, 2)], "1d"),
+            1,
         )
 
     def test_one_contiguous_run_across_a_weekend(self):
@@ -85,9 +92,7 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
     async def test_no_gaps_when_db_empty(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.one.return_value = (None, None)
-        result = await backfill_service._check_and_fill_gaps(
-            db, "AAPL", "1d", [], "5y"
-        )
+        result = await backfill_service._check_and_fill_gaps(db, "AAPL", "1d", [], "5y")
         self.assertEqual(
             result,
             {"gaps_found": 0, "gaps_filled": 0, "remaining_gap_count": 0, "gap_span_count": 0},
@@ -96,11 +101,10 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
     async def test_no_gaps_when_find_gaps_returns_empty(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.one.return_value = (
-            datetime(2026, 1, 2), datetime(2026, 1, 5),
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 5),
         )
-        with patch(
-            "backend.repositories.bar_repository.find_gaps", return_value=[]
-        ):
+        with patch("backend.repositories.bar_repository.find_gaps", return_value=[]):
             result = await backfill_service._check_and_fill_gaps(
                 db, "AAPL", "1d", ["yahoo_finance"], "5y"
             )
@@ -112,20 +116,36 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
         written; timestamps outside the gap set are ignored."""
         db = MagicMock()
         db.query.return_value.filter.return_value.one.return_value = (
-            datetime(2026, 1, 2), datetime(2026, 1, 5),
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 5),
         )
         gap_ts = datetime(2026, 1, 3)
         other_ts = datetime(2026, 1, 4)
 
         from backend.models import Bar, DataStatus
+
         gap_bar = Bar(
-            symbol="AAPL", timestamp=gap_ts, open=1, high=1, low=1, close=1,
-            volume=100, timeframe="1d", provider="yahoo_finance",
+            symbol="AAPL",
+            timestamp=gap_ts,
+            open=1,
+            high=1,
+            low=1,
+            close=1,
+            volume=100,
+            timeframe="1d",
+            provider="yahoo_finance",
             data_status=DataStatus.HISTORICAL,
         )
         other_bar = Bar(
-            symbol="AAPL", timestamp=other_ts, open=1, high=1, low=1, close=1,
-            volume=100, timeframe="1d", provider="yahoo_finance",
+            symbol="AAPL",
+            timestamp=other_ts,
+            open=1,
+            high=1,
+            low=1,
+            close=1,
+            volume=100,
+            timeframe="1d",
+            provider="yahoo_finance",
             data_status=DataStatus.HISTORICAL,
         )
         mock_provider = MagicMock()
@@ -137,7 +157,9 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
                 return_value=[gap_ts],
             ),
             patch.object(backfill_service, "_instantiate_provider", return_value=mock_provider),
-            patch.object(backfill_service, "_write_bars_in_chunks", new=AsyncMock(return_value=1)) as mock_write,
+            patch.object(
+                backfill_service, "_write_bars_in_chunks", new=AsyncMock(return_value=1)
+            ) as mock_write,
         ):
             result = await backfill_service._check_and_fill_gaps(
                 db, "AAPL", "1d", ["yahoo_finance"], "5y"
@@ -154,7 +176,8 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
     async def test_records_remaining_gap_when_no_provider_has_it(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.one.return_value = (
-            datetime(2026, 1, 2), datetime(2026, 1, 5),
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 5),
         )
         gap_ts = datetime(2026, 1, 3)
         mock_provider = MagicMock()
@@ -179,14 +202,17 @@ class TestCheckAndFillGaps(unittest.IsolatedAsyncioTestCase):
     async def test_provider_exception_does_not_raise(self):
         db = MagicMock()
         db.query.return_value.filter.return_value.one.return_value = (
-            datetime(2026, 1, 2), datetime(2026, 1, 5),
+            datetime(2026, 1, 2),
+            datetime(2026, 1, 5),
         )
         with (
             patch(
                 "backend.repositories.bar_repository.find_gaps",
                 return_value=[datetime(2026, 1, 3)],
             ),
-            patch.object(backfill_service, "_instantiate_provider", side_effect=RuntimeError("boom")),
+            patch.object(
+                backfill_service, "_instantiate_provider", side_effect=RuntimeError("boom")
+            ),
         ):
             result = await backfill_service._check_and_fill_gaps(
                 db, "AAPL", "1d", ["yahoo_finance"], "5y"
@@ -204,9 +230,17 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
 
     def _bar(self, minute: int, timeframe: str, provider: str):
         from backend.models import Bar, DataStatus
+
         return Bar(
-            symbol="CTNT", timestamp=datetime(2026, 9, 10, 10, minute), open=1, high=1,
-            low=1, close=1, volume=100, timeframe=timeframe, provider=provider,
+            symbol="CTNT",
+            timestamp=datetime(2026, 9, 10, 10, minute),
+            open=1,
+            high=1,
+            low=1,
+            close=1,
+            volume=100,
+            timeframe=timeframe,
+            provider=provider,
             data_status=DataStatus.HISTORICAL,
         )
 
@@ -214,7 +248,8 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
         """The common case (e.g. NOK) — unchanged from before this fix."""
         primary = MagicMock()
         primary.get_historical_bars.return_value = [
-            self._bar(0, "1m", "webull"), self._bar(1, "1m", "webull"),
+            self._bar(0, "1m", "webull"),
+            self._bar(1, "1m", "webull"),
         ]
         get_fallback = MagicMock(return_value=["alpaca"])
 
@@ -233,7 +268,10 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
             ),
         ):
             result = await backfill_service._fetch_tier1_1m_bars(
-                "CTNT", 15, MagicMock(), MagicMock(),
+                "CTNT",
+                15,
+                MagicMock(),
+                MagicMock(),
             )
 
         get_fallback.assert_not_called()
@@ -246,7 +284,8 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
         fallback must still run."""
         primary = MagicMock()
         primary.get_historical_bars.return_value = [
-            self._bar(0, "5m", "webull"), self._bar(5, "5m", "webull"),
+            self._bar(0, "5m", "webull"),
+            self._bar(5, "5m", "webull"),
         ]
         fallback = MagicMock()
         fallback.get_historical_bars.return_value = [self._bar(1, "1m", "alpaca")]
@@ -267,7 +306,10 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
             patch.object(backfill_service, "_instantiate_provider", return_value=fallback),
         ):
             result = await backfill_service._fetch_tier1_1m_bars(
-                "CTNT", 15, MagicMock(), MagicMock(),
+                "CTNT",
+                15,
+                MagicMock(),
+                MagicMock(),
             )
 
         fallback.get_historical_bars.assert_called_once()
@@ -302,7 +344,10 @@ class TestFetchTier1_1mBars(unittest.IsolatedAsyncioTestCase):
             patch.object(backfill_service, "_instantiate_provider", return_value=fallback),
         ):
             result = await backfill_service._fetch_tier1_1m_bars(
-                "CTNT", 15, MagicMock(), MagicMock(),
+                "CTNT",
+                15,
+                MagicMock(),
+                MagicMock(),
             )
 
         fallback.get_historical_bars.assert_called_once()
@@ -325,17 +370,25 @@ class TestBackfillSymbolTask(unittest.TestCase):
             db.close()
 
         fake_result = {
-            "symbol": "TESTSYM", "tier1_written": 5, "tier2_written": 3,
-            "tier3_written": 2, "gaps_found": 1, "gaps_filled": 1,
+            "symbol": "TESTSYM",
+            "tier1_written": 5,
+            "tier2_written": 3,
+            "tier3_written": 2,
+            "gaps_found": 1,
+            "gaps_filled": 1,
             "gap_detail": {"1d": {"gaps_found": 1, "gaps_filled": 1, "remaining_gap_count": 0}},
             "duration_s": 0.1,
         }
-        with patch.object(
-            backfill_service, "backfill_symbol_history",
-            new=AsyncMock(return_value=fake_result),
-        ), patch(
-            "backend.services.signal_recorder.signal_recorder.backfill_signals_for_symbol",
-            return_value=0,
+        with (
+            patch.object(
+                backfill_service,
+                "backfill_symbol_history",
+                new=AsyncMock(return_value=fake_result),
+            ),
+            patch(
+                "backend.services.signal_recorder.signal_recorder.backfill_signals_for_symbol",
+                return_value=0,
+            ),
         ):
             backfill_service.backfill_symbol_task("TESTSYM", job_id)
 
@@ -366,16 +419,25 @@ class TestBackfillSymbolTask(unittest.TestCase):
             db.close()
 
         fake_result = {
-            "symbol": "TESTSYM2", "tier1_written": 5, "tier2_written": 3,
-            "tier3_written": 2, "gaps_found": 3, "gaps_filled": 1,
-            "gap_detail": {}, "duration_s": 0.1,
+            "symbol": "TESTSYM2",
+            "tier1_written": 5,
+            "tier2_written": 3,
+            "tier3_written": 2,
+            "gaps_found": 3,
+            "gaps_filled": 1,
+            "gap_detail": {},
+            "duration_s": 0.1,
         }
-        with patch.object(
-            backfill_service, "backfill_symbol_history",
-            new=AsyncMock(return_value=fake_result),
-        ), patch(
-            "backend.services.signal_recorder.signal_recorder.backfill_signals_for_symbol",
-            return_value=0,
+        with (
+            patch.object(
+                backfill_service,
+                "backfill_symbol_history",
+                new=AsyncMock(return_value=fake_result),
+            ),
+            patch(
+                "backend.services.signal_recorder.signal_recorder.backfill_signals_for_symbol",
+                return_value=0,
+            ),
         ):
             backfill_service.backfill_symbol_task("TESTSYM2", job_id)
 
@@ -404,7 +466,8 @@ class TestBackfillSymbolTask(unittest.TestCase):
             db.close()
 
         with patch.object(
-            backfill_service, "backfill_symbol_history",
+            backfill_service,
+            "backfill_symbol_history",
             new=AsyncMock(side_effect=RuntimeError("provider exploded")),
         ):
             backfill_service.backfill_symbol_task("TESTSYM3", job_id)
@@ -440,16 +503,22 @@ class TestBackfillReusesTheSharedManager(unittest.IsolatedAsyncioTestCase):
         from backend.market_data.services.manager import market_data_manager
 
         ing = MagicMock()
-        for name in ("_resample_and_upsert", "_resample_1h_from_1m_and_upsert",
-                     "_resample_1h_to_4h_and_upsert", "_resample_1d_to_1wk_and_upsert"):
+        for name in (
+            "_resample_and_upsert",
+            "_resample_1h_from_1m_and_upsert",
+            "_resample_1h_to_4h_and_upsert",
+            "_resample_1d_to_1wk_and_upsert",
+        ):
             setattr(ing, name, AsyncMock(return_value=0))
         fetch1 = AsyncMock(return_value=[])
-        with patch.object(bs, "MarketDataManager", side_effect=AssertionError("built a manager")), \
-                patch.object(bs, "SessionLocal", MagicMock()), \
-                patch.object(bs, "_fetch_tier1_1m_bars", fetch1), \
-                patch.object(bs, "_fetch_tier2_1h_bars", AsyncMock(return_value=[])), \
-                patch.object(bs, "_fetch_tier2_1d_bars", AsyncMock(return_value=[])), \
-                patch("backend.market_data.services.ingestion_service.ingestion_service", ing):
+        with (
+            patch.object(bs, "MarketDataManager", side_effect=AssertionError("built a manager")),
+            patch.object(bs, "SessionLocal", MagicMock()),
+            patch.object(bs, "_fetch_tier1_1m_bars", fetch1),
+            patch.object(bs, "_fetch_tier2_1h_bars", AsyncMock(return_value=[])),
+            patch.object(bs, "_fetch_tier2_1d_bars", AsyncMock(return_value=[])),
+            patch("backend.market_data.services.ingestion_service.ingestion_service", ing),
+        ):
             result = await bs.backfill_symbol_history("AAPL")
 
         self.assertIsInstance(result, dict)

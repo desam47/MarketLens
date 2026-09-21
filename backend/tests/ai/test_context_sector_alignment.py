@@ -16,6 +16,7 @@ Fixed by pulling the same shared, DB-seeded TrendEngine singletons
 every other trend-consuming feature in the app already uses
 (backend.api.trend.registry.get_engine).
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -46,7 +47,6 @@ def _mock_engine_with_trend(direction: TrendDirection) -> MagicMock:
 
 
 class TestBuildContextSectorAlignment(unittest.TestCase):
-
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
     def test_populates_real_alignment_when_registry_engines_are_warm(
@@ -84,9 +84,7 @@ class TestBuildContextSectorAlignment(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_two_of_three_known_still_computes_an_alignment(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_two_of_three_known_still_computes_an_alignment(self, mock_scanner, mock_get_engine):
         """A real gap (e.g. the sector ETF was never ingested, so its
         registry engine is genuinely cold) shouldn't force the whole
         signal back to insufficient_data as long as 2 of 3 are known —

@@ -6,6 +6,7 @@ requiring a running server. Database operations are performed against
 a real (but isolated) in-memory SQLite database so the repository
 queries are exercised end-to-end.
 """
+
 import contextlib
 import os
 import sys
@@ -192,6 +193,7 @@ class _DBSession:
 
     def __init__(self):
         from backend.database import SessionLocal
+
         self._session = SessionLocal()
 
     def close(self):

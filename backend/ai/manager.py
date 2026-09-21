@@ -20,6 +20,7 @@ API keys are read from settings and never appear in any ``status()``
 or ``safe_config()`` payload. Frontend code must use ``safe_config()``
 when surfacing the manager to a UI.
 """
+
 from __future__ import annotations
 
 import logging
@@ -148,9 +149,7 @@ class AIManager:
             provider_type, _, explicit_model = name.partition(":")
             explicit_model = explicit_model or None
             is_primary = name == self.settings.provider
-            is_same_type_as_primary = (
-                not is_primary and provider_type == self.settings.provider
-            )
+            is_same_type_as_primary = not is_primary and provider_type == self.settings.provider
             if is_primary:
                 resolved_base = self.settings.base_url
                 resolved_model = self.settings.model
@@ -367,7 +366,9 @@ class AIManager:
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
-                    temperature=temperature if temperature is not None else self.settings.temperature,
+                    temperature=temperature
+                    if temperature is not None
+                    else self.settings.temperature,
                     response_format=response_format,
                 )
             except ProviderUnavailable as e:
@@ -470,7 +471,9 @@ class AIManager:
                     prompt,
                     system=system,
                     max_tokens=max_tokens or self.settings.max_tokens,
-                    temperature=temperature if temperature is not None else self.settings.temperature,
+                    temperature=temperature
+                    if temperature is not None
+                    else self.settings.temperature,
                     response_format=response_format,
                 ):
                     started = True
@@ -547,6 +550,7 @@ class AIManager:
             result = True
         else:
             import asyncio
+
             await asyncio.sleep(self._HEALTH_RETRY_DELAY)
             result = await provider.health_check()
         with self._cache_lock:
@@ -580,6 +584,7 @@ class AIManager:
 
 
 # --- Singleton ------------------------------------------------------
+
 
 # The settings are read at import time. Tests that want to override
 # the manager should call ``ai_manager.reload(settings)`` rather than

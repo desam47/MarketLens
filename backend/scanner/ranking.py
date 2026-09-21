@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class RankedEntry:
     """A single entry in a named ranking."""
@@ -69,8 +70,9 @@ class NamedRanking:
                     "symbol": e.symbol,
                     "score": round(e.score, 4),
                     "rank": e.rank,
-                    "metrics": {k: round(v, 4) if isinstance(v, float) else v
-                                for k, v in e.metrics.items()},
+                    "metrics": {
+                        k: round(v, 4) if isinstance(v, float) else v for k, v in e.metrics.items()
+                    },
                 }
                 for e in self.entries
             ],
@@ -80,6 +82,7 @@ class NamedRanking:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _top_n(entries: list[RankedEntry], n: int) -> list[RankedEntry]:
     """Re-assign ranks 1..min(n, len) and return the top N."""
@@ -95,10 +98,7 @@ def _mtf_bullish_count(result: ScanResult) -> int:
     """Count how many timeframes are bullish with confidence ≥ 0.5."""
     count = 0
     for sig in result.trend_signals.values():
-        if (
-            sig.get("direction", "").lower() == "uptrend"
-            and sig.get("confidence", 0.0) >= 0.5
-        ):
+        if sig.get("direction", "").lower() == "uptrend" and sig.get("confidence", 0.0) >= 0.5:
             count += 1
     return count
 
@@ -106,10 +106,7 @@ def _mtf_bullish_count(result: ScanResult) -> int:
 def _mtf_bearish_count(result: ScanResult) -> int:
     count = 0
     for sig in result.trend_signals.values():
-        if (
-            sig.get("direction", "").lower() == "downtrend"
-            and sig.get("confidence", 0.0) >= 0.5
-        ):
+        if sig.get("direction", "").lower() == "downtrend" and sig.get("confidence", 0.0) >= 0.5:
             count += 1
     return count
 
@@ -134,6 +131,7 @@ def _total_bearish_confidence(result: ScanResult) -> float:
 # ---------------------------------------------------------------------------
 # Ranking engine
 # ---------------------------------------------------------------------------
+
 
 class RankingEngine:
     """
@@ -329,7 +327,7 @@ class RankingEngine:
                     metrics={
                         "trend_strength": strength,
                         "directional_score": directional,
-                        "adx": r.indicator_values.get("adx") or 0.0
+                        "adx": r.indicator_values.get("adx") or 0.0,
                     },
                 )
             )
@@ -358,10 +356,7 @@ class RankingEngine:
                     symbol=r.symbol,
                     score=score,
                     rank=0,
-                    metrics={
-                        "trend_strength": strength,
-                        "directional_score": directional
-                    },
+                    metrics={"trend_strength": strength, "directional_score": directional},
                 )
             )
         scored.sort(key=lambda e: e.score, reverse=True)
@@ -407,7 +402,9 @@ class RankingEngine:
                     "benchmark": benchmark,
                     "relative_strength_pct": score,
                     "symbol_return_pct": r.indicator_values.get(f"symbol_return_pct_{benchmark}"),
-                    "benchmark_return_pct": r.indicator_values.get(f"benchmark_return_pct_{benchmark}"),
+                    "benchmark_return_pct": r.indicator_values.get(
+                        f"benchmark_return_pct_{benchmark}"
+                    ),
                 }
             else:
                 score = _total_trend_confidence(r)

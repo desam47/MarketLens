@@ -1,6 +1,7 @@
 """
 Tests for market regime engine
 """
+
 import os
 import sys
 import unittest
@@ -8,13 +9,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.regime.market_regime_engine import MarketRegime, MarketRegimeEngine
 
 
 class TestMarketRegimeEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.engine = MarketRegimeEngine(self.symbol)
@@ -43,7 +43,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         volumes = [1000] * len(prices)
 
         for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             # Provide approximate OHLC
             high = price + 0.5
             low = price - 0.5
@@ -66,10 +66,12 @@ class TestMarketRegimeEngine(unittest.TestCase):
         timeframe_engine = trend.timeframe_engine
         duplicates_before = timeframe_engine.duplicate_count
 
-        self.assertTrue(all(
-            candidate is trend
-            for candidate in self.engine.multitimeframe_engine.trend_engines.values()
-        ))
+        self.assertTrue(
+            all(
+                candidate is trend
+                for candidate in self.engine.multitimeframe_engine.trend_engines.values()
+            )
+        )
 
         with patch.object(trend, "update", wraps=trend.update) as update:
             self.engine.update(123.45, 1000, datetime.now(UTC), provider="test")
@@ -98,7 +100,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         volumes = [1000] * len(prices)
 
         for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             # Small ranges for low volatility
             high = price + 0.2
             low = price - 0.2
@@ -127,7 +129,7 @@ class TestMarketRegimeEngine(unittest.TestCase):
         volumes = [1000] * 10
 
         for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             high = price + 0.1
             low = price - 0.1
             open_price = price
@@ -137,11 +139,11 @@ class TestMarketRegimeEngine(unittest.TestCase):
         self.assertIsNotNone(initial_regime)
 
         # Now create trending conditions
-        trending_prices = [100 + i*0.5 for i in range(10)]  # Steady uptrend
+        trending_prices = [100 + i * 0.5 for i in range(10)]  # Steady uptrend
         trending_volumes = [1500] * 10  # Higher volume
 
         for i, (price, volume) in enumerate(zip(trending_prices, trending_volumes, strict=True)):
-            timestamp = base_time + timedelta(minutes=(i+10)*5)
+            timestamp = base_time + timedelta(minutes=(i + 10) * 5)
             high = price + 0.3
             low = price - 0.2
             open_price = price - 0.1 if i > 0 else price
@@ -157,11 +159,11 @@ class TestMarketRegimeEngine(unittest.TestCase):
         base_time = datetime.now()
 
         # Create consistent regime
-        prices = [100 + i*0.2 for i in range(15)]  # Steady uptrend
+        prices = [100 + i * 0.2 for i in range(15)]  # Steady uptrend
         volumes = [1200] * 15
 
         for i, (price, volume) in enumerate(zip(prices, volumes, strict=True)):
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             high = price + 0.2
             low = price - 0.1
             open_price = price - 0.05 if i > 0 else price
@@ -174,5 +176,5 @@ class TestMarketRegimeEngine(unittest.TestCase):
         self.assertLessEqual(stability, 1.0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

@@ -1,13 +1,14 @@
 """
 Tests for RelativeStrengthEngine — Phase 8 spec.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.regime.relative_strength_engine import (
     RelativeStrengthClassification,
@@ -17,7 +18,6 @@ from backend.regime.relative_strength_engine import (
 
 
 class TestRelativeStrengthEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.engine = RelativeStrengthEngine(self.symbol, lookback_days=5)
@@ -35,6 +35,7 @@ class TestRelativeStrengthEngine(unittest.TestCase):
     def test_default_lookback_from_settings(self):
         """No lookback param → reads from settings."""
         from backend.config.settings import settings
+
         engine = RelativeStrengthEngine(self.symbol)
         self.assertEqual(engine.lookback_days, settings.relative_strength.lookback_days)
 
@@ -53,8 +54,15 @@ class TestRelativeStrengthEngine(unittest.TestCase):
         now = datetime.now()
         for i in range(20):
             # Price + timestamp advance the history
-            self.engine.update(price=100.0 + i * 0.1, volume=1000, timestamp=now + timedelta(minutes=i), symbol=self.symbol)
-        self.assertLessEqual(len(self.engine._price_history[self.symbol]), self.engine.lookback_days * 3)
+            self.engine.update(
+                price=100.0 + i * 0.1,
+                volume=1000,
+                timestamp=now + timedelta(minutes=i),
+                symbol=self.symbol,
+            )
+        self.assertLessEqual(
+            len(self.engine._price_history[self.symbol]), self.engine.lookback_days * 3
+        )
 
     # ------------------------------------------------------------------
     # Classification thresholds
@@ -150,37 +158,35 @@ class TestThresholdConfigurable(unittest.TestCase):
     def test_outperformer_threshold_from_settings(self):
         """Engine reads outperformer_threshold from settings."""
         from backend.config.settings import settings
+
         engine = RelativeStrengthEngine("AAPL")
-        self.assertEqual(engine._cfg.outperformer_threshold,
-                         settings.relative_strength.outperformer_threshold)
+        self.assertEqual(
+            engine._cfg.outperformer_threshold, settings.relative_strength.outperformer_threshold
+        )
 
     def test_benchmarks_configurable(self):
         """Engine reads benchmark list from settings, not hardcoded."""
         from unittest.mock import patch
 
         from backend.config.settings import settings
+
         engine = RelativeStrengthEngine("AAPL")
         # Default is SPY + QQQ per the Phase 8 spec.
         self.assertEqual(engine._cfg.benchmark_list(), ("SPY", "QQQ"))
         self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ"])
 
         # When the config string changes, the engine follows.
-        with patch.object(
-            settings.relative_strength, "benchmarks", "SPY,QQQ,IWM"
-        ):
-            self.assertEqual(
-                engine._cfg.benchmark_list(), ("SPY", "QQQ", "IWM")
-            )
-            self.assertEqual(
-                engine._all_symbols(), ["AAPL", "SPY", "QQQ", "IWM"]
-            )
+        with patch.object(settings.relative_strength, "benchmarks", "SPY,QQQ,IWM"):
+            self.assertEqual(engine._cfg.benchmark_list(), ("SPY", "QQQ", "IWM"))
+            self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ", "IWM"])
 
     def test_benchmark_list_drops_empty_entries(self):
         """Trailing/empty entries in the benchmarks string are dropped."""
         from backend.config.settings import RelativeStrengthSettings
+
         cfg = RelativeStrengthSettings(benchmarks="SPY,,QQQ, ,IWM")
         self.assertEqual(cfg.benchmark_list(), ("SPY", "QQQ", "IWM"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

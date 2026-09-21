@@ -8,6 +8,7 @@ Verifies:
   * The PRAGMA applier is a no-op for non-SQLite engines (e.g. Postgres)
   * The applier is idempotent — calling it twice doesn't double-register
 """
+
 import unittest
 
 from sqlalchemy import create_engine, text
@@ -19,6 +20,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_journal_mode_is_wal(self):
         """A fresh engine must report journal_mode = 'wal' on first connect."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             mode = conn.execute(text("PRAGMA journal_mode")).scalar()
         self.assertEqual(str(mode).lower(), "wal")
@@ -26,6 +28,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_synchronous_is_normal(self):
         """synchronous=NORMAL keeps crash-safety while reducing fsync cost."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             sync = conn.execute(text("PRAGMA synchronous")).scalar()
         # NORMAL == 1 in SQLite.
@@ -34,6 +37,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_wal_autocheckpoint_is_1000(self):
         """Checkpoint every 1000 WAL pages (~4 MB)."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             ac = conn.execute(text("PRAGMA wal_autocheckpoint")).scalar()
         self.assertEqual(int(ac), 1000)
@@ -41,6 +45,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_cache_size_is_negative_64mb(self):
         """cache_size = -64000 → 64 MB page cache."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             cs = conn.execute(text("PRAGMA cache_size")).scalar()
         # SQLite returns cache_size in pages (negative) or KB. The
@@ -51,6 +56,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_temp_store_is_memory(self):
         """Temp tables / indexes should live in RAM (temp_store = MEMORY == 2)."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             ts = conn.execute(text("PRAGMA temp_store")).scalar()
         self.assertEqual(int(ts), 2)
@@ -58,6 +64,7 @@ class TestWalPragmasAppliedOnConnect(unittest.TestCase):
     def test_busy_timeout_is_30_seconds(self):
         """busy_timeout = 30000 ms (30 seconds)."""
         from backend.database.db import engine
+
         with engine.connect() as conn:
             bt = conn.execute(text("PRAGMA busy_timeout")).scalar()
         self.assertEqual(int(bt), 30000)
@@ -72,6 +79,7 @@ class TestWalPragmasOnPooledConnection(unittest.TestCase):
 
     def test_two_connections_see_wal(self):
         from backend.database.db import engine
+
         for _ in range(2):
             with engine.connect() as conn:
                 mode = conn.execute(text("PRAGMA journal_mode")).scalar()
@@ -90,6 +98,7 @@ class TestRegisterSqlitePragmasIdempotent(unittest.TestCase):
         import tempfile
 
         from backend.database.db import _register_sqlite_pragmas
+
         # WAL mode requires a real on-disk DB; an in-memory SQLite DB
         # only supports 'memory' journal mode. Use a tempfile instead.
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
@@ -105,6 +114,7 @@ class TestRegisterSqlitePragmasIdempotent(unittest.TestCase):
             eng.dispose()
         finally:
             import os
+
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             for ext in (".db-wal", ".db-shm"):
@@ -124,6 +134,7 @@ class TestRegisterSqlitePragmasSkipsNonSqlite(unittest.TestCase):
 
     def test_non_sqlite_url_is_noop(self):
         from backend.database.db import _is_sqlite_url
+
         # sqlite://memory: in-memory DB → still sqlite. The function
         # only short-circuits on non-sqlite URLs. Use a synthetic
         # non-sqlite URL with the register method to confirm the check

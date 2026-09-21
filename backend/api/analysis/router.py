@@ -6,6 +6,7 @@ These are read-only, symbol-keyed endpoints that run the Phase 9
 detection engines against the most recent stored bars. They require no
 live-tick state and can be served purely from the historical bar cache.
 """
+
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -32,7 +33,6 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 _DASHBOARD_TZ = ZoneInfo("America/New_York")
 
 
-
 def _to_dashboard_tz(value: datetime | None) -> str | None:
     from backend.utils.timezone import format_edt_iso
 
@@ -57,11 +57,16 @@ _PRICE_HISTORY_LABELS = {
     "week_52_low": "52 Week Low",
 }
 _PRICE_HISTORY_ORDER = [
-    "today_high", "today_low",
-    "prev_day_high", "prev_day_low",
-    "this_week_high", "this_week_low",
-    "prev_week_high", "prev_week_low",
-    "week_52_high", "week_52_low",
+    "today_high",
+    "today_low",
+    "prev_day_high",
+    "prev_day_low",
+    "this_week_high",
+    "this_week_low",
+    "prev_week_high",
+    "prev_week_low",
+    "week_52_high",
+    "week_52_low",
 ]
 
 
@@ -105,22 +110,31 @@ def _compute_period_ohlc(reference_bars: list[dict]) -> dict[str, dict]:
         return entry
 
     def _bar(idx: int) -> dict:
-        return _with_change({
-            "open": opens[idx], "high": highs[idx], "low": lows[idx],
-            "close": closes[idx], "volume": volumes[idx],
-        }, oldest_index=idx)
+        return _with_change(
+            {
+                "open": opens[idx],
+                "high": highs[idx],
+                "low": lows[idx],
+                "close": closes[idx],
+                "volume": volumes[idx],
+            },
+            oldest_index=idx,
+        )
 
     def _group(indices: list[int]) -> dict:
         # indices are ascending by position (newest -> oldest); the first is
         # the group's most recent bar (close/today-side), the last its oldest
         # (open).
-        return _with_change({
-            "open": opens[indices[-1]],
-            "high": max(highs[i] for i in indices),
-            "low": min(lows[i] for i in indices),
-            "close": closes[indices[0]],
-            "volume": sum(volumes[i] for i in indices),
-        }, oldest_index=indices[-1])
+        return _with_change(
+            {
+                "open": opens[indices[-1]],
+                "high": max(highs[i] for i in indices),
+                "low": min(lows[i] for i in indices),
+                "close": closes[indices[0]],
+                "volume": sum(volumes[i] for i in indices),
+            },
+            oldest_index=indices[-1],
+        )
 
     def _isocalendar_key(ts):
         try:
@@ -187,32 +201,28 @@ def _extract_price_history(result, reference_bars: list[dict] | None = None) -> 
         if lvl is None:
             continue
         latest_close = result.latest_close
-        dist = (
-            ((lvl.price - latest_close) / latest_close) * 100
-            if latest_close
-            else None
-        )
+        dist = ((lvl.price - latest_close) / latest_close) * 100 if latest_close else None
         entry = {
             "label": _PRICE_HISTORY_LABELS[t],
             "type": t,
             "price": lvl.price,
             "strength": lvl.strength,
             "distance_pct": dist,
-            "timestamp": (
-                lvl.timestamp.isoformat() if getattr(lvl, "timestamp", None) else None
-            ),
+            "timestamp": (lvl.timestamp.isoformat() if getattr(lvl, "timestamp", None) else None),
         }
         # Attach the period's full OHLCV (same values on both the _high and
         # _low entry for a period — the frontend pairs them back into one row).
         ohlc = period_ohlc.get(t.rsplit("_", 1)[0])
         if ohlc is not None:
-            entry.update({
-                "open": ohlc["open"],
-                "close": ohlc["close"],
-                "volume": ohlc["volume"],
-                "change": ohlc["change"],
-                "change_pct": ohlc["change_pct"],
-            })
+            entry.update(
+                {
+                    "open": ohlc["open"],
+                    "close": ohlc["close"],
+                    "volume": ohlc["volume"],
+                    "change": ohlc["change"],
+                    "change_pct": ohlc["change_pct"],
+                }
+            )
         history.append(entry)
     return history
 
@@ -271,6 +281,7 @@ async def get_transitions(
         # Phase 3.9.11: O(N) running-sum/sum-of-squares using a deque
         # instead of recomputing the full window slice per bar (was O(N·W)).
         from collections import deque
+
         sma_window = 20
         win = sma_window + 1  # include the current bar in the window
         scores: list[float] = []
@@ -291,7 +302,7 @@ async def get_transitions(
             mean = sum_w / win
             # var = E[x²] − E[x]² ; clamp to avoid sqrt of negative due to FP drift
             var = max(sum_sq / win - mean * mean, 0.0)
-            std = var ** 0.5 or 1e-9
+            std = var**0.5 or 1e-9
             z = (c - mean) / std
             # Clamp to ±2 standard deviations → ±100
             clamped = max(-2.0, min(2.0, z))
@@ -376,15 +387,25 @@ async def get_price_range(
         # describe genuine, actionable support/resistance. The engine only
         # emits a level when it sits on the correct side of the latest close,
         # so this is a clean pivot list — ordered R3 -> R1 -> PP -> S1 -> S3.
-        PIVOT_TABLE_TYPES = frozenset({
-            "pivot_pp",
-            "pivot_r1", "pivot_r2", "pivot_r3",
-            "pivot_s1", "pivot_s2", "pivot_s3",
-        })
+        PIVOT_TABLE_TYPES = frozenset(
+            {
+                "pivot_pp",
+                "pivot_r1",
+                "pivot_r2",
+                "pivot_r3",
+                "pivot_s1",
+                "pivot_s2",
+                "pivot_s3",
+            }
+        )
         PIVOT_TABLE_ORDER = {
-            "pivot_r3": 0, "pivot_r2": 1, "pivot_r1": 2,
+            "pivot_r3": 0,
+            "pivot_r2": 1,
+            "pivot_r1": 2,
             "pivot_pp": 3,
-            "pivot_s1": 4, "pivot_s2": 5, "pivot_s3": 6,
+            "pivot_s1": 4,
+            "pivot_s2": 5,
+            "pivot_s3": 6,
         }
         pivot_levels: list = []
         for lvl in result.levels:
@@ -461,7 +482,9 @@ async def get_divergences(
 
         engine = DivergenceEngine(pivot_lookback=2, max_pivots_apart=80)
         all_d = engine.detect(
-            highs, lows, closes,
+            highs,
+            lows,
+            closes,
             volumes=volumes,
             rsi=rsi,
             macd=macd,

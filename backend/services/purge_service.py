@@ -32,6 +32,7 @@ Usage from the ingestion service (after a symbol leaves all watchlists)::
     from backend.services.purge_service import purge_symbol_from_database
     purge_symbol_from_database(symbol)
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,6 +49,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Typed result dict
 # ---------------------------------------------------------------------------
+
 
 class PurgeResult(TypedDict):
     symbol: str
@@ -71,35 +73,32 @@ class PurgeResult(TypedDict):
 # delete_bars_for_symbol, etc. from the repositories directly).
 # ---------------------------------------------------------------------------
 
+
 def _delete_bars(db: Session, symbol: str) -> int:
     from backend.models.market_data_sql import BarModel
-    result = db.execute(
-        delete(BarModel).where(BarModel.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(BarModel).where(BarModel.symbol == symbol.upper()))
     return result.rowcount
 
 
 def _delete_signals(db: Session, symbol: str) -> int:
     from backend.models import HistoricalSignal
-    result = db.execute(
-        delete(HistoricalSignal).where(HistoricalSignal.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(HistoricalSignal).where(HistoricalSignal.symbol == symbol.upper()))
     return result.rowcount
 
 
 def _delete_quotes(db: Session, symbol: str) -> int:
     from backend.models import QuoteModel
-    result = db.execute(
-        delete(QuoteModel).where(QuoteModel.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(QuoteModel).where(QuoteModel.symbol == symbol.upper()))
     return result.rowcount
 
 
 def _delete_market_status(db: Session, symbol: str) -> int:
     from backend.models import MarketStatusModel
-    result = db.execute(
-        delete(MarketStatusModel).where(MarketStatusModel.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(MarketStatusModel).where(MarketStatusModel.symbol == symbol.upper()))
     return result.rowcount
 
 
@@ -120,14 +119,10 @@ def _delete_alerts_and_triggers(db: Session, symbol: str) -> tuple[int, int]:
     """
     from backend.models import Alert, AlertTrigger
 
-    trigger_result = db.execute(
-        delete(AlertTrigger).where(AlertTrigger.symbol == symbol.upper())
-    )
+    trigger_result = db.execute(delete(AlertTrigger).where(AlertTrigger.symbol == symbol.upper()))
     orphaned_triggers = trigger_result.rowcount
 
-    alert_result = db.execute(
-        delete(Alert).where(Alert.symbol == symbol.upper())
-    )
+    alert_result = db.execute(delete(Alert).where(Alert.symbol == symbol.upper()))
     alert_count = alert_result.rowcount
 
     return alert_count, orphaned_triggers
@@ -135,17 +130,15 @@ def _delete_alerts_and_triggers(db: Session, symbol: str) -> tuple[int, int]:
 
 def _delete_ai_analysis_jobs(db: Session, symbol: str) -> int:
     from backend.models import AIAnalysisJob
-    result = db.execute(
-        delete(AIAnalysisJob).where(AIAnalysisJob.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(AIAnalysisJob).where(AIAnalysisJob.symbol == symbol.upper()))
     return result.rowcount
 
 
 def _delete_backfill_jobs(db: Session, symbol: str) -> int:
     from backend.models import BackfillJob
-    result = db.execute(
-        delete(BackfillJob).where(BackfillJob.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(BackfillJob).where(BackfillJob.symbol == symbol.upper()))
     return result.rowcount
 
 
@@ -160,9 +153,7 @@ def _delete_backtest_runs(db: Session, symbol: str) -> tuple[int, int]:
 
     # Find the run IDs for this symbol so we can count + delete their trades.
     run_ids = list(
-        db.execute(
-            select(BacktestRun.id).where(BacktestRun.symbol == symbol.upper())
-        ).scalars()
+        db.execute(select(BacktestRun.id).where(BacktestRun.symbol == symbol.upper())).scalars()
     )
 
     if not run_ids:
@@ -174,24 +165,22 @@ def _delete_backtest_runs(db: Session, symbol: str) -> tuple[int, int]:
     ).rowcount
 
     # Now delete the runs themselves.
-    run_count = db.execute(
-        delete(BacktestRun).where(BacktestRun.id.in_(run_ids))
-    ).rowcount
+    run_count = db.execute(delete(BacktestRun).where(BacktestRun.id.in_(run_ids))).rowcount
 
     return run_count, trade_count
 
 
 def _delete_drawing_tools(db: Session, symbol: str) -> int:
     from backend.models import DrawingTool
-    result = db.execute(
-        delete(DrawingTool).where(DrawingTool.symbol == symbol.upper())
-    )
+
+    result = db.execute(delete(DrawingTool).where(DrawingTool.symbol == symbol.upper()))
     return result.rowcount
 
 
 # ---------------------------------------------------------------------------
 # Top-level purge — all tables in one transaction
 # ---------------------------------------------------------------------------
+
 
 def purge_symbol_from_database(symbol: str) -> PurgeResult:
     """Delete every per-symbol row for ``symbol`` across all tables.
@@ -204,9 +193,19 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
     """
     if not symbol:
         return PurgeResult(
-            symbol="", bars=0, signals=0, quotes=0, market_status=0,
-            alerts=0, alert_triggers=0, ai_analysis_jobs=0, backfill_jobs=0,
-            backtest_runs=0, backtest_trades=0, drawing_tools=0, total=0,
+            symbol="",
+            bars=0,
+            signals=0,
+            quotes=0,
+            market_status=0,
+            alerts=0,
+            alert_triggers=0,
+            ai_analysis_jobs=0,
+            backfill_jobs=0,
+            backtest_runs=0,
+            backtest_trades=0,
+            drawing_tools=0,
+            total=0,
         )
 
     symbol = symbol.upper()
@@ -225,9 +224,17 @@ def purge_symbol_from_database(symbol: str) -> PurgeResult:
         db.commit()
 
         total = (
-            bars + signals + quotes + market_status
-            + alerts + alert_triggers + ai_analysis_jobs + backfill_jobs
-            + backtest_runs + backtest_trades + drawing_tools
+            bars
+            + signals
+            + quotes
+            + market_status
+            + alerts
+            + alert_triggers
+            + ai_analysis_jobs
+            + backfill_jobs
+            + backtest_runs
+            + backtest_trades
+            + drawing_tools
         )
 
         if total > 0:
@@ -271,20 +278,36 @@ def purge_symbol_from_database_safe(symbol: str) -> PurgeResult:
     """
     if not symbol:
         return PurgeResult(
-            symbol="", bars=0, signals=0, quotes=0, market_status=0,
-            alerts=0, alert_triggers=0, ai_analysis_jobs=0, backfill_jobs=0,
-            backtest_runs=0, backtest_trades=0, drawing_tools=0, total=0,
+            symbol="",
+            bars=0,
+            signals=0,
+            quotes=0,
+            market_status=0,
+            alerts=0,
+            alert_triggers=0,
+            ai_analysis_jobs=0,
+            backfill_jobs=0,
+            backtest_runs=0,
+            backtest_trades=0,
+            drawing_tools=0,
+            total=0,
         )
     try:
         return purge_symbol_from_database(symbol)
     except Exception as e:
-        logger.warning(
-            f"purge_symbol_from_database({symbol}) failed: {e} — "
-            f"data may be orphaned"
-        )
+        logger.warning(f"purge_symbol_from_database({symbol}) failed: {e} — data may be orphaned")
         return PurgeResult(
-            symbol=symbol.upper(), bars=0, signals=0, quotes=0,
-            market_status=0, alerts=0, alert_triggers=0,
-            ai_analysis_jobs=0, backfill_jobs=0, backtest_runs=0, backtest_trades=0,
-            drawing_tools=0, total=0,
+            symbol=symbol.upper(),
+            bars=0,
+            signals=0,
+            quotes=0,
+            market_status=0,
+            alerts=0,
+            alert_triggers=0,
+            ai_analysis_jobs=0,
+            backfill_jobs=0,
+            backtest_runs=0,
+            backtest_trades=0,
+            drawing_tools=0,
+            total=0,
         )

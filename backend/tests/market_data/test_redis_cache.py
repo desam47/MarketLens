@@ -7,6 +7,7 @@ Tests the Redis-based caching layer with focus on:
 - Pub/sub for real-time updates
 - Proper error handling
 """
+
 import os
 import sys
 import unittest
@@ -75,8 +76,10 @@ class TestRedisCacheGetSet(unittest.TestCase):
         self.mock_client = MagicMock()
         self.mock_client.ping.return_value = True
 
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -100,6 +103,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
             "data_status": "LIVE",
         }
         import json
+
         self.mock_client.get.return_value = json.dumps([bar_dict])
 
         result = self.cache.get_bars("AAPL", "1d")
@@ -115,8 +119,10 @@ class TestRedisCacheGetSet(unittest.TestCase):
 
     def test_get_bars_unavailable_redis(self):
         """Should return None when Redis is unavailable."""
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis"):
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis"),
+        ):
             mock_settings.redis.enabled = False
             cache = RedisCache()
             result = cache.get_bars("AAPL", "1d")
@@ -143,8 +149,10 @@ class TestRedisCacheGetSet(unittest.TestCase):
 
     def test_set_bars_unavailable_redis(self):
         """Should return False when Redis is unavailable."""
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis"):
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis"),
+        ):
             mock_settings.redis.enabled = False
             cache = RedisCache()
             result = cache.set_bars("AAPL", "1d", [])
@@ -161,6 +169,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
             "volume": 1000,
         }
         import json
+
         self.mock_client.get.return_value = json.dumps(quote_dict)
 
         result = self.cache.get_quote("AAPL")
@@ -177,6 +186,7 @@ class TestRedisCacheGetSet(unittest.TestCase):
     def test_get_latest_bar_hit(self):
         """Should return cached latest bar when key exists."""
         import json
+
         bar_dict = {
             "symbol": "AAPL",
             "timestamp": "2026-01-01T10:00:00",
@@ -208,13 +218,19 @@ class TestRedisCacheGetSet(unittest.TestCase):
         bar = Bar(
             symbol="AAPL",
             timestamp=datetime.now(),
-            open=100.0, high=105.0, low=98.0,
-            close=103.0, volume=1000000,
-            timeframe="1d", provider="yahoo_finance",
+            open=100.0,
+            high=105.0,
+            low=98.0,
+            close=103.0,
+            volume=1000000,
+            timeframe="1d",
+            provider="yahoo_finance",
             data_status=DataStatus.LIVE,
         )
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -236,17 +252,28 @@ class TestRedisCacheGetSet(unittest.TestCase):
 
     def test_set_latest_bar_unavailable_redis(self):
         """Should return False when Redis is unavailable."""
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis"):
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis"),
+        ):
             mock_settings.redis.enabled = False
             cache = RedisCache()
-            result = cache.set_latest_bar("AAPL", "1d", Bar(
-                symbol="AAPL", timestamp=datetime.now(),
-                open=100.0, high=105.0, low=98.0,
-                close=103.0, volume=1000000,
-                timeframe="1d", provider="yahoo_finance",
-                data_status=DataStatus.LIVE,
-            ))
+            result = cache.set_latest_bar(
+                "AAPL",
+                "1d",
+                Bar(
+                    symbol="AAPL",
+                    timestamp=datetime.now(),
+                    open=100.0,
+                    high=105.0,
+                    low=98.0,
+                    close=103.0,
+                    volume=1000000,
+                    timeframe="1d",
+                    provider="yahoo_finance",
+                    data_status=DataStatus.LIVE,
+                ),
+            )
             self.assertFalse(result)
 
 
@@ -279,14 +306,23 @@ class TestBarCacheTTL(unittest.TestCase):
     def test_set_bars_uses_default_bar_data_ttl(self):
         """When no TTL override is passed, the global bar_data_ttl is used."""
         bar = Bar(
-            symbol="AAPL", timestamp=datetime.now(),
-            open=100, high=101, low=99, close=100.5, volume=1000,
-            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+            symbol="AAPL",
+            timestamp=datetime.now(),
+            open=100,
+            high=101,
+            low=99,
+            close=100.5,
+            volume=1000,
+            timeframe="1d",
+            provider="yahoo_finance",
+            data_status=DataStatus.LIVE,
         )
         mock_client = MagicMock()
         mock_client.ping.return_value = True
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -302,14 +338,23 @@ class TestBarCacheTTL(unittest.TestCase):
     def test_set_bars_uses_ttl_override(self):
         """An explicit ttl= argument is honoured regardless of the TF."""
         bar = Bar(
-            symbol="AAPL", timestamp=datetime.now(),
-            open=100, high=101, low=99, close=100.5, volume=1000,
-            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+            symbol="AAPL",
+            timestamp=datetime.now(),
+            open=100,
+            high=101,
+            low=99,
+            close=100.5,
+            volume=1000,
+            timeframe="1d",
+            provider="yahoo_finance",
+            data_status=DataStatus.LIVE,
         )
         mock_client = MagicMock()
         mock_client.ping.return_value = True
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -325,14 +370,23 @@ class TestBarCacheTTL(unittest.TestCase):
     def test_set_bars_per_tf_ttl_via_getter(self):
         """Wiring pattern: callers pass ttl=get_bar_cache_ttl(tf) explicitly."""
         bar = Bar(
-            symbol="AAPL", timestamp=datetime.now(),
-            open=100, high=101, low=99, close=100.5, volume=1000,
-            timeframe="1d", provider="yahoo_finance", data_status=DataStatus.LIVE,
+            symbol="AAPL",
+            timestamp=datetime.now(),
+            open=100,
+            high=101,
+            low=99,
+            close=100.5,
+            volume=1000,
+            timeframe="1d",
+            provider="yahoo_finance",
+            data_status=DataStatus.LIVE,
         )
         mock_client = MagicMock()
         mock_client.ping.return_value = True
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -342,9 +396,7 @@ class TestBarCacheTTL(unittest.TestCase):
             mock_redis_class.from_url.return_value = mock_client
             cache = RedisCache()
 
-            cache.set_bars(
-                "AAPL", "1d", [bar], ttl=get_bar_cache_ttl("1d")
-            )
+            cache.set_bars("AAPL", "1d", [bar], ttl=get_bar_cache_ttl("1d"))
 
         call_args = mock_client.setex.call_args
         self.assertEqual(call_args[0][1], 600)
@@ -359,8 +411,10 @@ class TestRedisCachePubSub(unittest.TestCase):
         self.mock_pubsub = MagicMock()
         self.mock_client.pubsub.return_value = self.mock_pubsub
 
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -410,8 +464,10 @@ class TestRedisCachePubSub(unittest.TestCase):
 
     def test_publish_when_redis_unavailable(self):
         """Should silently skip publishing when Redis is unavailable."""
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis"):
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis"),
+        ):
             mock_settings.redis.enabled = False
             cache = RedisCache()
 
@@ -440,8 +496,10 @@ class TestRedisCacheReconnectBehavior(unittest.TestCase):
         self.mock_client.ping.return_value = True
         self.mock_client.pubsub.return_value = MagicMock()
 
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -519,8 +577,10 @@ class TestRedisCacheErrorHandling(unittest.TestCase):
         self.mock_client.ping.return_value = True
         self.mock_client.pubsub.return_value = MagicMock()
 
-        with patch("backend.market_data.services.manager._settings") as mock_settings, \
-             patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class:
+        with (
+            patch("backend.market_data.services.manager._settings") as mock_settings,
+            patch("backend.market_data.services.manager.redis.Redis") as mock_redis_class,
+        ):
             mock_settings.redis.enabled = True
             mock_settings.redis.url = "redis://localhost:6379"
             mock_settings.redis.password = None
@@ -573,10 +633,14 @@ class TestInvalidateBarsForSymbol(unittest.TestCase):
 
     def _make_bar(self, symbol: str, timeframe: str = "1m"):
         from datetime import datetime
+
         return Bar(
             symbol=symbol,
             timeframe=timeframe,
-            open=100.0, high=101.0, low=99.0, close=100.5,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
             volume=1000,
             timestamp=datetime.now(),
             provider="test",
@@ -672,9 +736,14 @@ class TestBarQuoteJsonHelpers(unittest.TestCase):
         bar = Bar(
             symbol="AAPL",
             timestamp=datetime(2025, 6, 1, 10, 0),
-            open=100.0, high=101.0, low=99.0, close=100.5,
-            volume=1000, timeframe="1m",
-            provider="yahoo_finance", data_status=DataStatus.LIVE,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1000,
+            timeframe="1m",
+            provider="yahoo_finance",
+            data_status=DataStatus.LIVE,
         )
         s = _bar_to_json(bar)
         # Round-trip through the same data path Redis would use.
@@ -686,24 +755,31 @@ class TestBarQuoteJsonHelpers(unittest.TestCase):
     def test_bars_to_json_round_trip(self):
         bars = [
             Bar(
-                symbol="AAPL", timestamp=datetime(2025, 6, 1, 10, i),
-                open=100.0, high=101.0, low=99.0, close=100.5,
-                volume=1000, timeframe="1m",
-                provider="yahoo_finance", data_status=DataStatus.LIVE,
+                symbol="AAPL",
+                timestamp=datetime(2025, 6, 1, 10, i),
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1000,
+                timeframe="1m",
+                provider="yahoo_finance",
+                data_status=DataStatus.LIVE,
             )
             for i in range(3)
         ]
         s = _bars_to_json(bars)
-        restored_list = [Bar.model_validate(b) for b in
-                         __import__("json").loads(s)]
+        restored_list = [Bar.model_validate(b) for b in __import__("json").loads(s)]
         self.assertEqual(len(restored_list), 3)
         self.assertEqual(restored_list[0].symbol, "AAPL")
 
     def test_quote_to_json_round_trip(self):
         quote = Quote(
-            symbol="AAPL", price=150.0,
+            symbol="AAPL",
+            price=150.0,
             timestamp=datetime(2025, 6, 1, 10, 0),
-            provider="yahoo_finance", data_status=DataStatus.DELAYED,
+            provider="yahoo_finance",
+            data_status=DataStatus.DELAYED,
         )
         s = _quote_to_json(quote)
         restored = Quote.model_validate_json(s)
@@ -714,12 +790,18 @@ class TestBarQuoteJsonHelpers(unittest.TestCase):
         """datetime fields must serialize (default=str) — they are not
         natively JSON-serializable."""
         import json
+
         bar = Bar(
             symbol="AAPL",
             timestamp=datetime(2025, 6, 1, 10, 0, 30, 123456),
-            open=100.0, high=101.0, low=99.0, close=100.5,
-            volume=1000, timeframe="1m",
-            provider="yahoo_finance", data_status=DataStatus.LIVE,
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.5,
+            volume=1000,
+            timeframe="1m",
+            provider="yahoo_finance",
+            data_status=DataStatus.LIVE,
         )
         s = _bar_to_json(bar)
         # No exception during json.dumps; payload is valid JSON.

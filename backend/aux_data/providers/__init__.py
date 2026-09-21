@@ -1,4 +1,5 @@
 """Phase 18 auxiliary data provider implementations."""
+
 from .finnhub_news import FinnhubNewsProvider
 from .webull_fundamentals import WebullFundamentalsProvider
 from .yfinance_fundamentals import YFinanceFundamentalsProvider

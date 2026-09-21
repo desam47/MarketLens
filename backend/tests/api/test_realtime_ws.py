@@ -6,6 +6,7 @@ bookkeeping), the provider-stream lifecycle (idempotent start, release when
 the last subscriber leaves — including on disconnect) and the endpoint's
 input validation. This module previously had no tests at all.
 """
+
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
@@ -149,7 +150,9 @@ class TestRealtimeEndpoint(unittest.TestCase):
 
     def test_subscribe_normalises_and_acks(self):
         with self.client.websocket_connect("/api/realtime/ws") as ws:
-            reply = self._roundtrip(ws, {"action": "subscribe", "symbol": " aapl ", "timeframe": "5M"})
+            reply = self._roundtrip(
+                ws, {"action": "subscribe", "symbol": " aapl ", "timeframe": "5M"}
+            )
         self.assertEqual(
             reply, {"type": "subscribed", "symbol": "AAPL", "timeframe": "5m", "provider": "local"}
         )
@@ -164,7 +167,9 @@ class TestRealtimeEndpoint(unittest.TestCase):
             for symbol in ("A" * 21, "AA PL", "'; DROP TABLE bars;--", ""):
                 reply = self._roundtrip(ws, {"action": "subscribe", "symbol": symbol})
                 self.assertEqual(reply["type"], "error", symbol)
-            reply = self._roundtrip(ws, {"action": "subscribe", "symbol": "AAPL", "timeframe": "yearly"})
+            reply = self._roundtrip(
+                ws, {"action": "subscribe", "symbol": "AAPL", "timeframe": "yearly"}
+            )
             self.assertEqual(reply["type"], "error")
             self.assertEqual(ws_router.broadcast_manager.get_stats()["subscribed_keys"], 0)
 
@@ -181,17 +186,29 @@ class TestRealtimeEndpoint(unittest.TestCase):
             self.assertEqual(self._roundtrip(ws, {"action": "ping"}), {"type": "pong"})
 
     def test_subscription_cap_per_socket(self):
-        with patch.object(ws_router, "_MAX_SUBSCRIPTIONS_PER_SOCKET", 2), \
-                self.client.websocket_connect("/api/realtime/ws") as ws:
-            self.assertEqual(self._roundtrip(ws, {"action": "subscribe", "symbol": "A"})["type"], "subscribed")
-            self.assertEqual(self._roundtrip(ws, {"action": "subscribe", "symbol": "B"})["type"], "subscribed")
-            self.assertEqual(self._roundtrip(ws, {"action": "subscribe", "symbol": "C"})["type"], "error")
+        with (
+            patch.object(ws_router, "_MAX_SUBSCRIPTIONS_PER_SOCKET", 2),
+            self.client.websocket_connect("/api/realtime/ws") as ws,
+        ):
+            self.assertEqual(
+                self._roundtrip(ws, {"action": "subscribe", "symbol": "A"})["type"], "subscribed"
+            )
+            self.assertEqual(
+                self._roundtrip(ws, {"action": "subscribe", "symbol": "B"})["type"], "subscribed"
+            )
+            self.assertEqual(
+                self._roundtrip(ws, {"action": "subscribe", "symbol": "C"})["type"], "error"
+            )
             # Re-subscribing to an existing key at the cap is not a new subscription.
-            self.assertEqual(self._roundtrip(ws, {"action": "subscribe", "symbol": "A"})["type"], "subscribed")
+            self.assertEqual(
+                self._roundtrip(ws, {"action": "subscribe", "symbol": "A"})["type"], "subscribed"
+            )
 
     def test_unknown_provider_is_not_registered_and_acks_local(self):
         with self.client.websocket_connect("/api/realtime/ws") as ws:
-            reply = self._roundtrip(ws, {"action": "subscribe", "symbol": "AAPL", "provider": "evil"})
+            reply = self._roundtrip(
+                ws, {"action": "subscribe", "symbol": "AAPL", "provider": "evil"}
+            )
         self.assertEqual(reply["provider"], "local")
         self.assertEqual(ws_router._provider_stream_registry, {})
 
@@ -201,7 +218,9 @@ class TestRealtimeEndpoint(unittest.TestCase):
         manager.providers = {"alpaca": provider}
         with patch("backend.market_data.services.manager.market_data_manager", manager):
             with self.client.websocket_connect("/api/realtime/ws") as ws:
-                reply = self._roundtrip(ws, {"action": "subscribe", "symbol": "AAPL", "provider": "alpaca"})
+                reply = self._roundtrip(
+                    ws, {"action": "subscribe", "symbol": "AAPL", "provider": "alpaca"}
+                )
                 self.assertEqual(reply["provider"], "alpaca")
                 provider.subscribe.assert_called_once_with("AAPL", "1m")
             # Client dropped without unsubscribing: stream must be released.
@@ -219,7 +238,7 @@ class TestRealtimeEndpoint(unittest.TestCase):
                 with self.client.websocket_connect("/api/realtime/ws") as ws2:
                     self._roundtrip(ws2, sub)
                     provider.subscribe.assert_called_once()  # not once per socket
-                provider.unsubscribe.assert_not_called()      # ws1 still watching
+                provider.unsubscribe.assert_not_called()  # ws1 still watching
             provider.unsubscribe.assert_called_once_with("AAPL", "1m")
 
 

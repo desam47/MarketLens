@@ -11,6 +11,7 @@ end-to-end review:
   symbol and unsubscribed the stream.
 * The 1m recent-window provider fetch was a synchronous call on the ingestion event loop.
 """
+
 import asyncio
 import threading
 import unittest
@@ -35,11 +36,17 @@ def _service(symbols=("AAPL", "MSFT")) -> MarketDataIngestionService:
 
 class TestSlotFunctions(unittest.TestCase):
     def test_hourly_slot_opens_at_minute_two(self):
-        self.assertIsNone(ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 1, 59)))
-        self.assertEqual(ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 2)),
-                         (datetime(2026, 9, 18).date(), 10))
-        self.assertEqual(ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 59)),
-                         (datetime(2026, 9, 18).date(), 10))
+        self.assertIsNone(
+            ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 1, 59))
+        )
+        self.assertEqual(
+            ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 2)),
+            (datetime(2026, 9, 18).date(), 10),
+        )
+        self.assertEqual(
+            ing.MarketDataIngestionService._hourly_slot(datetime(2026, 9, 18, 10, 59)),
+            (datetime(2026, 9, 18).date(), 10),
+        )
 
     def test_four_hourly_slot_only_on_four_hour_boundaries(self):
         f = ing.MarketDataIngestionService._four_hourly_slot
@@ -51,11 +58,11 @@ class TestSlotFunctions(unittest.TestCase):
 
     def test_daily_close_slot_is_weekdays_from_1602(self):
         f = ing.MarketDataIngestionService._daily_close_slot
-        self.assertIsNone(f(datetime(2026, 9, 18, 16, 1)))                   # Friday, too early
+        self.assertIsNone(f(datetime(2026, 9, 18, 16, 1)))  # Friday, too early
         self.assertEqual(f(datetime(2026, 9, 18, 16, 2)), datetime(2026, 9, 18).date())
         self.assertEqual(f(datetime(2026, 9, 18, 23, 30)), datetime(2026, 9, 18).date())
-        self.assertIsNone(f(datetime(2026, 9, 19, 17, 0)))                   # Saturday
-        self.assertIsNone(f(datetime(2026, 9, 20, 17, 0)))                   # Sunday
+        self.assertIsNone(f(datetime(2026, 9, 19, 17, 0)))  # Saturday
+        self.assertIsNone(f(datetime(2026, 9, 20, 17, 0)))  # Sunday
 
 
 class TestSlotLoop(unittest.IsolatedAsyncioTestCase):
@@ -144,7 +151,7 @@ class TestSlotLoop(unittest.IsolatedAsyncioTestCase):
     async def test_real_slots_fire_every_hour_and_every_weekday_close(self):
         """The regression itself: polling every 30 s across a week must hit EVERY slot."""
         svc = _service()
-        clock = {"now": datetime(2026, 9, 14, 0, 0, 10)}        # a Monday
+        clock = {"now": datetime(2026, 9, 14, 0, 0, 10)}  # a Monday
         end = datetime(2026, 9, 21, 0, 0, 0)
         hourly, four_hourly, daily = [], [], []
 
@@ -159,6 +166,7 @@ class TestSlotLoop(unittest.IsolatedAsyncioTestCase):
         def runner(bucket):
             async def run():
                 bucket.append(clock["now"])
+
             return run
 
         # Three independent loops over the same simulated clock.
@@ -174,8 +182,10 @@ class TestSlotLoop(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hourly), 7 * 24, "24 hourly writes a day")
         self.assertEqual(len(four_hourly), 7 * 6, "6 four-hour writes a day")
         self.assertEqual(len(daily), 5, "one close write per weekday, none on the weekend")
-        self.assertTrue(all((t.hour, t.minute) == (16, 2) for t in daily),
-                        f"daily write at 16:02 sharp: {[t.time() for t in daily]}")
+        self.assertTrue(
+            all((t.hour, t.minute) == (16, 2) for t in daily),
+            f"daily write at 16:02 sharp: {[t.time() for t in daily]}",
+        )
 
 
 class _DbCase(unittest.TestCase):
@@ -185,8 +195,9 @@ class _DbCase(unittest.TestCase):
         from backend.models import BackfillJob
         from backend.models.market_data_sql import BarModel
 
-        self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                                    poolclass=StaticPool)
+        self.engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
         BarModel.__table__.create(self.engine)
         BackfillJob.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
@@ -199,23 +210,42 @@ class _DbCase(unittest.TestCase):
         from backend.models.market_data_sql import BarModel
 
         with self.Session() as db:
-            db.add(BarModel(symbol=symbol, timeframe=timeframe, open=1.0, high=1.0, low=1.0,
-                            close=1.0, volume=1, timestamp=ts, provider=provider,
-                            data_status="historical"))
+            db.add(
+                BarModel(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    open=1.0,
+                    high=1.0,
+                    low=1.0,
+                    close=1.0,
+                    volume=1,
+                    timestamp=ts,
+                    provider=provider,
+                    data_status="historical",
+                )
+            )
             db.commit()
 
     def _job(self, symbol, created_at):
         from backend.models import BackfillJob
 
         with self.Session() as db:
-            db.add(BackfillJob(job_id=f"{symbol}-{created_at.isoformat()}", symbol=symbol,
-                               status="partial", created_at=created_at))
+            db.add(
+                BackfillJob(
+                    job_id=f"{symbol}-{created_at.isoformat()}",
+                    symbol=symbol,
+                    status="partial",
+                    created_at=created_at,
+                )
+            )
             db.commit()
 
 
 class TestDailyCloseBarsMissing(_DbCase):
     def _today(self):
-        return datetime.now(ing._NY_TZ).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        return datetime.now(ing._NY_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+        )
 
     def test_missing_when_nothing_is_stored(self):
         self.assertTrue(_service()._daily_close_bars_missing())
@@ -240,7 +270,7 @@ class TestDailyCloseBarsMissing(_DbCase):
         self.assertTrue(_service()._daily_close_bars_missing())
 
     def test_no_symbols_means_nothing_to_write(self):
-        self.assertFalse(_service(symbols=()) ._daily_close_bars_missing())
+        self.assertFalse(_service(symbols=())._daily_close_bars_missing())
 
 
 class TestSeedCheck(_DbCase, unittest.IsolatedAsyncioTestCase):
@@ -283,9 +313,13 @@ class TestSeedCheck(_DbCase, unittest.IsolatedAsyncioTestCase):
 class TestRefreshSymbols(unittest.TestCase):
     def _refresh(self, svc, query):
         stream = MagicMock()
-        with patch.object(svc, "_query_active_watchlists", **query), \
-             patch("backend.market_data.streaming.webull_stream.get_webull_stream_client",
-                   return_value=stream):
+        with (
+            patch.object(svc, "_query_active_watchlists", **query),
+            patch(
+                "backend.market_data.streaming.webull_stream.get_webull_stream_client",
+                return_value=stream,
+            ),
+        ):
             result = svc.refresh_symbols_from_watchlist()
         return result, stream
 
@@ -312,27 +346,44 @@ class TestRefreshSymbols(unittest.TestCase):
     def test_the_swallowing_loader_still_returns_empty_lists_for_start(self):
         """start() / get_tracking_watchlists() keep the old contract."""
         svc = _service(())
-        with patch.object(svc, "_query_active_watchlists", side_effect=RuntimeError("boom")), \
-             self.assertLogs(_MOD, "WARNING"):
-            self.assertEqual(svc._load_symbols_and_watchlists_from_all_active_watchlists(), ([], []))
+        with (
+            patch.object(svc, "_query_active_watchlists", side_effect=RuntimeError("boom")),
+            self.assertLogs(_MOD, "WARNING"),
+        ):
+            self.assertEqual(
+                svc._load_symbols_and_watchlists_from_all_active_watchlists(), ([], [])
+            )
 
 
 class TestProviderFetchIsOffTheIngestionLoop(unittest.IsolatedAsyncioTestCase):
     def _bars(self, symbol):
         from backend.models.market_data import Bar, DataStatus
 
-        return [Bar(symbol=symbol, timestamp=datetime(2026, 9, 18, 10, 0), open=1.0, high=1.0,
-                    low=1.0, close=1.0, volume=1, timeframe="1m", provider="webull",
-                    data_status=DataStatus.LIVE)]
+        return [
+            Bar(
+                symbol=symbol,
+                timestamp=datetime(2026, 9, 18, 10, 0),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+                timeframe="1m",
+                provider="webull",
+                data_status=DataStatus.LIVE,
+            )
+        ]
 
     async def _cycle(self, svc):
         real_sleep = asyncio.sleep
         svc._resample_and_upsert = MagicMock(side_effect=lambda *a, **k: real_sleep(0))
-        with patch(f"{_MOD}.SessionLocal"), \
-             patch(f"{_MOD}.engine_registry", MagicMock()), \
-             patch(f"{_MOD}.asyncio.sleep", new=lambda *_a, **_k: real_sleep(0)), \
-             patch("backend.repositories.bar_repository.upsert_bars", return_value=0), \
-             patch("backend.market_data.services.cache._redis_cache"):
+        with (
+            patch(f"{_MOD}.SessionLocal"),
+            patch(f"{_MOD}.engine_registry", MagicMock()),
+            patch(f"{_MOD}.asyncio.sleep", new=lambda *_a, **_k: real_sleep(0)),
+            patch("backend.repositories.bar_repository.upsert_bars", return_value=0),
+            patch("backend.market_data.services.cache._redis_cache"),
+        ):
             await svc._ingest_1m_recent_window()
 
     async def test_batch_fetch_runs_in_a_worker_thread(self):

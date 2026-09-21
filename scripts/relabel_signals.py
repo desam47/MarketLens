@@ -14,6 +14,7 @@ forward outcomes are not touched. See ``backend/services/signal_replay.py``.
 
 Safe against the running server: short transactions, chunked writes, idempotent.
 """
+
 import argparse
 import logging
 import sys
@@ -48,11 +49,18 @@ def _stamped_rows(db) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     ap.add_argument("--restore", metavar="FILE", help="restore label columns from a saved backup")
-    ap.add_argument("--backup", metavar="FILE",
-                    default=str(ROOT / "data" / f"historical_signal_labels_pre_relabel_{date.today():%Y%m%d}.csv.gz"))
+    ap.add_argument(
+        "--backup",
+        metavar="FILE",
+        default=str(
+            ROOT / "data" / f"historical_signal_labels_pre_relabel_{date.today():%Y%m%d}.csv.gz"
+        ),
+    )
     ap.add_argument("--symbols", nargs="*", help="limit to these symbols")
     ap.add_argument("--timeframes", nargs="*", help="limit to these timeframes")
     ap.add_argument("--chunk-size", type=int, default=5000)
@@ -62,11 +70,17 @@ def main() -> int:
     db = SessionLocal()
     try:
         if args.restore:
-            print(f"restored {restore_labels(db, args.restore, args.chunk_size):,} rows from {args.restore}")
+            print(
+                f"restored {restore_labels(db, args.restore, args.chunk_size):,} rows from {args.restore}"
+            )
             return 0
 
-        pairs = db.query(HistoricalSignal.symbol, HistoricalSignal.timeframe).distinct().order_by(
-            HistoricalSignal.symbol, HistoricalSignal.timeframe).all()
+        pairs = (
+            db.query(HistoricalSignal.symbol, HistoricalSignal.timeframe)
+            .distinct()
+            .order_by(HistoricalSignal.symbol, HistoricalSignal.timeframe)
+            .all()
+        )
         if args.symbols:
             wanted = {s.upper() for s in args.symbols}
             pairs = [p for p in pairs if p.symbol in wanted]
@@ -84,13 +98,18 @@ def main() -> int:
             stats = relabel_signals(db, symbol, timeframe, args.chunk_size, dry_run=not args.apply)
             for k in totals:
                 totals[k] += stats[k]
-            print(f"[{i}/{len(pairs)}] {symbol:6} {timeframe:4} rows={stats['rows']:>7,} "
-                  f"changed={stats['changed']:>7,} labelled={stats['labelled']:>7,} "
-                  f"unlabelled={stats['unlabelled']:>6,}", flush=True)
+            print(
+                f"[{i}/{len(pairs)}] {symbol:6} {timeframe:4} rows={stats['rows']:>7,} "
+                f"changed={stats['changed']:>7,} labelled={stats['labelled']:>7,} "
+                f"unlabelled={stats['unlabelled']:>6,}",
+                flush=True,
+            )
 
         mode = "APPLIED" if args.apply else "DRY RUN (nothing written)"
-        print(f"\n{mode}: {len(pairs)} pairs in {time.time() - t0:.0f}s -- " +
-              ", ".join(f"{k}={v:,}" for k, v in totals.items()))
+        print(
+            f"\n{mode}: {len(pairs)} pairs in {time.time() - t0:.0f}s -- "
+            + ", ".join(f"{k}={v:,}" for k, v in totals.items())
+        )
         print(f"rows sharing a stamped score before: {before:,}; now: {_stamped_rows(db):,}")
         return 0
     finally:

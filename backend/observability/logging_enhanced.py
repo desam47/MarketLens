@@ -17,6 +17,7 @@ Usage:
     with with_context(symbol="AAPL", timeframe="1d"):
         log.info("scanning")  # emits symbol=AAPL, timeframe=1d in JSON payload
 """
+
 import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -37,15 +38,11 @@ __all__ = [
 # Context variable to hold the correlation ID for the current request.
 # Uses contextvars (PEP 567) for async-safe propagation — works correctly
 # with FastAPI's async context and concurrent requests.
-_correlation_id_ctx: ContextVar[str | None] = ContextVar(
-    "correlation_id", default=None
-)
+_correlation_id_ctx: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 
 # Context variable to hold additional structured fields (symbol, timeframe, etc.)
 # that should be injected into every log record during the with-block.
-_extra_fields_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
-    "_extra_fields", default=None
-)
+_extra_fields_ctx: ContextVar[dict[str, Any] | None] = ContextVar("_extra_fields", default=None)
 
 
 def set_correlation_id(correlation_id: str | None) -> None:
@@ -98,9 +95,7 @@ def get_logger_with_correlation(name: str) -> logging.Logger:
     """
     log = logging.getLogger(name)
     # Avoid duplicate filters
-    if not any(
-        isinstance(f, CorrelationIdFilter) for f in log.filters
-    ):
+    if not any(isinstance(f, CorrelationIdFilter) for f in log.filters):
         log.addFilter(CorrelationIdFilter())
     return log
 
@@ -108,6 +103,7 @@ def get_logger_with_correlation(name: str) -> logging.Logger:
 # ---------------------------------------------------------------------------
 # Phase 3.5.5: LogContext — arbitrary field injection via context manager
 # ---------------------------------------------------------------------------
+
 
 def get_extra_fields() -> dict[str, Any]:
     """Return extra fields set by with_context(), or empty dict if none."""
@@ -137,4 +133,3 @@ def with_context(**fields: Any):
         yield
     finally:
         _extra_fields_ctx.reset(token)
-

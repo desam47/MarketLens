@@ -4,6 +4,7 @@ Tests for backend/market_data/services/finnhub_service.py — FinnhubService
 All HTTP calls are mocked. We test the service layer's translation
 of Finnhub JSON into our Pydantic models.
 """
+
 import unittest
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -29,12 +30,21 @@ class TestFinnhubServiceCompanyProfile(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_company_profile(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "country": "US", "currency": "USD", "exchange": "NASDAQ",
-            "finnhubIndustry": "Technology", "ipo": "1980-12-12",
-            "logo": "https://logo.url/aapl.png", "marketCapitalization": 2500000.0,
-            "name": "Apple Inc", "ticker": "AAPL", "weburl": "https://apple.com",
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "country": "US",
+                "currency": "USD",
+                "exchange": "NASDAQ",
+                "finnhubIndustry": "Technology",
+                "ipo": "1980-12-12",
+                "logo": "https://logo.url/aapl.png",
+                "marketCapitalization": 2500000.0,
+                "name": "Apple Inc",
+                "ticker": "AAPL",
+                "weburl": "https://apple.com",
+            },
+        )
         profile = self.service.get_company_profile("AAPL")
         self.assertEqual(profile.ticker, "AAPL")
         self.assertEqual(profile.name, "Apple Inc")
@@ -57,19 +67,22 @@ class TestFinnhubServiceCompanyMetrics(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_company_metrics(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "metric": {
-                "peBasicExtraTTM": 28.5,
-                "beta": 1.2,
-                "52WeekHigh": 200.0,
-                "52WeekLow": 120.0,
-                "dividendYieldIndicatedAnnual": 0.005,
-                "epsBasicExtraTTM": 5.5,
-                "netMarginQuarterly": 0.25,
-                "priceTargetMean": 180.0,
-                "recommendationMean": 2.0,
-            }
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "metric": {
+                    "peBasicExtraTTM": 28.5,
+                    "beta": 1.2,
+                    "52WeekHigh": 200.0,
+                    "52WeekLow": 120.0,
+                    "dividendYieldIndicatedAnnual": 0.005,
+                    "epsBasicExtraTTM": 5.5,
+                    "netMarginQuarterly": 0.25,
+                    "priceTargetMean": 180.0,
+                    "recommendationMean": 2.0,
+                }
+            },
+        )
         metrics = self.service.get_company_metrics("AAPL")
         self.assertEqual(metrics.symbol, "AAPL")
         self.assertEqual(metrics.pe_basic_eps, 28.5)
@@ -94,16 +107,25 @@ class TestFinnhubServiceRecommendations(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_recommendations(self, mock_get):
-        mock_get.return_value = _mock_response(200, [
-            {"period": "2024-Q1", "buy": 15, "hold": 10, "sell": 5,
-             "strongBuy": 5, "strongSell": 1}
-        ])
+        mock_get.return_value = _mock_response(
+            200,
+            [
+                {
+                    "period": "2024-Q1",
+                    "buy": 15,
+                    "hold": 10,
+                    "sell": 5,
+                    "strongBuy": 5,
+                    "strongSell": 1,
+                }
+            ],
+        )
         recs = self.service.get_analyst_recommendations("AAPL")
         self.assertEqual(len(recs), 1)
         self.assertEqual(recs[0].period, "2024-Q1")
         self.assertEqual(recs[0].buy, 15)
         # 20 buys out of 36 total = 0.5555...
-        self.assertAlmostEqual(recs[0].buy_pct, 20/36, places=4)
+        self.assertAlmostEqual(recs[0].buy_pct, 20 / 36, places=4)
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_recommendations_empty(self, mock_get):
@@ -121,12 +143,15 @@ class TestFinnhubServiceInsiderSentiment(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_insider_sentiment(self, mock_get):
-        mock_get.return_value = _mock_response(200, {
-            "data": [
-                {"symbol": "AAPL", "year": 2024, "month": 1, "change": 50000, "mspr": 0.3},
-                {"symbol": "AAPL", "year": 2024, "month": 2, "change": -20000, "mspr": -0.1},
-            ]
-        })
+        mock_get.return_value = _mock_response(
+            200,
+            {
+                "data": [
+                    {"symbol": "AAPL", "year": 2024, "month": 1, "change": 50000, "mspr": 0.3},
+                    {"symbol": "AAPL", "year": 2024, "month": 2, "change": -20000, "mspr": -0.1},
+                ]
+            },
+        )
         result = self.service.get_insider_sentiment("AAPL", date(2024, 1, 1), date(2024, 12, 31))
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0].change, 50000)
@@ -149,12 +174,21 @@ class TestFinnhubServiceNews(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_company_news(self, mock_get):
-        mock_get.return_value = _mock_response(200, [
-            {"id": 1, "datetime": 1700000000, "headline": "Apple releases new iPhone",
-             "source": "Reuters", "url": "https://example.com/1",
-             "related": "AAPL", "summary": "Apple announced...",
-             "category": "technology"}
-        ])
+        mock_get.return_value = _mock_response(
+            200,
+            [
+                {
+                    "id": 1,
+                    "datetime": 1700000000,
+                    "headline": "Apple releases new iPhone",
+                    "source": "Reuters",
+                    "url": "https://example.com/1",
+                    "related": "AAPL",
+                    "summary": "Apple announced...",
+                    "category": "technology",
+                }
+            ],
+        )
         news = self.service.get_company_news("AAPL", date(2024, 1, 1), date(2024, 1, 7))
         self.assertEqual(len(news), 1)
         self.assertEqual(news[0].headline, "Apple releases new iPhone")
@@ -162,11 +196,19 @@ class TestFinnhubServiceNews(unittest.TestCase):
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_market_news(self, mock_get):
-        mock_get.return_value = _mock_response(200, [
-            {"id": 1, "datetime": 1700000000, "headline": "Markets rise",
-             "source": "Bloomberg", "url": "https://example.com/1",
-             "category": "general"}
-        ])
+        mock_get.return_value = _mock_response(
+            200,
+            [
+                {
+                    "id": 1,
+                    "datetime": 1700000000,
+                    "headline": "Markets rise",
+                    "source": "Bloomberg",
+                    "url": "https://example.com/1",
+                    "category": "general",
+                }
+            ],
+        )
         news = self.service.get_market_news("general")
         self.assertEqual(len(news), 1)
         self.assertEqual(news[0].headline, "Markets rise")
@@ -201,16 +243,34 @@ class TestFinnhubServiceFinancials(unittest.TestCase):
     @patch("backend.market_data.services.finnhub_service.requests.get")
     def test_get_company_financials(self, mock_get):
         mock_get.side_effect = [
-            _mock_response(200, {"data": [
-                {"revenue": 100000.0, "netIncome": 25000.0, "eps": 5.0}
-            ]}),
-            _mock_response(200, {"data": [
-                {"totalAssets": 200000.0, "totalLiabilities": 80000.0, "totalEquity": 120000.0}
-            ]}),
-            _mock_response(200, {"data": [
-                {"operatingCashFlow": 30000.0, "capitalExpenditure": 5000.0,
-                 "investingCashFlow": -10000.0, "financingCashFlow": -5000.0}
-            ]}),
+            _mock_response(
+                200, {"data": [{"revenue": 100000.0, "netIncome": 25000.0, "eps": 5.0}]}
+            ),
+            _mock_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "totalAssets": 200000.0,
+                            "totalLiabilities": 80000.0,
+                            "totalEquity": 120000.0,
+                        }
+                    ]
+                },
+            ),
+            _mock_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "operatingCashFlow": 30000.0,
+                            "capitalExpenditure": 5000.0,
+                            "investingCashFlow": -10000.0,
+                            "financingCashFlow": -5000.0,
+                        }
+                    ]
+                },
+            ),
         ]
         fin = self.service.get_company_financials("AAPL")
         self.assertEqual(fin.symbol, "AAPL")

@@ -1,6 +1,7 @@
 """
 Swing Low indicator
 """
+
 from typing import Any, cast
 
 from .base_indicator import BaseIndicator
@@ -26,14 +27,14 @@ class SwingLowIndicator(BaseIndicator):
             return []
 
         # Extract low prices
-        lows = [float(d['low']) for d in data]
+        lows = [float(d["low"]) for d in data]
 
         # Add to history
         self._low_history.extend(lows)
 
         # Keep history reasonable size
         if len(self._low_history) > len(data) + self.lookback_period * 2:
-            self._low_history = self._low_history[-(len(data) + self.lookback_period * 2):]
+            self._low_history = self._low_history[-(len(data) + self.lookback_period * 2) :]
 
         # Calculate swing low values
         swing_values: list[float | None] = []
@@ -43,8 +44,10 @@ class SwingLowIndicator(BaseIndicator):
             history_index = start_index + i
 
             # Need enough data on both sides
-            if (history_index < self.lookback_period or
-                history_index >= len(self._low_history) - self.lookback_period):
+            if (
+                history_index < self.lookback_period
+                or history_index >= len(self._low_history) - self.lookback_period
+            ):
                 swing_values.append(None)
                 continue
 
@@ -76,7 +79,7 @@ class SwingLowIndicator(BaseIndicator):
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update Swing Low with new data point"""
-        low_price = float(new_data['low'])
+        low_price = float(new_data["low"])
 
         # Add to history
         self._low_history.append(low_price)
@@ -84,7 +87,7 @@ class SwingLowIndicator(BaseIndicator):
         # Keep only recent data needed for calculation
         # We need lookback_period on both sides, so keep at least lookback_period*2+1
         if len(self._low_history) > self.lookback_period * 2 + 10:
-            self._low_history = self._low_history[-(self.lookback_period * 2 + 10):]
+            self._low_history = self._low_history[-(self.lookback_period * 2 + 10) :]
 
         # Need enough data to calculate swing low
         if len(self._low_history) < self.lookback_period * 2 + 1:

@@ -1,6 +1,7 @@
 """
 Tests for Watchlist API endpoints
 """
+
 import os
 import sys
 import unittest
@@ -8,15 +9,14 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
 
 
-def _mock_watchlist(id=1, name="Watchlist", description="A watchlist",
-                    is_active=True):
+def _mock_watchlist(id=1, name="Watchlist", description="A watchlist", is_active=True):
     """Create a mock watchlist with proper attribute types for Pydantic serialization."""
     m = MagicMock()
     m.id = id
@@ -43,18 +43,17 @@ def _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=
 
 
 class TestWatchlistAPI(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
         # Mock the database dependency (router imports get_db from
         # backend.api.dependencies, which delegates to backend.database).
-        self.mock_db_patch = patch('backend.api.dependencies.get_db')
+        self.mock_db_patch = patch("backend.api.dependencies.get_db")
         self.mock_get_db = self.mock_db_patch.start()
         self.mock_db = MagicMock()
         self.mock_get_db.return_value = self.mock_db
 
         # Mock the watchlist repository
-        self.mock_repo_patch = patch('backend.api.watchlist.router.WatchlistRepository')
+        self.mock_repo_patch = patch("backend.api.watchlist.router.WatchlistRepository")
         self.mock_repo_class = self.mock_repo_patch.start()
         self.mock_repo = MagicMock()
         self.mock_repo_class.return_value = self.mock_repo
@@ -92,10 +91,7 @@ class TestWatchlistAPI(unittest.TestCase):
         )
 
         # Test
-        watchlist_data = {
-            "name": "New Watchlist",
-            "description": "A new watchlist"
-        }
+        watchlist_data = {"name": "New Watchlist", "description": "A new watchlist"}
         response = self.client.post("/api/watchlists/", json=watchlist_data)
 
         # Assertions
@@ -106,8 +102,7 @@ class TestWatchlistAPI(unittest.TestCase):
 
         # Verify mock was called correctly
         self.mock_repo.create_watchlist.assert_called_once_with(
-            name="New Watchlist",
-            description="A new watchlist"
+            name="New Watchlist", description="A new watchlist"
         )
 
     def test_get_watchlist(self):
@@ -137,10 +132,7 @@ class TestWatchlistAPI(unittest.TestCase):
         )
 
         # Test
-        watchlist_data = {
-            "name": "Updated Watchlist",
-            "description": "An updated watchlist"
-        }
+        watchlist_data = {"name": "Updated Watchlist", "description": "An updated watchlist"}
         response = self.client.put("/api/watchlists/1", json=watchlist_data)
 
         # Assertions
@@ -180,15 +172,15 @@ class TestWatchlistAPI(unittest.TestCase):
         real Redis, so this test also pins the "non-blocking" behavior the
         redesign's plan called for (previously untested — the endpoint's
         own test predates the redesign and never mocked either)."""
-        mock_sym = _mock_symbol(
-            id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0
-        )
+        mock_sym = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0)
         mock_sym.entity_type = "stock"
         mock_sym.notes = None
         self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True, False)
 
         with (
-            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.ingestion_service.ingestion_service"
+            ) as mock_ingestion,
             patch(
                 "backend.market_data.services.backfill_queue.enqueue_backfill",
                 return_value="backfill-fakejobid",
@@ -221,15 +213,15 @@ class TestWatchlistAPI(unittest.TestCase):
         self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, True, False)
 
         with (
-            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.ingestion_service.ingestion_service"
+            ) as mock_ingestion,
             patch(
                 "backend.market_data.services.backfill_queue.enqueue_backfill",
                 return_value="backfill-fakejobid",
             ) as mock_enqueue,
         ):
-            response = self.client.post(
-                "/api/watchlists/1/symbols", json={"symbol": "aapl"}
-            )
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "aapl"})
 
         self.assertEqual(response.status_code, 201)
         mock_ingestion.register_symbol.assert_called_once_with("AAPL")
@@ -244,15 +236,15 @@ class TestWatchlistAPI(unittest.TestCase):
         self.mock_repo.add_symbol_to_watchlist.return_value = (mock_sym, False, True)
 
         with (
-            patch("backend.market_data.services.ingestion_service.ingestion_service") as mock_ingestion,
+            patch(
+                "backend.market_data.services.ingestion_service.ingestion_service"
+            ) as mock_ingestion,
             patch(
                 "backend.market_data.services.backfill_queue.enqueue_backfill",
                 return_value="backfill-fakejobid",
             ) as mock_enqueue,
         ):
-            response = self.client.post(
-                "/api/watchlists/1/symbols", json={"symbol": "AAPL"}
-            )
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "AAPL"})
 
         self.assertEqual(response.status_code, 201)
         mock_ingestion.register_symbol.assert_called_once_with("AAPL")
@@ -268,9 +260,7 @@ class TestWatchlistAPI(unittest.TestCase):
         with patch(
             "backend.market_data.services.ingestion_service.ingestion_service"
         ) as mock_ingestion:
-            response = self.client.post(
-                "/api/watchlists/1/symbols", json={"symbol": "AAPL"}
-            )
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "AAPL"})
 
         self.assertEqual(response.status_code, 201)
         mock_ingestion.register_symbol.assert_not_called()
@@ -291,8 +281,7 @@ class TestWatchlistAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 204)
         self.mock_repo.remove_symbol_from_watchlist.assert_called_once_with(
-            watchlist_id=1,
-            symbol="AAPL"
+            watchlist_id=1, symbol="AAPL"
         )
         mock_cancel.assert_called_once_with("AAPL")
 
@@ -301,10 +290,18 @@ class TestWatchlistAPI(unittest.TestCase):
         when one exists (previously zero test coverage for this endpoint
         or its underlying get_backfill_job_status)."""
         fake_status = {
-            "symbol": "AAPL", "job_id": "backfill-abc123", "status": "completed",
-            "tier1_written": 10, "tier2_written": 5, "tier3_written": 2,
-            "gaps_found": 0, "gaps_filled": 0, "result": None, "error": None,
-            "created_at": "2026-09-08T00:00:00Z", "started_at": "2026-09-08T00:00:01Z",
+            "symbol": "AAPL",
+            "job_id": "backfill-abc123",
+            "status": "completed",
+            "tier1_written": 10,
+            "tier2_written": 5,
+            "tier3_written": 2,
+            "gaps_found": 0,
+            "gaps_filled": 0,
+            "result": None,
+            "error": None,
+            "created_at": "2026-09-08T00:00:00Z",
+            "started_at": "2026-09-08T00:00:01Z",
             "completed_at": "2026-09-08T00:00:05Z",
         }
         with patch(
@@ -360,9 +357,7 @@ class TestWatchlistAPI(unittest.TestCase):
     def test_enable_symbol_in_watchlist(self):
         """Test enabling a symbol in a watchlist"""
         # Setup mock
-        enabled = _mock_symbol(
-            id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0
-        )
+        enabled = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True, position=0)
         self.mock_repo.enable_symbol_in_watchlist.return_value = True
         # Router fetches the symbol after a successful enable to return it.
         self.mock_repo.get_watchlist_symbol.return_value = enabled
@@ -378,17 +373,14 @@ class TestWatchlistAPI(unittest.TestCase):
 
         # Verify mock was called correctly
         self.mock_repo.enable_symbol_in_watchlist.assert_called_once_with(
-            watchlist_id=1,
-            symbol="AAPL"
+            watchlist_id=1, symbol="AAPL"
         )
         self.mock_repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
 
     def test_disable_symbol_in_watchlist(self):
         """Test disabling a symbol in a watchlist"""
         # Setup mock
-        disabled = _mock_symbol(
-            id=1, watchlist_id=1, symbol="AAPL", is_enabled=False, position=0
-        )
+        disabled = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=False, position=0)
         self.mock_repo.disable_symbol_in_watchlist.return_value = True
         # Router fetches the symbol after a successful disable to return it.
         self.mock_repo.get_watchlist_symbol.return_value = disabled
@@ -404,8 +396,7 @@ class TestWatchlistAPI(unittest.TestCase):
 
         # Verify mock was called correctly
         self.mock_repo.disable_symbol_in_watchlist.assert_called_once_with(
-            watchlist_id=1,
-            symbol="AAPL"
+            watchlist_id=1, symbol="AAPL"
         )
         self.mock_repo.get_watchlist_symbol.assert_called_once_with(1, "AAPL")
 
@@ -421,8 +412,7 @@ class TestWatchlistAPI(unittest.TestCase):
 
         # Test
         symbol_order = ["GOOGL", "AAPL", "MSFT"]  # New order
-        response = self.client.put("/api/watchlists/1/symbols/reorder",
-                                  json=symbol_order)
+        response = self.client.put("/api/watchlists/1/symbols/reorder", json=symbol_order)
 
         # Assertions
         self.assertEqual(response.status_code, 200)
@@ -434,11 +424,10 @@ class TestWatchlistAPI(unittest.TestCase):
 
         # Verify mock was called correctly
         self.mock_repo.reorder_watchlist_symbols.assert_called_once_with(
-            watchlist_id=1,
-            symbol_order=["GOOGL", "AAPL", "MSFT"]
+            watchlist_id=1, symbol_order=["GOOGL", "AAPL", "MSFT"]
         )
         self.mock_repo.get_watchlist_symbols.assert_called_once_with(1)
 
-if __name__ == '__main__':
-    unittest.main()
 
+if __name__ == "__main__":
+    unittest.main()

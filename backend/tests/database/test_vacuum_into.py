@@ -9,6 +9,7 @@ Validates:
   * analyze_db() runs without raising on a SQLite engine
   * analyze_db() is a no-op on a non-SQLite engine
 """
+
 import sqlite3
 import tempfile
 import unittest
@@ -26,22 +27,31 @@ class TestVacuumInto(unittest.TestCase):
         # Seed the live DB with a known row so we can verify the snapshot.
         from backend.database.db import SessionLocal
         from backend.models.market_data_sql import BarModel
+
         self._session = SessionLocal()
         # Use a tiny dummy bar so we have at least one row.
         # We pick a unique symbol per test to avoid duplicates on
         # successive runs of the same test method.
         import time
+
         self.test_symbol = f"VACUUM_TEST_{int(time.time() * 1000)}"
         from datetime import datetime
-        self._session.add(BarModel(
-            symbol=self.test_symbol,
-            timestamp=datetime.now(UTC),
-            timeframe="1m",
-            open=1.0, high=2.0, low=0.5, close=1.5, volume=100,
-            source="raw",
-            provider="test",
-            data_status="complete",
-        ))
+
+        self._session.add(
+            BarModel(
+                symbol=self.test_symbol,
+                timestamp=datetime.now(UTC),
+                timeframe="1m",
+                open=1.0,
+                high=2.0,
+                low=0.5,
+                close=1.5,
+                volume=100,
+                source="raw",
+                provider="test",
+                data_status="complete",
+            )
+        )
         self._session.commit()
 
     def tearDown(self):
@@ -52,9 +62,8 @@ class TestVacuumInto(unittest.TestCase):
         # file, but it must not outlive the test.
         try:
             from backend.models.market_data_sql import BarModel
-            self._session.query(BarModel).filter(
-                BarModel.symbol == self.test_symbol
-            ).delete()
+
+            self._session.query(BarModel).filter(BarModel.symbol == self.test_symbol).delete()
             self._session.commit()
         except Exception:
             self._session.rollback()
@@ -69,6 +78,7 @@ class TestVacuumInto(unittest.TestCase):
 
     def test_snapshot_is_created_and_nonempty(self):
         from backend.database.db import vacuum_into
+
         result = vacuum_into(self.snapshot_path)
         self.assertEqual(result, self.snapshot_path.resolve())
         self.assertTrue(self.snapshot_path.exists())
@@ -76,6 +86,7 @@ class TestVacuumInto(unittest.TestCase):
 
     def test_snapshot_is_a_valid_sqlite_db(self):
         from backend.database.db import vacuum_into
+
         vacuum_into(self.snapshot_path)
         # Open the snapshot with the standard library sqlite3 module to
         # confirm it's a real DB (not just any file).
@@ -91,6 +102,7 @@ class TestVacuumInto(unittest.TestCase):
 
     def test_snapshot_creates_missing_parent_dirs(self):
         from backend.database.db import vacuum_into
+
         nested = Path(self.tmpdir) / "a" / "b" / "snap.db"
         self.assertFalse(nested.parent.exists())
         vacuum_into(nested)
@@ -98,6 +110,7 @@ class TestVacuumInto(unittest.TestCase):
 
     def test_returns_resolved_path(self):
         from backend.database.db import vacuum_into
+
         rel = Path(self.tmpdir) / "rel.db"
         result = vacuum_into(rel)
         self.assertTrue(result.is_absolute())
@@ -110,10 +123,13 @@ class TestVacuumIntoRejectsNonSqlite(unittest.TestCase):
     def test_raises_on_postgres_url(self):
         from backend.database import db as dbmod
         from backend.database.db import vacuum_into
+
         # Temporarily point the module's engine at a Postgres URL by
         # monkey-patching ``engine.url``. We restore it after the test.
         original_engine = dbmod.engine
-        fake_eng = type("E", (), {"url": type("U", (), {"__str__": lambda s: "postgresql://x/y"})()})()
+        fake_eng = type(
+            "E", (), {"url": type("U", (), {"__str__": lambda s: "postgresql://x/y"})()}
+        )()
         try:
             dbmod.engine = fake_eng
             with self.assertRaises(RuntimeError):
@@ -127,14 +143,18 @@ class TestAnalyzeDb(unittest.TestCase):
 
     def test_runs_without_error_on_sqlite(self):
         from backend.database.db import analyze_db
+
         # Should not raise.
         analyze_db()
 
     def test_noop_on_non_sqlite(self):
         from backend.database import db as dbmod
         from backend.database.db import analyze_db
+
         original_engine = dbmod.engine
-        fake_eng = type("E", (), {"url": type("U", (), {"__str__": lambda s: "postgresql://x/y"})()})()
+        fake_eng = type(
+            "E", (), {"url": type("U", (), {"__str__": lambda s: "postgresql://x/y"})()}
+        )()
         try:
             dbmod.engine = fake_eng
             # Should return without raising.

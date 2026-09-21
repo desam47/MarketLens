@@ -1,6 +1,7 @@
 """The track_record section of build_context() — populates when
 outcome tracking is enabled, degrades to {} otherwise (same pattern as
 test_context_tape.py's tape section)."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -22,31 +23,54 @@ class TestContextTrackRecordSection(unittest.TestCase):
         return scan
 
     def test_populates_when_enabled(self):
-        record = {"sample_size": 4, "win_rate": 0.75, "avg_return_win": 0.04,
-                  "avg_return_loss": -0.02, "open_count": 1}
-        with patch.object(settings.ai_trade_plan_tracking, "enabled", True), \
-             patch("backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()), \
-             patch("backend.ai.trade_plan_tracker.get_track_record", return_value=record) as g:
-            out = ctx_mod.build_context("AAPL", include_news=False,
-                                        include_fundamentals=False, include_divergence=False)
+        record = {
+            "sample_size": 4,
+            "win_rate": 0.75,
+            "avg_return_win": 0.04,
+            "avg_return_loss": -0.02,
+            "open_count": 1,
+        }
+        with (
+            patch.object(settings.ai_trade_plan_tracking, "enabled", True),
+            patch(
+                "backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()
+            ),
+            patch("backend.ai.trade_plan_tracker.get_track_record", return_value=record) as g,
+        ):
+            out = ctx_mod.build_context(
+                "AAPL", include_news=False, include_fundamentals=False, include_divergence=False
+            )
         self.assertEqual(out.to_dict()["track_record"], record)
         g.assert_called_once_with("AAPL")
 
     def test_empty_when_disabled(self):
-        with patch.object(settings.ai_trade_plan_tracking, "enabled", False), \
-             patch("backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()), \
-             patch("backend.ai.trade_plan_tracker.get_track_record") as g:
-            out = ctx_mod.build_context("AAPL", include_news=False,
-                                        include_fundamentals=False, include_divergence=False)
+        with (
+            patch.object(settings.ai_trade_plan_tracking, "enabled", False),
+            patch(
+                "backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()
+            ),
+            patch("backend.ai.trade_plan_tracker.get_track_record") as g,
+        ):
+            out = ctx_mod.build_context(
+                "AAPL", include_news=False, include_fundamentals=False, include_divergence=False
+            )
         self.assertEqual(out.to_dict()["track_record"], {})
         g.assert_not_called()
 
     def test_degrades_on_lookup_error(self):
-        with patch.object(settings.ai_trade_plan_tracking, "enabled", True), \
-             patch("backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()), \
-             patch("backend.ai.trade_plan_tracker.get_track_record", side_effect=RuntimeError("db down")):
-            out = ctx_mod.build_context("AAPL", include_news=False,
-                                        include_fundamentals=False, include_divergence=False)
+        with (
+            patch.object(settings.ai_trade_plan_tracking, "enabled", True),
+            patch(
+                "backend.scanner.scanner.market_scanner.scan_symbol", return_value=self._min_scan()
+            ),
+            patch(
+                "backend.ai.trade_plan_tracker.get_track_record",
+                side_effect=RuntimeError("db down"),
+            ),
+        ):
+            out = ctx_mod.build_context(
+                "AAPL", include_news=False, include_fundamentals=False, include_divergence=False
+            )
         self.assertEqual(out.to_dict()["track_record"], {})
 
 

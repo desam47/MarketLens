@@ -16,6 +16,7 @@ persists trigger events. Two activation paths:
 Both paths call ``_try_fire()`` which handles dedup, the trigger insert,
 and, later, notification dispatch.
 """
+
 import json
 import logging
 import threading
@@ -59,8 +60,11 @@ PRICE_CONDITIONS: tuple[str, ...] = ("price_above", "price_below", "pct_change_a
 # just for alignment) on every single bar tick regardless of which
 # condition types are actually in use.
 TREND_CONDITIONS: tuple[str, ...] = (
-    "trend_crosses_above_70", "trend_crosses_below_70",
-    "trend_direction_changes", "trend_strengthens", "trend_weakens",
+    "trend_crosses_above_70",
+    "trend_crosses_below_70",
+    "trend_direction_changes",
+    "trend_strengthens",
+    "trend_weakens",
 )
 ALIGNMENT_CONDITIONS: tuple[str, ...] = ("full_timeframe_alignment", "timeframe_conflict")
 VOLUME_CONDITIONS: tuple[str, ...] = ("volume_expansion",)
@@ -72,13 +76,20 @@ DIVERGENCE_CONDITIONS: tuple[str, ...] = ("divergence",)
 REGIME_CONDITIONS: tuple[str, ...] = ("market_regime_change",)
 SIGNAL_PROFILE_CONDITIONS: tuple[str, ...] = ("signal_profile",)
 AUX_CONDITIONS: tuple[str, ...] = (
-    "news_arrival", "insider_sentiment_change", "options_activity_change",
+    "news_arrival",
+    "insider_sentiment_change",
+    "options_activity_change",
 )
 
 BAR_CONDITIONS: tuple[str, ...] = (
-    TREND_CONDITIONS + ALIGNMENT_CONDITIONS + VOLUME_CONDITIONS
-    + BREAKOUT_CONDITIONS + BREAKDOWN_CONDITIONS
-    + DIVERGENCE_CONDITIONS + REGIME_CONDITIONS + SIGNAL_PROFILE_CONDITIONS
+    TREND_CONDITIONS
+    + ALIGNMENT_CONDITIONS
+    + VOLUME_CONDITIONS
+    + BREAKOUT_CONDITIONS
+    + BREAKDOWN_CONDITIONS
+    + DIVERGENCE_CONDITIONS
+    + REGIME_CONDITIONS
+    + SIGNAL_PROFILE_CONDITIONS
 )
 
 
@@ -138,7 +149,9 @@ class AlertsEngine:
         self._alerts_cache = {a.id: a for a in alerts}
 
         current_price_symbols = set(self._price_alert_ids.keys())
-        current_bar_symbols = set(self._bar_alert_ids.keys()) if hasattr(self, "_bar_alert_ids") else set()
+        current_bar_symbols = (
+            set(self._bar_alert_ids.keys()) if hasattr(self, "_bar_alert_ids") else set()
+        )
         new_price_symbols: set[str] = set()
         new_bar_symbols: set[str] = set()
         # Track which symbols we've already registered in this reload pass to
@@ -178,8 +191,10 @@ class AlertsEngine:
                     engine_registry.unregister("bar", sym, self._on_bar)
                     del self._bar_alert_ids[sym]
 
-        logger.info(f"AlertsEngine loaded {len(alerts)} enabled alerts "
-                    f"({len(new_price_symbols)} price symbols, {len(new_bar_symbols)} bar symbols)")
+        logger.info(
+            f"AlertsEngine loaded {len(alerts)} enabled alerts "
+            f"({len(new_price_symbols)} price symbols, {len(new_bar_symbols)} bar symbols)"
+        )
 
     def evaluate_scan_result(self, result) -> None:
         """Evaluate scanner-signal alerts and schedule auxiliary checks.
@@ -193,10 +208,9 @@ class AlertsEngine:
         with self._lock:
             # Snapshot the current alert IDs so we can release the lock.
             candidates = [
-                a for a in self._alerts_cache.values()
-                if a.symbol.upper() == sym
-                and a.condition_type == "signal_equals"
-                and a.is_enabled
+                a
+                for a in self._alerts_cache.values()
+                if a.symbol.upper() == sym and a.condition_type == "signal_equals" and a.is_enabled
             ]
 
         for alert in candidates:
@@ -287,7 +301,8 @@ class AlertsEngine:
         sym = symbol.upper()
         with self._lock:
             candidates = [
-                alert for alert in self._alerts_cache.values()
+                alert
+                for alert in self._alerts_cache.values()
                 if alert.symbol.upper() == sym
                 and alert.condition_type in AUX_CONDITIONS
                 and alert.is_enabled
@@ -318,7 +333,9 @@ class AlertsEngine:
             except Exception:
                 logger.warning(
                     "Auxiliary alert evaluation failed for %s/%s",
-                    symbol, condition_type, exc_info=True,
+                    symbol,
+                    condition_type,
+                    exc_info=True,
                 )
 
     def _build_aux_payload(self, condition_type: str, symbol: str) -> dict | None:
@@ -330,8 +347,7 @@ class AlertsEngine:
             response = aux_data_manager.get_news(symbol, limit=20)
             items = list(response.items or [])
             identities = {
-                f"{item.timestamp.isoformat()}|{item.headline}|{item.url or ''}"
-                for item in items
+                f"{item.timestamp.isoformat()}|{item.headline}|{item.url or ''}" for item in items
             }
             with self._aux_lock:
                 previous = self._aux_state.get(key, {}).get("news_ids")
@@ -339,7 +355,8 @@ class AlertsEngine:
             if previous is None:
                 return None
             new_items = [
-                item for item in items
+                item
+                for item in items
                 if f"{item.timestamp.isoformat()}|{item.headline}|{item.url or ''}" not in previous
             ]
             return {
@@ -352,7 +369,9 @@ class AlertsEngine:
             from backend.market_data.services.finnhub_service import finnhub_service
 
             rows = finnhub_service.get_insider_sentiment(
-                symbol, date.today() - timedelta(days=365), date.today(),
+                symbol,
+                date.today() - timedelta(days=365),
+                date.today(),
             )
             rows = [row for row in rows if row.sentiment is not None]
             rows.sort(key=lambda row: (row.year, row.month))
@@ -408,7 +427,9 @@ class AlertsEngine:
 
             return {
                 "volume_change_pct": pct_change(current["volume"], previous["volume"]),
-                "open_interest_change_pct": pct_change(current["open_interest"], previous["open_interest"]),
+                "open_interest_change_pct": pct_change(
+                    current["open_interest"], previous["open_interest"]
+                ),
                 "volume": current["volume"],
                 "open_interest": current["open_interest"],
                 "previous_volume": previous["volume"],
@@ -418,8 +439,9 @@ class AlertsEngine:
 
     # --- Price callback (called from engine_registry, any thread) -------
 
-    def _on_quote(self, symbol: str, price: float, volume: float = 0,
-                  timestamp=None, **_: object) -> None:
+    def _on_quote(
+        self, symbol: str, price: float, volume: float = 0, timestamp=None, **_: object
+    ) -> None:
         """Called by engine_registry on every fresh quote for registered symbols.
 
         Checks price-based alert conditions and fires matching alerts.
@@ -448,8 +470,15 @@ class AlertsEngine:
 
     # --- Bar callback (called from engine_registry, any thread) -----------
 
-    def _on_bar(self, symbol: str, timeframe: str, price: float, volume: float = 0,
-                timestamp=None, **_: object) -> None:
+    def _on_bar(
+        self,
+        symbol: str,
+        timeframe: str,
+        price: float,
+        volume: float = 0,
+        timestamp=None,
+        **_: object,
+    ) -> None:
         """Called by engine_registry on every completed bar for registered symbols.
 
         Checks trend, alignment, volume, breakout/breakdown, and divergence
@@ -484,8 +513,11 @@ class AlertsEngine:
             signal_profile_payload = dict(trend_payload)
             signal_profile_payload["timeframe"] = tf
             signal_profile_payload["symbol"] = sym
-            signal_profile_payload["strength"] = min(abs(float(trend_payload.get("current", 0.0))) / 100.0, 1.0)
+            signal_profile_payload["strength"] = min(
+                abs(float(trend_payload.get("current", 0.0))) / 100.0, 1.0
+            )
             from .conditions import build_regime_change_payload
+
             signal_profile_payload.update(build_regime_change_payload(sym))
         alignment_payload = (
             build_alignment_payload(sym) if condition_types & set(ALIGNMENT_CONDITIONS) else None
@@ -497,7 +529,9 @@ class AlertsEngine:
             build_breakout_payload(sym, tf) if condition_types & set(BREAKOUT_CONDITIONS) else None
         )
         breakdown_payload = (
-            build_breakdown_payload(sym, tf) if condition_types & set(BREAKDOWN_CONDITIONS) else None
+            build_breakdown_payload(sym, tf)
+            if condition_types & set(BREAKDOWN_CONDITIONS)
+            else None
         )
 
         for alert in alerts.values():
@@ -516,17 +550,18 @@ class AlertsEngine:
                 self._try_fire(alert, price, extra_value=breakdown_payload)
             elif ct in DIVERGENCE_CONDITIONS:
                 from .conditions import build_divergence_payload
+
                 div_payload = build_divergence_payload(sym, tf)
                 self._try_fire(alert, price, extra_value=div_payload)
             elif ct in REGIME_CONDITIONS:
                 from .conditions import build_regime_change_payload
+
                 regime_payload = build_regime_change_payload(sym)
                 self._try_fire(alert, price, extra_value=regime_payload)
 
     # --- Core trigger logic --------------------------------------------
 
-    def _try_fire(self, alert: Alert, price: float | None, *,
-                   extra_value: object) -> bool:
+    def _try_fire(self, alert: Alert, price: float | None, *, extra_value: object) -> bool:
         """Evaluate an alert's condition; persist a trigger if it fires.
 
         Returns True if the alert fired, False otherwise.
@@ -571,8 +606,7 @@ class AlertsEngine:
         self._persist_trigger(alert, price, extra_value)
         return True
 
-    def _persist_trigger(self, alert: Alert, price: float | None,
-                         extra_value: object) -> None:
+    def _persist_trigger(self, alert: Alert, price: float | None, extra_value: object) -> None:
         """Insert an AlertTrigger row into the DB.
 
         Runs in a worker thread so it doesn't block the event loop or
@@ -589,9 +623,16 @@ class AlertsEngine:
                 message = f"{alert.symbol}: {alert.condition_type.replace('_', ' ')} {alert.parameter} (now {extra_value})"
             elif alert.condition_type == "pct_change_above":
                 observed = str(extra_value)
-                message = f"{alert.symbol}: +{extra_value:.2f}% change (threshold: {alert.parameter}%)"
-            elif alert.condition_type in ("trend_crosses_above_70", "trend_crosses_below_70",
-                                           "trend_direction_changes", "trend_strengthens", "trend_weakens"):
+                message = (
+                    f"{alert.symbol}: +{extra_value:.2f}% change (threshold: {alert.parameter}%)"
+                )
+            elif alert.condition_type in (
+                "trend_crosses_above_70",
+                "trend_crosses_below_70",
+                "trend_direction_changes",
+                "trend_strengthens",
+                "trend_weakens",
+            ):
                 if isinstance(extra_value, dict):
                     curr = extra_value.get("current", 0.0)
                     prev = extra_value.get("previous", 0.0)
@@ -610,8 +651,10 @@ class AlertsEngine:
                 message = f"{alert.symbol}: {alert.condition_type} ({len(dirs) if isinstance(dirs, list) else 0} timeframes)"
             elif alert.condition_type == "volume_expansion":
                 if isinstance(extra_value, dict):
-                    observed = (f"current={extra_value.get('current_volume', 0)}, "
-                                f"avg={extra_value.get('avg_volume', 0):.0f}")
+                    observed = (
+                        f"current={extra_value.get('current_volume', 0)}, "
+                        f"avg={extra_value.get('avg_volume', 0):.0f}"
+                    )
                 else:
                     observed = str(extra_value)
                 message = f"{alert.symbol}: volume expansion (param={alert.parameter})"
@@ -631,8 +674,10 @@ class AlertsEngine:
                 message = f"{alert.symbol}: {alert.parameter} divergence"
             elif alert.condition_type == "market_regime_change":
                 if isinstance(extra_value, dict):
-                    observed = (f"{extra_value.get('previous_regime', '?')} → "
-                                f"{extra_value.get('current_regime', '?')}")
+                    observed = (
+                        f"{extra_value.get('previous_regime', '?')} → "
+                        f"{extra_value.get('current_regime', '?')}"
+                    )
                 else:
                     observed = str(extra_value)
                 message = f"Market regime changed: {observed}"
@@ -647,8 +692,10 @@ class AlertsEngine:
                 message = f"{alert.symbol}: new news arrived"
             elif alert.condition_type == "insider_sentiment_change":
                 if isinstance(extra_value, dict):
-                    observed = (f"sentiment={extra_value.get('current_sentiment', 0):.3f}, "
-                                f"previous={extra_value.get('previous_sentiment', 0):.3f}")
+                    observed = (
+                        f"sentiment={extra_value.get('current_sentiment', 0):.3f}, "
+                        f"previous={extra_value.get('previous_sentiment', 0):.3f}"
+                    )
                 else:
                     observed = str(extra_value)
                 message = f"{alert.symbol}: insider sentiment changed"
@@ -656,8 +703,10 @@ class AlertsEngine:
                 if isinstance(extra_value, dict):
                     volume_change = extra_value.get("volume_change_pct")
                     oi_change = extra_value.get("open_interest_change_pct")
-                    observed = (f"volume Δ={volume_change if volume_change is not None else 0:.1f}%, "
-                                f"open interest Δ={oi_change if oi_change is not None else 0:.1f}%")
+                    observed = (
+                        f"volume Δ={volume_change if volume_change is not None else 0:.1f}%, "
+                        f"open interest Δ={oi_change if oi_change is not None else 0:.1f}%"
+                    )
                 else:
                     observed = str(extra_value)
                 message = f"{alert.symbol}: options activity changed"
@@ -667,7 +716,9 @@ class AlertsEngine:
                     profile = json.loads(alert.parameter or "{}")
                 except (TypeError, ValueError, json.JSONDecodeError):
                     profile = {}
-                message = f"{alert.symbol}: signal profile matched ({profile.get('direction', 'any')})"
+                message = (
+                    f"{alert.symbol}: signal profile matched ({profile.get('direction', 'any')})"
+                )
             else:
                 observed = str(extra_value) if extra_value is not None else None
                 message = None
@@ -680,11 +731,14 @@ class AlertsEngine:
             )
             db.add(trigger)
             db.commit()
-            logger.info(f"Alert fired: id={alert.id} {alert.name} "
-                        f"({alert.condition_type} {alert.parameter})")
+            logger.info(
+                f"Alert fired: id={alert.id} {alert.name} "
+                f"({alert.condition_type} {alert.parameter})"
+            )
 
             try:
                 from backend.notifications import dispatch_trigger_async
+
                 dispatch_trigger_async(trigger.id)
             except Exception as e:
                 logger.warning(f"Failed to enqueue alert delivery for trigger {trigger.id}: {e}")
@@ -702,6 +756,7 @@ class AlertsEngine:
             # (already committed above) into a logged failure.
             try:
                 from backend.ai.background import enqueue_alert_commentary_job
+
                 enqueue_alert_commentary_job(trigger.id)
             except Exception as e:
                 logger.warning(f"Failed to enqueue alert commentary for trigger {trigger.id}: {e}")
@@ -716,6 +771,7 @@ class AlertsEngine:
         db = SessionLocal()
         try:
             from backend.models import QuoteModel
+
             now = datetime.now(UTC)
             cutoff = now - timedelta(hours=26)  # allow for market closed hours
 

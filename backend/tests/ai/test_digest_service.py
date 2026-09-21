@@ -6,6 +6,7 @@ Deliberately tests _maybe_fire() directly rather than the sleep loop
 asyncio.sleep timing is involved in the actual firing decision, so
 this can be tested with a mocked now_ny() and no real waiting.
 """
+
 import asyncio
 import unittest
 from datetime import datetime
@@ -23,13 +24,13 @@ def _run(coro):
 
 
 class TestDigestServiceTimeGate(unittest.TestCase):
-
     def setUp(self):
         self.service = DigestService()
         # These tests are about the time gate; the durable "already generated" check
         # (covered in TestDigestServiceDurableDedupe) must not touch a real database.
-        patcher = patch.object(self.service, "_already_generated",
-                               new_callable=AsyncMock, return_value=False)
+        patcher = patch.object(
+            self.service, "_already_generated", new_callable=AsyncMock, return_value=False
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -147,7 +148,9 @@ class TestDigestServiceDurableDedupe(unittest.TestCase):
         from backend.models import AIDigest
 
         self.engine = create_engine(
-            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
         )
         AIDigest.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
@@ -170,23 +173,28 @@ class TestDigestServiceDurableDedupe(unittest.TestCase):
 
         repo = AIDigestRepository()
         try:
-            repo.create(session=session, market_regime=None, narrative="n", payload="{}",
-                        generated_at=when)
+            repo.create(
+                session=session, market_regime=None, narrative="n", payload="{}", generated_at=when
+            )
         finally:
             repo.close()
 
     def _tick(self, now: datetime, service: DigestService | None = None) -> list[str]:
         """Run one scheduler check at ``now`` on a FRESH service (= a process restart)."""
         service = service or DigestService()
-        with patch("backend.ai.digest_service.now_ny", return_value=now), \
-             patch.object(service, "_fire", new_callable=AsyncMock) as fire:
+        with (
+            patch("backend.ai.digest_service.now_ny", return_value=now),
+            patch.object(service, "_fire", new_callable=AsyncMock) as fire,
+        ):
             _run(service._maybe_fire())
         return [c.args[0] for c in fire.call_args_list]
 
     def test_restart_after_the_slot_was_generated_does_not_regenerate(self):
         self._store("premarket", datetime(2026, 9, 9, 8, 31))
         self.assertEqual(self._tick(datetime(2026, 9, 9, 11, 0)), [])
-        self.assertEqual(self._tick(datetime(2026, 9, 9, 11, 5)), [], "and again on the next restart")
+        self.assertEqual(
+            self._tick(datetime(2026, 9, 9, 11, 5)), [], "and again on the next restart"
+        )
 
     def test_nothing_stored_yet_fires(self):
         self.assertEqual(self._tick(datetime(2026, 9, 9, 9, 0)), ["premarket"])
@@ -214,8 +222,10 @@ class TestDigestServiceDurableDedupe(unittest.TestCase):
 
     def test_a_failing_check_fails_open(self):
         service = DigestService()
-        with patch.object(service, "_digest_exists_since", side_effect=RuntimeError("db locked")), \
-             self.assertLogs("backend.ai.digest_service", "WARNING"):
+        with (
+            patch.object(service, "_digest_exists_since", side_effect=RuntimeError("db locked")),
+            self.assertLogs("backend.ai.digest_service", "WARNING"),
+        ):
             self.assertEqual(self._tick(datetime(2026, 9, 9, 9, 0), service), ["premarket"])
 
     def test_the_database_check_runs_off_the_event_loop(self):
@@ -236,7 +246,6 @@ class TestDigestServiceDurableDedupe(unittest.TestCase):
 
 
 class TestDigestServiceFire(unittest.TestCase):
-
     def test_fire_swallows_generation_failure(self):
         """A broken digest generation must not crash the loop —
         matches every other background-loop's log-and-continue

@@ -7,6 +7,7 @@ appear 4 hours in the future, causing the frontend to show "Stuck · 4h ago".
 This migration subtracts 4 hours from every created_at value, converting
 the stored UTC time to the correct NY representation.
 """
+
 from __future__ import annotations
 
 import logging

@@ -2,6 +2,7 @@
 Tests for /api/ai/digest/* — the daily/session AI digest read + manual
 -trigger endpoints.
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -12,7 +13,6 @@ from backend.api.main import app
 
 
 class TestGetLatestDigest(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
@@ -29,7 +29,9 @@ class TestGetLatestDigest(unittest.TestCase):
     def test_returns_latest_digest(self, mock_repo_cls):
         mock_repo = MagicMock()
         mock_row = MagicMock(
-            id=1, session="close", market_regime="RISK_ON",
+            id=1,
+            session="close",
+            market_regime="RISK_ON",
             narrative="Markets are calm.",
             payload='{"movers": {"top_bullish": []}}',
             generated_at=datetime(2026, 9, 9, 16, 15, tzinfo=UTC),
@@ -60,7 +62,6 @@ class TestGetLatestDigest(unittest.TestCase):
 
 
 class TestGetDigestHistory(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 
@@ -69,12 +70,20 @@ class TestGetDigestHistory(unittest.TestCase):
         mock_repo = MagicMock()
         mock_repo.get_history.return_value = [
             MagicMock(
-                id=2, session="close", market_regime="NEUTRAL", narrative="n2",
-                payload=None, generated_at=datetime(2026, 9, 9, tzinfo=UTC),
+                id=2,
+                session="close",
+                market_regime="NEUTRAL",
+                narrative="n2",
+                payload=None,
+                generated_at=datetime(2026, 9, 9, tzinfo=UTC),
             ),
             MagicMock(
-                id=1, session="premarket", market_regime="RISK_ON", narrative="n1",
-                payload=None, generated_at=datetime(2026, 9, 8, tzinfo=UTC),
+                id=1,
+                session="premarket",
+                market_regime="RISK_ON",
+                narrative="n1",
+                payload=None,
+                generated_at=datetime(2026, 9, 8, tzinfo=UTC),
             ),
         ]
         mock_repo_cls.return_value = mock_repo
@@ -90,8 +99,12 @@ class TestGetDigestHistory(unittest.TestCase):
         mock_repo = MagicMock()
         mock_repo.get_history.return_value = [
             MagicMock(
-                id=1, session="close", market_regime=None, narrative=None,
-                payload=None, generated_at=datetime(2026, 9, 9, tzinfo=UTC),
+                id=1,
+                session="close",
+                market_regime=None,
+                narrative=None,
+                payload=None,
+                generated_at=datetime(2026, 9, 9, tzinfo=UTC),
             ),
         ]
         mock_repo_cls.return_value = mock_repo
@@ -102,7 +115,6 @@ class TestGetDigestHistory(unittest.TestCase):
 
 
 class TestGenerateDigestNow(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
 

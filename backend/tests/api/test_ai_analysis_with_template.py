@@ -5,6 +5,7 @@ template, renders its system prompt with the analysis context
 (symbol, timeframe), and passes the rendered prompt into the
 underlying ``analyze_symbol`` call as ``system_prompt_override``.
 """
+
 from unittest.mock import patch
 
 import pytest
@@ -56,6 +57,7 @@ def _create_template(name: str, prompt: str) -> int:
 
 def test_render_template_substitutes_variables():
     from backend.ai.prompt import render_template
+
     out = render_template(
         "Hello {{symbol}} on {{timeframe}}",
         {"symbol": "AAPL", "timeframe": "4h"},
@@ -65,6 +67,7 @@ def test_render_template_substitutes_variables():
 
 def test_render_template_handles_whitespace_and_unknowns():
     from backend.ai.prompt import render_template
+
     out = render_template(
         "{{  symbol  }} - {{ unknown }}",
         {"symbol": "TSLA"},
@@ -74,6 +77,7 @@ def test_render_template_handles_whitespace_and_unknowns():
 
 def test_render_template_handles_non_string_values():
     from backend.ai.prompt import render_template
+
     out = render_template(
         "Count: {{n}}",
         {"n": 42},
@@ -83,6 +87,7 @@ def test_render_template_handles_non_string_values():
 
 def test_render_template_handles_none():
     from backend.ai.prompt import render_template
+
     out = render_template(
         "Value: {{x}}",
         {"x": None},
@@ -97,6 +102,7 @@ def test_render_template_handles_none():
 @patch("backend.api.ai.router.ai_manager")
 def test_analyze_with_template_passes_override(mock_ai_mgr, mock_analyze, client):
     from backend.ai.prompt import AnalysisResponse
+
     mock_analyze.return_value = AnalysisResponse(
         summary="Risk summary for the symbol.",
         trend="bullish",
@@ -134,6 +140,7 @@ def test_analyze_with_template_passes_override(mock_ai_mgr, mock_analyze, client
 @patch("backend.api.ai.router.ai_manager")
 def test_analyze_without_template_uses_default(mock_ai_mgr, mock_analyze, client):
     from backend.ai.prompt import AnalysisResponse
+
     mock_analyze.return_value = AnalysisResponse(
         summary="Analysis of the symbol shows mixed signals.",
         trend="bullish",
@@ -182,6 +189,7 @@ def test_analyze_with_default_template_uses_default(mock_ai_mgr, mock_analyze, c
     """If a default template is set and no template_id given, the default
     is rendered automatically."""
     from backend.ai.prompt import AnalysisResponse
+
     mock_analyze.return_value = AnalysisResponse(
         summary="Analysis of the symbol looks neutral.",
         trend="neutral",
@@ -214,4 +222,3 @@ def test_analyze_with_default_template_uses_default(mock_ai_mgr, mock_analyze, c
     assert override is not None
     assert "GOOG" in override
     assert "4h" in override
-

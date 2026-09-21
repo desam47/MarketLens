@@ -1,6 +1,7 @@
 """
 API endpoints for market regime analysis
 """
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -87,6 +88,7 @@ def _data_age_seconds(ts: datetime | None) -> float | None:
     if ts is None:
         return None
     from backend.utils.timezone import now_ny
+
     if ts.tzinfo is not None:
         ts = ts.replace(tzinfo=None)
     delta = (now_ny() - ts).total_seconds()
@@ -146,6 +148,7 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
             for key in list(_transitions_cache.keys()):
                 if key.startswith(f"{symbol}:"):
                     _transitions_cache.pop(key, None)
+
         # NOTE: quote-frequency updates are intentionally NOT fed to the regime
         # engine. Alpaca free tier stops returning fresh quotes after 16:00 ET,
         # causing stale 16:00:05 timestamps to overwrite the correct bar-driven
@@ -154,6 +157,7 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
         # updates. The bar:1m dispatch below provides those.
         engine_registry.register("bar:1m", symbol, bar_update)
     return _engines[symbol]
+
 
 @router.get("/{symbol}/current")
 async def get_current_regime(symbol: str):
@@ -205,6 +209,7 @@ async def get_current_regime(symbol: str):
         logger.error(f"Error getting regime for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
 @router.get("/{symbol}/history")
 async def get_regime_history(symbol: str, limit: int | None = 100):
     """Get regime history for symbol (60s TTL cache)."""
@@ -230,7 +235,7 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
                 }
                 for signal in history
             ],
-            "count": len(history)
+            "count": len(history),
         }
         _regime_history_cache[key] = payload
         return payload
@@ -238,12 +243,17 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
         logger.error(f"Error getting regime history for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
 @router.post("/{symbol}/update")
-async def update_regime(symbol: str, price: float, volume: float,
-                       timestamp: str | None = None,
-                       high: float | None = None,
-                       low: float | None = None,
-                       open_price: float | None = None):
+async def update_regime(
+    symbol: str,
+    price: float,
+    volume: float,
+    timestamp: str | None = None,
+    high: float | None = None,
+    low: float | None = None,
+    open_price: float | None = None,
+):
     """Update regime engine with new market data"""
     try:
         engine = get_engine(symbol.upper())
@@ -252,22 +262,13 @@ async def update_regime(symbol: str, price: float, volume: float,
         ts = datetime.fromisoformat(timestamp) if timestamp else datetime.now()
 
         engine.update(
-            price=price,
-            volume=volume,
-            timestamp=ts,
-            high=high,
-            low=low,
-            open_price=open_price
+            price=price, volume=volume, timestamp=ts, high=high, low=low, open_price=open_price
         )
 
         # Invalidate TTL cache so the next GET reflects the new tick.
         _regime_cache.pop(symbol.upper(), None)
 
-        return {
-            "symbol": symbol.upper(),
-            "status": "updated",
-            "timestamp": _to_dashboard_tz(ts)
-        }
+        return {"symbol": symbol.upper(), "status": "updated", "timestamp": _to_dashboard_tz(ts)}
     except Exception as e:
         logger.error(f"Error updating regime for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -276,6 +277,7 @@ async def update_regime(symbol: str, price: float, volume: float,
 # ----------------------------------------------------------------------
 # Phase 8: relative-strength and sector endpoints
 # ----------------------------------------------------------------------
+
 
 def _get_rs_engine(symbol: str) -> RelativeStrengthEngine:
     """Get or create a relative-strength engine for symbol."""

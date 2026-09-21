@@ -17,6 +17,7 @@ can treat "AI off" as a normal outcome rather than handling a
 special exception. ``analyze_symbol()`` returns an
 ``UncertaintyResponse`` for the same reason.
 """
+
 from backend.ai.analyze import analyze_symbol
 from backend.ai.context import AnalysisContext, InsufficientDataError, build_context
 from backend.ai.manager import (

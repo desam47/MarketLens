@@ -7,6 +7,7 @@ These mirror the coverage backend/tests/api/test_analysis_router.py
 already has for the same logic via HTTP, but exercise the functions
 directly now that they're independently importable.
 """
+
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -20,14 +21,18 @@ from backend.analysis.series import (
 
 
 class TestLoadBars(unittest.TestCase):
-
     @patch("backend.analysis.series.bar_repository")
     def test_reshapes_bar_rows_to_dicts(self, mock_repo):
         mock_repo.get_bars.return_value = [
             MagicMock(
-                open=100.0, high=101.0, low=99.0, close=100.5,
-                volume=1_000_000, timestamp=datetime(2024, 1, 1, tzinfo=UTC),
-                source="raw", data_status=MagicMock(value="historical"),
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1_000_000,
+                timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+                source="raw",
+                data_status=MagicMock(value="historical"),
             )
         ]
         bars = load_bars("AAPL", "1d", limit=10)
@@ -44,9 +49,14 @@ class TestLoadBars(unittest.TestCase):
         hasattr(...) guard."""
         mock_repo.get_bars.return_value = [
             MagicMock(
-                open=1, high=1, low=1, close=1, volume=1,
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+                volume=1,
                 timestamp=datetime(2024, 1, 1, tzinfo=UTC),
-                source="raw", data_status="historical",
+                source="raw",
+                data_status="historical",
             )
         ]
         bars = load_bars("AAPL", "1d")
@@ -64,7 +74,6 @@ class TestLoadBars(unittest.TestCase):
 
 
 class TestBarDictsToArrays(unittest.TestCase):
-
     def test_empty_input_returns_empty_arrays(self):
         arrays = bar_dicts_to_arrays([])
         self.assertEqual(arrays["closes"], [])
@@ -82,7 +91,6 @@ class TestBarDictsToArrays(unittest.TestCase):
 
 
 class TestRsiSeries(unittest.TestCase):
-
     def test_short_series_stays_neutral(self):
         closes = [100.0] * 5
         out = rsi_series(closes, period=14)
@@ -100,7 +108,6 @@ class TestRsiSeries(unittest.TestCase):
 
 
 class TestMacdHistogramSeries(unittest.TestCase):
-
     def test_short_series_returns_zeros(self):
         closes = [100.0] * 10
         out = macd_histogram_series(closes, fast=12, slow=26, signal=9)

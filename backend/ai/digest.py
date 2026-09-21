@@ -13,6 +13,7 @@ degrades to empty, never kills the whole thing" convention, then a
 narrate step that mirrors backend.ai.analyze.analyze_symbol's
 prompt -> AI -> parse -> graceful-uncertainty-on-failure shape.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,7 +42,9 @@ def _safe_call(fn, *args, default=None, **kwargs):
         return default
 
 
-def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = False, db=None) -> dict[str, Any]:
+def build_digest_payload(
+    watchlist_id: int | None = None, aggregate_all: bool = False, db=None
+) -> dict[str, Any]:
     """Gather a structured digest payload, in-process, no HTTP round-trips.
 
     Never raises — every section degrades to an empty/absent value on
@@ -70,8 +73,10 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
         # gather symbols from all active watchlists
         if db is None:
             from backend.database import SessionLocal
+
             db = SessionLocal()
         from backend.repositories.watchlist_repository import WatchlistRepository
+
         repo = WatchlistRepository(db)
         all_wls = repo.get_watchlists(active_only=True)
         symbol_set = set()
@@ -87,11 +92,7 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
     # Ensure the scanner has scanned all symbols so we can aggregate).
     # Use run_sync to drive the async scan.
     run_sync(market_scanner.scan_symbols_async(symbols))
-    cache = {
-        s: market_scanner.scan_results[s]
-        for s in symbols
-        if s in market_scanner.scan_results
-    }
+    cache = {s: market_scanner.scan_results[s] for s in symbols if s in market_scanner.scan_results}
 
     # Descending by live price change % — actual price direction, not
     # the momentum/RSI directional score (a contrarian/oversold-bounce
@@ -121,7 +122,9 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
     # first, strongest-bearish last) since it's a filtered slice of
     # `ranked` — take the tail (most negative) and reverse so the
     # strongest bearish mover is first, matching top_bullish's order.
-    top_bearish = list(reversed(bearish_candidates[-top_movers_count:])) if bearish_candidates else []
+    top_bearish = (
+        list(reversed(bearish_candidates[-top_movers_count:])) if bearish_candidates else []
+    )
 
     rsi_extremes = [
         {
@@ -134,8 +137,12 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
         and ("RSI_OVERSOLD" in (r.signals or []) or "RSI_OVERBOUGHT" in (r.signals or []))
     ]
 
-    mtf_bullish_count = sum(1 for r in cache.values() if "MULTI_TIMEFRAME_BULLISH" in (r.signals or []))
-    mtf_bearish_count = sum(1 for r in cache.values() if "MULTI_TIMEFRAME_BEARISH" in (r.signals or []))
+    mtf_bullish_count = sum(
+        1 for r in cache.values() if "MULTI_TIMEFRAME_BULLISH" in (r.signals or [])
+    )
+    mtf_bearish_count = sum(
+        1 for r in cache.values() if "MULTI_TIMEFRAME_BEARISH" in (r.signals or [])
+    )
 
     # --- Per-mover AI blurb (feature 1's enriched analyze_symbol) —
     # only for the top movers, not the whole watchlist, to bound AI
@@ -184,7 +191,9 @@ def build_digest_payload(watchlist_id: int | None = None, aggregate_all: bool = 
                     r = all_movers[i]
                     symbol = getattr(r, "symbol", "unknown")
                     logger.warning(
-                        "Mover analysis failed for %s: %s", symbol, e,
+                        "Mover analysis failed for %s: %s",
+                        symbol,
+                        e,
                     )
                     mover_results[i] = {
                         "symbol": symbol,
@@ -224,11 +233,13 @@ def narrate_digest(payload: dict[str, Any]) -> DigestNarrative:
         return _fallback_narrative(payload)
 
     try:
-        resp = run_sync(ai_manager.complete(
-            prompt=build_digest_user_prompt(payload),
-            system=DIGEST_SYSTEM_PROMPT,
-            max_tokens=400,
-        ))
+        resp = run_sync(
+            ai_manager.complete(
+                prompt=build_digest_user_prompt(payload),
+                system=DIGEST_SYSTEM_PROMPT,
+                max_tokens=400,
+            )
+        )
         if resp.text is None:
             return _fallback_narrative(payload)
         return parse_digest_reply(resp.text)

@@ -8,6 +8,7 @@ frontend showed times 4–5 hours off.
 Starting 2026-09-02 the project uses naive America/New_York datetimes.
 This migration subtracts 4 hours (EDT offset) from all three columns.
 """
+
 from __future__ import annotations
 
 import logging

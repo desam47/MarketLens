@@ -3,6 +3,7 @@ The suite must not write into the live server's ``logs/marketlens.log``: importi
 configures file logging, and that used to append test noise (deliberate failures, MagicMock
 errors) to the file a running dev server is also writing.
 """
+
 import os
 import tempfile
 import unittest
@@ -16,7 +17,9 @@ _PROJECT_LOGS = Path(structured_logging.__file__).resolve().parent.parent.parent
 
 class TestLogDirectory(unittest.TestCase):
     def test_the_suite_logs_outside_the_project_logs_directory(self):
-        self.assertTrue(os.environ.get("MARKETLENS_LOG_DIR"), "conftest must set MARKETLENS_LOG_DIR")
+        self.assertTrue(
+            os.environ.get("MARKETLENS_LOG_DIR"), "conftest must set MARKETLENS_LOG_DIR"
+        )
         self.assertNotEqual(structured_logging._get_log_dir().resolve(), _PROJECT_LOGS.resolve())
 
     def test_the_root_file_handler_is_not_the_live_log(self):
@@ -24,8 +27,11 @@ class TestLogDirectory(unittest.TestCase):
         from logging.handlers import RotatingFileHandler
 
         live = str((_PROJECT_LOGS / "marketlens.log").resolve())
-        paths = [str(Path(h.baseFilename).resolve()) for h in logging.getLogger().handlers
-                 if isinstance(h, RotatingFileHandler)]
+        paths = [
+            str(Path(h.baseFilename).resolve())
+            for h in logging.getLogger().handlers
+            if isinstance(h, RotatingFileHandler)
+        ]
         self.assertNotIn(live, paths, "a test-run handler is writing to the live server's log")
 
     def test_the_override_is_honoured_and_created(self):

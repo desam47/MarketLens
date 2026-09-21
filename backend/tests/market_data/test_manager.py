@@ -1,6 +1,7 @@
 """
 Tests for MarketDataManager
 """
+
 import os
 import sys
 import unittest
@@ -8,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.market_data.services.manager import MarketDataManager
 from backend.models.market_data import (
@@ -20,19 +21,17 @@ from backend.models.market_data import (
 
 
 class TestMarketDataManager(unittest.TestCase):
-
     def setUp(self):
         # Clear circuit breakers BEFORE manager init so a clean slate for each test.
         # Breakers are module-level singletons — a breaker opened in one test would
         # otherwise fail-fast in the next test.
         from backend.market_data.services.manager import _cb_lock, _circuit_breakers
+
         with _cb_lock:
             _circuit_breakers.clear()
         # Make Redis look like a miss-everything cache so tests don't read
         # whatever the live ingestion service has populated.
-        self._redis_cache_patcher = patch(
-            "backend.market_data.services.manager._redis_cache"
-        )
+        self._redis_cache_patcher = patch("backend.market_data.services.manager._redis_cache")
         self.mock_redis = self._redis_cache_patcher.start()
         self.mock_redis.get_quote.return_value = None
         self.mock_redis.get_latest_bar.return_value = None
@@ -108,7 +107,7 @@ class TestMarketDataManager(unittest.TestCase):
         available = self.manager._get_available_providers()
         self.assertIn("yahoo_finance", available)
 
-    @patch('backend.market_data.services.manager.YFinanceProvider')
+    @patch("backend.market_data.services.manager.YFinanceProvider")
     def test_get_quote_success(self, mock_yf_provider_class):
         """Test successful quote retrieval through manager"""
         # Setup mock provider
@@ -119,7 +118,7 @@ class TestMarketDataManager(unittest.TestCase):
             price=150.0,
             timestamp=datetime.now(),
             provider="yahoo_finance",
-            data_status=DataStatus.DELAYED
+            data_status=DataStatus.DELAYED,
         )
 
         # Replace the provider in manager
@@ -135,7 +134,7 @@ class TestMarketDataManager(unittest.TestCase):
         self.assertEqual(quote.price, 150.0)
         mock_provider.get_quote.assert_called_once_with("AAPL")
 
-    @patch('backend.market_data.services.manager.YFinanceProvider')
+    @patch("backend.market_data.services.manager.YFinanceProvider")
     def test_get_quote_fallback(self, mock_yf_provider_class):
         """Test fallback when primary provider fails on all retries."""
         # Setup mock providers — primary always raises, fallback succeeds.
@@ -152,14 +151,11 @@ class TestMarketDataManager(unittest.TestCase):
             price=149.5,
             timestamp=datetime.now(),
             provider="fallback_provider",
-            data_status=DataStatus.DELAYED
+            data_status=DataStatus.DELAYED,
         )
 
         # Replace providers in manager
-        self.manager.providers = {
-            "yahoo_finance": mock_primary,
-            "fallback_provider": mock_fallback
-        }
+        self.manager.providers = {"yahoo_finance": mock_primary, "fallback_provider": mock_fallback}
         self.manager.provider_priority = ["yahoo_finance", "fallback_provider"]
 
         # Test
@@ -178,11 +174,11 @@ class TestMarketDataManager(unittest.TestCase):
     def test_get_provider_statuses(self):
         """Test getting status of all providers"""
         # Mock provider statuses
-        with patch.object(self.manager.providers["yahoo_finance"], 'get_provider_status') as mock_status:
+        with patch.object(
+            self.manager.providers["yahoo_finance"], "get_provider_status"
+        ) as mock_status:
             mock_status.return_value = ProviderStatus(
-                provider_name="yahoo_finance",
-                is_healthy=True,
-                timestamp=datetime.now()
+                provider_name="yahoo_finance", is_healthy=True, timestamp=datetime.now()
             )
 
             statuses = self.manager.get_provider_statuses()
@@ -217,22 +213,18 @@ class TestMarketDataManager(unittest.TestCase):
         cached = [self._make_bar("AAPL", "1m", old_ts) for _ in range(320)]
         mock_db = MagicMock()
 
-        with patch(
-            "backend.repositories.bar_repository"
-        ) as mock_repo, \
-             patch(
-            "backend.market_data.services.manager_class.get_settings"
-        ) as mock_get_settings, \
-             patch(
-            "backend.market_data.services.manager_class.get_redis_cache"
-        ) as mock_get_redis_cache:
+        with (
+            patch("backend.repositories.bar_repository") as mock_repo,
+            patch("backend.market_data.services.manager_class.get_settings") as mock_get_settings,
+            patch(
+                "backend.market_data.services.manager_class.get_redis_cache"
+            ) as mock_get_redis_cache,
+        ):
             mock_repo.get_bars.return_value = cached
             mock_get_redis_cache.return_value = self.mock_redis
             mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
             mock_get_settings.return_value.redis.enabled = True
-            self.manager.providers = {
-                "yahoo_finance": MagicMock(is_available=lambda: True)
-            }
+            self.manager.providers = {"yahoo_finance": MagicMock(is_available=lambda: True)}
             self.manager.provider_priority = ["yahoo_finance"]
 
             result = self.manager.get_historical_bars(
@@ -251,22 +243,18 @@ class TestMarketDataManager(unittest.TestCase):
         cached = [self._make_bar("AAPL", "1d", old_ts) for _ in range(80)]
         mock_db = MagicMock()
 
-        with patch(
-            "backend.repositories.bar_repository"
-        ) as mock_repo, \
-             patch(
-            "backend.market_data.services.manager_class.get_settings"
-        ) as mock_get_settings, \
-             patch(
-            "backend.market_data.services.manager_class.get_redis_cache"
-        ) as mock_get_redis_cache:
+        with (
+            patch("backend.repositories.bar_repository") as mock_repo,
+            patch("backend.market_data.services.manager_class.get_settings") as mock_get_settings,
+            patch(
+                "backend.market_data.services.manager_class.get_redis_cache"
+            ) as mock_get_redis_cache,
+        ):
             mock_repo.get_bars.return_value = cached
             mock_get_redis_cache.return_value = self.mock_redis
             mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
             mock_get_settings.return_value.redis.enabled = True
-            self.manager.providers = {
-                "yahoo_finance": MagicMock(is_available=lambda: True)
-            }
+            self.manager.providers = {"yahoo_finance": MagicMock(is_available=lambda: True)}
             self.manager.provider_priority = ["yahoo_finance"]
 
             result = self.manager.get_historical_bars(
@@ -285,8 +273,11 @@ class TestMarketDataManager(unittest.TestCase):
         mock_primary.get_quote.side_effect = [
             Exception("transient 1"),
             Quote(
-                symbol="AAPL", price=150.0, timestamp=datetime.now(),
-                provider="yahoo_finance", data_status=DataStatus.DELAYED,
+                symbol="AAPL",
+                price=150.0,
+                timestamp=datetime.now(),
+                provider="yahoo_finance",
+                data_status=DataStatus.DELAYED,
             ),
         ]
 
@@ -312,24 +303,20 @@ class TestMarketDataManager(unittest.TestCase):
         # ``manager_class`` calls ``get_settings()`` and ``get_redis_cache()``
         # (functions) rather than the module-level ``_settings`` / ``_redis_cache``
         # attributes, so we patch the functions at their actual call site.
-        with patch(
-            "backend.repositories.bar_repository"
-        ) as mock_repo, \
-             patch(
-            "backend.market_data.services.manager_class.get_settings"
-        ) as mock_get_settings, \
-             patch(
-            "backend.market_data.services.manager_class.get_redis_cache"
-        ) as mock_get_redis_cache:
+        with (
+            patch("backend.repositories.bar_repository") as mock_repo,
+            patch("backend.market_data.services.manager_class.get_settings") as mock_get_settings,
+            patch(
+                "backend.market_data.services.manager_class.get_redis_cache"
+            ) as mock_get_redis_cache,
+        ):
             mock_repo.get_bars.return_value = cached
             # Mirror the setUp's Redis-miss-everything mock through the getter.
             mock_get_redis_cache.return_value = self.mock_redis
             # Mock settings: TTL = 300s, Redis enabled, defaults for the rest.
             mock_get_settings.return_value.market_data.cache_ttl_seconds = 300
             mock_get_settings.return_value.redis.enabled = True
-            self.manager.providers = {
-                "yahoo_finance": MagicMock(is_available=lambda: True)
-            }
+            self.manager.providers = {"yahoo_finance": MagicMock(is_available=lambda: True)}
             self.manager.provider_priority = ["yahoo_finance"]
 
             result = self.manager.get_historical_bars(
@@ -358,6 +345,7 @@ class TestGetCachedProvider(unittest.TestCase):
 
     def setUp(self):
         from backend.market_data.services import manager as manager_mod
+
         self.manager_mod = manager_mod
         manager_mod._clear_provider_cache()
 
@@ -371,9 +359,7 @@ class TestGetCachedProvider(unittest.TestCase):
             def __init__(self):
                 construct_count["n"] += 1
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
-        ):
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}):
             first = self.manager_mod.get_cached_provider("fake")
             second = self.manager_mod.get_cached_provider("fake")
 
@@ -395,10 +381,11 @@ class TestGetCachedProvider(unittest.TestCase):
         already_built = _FakeProvider()
         construct_count["n"] = 0  # only count constructions *through the cache*
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
-        ), patch.object(
-            self.manager_mod.market_data_manager, "providers", {"fake": already_built}
+        with (
+            patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}),
+            patch.object(
+                self.manager_mod.market_data_manager, "providers", {"fake": already_built}
+            ),
         ):
             result = self.manager_mod.get_cached_provider("fake")
 
@@ -421,9 +408,7 @@ class TestGetCachedProvider(unittest.TestCase):
                 if attempt["n"] == 1:
                     raise RuntimeError("transient failure")
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"flaky": _FlakyProvider}
-        ):
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"flaky": _FlakyProvider}):
             first = self.manager_mod.get_cached_provider("flaky")
             self.assertIsNone(first)
             second = self.manager_mod.get_cached_provider("flaky")
@@ -438,11 +423,12 @@ class TestGetCachedProvider(unittest.TestCase):
             def __init__(self):
                 construct_count["n"] += 1
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
-        ), patch(
-            "backend.config.settings.BackfillSettings.get_primary_provider",
-            return_value="fake",
+        with (
+            patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}),
+            patch(
+                "backend.config.settings.BackfillSettings.get_primary_provider",
+                return_value="fake",
+            ),
         ):
             first = self.manager_mod.get_backfill_primary_provider("1m")
             second = self.manager_mod.get_backfill_primary_provider("1m")
@@ -459,9 +445,7 @@ class TestGetCachedProvider(unittest.TestCase):
             def __init__(self):
                 construct_count["n"] += 1
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}
-        ):
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"fake": _FakeProvider}):
             first = backfill_service._instantiate_provider("fake")
             second = backfill_service._instantiate_provider("fake")
 
@@ -502,9 +486,7 @@ class TestGetCachedProvider(unittest.TestCase):
             with results_lock:
                 results.append(instance)
 
-        with patch.object(
-            self.manager_mod, "_PROVIDER_CLASSES", {"slow": _SlowProvider}
-        ):
+        with patch.object(self.manager_mod, "_PROVIDER_CLASSES", {"slow": _SlowProvider}):
             threads = [threading.Thread(target=_call) for _ in range(n_threads)]
             for t in threads:
                 t.start()
@@ -516,5 +498,5 @@ class TestGetCachedProvider(unittest.TestCase):
         self.assertTrue(all(r is results[0] for r in results))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

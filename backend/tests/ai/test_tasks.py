@@ -7,6 +7,7 @@ are mocked so these tests exercise the task wiring (DB-status transitions,
 direct-vs-job paths, serialization shape) without a Redis worker, a live
 DB, or a real AI provider.
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest

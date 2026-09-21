@@ -1,6 +1,7 @@
 """
 Database configuration and session management
 """
+
 import os
 from pathlib import Path
 
@@ -18,6 +19,7 @@ class Base(DeclarativeBase):
     `declarative_base()` factory function. All models in backend/models/
     inherit from this class.
     """
+
 
 # Safety check: SQLite DB must live under the project root.
 # Fail immediately (not silently) if someone starts the server from the
@@ -133,6 +135,7 @@ _register_sqlite_pragmas(engine)
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 # Dependency to get DB session
 def get_db():
     db = SessionLocal()
@@ -180,6 +183,7 @@ def vacuum_into(snapshot_path: str | Path) -> Path:
     # connection with isolation_level=None to disable SQLAlchemy's
     # implicit transaction wrapping.
     from sqlalchemy import create_engine as _ce
+
     raw_engine = _ce(str(engine.url), isolation_level=None)
     try:
         with raw_engine.connect() as conn:
@@ -187,6 +191,7 @@ def vacuum_into(snapshot_path: str | Path) -> Path:
             # pass the path as a quoted SQL literal. Use the
             # SQLAlchemy text() builder for safe escaping.
             from sqlalchemy import text
+
             # VACUUM INTO takes no bind parameters, so the path is inlined as
             # a SQL string literal — double any embedded single quote.
             quoted = snapshot.as_posix().replace("'", "''")
@@ -210,6 +215,7 @@ def analyze_db() -> None:
         return
 
     from sqlalchemy import text
+
     with engine.connect() as conn:
         conn.execute(text("ANALYZE"))
         conn.commit()
@@ -231,9 +237,7 @@ def analyze_db() -> None:
 _PROTECTED_DB_PATH: str | None = None
 if _is_sqlite_url(_db_url):
     try:
-        _PROTECTED_DB_PATH = str(
-            Path(_db_url.replace("sqlite:///", "")).expanduser().resolve()
-        )
+        _PROTECTED_DB_PATH = str(Path(_db_url.replace("sqlite:///", "")).expanduser().resolve())
     except OSError:  # pragma: no cover - unresolvable path
         _PROTECTED_DB_PATH = None
 
@@ -258,10 +262,7 @@ _unguarded_drop_all = Base.metadata.drop_all
 def _guarded_drop_all(bind=None, tables=None, checkfirst=True):
     """``MetaData.drop_all`` that refuses to wipe the project database."""
     target = bind if bind is not None else engine
-    if (
-        _targets_protected_db(target)
-        and os.environ.get("MARKETLENS_ALLOW_DROP_ALL") != "1"
-    ):
+    if _targets_protected_db(target) and os.environ.get("MARKETLENS_ALLOW_DROP_ALL") != "1":
         raise RuntimeError(
             "Refusing drop_all() against the project database at "
             f"{_PROTECTED_DB_PATH}.\n"

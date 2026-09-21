@@ -1,6 +1,7 @@
 """
 Technical indicators module for MarketLens
 """
+
 from .adx import ADXIndicator as ADXIndicator
 from .atr import ATRIndicator as ATRIndicator
 from .base_indicator import BaseIndicator as BaseIndicator

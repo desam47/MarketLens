@@ -4,6 +4,7 @@ Chat repository for data access operations (Version 4, AI feature 4).
 Same thin-repository convention as AlertRepository/AIDigestRepository
 — owns its own SessionLocal when a session isn't passed in.
 """
+
 from backend.database import SessionLocal
 from backend.models import ChatMessage, ChatSession
 from backend.models.chat import UNIVERSAL_SYMBOL

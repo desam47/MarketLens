@@ -1,6 +1,7 @@
 """
 Average True Range (ATR) indicator
 """
+
 from typing import Any, cast
 
 from .base_indicator import BaseIndicator
@@ -21,9 +22,9 @@ class ATRIndicator(BaseIndicator):
 
         true_ranges = []
         for i in range(1, len(data)):
-            high = float(data[i]['high'])
-            low = float(data[i]['low'])
-            prev_close = float(data[i-1]['close'])
+            high = float(data[i]["high"])
+            low = float(data[i]["low"])
+            prev_close = float(data[i - 1]["close"])
 
             tr1 = high - low
             tr2 = abs(high - prev_close)
@@ -45,10 +46,12 @@ class ATRIndicator(BaseIndicator):
             return []
 
         # Calculate ATR as moving average of True Range
-        atr_values: list[float | None] = [None] * (self.period - 1)  # First 'period-1' values are undefined
+        atr_values: list[float | None] = [None] * (
+            self.period - 1
+        )  # First 'period-1' values are undefined
 
         for i in range(self.period - 1, len(true_ranges)):
-            atr = sum(true_ranges[i - self.period + 1:i + 1]) / self.period
+            atr = sum(true_ranges[i - self.period + 1 : i + 1]) / self.period
             atr_values.append(atr)
 
         # Filter out None values for clean return
@@ -64,12 +67,12 @@ class ATRIndicator(BaseIndicator):
         previous close as instance state and updates them in O(1) per
         bar.
         """
-        high = float(new_data['high'])
-        low = float(new_data['low'])
-        close = float(new_data['close'])
+        high = float(new_data["high"])
+        low = float(new_data["low"])
+        close = float(new_data["close"])
 
         # ---- State init ----
-        if not hasattr(self, '_smoothed_atr'):
+        if not hasattr(self, "_smoothed_atr"):
             self._smoothed_atr: float | None = None
             self._prev_close: float | None = None
             self._tr_history: list[float] = []
@@ -101,8 +104,6 @@ class ATRIndicator(BaseIndicator):
             return self._smoothed_atr
 
         # ---- Incremental update (O(1)) ----
-        self._smoothed_atr = (
-            (self._smoothed_atr * (self.period - 1) + tr) / self.period
-        )
+        self._smoothed_atr = (self._smoothed_atr * (self.period - 1) + tr) / self.period
         self.values.append(self._smoothed_atr)
         return self._smoothed_atr

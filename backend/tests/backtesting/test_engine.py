@@ -5,6 +5,7 @@ The pure helpers (``_compute_metrics``, ``_build_trade``,
 ``_relative_volume``) are tested directly. The state machine is tested
 by patching the bar repository so the engine never touches the real DB.
 """
+
 import os
 import sys
 import unittest
@@ -25,14 +26,22 @@ from backend.models.market_data import Bar, DataStatus
 def _bar(close, volume=1_000_000, days_ago=0):
     ts = datetime(2025, 1, 1) + timedelta(days=days_ago)
     return Bar(
-        symbol="AAPL", timestamp=ts, open=close, high=close * 1.01,
-        low=close * 0.99, close=close, volume=volume,
-        timeframe="1d", provider="test", data_status=DataStatus.LIVE,
+        symbol="AAPL",
+        timestamp=ts,
+        open=close,
+        high=close * 1.01,
+        low=close * 0.99,
+        close=close,
+        volume=volume,
+        timeframe="1d",
+        provider="test",
+        data_status=DataStatus.LIVE,
     )
 
 
-def _mock_trade(signal, entry_price, return_1d, return_5d, return_20d,
-               mfe=None, mae=None, entry_date=None):
+def _mock_trade(
+    signal, entry_price, return_1d, return_5d, return_20d, mfe=None, mae=None, entry_date=None
+):
     t = MagicMock()
     t.signal = signal
     t.entry_date = entry_date or datetime(2025, 1, 15)
@@ -46,7 +55,6 @@ def _mock_trade(signal, entry_price, return_1d, return_5d, return_20d,
 
 
 class TestComputeMetrics(unittest.TestCase):
-
     def test_empty_trades_returns_none_metrics(self):
         result = _compute_metrics([], total_bars=0)
         self.assertIsNone(result["win_rate_1d"])
@@ -161,12 +169,9 @@ class TestComputeMetrics(unittest.TestCase):
     def test_max_drawdown_negative(self):
         # 3 trades: +10%, then -5% (drawdown = 5%), then +2% (still below peak)
         trades = [
-            _mock_trade("RSI_OVERSOLD", 100, 10.0, 10.0, 10.0,
-                        entry_date=datetime(2025, 1, 1)),
-            _mock_trade("RSI_OVERSOLD", 100, -5.0, -5.0, -5.0,
-                        entry_date=datetime(2025, 2, 1)),
-            _mock_trade("RSI_OVERSOLD", 100, 2.0, 2.0, 2.0,
-                        entry_date=datetime(2025, 3, 1)),
+            _mock_trade("RSI_OVERSOLD", 100, 10.0, 10.0, 10.0, entry_date=datetime(2025, 1, 1)),
+            _mock_trade("RSI_OVERSOLD", 100, -5.0, -5.0, -5.0, entry_date=datetime(2025, 2, 1)),
+            _mock_trade("RSI_OVERSOLD", 100, 2.0, 2.0, 2.0, entry_date=datetime(2025, 3, 1)),
         ]
         result = _compute_metrics(trades, total_bars=100)
         # Peak cum: 10.0% after trade 1. After trade 2: compound = (1.10)(0.95)-1 = 4.5%.
@@ -179,13 +184,12 @@ class TestComputeMetrics(unittest.TestCase):
 
     def test_equity_curve_json_present(self):
         trades = [
-            _mock_trade("RSI_OVERSOLD", 100, 1.0, 1.0, 1.0,
-                        entry_date=datetime(2025, 1, 1)),
-            _mock_trade("RSI_OVERSOLD", 100, -1.0, -1.0, -1.0,
-                        entry_date=datetime(2025, 1, 2)),
+            _mock_trade("RSI_OVERSOLD", 100, 1.0, 1.0, 1.0, entry_date=datetime(2025, 1, 1)),
+            _mock_trade("RSI_OVERSOLD", 100, -1.0, -1.0, -1.0, entry_date=datetime(2025, 1, 2)),
         ]
         result = _compute_metrics(trades, total_bars=100)
         import json
+
         curve = json.loads(result["equity_curve_json"])
         self.assertEqual(len(curve), 2)
         # Each point is [timestamp, cum_return_pct]
@@ -295,10 +299,12 @@ class TestLookAheadBias(unittest.TestCase):
             side_effect=lambda r: setattr(r, "signals", ["RSI_OVERSOLD"])
         )
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner), \
-             patch("backend.backtesting.replay.build_scan_result", side_effect=spy), \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner),
+            patch("backend.backtesting.replay.build_scan_result", side_effect=spy),
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_repo = MagicMock()
             run = MagicMock()
             run.id = 1
@@ -320,6 +326,7 @@ class TestLookAheadBias(unittest.TestCase):
         # We can't directly compare by index here, but we can check
         # that no window is longer than INDICATOR_WARMUP + 1.
         from backend.backtesting.replay import INDICATOR_WARMUP
+
         for w in captured_windows:
             self.assertLessEqual(len(w), INDICATOR_WARMUP + 1)
 
@@ -332,8 +339,7 @@ class TestLookAheadBias(unittest.TestCase):
         """
 
         def make_trade(r1, r5, r20):
-            return _mock_trade("RSI_OVERSOLD", 100, r1, r5, r20,
-                               entry_date=datetime(2025, 1, 1))
+            return _mock_trade("RSI_OVERSOLD", 100, r1, r5, r20, entry_date=datetime(2025, 1, 1))
 
         # Same 1d returns, different 5d/20d returns.
         a = _compute_metrics(
@@ -366,9 +372,11 @@ class TestWalkForward(unittest.TestCase):
             side_effect=lambda r: setattr(r, "signals", ["RSI_OVERSOLD"])
         )
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner), \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner),
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_repo = MagicMock()
             run = MagicMock()
             run.id = 1
@@ -394,7 +402,8 @@ class TestWalkForward(unittest.TestCase):
         self.assertEqual(len(run_ids), 4)
         # The OOS runs should have out_of_sample=True patched onto them.
         oos_calls = [
-            c for c in mock_repo.update_run_status.call_args_list
+            c
+            for c in mock_repo.update_run_status.call_args_list
             if c.kwargs.get("out_of_sample") is True
         ]
         self.assertEqual(len(oos_calls), 2)
@@ -412,9 +421,11 @@ class TestWalkForward(unittest.TestCase):
             side_effect=lambda r: setattr(r, "signals", ["RSI_OVERSOLD"])
         )
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner), \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner),
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_repo = MagicMock()
             run = MagicMock()
             run.id = 1
@@ -452,9 +463,11 @@ class TestWalkForward(unittest.TestCase):
             n_splits=4,
         )
         # No bars loaded, no runs.
-        with patch("backend.backtesting.engine._build_scanner") as m, \
-             patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch.object(BacktestEngine, "_load_bars", return_value=[]):
+        with (
+            patch("backend.backtesting.engine._build_scanner") as m,
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch.object(BacktestEngine, "_load_bars", return_value=[]),
+        ):
             m.return_value = MagicMock()
             mock_repo = MagicMock()
             run = MagicMock()
@@ -468,7 +481,6 @@ class TestWalkForward(unittest.TestCase):
 
 
 class TestBuildTrade(unittest.TestCase):
-
     def test_insufficient_forward_bars_returns_none(self):
         # Only 5 bars total — can't compute the 20d return.
         bars = [_bar(100.0 + i, days_ago=4 - i) for i in range(5)]
@@ -528,9 +540,10 @@ class TestEngineStateMachine(unittest.TestCase):
         bars = [_bar(100.0, days_ago=5 - i) for i in range(5)]
         engine = BacktestEngine()
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
-
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             MockRepo.return_value = self._mock_repo()
 
             config = BacktestConfig(
@@ -563,10 +576,11 @@ class TestEngineStateMachine(unittest.TestCase):
             side_effect=lambda r: setattr(r, "signals", ["RSI_OVERSOLD"])
         )
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner") as mock_build_scanner, \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
-
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner") as mock_build_scanner,
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_build_scanner.return_value = stub_scanner
             MockRepo.return_value = self._mock_repo()
 
@@ -597,10 +611,11 @@ class TestEngineStateMachine(unittest.TestCase):
             side_effect=lambda r: setattr(r, "signals", ["RSI_OVERSOLD"])
         )
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner") as mock_build_scanner, \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
-
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner") as mock_build_scanner,
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_build_scanner.return_value = stub_scanner
             repo = self._mock_repo()
             MockRepo.return_value = repo
@@ -639,9 +654,11 @@ class TestStrategyVersion(unittest.TestCase):
         bars = self._bars()
         stub_scanner = self._scanner_firing("RSI_OVERSOLD")
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner), \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner),
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_repo = MagicMock()
             run = MagicMock()
             run.id = 7
@@ -672,9 +689,11 @@ class TestStrategyVersion(unittest.TestCase):
         bars = self._bars()
         stub_scanner = self._scanner_firing("RSI_OVERSOLD")
 
-        with patch("backend.backtesting.engine.BacktestRepository") as MockRepo, \
-             patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner), \
-             patch.object(BacktestEngine, "_load_bars", return_value=bars):
+        with (
+            patch("backend.backtesting.engine.BacktestRepository") as MockRepo,
+            patch("backend.backtesting.engine._build_scanner", return_value=stub_scanner),
+            patch.object(BacktestEngine, "_load_bars", return_value=bars),
+        ):
             mock_repo = MagicMock()
             run = MagicMock()
             run.id = 8

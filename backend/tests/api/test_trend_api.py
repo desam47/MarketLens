@@ -7,13 +7,14 @@ The shared TrendEngine registry is mocked at the import boundary
 in isolation. The real engine is covered by
 ``backend/tests/trend/test_trend_engine.py``.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi.testclient import TestClient
 
@@ -38,7 +39,7 @@ class TestTrendBatchAPI(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         _trend_cache.clear()
-        self.engine_patch = patch('backend.api.trend.router.get_engine')
+        self.engine_patch = patch("backend.api.trend.router.get_engine")
         self.mock_get_engine = self.engine_patch.start()
         self.mock_engine = MagicMock()
         self.mock_get_engine.return_value = self.mock_engine
@@ -49,7 +50,9 @@ class TestTrendBatchAPI(unittest.TestCase):
 
     def test_batch_returns_one_entry_per_requested_timeframe_in_order(self):
         signals = {
-            Timeframe.FIVE_MINUTE: _make_signal("AAPL", Timeframe.FIVE_MINUTE, TrendDirection.UPTREND),
+            Timeframe.FIVE_MINUTE: _make_signal(
+                "AAPL", Timeframe.FIVE_MINUTE, TrendDirection.UPTREND
+            ),
             Timeframe.ONE_HOUR: _make_signal("AAPL", Timeframe.ONE_HOUR, TrendDirection.DOWNTREND),
             Timeframe.ONE_DAY: _make_signal("AAPL", Timeframe.ONE_DAY, TrendDirection.SIDEWAYS),
         }
@@ -117,5 +120,5 @@ class TestTrendBatchAPI(unittest.TestCase):
         self.assertEqual(first.json(), second.json())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

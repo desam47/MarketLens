@@ -14,6 +14,7 @@ This module:
     in-memory engines stay current with live data — not just what was
     replayed at startup.
 """
+
 import logging
 import threading
 from collections import defaultdict
@@ -62,9 +63,11 @@ def seed_engine_from_quotes(symbol: str, update_fn: Callable, max_points: int = 
         rows.reverse()  # feed oldest → newest
         for q in rows:
             try:
-                update_fn(price=float(q.price or 0.0),
-                          volume=int(q.volume or 0),
-                          timestamp=_ensure_aware(q.timestamp))
+                update_fn(
+                    price=float(q.price or 0.0),
+                    volume=int(q.volume or 0),
+                    timestamp=_ensure_aware(q.timestamp),
+                )
             except Exception as e:
                 logger.debug(f"Seed tick failed for {symbol} @ {q.timestamp}: {e}")
         return len(rows)
@@ -72,8 +75,9 @@ def seed_engine_from_quotes(symbol: str, update_fn: Callable, max_points: int = 
         db.close()
 
 
-def seed_engine_from_bars(symbol: str, timeframe: str, update_fn: Callable,
-                          max_points: int = 200) -> int:
+def seed_engine_from_bars(
+    symbol: str, timeframe: str, update_fn: Callable, max_points: int = 200
+) -> int:
     """Replay a symbol+timeframe's stored bars through an engine update()."""
     db = SessionLocal()
     try:
@@ -87,9 +91,11 @@ def seed_engine_from_bars(symbol: str, timeframe: str, update_fn: Callable,
         rows.reverse()
         for b in rows:
             try:
-                update_fn(price=float(b.close or 0.0),
-                          volume=int(b.volume or 0),
-                          timestamp=_ensure_aware(b.timestamp))
+                update_fn(
+                    price=float(b.close or 0.0),
+                    volume=int(b.volume or 0),
+                    timestamp=_ensure_aware(b.timestamp),
+                )
             except Exception as e:
                 logger.debug(f"Seed bar failed for {symbol}/{timeframe} @ {b.timestamp}: {e}")
         return len(rows)
@@ -104,6 +110,7 @@ def seed_engine_from_bars(symbol: str, timeframe: str, update_fn: Callable,
 # the server's asyncio loop, so a direct call is fine — no need to schedule
 # on the loop. We still guard with a lock so a router that registers while
 # a tick is being dispatched doesn't trip an iteration-during-mutation bug.
+
 
 class EngineRegistry:
     """Process-wide registry of analysis-engine update callbacks.
@@ -132,7 +139,9 @@ class EngineRegistry:
         with self._lock:
             if update_fn not in self._entries[key]:
                 self._entries[key].append(update_fn)
-                logger.debug(f"Registered {kind} engine for {symbol} (total={len(self._entries[key])})")
+                logger.debug(
+                    f"Registered {kind} engine for {symbol} (total={len(self._entries[key])})"
+                )
 
     def unregister(self, kind: str, symbol: str, update_fn: Callable) -> bool:
         """Remove a previously-registered callback.
@@ -153,8 +162,16 @@ class EngineRegistry:
                 del self._entries[key]
             return True
 
-    def dispatch_quote(self, symbol: str, price: float, volume: float,
-                       timestamp, high=None, low=None, open_price=None) -> int:
+    def dispatch_quote(
+        self,
+        symbol: str,
+        price: float,
+        volume: float,
+        timestamp,
+        high=None,
+        low=None,
+        open_price=None,
+    ) -> int:
         """Fan out a fresh quote to every engine registered for QUOTE on this symbol.
 
         Returns the number of engines notified. The regime engine wants OHLCV
@@ -178,16 +195,24 @@ class EngineRegistry:
                 # logged — meaning every price-based alert
                 # (price_above/price_below/pct_change_above) has never
                 # actually fired from a live quote tick.
-                cb(symbol=symbol, price=price, volume=volume, timestamp=timestamp,
-                   high=high, low=low, open_price=open_price)
+                cb(
+                    symbol=symbol,
+                    price=price,
+                    volume=volume,
+                    timestamp=timestamp,
+                    high=high,
+                    low=low,
+                    open_price=open_price,
+                )
                 notified += 1
             except Exception as e:
                 # An engine bug must not break the ingestion loop
                 logger.warning(f"Engine update failed for {symbol} (quote): {e}")
         return notified
 
-    def dispatch_trade(self, symbol: str, price: float, size: float,
-                       timestamp, side: str | None = None) -> int:
+    def dispatch_trade(
+        self, symbol: str, price: float, size: float, timestamp, side: str | None = None
+    ) -> int:
         """Fan out a single trade print to engines registered for TRADE on this symbol.
 
         Distinct from ``dispatch_quote`` — this is one Time & Sales print
@@ -210,11 +235,17 @@ class EngineRegistry:
                 logger.warning(f"Engine update failed for {symbol} (trade): {e}")
         return notified
 
-    def dispatch_bar(self, symbol: str, timeframe: str, price: float,
-                     volume: float, timestamp,
-                     high: float | None = None,
-                     low: float | None = None,
-                     open_price: float | None = None) -> int:
+    def dispatch_bar(
+        self,
+        symbol: str,
+        timeframe: str,
+        price: float,
+        volume: float,
+        timestamp,
+        high: float | None = None,
+        low: float | None = None,
+        open_price: float | None = None,
+    ) -> int:
         """Fan out a fresh bar to engines registered for that timeframe on this symbol.
 
         Callbacks are invoked with the full bar context: ``symbol``, ``timeframe``,
@@ -237,9 +268,16 @@ class EngineRegistry:
         notified = 0
         for cb in callbacks:
             try:
-                cb(symbol=symbol, timeframe=timeframe,
-                   price=price, volume=volume, timestamp=timestamp,
-                   high=high, low=low, open_price=open_price)
+                cb(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    price=price,
+                    volume=volume,
+                    timestamp=timestamp,
+                    high=high,
+                    low=low,
+                    open_price=open_price,
+                )
                 notified += 1
                 logger.debug(f"dispatch_bar: notified engine cb={cb} for {symbol}/{timeframe}")
             except Exception as e:

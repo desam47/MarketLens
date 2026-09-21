@@ -5,6 +5,7 @@ These functions are called from the alert engine to construct the ``value``
 dict that an evaluator receives. Each builder pulls recent bar data and
 projects it into the shape its corresponding ``_eval_*`` function expects.
 """
+
 from .helpers import (
     _compute_trend_score_from_bars,
     _get_recent_bars,
@@ -15,8 +16,12 @@ def build_trend_payload(symbol: str, timeframe: str = "1d", lookback: int = 14) 
     """Build the value dict for trend conditions from recent bars."""
     bars = _get_recent_bars(symbol, timeframe, lookback + 2)
     if len(bars) < lookback + 1:
-        return {"current": 0.0, "previous": 0.0,
-                "current_direction": "neutral", "previous_direction": "neutral"}
+        return {
+            "current": 0.0,
+            "previous": 0.0,
+            "current_direction": "neutral",
+            "previous_direction": "neutral",
+        }
     current, previous, curr_dir, prev_dir = _compute_trend_score_from_bars(bars, lookback)
     return {
         "current": current,

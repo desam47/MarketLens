@@ -1,6 +1,7 @@
 """
 Tests for Indicator Engine
 """
+
 import unittest
 
 from backend.indicators import (
@@ -12,7 +13,6 @@ from backend.indicators import (
 
 
 class TestIndicatorEngine(unittest.TestCase):
-
     def setUp(self):
         self.engine = IndicatorEngine()
 
@@ -45,11 +45,11 @@ class TestIndicatorEngine(unittest.TestCase):
 
         # Test data
         data = [
-            {'close': 10, 'high': 11, 'low': 9, 'volume': 100},
-            {'close': 12, 'high': 13, 'low': 11, 'volume': 120},
-            {'close': 14, 'high': 15, 'low': 13, 'volume': 140},
-            {'close': 13, 'high': 14, 'low': 12, 'volume': 130},
-            {'close': 15, 'high': 16, 'low': 14, 'volume': 150}
+            {"close": 10, "high": 11, "low": 9, "volume": 100},
+            {"close": 12, "high": 13, "low": 11, "volume": 120},
+            {"close": 14, "high": 15, "low": 13, "volume": 140},
+            {"close": 13, "high": 14, "low": 12, "volume": 130},
+            {"close": 15, "high": 16, "low": 14, "volume": 150},
         ]
 
         # Update engine with each data point
@@ -76,13 +76,13 @@ class TestIndicatorEngine(unittest.TestCase):
 
         # Test data
         data = [
-            {'close': 10, 'high': 11, 'low': 9, 'volume': 100},
-            {'close': 12, 'high': 13, 'low': 11, 'volume': 120},
-            {'close': 14, 'high': 15, 'low': 13, 'volume': 140},
-            {'close': 13, 'high': 14, 'low': 12, 'volume': 130},
-            {'close': 15, 'high': 16, 'low': 14, 'volume': 150},
-            {'close': 11, 'high': 12, 'low': 10, 'volume': 110},
-            {'close': 13, 'high': 14, 'low': 12, 'volume': 130}
+            {"close": 10, "high": 11, "low": 9, "volume": 100},
+            {"close": 12, "high": 13, "low": 11, "volume": 120},
+            {"close": 14, "high": 15, "low": 13, "volume": 140},
+            {"close": 13, "high": 14, "low": 12, "volume": 130},
+            {"close": 15, "high": 16, "low": 14, "volume": 150},
+            {"close": 11, "high": 12, "low": 10, "volume": 110},
+            {"close": 13, "high": 14, "low": 12, "volume": 130},
         ]
 
         # Calculate all indicators
@@ -145,9 +145,7 @@ class TestIndicatorEngine(unittest.TestCase):
         self.assertIsInstance(adx, ADXIndicator)
         self.assertEqual(adx.period, 21)
 
-        st = IndicatorEngine.create_indicator(
-            "supertrend", {"atr_period": 7, "multiplier": 2.5}
-        )
+        st = IndicatorEngine.create_indicator("supertrend", {"atr_period": 7, "multiplier": 2.5})
         self.assertIsInstance(st, SuperTrendIndicator)
         self.assertEqual(st.atr_period, 7)
         self.assertEqual(st.multiplier, 2.5)
@@ -234,8 +232,13 @@ class TestIndicatorEngine(unittest.TestCase):
 
         # Stack contains all the standard slots.
         expected = {
-            "ema_fast", "ema_slow", "rsi", "macd", "adx",
-            "supertrend", "bollinger_bands",
+            "ema_fast",
+            "ema_slow",
+            "rsi",
+            "macd",
+            "adx",
+            "supertrend",
+            "bollinger_bands",
         }
         self.assertEqual(set(stack.keys()), expected)
 
@@ -253,5 +256,5 @@ class TestIndicatorEngine(unittest.TestCase):
         self.assertEqual(stack["ema_slow"].period, 50)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

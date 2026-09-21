@@ -5,6 +5,7 @@ Covers:
   - GET /api/system/performance surfaces cache, rate_limit, websocket blocks
   - GET /api/system/metrics returns Prometheus exposition text
 """
+
 import os
 import sys
 import unittest
@@ -94,9 +95,11 @@ class TestPerformanceEndpointStats(unittest.TestCase):
 
     def test_performance_gracefully_handles_missing_subsystems(self):
         """If subsystem stat collectors raise, the endpoint must still respond."""
-        with patch("backend.api.system.router._safe_cache_stats", return_value=None), \
-             patch("backend.api.system.router._safe_rate_limit_stats", return_value=None), \
-             patch("backend.api.system.router._safe_websocket_stats", return_value=None):
+        with (
+            patch("backend.api.system.router._safe_cache_stats", return_value=None),
+            patch("backend.api.system.router._safe_rate_limit_stats", return_value=None),
+            patch("backend.api.system.router._safe_websocket_stats", return_value=None),
+        ):
             resp = self.client.get("/api/system/performance")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
@@ -222,6 +225,7 @@ class TestRestartEndpoint(unittest.TestCase):
         args, _ = mock_popen.call_args
         script_path = args[0][1]
         from pathlib import Path
+
         self.assertTrue(Path(script_path).is_file(), f"{script_path} does not exist")
 
 

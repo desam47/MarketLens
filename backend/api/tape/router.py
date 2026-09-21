@@ -7,6 +7,7 @@ Tape (Time & Sales) analytics endpoints.
 503 when ``TAPE_ENABLED`` is off (the frontend card renders a
 "tape streaming off" state on that).
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -59,11 +60,19 @@ async def get_tape_bars_endpoint(
             "symbol": symbol.upper(),
             "bars": [
                 {
-                    "timestamp": r.timestamp.isoformat() if isinstance(r.timestamp, datetime) else str(r.timestamp),
-                    "open": r.open, "high": r.high, "low": r.low, "close": r.close,
-                    "volume": r.volume, "buy_volume": r.buy_volume,
-                    "sell_volume": r.sell_volume, "signed_volume": r.signed_volume,
-                    "trade_count": r.trade_count, "block_count": r.block_count,
+                    "timestamp": r.timestamp.isoformat()
+                    if isinstance(r.timestamp, datetime)
+                    else str(r.timestamp),
+                    "open": r.open,
+                    "high": r.high,
+                    "low": r.low,
+                    "close": r.close,
+                    "volume": r.volume,
+                    "buy_volume": r.buy_volume,
+                    "sell_volume": r.sell_volume,
+                    "signed_volume": r.signed_volume,
+                    "trade_count": r.trade_count,
+                    "block_count": r.block_count,
                     "vwap": r.vwap,
                 }
                 for r in rows

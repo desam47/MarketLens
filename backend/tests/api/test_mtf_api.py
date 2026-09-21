@@ -1,11 +1,12 @@
 """
 Tests for the multi-timeframe API router.
 """
+
 import logging
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -103,11 +104,13 @@ class TestMTFLiveTickRegistration:
     def test_mtf_timeframes_include_1m(self):
         """Scalper preset includes 1m — the user-visible shortest horizon."""
         from backend.engines.timeframe import Timeframe
+
         assert Timeframe.ONE_MINUTE in PRESET_SCALPER
 
     def test_mtf_timeframes_include_30m_and_1wk(self):
         """Day-trading and swing presets cover the full range."""
         from backend.engines.timeframe import Timeframe
+
         assert Timeframe.THIRTY_MINUTE in PRESET_DAY_TRADING
         assert Timeframe.ONE_WEEK in PRESET_SWING
 
@@ -119,6 +122,7 @@ class TestMTFLiveTickRegistration:
         provider-derived 4h bars.
         """
         from backend.engines.timeframe import Timeframe
+
         # The scalper preset covers minute-level TFs; day_trading covers
         # intraday; swing covers daily and weekly.
         for tf_str in ("1m", "5m", "15m", "30m", "1h", "1d", "1wk"):

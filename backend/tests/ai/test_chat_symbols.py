@@ -5,6 +5,7 @@ AI Hub chat.
 The known-symbol set and the live-quote validation are both patched so
 these run offline and deterministically.
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -51,8 +52,11 @@ class TestExtractSymbols(_Base):
         self.assertEqual(chat_symbols.extract_symbols("how is NVDA trend"), ["NVDA"])
 
     def test_stopwords_dropped(self):
-        for msg in ("is the CEO of AI EV making NEW ALL time highs",
-                    "sold ALL my shares", "what is IT doing"):
+        for msg in (
+            "is the CEO of AI EV making NEW ALL time highs",
+            "sold ALL my shares",
+            "what is IT doing",
+        ):
             self.assertEqual(chat_symbols.extract_symbols(msg), [], msg)
 
     def test_it_only_via_known_or_cashtag(self):
@@ -67,7 +71,8 @@ class TestExtractSymbols(_Base):
 
     def test_lowercase_known_ticker_resolved(self):
         self.assertEqual(
-            chat_symbols.extract_symbols("what's support and resistance for aapl"), ["AAPL"])
+            chat_symbols.extract_symbols("what's support and resistance for aapl"), ["AAPL"]
+        )
         self.assertEqual(chat_symbols.extract_symbols("how's spy trending"), ["SPY"])
 
     def test_lowercase_unknown_word_not_a_ticker(self):
@@ -82,13 +87,14 @@ class TestExtractSymbols(_Base):
 
     def test_lowercase_known_ticker_in_shouty_message(self):
         self.assertEqual(
-            chat_symbols.extract_symbols("WHAT IS SUPPORT AND RESISTANCE FOR SPY"), ["SPY"])
+            chat_symbols.extract_symbols("WHAT IS SUPPORT AND RESISTANCE FOR SPY"), ["SPY"]
+        )
 
     def test_fat_finger_of_known_ticker_corrected(self):
         self._patch_quotes({"AAPLE": None})  # not a real ticker
         self.assertEqual(
-            chat_symbols.extract_symbols("provide a trend and directional call for AAPLE"),
-            ["AAPL"])
+            chat_symbols.extract_symbols("provide a trend and directional call for AAPLE"), ["AAPL"]
+        )
 
     def test_fat_finger_transposition_corrected(self):
         self._patch_quotes({"MFST": None})
@@ -136,7 +142,8 @@ class TestExtractSymbols(_Base):
 
     def test_group_phrase_keeps_real_ticker(self):
         self.assertEqual(
-            chat_symbols.extract_symbols("how does NVDA compare to the market"), ["NVDA"])
+            chat_symbols.extract_symbols("how does NVDA compare to the market"), ["NVDA"]
+        )
 
 
 class TestResolveTurnSymbols(_Base):
@@ -147,7 +154,8 @@ class TestResolveTurnSymbols(_Base):
 
     def test_cap_at_three(self):
         syms, capped = chat_symbols.resolve_turn_symbols(
-            "compare $AAPL $MSFT $NVDA $SPY $QQQ", [], [])
+            "compare $AAPL $MSFT $NVDA $SPY $QQQ", [], []
+        )
         self.assertEqual(len(syms), 3)
         self.assertTrue(capped)
 

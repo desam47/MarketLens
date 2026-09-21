@@ -1,6 +1,7 @@
 """
 Custom indicator models for MarketLens (Phase 2.3.4).
 """
+
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
@@ -19,6 +20,7 @@ class CustomIndicator(Base):
     Indicators are stored per user (via watchlist_id or globally) and can be
     applied to any symbol+timeframe at chart render time.
     """
+
     __tablename__ = "custom_indicators"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -33,9 +35,7 @@ class CustomIndicator(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Formula type: 'sma', 'ema', 'rsi', 'macd', 'bollinger', 'atr', 'custom'
-    formula_type: Mapped[str] = mapped_column(
-        String(30), nullable=False, default="custom"
-    )
+    formula_type: Mapped[str] = mapped_column(String(30), nullable=False, default="custom")
     # JSON-encoded parameters: e.g. {"period": 20, "field": "close"}
     parameters: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -54,9 +54,7 @@ class CustomIndicator(Base):
     z_index: Mapped[int] = mapped_column(Integer, default=0)
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

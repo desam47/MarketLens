@@ -2,6 +2,7 @@
 Tests for backend.ai.prompt.build_chat_prompt — the universal-chat
 multi-block prompt assembler.
 """
+
 import unittest
 
 from backend.ai.prompt import CHAT_SYSTEM_PROMPT, build_chat_prompt
@@ -39,7 +40,9 @@ class TestBuildChatPrompt(unittest.TestCase):
 
     def test_alert_and_transcript_blocks_render(self):
         p = build_chat_prompt(
-            [_WARM_BLOCK], [], _MARKET,
+            [_WARM_BLOCK],
+            [],
+            _MARKET,
             [("user", "hi"), ("assistant", "hey")],
             "more",
             alert_context={"message": "AAPL crossed 100"},
@@ -50,14 +53,21 @@ class TestBuildChatPrompt(unittest.TestCase):
         self.assertIn("user: hi", p)
 
     def test_capped_note_rendered_when_passed(self):
-        p = build_chat_prompt([_WARM_BLOCK], [], _MARKET, [], "x",
-                              capped_note="(I looked at AAPL.)")
+        p = build_chat_prompt(
+            [_WARM_BLOCK], [], _MARKET, [], "x", capped_note="(I looked at AAPL.)"
+        )
         self.assertIn("(I looked at AAPL.)", p)
 
     def test_token_budget_drops_oldest_transcript_first(self):
         long_hist = [("user", "word " * 500), ("user", "recent question")]
-        p = build_chat_prompt([_WARM_BLOCK], [], _MARKET, long_hist, "now",
-                              token_budget=len(CHAT_SYSTEM_PROMPT) // 4 + 400)
+        p = build_chat_prompt(
+            [_WARM_BLOCK],
+            [],
+            _MARKET,
+            long_hist,
+            "now",
+            token_budget=len(CHAT_SYSTEM_PROMPT) // 4 + 400,
+        )
         self.assertIn("New message: now", p)  # trailing always kept
         if "Prior conversation" in p:
             self.assertIn("[earlier conversation truncated]", p)

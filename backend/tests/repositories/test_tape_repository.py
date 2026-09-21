@@ -1,4 +1,5 @@
 """Tests for backend.repositories.tape_repository (in-memory SQLite)."""
+
 import unittest
 from datetime import datetime, timedelta
 
@@ -15,9 +16,21 @@ from backend.repositories.tape_repository import (
 
 def _row(sym="AAPL", ts=None, signed=100, **kw):
     ts = ts or datetime(2026, 9, 10, 10, 0, 0)
-    base = dict(symbol=sym, timestamp=ts, open=100.0, high=100.5, low=99.5, close=100.2,
-                volume=1000, buy_volume=600, sell_volume=400, signed_volume=signed,
-                trade_count=12, block_count=0, vwap=100.1)
+    base = dict(
+        symbol=sym,
+        timestamp=ts,
+        open=100.0,
+        high=100.5,
+        low=99.5,
+        close=100.2,
+        volume=1000,
+        buy_volume=600,
+        sell_volume=400,
+        signed_volume=signed,
+        trade_count=12,
+        block_count=0,
+        vwap=100.1,
+    )
     base.update(kw)
     return base
 

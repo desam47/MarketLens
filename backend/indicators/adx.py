@@ -1,6 +1,7 @@
 """
 Average Directional Index (ADX) indicator
 """
+
 from typing import Any, cast
 
 from .base_indicator import BaseIndicator
@@ -26,11 +27,11 @@ class ADXIndicator(BaseIndicator):
         tr = []
 
         for i in range(1, len(data)):
-            high_curr = float(data[i]['high'])
-            low_curr = float(data[i]['low'])
-            high_prev = float(data[i-1]['high'])
-            low_prev = float(data[i-1]['low'])
-            close_prev = float(data[i-1]['close'])
+            high_curr = float(data[i]["high"])
+            low_curr = float(data[i]["low"])
+            high_prev = float(data[i - 1]["high"])
+            low_prev = float(data[i - 1]["low"])
+            close_prev = float(data[i - 1]["close"])
 
             # Calculate Directional Movement
             up_move = high_curr - high_prev
@@ -63,14 +64,16 @@ class ADXIndicator(BaseIndicator):
         if len(values) < period:
             return cast(list[float | None], [None] * len(values))
 
-        smoothed: list[float | None] = [None] * (period - 1)  # First 'period-1' values are undefined
+        smoothed: list[float | None] = [None] * (
+            period - 1
+        )  # First 'period-1' values are undefined
         # First smoothed value is simple average
         first_avg = sum(values[:period]) / period
         smoothed.append(first_avg)
 
         # Subsequent values using Wilder's smoothing
         for i in range(period, len(values)):
-            smoothed_val = (smoothed[i-1] * (period - 1) + values[i]) / period
+            smoothed_val = (smoothed[i - 1] * (period - 1) + values[i]) / period
             smoothed.append(smoothed_val)
 
         return smoothed
@@ -122,11 +125,7 @@ class ADXIndicator(BaseIndicator):
             elif di_plus_val + di_minus_val == 0:
                 dx_val = 0
             else:
-                dx_val = (
-                    abs(di_plus_val - di_minus_val)
-                    / (di_plus_val + di_minus_val)
-                    * 100
-                )
+                dx_val = abs(di_plus_val - di_minus_val) / (di_plus_val + di_minus_val) * 100
             dx.append(dx_val)
 
         # The first (period - 1) entries of dx are None by construction
@@ -159,12 +158,12 @@ class ADXIndicator(BaseIndicator):
              values and appends a DX value to the rolling window. Once
              the window is full, we also stream-update the ADX.
         """
-        high = float(new_data['high'])
-        low = float(new_data['low'])
-        close = float(new_data['close'])
+        high = float(new_data["high"])
+        low = float(new_data["low"])
+        close = float(new_data["close"])
 
         # ---- State init ----
-        if not hasattr(self, '_smoothed_dm_plus'):
+        if not hasattr(self, "_smoothed_dm_plus"):
             self._smoothed_dm_plus: float | None = None
             self._smoothed_dm_minus: float | None = None
             self._smoothed_tr: float | None = None
@@ -227,14 +226,12 @@ class ADXIndicator(BaseIndicator):
 
         # ---- Phase 2: stream-update smoothed averages (O(1)) ----
         self._smoothed_dm_plus = (
-            (self._smoothed_dm_plus * (self.period - 1) + dm_plus) / self.period
-        )
+            self._smoothed_dm_plus * (self.period - 1) + dm_plus
+        ) / self.period
         self._smoothed_dm_minus = (
-            (self._smoothed_dm_minus * (self.period - 1) + dm_minus) / self.period
-        )
-        self._smoothed_tr = (
-            (self._smoothed_tr * (self.period - 1) + tr) / self.period
-        )
+            self._smoothed_dm_minus * (self.period - 1) + dm_minus
+        ) / self.period
+        self._smoothed_tr = (self._smoothed_tr * (self.period - 1) + tr) / self.period
 
         # ---- Compute DI+/DI- and DX for this bar ----
         if self._smoothed_tr == 0:
@@ -265,8 +262,6 @@ class ADXIndicator(BaseIndicator):
             self.values.append(self._smoothed_adx)
             return self._smoothed_adx
 
-        self._smoothed_adx = (
-            (self._smoothed_adx * (self.period - 1) + dx) / self.period
-        )
+        self._smoothed_adx = (self._smoothed_adx * (self.period - 1) + dx) / self.period
         self.values.append(self._smoothed_adx)
         return self._smoothed_adx

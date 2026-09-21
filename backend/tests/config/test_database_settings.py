@@ -5,6 +5,7 @@ The DB path is hard-coded to <project_root>/marketlens.db and cannot be
 overridden by DATABASE_URL env var or constructor argument. The only way to
 use a different DB is MARKETLENS_DB_OVERRIDE.
 """
+
 import os
 import unittest
 from unittest.mock import patch
@@ -28,6 +29,7 @@ class TestDatabaseUrlNormalisation(unittest.TestCase):
     def _project_root_path(self) -> str:
         """Return the expected hard-coded DB path."""
         from pathlib import Path
+
         root = Path(__file__).parent.parent.parent.parent / "marketlens.db"
         return f"sqlite:///{root.resolve()}"
 

@@ -1,6 +1,7 @@
 """
 Bar repository for persisting and retrieving historical OHLCV bars.
 """
+
 import collections.abc
 import logging
 from datetime import datetime, timedelta
@@ -32,7 +33,7 @@ _TF_MULTIPLIER: dict[str, int] = {
     "30m": 30,
     "1h": 60,
     "4h": 240,
-    "1d": 480,   # 8h × 60 min (RTH + extended hours for liquid names)
+    "1d": 480,  # 8h × 60 min (RTH + extended hours for liquid names)
     "1wk": 2400,  # 5 trading days × 480 min (8h with extended hours)
 }
 
@@ -46,7 +47,7 @@ _WIDENING_HOURS: dict[str, int] = {
     "30m": 1,
     "1h": 1,
     "4h": 4,
-    "1d": 24,   # calendar day
+    "1d": 24,  # calendar day
     "1wk": 168,  # ISO week = 7 days
 }
 
@@ -63,7 +64,9 @@ def _bar_to_model(bar: Bar) -> BarModel:
         volume=bar.volume,
         timestamp=bar.timestamp,
         provider=bar.provider,
-        data_status=bar.data_status.value if isinstance(bar.data_status, DataStatus) else str(bar.data_status),
+        data_status=bar.data_status.value
+        if isinstance(bar.data_status, DataStatus)
+        else str(bar.data_status),
         session=bar.session,
     )
 
@@ -113,8 +116,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
 
     # Detect whether the unique constraint exists by checking sqlite_master.
     # The constraint is added via the model's unique=True flag.
-    has_unique = _has_unique_constraint(db, "bars",
-        ("symbol", "timeframe", "timestamp"))
+    has_unique = _has_unique_constraint(db, "bars", ("symbol", "timeframe", "timestamp"))
 
     written = 0
     if has_unique:
@@ -173,13 +175,17 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     else:
         # Per-row merge fallback (SQLAlchemy 2.0 ORM style).
         for bar in bars:
-            existing = db.query(BarModel).filter(
-                and_(
-                    BarModel.symbol == bar.symbol.upper(),
-                    BarModel.timeframe == bar.timeframe,
-                    BarModel.timestamp == bar.timestamp,
+            existing = (
+                db.query(BarModel)
+                .filter(
+                    and_(
+                        BarModel.symbol == bar.symbol.upper(),
+                        BarModel.timeframe == bar.timeframe,
+                        BarModel.timestamp == bar.timestamp,
+                    )
                 )
-            ).first()
+                .first()
+            )
             if existing:
                 existing.open = bar.open
                 existing.high = bar.high
@@ -393,9 +399,7 @@ def _log_slow_query(
 
     dialect = db.bind.dialect.name if db.bind else "sqlite"
     param_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
-    logger.warning(
-        f"slow_query: {op} took {elapsed_ms:.1f}ms ({param_str})"
-    )
+    logger.warning(f"slow_query: {op} took {elapsed_ms:.1f}ms ({param_str})")
     if dialect != "sqlite":
         return
 
@@ -408,9 +412,7 @@ def _log_slow_query(
         # ``last_query_rowset`` isn't a documented public API but is
         # used by SQLAlchemy's own dialect debug tooling; fall back to
         # nothing if it's unavailable.
-        sql = getattr(conn, "_last_query_rowset", None) or getattr(
-            conn, "last_query", None
-        )
+        sql = getattr(conn, "_last_query_rowset", None) or getattr(conn, "last_query", None)
         if not sql:
             return
         plan_rows = db.execute(text(f"EXPLAIN QUERY PLAN {sql}")).fetchall()
@@ -475,9 +477,7 @@ def prune_bars_older_than(
             .order_by(BarModel.id.asc())
             .limit(chunk_size)
         )
-        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(
-            synchronize_session=False
-        )
+        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(synchronize_session=False)
         db.commit()
         if deleted == 0:
             break
@@ -544,18 +544,12 @@ def bulk_delete_bars(
 
     total_deleted = 0
     while True:
-        subq = (
-            select(BarModel.id)
-            .where(BarModel.symbol.in_(sym_list))
-            .order_by(BarModel.id.asc())
-        )
+        subq = select(BarModel.id).where(BarModel.symbol.in_(sym_list)).order_by(BarModel.id.asc())
         if cutoff is not None:
             subq = subq.where(BarModel.timestamp < cutoff)
         subq = subq.limit(chunk_size)
 
-        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(
-            synchronize_session=False
-        )
+        deleted = db.query(BarModel).filter(BarModel.id.in_(subq)).delete(synchronize_session=False)
         db.commit()
         if deleted == 0:
             break
@@ -564,9 +558,7 @@ def bulk_delete_bars(
             break
 
     if total_deleted:
-        logger.info(
-            f"bulk_delete_bars: removed {total_deleted} bars for {len(sym_list)} symbols"
-        )
+        logger.info(f"bulk_delete_bars: removed {total_deleted} bars for {len(sym_list)} symbols")
     return total_deleted
 
 
@@ -671,20 +663,22 @@ def find_duplicate_calendar_bars(
     for (sym, date), group in by_day.items():
         if len(group) < 2:
             continue
-        out.append({
-            "symbol": sym,
-            "date": date.isoformat(),
-            "count": len(group),
-            "rows": [
-                {
-                    "id": r.id,
-                    "timestamp": r.timestamp.isoformat(),
-                    "provider": r.provider,
-                    "close": r.close,
-                }
-                for r in group
-            ],
-        })
+        out.append(
+            {
+                "symbol": sym,
+                "date": date.isoformat(),
+                "count": len(group),
+                "rows": [
+                    {
+                        "id": r.id,
+                        "timestamp": r.timestamp.isoformat(),
+                        "provider": r.provider,
+                        "close": r.close,
+                    }
+                    for r in group
+                ],
+            }
+        )
     return out
 
 
@@ -703,7 +697,12 @@ def find_duplicate_calendar_bars(
 # Bucket width, in minutes, for the intraday sub-hour timeframes. 1h and 4h
 # are handled separately below since their step is hours, not minutes.
 _INTRADAY_BUCKET_MINUTES: dict[str, int] = {
-    "1m": 1, "2m": 2, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+    "1m": 1,
+    "2m": 2,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
 }
 
 # Regular session bounds (ET). Only the regular session is enumerated as
@@ -718,12 +717,23 @@ _SESSION_CLOSE = _time(16, 0)
 # not where the "gaps" problem the backfill pipeline patches actually
 # occurs; it fully derives from an already gap-verified 1d series.
 _GAP_CHECK_TIMEFRAMES: tuple[str, ...] = (
-    "1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d",
+    "1m",
+    "2m",
+    "3m",
+    "5m",
+    "15m",
+    "30m",
+    "1h",
+    "4h",
+    "1d",
 )
 
 
 def expected_bar_timestamps(
-    symbol: str, timeframe: str, start: datetime, end: datetime,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
 ) -> list[datetime]:
     """Enumerate the canonical bucket-start timestamps a fully-populated
     ``timeframe`` series should have between ``start`` and ``end`` (both
@@ -746,8 +756,7 @@ def expected_bar_timestamps(
     """
     if timeframe not in _GAP_CHECK_TIMEFRAMES:
         raise ValueError(
-            f"expected_bar_timestamps only covers {_GAP_CHECK_TIMEFRAMES}, "
-            f"got {timeframe!r}"
+            f"expected_bar_timestamps only covers {_GAP_CHECK_TIMEFRAMES}, got {timeframe!r}"
         )
 
     out: list[datetime] = []
@@ -788,7 +797,11 @@ def expected_bar_timestamps(
 
 
 def find_gaps(
-    db: Session, symbol: str, timeframe: str, start: datetime, end: datetime,
+    db: Session,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
 ) -> list[datetime]:
     """Return the expected bucket-start timestamps missing from the DB for
     ``symbol``/``timeframe`` between ``start`` and ``end`` (inclusive).

@@ -13,6 +13,7 @@ All bounds here are advisory; the engine itself doesn't enforce them
 (e.g. ``rsi_period * 2`` warmup is computed from whatever the caller
 chose). The bounds exist to catch obvious nonsense in the form.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -52,15 +53,21 @@ class ExperimentParameters(BaseModel):
 
     # --- Regime thresholds (used by classify_regime) ---
     adx_trending_threshold: float = Field(
-        default=25.0, ge=10, le=50,
+        default=25.0,
+        ge=10,
+        le=50,
         description="ADX above this value → trending regime",
     )
     rsi_bullish_ceiling: float = Field(
-        default=55.0, ge=45, le=70,
+        default=55.0,
+        ge=45,
+        le=70,
         description="Within trending: RSI above this → bullish regime",
     )
     rsi_bearish_floor: float = Field(
-        default=45.0, ge=30, le=55,
+        default=45.0,
+        ge=30,
+        le=55,
         description="Within trending: RSI below this → bearish regime",
     )
 

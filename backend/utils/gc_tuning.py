@@ -16,6 +16,7 @@ every acyclic object immediately (frozen or not), and what gets frozen here is
 process-lifetime state (engines, caches, modules), so that is the right side of the
 trade. Anything allocated after startup is collected normally.
 """
+
 from __future__ import annotations
 
 import gc
@@ -31,11 +32,12 @@ def freeze_startup_heap() -> int:
     Returns the number of objects in the permanent generation afterwards.
     """
     started = time.perf_counter()
-    gc.collect()   # free startup garbage first, so it is not frozen along with the live heap
+    gc.collect()  # free startup garbage first, so it is not frozen along with the live heap
     gc.freeze()
     frozen = gc.get_freeze_count()
     logger.info(
         "GC: froze %d startup objects so full collections skip them (collect+freeze %.0f ms)",
-        frozen, (time.perf_counter() - started) * 1000.0,
+        frozen,
+        (time.perf_counter() - started) * 1000.0,
     )
     return frozen

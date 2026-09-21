@@ -28,6 +28,7 @@ All naive datetime values stored in the DB are NY local (EDT/EST).
 before they reach the data layer. This matches the Alpaca provider's
 ``_ts_to_ny()`` and the ``backend.utils.timezone`` convention.
 """
+
 from __future__ import annotations
 
 import logging
@@ -61,6 +62,7 @@ _orig_set_file_logger = _wb_client.ApiClient.set_file_logger
 # handler — confirmed live, up to 100+ duplicate copies of one message —
 # which is what was inflating webull_trade_sdk.log by ~100MB/hour.
 _file_logger_paths_registered: set[tuple[str, str]] = set()
+
 
 def _patched_set_file_logger(
     self,
@@ -114,6 +116,7 @@ _wb_client.ApiClient.set_file_logger = _patched_set_file_logger
 # on ``logger_name`` alone — stdout is the only stream any caller passes).
 _orig_set_stream_logger = _wb_client.ApiClient.set_stream_logger
 _stream_logger_names_registered: set[str] = set()
+
 
 def _patched_set_stream_logger(
     self,
@@ -175,16 +178,16 @@ logger = logging.getLogger(__name__)
 # Our timeframe → Webull SDK timespan.  The SDK uses m1/m5/m15/m30/m60/d/w.
 # 2m/3m fall back to m1 (Webull's closest equivalent); 1mo → d (daily approx).
 _TIMEFRAME_TO_TIMESPAN: dict[str, str] = {
-    "1m":  "M1",
-    "2m":  "M1",
-    "3m":  "M1",
-    "5m":  "M5",
+    "1m": "M1",
+    "2m": "M1",
+    "3m": "M1",
+    "5m": "M5",
     "15m": "M15",
     "30m": "M30",
     "60m": "M60",
-    "1h":  "M60",
-    "4h":  "M60",   # Webull's 60-minute bar, combined from 4×15m
-    "1d":  "D",
+    "1h": "M60",
+    "4h": "M60",  # Webull's 60-minute bar, combined from 4×15m
+    "1d": "D",
     "1wk": "W",
     "1mo": "D",
 }
@@ -194,50 +197,50 @@ _TIMEFRAME_TO_TIMESPAN: dict[str, str] = {
 # 1m fetches pull enough rows. Webull only serves ~30 days of 1m
 # history, so callers should not request 1m beyond 1mo.
 _BARS_PER_DAY: dict[str, int] = {
-    "1m":   390,    # 6.5h × 60
-    "2m":   195,    # 6.5h × 30
-    "3m":   130,    # 6.5h × 20
-    "5m":   78,     # 6.5h × 12
-    "15m":  26,     # 6.5h × 4
-    "30m":  13,     # 6.5h × 2
-    "60m":  7,      # 6.5h / 1h
-    "1h":   7,
-    "4h":   2,      # 6.5h / 4h
-    "1d":   1,
-    "1wk":  1,      # only one weekly bar per day
-    "1mo":  1,
+    "1m": 390,  # 6.5h × 60
+    "2m": 195,  # 6.5h × 30
+    "3m": 130,  # 6.5h × 20
+    "5m": 78,  # 6.5h × 12
+    "15m": 26,  # 6.5h × 4
+    "30m": 13,  # 6.5h × 2
+    "60m": 7,  # 6.5h / 1h
+    "1h": 7,
+    "4h": 2,  # 6.5h / 4h
+    "1d": 1,
+    "1wk": 1,  # only one weekly bar per day
+    "1mo": 1,
 }
 
 # Trading days per range_ string.
 _RANGE_DAYS: dict[str, int] = {
-    "1d":   1,
-    "5d":   5,
-    "15d":  15,     # Phase 3.9: 15 trading days ≈ 4 pages of M1
-    "1mo":  22,     # ~22 trading days per month
-    "3mo":  65,
-    "6mo":  130,
-    "1y":   252,
-    "2y":   504,
-    "5y":   1260,
-    "15m":  1,      # Phase 3.8: live ingestion recent-window fetch
-    "3h":   1,      # Phase 3.8: 1h recent-window fetch (1 trading day)
+    "1d": 1,
+    "5d": 5,
+    "15d": 15,  # Phase 3.9: 15 trading days ≈ 4 pages of M1
+    "1mo": 22,  # ~22 trading days per month
+    "3mo": 65,
+    "6mo": 130,
+    "1y": 252,
+    "2y": 504,
+    "5y": 1260,
+    "15m": 1,  # Phase 3.8: live ingestion recent-window fetch
+    "3h": 1,  # Phase 3.8: 1h recent-window fetch (1 trading day)
 }
 
 # Map our ``range_`` to an approximate bar count so the SDK's count param
 # covers the requested window.  These are conservative (more bars than needed
 # is fine; fewer is not).
 _RANGE_TO_COUNT: dict[str, int] = {
-    "1d":  1,
-    "5d":  5,
+    "1d": 1,
+    "5d": 5,
     "15d": 15,
     "1mo": 22,
     "3mo": 65,
     "6mo": 130,
-    "1y":  252,
-    "2y":  504,
-    "5y":  1260,
-    "15m": 30,      # Phase 3.8: 30 × 1m bars (15-min lookback, doubled for safety)
-    "3h":  30,      # Phase 3.8: 30 × 1h bars (3-hour lookback, conservative)
+    "1y": 252,
+    "2y": 504,
+    "5y": 1260,
+    "15m": 30,  # Phase 3.8: 30 × 1m bars (15-min lookback, doubled for safety)
+    "3h": 30,  # Phase 3.8: 30 × 1h bars (3-hour lookback, conservative)
 }
 
 # Ranges that name a short lookback WINDOW rather than a number of trading
@@ -289,9 +292,7 @@ def _epoch_ms_to_ny(ms: int | str | float | None) -> datetime:
     # Numeric path: epoch milliseconds.
     if isinstance(ms, (int, float)):
         try:
-            return to_ny(
-                datetime.fromtimestamp(float(ms) / 1000.0, tz=UTC)
-            )
+            return to_ny(datetime.fromtimestamp(float(ms) / 1000.0, tz=UTC))
         except (TypeError, ValueError, OSError):
             return to_ny(datetime.now(UTC))
 
@@ -326,24 +327,34 @@ def _extended_hours_quote_fields(field: dict) -> dict:
     return {
         "extended_hours_price": float(last_price) if last_price not in (None, "") else None,
         "extended_hours_change": (
-            float(field["extend_hour_change"]) if field.get("extend_hour_change") not in (None, "") else None
+            float(field["extend_hour_change"])
+            if field.get("extend_hour_change") not in (None, "")
+            else None
         ),
         "extended_hours_change_ratio": (
             float(field["extend_hour_change_ratio"])
-            if field.get("extend_hour_change_ratio") not in (None, "") else None
+            if field.get("extend_hour_change_ratio") not in (None, "")
+            else None
         ),
         "extended_hours_high": (
-            float(field["extend_hour_high"]) if field.get("extend_hour_high") not in (None, "") else None
+            float(field["extend_hour_high"])
+            if field.get("extend_hour_high") not in (None, "")
+            else None
         ),
         "extended_hours_low": (
-            float(field["extend_hour_low"]) if field.get("extend_hour_low") not in (None, "") else None
+            float(field["extend_hour_low"])
+            if field.get("extend_hour_low") not in (None, "")
+            else None
         ),
         "extended_hours_volume": (
-            int(float(field["extend_hour_volume"])) if field.get("extend_hour_volume") not in (None, "") else None
+            int(float(field["extend_hour_volume"]))
+            if field.get("extend_hour_volume") not in (None, "")
+            else None
         ),
         "extended_hours_timestamp": (
             _epoch_ms_to_ny(field["extend_hour_last_trade_time"])
-            if field.get("extend_hour_last_trade_time") not in (None, "") else None
+            if field.get("extend_hour_last_trade_time") not in (None, "")
+            else None
         ),
     }
 
@@ -367,8 +378,13 @@ def _classify_session(ts: datetime) -> str:
 # Used to detect when Webull returns a coarser resolution than requested
 # (free-tier accounts may downsample 1m → 5m regardless of M1 request).
 _TIMESPAN_TO_TIMEFRAME: dict[str, str] = {
-    "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m",
-    "M60": "1h", "D": "1d", "W": "1wk",
+    "M1": "1m",
+    "M5": "5m",
+    "M15": "15m",
+    "M30": "30m",
+    "M60": "1h",
+    "D": "1d",
+    "W": "1wk",
 }
 
 
@@ -386,10 +402,7 @@ def _infer_actual_timeframe(timespan: str, bars: list) -> str:
         return _TIMESPAN_TO_TIMEFRAME.get(timespan, timespan)
 
     timestamps = sorted(bars)  # in-place sort just in case
-    gaps = [
-        (timestamps[i + 1] - timestamps[i]).total_seconds()
-        for i in range(len(timestamps) - 1)
-    ]
+    gaps = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(len(timestamps) - 1)]
     # Use the median to avoid being skewed by intra-day session gaps.
     gaps_sorted = sorted(gaps)
     median_gap = gaps_sorted[len(gaps_sorted) // 2]
@@ -469,6 +482,7 @@ class WebullProvider(BaseMarketDataProvider):
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull snapshot HTTP {resp.status_code}")
             from ..provider import safe_json
+
             data = safe_json(resp.text, url=resp.url)
             if not isinstance(data, list) or not data:
                 raise RuntimeError(f"Webull returned empty snapshot for {sym}")
@@ -505,6 +519,7 @@ class WebullProvider(BaseMarketDataProvider):
             results: dict[str, Quote] = {}
             if resp.status_code == 200:
                 from ..provider import safe_json
+
                 data = safe_json(resp.text, url=resp.url)
                 if isinstance(data, list):
                     for field in data:
@@ -520,8 +535,7 @@ class WebullProvider(BaseMarketDataProvider):
                             data_status=DataStatus.DELAYED,
                             bid=float(field["bid"]) if field.get("bid") else None,
                             ask=float(field["ask"]) if field.get("ask") else None,
-                            volume=int(float(field["volume"]))
-                            if field.get("volume") else None,
+                            volume=int(float(field["volume"])) if field.get("volume") else None,
                             **_extended_hours_quote_fields(field),
                         )
             # Return empty entries for any missing symbols.
@@ -566,9 +580,7 @@ class WebullProvider(BaseMarketDataProvider):
         threads firing this unthrottled, straight through the raw SDK
         client, was previously able to burst past Webull's own rate limit.
         """
-        return self._data_client.market_data.get_tick(
-            symbol.upper(), "US_STOCK", count=str(count)
-        )
+        return self._data_client.market_data.get_tick(symbol.upper(), "US_STOCK", count=str(count))
 
     # ---------------------------------------------------------------- fundamentals
     def get_financial_indicators(self, symbol: str):
@@ -580,9 +592,7 @@ class WebullProvider(BaseMarketDataProvider):
         ``_call_provider`` and shares Webull's rate limiter/circuit breaker
         with every other Webull call instead of bypassing it.
         """
-        return self._data_client.fundamentals.get_financials_indicators(
-            symbol.upper(), "US_STOCK"
-        )
+        return self._data_client.fundamentals.get_financials_indicators(symbol.upper(), "US_STOCK")
 
     def get_fund_brief(self, symbol: str):
         """Raw ``get_fund_brief`` response — used only for the issuer/company
@@ -640,12 +650,20 @@ class WebullProvider(BaseMarketDataProvider):
             # 3 trading days × 390 bars/day = 1,170 < 1,200 cap → 4 days triggers paginator.
             if timeframe == "1m" and (_end_ts is not None or days_per_range > 3 or ext_hours):
                 return self._fetch_1m_paginated(
-                    sym, timespan, count, range_, _start_ts, _end_ts,
+                    sym,
+                    timespan,
+                    count,
+                    range_,
+                    _start_ts,
+                    _end_ts,
                     trading_sessions=trading_sessions,
                 )
 
             resp = self._data_client.market_data.get_history_bar(
-                sym, "US_STOCK", timespan, count=str(count),
+                sym,
+                "US_STOCK",
+                timespan,
+                count=str(count),
                 trading_sessions=trading_sessions,
                 # Include the currently-forming minute bar (minute charts
                 # only) so the live feed isn't always ~1 bar behind.
@@ -654,6 +672,7 @@ class WebullProvider(BaseMarketDataProvider):
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull bars HTTP {resp.status_code}")
             from ..provider import safe_json
+
             data = safe_json(resp.text, url=resp.url)
             if not isinstance(data, list):
                 self._reset_error_state()
@@ -729,7 +748,9 @@ class WebullProvider(BaseMarketDataProvider):
             # NOTE: do NOT set start_time — Webull's M1 endpoint returns 0 bars
             # whenever start_time is present in the query string.
             resp = self._data_client.market_data.get_history_bar(
-                sym, "US_STOCK", timespan,
+                sym,
+                "US_STOCK",
+                timespan,
                 count=str(bars_per_page),
                 end_time=str(page_end_ms),
                 trading_sessions=trading_sessions,
@@ -737,7 +758,7 @@ class WebullProvider(BaseMarketDataProvider):
             )
             if resp.status_code != 200:
                 logger.warning(
-                    f"Webull 1m pagination: page {page_idx+1}/{num_pages} failed for {sym}: "
+                    f"Webull 1m pagination: page {page_idx + 1}/{num_pages} failed for {sym}: "
                     f"HTTP {resp.status_code}"
                 )
                 break
@@ -745,13 +766,13 @@ class WebullProvider(BaseMarketDataProvider):
             data = resp.json()
             if not isinstance(data, list) or not data:
                 logger.warning(
-                    f"Webull 1m pagination: page {page_idx+1}/{num_pages} returned no data for {sym} "
+                    f"Webull 1m pagination: page {page_idx + 1}/{num_pages} returned no data for {sym} "
                     f"— stopping"
                 )
                 break
 
             logger.info(
-                f"Webull 1m pagination: page {page_idx+1}/{num_pages} for {sym} "
+                f"Webull 1m pagination: page {page_idx + 1}/{num_pages} for {sym} "
                 f"returned {len(data)} bars (oldest={data[-1].get('time')})"
             )
             all_raw.extend(data)
@@ -786,19 +807,21 @@ class WebullProvider(BaseMarketDataProvider):
         bars: list[Bar] = []
         for row in data:
             ts = _epoch_ms_to_ny(row.get("time"))
-            bars.append(Bar(
-                symbol=sym,
-                timestamp=ts,
-                open=float(row.get("open") or 0),
-                high=float(row.get("high") or 0),
-                low=float(row.get("low") or 0),
-                close=float(row.get("close") or 0),
-                volume=int(float(row["volume"])) if row.get("volume") else 0,
-                timeframe=timeframe,
-                provider=self.name,
-                data_status=DataStatus.HISTORICAL,
-                session=_classify_session(ts),
-            ))
+            bars.append(
+                Bar(
+                    symbol=sym,
+                    timestamp=ts,
+                    open=float(row.get("open") or 0),
+                    high=float(row.get("high") or 0),
+                    low=float(row.get("low") or 0),
+                    close=float(row.get("close") or 0),
+                    volume=int(float(row["volume"])) if row.get("volume") else 0,
+                    timeframe=timeframe,
+                    provider=self.name,
+                    data_status=DataStatus.HISTORICAL,
+                    session=_classify_session(ts),
+                )
+            )
         # Webull returns bars newest-first; sort chronologically (oldest→newest)
         # so callers (bar_repository, chart display) get predictable ordering.
         bars.sort(key=lambda b: b.timestamp)
@@ -873,9 +896,12 @@ class WebullProvider(BaseMarketDataProvider):
             # and stays within the documented Webull contract.
             rows_by_symbol: dict[str, list[dict]] = {}
             for chunk_start in range(0, len(sym_list), _WEBULL_BATCH_LIMIT):
-                chunk = sym_list[chunk_start:chunk_start + _WEBULL_BATCH_LIMIT]
+                chunk = sym_list[chunk_start : chunk_start + _WEBULL_BATCH_LIMIT]
                 resp = self._data_client.market_data.get_batch_history_bar(
-                    chunk, "US_STOCK", timespan, count=str(count),
+                    chunk,
+                    "US_STOCK",
+                    timespan,
+                    count=str(count),
                     trading_sessions=trading_sessions,
                     real_time_required=(timespan == "M1") or None,
                 )
@@ -912,19 +938,21 @@ class WebullProvider(BaseMarketDataProvider):
                     if not isinstance(row, dict):
                         continue
                     row_ts = _epoch_ms_to_ny(row.get("time"))
-                    bars.append(Bar(
-                        symbol=sym,
-                        timestamp=row_ts,
-                        open=float(row.get("open") or 0),
-                        high=float(row.get("high") or 0),
-                        low=float(row.get("low") or 0),
-                        close=float(row.get("close") or 0),
-                        volume=int(float(row["volume"])) if row.get("volume") else 0,
-                        timeframe=timeframe,
-                        provider=self.name,
-                        data_status=DataStatus.HISTORICAL,
-                        session=_classify_session(row_ts),
-                    ))
+                    bars.append(
+                        Bar(
+                            symbol=sym,
+                            timestamp=row_ts,
+                            open=float(row.get("open") or 0),
+                            high=float(row.get("high") or 0),
+                            low=float(row.get("low") or 0),
+                            close=float(row.get("close") or 0),
+                            volume=int(float(row["volume"])) if row.get("volume") else 0,
+                            timeframe=timeframe,
+                            provider=self.name,
+                            data_status=DataStatus.HISTORICAL,
+                            session=_classify_session(row_ts),
+                        )
+                    )
                 bars.sort(key=lambda b: b.timestamp)
                 if bars and len(bars) >= 2:
                     actual_tf = _infer_actual_timeframe(
@@ -979,6 +1007,7 @@ class WebullProvider(BaseMarketDataProvider):
             if resp.status_code != 200:
                 raise RuntimeError(f"Webull status HTTP {resp.status_code}")
             from ..provider import safe_json
+
             data = safe_json(resp.text, url=resp.url)
             field = (data or [{}])[0]
             state = str(field.get("marketStatus") or field.get("marketState") or "")
@@ -986,7 +1015,7 @@ class WebullProvider(BaseMarketDataProvider):
             status = MarketStatus(
                 symbol=sym,
                 is_open=is_open,
-                next_open=None,   # not available in snapshot
+                next_open=None,  # not available in snapshot
                 next_close=None,  # not available in snapshot
                 timezone="America/New_York",
                 provider=self.name,
@@ -1005,7 +1034,7 @@ class WebullProvider(BaseMarketDataProvider):
             supports_historical_bars=True,
             supports_latest_quote=True,
             supports_latest_bar=True,
-            supports_batch_quotes=True,   # comma-separated snapshot is supported
+            supports_batch_quotes=True,  # comma-separated snapshot is supported
             supports_market_status=True,
             min_timeframe="1m",
             max_timeframe="1y",

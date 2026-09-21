@@ -20,6 +20,7 @@ say anything it likes, but only fields we explicitly model survive
 the parse. This means a confident-but-wrong AI reply can't
 overwrite the quantitative engine's score.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,11 +34,14 @@ from backend.alerts.conditions.evaluators import (
 )
 
 SYSTEM_PROMPT_CONFLUENCE = """This is the system prompt for confluence analysis. It instructs the AI to consider quantitative trend, sentiment, and fundamentals, and output a JSON with score (0‑100), alignment (\"strong\", \"moderate\", \"weak\", \"conflicting\"), reasoning, and primary_catalyst. The AI must output only the JSON block and nothing else."""
+
+
 class ConfluenceResponse(BaseModel):
     score: float = Field(..., ge=0.0, le=100.0)
     alignment: Literal["strong", "moderate", "weak", "conflicting"]
     reasoning: str = Field(..., min_length=1, max_length=500)
     primary_catalyst: str = Field(..., min_length=1, max_length=200)
+
 
 # --- Response model -------------------------------------------------
 
@@ -168,17 +172,31 @@ class TradePlan(BaseModel):
 # Literal check unchanged (extract_json_object's parse rejects true
 # gibberish long before this point).
 _TREND_SYNONYMS: dict[str, str] = {
-    "uptrend": "bullish", "up": "bullish", "upward": "bullish",
-    "strong_uptrend": "bullish", "strong_bullish": "bullish",
+    "uptrend": "bullish",
+    "up": "bullish",
+    "upward": "bullish",
+    "strong_uptrend": "bullish",
+    "strong_bullish": "bullish",
     "weak_bullish": "bullish",
-    "downtrend": "bearish", "down": "bearish", "downward": "bearish",
-    "strong_downtrend": "bearish", "strong_bearish": "bearish",
+    "downtrend": "bearish",
+    "down": "bearish",
+    "downward": "bearish",
+    "strong_downtrend": "bearish",
+    "strong_bearish": "bearish",
     "weak_bearish": "bearish",
-    "sideways": "neutral", "flat": "neutral", "range": "neutral",
-    "ranging": "neutral", "choppy": "neutral",
-    "conflicting": "mixed", "conflict": "mixed",
-    "unknown": "uncertain", "unclear": "uncertain", "no_signal": "uncertain",
-    "n/a": "uncertain", "na": "uncertain", "none": "uncertain",
+    "sideways": "neutral",
+    "flat": "neutral",
+    "range": "neutral",
+    "ranging": "neutral",
+    "choppy": "neutral",
+    "conflicting": "mixed",
+    "conflict": "mixed",
+    "unknown": "uncertain",
+    "unclear": "uncertain",
+    "no_signal": "uncertain",
+    "n/a": "uncertain",
+    "na": "uncertain",
+    "none": "uncertain",
 }
 
 # Common key names a model uses for a level's price/number and its
@@ -315,7 +333,10 @@ class AnalysisResponse(BaseModel):
         return _TREND_SYNONYMS.get(key, v)
 
     @field_validator(
-        "supporting_factors", "risk_factors", "timeframe_conflicts", "key_levels",
+        "supporting_factors",
+        "risk_factors",
+        "timeframe_conflicts",
+        "key_levels",
         mode="before",
     )
     @classmethod
@@ -612,7 +633,8 @@ def render_system_prompt(
     if win_rate is not None and sample_size:
         additions.append(
             _CONFIDENCE_CALIBRATION.format(
-                win_rate=_format_win_rate(win_rate), n=sample_size,
+                win_rate=_format_win_rate(win_rate),
+                n=sample_size,
             )
         )
 
@@ -657,6 +679,7 @@ def build_user_prompt(context_dict: dict[str, Any]) -> str:
 
 
 # --- Digest (Version 4, AI feature 2) -------------------------------
+
 
 class DigestNarrative(BaseModel):
     """AI's short natural-language summary of a digest payload.
@@ -727,6 +750,7 @@ def parse_digest_reply(text: str | None) -> DigestNarrative:
 
 # --- Alert commentary (Version 4, AI feature 3) ---------------------
 
+
 class AlertCommentaryResponse(BaseModel):
     """AI's short note explaining why a specific alert fired.
 
@@ -785,6 +809,7 @@ def parse_alert_commentary_reply(text: str | None) -> AlertCommentaryResponse:
 
 # --- Chat (Version 4, AI feature 4) ----------------------------------
 
+
 class ChatReplyResponse(BaseModel):
     """AI's reply to one chat turn.
 
@@ -823,10 +848,17 @@ class ChatReplyResponse(BaseModel):
     # says — see CHAT_SYSTEM_PROMPT rule 10 for when the model may set
     # them.
     action: Literal[
-        "none", "create_alert", "modify_alert", "delete_alert",
-        "add_to_watchlist", "remove_from_watchlist",
-        "create_watchlist", "delete_watchlist",
-        "run_backtest", "set_entity_type", "run_screen",
+        "none",
+        "create_alert",
+        "modify_alert",
+        "delete_alert",
+        "add_to_watchlist",
+        "remove_from_watchlist",
+        "create_watchlist",
+        "delete_watchlist",
+        "run_backtest",
+        "set_entity_type",
+        "run_screen",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -864,7 +896,8 @@ class ChatReplyResponse(BaseModel):
 # framing is duplicated, not these ~10 tool-behavior bullets. Kept
 # deliberately terse (2026-09-16 trim) — this text is resent on every
 # single completion call, including every chained continuation one.
-_ACTION_TOOL_DOCS = """\
+_ACTION_TOOL_DOCS = (
+    """\
     - create_alert / modify_alert / add_to_watchlist / create_watchlist / \
       run_backtest / set_entity_type / run_screen fire on the FIRST \
       clear request — no confirmation needed. Fill the matching \
@@ -882,7 +915,9 @@ _ACTION_TOOL_DOCS = """\
       "id" from active_alerts in the <market> block. If you can't find \
       a matching alert there, say so instead of guessing an id.
     - create_alert needs action_symbol, action_condition_type (one of: \
-      """ + ", ".join(_VALID_ALERT_CONDITION_TYPES) + """), and \
+      """
+    + ", ".join(_VALID_ALERT_CONDITION_TYPES)
+    + """), and \
       action_parameter (the threshold, e.g. "220" for a price level or \
       "5" for a percent). action_label is an optional short name.
     - modify_alert changes an EXISTING alert (found via active_alerts) \
@@ -917,8 +952,10 @@ _ACTION_TOOL_DOCS = """\
       label — never say you can't relabel a ticker, set this action \
       instead.
 """
+)
 
-CHAT_SYSTEM_PROMPT = """\
+CHAT_SYSTEM_PROMPT = (
+    """\
 You are MarketLens Analyst & Advisor, having a back-and-forth \
 conversation with a human trader about the market and any tickers they \
 bring up. A turn may be about one stock, several, or the market as a \
@@ -992,7 +1029,9 @@ Rules you must follow:
     delete_alert, add_to_watchlist, remove_from_watchlist, \
     create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
     run_screen.
-""" + _ACTION_TOOL_DOCS + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
+"""
+    + _ACTION_TOOL_DOCS
+    + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
       ("what's in my X watchlist", "analyze my X watchlist") is never \
       an "action" — the app resolves the name itself and gives you a \
       normal <context> block per member ticker (same shape as any \
@@ -1018,6 +1057,7 @@ Rules you must follow:
     first one now; the app decides on its own whether anything from \
     the message still needs doing after that runs.
 """
+)
 
 # A separate, deliberately lean system prompt for a multi-step
 # continuation call (backend.ai.chat._run_turn_actions, 2026-09-16) —
@@ -1030,7 +1070,8 @@ Rules you must follow:
 # more than trimming the main prompt: a 3-step compound turn used to
 # resend the FULL ~2.4k-token CHAT_SYSTEM_PROMPT three times; the 2nd
 # and 3rd calls now send this instead.
-CHAT_CONTINUATION_SYSTEM_PROMPT = """\
+CHAT_CONTINUATION_SYSTEM_PROMPT = (
+    """\
 You already ran the first step of a multi-part trader request; the \
 message below has the ORIGINAL request plus what's already been done. \
 Decide: is anything from the original request still undone?
@@ -1048,7 +1089,10 @@ runs.
 Tools, via "action": create_alert, modify_alert, delete_alert, \
 add_to_watchlist, remove_from_watchlist, create_watchlist, \
 delete_watchlist, run_backtest, set_entity_type, run_screen.
-""" + _ACTION_TOOL_DOCS
+"""
+    + _ACTION_TOOL_DOCS
+)
+
 
 # Rough token estimate for the assembled prompt's size guard.
 def _approx_tokens(s: str) -> int:
@@ -1191,10 +1235,11 @@ def build_chat_prompt(
         warm = bool(block.get("availability", {}).get("engine_warm"))
         body = json.dumps(
             {**block["context"], "data_availability": block.get("availability", {})},
-            separators=(",", ":"), default=str,
+            separators=(",", ":"),
+            default=str,
         )
         chunk = (
-            f'Quant context for {sym}:\n'
+            f"Quant context for {sym}:\n"
             f'<context symbol="{sym}" engine_warm="{str(warm).lower()}">\n{body}\n</context>'
         )
         if fits(chunk):
@@ -1276,10 +1321,12 @@ def render_template(template: str, variables: dict[str, Any]) -> str:
     >>> render_template("Hello {{name}}", {})
     'Hello '
     """
+
     def _replace(match: re.Match[str]) -> str:
         name = match.group(1)
         value = variables.get(name, "")
         return str(value) if value is not None else ""
+
     return _TEMPLATE_VAR_RE.sub(_replace, template)
 
 
@@ -1305,16 +1352,24 @@ ANALYSIS_JSON_SCHEMA: dict[str, Any] = {
             },
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "supporting_factors": {
-                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 10,
             },
             "risk_factors": {
-                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 10,
             },
             "timeframe_conflicts": {
-                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 10,
             },
             "key_levels": {
-                "type": "array", "items": {"type": "string"}, "maxItems": 10,
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 10,
             },
         },
         "required": ["summary", "trend", "confidence"],

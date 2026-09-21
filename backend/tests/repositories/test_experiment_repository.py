@@ -1,6 +1,7 @@
 """
 Tests for ``backend.repositories.experiment_repository``.
 """
+
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ class TestExperimentRepository(unittest.TestCase):
         self._session.close()
         self._eng.dispose()
         import os as _os
+
         for p in [self._path, self._path + "-wal", self._path + "-shm"]:
             if _os.path.exists(p):
                 _os.unlink(p)
@@ -123,11 +125,15 @@ class TestExperimentRepository(unittest.TestCase):
 
     def test_update_metrics_sets_slice_columns(self):
         exp = self._seed()
-        self.repo.update_metrics(exp.id, "is_", {
-            "win_rate_1d": 0.62,
-            "avg_return_1d": 0.55,
-            "total_signals": 120,
-        })
+        self.repo.update_metrics(
+            exp.id,
+            "is_",
+            {
+                "win_rate_1d": 0.62,
+                "avg_return_1d": 0.55,
+                "total_signals": 120,
+            },
+        )
         updated = self.repo.get(exp.id)
         self.assertAlmostEqual(updated.is_win_rate, 0.62)
         self.assertAlmostEqual(updated.is_avg_return_1d, 0.55)
@@ -175,6 +181,7 @@ class TestExperimentRepository(unittest.TestCase):
 
     def test_get_runs_for_experiment_returns_runs(self):
         from backend.models import BacktestRun
+
         session = self._Session()
         try:
             run = BacktestRun(
@@ -202,6 +209,7 @@ class TestExperimentRepository(unittest.TestCase):
 
     def test_get_regime_breakdown_empty(self):
         from backend.models import BacktestRun
+
         session = self._Session()
         try:
             run = BacktestRun(

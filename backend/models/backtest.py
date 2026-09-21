@@ -14,6 +14,7 @@ to "actual strategy evaluator". The equity curve is stored as a JSON
 array of `[date, cumulative_return_pct]` pairs so the dashboard can
 plot it without re-iterating bars.
 """
+
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
@@ -36,6 +37,7 @@ class BacktestRun(Base):
     text rather than a JSON column so SQLite can write it without a
     type adapter.
     """
+
     __tablename__ = "backtest_runs"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -44,7 +46,9 @@ class BacktestRun(Base):
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
     signals_requested = Column(String(255), nullable=False)
-    strategy_version = Column(String(50), nullable=True)  # e.g. "v1.0", "rsi14-macd"; enables reproducible comparisons across runs
+    strategy_version = Column(
+        String(50), nullable=True
+    )  # e.g. "v1.0", "rsi14-macd"; enables reproducible comparisons across runs
     status = Column(String(20), nullable=False, default="pending", index=True)
     total_bars = Column(Integer, nullable=True)
     total_signals = Column(Integer, nullable=True)
@@ -113,11 +117,11 @@ class BacktestTrade(Base):
     percentages, so the user can see how "deep" each trade went both
     ways even if the final exit was unremarkable.
     """
+
     __tablename__ = "backtest_trades"
 
     id = Column(Integer, primary_key=True, index=True)
-    run_id = Column(Integer, ForeignKey("backtest_runs.id"),
-                    nullable=False, index=True)
+    run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=False, index=True)
     signal = Column(String(40), nullable=False)
     entry_date = Column(DateTime, nullable=False)
     entry_price = Column(Float, nullable=False)
@@ -150,4 +154,3 @@ class BacktestTrade(Base):
             f"<BacktestTrade(id={self.id}, run_id={self.run_id}, "
             f"signal={self.signal!r}, entry={self.entry_price})>"
         )
-

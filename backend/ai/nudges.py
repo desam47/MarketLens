@@ -32,6 +32,7 @@ logs and moves on rather than aborting the whole tick, and a failure
 in the whole tick is caught by the loop so the service itself never
 dies.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -111,8 +112,7 @@ class NudgeService:
             # trigger — the id watermark is what actually dedupes.
             since = now_ny() - timedelta(minutes=10)
             triggers = [
-                t for t in repo.get_recent_triggers(since=since)
-                if t.id > self._last_trigger_id
+                t for t in repo.get_recent_triggers(since=since) if t.id > self._last_trigger_id
             ]
             if not triggers:
                 return
@@ -130,7 +130,7 @@ class NudgeService:
     def _format_alert_nudge(trigger) -> str:
         name = trigger.alert.name if trigger.alert is not None else "alert"
         detail = trigger.ai_commentary or trigger.message or f"observed {trigger.observed_value}"
-        return f"Alert fired — {trigger.symbol} \"{name}\": {detail}"
+        return f'Alert fired — {trigger.symbol} "{name}": {detail}'
 
     def _check_big_moves(self, score_threshold: float, cooldown_seconds: float) -> None:
         try:

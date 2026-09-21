@@ -1,6 +1,7 @@
 """
 Tests for Volume SMA indicator
 """
+
 import unittest
 
 from backend.indicators.volume_sma import VolumeSMAIndicator

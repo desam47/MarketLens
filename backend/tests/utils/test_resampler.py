@@ -4,6 +4,7 @@ Tests for backend.utils.resampler.
 Covers: aggregation correctness, boundary alignment, timezone handling,
 data_status propagation, empty/single-bar edge cases, and error paths.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from backend.utils.resampler import (
 )
 
 # ------------------------------------------------------------------ helpers
+
 
 def make_bar(
     dt: datetime,
@@ -53,6 +55,7 @@ def dt(year, month, day, hour, minute=0, tz=None) -> datetime:
 
 
 # ------------------------------------------------------------------ _floor_minute / _floor_hour
+
 
 class TestFloorMinute:
     def test_exact_multiple(self):
@@ -89,10 +92,12 @@ class TestFloorHour:
 
 # ------------------------------------------------------------------ bucket boundaries
 
+
 class TestBucketStart1d:
     def test_rth_bar(self):
         """10:00 ET → 09:30 ET same day."""
         from zoneinfo import ZoneInfo
+
         et = ZoneInfo("America/New_York")
         bar_et = datetime(2026, 9, 1, 10, 0, tzinfo=et)
         result = _bucket_start_1d(bar_et)
@@ -103,6 +108,7 @@ class TestBucketStart1d:
     def test_premarket_rolls_into_rth_day(self):
         """09:00 ET (pre-market) on 2026-09-01 → 09:30 ET 2026-09-01."""
         from zoneinfo import ZoneInfo
+
         et = ZoneInfo("America/New_York")
         bar_et = datetime(2026, 9, 1, 9, 0, tzinfo=et)
         result = _bucket_start_1d(bar_et)
@@ -113,6 +119,7 @@ class TestBucketStart1d:
     def test_after_hours_rolls_back(self):
         """17:00 ET (after-hours) → 09:30 ET same calendar day."""
         from zoneinfo import ZoneInfo
+
         et = ZoneInfo("America/New_York")
         bar_et = datetime(2026, 9, 1, 17, 0, tzinfo=et)
         result = _bucket_start_1d(bar_et)
@@ -142,6 +149,7 @@ class TestBucketStart1wk:
 
 
 # ------------------------------------------------------------------ resample_ohlcv core
+
 
 class TestResample5m:
     def test_five_1m_bars_to_one_5m(self):
@@ -219,6 +227,7 @@ class TestBucketStart4h:
 
     def test_mid_bucket_rolls_back(self):
         from backend.utils.resampler import _floor_4h
+
         d = dt(2026, 9, 1, 14, 37)
         result = _floor_4h(d)
         assert result.hour == 12
@@ -226,12 +235,14 @@ class TestBucketStart4h:
 
     def test_just_after_boundary_rolls_forward(self):
         from backend.utils.resampler import _floor_4h
+
         d = dt(2026, 9, 1, 12, 1)
         result = _floor_4h(d)
         assert result.hour == 12
 
     def test_exact_boundary_stays(self):
         from backend.utils.resampler import _floor_4h
+
         for h in (0, 4, 8, 12, 16, 20):
             d = dt(2026, 9, 1, h, 0)
             result = _floor_4h(d)
@@ -239,6 +250,7 @@ class TestBucketStart4h:
 
     def test_just_before_boundary_rolls_back(self):
         from backend.utils.resampler import _floor_4h
+
         d = dt(2026, 9, 1, 11, 59)
         result = _floor_4h(d)
         assert result.hour == 8
@@ -286,6 +298,7 @@ class TestResample4h:
 class TestResample1d:
     def test_same_rth_day(self):
         from zoneinfo import ZoneInfo
+
         et = ZoneInfo("America/New_York")
         bars = [
             make_bar(datetime(2026, 9, 1, 10, 0, tzinfo=et), 100, 101, 99, 100),
@@ -303,6 +316,7 @@ class TestResample1d:
 
     def test_two_calendar_days(self):
         from zoneinfo import ZoneInfo
+
         et = ZoneInfo("America/New_York")
         bars = [
             make_bar(datetime(2026, 9, 1, 10, 0, tzinfo=et), 100, 101, 99, 100),
@@ -317,7 +331,7 @@ class TestResample1d:
 class TestResample1wk:
     def test_same_iso_week(self):
         bars = [
-            make_bar(dt(2026, 9, 7, 10, 0), 100, 101, 99, 100),   # Monday
+            make_bar(dt(2026, 9, 7, 10, 0), 100, 101, 99, 100),  # Monday
             make_bar(dt(2026, 9, 9, 14, 0), 200, 201, 199, 200),  # Wednesday
         ]
         out = resample_ohlcv(bars, "1wk")
@@ -328,7 +342,7 @@ class TestResample1wk:
 
     def test_two_iso_weeks(self):
         bars = [
-            make_bar(dt(2026, 9, 7, 10, 0), 100, 101, 99, 100),   # Week 36
+            make_bar(dt(2026, 9, 7, 10, 0), 100, 101, 99, 100),  # Week 36
             make_bar(dt(2026, 9, 14, 10, 0), 200, 201, 199, 200),  # Week 37
         ]
         out = resample_ohlcv(bars, "1wk")
@@ -336,6 +350,7 @@ class TestResample1wk:
 
 
 # ------------------------------------------------------------------ edge cases
+
 
 class TestEdgeCases:
     def test_empty_input_returns_empty(self):
@@ -410,6 +425,7 @@ class TestZoneInfoHoisted:
         assert hasattr(resampler, "_NY_TZ")
         # It is a real ZoneInfo, not a string or a lazy import handle.
         from zoneinfo import ZoneInfo
+
         assert isinstance(resampler._NY_TZ, ZoneInfo)
         assert str(resampler._NY_TZ) == "America/New_York"
 
@@ -423,13 +439,9 @@ class TestZoneInfoHoisted:
         src = inspect.getsource(resampler._bucket_start_1d)
         # The function body must NOT contain ``ZoneInfo(`` — that would
         # indicate a per-call construction.
-        assert "ZoneInfo(" not in src, (
-            "_bucket_start_1d still constructs ZoneInfo on every call"
-        )
+        assert "ZoneInfo(" not in src, "_bucket_start_1d still constructs ZoneInfo on every call"
         # And it must reference the hoisted constant.
-        assert "_NY_TZ" in src, (
-            "_bucket_start_1d should reference the module-level _NY_TZ"
-        )
+        assert "_NY_TZ" in src, "_bucket_start_1d should reference the module-level _NY_TZ"
 
     def test_repeated_calls_share_same_tz(self):
         """Calling _bucket_start_1d many times uses the same ZoneInfo

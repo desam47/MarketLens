@@ -9,6 +9,7 @@ The ``id`` here is the RQ job ID (UUID string), not the integer
 same identifier end-to-end (the RQ job ID is what RQ CLI tools show
 in ``rq info`` output too).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -27,6 +28,7 @@ router = APIRouter(prefix="/api/ai/jobs", tags=["ai-jobs"])
 
 class JobEnqueueRequest(BaseModel):
     """Body for ``POST /api/ai/jobs``."""
+
     symbol: str = Field(..., min_length=1, max_length=10)
     timeframe: str = Field(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$")
     template_id: int | None = Field(default=None, ge=1)
@@ -34,6 +36,7 @@ class JobEnqueueRequest(BaseModel):
 
 class JobEnqueueResponse(BaseModel):
     """Response when a job is enqueued (or when enqueue fails)."""
+
     job_id: str
     status: str
     symbol: str
@@ -44,6 +47,7 @@ class JobEnqueueResponse(BaseModel):
 
 class JobStatusResponse(BaseModel):
     """Response for ``GET /api/ai/jobs/{job_id}``."""
+
     job_id: str
     status: str
     symbol: str
@@ -81,11 +85,10 @@ def enqueue_job(req: JobEnqueueRequest) -> JobEnqueueResponse:
         # Capture the template name up-front so workers don't need a DB read.
         from ...database import SessionLocal
         from ...models import AITemplate
+
         db = SessionLocal()
         try:
-            tmpl = (
-                db.query(AITemplate).filter(AITemplate.id == req.template_id).first()
-            )
+            tmpl = db.query(AITemplate).filter(AITemplate.id == req.template_id).first()
             if tmpl is None:
                 raise HTTPException(
                     status_code=404,

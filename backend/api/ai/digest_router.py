@@ -12,6 +12,7 @@ schedule-only (``backend.ai.digest_service.DigestService``) — so the
 read endpoints never enqueue anything; they just read the latest
 ``AIDigest`` row.
 """
+
 from __future__ import annotations
 
 import asyncio

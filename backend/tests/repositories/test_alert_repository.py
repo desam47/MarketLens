@@ -4,6 +4,7 @@ Tests for AlertRepository — focused on delete_all_triggers() (the
 it exists alongside. Fresh in-memory SQLite per test, same convention
 as test_chat_repository.py / test_bar_repository.py.
 """
+
 import unittest
 
 from sqlalchemy import create_engine
@@ -16,7 +17,8 @@ from backend.repositories.alert_repository import AlertRepository
 class TestAlertRepository(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         for model in (Alert, AlertTrigger):
             model.__table__.create(self.engine, checkfirst=True)
@@ -44,11 +46,13 @@ class TestAlertRepository(unittest.TestCase):
         repo = self._repo()
         a1 = repo.create("A", "AAPL", "price_above", "200")
         a2 = repo.create("B", "MSFT", "price_below", "300")
-        self.db.add_all([
-            AlertTrigger(alert_id=a1.id, symbol="AAPL", message="one"),
-            AlertTrigger(alert_id=a1.id, symbol="AAPL", message="two"),
-            AlertTrigger(alert_id=a2.id, symbol="MSFT", message="three"),
-        ])
+        self.db.add_all(
+            [
+                AlertTrigger(alert_id=a1.id, symbol="AAPL", message="one"),
+                AlertTrigger(alert_id=a1.id, symbol="AAPL", message="two"),
+                AlertTrigger(alert_id=a2.id, symbol="MSFT", message="three"),
+            ]
+        )
         self.db.commit()
 
         deleted = repo.delete_all_triggers()

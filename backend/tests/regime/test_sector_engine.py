@@ -1,12 +1,13 @@
 """
 Tests for SectorEngine — Phase 8 spec.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.regime.sector_engine import (
     SECTOR_ETFS,
@@ -18,7 +19,6 @@ from backend.regime.sector_engine import (
 
 
 class TestSectorEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
 
@@ -77,45 +77,35 @@ class TestSectorEngine(unittest.TestCase):
     def test_compute_alignment_all_uptrend(self):
         """All 3 up → perfect, score 1.0."""
         engine = SectorEngine("AAPL")
-        score, level, factors = engine._compute_alignment(
-            "uptrend", "uptrend", "uptrend"
-        )
+        score, level, factors = engine._compute_alignment("uptrend", "uptrend", "uptrend")
         self.assertEqual(score, 1.0)
         self.assertEqual(level, AlignmentLevel.PERFECT.value)
 
     def test_compute_alignment_all_downtrend(self):
         """All 3 down → perfect, score 1.0."""
         engine = SectorEngine("AAPL")
-        score, level, factors = engine._compute_alignment(
-            "downtrend", "downtrend", "downtrend"
-        )
+        score, level, factors = engine._compute_alignment("downtrend", "downtrend", "downtrend")
         self.assertEqual(score, 1.0)
         self.assertEqual(level, AlignmentLevel.PERFECT.value)
 
     def test_compute_alignment_2_up_1_down(self):
         """2/3 up → majority, score ~0.67."""
         engine = SectorEngine("AAPL")
-        score, level, factors = engine._compute_alignment(
-            "uptrend", "uptrend", "downtrend"
-        )
+        score, level, factors = engine._compute_alignment("uptrend", "uptrend", "downtrend")
         self.assertAlmostEqual(score, 0.67, places=2)
         self.assertEqual(level, AlignmentLevel.MAJORITY.value)
 
     def test_compute_alignment_split(self):
         """1/3 → split, score 0.0."""
         engine = SectorEngine("AAPL")
-        score, level, factors = engine._compute_alignment(
-            "uptrend", "sideways", "downtrend"
-        )
+        score, level, factors = engine._compute_alignment("uptrend", "sideways", "downtrend")
         self.assertEqual(score, 0.0)
         self.assertEqual(level, AlignmentLevel.CONFLICTING.value)
 
     def test_compute_alignment_insufficient_data(self):
         """2+ unknown → 0.0."""
         engine = SectorEngine("AAPL")
-        score, level, factors = engine._compute_alignment(
-            "unknown", "unknown", "uptrend"
-        )
+        score, level, factors = engine._compute_alignment("unknown", "unknown", "uptrend")
         self.assertEqual(score, 0.0)
 
     def test_compute_alignment_perfect_all_strong_uptrend(self):
@@ -175,5 +165,5 @@ class TestSectorEngine(unittest.TestCase):
         self.assertEqual(len(history), 3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

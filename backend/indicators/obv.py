@@ -1,6 +1,7 @@
 """
 On-Balance Volume (OBV) indicator
 """
+
 from typing import Any
 
 from .base_indicator import BaseIndicator
@@ -19,17 +20,17 @@ class OBVIndicator(BaseIndicator):
             return []
 
         # Extract closes and volumes
-        closes = [float(d['close']) for d in data]
-        volumes = [float(d['volume']) for d in data]
+        closes = [float(d["close"]) for d in data]
+        volumes = [float(d["volume"]) for d in data]
 
         # Calculate OBV
         obv_values = [0.0]  # Start with 0
 
         for i in range(1, len(closes)):
-            if closes[i] > closes[i-1]:
+            if closes[i] > closes[i - 1]:
                 # Price up - add volume
                 obv_values.append(obv_values[-1] + volumes[i])
-            elif closes[i] < closes[i-1]:
+            elif closes[i] < closes[i - 1]:
                 # Price down - subtract volume
                 obv_values.append(obv_values[-1] - volumes[i])
             else:
@@ -41,11 +42,11 @@ class OBVIndicator(BaseIndicator):
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update OBV with new data point"""
-        close_price = float(new_data['close'])
-        volume = float(new_data['volume'])
+        close_price = float(new_data["close"])
+        volume = float(new_data["volume"])
 
         # Initialize price and volume history if needed
-        if not hasattr(self, '_price_history'):
+        if not hasattr(self, "_price_history"):
             self._price_history = []
             self._volume_history = []
 

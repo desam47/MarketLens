@@ -10,6 +10,7 @@ Each group is independently gated: when its provider is disabled
 (AUX_*_ENABLED=false) the endpoint returns 503 with a descriptive message.
 The rest of the API is unaffected.
 """
+
 import logging
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -45,6 +46,7 @@ def _to_dashboard_tz(value: datetime | None) -> str:
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
+
 
 class NewsQuery(BaseModel):
     limit: int = Field(default=20, ge=1, le=50, description="Max articles to return")
@@ -88,6 +90,7 @@ def _disabled_resp(category: str) -> dict:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "/news/{symbol}",
     response_model=NewsResponse,
@@ -121,7 +124,9 @@ async def get_fundamentals(symbol: str):
         return result
     except Exception as exc:
         logger.error("Fundamentals endpoint failed for %s: %s", symbol, exc)
-        raise HTTPException(status_code=500, detail=f"Failed to fetch fundamentals: {exc!s}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch fundamentals: {exc!s}"
+        ) from exc
 
 
 @router.get(

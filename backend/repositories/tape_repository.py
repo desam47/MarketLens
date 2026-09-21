@@ -2,6 +2,7 @@
 Repository for ``tape_bars`` — 1-second Time & Sales aggregates written
 by ``TapeEngine``. Short retention (``TAPE_RETENTION_DAYS``).
 """
+
 from __future__ import annotations
 
 import logging
@@ -15,8 +16,17 @@ from backend.models.market_data_sql import TapeBarModel
 logger = logging.getLogger(__name__)
 
 _FIELDS = (
-    "open", "high", "low", "close", "volume", "buy_volume", "sell_volume",
-    "signed_volume", "trade_count", "block_count", "vwap",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "buy_volume",
+    "sell_volume",
+    "signed_volume",
+    "trade_count",
+    "block_count",
+    "vwap",
 )
 
 
@@ -51,9 +61,7 @@ def get_tape_bars(
     q = db.query(TapeBarModel).filter(TapeBarModel.symbol == symbol.upper())
     if since is not None:
         q = q.filter(TapeBarModel.timestamp >= since)
-    return list(
-        q.order_by(TapeBarModel.timestamp.desc()).limit(limit).all()
-    )[::-1]
+    return list(q.order_by(TapeBarModel.timestamp.desc()).limit(limit).all())[::-1]
 
 
 def prune_tape_bars(db: Session, cutoff: datetime) -> int:

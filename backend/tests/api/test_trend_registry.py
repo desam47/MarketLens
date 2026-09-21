@@ -13,6 +13,7 @@ was the dominant cost of server startup (~500-700ms/symbol) — the fix is
 `_create_and_register_engine`, a bare (unseeded) engine constructor the
 batch path uses instead of `get_engine()`.
 """
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -30,9 +31,7 @@ class TestBatchSeedEnginesNoDoubleSeed(unittest.TestCase):
         self.registry = trend_registry
         self.registry._engines.clear()
 
-        self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False}
-        )
+        self.engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
         BarModel.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(bind=self.engine)
         self._session_patch = patch.object(trend_registry, "SessionLocal", self.Session)
@@ -46,12 +45,20 @@ class TestBatchSeedEnginesNoDoubleSeed(unittest.TestCase):
     def _insert_bars(self, symbol: str, timeframe: str, n: int):
         with self.Session() as db:
             for i in range(n):
-                db.add(BarModel(
-                    symbol=symbol, timeframe=timeframe,
-                    open=100.0, high=101.0, low=99.0, close=100.0 + i,
-                    volume=1000, timestamp=datetime(2025, 1, 1) + timedelta(minutes=i),
-                    provider="test", data_status="HISTORICAL",
-                ))
+                db.add(
+                    BarModel(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        open=100.0,
+                        high=101.0,
+                        low=99.0,
+                        close=100.0 + i,
+                        volume=1000,
+                        timestamp=datetime(2025, 1, 1) + timedelta(minutes=i),
+                        provider="test",
+                        data_status="HISTORICAL",
+                    )
+                )
             db.commit()
 
     def test_new_symbol_seeded_exactly_once(self):
@@ -67,7 +74,9 @@ class TestBatchSeedEnginesNoDoubleSeed(unittest.TestCase):
             results = self.registry._batch_seed_engines(("AAPL",))
 
         self.assertEqual(results["AAPL"], 5)
-        self.assertEqual(mock_engine.update.call_count, 5, "bars must be applied exactly once, not doubled")
+        self.assertEqual(
+            mock_engine.update.call_count, 5, "bars must be applied exactly once, not doubled"
+        )
 
     def test_already_created_engine_is_not_reseeded(self):
         """A symbol whose engine already exists (e.g. warmed by an earlier
@@ -106,8 +115,10 @@ class TestBatchSeedEnginesNoDoubleSeed(unittest.TestCase):
             db.query = counting_query
             return db
 
-        with patch.object(self.registry, "SessionLocal", counting_session), \
-             patch.object(self.registry, "TrendEngine") as MockEngineCls:
+        with (
+            patch.object(self.registry, "SessionLocal", counting_session),
+            patch.object(self.registry, "TrendEngine") as MockEngineCls,
+        ):
             MockEngineCls.side_effect = lambda symbol: MagicMock()
             self.registry._batch_seed_engines(("AAPL", "MSFT"))
 

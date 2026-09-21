@@ -20,6 +20,7 @@ Note: 1d bars were already stored correctly (midnight NY) in many cases; the
 shift only applies to bars that were stored as UTC. After this migration, all
 stored timestamps are naive NY (EDT/EST) wall-clock times.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,10 +39,7 @@ def shift_column(engine, table: str, column: str, offset_hours: int) -> int:
     """Subtract ``offset_hours`` from every value in ``<table>.<column>``."""
     with engine.begin() as conn:
         result = conn.execute(
-            text(
-                f"UPDATE {table} "
-                f"SET {column} = datetime({column}, '-{offset_hours} hours')"
-            )
+            text(f"UPDATE {table} SET {column} = datetime({column}, '-{offset_hours} hours')")
         )
         return result.rowcount
 
@@ -73,8 +71,11 @@ def main() -> int:
     log.info(f"  Deleted {n} 1m signal rows")
 
     # Quotes, provider_status: shift by -4h (EDT)
-    for table, col in [("quotes", "timestamp"), ("provider_status", "timestamp"),
-                        ("provider_status", "last_success")]:
+    for table, col in [
+        ("quotes", "timestamp"),
+        ("provider_status", "timestamp"),
+        ("provider_status", "last_success"),
+    ]:
         try:
             n = shift_column(engine, table, col, offset_hours=4)
             log.info(f"  Shifted {table}.{col} by -4h ({n} rows)")
@@ -102,7 +103,7 @@ def main() -> int:
         # EDT: from spring-forward to fall-back
         if edt_start <= d_ < est_start:
             return 4  # EDT
-        return 5    # EST
+        return 5  # EST
 
     with engine.begin() as conn:
         rows = conn.execute(
@@ -113,7 +114,7 @@ def main() -> int:
             offset = _ny_offset(ts)
             conn.execute(
                 text("UPDATE bars SET timestamp = datetime(timestamp, :offset) WHERE id = :id"),
-                {"offset": f"-{offset} hours", "id": row_id}
+                {"offset": f"-{offset} hours", "id": row_id},
             )
             updated += 1
         log.info(f"  Shifted 1d bars by DST-aware offset ({updated} rows)")

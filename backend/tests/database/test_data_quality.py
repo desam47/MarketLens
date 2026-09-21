@@ -7,6 +7,7 @@ never collided on the DB's exact-timestamp unique key — 63% of stored 1d
 rows ended up duplicated before anyone noticed. This endpoint is the
 ongoing watch for that class of bug recurring.
 """
+
 import unittest
 
 
@@ -17,6 +18,7 @@ class TestDataQualityEndpoint(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_endpoint_returns_200(self):

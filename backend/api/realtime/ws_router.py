@@ -19,6 +19,7 @@ Concurrency model
   the loop via ``loop.call_soon_threadsafe``.
 - WebSocket sends happen only on the event loop.
 """
+
 import asyncio
 import logging
 import re
@@ -67,6 +68,7 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
 # ---------------------------------------------------------------------------
 # Broadcast manager
 # ---------------------------------------------------------------------------
+
 
 class RealtimeBroadcastManager:
     """Process-wide subscription registry for realtime WebSocket clients.
@@ -275,9 +277,7 @@ async def _broadcast_bar(bar: Any, symbol: str | None = None, timeframe: str | N
     bar_data = bar.model_dump()
     # Convert timestamp to the dashboard timezone for client display.
     bar_data["timestamp"] = (
-        _to_dashboard_tz(bar.timestamp)
-        if isinstance(bar.timestamp, datetime)
-        else bar.timestamp
+        _to_dashboard_tz(bar.timestamp) if isinstance(bar.timestamp, datetime) else bar.timestamp
     )
     payload = {
         "type": "bar_update",
@@ -292,6 +292,7 @@ async def _broadcast_bar(bar: Any, symbol: str | None = None, timeframe: str | N
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
+
 
 class RealtimeDispatcher:
     """Bridge ``engine_registry`` bar events into the broadcast manager.
@@ -328,6 +329,7 @@ class RealtimeDispatcher:
             return
         if not self._manager.has_subscribers(symbol, timeframe):
             return
+
         def _schedule() -> None:
             # Runs on the loop thread. Creating the coroutine here (not in
             # the caller's thread) means a closed loop can't leave behind a
@@ -353,7 +355,9 @@ class RealtimeDispatcher:
                 "low": data.get("low"),
                 "close": data.get("close"),
                 "volume": data.get("volume"),
-                "timestamp": _to_dashboard_tz(data.get("timestamp")) if isinstance(data.get("timestamp"), datetime) else data.get("timestamp"),
+                "timestamp": _to_dashboard_tz(data.get("timestamp"))
+                if isinstance(data.get("timestamp"), datetime)
+                else data.get("timestamp"),
             },
         }
         await self._manager.broadcast(key, payload)
@@ -383,6 +387,7 @@ def reset() -> None:
 # ---------------------------------------------------------------------------
 # Provider stream management (v3.6)
 # ---------------------------------------------------------------------------
+
 
 def _call_provider(provider: str, method: str, symbol: str, timeframe: str) -> None:
     """Invoke ``subscribe``/``unsubscribe`` on a provider instance, if it has one."""
@@ -442,6 +447,7 @@ async def _release_provider_streams(orphaned_keys: list[str]) -> None:
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.websocket("/ws")
 async def realtime_websocket(websocket: WebSocket):
     """WebSocket realtime bar push channel.
@@ -473,9 +479,7 @@ async def realtime_websocket(websocket: WebSocket):
             except Exception as e:
                 logger.debug(f"Bad WS frame: {e}")
                 try:
-                    await websocket.send_json(
-                        {"type": "error", "message": f"Invalid frame: {e}"}
-                    )
+                    await websocket.send_json({"type": "error", "message": f"Invalid frame: {e}"})
                 except Exception:
                     break
                 continue
@@ -506,14 +510,17 @@ async def realtime_websocket(websocket: WebSocket):
                     continue
 
             if action == "subscribe":
-                if (
-                    broadcast_manager.subscription_count(websocket) >= _MAX_SUBSCRIPTIONS_PER_SOCKET
-                    and not broadcast_manager.has_subscribers(sym, tf)
+                if broadcast_manager.subscription_count(
+                    websocket
+                ) >= _MAX_SUBSCRIPTIONS_PER_SOCKET and not broadcast_manager.has_subscribers(
+                    sym, tf
                 ):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Subscription limit reached ({_MAX_SUBSCRIPTIONS_PER_SOCKET})",
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": f"Subscription limit reached ({_MAX_SUBSCRIPTIONS_PER_SOCKET})",
+                        }
+                    )
                     continue
                 await broadcast_manager.subscribe(websocket, sym, tf)
                 # If client requested a supported provider, route the stream
@@ -526,29 +533,31 @@ async def realtime_websocket(websocket: WebSocket):
                 )
                 if stream_provider:
                     await _maybe_start_provider_stream(stream_provider, sym, tf)
-                await websocket.send_json({
-                    "type": "subscribed",
-                    "symbol": sym,
-                    "timeframe": tf,
-                    "provider": stream_provider or "local",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "subscribed",
+                        "symbol": sym,
+                        "timeframe": tf,
+                        "provider": stream_provider or "local",
+                    }
+                )
             elif action == "unsubscribe":
                 await broadcast_manager.unsubscribe(websocket, sym, tf)
                 # If no more local subscribers and a provider stream is active,
                 # tear it down.
                 if not broadcast_manager.has_subscribers(sym, tf):
                     await _release_provider_streams([broadcast_manager._make_key(sym, tf)])
-                await websocket.send_json({
-                    "type": "unsubscribed",
-                    "symbol": sym,
-                    "timeframe": tf,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "unsubscribed",
+                        "symbol": sym,
+                        "timeframe": tf,
+                    }
+                )
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
             elif action in (None, ""):
-                await websocket.send_json(
-                    {"type": "error", "message": "Missing 'action'"}
-                )
+                await websocket.send_json({"type": "error", "message": "Missing 'action'"})
             else:
                 await websocket.send_json(
                     {"type": "error", "message": f"Unknown action: {action!r}"}

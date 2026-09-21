@@ -1,6 +1,7 @@
 """
 Data models for MarketLens
 """
+
 # Import alert models
 # Import AI analysis job models (Phase 2.5: background AI processing)
 from .ai_analysis_job import AIAnalysisJob as AIAnalysisJob

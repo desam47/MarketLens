@@ -1,4 +1,5 @@
 """Tests for the custom-indicators API router."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +18,7 @@ def client():
 def _clear_indicators():
     """Wipe the custom_indicators table before/after each test."""
     from backend.database import SessionLocal
+
     db = SessionLocal()
     try:
         db.query(CustomIndicator).delete()
@@ -99,7 +101,12 @@ def test_get_indicator_by_id(client):
 def test_get_indicator_by_slug(client):
     client.post(
         "/api/custom-indicators",
-        json={"name": "X", "slug": "by-slug-test", "formula_type": "ema", "parameters": {"period": 12}},
+        json={
+            "name": "X",
+            "slug": "by-slug-test",
+            "formula_type": "ema",
+            "parameters": {"period": 12},
+        },
     )
     resp = client.get("/api/custom-indicators/by-slug/by-slug-test")
     assert resp.status_code == 200

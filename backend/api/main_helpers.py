@@ -19,6 +19,7 @@ to do. (Originally the prune ran inline on every ~60s 1m-ingestion tick;
 moved to a dedicated hourly loop 2026-09-17 since day-granularity
 retention windows don't need re-checking every tick.)
 """
+
 from __future__ import annotations
 
 import logging
@@ -39,14 +40,10 @@ logger = logging.getLogger(__name__)
 def _watched_symbols() -> list[str]:
     """Return upper-case symbol list across all active watchlists."""
     from backend.models import WatchlistSymbol
+
     db = SessionLocal()
     try:
-        rows = (
-            db.query(WatchlistSymbol.symbol)
-            .filter(WatchlistSymbol.is_enabled)
-            .distinct()
-            .all()
-        )
+        rows = db.query(WatchlistSymbol.symbol).filter(WatchlistSymbol.is_enabled).distinct().all()
         return [s[0].upper() for s in rows]
     finally:
         db.close()
@@ -58,8 +55,11 @@ def _open_bars(symbol: str, timeframe: str, now: datetime) -> int:
     try:
         return (
             db.query(func.count(BarModel.id))
-            .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe,
-                    BarModel.timestamp > now - bar_length(timeframe))
+            .filter(
+                BarModel.symbol == symbol,
+                BarModel.timeframe == timeframe,
+                BarModel.timestamp > now - bar_length(timeframe),
+            )
             .scalar()
         ) or 0
     finally:
@@ -98,9 +98,7 @@ def _fill_signal_gaps(symbol: str) -> dict[str, int]:
         gap = bar_n - _open_bars(symbol, tf, now) - sig_n
         if gap > 0:
             # Re-run the per-timeframe backfill with the high cap.
-            n = signal_recorder.backfill_signals_for_symbol(
-                symbol, timeframe=tf, max_bars=50000
-            )
+            n = signal_recorder.backfill_signals_for_symbol(symbol, timeframe=tf, max_bars=50000)
             if n:
                 filled[tf] = n
     return filled

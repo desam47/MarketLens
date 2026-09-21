@@ -5,6 +5,7 @@ Phase 8 spec: classify each stock relative to SPY, QQQ, and a sector ETF
 into one of STRONG_OUTPERFORMER / OUTPERFORMER / INLINE /
 UNDERPERFORMER / STRONG_UNDERPERFORMER.
 """
+
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,9 +31,10 @@ class RelativeStrengthClassification(StrEnum):
 @dataclass
 class RelativeStrengthSignal:
     """Alpha vs a single benchmark over the configured lookback window."""
+
     symbol: str
-    benchmark: str           # e.g. "SPY", "QQQ", "XLK"
-    rs_pct: float            # (symbol_return - benchmark_return) as a fraction
+    benchmark: str  # e.g. "SPY", "QQQ", "XLK"
+    rs_pct: float  # (symbol_return - benchmark_return) as a fraction
     classification: RelativeStrengthClassification
     symbol_return_pct: float
     benchmark_return_pct: float
@@ -43,7 +45,7 @@ class RelativeStrengthSignal:
         return {
             "symbol": self.symbol,
             "benchmark": self.benchmark,
-            "rs_pct": round(self.rs_pct * 100, 2),            # percent for readability
+            "rs_pct": round(self.rs_pct * 100, 2),  # percent for readability
             "classification": self.classification.value,
             "symbol_return_pct": round(self.symbol_return_pct * 100, 2),
             "benchmark_return_pct": round(self.benchmark_return_pct * 100, 2),
@@ -62,8 +64,12 @@ class RelativeStrengthEngine:
     window.
     """
 
-    def __init__(self, symbol: str, lookback_days: int | None = None,
-                 trend_engines: dict[str, TrendEngine] | None = None):
+    def __init__(
+        self,
+        symbol: str,
+        lookback_days: int | None = None,
+        trend_engines: dict[str, TrendEngine] | None = None,
+    ):
         self.symbol = symbol.upper()
         self.lookback_days = lookback_days or settings.relative_strength.lookback_days
         self._cfg = settings.relative_strength
@@ -74,10 +80,7 @@ class RelativeStrengthEngine:
         if trend_engines is not None:
             self._engines: dict[str, TrendEngine] = dict(trend_engines)
         else:
-            self._engines = {
-                sym: TrendEngine(sym)
-                for sym in self._all_symbols()
-            }
+            self._engines = {sym: TrendEngine(sym) for sym in self._all_symbols()}
 
         self._price_history: dict[str, list[tuple[datetime, float]]] = {
             sym: [] for sym in self._all_symbols()
@@ -92,11 +95,7 @@ class RelativeStrengthEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def update(self,
-               price: float,
-               volume: float,
-               timestamp: datetime,
-               symbol: str) -> None:
+    def update(self, price: float, volume: float, timestamp: datetime, symbol: str) -> None:
         """
         Feed a new price tick into the appropriate TrendEngine.
 
@@ -115,10 +114,7 @@ class RelativeStrengthEngine:
         self._price_history[symbol].append((timestamp, price))
         self._prune_history(symbol)
 
-    def update_all(self,
-                   prices: dict[str, float],
-                   volume: float,
-                   timestamp: datetime) -> None:
+    def update_all(self, prices: dict[str, float], volume: float, timestamp: datetime) -> None:
         """Feed a price for every tracked symbol at once (e.g. from a quote bundle)."""
         for sym, price in prices.items():
             self.update(price, volume, timestamp, sym)
@@ -142,6 +138,7 @@ class RelativeStrengthEngine:
             try:
                 # Lazy import to avoid a circular dependency at module load time.
                 from backend.database import SessionLocal
+
                 db = SessionLocal()
                 try:
                     # desc=True: get_bars applies LIMIT to its ordered query,
@@ -191,9 +188,7 @@ class RelativeStrengthEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _compute_vs_benchmark(self,
-                              benchmark: str,
-                              ts: datetime) -> RelativeStrengthSignal | None:
+    def _compute_vs_benchmark(self, benchmark: str, ts: datetime) -> RelativeStrengthSignal | None:
         """Compute alpha vs one benchmark."""
         sym_hist = self._price_history[self.symbol]
         bmk_hist = self._price_history.get(benchmark, [])

@@ -2,6 +2,7 @@
 Market Data Ingestion Service
 Automatically fetches and stores market data from providers
 """
+
 import asyncio
 import atexit
 import logging
@@ -52,6 +53,7 @@ def _instantiate_backfill_provider(name: str):
     fails.
     """
     from backend.market_data.services.manager import get_cached_provider
+
     return get_cached_provider(name)
 
 
@@ -226,8 +228,7 @@ class MarketDataIngestionService:
             # the dict. Since we only ingest 1m bars, higher-TF keys are never
             # written and should not linger from a pre-3.1 state.
             self.last_bar_update[symbol] = {
-                k: v for k, v in self.last_bar_update[symbol].items()
-                if k == "1m"
+                k: v for k, v in self.last_bar_update[symbol].items() if k == "1m"
             }
 
     def _load_symbols_from_watchlist(self) -> list[str]:
@@ -275,10 +276,14 @@ class MarketDataIngestionService:
                             symbols.append(sym)
             if include_symbols:
                 if symbols:
-                    logger.info(f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}")
+                    logger.info(
+                        f"Loaded {len(symbols)} symbols across {len(active_wls)} active watchlist(s): {symbols}"
+                    )
                 else:
                     if active_wls:
-                        logger.info("Active watchlists exist but all are empty — no symbols to ingest")
+                        logger.info(
+                            "Active watchlists exist but all are empty — no symbols to ingest"
+                        )
                     else:
                         logger.info("No active watchlist found — no symbols to ingest")
             return (sorted(symbols), watchlists) if include_symbols else ([], watchlists)
@@ -287,7 +292,9 @@ class MarketDataIngestionService:
 
     def get_tracking_watchlists(self) -> list[str]:
         """Return active watchlists that contribute enabled symbols."""
-        return self._load_symbols_and_watchlists_from_all_active_watchlists(include_symbols=False)[1]
+        return self._load_symbols_and_watchlists_from_all_active_watchlists(include_symbols=False)[
+            1
+        ]
 
     def start(self):
         """Start the ingestion service in a background thread.
@@ -325,7 +332,9 @@ class MarketDataIngestionService:
 
         self.is_running = True
         set_ingestion_running(True)
-        logger.info(f"Starting market data ingestion service for {len(self.symbols)} symbols in background thread")
+        logger.info(
+            f"Starting market data ingestion service for {len(self.symbols)} symbols in background thread"
+        )
 
         # Capture the correlation ID from the current contextvar so it can be
         # re-installed in the background thread. Daemon threads don't inherit
@@ -337,6 +346,7 @@ class MarketDataIngestionService:
                 get_correlation_id,
                 set_correlation_id,
             )
+
             captured_corr_id = get_correlation_id()
         except Exception:
             pass
@@ -394,14 +404,27 @@ class MarketDataIngestionService:
     # already at 12:20 and 30m correctly at 11:30 (30m's own window
     # genuinely hadn't closed yet — not the same issue).
     _RESAMPLE_WIDENING_HOURS: dict[str, int] = {
-        "2m": 0, "3m": 0, "5m": 0, "15m": 1, "30m": 1,
-        "1h": 1, "4h": 4, "1d": 24, "1wk": 168,
+        "2m": 0,
+        "3m": 0,
+        "5m": 0,
+        "15m": 1,
+        "30m": 1,
+        "1h": 1,
+        "4h": 4,
+        "1d": 24,
+        "1wk": 168,
     }
 
     # Per-source-TF minute counts, mirroring resampler._TF_MINUTES.
     _RESAMPLE_SOURCE_MINS: dict[str, int] = {
-        "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-        "1h": 60, "4h": 240, "1d": 1440, "1wk": 10080,
+        "1m": 1,
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60,
+        "4h": 240,
+        "1d": 1440,
+        "1wk": 10080,
     }
 
     def _model_to_bar(self, row: BarModel) -> Bar:
@@ -475,13 +498,10 @@ class MarketDataIngestionService:
         try:
             target_mins = _TF_MINUTES.get(target_tf, 60)
             for symbol in symbols_to_process:
-                query = (
-                    db.query(BarModel)
-                    .filter(
-                        and_(
-                            BarModel.symbol == symbol.upper(),
-                            BarModel.timeframe == source_tf,
-                        )
+                query = db.query(BarModel).filter(
+                    and_(
+                        BarModel.symbol == symbol.upper(),
+                        BarModel.timeframe == source_tf,
                     )
                 )
                 # 2026-09-09: sub-hour timeframes (2m/3m/5m/15m/30m — the
@@ -547,6 +567,7 @@ class MarketDataIngestionService:
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
+
                 for symbol in symbols_to_process:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
@@ -621,7 +642,9 @@ class MarketDataIngestionService:
                     try:
                         dt_ny = bar.timestamp.replace(tzinfo=_NY_TZ)
                         hour_floor = (dt_ny.hour // 4) * 4
-                        bucket_start_ny = dt_ny.replace(hour=hour_floor, minute=0, second=0, microsecond=0, tzinfo=None)
+                        bucket_start_ny = dt_ny.replace(
+                            hour=hour_floor, minute=0, second=0, microsecond=0, tzinfo=None
+                        )
                     except Exception:
                         bucket_start_ny = bar.timestamp
                     if bucket_start_ny not in buckets:
@@ -674,6 +697,7 @@ class MarketDataIngestionService:
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
+
                 for symbol in symbols_to_process:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
@@ -735,7 +759,9 @@ class MarketDataIngestionService:
                         dt_ny = bar.timestamp.replace(tzinfo=_NY_TZ)
                         dt_utc = dt_ny.astimezone(UTC)
                         monday = dt_utc - timedelta(days=dt_utc.weekday())
-                        bucket_start_utc = monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+                        bucket_start_utc = monday.replace(
+                            hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+                        )
                     except Exception:
                         bucket_start_utc = bar.timestamp
                     if bucket_start_utc not in buckets:
@@ -772,7 +798,9 @@ class MarketDataIngestionService:
                         volume=sum(b.volume for b in member_bars),
                         timestamp=bucket_ts,
                         provider="aggregated_from_1d",
-                        data_status=DataStatus.HISTORICAL if now_et >= saturday_et else DataStatus.INCOMPLETE,
+                        data_status=DataStatus.HISTORICAL
+                        if now_et >= saturday_et
+                        else DataStatus.INCOMPLETE,
                     )
                     to_write.append(bar)
 
@@ -783,6 +811,7 @@ class MarketDataIngestionService:
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
+
                 for symbol in symbols_to_process:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
@@ -905,6 +934,7 @@ class MarketDataIngestionService:
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
+
                 for symbol in self.symbols:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
@@ -927,7 +957,9 @@ class MarketDataIngestionService:
         return hours
 
     async def _resample_1h_from_1m_and_upsert(
-        self, hour_starts: list[datetime] | None = None, _symbol: str | None = None,
+        self,
+        hour_starts: list[datetime] | None = None,
+        _symbol: str | None = None,
     ) -> int:
         """Build/refresh 1h bars from 1m data for each bucket in
         ``hour_starts`` (naive NY, each already floored to :00). Defaults
@@ -1031,14 +1063,14 @@ class MarketDataIngestionService:
                         timestamp=hour_start,
                         provider="live_from_1m",
                         data_status=(
-                            DataStatus.INCOMPLETE if hour_end > now_naive
-                            else DataStatus.HISTORICAL
+                            DataStatus.INCOMPLETE if hour_end > now_naive else DataStatus.HISTORICAL
                         ),
                     )
                     written += upsert_bars(db, [bar])
             db.commit()
             if written:
                 from backend.market_data.services.cache import _redis_cache
+
                 for symbol in symbols_to_process:
                     _redis_cache.invalidate_bars_for_symbol(symbol)
         except Exception:
@@ -1082,7 +1114,10 @@ class MarketDataIngestionService:
                 # limited) would otherwise freeze every other loop on this event loop.
                 batch_bars = await asyncio.to_thread(
                     self.manager.get_historical_bars_batch,
-                    list(self.symbols), "1m", range_="15m", use_cache=False,
+                    list(self.symbols),
+                    "1m",
+                    range_="15m",
+                    use_cache=False,
                     # Keep the live 1m feed flowing outside RTH (premarket /
                     # after-hours). Sub-hour resampling spans all sessions too; only the
                     # provider-sourced 1h/1d/1wk history stays RTH-only.
@@ -1094,9 +1129,7 @@ class MarketDataIngestionService:
                         for bar in bars:
                             bar.timeframe = "1m"
                         bars_to_upsert.extend(bars)
-                        fresh_bars.extend(
-                            (b.symbol, b.timeframe, b, b.timestamp) for b in bars
-                        )
+                        fresh_bars.extend((b.symbol, b.timeframe, b, b.timestamp) for b in bars)
                         logger.debug(
                             f"Ingested {len(bars)} 1m bars for {symbol} "
                             f"(range 15m, latest={bars[-1].timestamp})"
@@ -1108,7 +1141,10 @@ class MarketDataIngestionService:
                     try:
                         bars = await asyncio.to_thread(
                             self.manager.get_historical_bars,
-                            symbol, "1m", range_="15m", use_cache=False,
+                            symbol,
+                            "1m",
+                            range_="15m",
+                            use_cache=False,
                             include_extended_hours=True,
                         )
                         if bars:
@@ -1116,9 +1152,7 @@ class MarketDataIngestionService:
                             for bar in bars:
                                 bar.timeframe = "1m"
                             bars_to_upsert.extend(bars)
-                            fresh_bars.extend(
-                                (b.symbol, b.timeframe, b, b.timestamp) for b in bars
-                            )
+                            fresh_bars.extend((b.symbol, b.timeframe, b, b.timestamp) for b in bars)
                             logger.debug(
                                 f"Ingested {len(bars)} 1m bars for {symbol} "
                                 f"(range 15m, latest={bars[-1].timestamp})"
@@ -1129,12 +1163,14 @@ class MarketDataIngestionService:
 
             if bars_to_upsert:
                 from backend.repositories.bar_repository import upsert_bars
+
                 written = upsert_bars(db, bars_to_upsert)
                 logger.info(f"Ingested {written} 1m bars across {len(self.symbols)} symbols")
                 db.commit()
                 upserted_symbols = {b.symbol.upper() for b in bars_to_upsert}
                 if upserted_symbols:
                     from backend.market_data.services.cache import _redis_cache
+
                     for sym in upserted_symbols:
                         _redis_cache.invalidate_bars_for_symbol(sym)
                     # Immediately resample sub-hour timeframes for symbols
@@ -1281,10 +1317,7 @@ class MarketDataIngestionService:
                 provider.get_historical_bars, symbol, timeframe, range_=range_
             )
         primary_name = provider.__class__.__name__ if provider else "primary"
-        bars = [
-            n for n in (normalize_fn(b, primary_name) for b in raw_bars)
-            if n is not None
-        ]
+        bars = [n for n in (normalize_fn(b, primary_name) for b in raw_bars) if n is not None]
 
         latest_ts = max((b.timestamp for b in bars), default=None)
         now_ny = datetime.now(_NY_TZ).replace(tzinfo=None)
@@ -1298,10 +1331,7 @@ class MarketDataIngestionService:
                 fb_raw = await asyncio.to_thread(
                     fb.get_historical_bars, symbol, timeframe, range_=range_
                 )
-                fb_bars = [
-                    n for n in (normalize_fn(b, fb_name) for b in fb_raw)
-                    if n is not None
-                ]
+                fb_bars = [n for n in (normalize_fn(b, fb_name) for b in fb_raw) if n is not None]
                 if fb_bars:
                     by_ts = {b.timestamp: b for b in bars}
                     by_ts.update({b.timestamp: b for b in fb_bars})
@@ -1372,7 +1402,9 @@ class MarketDataIngestionService:
                     bars, provider = await self._fetch_1h_bars_with_fallback(symbol)
 
                     for b in bars:
-                        normalized = _normalize_1h_bar(b, provider.__class__.__name__ if provider else "fallback")
+                        normalized = _normalize_1h_bar(
+                            b, provider.__class__.__name__ if provider else "fallback"
+                        )
                         if normalized is not None:
                             normalized.timeframe = "1h"
                             bars_to_upsert.append(normalized)
@@ -1385,8 +1417,11 @@ class MarketDataIngestionService:
                 written = upsert_bars(db, bars_to_upsert)
                 db.commit()
                 if written:
-                    logger.info(f"1h ingest: wrote {written} bars across {len(self.symbols)} symbols")
+                    logger.info(
+                        f"1h ingest: wrote {written} bars across {len(self.symbols)} symbols"
+                    )
                     from backend.market_data.services.cache import _redis_cache
+
                     for sym in {b.symbol.upper() for b in bars_to_upsert}:
                         _redis_cache.invalidate_bars_for_symbol(sym)
         finally:
@@ -1450,7 +1485,9 @@ class MarketDataIngestionService:
 
         Waits for :02 past the hour so the closed hour-bar has settled.
         """
-        await self._slot_loop("1h write", self._hourly_slot, self._write_1h_recent_window, initial_delay)
+        await self._slot_loop(
+            "1h write", self._hourly_slot, self._write_1h_recent_window, initial_delay
+        )
 
     async def _gapfill_1h_loop(self, initial_delay: float = 0.0):
         """Phase 3.8 — auto gap-fill for 1h bars.
@@ -1501,7 +1538,9 @@ class MarketDataIngestionService:
                     bars, provider = await self._fetch_1h_bars_with_fallback(symbol)
 
                     for b in bars:
-                        normalized = _normalize_1h_bar(b, provider.__class__.__name__ if provider else "fallback")
+                        normalized = _normalize_1h_bar(
+                            b, provider.__class__.__name__ if provider else "fallback"
+                        )
                         if normalized is not None:
                             normalized.timeframe = "1h"
                             bars_to_upsert.append(normalized)
@@ -1518,6 +1557,7 @@ class MarketDataIngestionService:
                         f"{len(self.symbols)} symbols"
                     )
                     from backend.market_data.services.cache import _redis_cache
+
                     for sym in {b.symbol.upper() for b in bars_to_upsert}:
                         _redis_cache.invalidate_bars_for_symbol(sym)
         finally:
@@ -1550,8 +1590,9 @@ class MarketDataIngestionService:
         """
         # Not ``_write_4h_bars``: its own "within 2 minutes of the boundary" guard would
         # turn every poll after :02 into a no-op.
-        await self._slot_loop("4h write", self._four_hourly_slot,
-                              self._resample_1h_to_4h_and_upsert, initial_delay)
+        await self._slot_loop(
+            "4h write", self._four_hourly_slot, self._resample_1h_to_4h_and_upsert, initial_delay
+        )
 
     async def _write_1d_bars(self) -> int:
         """Fetch recent 1d bars via BACKFILL_1D_* chain and write.
@@ -1588,6 +1629,7 @@ class MarketDataIngestionService:
                 db.commit()
                 logger.info(f"1d ingest: wrote {written} bars across {len(self.symbols)} symbols")
                 from backend.market_data.services.cache import _redis_cache
+
                 for sym in {b.symbol.upper() for b in bars_to_upsert}:
                     _redis_cache.invalidate_bars_for_symbol(sym)
         finally:
@@ -1612,7 +1654,8 @@ class MarketDataIngestionService:
         db = SessionLocal()
         try:
             have = {
-                sym for (sym,) in db.query(BarModel.symbol).filter(
+                sym
+                for (sym,) in db.query(BarModel.symbol).filter(
                     BarModel.timeframe == "1d",
                     BarModel.timestamp == today,
                     BarModel.provider != "live_from_1m",
@@ -1628,11 +1671,17 @@ class MarketDataIngestionService:
 
         A restart after 16:02 still does this once, if today's provider bar is missing.
         """
+
         async def missing() -> bool:
             return await asyncio.to_thread(self._daily_close_bars_missing)
 
-        await self._slot_loop("daily write", self._daily_close_slot, self._daily_close_write,
-                              initial_delay, catch_up=missing)
+        await self._slot_loop(
+            "daily write",
+            self._daily_close_slot,
+            self._daily_close_write,
+            initial_delay,
+            catch_up=missing,
+        )
 
     async def _gapfill_1m_loop(self, initial_delay: float = 0.0):
         """Phase 3.8 — auto gap-fill for 1m bars.
@@ -1711,9 +1760,7 @@ class MarketDataIngestionService:
                 # merges Alpaca primary + yfinance gap-fill and deduplicates
                 # by timestamp. Manager and db_session are not used inside
                 # that function — pass None.
-                bars = await _fetch_tier1_1m_bars(
-                    symbol, days=1, manager=None, db_session=None
-                )
+                bars = await _fetch_tier1_1m_bars(symbol, days=1, manager=None, db_session=None)
                 if not bars:
                     continue
 
@@ -1744,6 +1791,7 @@ class MarketDataIngestionService:
                             f"range=[{new_bars[0].timestamp}..{new_bars[-1].timestamp}])"
                         )
                         from backend.market_data.services.cache import _redis_cache
+
                         _redis_cache.invalidate_bars_for_symbol(symbol)
                     written_total += written
                 finally:
@@ -1960,7 +2008,9 @@ class MarketDataIngestionService:
             if _stream is not None:
                 _stream.subscribe([symbol])
         except Exception:  # noqa: BLE001
-            logger.debug("Webull stream subscription change failed in register_symbol", exc_info=True)
+            logger.debug(
+                "Webull stream subscription change failed in register_symbol", exc_info=True
+            )
 
         if symbol in self.symbols:
             return
@@ -2017,8 +2067,13 @@ class MarketDataIngestionService:
                 if removed:
                     _stream.unsubscribe(removed)
         except Exception:  # noqa: BLE001
-            logger.debug("Webull stream subscription change failed in refresh_symbols_from_watchlist", exc_info=True)
-        logger.info(f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})")
+            logger.debug(
+                "Webull stream subscription change failed in refresh_symbols_from_watchlist",
+                exc_info=True,
+            )
+        logger.info(
+            f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})"
+        )
         return self.symbols
 
     async def _jittered_sleep(self, base_seconds: float, jitter: float = 1.0) -> None:
@@ -2101,10 +2156,15 @@ class MarketDataIngestionService:
                         .filter(_BarModel.symbol == symbol.upper())
                         .scalar()
                     )
-                    attempted_recently = db.query(BackfillJob.id).filter(
-                        BackfillJob.symbol == symbol.upper(),
-                        BackfillJob.created_at >= retry_after,
-                    ).first() is not None
+                    attempted_recently = (
+                        db.query(BackfillJob.id)
+                        .filter(
+                            BackfillJob.symbol == symbol.upper(),
+                            BackfillJob.created_at >= retry_after,
+                        )
+                        .first()
+                        is not None
+                    )
                 finally:
                     db.close()
                 # No data at all, or LESS than _SEED_MIN_HISTORY_DAYS of it (the oldest bar is
@@ -2114,10 +2174,7 @@ class MarketDataIngestionService:
                 # full provider re-fetch. The retry guard keeps a young ticker whose provider
                 # genuinely has less history from being re-queued on every restart.
                 if (oldest is None or oldest > threshold) and not attempted_recently:
-                    logger.info(
-                        f"_seed_check: enqueueing backfill for {symbol} "
-                        f"(oldest={oldest})"
-                    )
+                    logger.info(f"_seed_check: enqueueing backfill for {symbol} (oldest={oldest})")
                     # enqueue_backfill is sync (Redis + a couple of small
                     # DB queries, no provider I/O) and already
                     # single-flight-checked — no asyncio.create_task or
@@ -2125,7 +2182,6 @@ class MarketDataIngestionService:
                     enqueue_backfill(symbol)
             except Exception as e:
                 logger.warning(f"_seed_check: failed for {symbol}: {e}")
-
 
     async def _quote_ingestion_loop(self, initial_delay: float = 0.0):
         """Continuously ingest quote data.
@@ -2205,9 +2261,7 @@ class MarketDataIngestionService:
             await asyncio.sleep(initial_delay)
         while self.is_running:
             try:
-                backfilled = await asyncio.to_thread(
-                    signal_recorder.backfill_outcomes, 1000
-                )
+                backfilled = await asyncio.to_thread(signal_recorder.backfill_outcomes, 1000)
                 if backfilled:
                     logger.debug(f"Backfilled {backfilled} signal outcomes")
             except Exception as e:
@@ -2255,7 +2309,8 @@ class MarketDataIngestionService:
             # engines. The ~10s per-symbol throttle still applies.
             now = datetime.now()
             wanted = [
-                s for s in self.symbols
+                s
+                for s in self.symbols
                 if now - self.last_quote_update.get(s, datetime.min) >= timedelta(seconds=10)
             ]
             if not wanted:
@@ -2281,7 +2336,9 @@ class MarketDataIngestionService:
                     self.last_quote_update[quote.symbol.upper()] = now
                     fresh_quotes.append(quote)
                 except Exception as e:
-                    logger.warning(f"Failed to store quote for {getattr(quote,'symbol','?')}: {e}")
+                    logger.warning(
+                        f"Failed to store quote for {getattr(quote, 'symbol', '?')}: {e}"
+                    )
 
             db.commit()
         except Exception as e:
@@ -2307,7 +2364,9 @@ class MarketDataIngestionService:
                 timestamp=_ensure_aware(q.timestamp),
                 # Quote objects only carry bid/ask — engines that need OHLC
                 # fall back to `price` for missing fields (see regime engine).
-                high=None, low=None, open_price=None,
+                high=None,
+                low=None,
+                open_price=None,
             )
             if notified:
                 logger.debug(f"Dispatched {q.symbol} quote to {notified} engine(s)")
@@ -2333,7 +2392,9 @@ class MarketDataIngestionService:
             for symbol in self.symbols:
                 # Check if we need to update
                 last_update = self.last_status_update.get(symbol, datetime.min)
-                if datetime.now() - last_update < timedelta(minutes=5):  # Min 5min between status updates
+                if datetime.now() - last_update < timedelta(
+                    minutes=5
+                ):  # Min 5min between status updates
                     continue
 
                 try:
@@ -2353,12 +2414,14 @@ class MarketDataIngestionService:
                         next_close=status.next_close,
                         timezone=status.timezone,
                         provider=status.provider,
-                        timestamp=status.timestamp
+                        timestamp=status.timestamp,
                     )
                     db.add(db_status)
 
                     self.last_status_update[symbol] = datetime.now()
-                    logger.debug(f"Ingested market status for {symbol}: {'OPEN' if status.is_open else 'CLOSED'}")
+                    logger.debug(
+                        f"Ingested market status for {symbol}: {'OPEN' if status.is_open else 'CLOSED'}"
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed to ingest market status for {symbol}: {e}")
@@ -2390,7 +2453,7 @@ class MarketDataIngestionService:
                     rate_limit_remaining=status.rate_limit_remaining,
                     last_success=status.last_success,
                     error_message=status.error_message,
-                    timestamp=status.timestamp
+                    timestamp=status.timestamp,
                 )
                 db.add(db_status)
 
@@ -2410,10 +2473,12 @@ class MarketDataIngestionService:
         """Get the latest bar for a symbol and timeframe from database"""
         db: Session = SessionLocal()
         try:
-            db_bar = db.query(BarModel)\
-                .filter(and_(BarModel.symbol == symbol, BarModel.timeframe == timeframe))\
-                .order_by(BarModel.timestamp.desc())\
+            db_bar = (
+                db.query(BarModel)
+                .filter(and_(BarModel.symbol == symbol, BarModel.timeframe == timeframe))
+                .order_by(BarModel.timestamp.desc())
                 .first()
+            )
 
             if db_bar:
                 try:
@@ -2421,7 +2486,9 @@ class MarketDataIngestionService:
                 except ValueError:
                     logger.warning(
                         "Unknown data_status '%s' for %s %s bar; treating as LIVE",
-                        db_bar.data_status, symbol, timeframe
+                        db_bar.data_status,
+                        symbol,
+                        timeframe,
                     )
                     status = DataStatus.LIVE
                 return Bar(
@@ -2434,7 +2501,7 @@ class MarketDataIngestionService:
                     volume=db_bar.volume,
                     timeframe=db_bar.timeframe,
                     provider=db_bar.provider,
-                    data_status=status
+                    data_status=status,
                 )
             return None
         finally:
@@ -2443,6 +2510,7 @@ class MarketDataIngestionService:
     def get_quote_history(self, symbol: str, limit: int = 100) -> list[Quote]:
         """Get historical quotes for a symbol"""
         return quote_repository.get_quote_history(symbol, limit)
+
 
 # Global instance for easy access
 ingestion_service = MarketDataIngestionService()

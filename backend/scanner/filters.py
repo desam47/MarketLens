@@ -126,6 +126,7 @@ class TrueFilter(Filter):
 # Concrete filters
 # ---------------------------------------------------------------------------
 
+
 class TrendScoreGt(Filter):
     """Total score greater than threshold."""
 
@@ -371,9 +372,7 @@ class PriceAbove(Filter):
         self.price = price
 
     def matches(self, result: ScanResult) -> bool:
-        p = result.indicator_values.get("price") or (
-            result.quote.price if result.quote else None
-        )
+        p = result.indicator_values.get("price") or (result.quote.price if result.quote else None)
         return p is not None and p > self.price
 
     def describe(self) -> str:
@@ -387,9 +386,7 @@ class PriceBelow(Filter):
         self.price = price
 
     def matches(self, result: ScanResult) -> bool:
-        p = result.indicator_values.get("price") or (
-            result.quote.price if result.quote else None
-        )
+        p = result.indicator_values.get("price") or (result.quote.price if result.quote else None)
         return p is not None and p < self.price
 
     def describe(self) -> str:
@@ -413,6 +410,7 @@ class ADXStrong(Filter):
 # ---------------------------------------------------------------------------
 # Composite scanner filters
 # ---------------------------------------------------------------------------
+
 
 def _price(result: ScanResult) -> float | None:
     """Return the best available current price for a scan result."""
@@ -693,13 +691,9 @@ class FilterRegistry:
         try:
             return cls(**params)
         except TypeError as exc:
-            raise ValueError(
-                f"Invalid params for filter '{ftype}': {exc}"
-            ) from exc
+            raise ValueError(f"Invalid params for filter '{ftype}': {exc}") from exc
 
-    def build_conjunction(
-        self, expressions: list[dict[str, Any]]
-    ) -> Filter:
+    def build_conjunction(self, expressions: list[dict[str, Any]]) -> Filter:
         """
         Build an AND conjunction from a list of filter configs.
 
@@ -708,9 +702,7 @@ class FilterRegistry:
         """
         return AndFilter([self.build(expr) for expr in expressions])
 
-    def build_disjunction(
-        self, expressions: list[dict[str, Any]]
-    ) -> Filter:
+    def build_disjunction(self, expressions: list[dict[str, Any]]) -> Filter:
         """Build an OR disjunction from a list of filter configs."""
         return OrFilter([self.build(expr) for expr in expressions])
 
@@ -722,6 +714,7 @@ default_registry = FilterRegistry()
 # ---------------------------------------------------------------------------
 # Helper: apply a filter to a list of ScanResults
 # ---------------------------------------------------------------------------
+
 
 def apply_filter(
     results: list[ScanResult],

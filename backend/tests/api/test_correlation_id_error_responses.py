@@ -15,6 +15,7 @@ header:
   - 500 from an unhandled endpoint exception
   - HTTPException raised from an endpoint (e.g. 404 from a router)
 """
+
 import os
 import sys
 import unittest
@@ -63,6 +64,7 @@ class TestCorrelationIdOn500(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app, raise_server_exceptions=False)
+
         # Add a temporary route that always raises.
         @app.get("/_test/raise_500")
         def _raise():
@@ -105,9 +107,7 @@ class TestCorrelationIdOnHTTPException(unittest.TestCase):
 
     def test_http_exception_includes_correlation_id(self):
         corr_id = "http-exc-" + uuid.uuid4().hex[:8]
-        resp = self.client.get(
-            "/_test/raise_http_exception", headers={"X-Correlation-ID": corr_id}
-        )
+        resp = self.client.get("/_test/raise_http_exception", headers={"X-Correlation-ID": corr_id})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.headers.get("X-Correlation-ID"), corr_id)
         # The body still contains the original detail — we didn't strip it.

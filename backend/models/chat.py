@@ -41,6 +41,7 @@ class ChatSession(Base):
     don't enforce one either) — it's just an id to look the row up by
     when present.
     """
+
     __tablename__ = "chat_sessions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -53,7 +54,9 @@ class ChatSession(Base):
     updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
 
     messages = relationship(
-        "ChatMessage", back_populates="session", cascade="all, delete-orphan",
+        "ChatMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
         order_by="ChatMessage.created_at",
     )
 
@@ -64,6 +67,7 @@ class ChatSession(Base):
 class ChatMessage(Base):
     """One message in a ChatSession — either the user's question or
     the AI's reply."""
+
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)

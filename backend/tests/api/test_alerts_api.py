@@ -1,6 +1,7 @@
 """
 Tests for the Alerts API endpoints.
 """
+
 import os
 import sys
 import unittest
@@ -17,8 +18,11 @@ from backend.api.main import app
 def _mock_alert(**kwargs):
     """Factory for a mock Alert model."""
     defaults = dict(
-        id=1, name="Test Alert", symbol="AAPL",
-        condition_type="signal_equals", parameter="RSI_OVERSOLD",
+        id=1,
+        name="Test Alert",
+        symbol="AAPL",
+        condition_type="signal_equals",
+        parameter="RSI_OVERSOLD",
         is_enabled=True,
         created_at=datetime(2025, 1, 1, 12, 0, 0),
         updated_at=datetime(2025, 1, 1, 12, 0, 0),
@@ -32,7 +36,9 @@ def _mock_alert(**kwargs):
 
 def _mock_trigger(**kwargs):
     defaults = dict(
-        id=1, alert_id=1, symbol="AAPL",
+        id=1,
+        alert_id=1,
+        symbol="AAPL",
         observed_value="['RSI_OVERSOLD']",
         message="AAPL: RSI_OVERSOLD signal detected",
         triggered_at=datetime(2025, 1, 1, 12, 0, 0),
@@ -49,7 +55,6 @@ def _mock_trigger(**kwargs):
 
 
 class TestAlertsAPI(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
         # Prevent engine startup from hitting the DB.
@@ -89,28 +94,35 @@ class TestAlertsAPI(unittest.TestCase):
     # --- POST /api/alerts/ ----------------------------------------------
 
     def test_create_alert_success(self):
-        created = _mock_alert(id=1, name="New Alert", symbol="TSLA",
-                              condition_type="price_above", parameter="200.0")
+        created = _mock_alert(
+            id=1, name="New Alert", symbol="TSLA", condition_type="price_above", parameter="200.0"
+        )
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
             instance = MockRepo.return_value
             instance.create.return_value = created
-            response = self.client.post("/api/alerts/", json={
-                "name": "New Alert",
-                "symbol": "TSLA",
-                "condition_type": "price_above",
-                "parameter": "200.0",
-            })
+            response = self.client.post(
+                "/api/alerts/",
+                json={
+                    "name": "New Alert",
+                    "symbol": "TSLA",
+                    "condition_type": "price_above",
+                    "parameter": "200.0",
+                },
+            )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["name"], "New Alert")
         self.mock_engine.register_for_alert.assert_called_once()
 
     def test_create_alert_invalid_condition_type(self):
-        response = self.client.post("/api/alerts/", json={
-            "name": "Bad",
-            "symbol": "AAPL",
-            "condition_type": "not_a_real_condition",
-            "parameter": "100",
-        })
+        response = self.client.post(
+            "/api/alerts/",
+            json={
+                "name": "Bad",
+                "symbol": "AAPL",
+                "condition_type": "not_a_real_condition",
+                "parameter": "100",
+            },
+        )
         self.assertEqual(response.status_code, 422)
 
     # --- GET /api/alerts/active -----------------------------------------
@@ -137,7 +149,9 @@ class TestAlertsAPI(unittest.TestCase):
             MockRepo.return_value.get_recent_triggers.return_value = [
                 _mock_trigger(id=1, symbol="AAPL", triggered_at=now, ai_commentary=None),
                 _mock_trigger(
-                    id=2, symbol="TSLA", triggered_at=now,
+                    id=2,
+                    symbol="TSLA",
+                    triggered_at=now,
                     ai_commentary="TSLA crossed above its 50-day average on rising volume.",
                 ),
             ]
@@ -154,9 +168,7 @@ class TestAlertsAPI(unittest.TestCase):
 
     def test_get_alert_found(self):
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
-            MockRepo.return_value.get_by_id.return_value = _mock_alert(
-                id=5, name="Found It"
-            )
+            MockRepo.return_value.get_by_id.return_value = _mock_alert(id=5, name="Found It")
             response = self.client.get("/api/alerts/5")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["name"], "Found It")
@@ -171,10 +183,8 @@ class TestAlertsAPI(unittest.TestCase):
     # --- PUT /api/alerts/{id} -------------------------------------------
 
     def test_update_alert_enable_to_disable_triggers_unregister(self):
-        existing = _mock_alert(id=1, is_enabled=True,
-                              condition_type="price_above", parameter="100")
-        updated = _mock_alert(id=1, is_enabled=False,
-                              condition_type="price_above", parameter="100")
+        existing = _mock_alert(id=1, is_enabled=True, condition_type="price_above", parameter="100")
+        updated = _mock_alert(id=1, is_enabled=False, condition_type="price_above", parameter="100")
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
             instance = MockRepo.return_value
             instance.get_by_id.return_value = existing
@@ -185,10 +195,10 @@ class TestAlertsAPI(unittest.TestCase):
         self.mock_engine.register_for_alert.assert_not_called()
 
     def test_update_alert_disable_to_enable_triggers_register(self):
-        existing = _mock_alert(id=1, is_enabled=False,
-                              condition_type="price_above", parameter="100")
-        updated = _mock_alert(id=1, is_enabled=True,
-                              condition_type="price_above", parameter="100")
+        existing = _mock_alert(
+            id=1, is_enabled=False, condition_type="price_above", parameter="100"
+        )
+        updated = _mock_alert(id=1, is_enabled=True, condition_type="price_above", parameter="100")
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
             instance = MockRepo.return_value
             instance.get_by_id.return_value = existing
@@ -238,16 +248,17 @@ class TestAlertsAPI(unittest.TestCase):
         self.assertEqual(response.json(), {"deleted": 0})
 
     def test_test_delivery_returns_result_without_triggering_engine(self):
-        with patch("backend.api.alerts.router.AlertRepository") as MockRepo, patch(
-            "backend.notifications.delivery.send_test_delivery",
-            return_value={"status": "delivered", "response": "HTTP 200"},
-        ) as send_test:
+        with (
+            patch("backend.api.alerts.router.AlertRepository") as MockRepo,
+            patch(
+                "backend.notifications.delivery.send_test_delivery",
+                return_value={"status": "delivered", "response": "HTTP 200"},
+            ) as send_test,
+        ):
             MockRepo.return_value.get_by_id.return_value = _mock_alert(
                 id=4, condition_type="signal_profile", parameter='{"channels":["webhook"]}'
             )
-            response = self.client.post(
-                "/api/alerts/4/test-delivery", json={"channel": "webhook"}
-            )
+            response = self.client.post("/api/alerts/4/test-delivery", json={"channel": "webhook"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "delivered")
         send_test.assert_called_once()
@@ -255,9 +266,7 @@ class TestAlertsAPI(unittest.TestCase):
     def test_test_delivery_rejects_unknown_channel(self):
         with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
             MockRepo.return_value.get_by_id.return_value = _mock_alert(id=4)
-            response = self.client.post(
-                "/api/alerts/4/test-delivery", json={"channel": "pager"}
-            )
+            response = self.client.post("/api/alerts/4/test-delivery", json={"channel": "pager"})
         self.assertEqual(response.status_code, 400)
 
     def test_delivery_summary(self):

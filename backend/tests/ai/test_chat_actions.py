@@ -12,6 +12,7 @@ Two layers:
     prove the db-threading (ChatRepository -> _generate_reply ->
     _finalize_parsed -> the repos) actually wires up.
 """
+
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -71,10 +72,16 @@ def _parsed(**over) -> ChatReplyResponse:
 class _DBBase(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         for model in (
-            ChatSession, ChatMessage, Alert, AlertTrigger, Watchlist, WatchlistSymbol,
+            ChatSession,
+            ChatMessage,
+            Alert,
+            AlertTrigger,
+            Watchlist,
+            WatchlistSymbol,
         ):
             model.__table__.create(self.engine, checkfirst=True)
         Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
@@ -90,15 +97,21 @@ class _DBBase(unittest.TestCase):
 class TestConditionTypeValidation(unittest.TestCase):
     def test_invalid_condition_type_becomes_none(self):
         r = ChatReplyResponse(
-            reply="ok", action="create_alert", action_symbol="AAPL",
-            action_condition_type="not_a_real_condition", action_parameter="200",
+            reply="ok",
+            action="create_alert",
+            action_symbol="AAPL",
+            action_condition_type="not_a_real_condition",
+            action_parameter="200",
         )
         self.assertIsNone(r.action_condition_type)
 
     def test_valid_condition_type_kept(self):
         r = ChatReplyResponse(
-            reply="ok", action="create_alert", action_symbol="AAPL",
-            action_condition_type="price_above", action_parameter="200",
+            reply="ok",
+            action="create_alert",
+            action_symbol="AAPL",
+            action_condition_type="price_above",
+            action_parameter="200",
         )
         self.assertEqual(r.action_condition_type, "price_above")
 
@@ -132,7 +145,9 @@ class TestConfirmGate(_DBBase):
         wl = WatchlistRepository(self.db).create_watchlist("Watch1")
         WatchlistRepository(self.db).add_symbol_to_watchlist(wl.id, "AAPL")
         parsed = _parsed(
-            action="remove_from_watchlist", action_symbol="AAPL", action_confirmed=False,
+            action="remove_from_watchlist",
+            action_symbol="AAPL",
+            action_confirmed=False,
         )
 
         text, grounded, _ = _finalize_parsed(self.db, parsed, [])
@@ -144,7 +159,9 @@ class TestConfirmGate(_DBBase):
         wl = WatchlistRepository(self.db).create_watchlist("Watch1")
         WatchlistRepository(self.db).add_symbol_to_watchlist(wl.id, "AAPL")
         parsed = _parsed(
-            action="remove_from_watchlist", action_symbol="AAPL", action_confirmed=True,
+            action="remove_from_watchlist",
+            action_symbol="AAPL",
+            action_confirmed=True,
         )
 
         text, grounded, _ = _finalize_parsed(self.db, parsed, [])
@@ -155,7 +172,9 @@ class TestConfirmGate(_DBBase):
     def test_delete_watchlist_without_confirmation_does_not_delete(self):
         wl = WatchlistRepository(self.db).create_watchlist("Swing Setups")
         parsed = _parsed(
-            action="delete_watchlist", action_watchlist="Swing Setups", action_confirmed=False,
+            action="delete_watchlist",
+            action_watchlist="Swing Setups",
+            action_confirmed=False,
         )
 
         text, grounded, _ = _finalize_parsed(self.db, parsed, [])
@@ -166,7 +185,9 @@ class TestConfirmGate(_DBBase):
     def test_delete_watchlist_with_confirmation_deletes(self):
         wl = WatchlistRepository(self.db).create_watchlist("Swing Setups")
         parsed = _parsed(
-            action="delete_watchlist", action_watchlist="Swing Setups", action_confirmed=True,
+            action="delete_watchlist",
+            action_watchlist="Swing Setups",
+            action_confirmed=True,
         )
 
         text, grounded, _ = _finalize_parsed(self.db, parsed, [])
@@ -179,8 +200,10 @@ class TestConfirmGate(_DBBase):
         # regardless of action_confirmed — it's only meaningful for the
         # destructive set.
         parsed = _parsed(
-            action="create_alert", action_symbol="AAPL",
-            action_condition_type="price_above", action_parameter="200",
+            action="create_alert",
+            action_symbol="AAPL",
+            action_condition_type="price_above",
+            action_parameter="200",
             action_confirmed=False,
         )
         text, grounded, _ = _finalize_parsed(self.db, parsed, [])
@@ -207,7 +230,14 @@ class TestRunTurnActions(_DBBase):
         mock_ai = self._mock_complete()  # no continuation call should happen at all
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [], "create a watchlist called Tech", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech",
+            None,
         )
         self.assertIn("Tech", text)
         mock_ai.complete.assert_not_called()
@@ -219,7 +249,14 @@ class TestRunTurnActions(_DBBase):
         mock_ai = self._mock_complete()
         parsed = _parsed(action="none", reply="Sure, here's the market and sector view.")
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [], "how's the market and sector doing", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "how's the market and sector doing",
+            None,
         )
         self.assertEqual(text, "Sure, here's the market and sector view.")
         mock_ai.complete.assert_not_called()
@@ -232,8 +269,14 @@ class TestRunTurnActions(_DBBase):
         )
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create a watchlist called Tech and add NVDA to it", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech and add NVDA to it",
+            None,
         )
         self.assertIn("Tech", text)
         self.assertIn("NVDA", text)
@@ -251,8 +294,14 @@ class TestRunTurnActions(_DBBase):
         mock_ai = self._mock_complete('{"reply": "ok", "grounded": true}')
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create a watchlist called Tech and add NVDA to it", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech and add NVDA to it",
+            None,
         )
         self.assertEqual(mock_ai.complete.call_count, 1)
         used_system = mock_ai.complete.call_args.kwargs["system"]
@@ -267,12 +316,20 @@ class TestRunTurnActions(_DBBase):
             f'"action_target_id": {alert.id}}}',
         )
         parsed = _parsed(
-            action="create_alert", action_symbol="AAPL",
-            action_condition_type="price_above", action_parameter="200",
+            action="create_alert",
+            action_symbol="AAPL",
+            action_condition_type="price_above",
+            action_parameter="200",
         )
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create an AAPL alert and then delete my nvda alert", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create an AAPL alert and then delete my nvda alert",
+            None,
         )
         self.assertIn("confirm", text.lower())
         self.assertEqual(mock_ai.complete.call_count, 1)
@@ -282,15 +339,23 @@ class TestRunTurnActions(_DBBase):
     def test_respects_max_chain_steps(self):
         # Every continuation keeps returning another real action — the
         # cap must still stop it rather than looping indefinitely.
-        mock_ai = self._mock_complete(*[
-            '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
-            f'"action_symbol": "SYM{i}", "action_watchlist": "Tech"}}'
-            for i in range(10)
-        ])
+        mock_ai = self._mock_complete(
+            *[
+                '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+                f'"action_symbol": "SYM{i}", "action_watchlist": "Tech"}}'
+                for i in range(10)
+            ]
+        )
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create Tech and add A and B and C and D", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create Tech and add A and B and C and D",
+            None,
         )
         self.assertEqual(mock_ai.complete.call_count, _MAX_CHAIN_STEPS - 1)
 
@@ -303,8 +368,14 @@ class TestRunTurnActions(_DBBase):
         mock_ai.complete = AsyncMock(side_effect=RuntimeError("provider down"))
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create a watchlist called Tech and add NVDA to it", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech and add NVDA to it",
+            None,
         )
         self.assertIn("Tech", text)  # first step's result still returned
 
@@ -317,8 +388,14 @@ class TestRunTurnActions(_DBBase):
         )
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
         text, grounded, _ = _run_turn_actions(
-            self.db, parsed, [], [], None, [],
-            "create a watchlist called Tech and add NVDA to it", None,
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech and add NVDA to it",
+            None,
         )
         self.assertIn("NVDA", text)
         self.assertEqual(mock_ai.complete.call_count, 3)  # malformed + retry + stop call
@@ -331,15 +408,25 @@ class TestRunTurnActions(_DBBase):
             return ScannedResultItem(symbol=symbol, total_score=1.0, rank=1, signals=[])
 
         first = ExecutionResult(
-            matched_all=[], filter_description="oversold", matched_count=1, universe_size=3,
+            matched_all=[],
+            filter_description="oversold",
+            matched_count=1,
+            universe_size=3,
             top_n=[item("AAPL")],
         )
         second = ExecutionResult(
-            matched_all=[], filter_description="overbought", matched_count=1, universe_size=3,
+            matched_all=[],
+            filter_description="overbought",
+            matched_count=1,
+            universe_size=3,
             top_n=[item("MSFT")],
         )
-        with patch("backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")), \
-             patch("backend.nl_search.executor.execute_query", side_effect=[first, second]):
+        with (
+            patch(
+                "backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")
+            ),
+            patch("backend.nl_search.executor.execute_query", side_effect=[first, second]),
+        ):
             self._mock_complete(
                 '{"reply": "ok", "grounded": true, "action": "run_screen", '
                 '"action_query": "overbought"}',
@@ -347,17 +434,28 @@ class TestRunTurnActions(_DBBase):
             )
             parsed = _parsed(action="run_screen", action_query="oversold")
             text, grounded, screened = _run_turn_actions(
-                self.db, parsed, [], [], None, [],
-                "screen for oversold names and also overbought names", None,
+                self.db,
+                parsed,
+                [],
+                [],
+                None,
+                [],
+                "screen for oversold names and also overbought names",
+                None,
             )
         self.assertEqual(screened, ["AAPL", "MSFT"])
 
 
 class TestActionHandlers(_DBBase):
     def test_create_alert(self):
-        text, grounded = _create_alert(self.db, _parsed(
-            action_symbol="AAPL", action_condition_type="price_above", action_parameter="200",
-        ))
+        text, grounded = _create_alert(
+            self.db,
+            _parsed(
+                action_symbol="AAPL",
+                action_condition_type="price_above",
+                action_parameter="200",
+            ),
+        )
         self.assertTrue(grounded)
         alerts = AlertRepository(self.db).get_all()
         self.assertEqual(len(alerts), 1)
@@ -366,10 +464,15 @@ class TestActionHandlers(_DBBase):
         self.assertEqual(alerts[0].parameter, "200")
 
     def test_create_alert_uses_custom_label(self):
-        text, _ = _create_alert(self.db, _parsed(
-            action_symbol="AAPL", action_condition_type="price_above",
-            action_parameter="200", action_label="Breakout watch",
-        ))
+        text, _ = _create_alert(
+            self.db,
+            _parsed(
+                action_symbol="AAPL",
+                action_condition_type="price_above",
+                action_parameter="200",
+                action_label="Breakout watch",
+            ),
+        )
         self.assertEqual(AlertRepository(self.db).get_all()[0].name, "Breakout watch")
 
     def test_create_alert_missing_fields_asks_not_creates(self):
@@ -386,7 +489,8 @@ class TestActionHandlers(_DBBase):
         alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
         original_id = alert.id
         text, grounded = _modify_alert(
-            self.db, _parsed(action_target_id=alert.id, action_parameter="230"),
+            self.db,
+            _parsed(action_target_id=alert.id, action_parameter="230"),
         )
         self.assertTrue(grounded)
         self.assertIn("230", text)
@@ -397,7 +501,9 @@ class TestActionHandlers(_DBBase):
 
     def test_modify_alert_changes_condition_type(self):
         alert = AlertRepository(self.db).create("A", "NVDA", "price_above", "220")
-        _modify_alert(self.db, _parsed(action_target_id=alert.id, action_condition_type="price_below"))
+        _modify_alert(
+            self.db, _parsed(action_target_id=alert.id, action_condition_type="price_below")
+        )
         updated = AlertRepository(self.db).get_by_id(alert.id)
         self.assertEqual(updated.condition_type, "price_below")
         self.assertEqual(updated.parameter, "220")  # untouched field kept
@@ -410,7 +516,8 @@ class TestActionHandlers(_DBBase):
 
     def test_modify_alert_not_found(self):
         text, grounded = _modify_alert(
-            self.db, _parsed(action_target_id=999, action_parameter="230"),
+            self.db,
+            _parsed(action_target_id=999, action_parameter="230"),
         )
         self.assertFalse(grounded)
         self.assertIn("doesn't exist", text.lower())
@@ -482,14 +589,16 @@ class TestActionHandlers(_DBBase):
         repo = WatchlistRepository(self.db)
         repo.create_watchlist("Watch1")
         text, grounded = _remove_from_watchlist(
-            self.db, _parsed(action_symbol="ZZZZ", action_watchlist="Watch1"),
+            self.db,
+            _parsed(action_symbol="ZZZZ", action_watchlist="Watch1"),
         )
         self.assertFalse(grounded)
         self.assertIn("wasn't in", text)
 
     def test_remove_from_watchlist_unnamed_but_named_list_missing(self):
         text, grounded = _remove_from_watchlist(
-            self.db, _parsed(action_symbol="AAPL", action_watchlist="Nope"),
+            self.db,
+            _parsed(action_symbol="AAPL", action_watchlist="Nope"),
         )
         self.assertFalse(grounded)
         self.assertIn("couldn't find", text.lower())
@@ -533,7 +642,8 @@ class TestActionHandlers(_DBBase):
         repo.add_symbol_to_watchlist(swing.id, "RIVN")
 
         text, grounded = _remove_from_watchlist(
-            self.db, _parsed(action_symbol="RIVN", action_watchlist="Swing Setups"),
+            self.db,
+            _parsed(action_symbol="RIVN", action_watchlist="Swing Setups"),
         )
 
         self.assertTrue(grounded)
@@ -542,9 +652,13 @@ class TestActionHandlers(_DBBase):
         self.assertIsNone(repo.get_watchlist_symbol(swing.id, "RIVN"))
 
     def test_create_watchlist_with_initial_symbol(self):
-        text, grounded = _create_watchlist(self.db, _parsed(
-            action_watchlist="Swing Setups", action_symbol="TSLA",
-        ))
+        text, grounded = _create_watchlist(
+            self.db,
+            _parsed(
+                action_watchlist="Swing Setups",
+                action_symbol="TSLA",
+            ),
+        )
         self.assertTrue(grounded)
         wl = WatchlistRepository(self.db).get_watchlist_by_name("Swing Setups")
         self.assertIsNotNone(wl)
@@ -575,7 +689,8 @@ class TestSetEntityType(_DBBase):
         repo.add_symbol_to_watchlist(wl.id, "SPY")
 
         text, grounded = _set_entity_type(
-            self.db, _parsed(action_symbol="SPY", action_entity_type="etf"),
+            self.db,
+            _parsed(action_symbol="SPY", action_entity_type="etf"),
         )
 
         self.assertTrue(grounded)
@@ -591,7 +706,8 @@ class TestSetEntityType(_DBBase):
         repo.update_symbol_in_watchlist(wl.id, "SPY", entity_type="etf")
 
         text, grounded = _set_entity_type(
-            self.db, _parsed(action_symbol="SPY", action_entity_type="stock"),
+            self.db,
+            _parsed(action_symbol="SPY", action_entity_type="stock"),
         )
 
         self.assertTrue(grounded)
@@ -609,7 +725,8 @@ class TestSetEntityType(_DBBase):
 
     def test_symbol_not_on_any_watchlist(self):
         text, grounded = _set_entity_type(
-            self.db, _parsed(action_symbol="ZZZZ", action_entity_type="etf"),
+            self.db,
+            _parsed(action_symbol="ZZZZ", action_entity_type="etf"),
         )
         self.assertFalse(grounded)
         self.assertIn("isn't on any of your watchlists", text)
@@ -622,7 +739,8 @@ class TestSetEntityType(_DBBase):
         repo.add_symbol_to_watchlist(swing.id, "SPY")
 
         text, grounded = _set_entity_type(
-            self.db, _parsed(action_symbol="SPY", action_entity_type="etf"),
+            self.db,
+            _parsed(action_symbol="SPY", action_entity_type="etf"),
         )
 
         self.assertTrue(grounded)
@@ -638,9 +756,14 @@ class TestSetEntityType(_DBBase):
         repo.add_symbol_to_watchlist(tech.id, "SPY")
         repo.add_symbol_to_watchlist(swing.id, "SPY")
 
-        text, grounded = _set_entity_type(self.db, _parsed(
-            action_symbol="SPY", action_entity_type="etf", action_watchlist="Tech",
-        ))
+        text, grounded = _set_entity_type(
+            self.db,
+            _parsed(
+                action_symbol="SPY",
+                action_entity_type="etf",
+                action_watchlist="Tech",
+            ),
+        )
 
         self.assertTrue(grounded)
         self.assertEqual(repo.get_watchlist_symbol(tech.id, "SPY").entity_type, "etf")
@@ -654,7 +777,9 @@ class TestSetEntityType(_DBBase):
         text, grounded, _ = _finalize_parsed(
             self.db,
             _parsed(
-                action="set_entity_type", action_symbol="SPY", action_entity_type="etf",
+                action="set_entity_type",
+                action_symbol="SPY",
+                action_entity_type="etf",
                 action_confirmed=False,
             ),
             symbol_blocks=[],
@@ -743,17 +868,21 @@ class TestRunBacktest(_DBBase):
         self.assertIn("which ticker", text.lower())
 
     def test_disabled_flag_degrades_without_running(self):
-        with patch.object(ai_manager.settings, "backtest_tool_enabled", False), \
-             patch("backend.backtesting.engine.backtest_engine") as engine:
+        with (
+            patch.object(ai_manager.settings, "backtest_tool_enabled", False),
+            patch("backend.backtesting.engine.backtest_engine") as engine,
+        ):
             text, grounded = _run_backtest(self.db, _parsed(action_symbol="AAPL"))
         self.assertFalse(grounded)
         self.assertIn("isn't enabled", text)
         engine.run.assert_not_called()
 
     def test_rate_limited_degrades(self):
-        with self._enabled(), \
-             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
-             patch("backend.backtesting.engine.backtest_engine") as engine:
+        with (
+            self._enabled(),
+            patch("backend.api.rate_limit._backtest_limiter") as limiter,
+            patch("backend.backtesting.engine.backtest_engine") as engine,
+        ):
             limiter.is_allowed.return_value = (False, 42)
             text, grounded = _run_backtest(self.db, _parsed(action_symbol="AAPL"))
         self.assertFalse(grounded)
@@ -763,10 +892,12 @@ class TestRunBacktest(_DBBase):
 
     def test_insufficient_data_degrades(self):
         run = MagicMock(status="completed", total_signals=0)
-        with self._enabled(), \
-             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
-             patch("backend.backtesting.engine.backtest_engine") as engine, \
-             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+        with (
+            self._enabled(),
+            patch("backend.api.rate_limit._backtest_limiter") as limiter,
+            patch("backend.backtesting.engine.backtest_engine") as engine,
+            patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls,
+        ):
             limiter.is_allowed.return_value = (True, 0)
             engine.run.return_value = 1
             repo_cls.return_value.get_run.return_value = run
@@ -776,13 +907,19 @@ class TestRunBacktest(_DBBase):
 
     def test_happy_path_reports_real_numbers(self):
         run = MagicMock(
-            status="completed", total_signals=42, signals_requested="RSI_OVERSOLD,MACD_BULLISH",
-            win_rate_1d=0.62, avg_return_1d=0.012, avg_return_5d=0.034,
+            status="completed",
+            total_signals=42,
+            signals_requested="RSI_OVERSOLD,MACD_BULLISH",
+            win_rate_1d=0.62,
+            avg_return_1d=0.012,
+            avg_return_5d=0.034,
         )
-        with self._enabled(), \
-             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
-             patch("backend.backtesting.engine.backtest_engine") as engine, \
-             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+        with (
+            self._enabled(),
+            patch("backend.api.rate_limit._backtest_limiter") as limiter,
+            patch("backend.backtesting.engine.backtest_engine") as engine,
+            patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls,
+        ):
             limiter.is_allowed.return_value = (True, 0)
             engine.run.return_value = 7
             repo_cls.return_value.get_run.return_value = run
@@ -797,18 +934,26 @@ class TestRunBacktest(_DBBase):
         # run_backtest is not in _DESTRUCTIVE_ACTIONS — it fires on the
         # first mention, like create_alert.
         run = MagicMock(
-            status="completed", total_signals=5, signals_requested="RSI_OVERSOLD",
-            win_rate_1d=0.4, avg_return_1d=-0.01, avg_return_5d=0.0,
+            status="completed",
+            total_signals=5,
+            signals_requested="RSI_OVERSOLD",
+            win_rate_1d=0.4,
+            avg_return_1d=-0.01,
+            avg_return_5d=0.0,
         )
-        with self._enabled(), \
-             patch("backend.api.rate_limit._backtest_limiter") as limiter, \
-             patch("backend.backtesting.engine.backtest_engine") as engine, \
-             patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls:
+        with (
+            self._enabled(),
+            patch("backend.api.rate_limit._backtest_limiter") as limiter,
+            patch("backend.backtesting.engine.backtest_engine") as engine,
+            patch("backend.repositories.backtest_repository.BacktestRepository") as repo_cls,
+        ):
             limiter.is_allowed.return_value = (True, 0)
             engine.run.return_value = 3
             repo_cls.return_value.get_run.return_value = run
             text, grounded, _ = _finalize_parsed(
-                self.db, _parsed(action="run_backtest", action_symbol="AAPL"), [],
+                self.db,
+                _parsed(action="run_backtest", action_symbol="AAPL"),
+                [],
             )
         self.assertNotIn("confirm", text.lower())
         engine.run.assert_called_once()
@@ -824,7 +969,9 @@ class TestRunScreen(_DBBase):
 
         top_n = top_n or []
         return ExecutionResult(
-            matched_all=[], top_n=top_n, filter_description="RSI oversold",
+            matched_all=[],
+            top_n=top_n,
+            filter_description="RSI oversold",
             universe_size=universe_size,
             matched_count=matched_count if matched_count is not None else len(top_n),
         )
@@ -841,14 +988,17 @@ class TestRunScreen(_DBBase):
 
     def test_unknown_watchlist_name_degrades(self):
         text, grounded, _ = _run_screen(
-            self.db, _parsed(action_query="oversold", action_watchlist="Nope"),
+            self.db,
+            _parsed(action_query="oversold", action_watchlist="Nope"),
         )
         self.assertFalse(grounded)
         self.assertIn("couldn't find", text)
 
     def test_empty_universe_degrades(self):
-        with patch("backend.nl_search.parser.parse_query") as parse, \
-             patch("backend.nl_search.executor.execute_query") as execute:
+        with (
+            patch("backend.nl_search.parser.parse_query") as parse,
+            patch("backend.nl_search.executor.execute_query") as execute,
+        ):
             parse.return_value = (MagicMock(), None, "rules")
             execute.return_value = self._result(universe_size=0)
             text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
@@ -856,8 +1006,10 @@ class TestRunScreen(_DBBase):
         self.assertIn("empty", text.lower())
 
     def test_no_matches_is_still_grounded(self):
-        with patch("backend.nl_search.parser.parse_query") as parse, \
-             patch("backend.nl_search.executor.execute_query") as execute:
+        with (
+            patch("backend.nl_search.parser.parse_query") as parse,
+            patch("backend.nl_search.executor.execute_query") as execute,
+        ):
             parse.return_value = (MagicMock(), None, "rules")
             execute.return_value = self._result(top_n=[], universe_size=8, matched_count=0)
             text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
@@ -866,8 +1018,10 @@ class TestRunScreen(_DBBase):
         self.assertIn("RSI oversold", text)
 
     def test_happy_path_reports_matches(self):
-        with patch("backend.nl_search.parser.parse_query") as parse, \
-             patch("backend.nl_search.executor.execute_query") as execute:
+        with (
+            patch("backend.nl_search.parser.parse_query") as parse,
+            patch("backend.nl_search.executor.execute_query") as execute,
+        ):
             parse.return_value = (MagicMock(), None, "rules")
             execute.return_value = self._result(
                 top_n=[self._item("AAPL", 62.0), self._item("MSFT", 41.0)],
@@ -880,8 +1034,10 @@ class TestRunScreen(_DBBase):
 
     def test_more_than_five_matches_are_summarized(self):
         items = [self._item(f"T{i}", float(i)) for i in range(7)]
-        with patch("backend.nl_search.parser.parse_query") as parse, \
-             patch("backend.nl_search.executor.execute_query") as execute:
+        with (
+            patch("backend.nl_search.parser.parse_query") as parse,
+            patch("backend.nl_search.executor.execute_query") as execute,
+        ):
             parse.return_value = (MagicMock(), None, "rules")
             execute.return_value = self._result(top_n=items, matched_count=7)
             text, grounded, _ = _run_screen(self.db, _parsed(action_query="oversold"))
@@ -897,21 +1053,28 @@ class TestRunScreen(_DBBase):
     def test_finalize_parsed_never_asks_for_confirmation(self):
         # run_screen is not in _DESTRUCTIVE_ACTIONS — it fires on the
         # first mention, like run_backtest.
-        with patch("backend.nl_search.parser.parse_query") as parse, \
-             patch("backend.nl_search.executor.execute_query") as execute:
+        with (
+            patch("backend.nl_search.parser.parse_query") as parse,
+            patch("backend.nl_search.executor.execute_query") as execute,
+        ):
             parse.return_value = (MagicMock(), None, "rules")
             execute.return_value = self._result(top_n=[self._item("AAPL", 62.0)])
             text, grounded, _ = _finalize_parsed(
-                self.db, _parsed(action="run_screen", action_query="oversold"), [],
+                self.db,
+                _parsed(action="run_screen", action_query="oversold"),
+                [],
             )
         self.assertNotIn("confirm", text.lower())
         self.assertIn("AAPL", text)
 
 
 class TestRunActionNeverRaises(_DBBase):
-    @patch("backend.ai.chat._ACTION_HANDLERS", {
-        "create_alert": MagicMock(side_effect=RuntimeError("boom")),
-    })
+    @patch(
+        "backend.ai.chat._ACTION_HANDLERS",
+        {
+            "create_alert": MagicMock(side_effect=RuntimeError("boom")),
+        },
+    )
     def test_handler_exception_degrades_gracefully(self):
         text, grounded, _ = _run_action(self.db, _parsed(action="create_alert"))
         self.assertFalse(grounded)
@@ -926,10 +1089,15 @@ class TestRunActionInvalidatesBaseline(_DBBase):
 
     def test_create_alert_invalidates(self):
         with patch("backend.ai.market_baseline.invalidate_cache") as inv:
-            _run_action(self.db, _parsed(
-                action="create_alert", action_symbol="AAPL",
-                action_condition_type="price_above", action_parameter="200",
-            ))
+            _run_action(
+                self.db,
+                _parsed(
+                    action="create_alert",
+                    action_symbol="AAPL",
+                    action_condition_type="price_above",
+                    action_parameter="200",
+                ),
+            )
         inv.assert_called_once()
 
     def test_add_to_watchlist_invalidates(self):
@@ -938,26 +1106,41 @@ class TestRunActionInvalidatesBaseline(_DBBase):
         inv.assert_called_once()
 
     def test_run_backtest_does_not_invalidate(self):
-        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
-             patch("backend.ai.chat._ACTION_HANDLERS", {
-                 "run_backtest": MagicMock(return_value=("ok", True)),
-             }):
+        with (
+            patch("backend.ai.market_baseline.invalidate_cache") as inv,
+            patch(
+                "backend.ai.chat._ACTION_HANDLERS",
+                {
+                    "run_backtest": MagicMock(return_value=("ok", True)),
+                },
+            ),
+        ):
             _run_action(self.db, _parsed(action="run_backtest", action_symbol="AAPL"))
         inv.assert_not_called()
 
     def test_run_screen_does_not_invalidate(self):
-        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
-             patch("backend.ai.chat._ACTION_HANDLERS", {
-                 "run_screen": MagicMock(return_value=("ok", True, [])),
-             }):
+        with (
+            patch("backend.ai.market_baseline.invalidate_cache") as inv,
+            patch(
+                "backend.ai.chat._ACTION_HANDLERS",
+                {
+                    "run_screen": MagicMock(return_value=("ok", True, [])),
+                },
+            ),
+        ):
             _run_action(self.db, _parsed(action="run_screen", action_query="oversold"))
         inv.assert_not_called()
 
     def test_failed_handler_does_not_invalidate(self):
-        with patch("backend.ai.market_baseline.invalidate_cache") as inv, \
-             patch("backend.ai.chat._ACTION_HANDLERS", {
-                 "create_alert": MagicMock(side_effect=RuntimeError("boom")),
-             }):
+        with (
+            patch("backend.ai.market_baseline.invalidate_cache") as inv,
+            patch(
+                "backend.ai.chat._ACTION_HANDLERS",
+                {
+                    "create_alert": MagicMock(side_effect=RuntimeError("boom")),
+                },
+            ),
+        ):
             _run_action(self.db, _parsed(action="create_alert"))
         inv.assert_not_called()
 
@@ -965,19 +1148,26 @@ class TestRunActionInvalidatesBaseline(_DBBase):
 class TestConfirmPromptWording(_DBBase):
     def test_delete_alert_wording(self):
         self.assertIn(
-            "confirm", _confirm_prompt(self.db, _parsed(action="delete_alert")).lower(),
+            "confirm",
+            _confirm_prompt(self.db, _parsed(action="delete_alert")).lower(),
         )
 
     def test_remove_from_watchlist_wording_includes_symbol_and_list(self):
-        text = _confirm_prompt(self.db, _parsed(
-            action="remove_from_watchlist", action_symbol="RIVN", action_watchlist="Swing Setups",
-        ))
+        text = _confirm_prompt(
+            self.db,
+            _parsed(
+                action="remove_from_watchlist",
+                action_symbol="RIVN",
+                action_watchlist="Swing Setups",
+            ),
+        )
         self.assertIn("RIVN", text)
         self.assertIn("Swing Setups", text)
 
     def test_delete_watchlist_wording_includes_name(self):
         text = _confirm_prompt(
-            self.db, _parsed(action="delete_watchlist", action_watchlist="Swing Setups"),
+            self.db,
+            _parsed(action="delete_watchlist", action_watchlist="Swing Setups"),
         )
         self.assertIn("Swing Setups", text)
 
@@ -988,6 +1178,7 @@ class TestConfirmPromptWording(_DBBase):
         # back to a vague "that watchlist" and not ask "which one" when
         # there's nothing to disambiguate.
         from backend.repositories.watchlist_repository import WatchlistRepository
+
         WatchlistRepository(self.db).create_watchlist("My Longs")
         text = _confirm_prompt(self.db, _parsed(action="delete_watchlist", action_watchlist=None))
         self.assertIn("My Longs", text)
@@ -995,6 +1186,7 @@ class TestConfirmPromptWording(_DBBase):
 
     def test_delete_watchlist_no_name_with_multiple_asks_with_real_names(self):
         from backend.repositories.watchlist_repository import WatchlistRepository
+
         repo = WatchlistRepository(self.db)
         repo.create_watchlist("My Longs")
         repo.create_watchlist("Swing Setups")
@@ -1011,8 +1203,10 @@ class TestFallbackAction(unittest.TestCase):
 
     def test_delete_watchlist_phrasing_with_no_symbol_matches(self):
         for phrase in (
-            "delete my watchlist", "please remove my watchlist",
-            "can you clear my watchlist", "trash my watch list",
+            "delete my watchlist",
+            "please remove my watchlist",
+            "can you clear my watchlist",
+            "trash my watch list",
         ):
             self.assertEqual(_fallback_action(phrase, []), "delete_watchlist", phrase)
 
@@ -1035,7 +1229,12 @@ class TestFallbackConfirmation(unittest.TestCase):
     the action with action_confirmed=true."""
 
     def test_yes_after_delete_watchlist_confirm_resolves_name(self):
-        transcript = [("assistant", 'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.')]
+        transcript = [
+            (
+                "assistant",
+                'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.',
+            )
+        ]
         self.assertEqual(
             _fallback_confirmation("yes", transcript),
             ("delete_watchlist", None, "Watch1"),
@@ -1049,7 +1248,12 @@ class TestFallbackConfirmation(unittest.TestCase):
         )
 
     def test_non_affirmative_reply_does_not_match(self):
-        transcript = [("assistant", 'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.')]
+        transcript = [
+            (
+                "assistant",
+                'Delete the watchlist "Watch1"? This removes every ticker in it — say yes to confirm.',
+            )
+        ]
         self.assertIsNone(_fallback_confirmation("actually never mind", transcript))
 
     def test_prior_non_confirmation_message_does_not_match(self):
@@ -1068,8 +1272,10 @@ class TestWatchlistListReply(_DBBase):
 
     def test_intent_matches_reported_phrasing(self):
         for phrase in (
-            "how many watchlist i have", "how many watchlists do i have",
-            "what watchlists do I have", "which watchlists do I have",
+            "how many watchlist i have",
+            "how many watchlists do i have",
+            "what watchlists do I have",
+            "which watchlists do I have",
             "list my watchlists",
         ):
             self.assertTrue(_WATCHLIST_LIST_INTENT.search(phrase), phrase)
@@ -1115,7 +1321,7 @@ class TestWatchlistContentsReply(_DBBase):
             "what tickers are in Market Context": "Market Context",
             "What tickers are in Market Context?": "Market Context",
             "which symbols are on my Market Context list": "Market Context",
-            'what\'s in the Market Context watchlist': "Market Context",
+            "what's in the Market Context watchlist": "Market Context",
             "what's in the Market Context watchlist?": "Market Context",
             "what tickers are in my Default watchlist": "Default",
         }
@@ -1172,10 +1378,16 @@ class TestEndToEnd(unittest.TestCase):
 
     def setUp(self):
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         for model in (
-            ChatSession, ChatMessage, Alert, AlertTrigger, Watchlist, WatchlistSymbol,
+            ChatSession,
+            ChatMessage,
+            Alert,
+            AlertTrigger,
+            Watchlist,
+            WatchlistSymbol,
         ):
             model.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
@@ -1204,10 +1416,12 @@ class TestEndToEnd(unittest.TestCase):
     def test_add_to_watchlist_end_to_end(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "On it.", "grounded": true, "action": "add_to_watchlist", '
-            '"action_symbol": "RIVN"}'
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "On it.", "grounded": true, "action": "add_to_watchlist", '
+                '"action_symbol": "RIVN"}'
+            )
+        )
 
         msg, grounded, *_ = answer_chat_message(self.session_id, "add RIVN to my watchlist")
 
@@ -1229,20 +1443,23 @@ class TestEndToEnd(unittest.TestCase):
         stopping the chain with action="none")."""
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(side_effect=[
-            _reply(
-                '{"reply": "ok", "grounded": true, "action": "create_watchlist", '
-                '"action_watchlist": "Tech"}'
-            ),
-            _reply(
-                '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
-                '"action_symbol": "NVDA", "action_watchlist": "Tech"}'
-            ),
-            _reply('{"reply": "ok", "grounded": true}'),
-        ])
+        mock_ai.complete = AsyncMock(
+            side_effect=[
+                _reply(
+                    '{"reply": "ok", "grounded": true, "action": "create_watchlist", '
+                    '"action_watchlist": "Tech"}'
+                ),
+                _reply(
+                    '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
+                    '"action_symbol": "NVDA", "action_watchlist": "Tech"}'
+                ),
+                _reply('{"reply": "ok", "grounded": true}'),
+            ]
+        )
 
         msg, grounded, *_ = answer_chat_message(
-            self.session_id, "create a watchlist called Tech and add NVDA to it",
+            self.session_id,
+            "create a watchlist called Tech and add NVDA to it",
         )
 
         self.assertIn("Tech", msg.content)
@@ -1265,10 +1482,12 @@ class TestEndToEnd(unittest.TestCase):
 
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "Delete the NVDA alert?", "grounded": true, '
-            '"action": "delete_alert", "action_target_id": ' + str(alert_id) + '}'
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "Delete the NVDA alert?", "grounded": true, '
+                '"action": "delete_alert", "action_target_id": ' + str(alert_id) + "}"
+            )
+        )
 
         msg1, grounded1, *_ = answer_chat_message(self.session_id, "delete my nvda alert")
         self.assertIn("confirm", msg1.content.lower())
@@ -1304,19 +1523,28 @@ class TestEndToEnd(unittest.TestCase):
 
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "checking", "grounded": true, "action": "run_screen", '
-            '"action_query": "oversold"}'
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "checking", "grounded": true, "action": "run_screen", '
+                '"action_query": "oversold"}'
+            )
+        )
         result = ExecutionResult(
             matched_all=[],
             top_n=[ScannedResultItem(symbol="AAPL", total_score=62.0, rank=1, signals=[])],
-            filter_description="RSI oversold", universe_size=5, matched_count=1,
+            filter_description="RSI oversold",
+            universe_size=5,
+            matched_count=1,
         )
-        with patch("backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")), \
-             patch("backend.nl_search.executor.execute_query", return_value=result):
+        with (
+            patch(
+                "backend.nl_search.parser.parse_query", return_value=(MagicMock(), None, "rules")
+            ),
+            patch("backend.nl_search.executor.execute_query", return_value=result),
+        ):
             msg, grounded, focus, partial, unavailable = answer_chat_message(
-                self.session_id, "which of my names look weak",
+                self.session_id,
+                "which of my names look weak",
             )
 
         self.assertTrue(grounded)
@@ -1342,16 +1570,21 @@ class TestEndToEnd(unittest.TestCase):
         db.close()
 
         mock_ctx.return_value.compact.return_value = {
-            "price": 0.16, "trend_state": {"direction": "up"}, "momentum": {"rsi": 55},
+            "price": 0.16,
+            "trend_state": {"direction": "up"},
+            "momentum": {"rsi": 55},
         }
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "DVLT is trending up on light volume.", "grounded": true}'
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "DVLT is trending up on light volume.", "grounded": true}'
+            )
+        )
 
         msg, grounded, focus, partial, unavailable = answer_chat_message(
-            self.session_id, 'Analyze "My Watch" watchlist',
+            self.session_id,
+            'Analyze "My Watch" watchlist',
         )
 
         self.assertTrue(grounded)
@@ -1379,10 +1612,12 @@ class TestEndToEnd(unittest.TestCase):
 
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
-        mock_ai.complete = AsyncMock(return_value=_reply(
-            '{"reply": "Which watchlist would you like to delete?", "grounded": false, '
-            '"action": "none"}'
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "Which watchlist would you like to delete?", "grounded": false, '
+                '"action": "none"}'
+            )
+        )
         msg1, grounded1, *_ = answer_chat_message(self.session_id, "delete my watchlist")
         self.assertIn("Watch1", msg1.content)
         self.assertIn("confirm", msg1.content.lower())

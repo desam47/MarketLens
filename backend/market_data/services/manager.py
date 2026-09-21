@@ -14,6 +14,7 @@ IMPORTANT: import _settings and redis from _providers so that patches at
 ``backend.market_data.services.manager._settings`` and
 ``backend.market_data.services.manager.redis`` propagate to all internal modules.
 """
+
 import threading
 
 from backend.market_data.providers.yfinance_provider import YFinanceProvider
@@ -63,18 +64,21 @@ _settings = _shared._settings
 def get_1m_gapfill_providers() -> list[str]:
     """1m gap-fill providers — fills the ~15 min lag window where Alpaca lags."""
     from backend.config.settings import settings as _s
+
     return _s.backfill.get_1m_gapfill_providers()
 
 
 def get_1m_fallback_providers() -> list[str]:
     """1m fallback providers (after primary Alpaca fails)."""
     from backend.config.settings import settings as _s
+
     return _s.backfill.get_1m_fallback_providers()
 
 
 def get_1h_1d_fallback_providers(timeframe: str) -> list[str]:
     """Fallback provider names for 1h or 1d backfill from .env."""
     from backend.config.settings import settings as _s
+
     return _s.backfill.get_fallback_providers(timeframe)
 
 
@@ -143,9 +147,7 @@ def get_cached_provider(name: str):
         return _provider_instance_cache[name]
     provider_cls = _PROVIDER_CLASSES.get(name)
     if provider_cls is None:
-        logger.warning(
-            f"Unknown provider {name!r} — available: {list(_PROVIDER_CLASSES.keys())}"
-        )
+        logger.warning(f"Unknown provider {name!r} — available: {list(_PROVIDER_CLASSES.keys())}")
         return None
     with _construction_lock(name):
         # Re-check: another thread may have constructed (or failed to

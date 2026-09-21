@@ -1,6 +1,7 @@
 """
 Drawing tools models for MarketLens (Phase 2.3.5).
 """
+
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
@@ -27,6 +28,7 @@ class DrawingTool(Base):
     coordinates as ISO timestamp strings and price values so they are
     resolution-independent.
     """
+
     __tablename__ = "drawing_tools"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -74,9 +76,7 @@ class DrawingTool(Base):
     extend_left: Mapped[bool] = mapped_column(Boolean, default=False)
     extend_right: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

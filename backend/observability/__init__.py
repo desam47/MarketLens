@@ -5,6 +5,7 @@ Mutated by services (scanner, ingestion, middleware); read by the
 services can import it without pulling in FastAPI (which would
 create a circular import — the API routers import the services).
 """
+
 from .metrics import (
     get_snapshot,
     record_bar,

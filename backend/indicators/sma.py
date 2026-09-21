@@ -21,14 +21,14 @@ class SMAIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = [float(d['close']) for d in data]
+        closes = [float(d["close"]) for d in data]
 
         # Add to price history
         self._price_history.extend(closes)
 
         # Keep history reasonable size
         if len(self._price_history) > self.period * 2:
-            self._price_history = self._price_history[-self.period * 2:]
+            self._price_history = self._price_history[-self.period * 2 :]
 
         # Calculate SMA values for the new data points
         sma_values: list[float | None] = []
@@ -52,18 +52,18 @@ class SMAIndicator(BaseIndicator):
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update SMA with new data point"""
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         # Add to price history
         self._price_history.append(close_price)
 
         # Keep history reasonable size
         if len(self._price_history) > self.period * 2:
-            self._price_history = self._price_history[-self.period * 2:]
+            self._price_history = self._price_history[-self.period * 2 :]
 
         # Calculate SMA if we have enough data
         if len(self._price_history) >= self.period:
-            sma = sum(self._price_history[-self.period:]) / self.period
+            sma = sum(self._price_history[-self.period :]) / self.period
             self.values.append(sma)
             return sma
 

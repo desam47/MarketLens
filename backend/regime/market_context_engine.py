@@ -10,6 +10,7 @@ block for each sub-index, but the per-symbol API now returns the
 new 4-name enum. The aggregation rule (consensus threshold) is
 configurable via MarketContextSettings.
 """
+
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -24,11 +25,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MarketContextSignal:
     """Phase 8: market-wide regime + supporting metrics."""
-    regime: str                        # MarketRegime.value
-    confidence: float                  # 0.0..1.0
-    trend_strength: float              # 0.0..1.0
-    momentum: float                    # -1.0..+1.0  (negative = bearish, positive = bullish)
-    volatility_state: str              # "low" | "normal" | "high" | "unknown"
+
+    regime: str  # MarketRegime.value
+    confidence: float  # 0.0..1.0
+    trend_strength: float  # 0.0..1.0
+    momentum: float  # -1.0..+1.0  (negative = bearish, positive = bullish)
+    volatility_state: str  # "low" | "normal" | "high" | "unknown"
     sub_regimes: dict[str, str] = field(default_factory=dict)
     # SPY/QQQ/IWM/VIX sub-regime values
     contributing_factors: dict[str, Any] = field(default_factory=dict)
@@ -61,8 +63,7 @@ class MarketContextEngine:
     def __init__(self):
         self._cfg = settings.market_context
         self.sub_engines: dict[str, MarketRegimeEngine] = {
-            sym: MarketRegimeEngine(sym)
-            for sym in self._cfg.indices
+            sym: MarketRegimeEngine(sym) for sym in self._cfg.indices
         }
         self._price_history: dict[str, list[tuple[datetime, float]]] = {
             sym: [] for sym in self._cfg.indices
@@ -73,15 +74,17 @@ class MarketContextEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def update(self,
-               price: float,
-               volume: float,
-               timestamp: datetime,
-               symbol: str,
-               high: float | None = None,
-               low: float | None = None,
-               open_price: float | None = None,
-               provider: str = "internal") -> None:
+    def update(
+        self,
+        price: float,
+        volume: float,
+        timestamp: datetime,
+        symbol: str,
+        high: float | None = None,
+        low: float | None = None,
+        open_price: float | None = None,
+        provider: str = "internal",
+    ) -> None:
         """
         Feed a new tick for one of the configured index symbols.
 
@@ -114,8 +117,11 @@ class MarketContextEngine:
         regime, confidence, factors = self._aggregate(sub_regimes)
         trend_strength, momentum, volatility_state = self._aggregate_metrics()
         ts = max(
-            (e.get_current_regime().timestamp for e in self.sub_engines.values()
-             if e.get_current_regime()),
+            (
+                e.get_current_regime().timestamp
+                for e in self.sub_engines.values()
+                if e.get_current_regime()
+            ),
             default=datetime.now(UTC),
         )
 
@@ -170,7 +176,12 @@ class MarketContextEngine:
             return MarketRegime.UNKNOWN.value, 0.0, factors
 
         # Count sub-regimes (skip UNKNOWN)
-        counts = {MarketRegime.RISK_ON: 0, MarketRegime.RISK_OFF: 0, MarketRegime.NEUTRAL: 0, MarketRegime.TRANSITION: 0}
+        counts = {
+            MarketRegime.RISK_ON: 0,
+            MarketRegime.RISK_OFF: 0,
+            MarketRegime.NEUTRAL: 0,
+            MarketRegime.TRANSITION: 0,
+        }
         for sym, reg in sub_regimes.items():
             if reg in counts:
                 counts[reg] += 1
@@ -181,13 +192,25 @@ class MarketContextEngine:
         # Apply consensus
         if counts[MarketRegime.RISK_ON] >= threshold:
             factors["primary_reason"] = "consensus_risk_on"
-            return MarketRegime.RISK_ON.value, min(0.9, 0.5 + counts[MarketRegime.RISK_ON] * 0.1), factors
+            return (
+                MarketRegime.RISK_ON.value,
+                min(0.9, 0.5 + counts[MarketRegime.RISK_ON] * 0.1),
+                factors,
+            )
         if counts[MarketRegime.RISK_OFF] >= threshold:
             factors["primary_reason"] = "consensus_risk_off"
-            return MarketRegime.RISK_OFF.value, min(0.9, 0.5 + counts[MarketRegime.RISK_OFF] * 0.1), factors
+            return (
+                MarketRegime.RISK_OFF.value,
+                min(0.9, 0.5 + counts[MarketRegime.RISK_OFF] * 0.1),
+                factors,
+            )
         if counts[MarketRegime.NEUTRAL] >= threshold:
             factors["primary_reason"] = "consensus_neutral"
-            return MarketRegime.NEUTRAL.value, min(0.9, 0.5 + counts[MarketRegime.NEUTRAL] * 0.1), factors
+            return (
+                MarketRegime.NEUTRAL.value,
+                min(0.9, 0.5 + counts[MarketRegime.NEUTRAL] * 0.1),
+                factors,
+            )
 
         # Mixed → TRANSITION
         factors["primary_reason"] = "mixed_sub_regimes"

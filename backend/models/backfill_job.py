@@ -19,6 +19,7 @@ Status transitions: queued -> started -> completed | partial | failed
     thinly-traded symbol with genuinely no prints in some minute).
   - "failed": an exception aborted the pipeline before it finished.
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text
@@ -64,11 +65,17 @@ class BackfillJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True, index=True,
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     symbol: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="queued", index=True,
+        String(20),
+        nullable=False,
+        default="queued",
+        index=True,
     )
     tier1_written: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tier2_written: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -78,11 +85,11 @@ class BackfillJob(Base):
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow,
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    __table_args__ = (
-        Index("ix_backfill_jobs_symbol_created", "symbol", "created_at"),
-    )
+    __table_args__ = (Index("ix_backfill_jobs_symbol_created", "symbol", "created_at"),)

@@ -42,6 +42,7 @@ generation and duration, and a stall report notes any collection overlapping it.
 Off by default and zero-cost while off: nothing runs until ``enable()`` is called
 (``POST /api/system/loop_lag_watchdog``).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -141,13 +142,15 @@ class LoopLagWatchdog:
         gen = info.get("generation", -1)
         self.gc_counts[gen] += 1
         if ms >= self._gc_report_ms:
-            self.gc_events.append({
-                "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
-                "generation": gen,
-                "ms": round(ms, 1),
-                "collected": info.get("collected", 0),
-                "_end_mono": end,
-            })
+            self.gc_events.append(
+                {
+                    "at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                    "generation": gen,
+                    "ms": round(ms, 1),
+                    "collected": info.get("collected", 0),
+                    "_end_mono": end,
+                }
+            )
 
     def _gc_overlapping(self, start: float, end: float) -> list[dict]:
         return [
@@ -181,7 +184,9 @@ class LoopLagWatchdog:
                     samples.append(self._snapshot(me))
             elif stalled:
                 stalled = False
-                self._report((self._last_tick - stall_from) * 1000.0, samples, stall_from, self._last_tick)
+                self._report(
+                    (self._last_tick - stall_from) * 1000.0, samples, stall_from, self._last_tick
+                )
                 samples = []
 
     def _snapshot(self, my_tid: int) -> list[tuple[str, int, tuple[str, ...]]]:
@@ -191,14 +196,21 @@ class LoopLagWatchdog:
             if tid == my_tid:
                 continue
             stack = traceback.extract_stack(frame, limit=self._stack_depth)
-            out.append((
-                names.get(tid, str(tid)), tid,
-                tuple(f"{_short(f.filename)}:{f.lineno} {f.name}" for f in stack),
-            ))
+            out.append(
+                (
+                    names.get(tid, str(tid)),
+                    tid,
+                    tuple(f"{_short(f.filename)}:{f.lineno} {f.name}" for f in stack),
+                )
+            )
         return out
 
-    def _report(self, stall_ms: float, samples: list, stall_from: float = 0.0, stall_to: float = 0.0) -> None:
-        if not samples or self.stall_count >= self._max_reports:  # bound log volume if it goes pathological
+    def _report(
+        self, stall_ms: float, samples: list, stall_from: float = 0.0, stall_to: float = 0.0
+    ) -> None:
+        if (
+            not samples or self.stall_count >= self._max_reports
+        ):  # bound log volume if it goes pathological
             return
         per_thread: dict[str, list[tuple[str, ...]]] = collections.defaultdict(list)
         tids: dict[str, int] = {}
@@ -210,20 +222,24 @@ class LoopLagWatchdog:
         for name, stacks in per_thread.items():
             innermost = collections.Counter(s[-1] if s else "?" for s in stacks)
             idle = all(
-                s and (s[-1].split(":")[0].rsplit("/", 1)[-1], s[-1].rsplit(" ", 1)[-1]) in _IDLE_FRAMES
+                s
+                and (s[-1].split(":")[0].rsplit("/", 1)[-1], s[-1].rsplit(" ", 1)[-1])
+                in _IDLE_FRAMES
                 for s in stacks
             )
-            threads.append({
-                "thread": name,
-                "is_event_loop": tids[name] == self._loop_tid,
-                "samples": len(stacks),
-                "distinct_innermost_frames": len(innermost),
-                "idle": idle,
-                "top_stacks": [
-                    {"count": n, "stack": list(st)}
-                    for st, n in collections.Counter(stacks).most_common(2)
-                ],
-            })
+            threads.append(
+                {
+                    "thread": name,
+                    "is_event_loop": tids[name] == self._loop_tid,
+                    "samples": len(stacks),
+                    "distinct_innermost_frames": len(innermost),
+                    "idle": idle,
+                    "top_stacks": [
+                        {"count": n, "stack": list(st)}
+                        for st, n in collections.Counter(stacks).most_common(2)
+                    ],
+                }
+            )
         # Busy threads first: the ones whose innermost frame keeps changing are
         # executing Python (likely GIL holders); then non-idle ones stuck in place.
         threads.sort(key=lambda t: (t["idle"], -t["distinct_innermost_frames"], -t["samples"]))
@@ -239,15 +255,18 @@ class LoopLagWatchdog:
         busy = [t for t in threads if not t["idle"]][:3]
         logger.warning(
             "event loop stalled %.0f ms (%d stack samples)%s; busiest: %s",
-            stall_ms, len(samples),
+            stall_ms,
+            len(samples),
             f" — overlaps GC gen{report['gc_overlap'][0]['generation']} {report['gc_overlap'][0]['ms']:.0f} ms"
-            if report["gc_overlap"] else "",
+            if report["gc_overlap"]
+            else "",
             " | ".join(
                 f"{t['thread']}{'[loop]' if t['is_event_loop'] else ''}"
                 f" x{t['distinct_innermost_frames']}: "
                 f"{' <- '.join(reversed(t['top_stacks'][0]['stack'][-3:])) if t['top_stacks'] else '?'}"
                 for t in busy
-            ) or "none",
+            )
+            or "none",
         )
 
 
@@ -285,7 +304,11 @@ def status() -> dict:
         "stall_count": wd.stall_count if wd else 0,
         "gc": {
             "collections_by_generation": dict(wd.gc_counts) if wd else {},
-            "slow_collections": [{k: v for k, v in e.items() if not k.startswith("_")} for e in wd.gc_events] if wd else [],
+            "slow_collections": [
+                {k: v for k, v in e.items() if not k.startswith("_")} for e in wd.gc_events
+            ]
+            if wd
+            else [],
         },
         "recent_stalls": list(wd.reports) if wd else [],
     }

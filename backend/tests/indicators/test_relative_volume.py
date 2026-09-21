@@ -1,6 +1,7 @@
 """
 Tests for Relative Volume indicator
 """
+
 import unittest
 
 from backend.indicators.relative_volume import RelativeVolumeIndicator

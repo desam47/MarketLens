@@ -2,6 +2,7 @@
 API tests for the Phase 8 endpoints (relative-strength, sector,
 market-context).
 """
+
 import logging
 import os
 import sys
@@ -11,7 +12,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 # Disable noisy loggers during tests.
 logging.getLogger("backend.data_quality").setLevel(logging.CRITICAL)
@@ -19,6 +20,7 @@ logging.getLogger("backend.data_quality").setLevel(logging.CRITICAL)
 
 def _regime_client():
     from backend.api.regime.router import router
+
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -26,6 +28,7 @@ def _regime_client():
 
 def _mkt_ctx_client():
     from backend.api.market_context.router import router
+
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -53,9 +56,16 @@ class TestRegimeAPI(unittest.TestCase):
         body = resp.json()
         if body["signals"]:
             sig = body["signals"][0]
-            for key in ("symbol", "benchmark", "rs_pct", "classification",
-                        "symbol_return_pct", "benchmark_return_pct",
-                        "lookback_days", "timestamp"):
+            for key in (
+                "symbol",
+                "benchmark",
+                "rs_pct",
+                "classification",
+                "symbol_return_pct",
+                "benchmark_return_pct",
+                "lookback_days",
+                "timestamp",
+            ):
                 self.assertIn(key, sig)
 
     def test_sector_endpoint_returns_signal(self):
@@ -63,9 +73,17 @@ class TestRegimeAPI(unittest.TestCase):
         resp = self.client.get("/api/regime/AAPL/sector")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        for key in ("symbol", "sector", "sector_etf",
-                    "stock_trend", "sector_trend", "market_trend",
-                    "alignment_score", "alignment_level", "timestamp"):
+        for key in (
+            "symbol",
+            "sector",
+            "sector_etf",
+            "stock_trend",
+            "sector_trend",
+            "market_trend",
+            "alignment_score",
+            "alignment_level",
+            "timestamp",
+        ):
             self.assertIn(key, body)
 
     def test_sector_aapl_is_technology(self):
@@ -114,6 +132,7 @@ class TestGetSectorEngineInjection(unittest.TestCase):
         import sys
 
         import backend.api.regime.router  # noqa: F401 — ensure it's imported
+
         regime_router = sys.modules["backend.api.regime.router"]
 
         regime_router._sector_engines.pop("NVDA", None)
@@ -145,16 +164,22 @@ class TestMarketContextAPI(unittest.TestCase):
         resp = self.client.get("/api/market-context/current")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        for key in ("regime", "confidence", "trend_strength", "momentum",
-                    "volatility_state", "sub_regimes", "timestamp"):
+        for key in (
+            "regime",
+            "confidence",
+            "trend_strength",
+            "momentum",
+            "volatility_state",
+            "sub_regimes",
+            "timestamp",
+        ):
             self.assertIn(key, body)
 
     def test_current_regime_is_new_enum(self):
         """regime field is one of the 4 spec names (or 'unknown')."""
         resp = self.client.get("/api/market-context/current")
         body = resp.json()
-        self.assertIn(body["regime"],
-                      {"risk_on", "risk_off", "neutral", "transition", "unknown"})
+        self.assertIn(body["regime"], {"risk_on", "risk_off", "neutral", "transition", "unknown"})
 
     def test_history_endpoint(self):
         """GET /api/market-context/history returns 200 with history array."""
@@ -180,6 +205,5 @@ class TestMarketContextAPI(unittest.TestCase):
         self.assertIsInstance(body["sub_regimes"], dict)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-

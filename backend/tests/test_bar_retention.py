@@ -11,6 +11,7 @@ Validates:
     was removed 2026-09-09 — see TestSettingsFields)
   * _safe_bar_counts returns retention fields
 """
+
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,7 @@ class _TestMixin:
     def tearDownClass(cls):
         cls._engine.dispose()
         import os
+
         for p in [cls._tmp.name, cls._tmp.name + "-wal", cls._tmp.name + "-shm"]:
             if os.path.exists(p):
                 os.unlink(p)
@@ -95,9 +97,7 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
             deleted = prune_bars_older_than(db, cutoff)
             self.assertEqual(deleted, 1)  # only TSLA
             # AAPL should remain
-            remaining = db.query(BarModel).filter(
-                BarModel.symbol == "AAPL"
-            ).count()
+            remaining = db.query(BarModel).filter(BarModel.symbol == "AAPL").count()
             self.assertEqual(remaining, 1)
         finally:
             db.close()
@@ -111,13 +111,21 @@ class TestPruneBarsOlderThan(_TestMixin, unittest.TestCase):
             now = datetime.now(UTC)
             for i in range(100):
                 ts = now - timedelta(days=100 + i)
-                db.add(BarModel(
-                    symbol="BULK",
-                    timestamp=ts,
-                    timeframe="1m",
-                    open=10.0, high=11.0, low=9.0, close=10.5, volume=100,
-                    provider="test", data_status="complete", source="raw",
-                ))
+                db.add(
+                    BarModel(
+                        symbol="BULK",
+                        timestamp=ts,
+                        timeframe="1m",
+                        open=10.0,
+                        high=11.0,
+                        low=9.0,
+                        close=10.5,
+                        volume=100,
+                        provider="test",
+                        data_status="complete",
+                        source="raw",
+                    )
+                )
             db.commit()
             cutoff = now - timedelta(days=50)
             deleted = prune_bars_older_than(db, cutoff, chunk_size=10)
@@ -320,9 +328,14 @@ class TestPruneBarsByRetention(_TestMixin, unittest.TestCase):
             deleted_by_tf = prune_bars_by_retention(db)
             self.assertEqual(deleted_by_tf.get("1m"), 1)
             self.assertNotIn("1d", deleted_by_tf)  # nothing pruned -> omitted
-            remaining_1d = db.query(BarModel).filter(
-                BarModel.symbol == "AAPL", BarModel.timeframe == "1d",
-            ).count()
+            remaining_1d = (
+                db.query(BarModel)
+                .filter(
+                    BarModel.symbol == "AAPL",
+                    BarModel.timeframe == "1d",
+                )
+                .count()
+            )
             self.assertEqual(remaining_1d, 1)
         finally:
             db.close()

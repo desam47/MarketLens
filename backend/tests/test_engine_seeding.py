@@ -12,13 +12,14 @@ These tests verify that:
 Bug this prevents: "no data showing up" after backend restart because the
 regime/trend/confluence engines were in-memory only and lost their state.
 """
+
 import os
 import sys
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -50,22 +51,27 @@ class _InMemoryDBMixin:
     def setUp(self):
         super().setUp()
         self._mem_engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         Base.metadata.create_all(bind=self._mem_engine)
         self.MemSession = sessionmaker(
-            bind=self._mem_engine, autoflush=False, expire_on_commit=False,
+            bind=self._mem_engine,
+            autoflush=False,
+            expire_on_commit=False,
         )
         # Every DB read in the seeding path goes through
         # engine_seeder.SessionLocal (seed_engine_from_quotes /
         # seed_engine_from_bars) — patch it there.
         self._db_patch = patch(
-            "backend.market_data.services.engine_seeder.SessionLocal", self.MemSession,
+            "backend.market_data.services.engine_seeder.SessionLocal",
+            self.MemSession,
         )
         self._db_patch.start()
         # A prior test may have cached a regime engine keyed "AAPL";
         # clear so seeding actually runs against the patched DB.
         from backend.api.regime.router import _engines as _regime_engines
+
         _regime_engines.pop("AAPL", None)
 
     def tearDown(self):
@@ -83,16 +89,18 @@ class _SeededDBMixin(_InMemoryDBMixin):
         with self.MemSession() as db:
             # 60 synthetic quotes with a clear uptrend — enough for regime classification.
             for i in range(60):
-                db.add(QuoteModel(
-                    symbol="AAPL",
-                    price=150.0 + i * 0.10,  # clear uptrend
-                    bid=150.0 + i * 0.10 - 0.01,
-                    ask=150.0 + i * 0.10 + 0.01,
-                    volume=1_000_000,
-                    timestamp=base_time + timedelta(minutes=i * 10),
-                    provider="test",
-                    data_status="ok",
-                ))
+                db.add(
+                    QuoteModel(
+                        symbol="AAPL",
+                        price=150.0 + i * 0.10,  # clear uptrend
+                        bid=150.0 + i * 0.10 - 0.01,
+                        ask=150.0 + i * 0.10 + 0.01,
+                        volume=1_000_000,
+                        timestamp=base_time + timedelta(minutes=i * 10),
+                        provider="test",
+                        data_status="ok",
+                    )
+                )
             db.commit()
 
 
@@ -116,7 +124,8 @@ class TestSeedEngineFromQuotes(_SeededDBMixin, unittest.TestCase):
 
         count = seed_engine_from_quotes("AAPL", engine.update, max_points=200)
         self.assertGreater(
-            count, 0,
+            count,
+            0,
             "seed_engine_from_quotes should have found and replayed some quotes. "
             "If this fails, ensure the test DB (marketlens.db) has QuoteModel rows "
             "for AAPL from a prior ingestion run.",
@@ -129,7 +138,8 @@ class TestSeedEngineFromQuotes(_SeededDBMixin, unittest.TestCase):
         )
         # RegimeSignal.regime is an Enum — compare via .value to avoid enum mismatch
         self.assertNotEqual(
-            signal.regime.value, "unknown",
+            signal.regime.value,
+            "unknown",
             "Seeded regime should not be 'unknown' — the engine should have "
             "enough history from the DB to classify the market.",
         )
@@ -154,9 +164,10 @@ class TestSeedEngineFromQuotes(_SeededDBMixin, unittest.TestCase):
         # Verify strictly increasing timestamps (oldest first)
         for i in range(1, len(seen_timestamps)):
             self.assertGreaterEqual(
-                seen_timestamps[i], seen_timestamps[i - 1],
+                seen_timestamps[i],
+                seen_timestamps[i - 1],
                 f"Quote timestamps must be replayed oldest→newest, but "
-                f"ts[{i-1}]={seen_timestamps[i-1]} > ts[{i}]={seen_timestamps[i]}",
+                f"ts[{i - 1}]={seen_timestamps[i - 1]} > ts[{i}]={seen_timestamps[i]}",
             )
 
 
@@ -178,12 +189,19 @@ class TestEngineRegistry(unittest.TestCase):
 
         self.registry.register("quote", "AAPL", callback_a)
         self.registry.register("quote", "AAPL", callback_b)
-        self.registry.register("quote", "NVDA", lambda **kw: received.append(("n", 1)))  # different symbol
+        self.registry.register(
+            "quote", "NVDA", lambda **kw: received.append(("n", 1))
+        )  # different symbol
 
         ts = datetime.now(UTC)
         notified = self.registry.dispatch_quote(
-            symbol="AAPL", price=123.45, volume=1000,
-            timestamp=ts, high=124.0, low=122.0, open_price=123.0,
+            symbol="AAPL",
+            price=123.45,
+            volume=1000,
+            timestamp=ts,
+            high=124.0,
+            low=122.0,
+            open_price=123.0,
         )
 
         self.assertEqual(notified, 2, "Should have notified both AAPL callbacks")
@@ -241,8 +259,13 @@ class TestEngineRegistry(unittest.TestCase):
         self.registry.register("quote", "AAPL", capture)
         ts = datetime.now(UTC)
         self.registry.dispatch_quote(
-            symbol="AAPL", price=100, volume=50, timestamp=ts,
-            high=101, low=99, open_price=99.5,
+            symbol="AAPL",
+            price=100,
+            volume=50,
+            timestamp=ts,
+            high=101,
+            low=99,
+            open_price=99.5,
         )
 
         self.assertEqual(captured["price"], 100)
@@ -267,7 +290,10 @@ class TestEngineRegistry(unittest.TestCase):
 
         self.registry.register("quote", "AAPL", capture)
         self.registry.dispatch_quote(
-            symbol="AAPL", price=100, volume=50, timestamp=datetime.now(UTC),
+            symbol="AAPL",
+            price=100,
+            volume=50,
+            timestamp=datetime.now(UTC),
         )
 
         self.assertEqual(captured.get("symbol"), "AAPL")
@@ -291,7 +317,9 @@ class TestEngineRegistry(unittest.TestCase):
 
     def test_dispatch_trade_swallows_callback_errors(self):
         received = []
-        self.registry.register("trade", "AAPL", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
+        self.registry.register(
+            "trade", "AAPL", lambda **kw: (_ for _ in ()).throw(RuntimeError("x"))
+        )
         self.registry.register("trade", "AAPL", lambda **kw: received.append("ok"))
         n = self.registry.dispatch_trade("AAPL", price=1, size=1, timestamp=datetime.now(UTC))
         self.assertEqual(n, 1)
@@ -320,19 +348,21 @@ class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
         with self.MemSession() as db:
             for i in range(60):
                 price = 150.0 + i * 0.10
-                db.add(BarModel(
-                    symbol="AAPL",
-                    timeframe="1m",
-                    open=price - 0.05,
-                    high=price + 0.05,
-                    low=price - 0.10,
-                    close=price,
-                    volume=1_000_000,
-                    timestamp=base_time + timedelta(minutes=i),
-                    provider="test",
-                    data_status="HISTORICAL",
-                    source="raw",
-                ))
+                db.add(
+                    BarModel(
+                        symbol="AAPL",
+                        timeframe="1m",
+                        open=price - 0.05,
+                        high=price + 0.05,
+                        low=price - 0.10,
+                        close=price,
+                        volume=1_000_000,
+                        timestamp=base_time + timedelta(minutes=i),
+                        provider="test",
+                        data_status="HISTORICAL",
+                        source="raw",
+                    )
+                )
             db.commit()
 
     def test_regime_engine_returns_non_unknown_on_first_request(self):
@@ -345,6 +375,7 @@ class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
         # test_seed_produces_non_unknown_regime, which seeds an engine into
         # the registry) doesn't return a stale engine here.
         from backend.api.regime.router import _engines
+
         _engines.pop("AAPL", None)
 
         signal = get_regime_engine_from_router("AAPL").get_current_regime()
@@ -356,7 +387,8 @@ class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
             "or the router's get_regime_engine() is not calling seed_engine_from_bars.",
         )
         self.assertNotEqual(
-            signal.regime.value, "unknown",
+            signal.regime.value,
+            "unknown",
             f"Seeded regime for AAPL should not be 'unknown', got: {signal.regime.value}",
         )
 

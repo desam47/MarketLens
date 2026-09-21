@@ -6,6 +6,7 @@ the app is imported, and installs guards that fail any test that opens the live 
 connects to Redis DB 0. These tests pin that: the isolation is in effect, the schema is complete,
 and the guards actually fire (an isolation that silently stops working would look like a green suite).
 """
+
 import os
 import sqlite3
 import sys
@@ -27,7 +28,9 @@ pytestmark = pytest.mark.skipif(
 def _conftest_attr(name: str):
     """A conftest module global (found via sys.modules: importing it again would re-run its setup)."""
     for module in list(sys.modules.values()):
-        if getattr(module, "__file__", "") and str(module.__file__).endswith(str(Path("tests") / "conftest.py")):
+        if getattr(module, "__file__", "") and str(module.__file__).endswith(
+            str(Path("tests") / "conftest.py")
+        ):
             if hasattr(module, name):
                 return getattr(module, name)
     raise AssertionError(f"conftest.{name} not found")
@@ -59,7 +62,10 @@ class TestSessionIsolation(unittest.TestCase):
         from backend.database import Base, engine
 
         with engine.connect() as conn:
-            tables = {row[0] for row in conn.exec_driver_sql("select name from sqlite_master where type='table'")}
+            tables = {
+                row[0]
+                for row in conn.exec_driver_sql("select name from sqlite_master where type='table'")
+            }
             head = conn.exec_driver_sql("select version_num from alembic_version").scalar()
         self.assertTrue(set(Base.metadata.tables) <= tables, set(Base.metadata.tables) - tables)
         self.assertIsNotNone(head, "migrations were applied")
@@ -77,7 +83,7 @@ class TestSessionIsolation(unittest.TestCase):
 
 class TestGuardsFire(unittest.TestCase):
     def tearDown(self):
-        _conftest_touches().clear()          # these tests trigger the guards ON PURPOSE
+        _conftest_touches().clear()  # these tests trigger the guards ON PURPOSE
 
     def test_opening_the_live_sqlite_file_is_refused(self):
         from sqlalchemy import create_engine
@@ -126,13 +132,15 @@ class TestGuardsFire(unittest.TestCase):
         self.assertEqual(_conftest_touches(), [])
 
 
-@pytest.mark.skipif(os.environ.get("MARKETLENS_TEST_ALLOW_NETWORK") == "1", reason="network allowed for this run")
+@pytest.mark.skipif(
+    os.environ.get("MARKETLENS_TEST_ALLOW_NETWORK") == "1", reason="network allowed for this run"
+)
 class TestNetworkGuard(unittest.TestCase):
     """No test may reach the internet (Alpaca / Finnhub / Yahoo / AI providers burned quota and made
     the suite slow and flaky offline); loopback must keep working (Redis, in-process servers)."""
 
     def tearDown(self):
-        _conftest_attr("_NETWORK_ATTEMPTS").clear()      # these tests trigger the guard ON PURPOSE
+        _conftest_attr("_NETWORK_ATTEMPTS").clear()  # these tests trigger the guard ON PURPOSE
 
     def test_an_outbound_connection_is_refused_before_anything_is_sent(self):
         import socket
@@ -140,7 +148,9 @@ class TestNetworkGuard(unittest.TestCase):
         with self.assertRaises(ConnectionRefusedError) as cm:
             socket.create_connection(("93.184.216.34", 80), timeout=2)
         self.assertIn("outbound network is disabled", str(cm.exception))
-        self.assertTrue(any("93.184.216.34:80" in line for line in _conftest_attr("_NETWORK_ATTEMPTS")))
+        self.assertTrue(
+            any("93.184.216.34:80" in line for line in _conftest_attr("_NETWORK_ATTEMPTS"))
+        )
 
     def test_the_refusal_is_an_oserror_so_provider_error_handling_still_applies(self):
         import socket

@@ -14,6 +14,7 @@ Security:
 - A simple keyword filter rejects obvious prompt-injection attempts.
 - The seeded default (``is_system=True``) cannot be deleted.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,6 +44,7 @@ router = APIRouter(prefix="/api/ai/templates", tags=["ai-templates"])
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────
 
+
 class AITemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=MAX_NAME_LEN)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
@@ -56,9 +58,7 @@ class AITemplateCreate(BaseModel):
 class AITemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME_LEN)
     description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LEN)
-    system_prompt: str | None = Field(
-        default=None, min_length=10, max_length=MAX_SYSTEM_PROMPT_LEN
-    )
+    system_prompt: str | None = Field(default=None, min_length=10, max_length=MAX_SYSTEM_PROMPT_LEN)
     user_instructions: str | None = Field(default=None, max_length=MAX_USER_INSTRUCTIONS_LEN)
     variables: list[str] | None = None
     is_active: bool | None = None
@@ -81,6 +81,7 @@ class AITemplateResponse(BaseModel):
 
 class TemplatePreviewResponse(BaseModel):
     """Rendered template preview — what the AI would see, no AI call."""
+
     template_id: int
     system_prompt_rendered: str
     variables_used: dict[str, Any]
@@ -88,6 +89,7 @@ class TemplatePreviewResponse(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
+
 
 def _parse_variables(json_str: str | None) -> list[str]:
     if not json_str:
@@ -147,9 +149,7 @@ def _ensure_single_default(db: Session, new_default_id: int) -> None:
     )
 
 
-def _resolve_template_for_request(
-    db: Session, template_id: int | None
-) -> AITemplate | None:
+def _resolve_template_for_request(db: Session, template_id: int | None) -> AITemplate | None:
     """Pick the template to use for an analysis call.
 
     - If ``template_id`` given, load it (must be active).
@@ -167,13 +167,18 @@ def _resolve_template_for_request(
             )
         return tmpl
     # No explicit id — use the default if one exists.
-    return db.query(AITemplate).filter(
-        AITemplate.is_default == True,  # noqa: E712
-        AITemplate.is_active == True,   # noqa: E712
-    ).first()
+    return (
+        db.query(AITemplate)
+        .filter(
+            AITemplate.is_default == True,  # noqa: E712
+            AITemplate.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
+
 
 @router.get("", response_model=list[AITemplateResponse])
 def list_templates(
@@ -226,10 +231,14 @@ def create_template(payload: AITemplateCreate, db: Session = Depends(get_db)):
 @router.get("/default", response_model=AITemplateResponse)
 def get_default_template(db: Session = Depends(get_db)):
     """Return the active default template, or 404 if none is set."""
-    tmpl = db.query(AITemplate).filter(
-        AITemplate.is_default == True,  # noqa: E712
-        AITemplate.is_active == True,   # noqa: E712
-    ).first()
+    tmpl = (
+        db.query(AITemplate)
+        .filter(
+            AITemplate.is_default == True,  # noqa: E712
+            AITemplate.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
     if not tmpl:
         raise HTTPException(status_code=404, detail="No default template configured")
     return _to_response(tmpl)
@@ -273,6 +282,7 @@ def preview_template(
 
     # Detect variables that appeared in the template but weren't supplied.
     import re
+
     used = re.findall(r"\{\{(\w+)\}\}", tmpl.system_prompt)
     missing = [name for name in used if name not in context or context.get(name) in (None, "")]
 
@@ -339,7 +349,7 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=400,
             detail="Cannot delete the system-seeded default template. "
-                   "Deactivate it via PATCH /api/ai/templates/{id} instead.",
+            "Deactivate it via PATCH /api/ai/templates/{id} instead.",
         )
     db.delete(tmpl)
     db.commit()

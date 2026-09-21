@@ -5,6 +5,7 @@ SQLite treats a negative LIMIT as "no limit", and the parameter used to be an
 unchecked ``int``: ``?limit=-1`` (or a huge value) returned a symbol's entire
 quote history (measured live: ~6k rows, 2.2 MB, up to ~0.5 s).
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 

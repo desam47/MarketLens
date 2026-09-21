@@ -1,4 +1,5 @@
 """Tests for the AI-driven NL query parser."""
+
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,7 +17,6 @@ def _fenced(payload: dict) -> str:
 
 
 class TestParseQueryWithAIDisabled(unittest.TestCase):
-
     @patch("backend.nl_search.parser.ai_manager")
     def test_returns_none_when_ai_unavailable(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=False)
@@ -26,17 +26,20 @@ class TestParseQueryWithAIDisabled(unittest.TestCase):
 
 
 class TestParseQueryWithAIValid(unittest.TestCase):
-
     @patch("backend.nl_search.parser.ai_manager")
     def test_valid_fenced_json(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({
-                "ranking": "strongest_bullish",
-                "direction": "bullish",
-                "min_confidence": 0.6,
-            })
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(
+                _fenced(
+                    {
+                        "ranking": "strongest_bullish",
+                        "direction": "bullish",
+                        "min_confidence": 0.6,
+                    }
+                )
+            )
+        )
         result = parse_query_with_ai("give me bullish stocks")
         self.assertIsNotNone(result)
         self.assertEqual(result.ranking, "strongest_bullish")
@@ -46,9 +49,9 @@ class TestParseQueryWithAIValid(unittest.TestCase):
     @patch("backend.nl_search.parser.ai_manager")
     def test_valid_plain_json(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            json.dumps({"ranking": "strongest_momentum"})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(json.dumps({"ranking": "strongest_momentum"}))
+        )
         result = parse_query_with_ai("momentum plays")
         self.assertIsNotNone(result)
         self.assertEqual(result.ranking, "strongest_momentum")
@@ -56,9 +59,9 @@ class TestParseQueryWithAIValid(unittest.TestCase):
     @patch("backend.nl_search.parser.ai_manager")
     def test_match_all_default(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "strongest_bullish", "match_all": True})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(_fenced({"ranking": "strongest_bullish", "match_all": True}))
+        )
         result = parse_query_with_ai("weather forecast today")
         self.assertIsNotNone(result)
         self.assertTrue(result.match_all)
@@ -68,14 +71,18 @@ class TestParseQueryWithAIValid(unittest.TestCase):
         """The AI may emit _conflict for cross-TF queries; we strip it
         before validation and pass it via the parser orchestrator."""
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({
-                "timeframe": "1d",
-                "direction": "bullish",
-                "mtf_conflict": True,
-                "_conflict": {"timeframe": "5m", "direction": "bearish"},
-            })
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(
+                _fenced(
+                    {
+                        "timeframe": "1d",
+                        "direction": "bullish",
+                        "mtf_conflict": True,
+                        "_conflict": {"timeframe": "5m", "direction": "bearish"},
+                    }
+                )
+            )
+        )
         result = parse_query_with_ai("bullish daily but bearish 5m")
         self.assertIsNotNone(result)
         self.assertEqual(result.timeframe, "1d")
@@ -83,7 +90,6 @@ class TestParseQueryWithAIValid(unittest.TestCase):
 
 
 class TestParseQueryWithAIFailures(unittest.TestCase):
-
     @patch("backend.nl_search.parser.ai_manager")
     def test_invalid_json_returns_none(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
@@ -96,18 +102,20 @@ class TestParseQueryWithAIFailures(unittest.TestCase):
     @patch("backend.nl_search.parser.ai_manager")
     def test_bad_enum_returns_none(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "purple", "direction": "bullish"})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(_fenced({"ranking": "purple", "direction": "bullish"}))
+        )
         result = parse_query_with_ai("anything")
         self.assertIsNone(result)
 
     @patch("backend.nl_search.parser.ai_manager")
     def test_out_of_range_returns_none(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"trend_min": 150})  # out of [0, 100] range
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(
+                _fenced({"trend_min": 150})  # out of [0, 100] range
+            )
+        )
         result = parse_query_with_ai("anything")
         self.assertIsNone(result)
 
@@ -139,14 +147,15 @@ class TestParseQueryWithAITranslationCache(unittest.TestCase):
         # Isolate from any state other tests/live traffic left behind —
         # this module-level cache persists for the process lifetime.
         from backend.nl_search import parser as parser_module
+
         parser_module._translation_cache.clear()
 
     @patch("backend.nl_search.parser.ai_manager")
     def test_second_identical_call_skips_ai(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "strongest_momentum"})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(_fenced({"ranking": "strongest_momentum"}))
+        )
         first = parse_query_with_ai("optimize cache test query one")
         self.assertIsNotNone(first)
         self.assertEqual(mock_ai.complete.call_count, 1)
@@ -160,9 +169,9 @@ class TestParseQueryWithAITranslationCache(unittest.TestCase):
     @patch("backend.nl_search.parser.ai_manager")
     def test_cache_key_is_case_and_whitespace_insensitive(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "strongest_momentum"})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(_fenced({"ranking": "strongest_momentum"}))
+        )
         parse_query_with_ai("optimize cache test query two")
         parse_query_with_ai("  Optimize Cache Test Query Two  ")
         self.assertEqual(mock_ai.complete.call_count, 1)
@@ -172,9 +181,11 @@ class TestParseQueryWithAITranslationCache(unittest.TestCase):
         """Mutating one caller's returned NLFilters must not corrupt
         what a later cache hit returns."""
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "strongest_momentum", "signals": ["HIGH_VOLUME"]})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(
+                _fenced({"ranking": "strongest_momentum", "signals": ["HIGH_VOLUME"]})
+            )
+        )
         first = parse_query_with_ai("optimize cache test query three")
         self.assertIsNotNone(first)
         first.signals.append("RSI_OVERSOLD")  # mutate the caller's copy
@@ -196,22 +207,21 @@ class TestParseQueryWithAITranslationCache(unittest.TestCase):
         # not be stuck returning None forever. Update the return value
         # on the SAME AsyncMock instance (replacing it would reset
         # call_count and break the assertion below).
-        mock_ai.complete.return_value = _ai_response(
-            _fenced({"ranking": "strongest_momentum"})
-        )
+        mock_ai.complete.return_value = _ai_response(_fenced({"ranking": "strongest_momentum"}))
         second = parse_query_with_ai("optimize cache test query four")
         self.assertIsNotNone(second)
         self.assertEqual(mock_ai.complete.call_count, 2)
 
 
 class TestParseQueryOrchestrator(unittest.TestCase):
-
     @patch("backend.nl_search.parser.ai_manager")
     def test_ai_used_when_rules_fail(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=_ai_response(
-            _fenced({"ranking": "biggest_improvement", "direction": "bullish"})
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=_ai_response(
+                _fenced({"ranking": "biggest_improvement", "direction": "bullish"})
+            )
+        )
         # Garbage query, but AI understands the intent.
         f, extras, used = parse_query("improve now")
         self.assertEqual(used, "ai")

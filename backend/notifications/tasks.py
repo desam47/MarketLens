@@ -1,4 +1,5 @@
 """RQ task bodies for durable alert notification delivery."""
+
 from __future__ import annotations
 
 from backend.notifications.delivery import dispatch_trigger

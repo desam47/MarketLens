@@ -6,6 +6,7 @@ record_trade_plan / get_track_record each open their own SessionLocal()
 (patched to an in-memory sqlite sessionmaker below); _grade_row /
 _grade_once take a db session directly.
 """
+
 import json
 import unittest
 from datetime import datetime, timedelta
@@ -22,9 +23,14 @@ from backend.models.market_data import Bar, DataStatus
 
 def _plan(**over) -> TradePlan:
     base = dict(
-        recommendation="buy", conviction="medium", time_horizon="swing",
-        entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=96.0,
-        targets=[108.0, 115.0], risk_reward=1.4,
+        recommendation="buy",
+        conviction="medium",
+        time_horizon="swing",
+        entry_zone_low=100.0,
+        entry_zone_high=102.0,
+        stop_loss=96.0,
+        targets=[108.0, 115.0],
+        risk_reward=1.4,
         thesis="Buy the pullback into support with the daily trend up.",
         invalidation="A daily close below 96 breaks the structure.",
     )
@@ -34,8 +40,11 @@ def _plan(**over) -> TradePlan:
 
 def _analysis(**over) -> AnalysisResponse:
     base = dict(
-        summary="Clean uptrend, buying the dip.", trend="bullish", confidence=0.7,
-        provider="ollama", model="llama3.2",
+        summary="Clean uptrend, buying the dip.",
+        trend="bullish",
+        confidence=0.7,
+        provider="ollama",
+        model="llama3.2",
     )
     base.update(over)
     return AnalysisResponse(**base)
@@ -43,15 +52,24 @@ def _analysis(**over) -> AnalysisResponse:
 
 def _bar(day: str, *, o, h, low, c) -> Bar:
     return Bar(
-        symbol="AAPL", timestamp=datetime.fromisoformat(day), open=o, high=h, low=low, close=c,
-        volume=1_000_000, timeframe="1d", provider="test", data_status=DataStatus.HISTORICAL,
+        symbol="AAPL",
+        timestamp=datetime.fromisoformat(day),
+        open=o,
+        high=h,
+        low=low,
+        close=c,
+        volume=1_000_000,
+        timeframe="1d",
+        provider="test",
+        data_status=DataStatus.HISTORICAL,
     )
 
 
 class _DBBase(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         AITradePlanOutcome.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
@@ -85,8 +103,11 @@ class TestRecordTradePlan(_DBBase):
 
     def test_sell_plan_captured(self):
         plan = _plan(
-            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
-            stop_loss=106.0, targets=[95.0, 90.0],
+            recommendation="sell",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=106.0,
+            targets=[95.0, 90.0],
         )
         tracker.record_trade_plan("MSFT", _analysis(trade_plan=plan))
         row = self.db.query(AITradePlanOutcome).first()
@@ -109,11 +130,19 @@ class TestRecordTradePlan(_DBBase):
 class TestGradeRow(_DBBase):
     def _open_row(self, **over) -> AITradePlanOutcome:
         base = dict(
-            symbol="AAPL", recommendation="buy", conviction="medium", time_horizon="swing",
-            entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=96.0,
-            targets_json=json.dumps([108.0, 115.0]), risk_reward=1.4,
-            provider="ollama", model="llama3.2",
-            created_at=datetime.now() - timedelta(days=1), status="open",
+            symbol="AAPL",
+            recommendation="buy",
+            conviction="medium",
+            time_horizon="swing",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=96.0,
+            targets_json=json.dumps([108.0, 115.0]),
+            risk_reward=1.4,
+            provider="ollama",
+            model="llama3.2",
+            created_at=datetime.now() - timedelta(days=1),
+            status="open",
         )
         base.update(over)
         row = AITradePlanOutcome(**base)
@@ -157,8 +186,11 @@ class TestGradeRow(_DBBase):
     @patch("backend.repositories.bar_repository.get_bars")
     def test_sell_target_hit_is_a_win(self, mock_bars):
         row = self._open_row(
-            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
-            stop_loss=106.0, targets_json=json.dumps([95.0, 90.0]),
+            recommendation="sell",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=106.0,
+            targets_json=json.dumps([95.0, 90.0]),
         )
         mock_bars.return_value = [_bar("2026-01-02", o=100, h=101, low=94, c=95)]
         tracker._grade_row(self.db, row, datetime.now().date())
@@ -171,8 +203,11 @@ class TestGradeRow(_DBBase):
         # fill-aware: the entry zone must be touched first. bar1 fills
         # [100,102], bar2 (gap-up) hits the stop at 106 → loss.
         row = self._open_row(
-            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
-            stop_loss=106.0, targets_json=json.dumps([95.0, 90.0]),
+            recommendation="sell",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=106.0,
+            targets_json=json.dumps([95.0, 90.0]),
         )
         mock_bars.return_value = [
             _bar("2026-01-02", o=101, h=102, low=100, c=101),  # fills entry zone
@@ -186,8 +221,11 @@ class TestGradeRow(_DBBase):
         # sell entry [100,102], stop 106; a single bar opening at 104 never
         # enters the entry zone, so the stop hit must NOT grade the row.
         row = self._open_row(
-            recommendation="sell", entry_zone_low=100.0, entry_zone_high=102.0,
-            stop_loss=106.0, targets_json=json.dumps([95.0, 90.0]),
+            recommendation="sell",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=106.0,
+            targets_json=json.dumps([95.0, 90.0]),
         )
         mock_bars.return_value = [
             _bar("2026-01-02", o=104, h=107, low=103, c=106),  # gap, no fill
@@ -255,7 +293,8 @@ class TestGradeRow(_DBBase):
         row = self._open_row(created_at=datetime.now() - timedelta(days=1))
         self.assertFalse(tracker._grade_row(self.db, row, datetime.now().date()))
         row2 = self._open_row(
-            time_horizon="scalp", created_at=datetime.now() - timedelta(days=5),
+            time_horizon="scalp",
+            created_at=datetime.now() - timedelta(days=5),
         )
         self.assertTrue(tracker._grade_row(self.db, row2, datetime.now().date()))
         self.assertEqual(row2.status, "expired")
@@ -265,11 +304,19 @@ class TestGradeRow(_DBBase):
 class TestGradeOnce(_DBBase):
     def _seed(self, **over) -> AITradePlanOutcome:
         base = dict(
-            symbol="AAPL", recommendation="buy", conviction="medium", time_horizon="swing",
-            entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=96.0,
-            targets_json=json.dumps([108.0]), risk_reward=1.4,
-            provider="ollama", model="llama3.2",
-            created_at=datetime.now() - timedelta(days=1), status="open",
+            symbol="AAPL",
+            recommendation="buy",
+            conviction="medium",
+            time_horizon="swing",
+            entry_zone_low=100.0,
+            entry_zone_high=102.0,
+            stop_loss=96.0,
+            targets_json=json.dumps([108.0]),
+            risk_reward=1.4,
+            provider="ollama",
+            model="llama3.2",
+            created_at=datetime.now() - timedelta(days=1),
+            status="open",
         )
         base.update(over)
         row = AITradePlanOutcome(**base)
@@ -292,14 +339,16 @@ class TestGradeOnce(_DBBase):
         self.assertEqual(statuses["MSFT"], "open")
 
     def test_a_broken_row_does_not_block_the_batch(self):
-        good = self._seed(symbol="AAPL", time_horizon="scalp", created_at=datetime.now() - timedelta(days=5))
+        good = self._seed(
+            symbol="AAPL", time_horizon="scalp", created_at=datetime.now() - timedelta(days=5)
+        )
         bad = self._seed(symbol="MSFT", targets_json="not json")
         with patch("backend.repositories.bar_repository.get_bars", return_value=[]):
             resolved = tracker._grade_once(self.db)
         self.db.refresh(good)
         self.db.refresh(bad)
         self.assertEqual(good.status, "expired")  # resolved despite the sibling's bad row
-        self.assertEqual(bad.status, "open")       # left alone, not crashed
+        self.assertEqual(bad.status, "open")  # left alone, not crashed
         self.assertEqual(resolved, 1)
 
     def test_no_open_rows_is_a_clean_noop(self):
@@ -318,9 +367,17 @@ class TestGetTrackRecord(_DBBase):
 
     def _row(self, **over):
         base = dict(
-            symbol="AAPL", recommendation="buy", conviction="medium", time_horizon="swing",
-            targets_json="[]", provider="ollama", model="llama3.2",
-            created_at=datetime.now(), status="win", resolved_at=datetime.now(), return_pct=0.05,
+            symbol="AAPL",
+            recommendation="buy",
+            conviction="medium",
+            time_horizon="swing",
+            targets_json="[]",
+            provider="ollama",
+            model="llama3.2",
+            created_at=datetime.now(),
+            status="win",
+            resolved_at=datetime.now(),
+            return_pct=0.05,
         )
         base.update(over)
         self.db.add(AITradePlanOutcome(**base))

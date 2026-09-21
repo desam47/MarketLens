@@ -1,11 +1,12 @@
 """
 Tests for the RankingEngine (backend.scanner.ranking).
 """
+
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.scanner.filters import DailyBullish
 from backend.scanner.ranking import (
@@ -66,7 +67,6 @@ def _result(
 
 
 class TestRankedEntry(unittest.TestCase):
-
     def test_ranked_entry(self):
         e = RankedEntry(symbol="AAPL", score=80.5, rank=1, metrics={"foo": 1.0})
         self.assertEqual(e.symbol, "AAPL")
@@ -76,7 +76,6 @@ class TestRankedEntry(unittest.TestCase):
 
 
 class TestRankingEngine(unittest.TestCase):
-
     def setUp(self):
         self.engine = RankingEngine()
 
@@ -108,7 +107,9 @@ class TestRankingEngine(unittest.TestCase):
         ranking = self.engine.rank([underperformer, outperformer], top_n=2)[
             "strongest_relative_strength"
         ]
-        self.assertEqual([entry.symbol for entry in ranking.entries], ["OUTPERFORMER", "UNDERPERFORMER"])
+        self.assertEqual(
+            [entry.symbol for entry in ranking.entries], ["OUTPERFORMER", "UNDERPERFORMER"]
+        )
         self.assertEqual(ranking.entries[0].metrics["benchmark"], "SPY")
         self.assertEqual(ranking.entries[0].score, 8.0)
 
@@ -175,7 +176,10 @@ class TestRankingEngine(unittest.TestCase):
         rising symbol must outrank the crashing one on the bullish side,
         and the crashing one must top the bearish side."""
         crashing_but_directionally_bullish = _result(
-            "CTNT", change_pct=-31.0, momentum=50.0, rsi=38.4,
+            "CTNT",
+            change_pct=-31.0,
+            momentum=50.0,
+            rsi=38.4,
         )
         actually_rising = _result("RISING", change_pct=5.0)
         out = self.engine.rank([crashing_but_directionally_bullish, actually_rising], top_n=1)
@@ -191,10 +195,8 @@ class TestRankingEngine(unittest.TestCase):
         # strong trend_strength AND positive momentum; BEAR has the same
         # strong trend_strength but negative momentum.
         results = [
-            _result("BULL", score=80.0, momentum=40.0, macd=1.0,
-                    trend_strength=80.0, adx=50.0),
-            _result("BEAR", score=80.0, momentum=-40.0, macd=-1.0,
-                    trend_strength=80.0, adx=50.0),
+            _result("BULL", score=80.0, momentum=40.0, macd=1.0, trend_strength=80.0, adx=50.0),
+            _result("BEAR", score=80.0, momentum=-40.0, macd=-1.0, trend_strength=80.0, adx=50.0),
         ]
         out = self.engine.rank(results)
         improvement = {e.symbol: e.score for e in out["biggest_improvement"].entries}
@@ -222,15 +224,21 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_best_mtf_alignment(self):
         results = [
-            _result("ALL_UP", trend_signals={
-                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.8},
-                "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
-                "ONE_DAY": {"direction": "uptrend", "confidence": 0.8},
-            }),
-            _result("MIXED", trend_signals={
-                "ONE_HOUR": {"direction": "uptrend", "confidence": 0.8},
-                "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.8},
-            }),
+            _result(
+                "ALL_UP",
+                trend_signals={
+                    "ONE_HOUR": {"direction": "uptrend", "confidence": 0.8},
+                    "FOUR_HOUR": {"direction": "uptrend", "confidence": 0.8},
+                    "ONE_DAY": {"direction": "uptrend", "confidence": 0.8},
+                },
+            ),
+            _result(
+                "MIXED",
+                trend_signals={
+                    "ONE_HOUR": {"direction": "uptrend", "confidence": 0.8},
+                    "FOUR_HOUR": {"direction": "downtrend", "confidence": 0.8},
+                },
+            ),
         ]
         out = self.engine.rank(results)
         align = out["best_mtf_alignment"]
@@ -238,9 +246,12 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_filter_restricts_candidates(self):
         results = [
-            _result("BULL", score=90.0, change_pct=8.0, trend_signals={
-                "ONE_DAY": {"direction": "uptrend", "confidence": 0.8}
-            }),
+            _result(
+                "BULL",
+                score=90.0,
+                change_pct=8.0,
+                trend_signals={"ONE_DAY": {"direction": "uptrend", "confidence": 0.8}},
+            ),
             _result("BEAR", score=10.0, change_pct=-8.0),
         ]
         bull_filter = DailyBullish()
@@ -276,6 +287,7 @@ class TestRankingEngine(unittest.TestCase):
 
     def test_named_ranking_to_dict(self):
         from backend.scanner.ranking import NamedRanking
+
         ranking = NamedRanking(
             name="strongest_bullish",
             label="Strongest Bullish",
@@ -291,7 +303,6 @@ class TestRankingEngine(unittest.TestCase):
 
 
 class TestDefaultRankingEngine(unittest.TestCase):
-
     def test_default_instance_exists(self):
         self.assertIsInstance(default_ranking_engine, RankingEngine)
 

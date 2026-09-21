@@ -31,6 +31,7 @@ Usage::
     async def scan_symbol(symbol: str):
         return await _cached_scan(symbol)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -118,6 +119,7 @@ def _reference_bars_cache_stats() -> dict[str, int]:
     # lives there, next to load_reference_bars, since both the analysis
     # router and backend.ai.context.py import it directly).
     from backend.analysis.series import _reference_bars_cache
+
     return {"size": _reference_bars_cache.currsize, "maxsize": _reference_bars_cache.maxsize}
 
 
@@ -133,9 +135,18 @@ def get_cache_stats() -> dict[str, dict[str, int]]:
         "sector": {"size": _sector_cache.currsize, "maxsize": _sector_cache.maxsize},
         "rs_batch": {"size": _rs_batch_cache.currsize, "maxsize": _rs_batch_cache.maxsize},
         "context": {"size": _context_cache.currsize, "maxsize": _context_cache.maxsize},
-        "regime_history": {"size": _regime_history_cache.currsize, "maxsize": _regime_history_cache.maxsize},
-        "trend_history": {"size": _trend_history_cache.currsize, "maxsize": _trend_history_cache.maxsize},
-        "strategy_history": {"size": _strategy_history_cache.currsize, "maxsize": _strategy_history_cache.maxsize},
+        "regime_history": {
+            "size": _regime_history_cache.currsize,
+            "maxsize": _regime_history_cache.maxsize,
+        },
+        "trend_history": {
+            "size": _trend_history_cache.currsize,
+            "maxsize": _trend_history_cache.maxsize,
+        },
+        "strategy_history": {
+            "size": _strategy_history_cache.currsize,
+            "maxsize": _strategy_history_cache.maxsize,
+        },
         "mtf_history": {"size": _mtf_history_cache.currsize, "maxsize": _mtf_history_cache.maxsize},
         "transitions": {"size": _transitions_cache.currsize, "maxsize": _transitions_cache.maxsize},
         "reference_bars": _reference_bars_cache_stats(),
@@ -165,6 +176,7 @@ def ttl_cached(cache: TTLCache, key_fn: Callable[..., str]):
     its own task, so one caller disconnecting (cancellation) doesn't
     cancel it for the others still waiting on it.
     """
+
     def decorator(fn: Callable[P, T]) -> Callable[P, T]:
         is_async = asyncio.iscoroutinefunction(fn)
         # key -> in-flight computation task, for async single-flight.
@@ -182,6 +194,7 @@ def ttl_cached(cache: TTLCache, key_fn: Callable[..., str]):
             # A task left over from a different (closed) event loop can't
             # be awaited from this one — compute afresh instead.
             if task is None or task.get_loop() is not loop:
+
                 async def compute() -> T:
                     if is_async:
                         return await fn(*args, **kwargs)
@@ -214,4 +227,5 @@ def ttl_cached(cache: TTLCache, key_fn: Callable[..., str]):
         if is_async:
             return async_wrapper  # type: ignore[return-value]
         return sync_wrapper  # type: ignore[return-value]
+
     return decorator

@@ -4,6 +4,7 @@ AI Digest repository for data access operations.
 Same thin-repository convention as AlertRepository — owns its own
 SessionLocal when a session isn't passed in, closes it on ``close()``.
 """
+
 from datetime import datetime
 
 from sqlalchemy import desc

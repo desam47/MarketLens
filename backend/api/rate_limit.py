@@ -15,6 +15,7 @@ rate limiting.
 
 Falls back to in-memory token bucket if Redis is unavailable.
 """
+
 import logging
 import time
 from collections import defaultdict, deque
@@ -315,9 +316,7 @@ class InMemoryRateLimiter:
             "total_allowed": self._total_allowed,
             "total_rejected": self._total_rejected,
             "total_requests": total,
-            "reject_rate": (
-                round(self._total_rejected / total, 4) if total > 0 else 0.0
-            ),
+            "reject_rate": (round(self._total_rejected / total, 4) if total > 0 else 0.0),
             "max_requests": self.max_requests,
             "window_seconds": self.window_seconds,
         }
@@ -379,9 +378,7 @@ class RateLimitMiddleware:
             headers.update(SecurityHeadersMiddleware._static_headers())
             response = JSONResponse(
                 status_code=429,
-                content={
-                    "detail": "Too many requests. Please slow down and try again later."
-                },
+                content={"detail": "Too many requests. Please slow down and try again later."},
                 headers=headers,
             )
             await response(scope, receive, send)

@@ -12,6 +12,7 @@ receive HTTP 429 (Too Many Requests) due to differences in TLS cipher suites and
 ALPN protocols. curl_cffi uses libcurl under the hood and correctly impersonates a
 real browser (Chrome 120), bypassing the anti-bot protection.
 """
+
 import asyncio
 import logging
 import threading
@@ -42,14 +43,31 @@ _COOKIE_URL = "https://fc.yahoo.com"
 _CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
 _CRUMB_TTL_SECONDS = 3600.0
 _INTERVAL_MAP = {
-    "1m": "1m", "2m": "2m", "5m": "5m", "15m": "15m", "30m": "30m",
-    "60m": "60m", "90m": "90m", "1h": "60m",
-    "4h": "60m",   # yfinance has no 4h; fetch 1h bars and resample at read time
-    "1d": "1d", "5d": "5d", "1wk": "1wk", "1mo": "1mo", "3mo": "3mo",
+    "1m": "1m",
+    "2m": "2m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "60m": "60m",
+    "90m": "90m",
+    "1h": "60m",
+    "4h": "60m",  # yfinance has no 4h; fetch 1h bars and resample at read time
+    "1d": "1d",
+    "5d": "5d",
+    "1wk": "1wk",
+    "1mo": "1mo",
+    "3mo": "3mo",
 }
 _RANGE_MAP = {
-    "1m": "1d", "5m": "5d", "15m": "5d", "30m": "5d",
-    "1h": "1y", "4h": "1y", "1d": "6mo", "1wk": "2y", "1mo": "5y",
+    "1m": "1d",
+    "5m": "5d",
+    "15m": "5d",
+    "30m": "5d",
+    "1h": "1y",
+    "4h": "1y",
+    "1d": "6mo",
+    "1wk": "2y",
+    "1mo": "5y",
 }
 
 
@@ -74,7 +92,9 @@ class YFinanceProvider(BaseMarketDataProvider):
         makes concurrent callers share ONE fetch instead of each hitting Yahoo.
         """
         with self._auth_lock:
-            fresh = self._crumb is not None and (time.monotonic() - self._crumb_at) < _CRUMB_TTL_SECONDS
+            fresh = (
+                self._crumb is not None and (time.monotonic() - self._crumb_at) < _CRUMB_TTL_SECONDS
+            )
             if force or not fresh:
                 session = curl_requests.Session(impersonate="chrome120")
                 session.get(_COOKIE_URL, timeout=10)  # 404 is expected; only the cookie matters
@@ -114,16 +134,13 @@ class YFinanceProvider(BaseMarketDataProvider):
             timeout=15,
         )
         if r.status_code != 200:
-            raise RuntimeError(
-                f"Yahoo Finance HTTP {r.status_code} for {symbol}: {r.text[:200]}"
-            )
+            raise RuntimeError(f"Yahoo Finance HTTP {r.status_code} for {symbol}: {r.text[:200]}")
         data = safe_json(r.text, url=url)
         result = (data.get("chart") or {}).get("result")
         if not result:
             err = (data.get("chart") or {}).get("error")
             raise ValueError(f"No chart data for {symbol}: {err}")
         return result[0] if isinstance(result, list) and result else {}
-
 
     @staticmethod
     def _meta(chart: dict) -> dict:
@@ -177,8 +194,7 @@ class YFinanceProvider(BaseMarketDataProvider):
     def _resolve_interval(timeframe: str) -> str:
         if timeframe not in _INTERVAL_MAP:
             raise ValueError(
-                f"Unsupported timeframe {timeframe!r}; "
-                f"supported: {sorted(_INTERVAL_MAP)}"
+                f"Unsupported timeframe {timeframe!r}; supported: {sorted(_INTERVAL_MAP)}"
             )
         return _INTERVAL_MAP[timeframe]
 
@@ -199,18 +215,12 @@ class YFinanceProvider(BaseMarketDataProvider):
         try:
             chart = self._fetch_chart(symbol, interval="1d", range_="5d")
             meta = self._meta(chart)
-            price = (
-                meta.get("regularMarketPrice")
-                or meta.get("previousClose")
-                or 0.0
-            )
-            ts_epoch = (
-                meta.get("regularMarketTime")
-                or meta.get("chartPreviousClose")
-                or 0
-            )
+            price = meta.get("regularMarketPrice") or meta.get("previousClose") or 0.0
+            ts_epoch = meta.get("regularMarketTime") or meta.get("chartPreviousClose") or 0
             try:
-                ts = datetime.fromtimestamp(int(ts_epoch), tz=UTC) if ts_epoch else datetime.now(UTC)
+                ts = (
+                    datetime.fromtimestamp(int(ts_epoch), tz=UTC) if ts_epoch else datetime.now(UTC)
+                )
             except (TypeError, ValueError, OSError):
                 ts = datetime.now(UTC)
 
@@ -242,8 +252,17 @@ class YFinanceProvider(BaseMarketDataProvider):
             target = timestamp.timestamp()
             idx = min(range(len(ts_arr)), key=lambda i: abs(ts_arr[i] - target))
             bar = self._bar_from_chart_data(
-                symbol, idx, ts_arr, opens, highs, lows, closes, volumes,
-                timeframe, DataStatus.HISTORICAL, self.name,
+                symbol,
+                idx,
+                ts_arr,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                timeframe,
+                DataStatus.HISTORICAL,
+                self.name,
             )
             self._reset_error_state()
             return bar
@@ -263,8 +282,17 @@ class YFinanceProvider(BaseMarketDataProvider):
             while abs(i) <= len(ts_arr) and (i == -1 or closes[i] is None):
                 i -= 1
             bar = self._bar_from_chart_data(
-                symbol, i, ts_arr, opens, highs, lows, closes, volumes,
-                timeframe, DataStatus.DELAYED, self.name,
+                symbol,
+                i,
+                ts_arr,
+                opens,
+                highs,
+                lows,
+                closes,
+                volumes,
+                timeframe,
+                DataStatus.DELAYED,
+                self.name,
             )
             self._reset_error_state()
             return bar
@@ -343,19 +371,31 @@ class YFinanceProvider(BaseMarketDataProvider):
                 if interval.endswith("m") and i == len(ts_arr) - 1:
                     ts = datetime.fromtimestamp(int(ts_arr[i]), tz=UTC)
                     is_flat_zero_volume = (
-                        opens[i] == highs[i] == lows[i] == closes[i]
-                        and (volumes[i] or 0) == 0
+                        opens[i] == highs[i] == lows[i] == closes[i] and (volumes[i] or 0) == 0
                     )
                     if ts.second != 0 or is_flat_zero_volume:
                         continue
-                bars.append(self._bar_from_chart_data(
-                    symbol, i, ts_arr, opens, highs, lows, closes, volumes,
-                    timeframe, DataStatus.HISTORICAL, self.name,
-                ))
+                bars.append(
+                    self._bar_from_chart_data(
+                        symbol,
+                        i,
+                        ts_arr,
+                        opens,
+                        highs,
+                        lows,
+                        closes,
+                        volumes,
+                        timeframe,
+                        DataStatus.HISTORICAL,
+                        self.name,
+                    )
+                )
             self._reset_error_state()
             return bars
         except Exception as e:
-            self._handle_error(e, f"Failed to get historical bars for {symbol} ({timeframe}, {range_})")
+            self._handle_error(
+                e, f"Failed to get historical bars for {symbol} ({timeframe}, {range_})"
+            )
             raise
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, Quote]:
@@ -382,7 +422,9 @@ class YFinanceProvider(BaseMarketDataProvider):
                     quote = Quote(
                         symbol=symbol_upper,
                         price=float(item.get("regularMarketPrice", 0.0)),
-                        timestamp=to_ny(datetime.fromtimestamp(item.get("regularMarketTime", 0), UTC)),
+                        timestamp=to_ny(
+                            datetime.fromtimestamp(item.get("regularMarketTime", 0), UTC)
+                        ),
                         provider=self.name,
                         data_status=DataStatus.DELAYED,
                         bid=item.get("bid"),

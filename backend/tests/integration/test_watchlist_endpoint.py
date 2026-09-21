@@ -4,6 +4,7 @@ End-to-end watchlist API integration tests.
 Tests the full CRUD lifecycle via the FastAPI TestClient: create a
 watchlist, add symbols, rename it, delete it.
 """
+
 from __future__ import annotations
 
 import os
@@ -25,6 +26,7 @@ class TestWatchlistCRUD(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_create_and_list_watchlist(self) -> None:

@@ -3,6 +3,7 @@ Tests for backend.ai.digest — the daily/session AI digest's
 aggregation logic (build_digest_payload / narrate_digest /
 generate_and_store_digest).
 """
+
 import threading
 import time
 import unittest
@@ -15,7 +16,9 @@ from backend.ai.provider import AIResponse
 from backend.scanner.scanner import ScanResult
 
 
-def _fake_result(symbol: str, score: float, signals: list[str] | None = None, rsi: float | None = None) -> ScanResult:
+def _fake_result(
+    symbol: str, score: float, signals: list[str] | None = None, rsi: float | None = None
+) -> ScanResult:
     """``score`` doubles as both the (legacy) directional score and the
     live change_pct — build_digest_payload's movers now rank by
     change_pct, so every existing caller's sign/magnitude still drives
@@ -32,7 +35,6 @@ def _fake_result(symbol: str, score: float, signals: list[str] | None = None, rs
 
 
 class TestBuildDigestPayload(unittest.TestCase):
-
     @patch("backend.ai.digest.analyze_symbol")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")
     @patch("backend.scanner.scanner.market_scanner")
@@ -40,9 +42,7 @@ class TestBuildDigestPayload(unittest.TestCase):
     def test_picks_top_n_movers_by_signed_score(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         symbols = ["A", "B", "C", "D"]
         mock_resolve.return_value = symbols
         results = {
@@ -76,9 +76,7 @@ class TestBuildDigestPayload(unittest.TestCase):
         symbol with a bullish-looking directional score but a genuinely
         negative change_pct must land on the bearish side, and its
         reported change_pct (not the old score) is what's exposed."""
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         symbols = ["CRASHING", "RISING"]
         mock_resolve.return_value = symbols
         crashing = _fake_result("CRASHING", score=44.0)  # bullish-looking score...
@@ -104,9 +102,7 @@ class TestBuildDigestPayload(unittest.TestCase):
     def test_empty_watchlist_degrades_without_exception(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = []
         mock_scanner.scan_results = {}
 
@@ -142,12 +138,12 @@ class TestBuildDigestPayload(unittest.TestCase):
     def test_rsi_extremes_and_mtf_counts(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = ["A", "B", "C"]
         mock_scanner.scan_results = {
-            "A": _fake_result("A", 10.0, signals=["RSI_OVERSOLD", "MULTI_TIMEFRAME_BULLISH"], rsi=25.0),
+            "A": _fake_result(
+                "A", 10.0, signals=["RSI_OVERSOLD", "MULTI_TIMEFRAME_BULLISH"], rsi=25.0
+            ),
             "B": _fake_result("B", -10.0, signals=["MULTI_TIMEFRAME_BEARISH"], rsi=55.0),
             "C": _fake_result("C", 5.0, rsi=50.0),
         }
@@ -166,9 +162,7 @@ class TestBuildDigestPayload(unittest.TestCase):
     def test_mover_blurb_only_added_when_analysis_is_confident(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = ["A"]
         mock_scanner.scan_results = {"A": _fake_result("A", 90.0)}
         mock_analyze.return_value = MagicMock(is_uncertain=False, summary="Strong uptrend.")
@@ -184,9 +178,7 @@ class TestBuildDigestPayload(unittest.TestCase):
     def test_mover_blurb_omitted_when_analysis_uncertain(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = ["A"]
         mock_scanner.scan_results = {"A": _fake_result("A", 90.0)}
         mock_analyze.return_value = MagicMock(is_uncertain=True, summary="")
@@ -197,7 +189,6 @@ class TestBuildDigestPayload(unittest.TestCase):
 
 
 class TestNarrateDigest(unittest.TestCase):
-
     @patch("backend.ai.digest.ai_manager")
     def test_ai_off_falls_back_to_plain_narrative(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=False)
@@ -213,10 +204,13 @@ class TestNarrateDigest(unittest.TestCase):
     @patch("backend.ai.digest.ai_manager")
     def test_successful_ai_reply_parsed(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text='```json\n{"narrative": "Markets are calm.", "headline_movers": ["A", "B"]}\n```',
-            provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text='```json\n{"narrative": "Markets are calm.", "headline_movers": ["A", "B"]}\n```',
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
         payload = {"market_regime": {}, "movers": {"top_bullish": [], "top_bearish": []}}
         result = narrate_digest(payload)
         self.assertEqual(result.narrative, "Markets are calm.")
@@ -225,9 +219,13 @@ class TestNarrateDigest(unittest.TestCase):
     @patch("backend.ai.digest.ai_manager")
     def test_malformed_ai_reply_falls_back_gracefully(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
-        mock_ai.complete = AsyncMock(return_value=AIResponse(
-            text="not json", provider="ollama", model="llama3.2",
-        ))
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text="not json",
+                provider="ollama",
+                model="llama3.2",
+            )
+        )
         payload = {
             "market_regime": {"regime": "NEUTRAL"},
             "movers": {"top_bullish": [], "top_bearish": []},
@@ -252,9 +250,7 @@ class TestDigestParallelMoverAnalysis(unittest.TestCase):
     ):
         # 10 symbols → 5 bullish + 5 bearish = 10 movers;
         # max_workers = min(4, 10) = 4 → at most 4 concurrent analyses.
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         symbols = [f"S{i}" for i in range(10)]
         mock_resolve.return_value = symbols
         results = {
@@ -293,9 +289,7 @@ class TestDigestParallelMoverAnalysis(unittest.TestCase):
     ):
         # A=90 (slowest), B=80, C=70 (fastest) — ranked order must
         # survive even though C finishes before A.
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = ["A", "B", "C"]
         results = {
             "A": _fake_result("A", 90.0),
@@ -330,9 +324,7 @@ class TestDigestParallelMoverAnalysis(unittest.TestCase):
         # One symbol's analysis crashes; the other two must still
         # produce blurbs. _safe_call swallows the analyze_symbol error
         # inside _mover_dict, so future.result() returns normally.
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = ["A", "B", "C"]
         results = {
             "A": _fake_result("A", 90.0),
@@ -364,9 +356,7 @@ class TestDigestParallelMoverAnalysis(unittest.TestCase):
     def test_empty_mover_lists_no_executor_or_analysis(
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         mock_resolve.return_value = []
         mock_scanner.scan_results = {}
         mock_scanner.scan_symbols_async = AsyncMock()
@@ -383,9 +373,7 @@ class TestDigestParallelMoverAnalysis(unittest.TestCase):
         self, mock_get_engine, mock_scanner, mock_resolve, mock_analyze
     ):
         # 8 movers × 0.1s each: sequential ≈ 0.8s, 4-worker parallel ≈ 0.2s.
-        mock_get_engine.return_value = MagicMock(
-            get_current_context=MagicMock(return_value=None)
-        )
+        mock_get_engine.return_value = MagicMock(get_current_context=MagicMock(return_value=None))
         symbols = [f"S{i}" for i in range(8)]
         mock_resolve.return_value = symbols
         results = {

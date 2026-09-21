@@ -14,6 +14,7 @@ market-wide baseline regardless, so a 0-symbol turn is still answerable.
 Nothing in backend/nl_search/ is reusable — that layer produces
 screening filters, never a ticker list.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,32 +39,242 @@ _KNOWN_TTL = 60.0
 # tickers among these (IT, ALL, ON, F, C, ...) are only accepted via a
 # cashtag or an explicit "(TICKER)" / "ticker:" form, or the known set.
 _CHAT_STOPWORDS = {
-    "A", "I", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS", "IT",
-    "ME", "MY", "NO", "OF", "OK", "ON", "OR", "SO", "TO", "UP", "US", "WE",
-    "ALL", "AND", "ANY", "ARE", "BUT", "CAN", "DAY", "DID", "FOR", "GET", "GOT", "HAS",
-    "HAD", "HER", "HIM", "HIS", "HOW", "ITS", "LET", "LOW", "MAY", "NEW", "NOT", "NOW",
-    "OFF", "OLD", "ONE", "OUR", "OUT", "OWN", "PER", "PUT", "SEE", "SHE", "THE", "TOO",
-    "TOP", "TWO", "USE", "WAS", "WAY", "WHO", "WHY", "YES", "YET", "YOU",
-    "BEEN", "BOTH", "DOES", "DOWN", "EACH", "ELSE", "EVEN", "EVER", "FROM", "HAVE",
-    "HERE", "INTO", "JUST", "LESS", "LIKE", "MORE", "MOST", "MUCH", "ONLY", "OVER",
-    "SOME", "SUCH", "THAN", "THAT", "THEM", "THEN", "THEY", "THIS", "WHAT", "WHEN",
-    "WILL", "WITH", "YOUR",
+    "A",
+    "I",
+    "AN",
+    "AS",
+    "AT",
+    "BE",
+    "BY",
+    "DO",
+    "GO",
+    "HE",
+    "IF",
+    "IN",
+    "IS",
+    "IT",
+    "ME",
+    "MY",
+    "NO",
+    "OF",
+    "OK",
+    "ON",
+    "OR",
+    "SO",
+    "TO",
+    "UP",
+    "US",
+    "WE",
+    "ALL",
+    "AND",
+    "ANY",
+    "ARE",
+    "BUT",
+    "CAN",
+    "DAY",
+    "DID",
+    "FOR",
+    "GET",
+    "GOT",
+    "HAS",
+    "HAD",
+    "HER",
+    "HIM",
+    "HIS",
+    "HOW",
+    "ITS",
+    "LET",
+    "LOW",
+    "MAY",
+    "NEW",
+    "NOT",
+    "NOW",
+    "OFF",
+    "OLD",
+    "ONE",
+    "OUR",
+    "OUT",
+    "OWN",
+    "PER",
+    "PUT",
+    "SEE",
+    "SHE",
+    "THE",
+    "TOO",
+    "TOP",
+    "TWO",
+    "USE",
+    "WAS",
+    "WAY",
+    "WHO",
+    "WHY",
+    "YES",
+    "YET",
+    "YOU",
+    "BEEN",
+    "BOTH",
+    "DOES",
+    "DOWN",
+    "EACH",
+    "ELSE",
+    "EVEN",
+    "EVER",
+    "FROM",
+    "HAVE",
+    "HERE",
+    "INTO",
+    "JUST",
+    "LESS",
+    "LIKE",
+    "MORE",
+    "MOST",
+    "MUCH",
+    "ONLY",
+    "OVER",
+    "SOME",
+    "SUCH",
+    "THAN",
+    "THAT",
+    "THEM",
+    "THEN",
+    "THEY",
+    "THIS",
+    "WHAT",
+    "WHEN",
+    "WILL",
+    "WITH",
+    "YOUR",
     # finance abbreviations / jargon
-    "AI", "AH", "AM", "PM", "ET", "PT", "CT", "EOD", "EOW", "YTD", "YOY", "QOQ", "MOM",
-    "ATH", "ATL", "DCA", "FUD", "IMO", "FYI", "WSB", "DD", "TA", "FA", "PE", "PEG",
-    "EPS", "FCF", "ROE", "ROI", "P/E", "RSI", "MACD", "ADX", "EMA", "SMA", "VWAP",
-    "CPI", "PPI", "GDP", "PCE", "FOMC", "FED", "ECB", "BOJ", "IRA", "IPO", "ETF",
-    "CEO", "CFO", "COO", "CTO", "USD", "EUR", "GBP", "JPY", "USA", "UK", "EU",
-    "Q1", "Q2", "Q3", "Q4", "FY", "H1", "H2", "TTM", "MRQ",
-    "BUY", "SELL", "HOLD", "LONG", "CALL", "BID", "ASK", "GAP", "RUN",
-    "EV", "ESG", "AUM", "NAV", "OTC", "SEC", "IRS", "GAAP", "DIP", "PDT",
+    "AI",
+    "AH",
+    "AM",
+    "PM",
+    "ET",
+    "PT",
+    "CT",
+    "EOD",
+    "EOW",
+    "YTD",
+    "YOY",
+    "QOQ",
+    "MOM",
+    "ATH",
+    "ATL",
+    "DCA",
+    "FUD",
+    "IMO",
+    "FYI",
+    "WSB",
+    "DD",
+    "TA",
+    "FA",
+    "PE",
+    "PEG",
+    "EPS",
+    "FCF",
+    "ROE",
+    "ROI",
+    "P/E",
+    "RSI",
+    "MACD",
+    "ADX",
+    "EMA",
+    "SMA",
+    "VWAP",
+    "CPI",
+    "PPI",
+    "GDP",
+    "PCE",
+    "FOMC",
+    "FED",
+    "ECB",
+    "BOJ",
+    "IRA",
+    "IPO",
+    "ETF",
+    "CEO",
+    "CFO",
+    "COO",
+    "CTO",
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "USA",
+    "UK",
+    "EU",
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4",
+    "FY",
+    "H1",
+    "H2",
+    "TTM",
+    "MRQ",
+    "BUY",
+    "SELL",
+    "HOLD",
+    "LONG",
+    "CALL",
+    "BID",
+    "ASK",
+    "GAP",
+    "RUN",
+    "EV",
+    "ESG",
+    "AUM",
+    "NAV",
+    "OTC",
+    "SEC",
+    "IRS",
+    "GAAP",
+    "DIP",
+    "PDT",
     # conversational filler — blocks a needless AI name->ticker lookup on
     # a message that names no company (still forced through by a cashtag).
-    "ABOUT", "DOING", "GOING", "LOOKS", "LOOKING", "THINK", "THINKS", "TODAY",
-    "TONIGHT", "MAYBE", "REALLY", "BETTER", "WORSE", "SHOULD", "WOULD", "COULD",
-    "AGAIN", "STILL", "BEING", "GONNA", "WANNA", "PLEASE", "THANKS", "GUESS",
-    "PRETTY", "QUITE", "THING", "STUFF", "OKAY", "SURE", "WELL", "KNOW", "WANT",
-    "NEED", "MAKE", "TAKE", "LOOK", "FEEL", "SEEM", "SEEMS", "VERY", "MOVING",
+    "ABOUT",
+    "DOING",
+    "GOING",
+    "LOOKS",
+    "LOOKING",
+    "THINK",
+    "THINKS",
+    "TODAY",
+    "TONIGHT",
+    "MAYBE",
+    "REALLY",
+    "BETTER",
+    "WORSE",
+    "SHOULD",
+    "WOULD",
+    "COULD",
+    "AGAIN",
+    "STILL",
+    "BEING",
+    "GONNA",
+    "WANNA",
+    "PLEASE",
+    "THANKS",
+    "GUESS",
+    "PRETTY",
+    "QUITE",
+    "THING",
+    "STUFF",
+    "OKAY",
+    "SURE",
+    "WELL",
+    "KNOW",
+    "WANT",
+    "NEED",
+    "MAKE",
+    "TAKE",
+    "LOOK",
+    "FEEL",
+    "SEEM",
+    "SEEMS",
+    "VERY",
+    "MOVING",
 }
 
 # Cashtag / caret / explicit forms are high-confidence and skip shape
@@ -75,11 +286,14 @@ _RE_TICKER_KW = re.compile(r"\bticker[s]?:?\s+([A-Z][A-Z.\-]{0,6})\b")
 _RE_BARE = re.compile(r"(?<![A-Za-z0-9$^])([A-Z]{2,5})\b")
 
 _RE_PRONOUN = re.compile(
-    r"\b(it|its|it'?s|that|this|the stock|the name|the ticker|they|them|those)\b", re.I)
+    r"\b(it|its|it'?s|that|this|the stock|the name|the ticker|they|them|those)\b", re.I
+)
 _RE_BARE_METRIC = re.compile(
     r"\b(p\s*/?\s*e|pe|peg|rsi|macd|adx|eps|ebitda|margin|margins|fcf|debt|guidance|"
     r"target|targets|valuation|multiple|support|resistance|trend|dividend|yield|"
-    r"buyback|earnings|revenue|catalyst)\b", re.I)
+    r"buyback|earnings|revenue|catalyst)\b",
+    re.I,
+)
 _RE_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}\b")
 
 # Explicit "asking about a subject" phrasing — the only lowercase signal
@@ -95,20 +309,24 @@ _RE_NAME_TRIGGER = re.compile(
     re.I,
 )
 _RE_NAME_SUFFIX = re.compile(
-    r"\b([a-z][a-z'&.-]{2,})\s+(?:stock|shares|share price|ticker)\b", re.I,
+    r"\b([a-z][a-z'&.-]{2,})\s+(?:stock|shares|share price|ticker)\b",
+    re.I,
 )
 
 # Common company / index names -> ticker. Deterministic, case-insensitive;
 # checked before the AI name->ticker fallback. Values not already in the
 # known set are still live-quote validated.
 _NAME_TO_TICKER: dict[str, str] = {
-    "alphabet": "GOOGL", "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "google": "GOOGL",
     "apple": "AAPL",
     "microsoft": "MSFT",
     "amazon": "AMZN",
     "tesla": "TSLA",
     "nvidia": "NVDA",
-    "meta platforms": "META", "meta": "META", "facebook": "META",
+    "meta platforms": "META",
+    "meta": "META",
+    "facebook": "META",
     "netflix": "NFLX",
     "broadcom": "AVGO",
     "palantir": "PLTR",
@@ -116,16 +334,25 @@ _NAME_TO_TICKER: dict[str, str] = {
     "intel": "INTC",
     "coinbase": "COIN",
     "robinhood": "HOOD",
-    "berkshire hathaway": "BRK.B", "berkshire": "BRK.B",
+    "berkshire hathaway": "BRK.B",
+    "berkshire": "BRK.B",
     "walmart": "WMT",
     "disney": "DIS",
-    "the s&p": "SPY", "s&p 500": "SPY", "s&p500": "SPY", "sp500": "SPY", "spx": "SPY",
-    "the nasdaq": "QQQ", "nasdaq 100": "QQQ", "ndx": "QQQ",
-    "the dow": "DIA", "dow jones": "DIA",
+    "the s&p": "SPY",
+    "s&p 500": "SPY",
+    "s&p500": "SPY",
+    "sp500": "SPY",
+    "spx": "SPY",
+    "the nasdaq": "QQQ",
+    "nasdaq 100": "QQQ",
+    "ndx": "QQQ",
+    "the dow": "DIA",
+    "dow jones": "DIA",
     "russell 2000": "IWM",
 }
 _RE_NAME = re.compile(
-    r"\b(" + "|".join(re.escape(k) for k in sorted(_NAME_TO_TICKER, key=len, reverse=True))
+    r"\b("
+    + "|".join(re.escape(k) for k in sorted(_NAME_TO_TICKER, key=len, reverse=True))
     + r")\b",
     re.I,
 )
@@ -274,7 +501,8 @@ def _nearest_known(token: str) -> str | None:
     if not (4 <= len(token) <= 5):
         return None
     cands = [
-        k for k in _known_symbols()
+        k
+        for k in _known_symbols()
         if 4 <= len(k) <= 5 and not k.startswith("^") and _fuzzy1(token, k)
     ]
     return cands[0] if len(cands) == 1 else None
@@ -303,9 +531,7 @@ def _looks_like_name(text: str) -> bool:
     def _is_candidate(word: str) -> bool:
         w = word.strip(".'&-")
         return bool(
-            w
-            and w.upper() not in _CHAT_STOPWORDS
-            and not _RE_BARE_METRIC.fullmatch(w.lower())
+            w and w.upper() not in _CHAT_STOPWORDS and not _RE_BARE_METRIC.fullmatch(w.lower())
         )
 
     for m in _RE_NAME_TRIGGER.finditer(masked):
@@ -445,15 +671,17 @@ def _ai_resolve_name_uncached(text: str) -> list[str]:
         # worker threads) — bridge the async manager calls.
         if not run_sync(ai_manager.is_available()):
             return []
-        resp = run_sync(ai_manager.complete(
-            prompt=(
-                "Extract US stock ticker symbols for any companies named in this "
-                "message. Reply with a JSON object: {\"tickers\": [\"AAPL\", ...]}. "
-                "Empty list if none.\n\nMessage: " + text
-            ),
-            system="You map company names to their US ticker symbols. JSON only.",
-            max_tokens=120,
-        ))
+        resp = run_sync(
+            ai_manager.complete(
+                prompt=(
+                    "Extract US stock ticker symbols for any companies named in this "
+                    'message. Reply with a JSON object: {"tickers": ["AAPL", ...]}. '
+                    "Empty list if none.\n\nMessage: " + text
+                ),
+                system="You map company names to their US ticker symbols. JSON only.",
+                max_tokens=120,
+            )
+        )
         if resp.text is None:
             return []
         import json

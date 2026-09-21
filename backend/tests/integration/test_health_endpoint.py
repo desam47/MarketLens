@@ -9,6 +9,7 @@ The goal is to catch regressions that unit tests miss: middleware
 ordering, request/response shape drift, and the wiring between routers
 and the app object.
 """
+
 from __future__ import annotations
 
 import os
@@ -74,6 +75,7 @@ class TestSystemStatusEndpoint(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_system_status_returns_200(self) -> None:
@@ -90,6 +92,7 @@ class TestOpenAPISchema(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_openapi_json_is_valid(self) -> None:
@@ -118,11 +121,13 @@ class TestMiddlewareOrder(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
 
     def test_rate_limited_response_carries_security_headers(self) -> None:
         # Force the rate limiter to deny every request.
         from backend.api.main import _write_limiter
+
         with patch.object(_write_limiter, "is_allowed", return_value=(False, 0)):
             resp = self.client.post("/api/ai/config", json={})
         # 429 from the middleware.

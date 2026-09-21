@@ -9,6 +9,7 @@ Covers the seams that do NOT require a live Redis / RQ worker / DB:
     ``None`` (or an empty result) instead of raising. The ``*_job`` helpers
     return ``None`` before any DB access, so these tests never touch SQLite.
 """
+
 from datetime import UTC, datetime
 from unittest.mock import patch
 

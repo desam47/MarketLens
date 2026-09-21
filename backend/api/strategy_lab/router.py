@@ -8,6 +8,7 @@ experiments run asynchronously: the POST endpoint spawns a
 ``BacktestEngine.run`` per (symbol, slice) pair and returns the
 experiment_id immediately so the front-end can poll ``GET /{id}``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -224,11 +225,16 @@ class ExperimentResponse(BaseModel):
     run_ids_json: str | None = None
 
     @field_serializer(
-        "start_date", "end_date",
-        "is_start", "is_end",
-        "val_start", "val_end",
-        "oos_start", "oos_end",
-        "created_at", "completed_at",
+        "start_date",
+        "end_date",
+        "is_start",
+        "is_end",
+        "val_start",
+        "val_end",
+        "oos_start",
+        "oos_end",
+        "created_at",
+        "completed_at",
     )
     def _serialize_tz(self, value: datetime | None) -> str | None:
         return _to_dashboard_tz(value)
@@ -269,7 +275,9 @@ async def create_experiment(body: ExperimentCreate) -> ExperimentResponse:
     The experiment is queued and runs synchronously in this process.
     Poll ``GET /api/strategy-lab/{id}`` for status and results.
     """
-    params = body.parameters.to_experiment_parameters() if body.parameters else ExperimentParameters()
+    params = (
+        body.parameters.to_experiment_parameters() if body.parameters else ExperimentParameters()
+    )
     signals = body.signals if body.signals else DEFAULT_SIGNALS
 
     config = ExperimentConfig(
@@ -353,24 +361,26 @@ def get_experiment_runs(experiment_id: int) -> dict:
     # Serialize runs — only the fields the front-end needs.
     run_rows = []
     for r in runs:
-        run_rows.append({
-            "id": r.id,
-            "symbol": r.symbol,
-            "start_date": _to_dashboard_tz(r.start_date),
-            "end_date": _to_dashboard_tz(r.end_date),
-            "status": r.status,
-            "out_of_sample": r.out_of_sample,
-            "win_rate_1d": r.win_rate_1d,
-            "avg_return_1d": r.avg_return_1d,
-            "avg_return_5d": r.avg_return_5d,
-            "avg_return_20d": r.avg_return_20d,
-            "sharpe_ratio": r.sharpe_ratio,
-            "profit_factor": r.profit_factor,
-            "max_drawdown": r.max_drawdown,
-            "total_signals": r.total_signals,
-            "signal_frequency": r.signal_frequency,
-            "regime_at_entry": None,  # aggregated below
-        })
+        run_rows.append(
+            {
+                "id": r.id,
+                "symbol": r.symbol,
+                "start_date": _to_dashboard_tz(r.start_date),
+                "end_date": _to_dashboard_tz(r.end_date),
+                "status": r.status,
+                "out_of_sample": r.out_of_sample,
+                "win_rate_1d": r.win_rate_1d,
+                "avg_return_1d": r.avg_return_1d,
+                "avg_return_5d": r.avg_return_5d,
+                "avg_return_20d": r.avg_return_20d,
+                "sharpe_ratio": r.sharpe_ratio,
+                "profit_factor": r.profit_factor,
+                "max_drawdown": r.max_drawdown,
+                "total_signals": r.total_signals,
+                "signal_frequency": r.signal_frequency,
+                "regime_at_entry": None,  # aggregated below
+            }
+        )
 
     return {
         "runs": run_rows,
@@ -412,11 +422,7 @@ def compare_experiments(body: ExperimentCompare) -> ExperimentCompareResponse:
 
         db = SessionLocal()
         try:
-            trades = (
-                db.query(BacktestTrade)
-                .filter(BacktestTrade.run_id.in_(all_run_ids))
-                .all()
-            )
+            trades = db.query(BacktestTrade).filter(BacktestTrade.run_id.in_(all_run_ids)).all()
         finally:
             db.close()
 
@@ -439,14 +445,17 @@ def compare_experiments(body: ExperimentCompare) -> ExperimentCompareResponse:
             avg_return = round(sum(rets) / len(rets), 6) if rets else None
             win_rate = (
                 round(len([t for t in t_list if t.return_1d and t.return_1d > 0]) / len(rets), 4)
-                if rets else None
+                if rets
+                else None
             )
-            regime_breakdown.append({
-                "regime": regime,
-                "count": count,
-                "avg_return_1d": avg_return,
-                "win_rate_1d": win_rate,
-            })
+            regime_breakdown.append(
+                {
+                    "regime": regime,
+                    "count": count,
+                    "avg_return_1d": avg_return,
+                    "win_rate_1d": win_rate,
+                }
+            )
     else:
         regime_breakdown = None
 

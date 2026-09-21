@@ -5,6 +5,7 @@ Fresh in-memory SQLite per test (same convention as
 test_bar_repository.py / test_signal_repository.py) so chat rows
 never touch the real marketlens.db.
 """
+
 import unittest
 
 from sqlalchemy import create_engine
@@ -15,10 +16,10 @@ from backend.repositories.chat_repository import ChatRepository
 
 
 class TestChatRepository(unittest.TestCase):
-
     def setUp(self):
         self.engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False},
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
         )
         for model in (ChatSession, ChatMessage):
             model.__table__.create(self.engine, checkfirst=True)

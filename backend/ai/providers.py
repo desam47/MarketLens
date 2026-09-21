@@ -8,6 +8,7 @@ two recoverable failure modes (connection / 4xx). Authentication
 errors (missing/bad API key) are treated as ``ProviderUnavailable``
 so the manager can fall through to the next chain entry.
 """
+
 from __future__ import annotations
 
 import json
@@ -106,7 +107,8 @@ class OpenAICompatibleProvider(AIProvider):
                 client = httpx.AsyncClient(
                     timeout=self._timeout,
                     limits=httpx.Limits(
-                        max_connections=10, max_keepalive_connections=5,
+                        max_connections=10,
+                        max_keepalive_connections=5,
                     ),
                 )
                 self._client = client
@@ -126,7 +128,8 @@ class OpenAICompatibleProvider(AIProvider):
                 client = httpx.AsyncClient(
                     timeout=self._health_check_timeout,
                     limits=httpx.Limits(
-                        max_connections=2, max_keepalive_connections=1,
+                        max_connections=2,
+                        max_keepalive_connections=1,
                     ),
                 )
                 self._hc_client = client
@@ -230,9 +233,7 @@ class OpenAICompatibleProvider(AIProvider):
         try:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
-            raise ProviderUnavailable(
-                f"{self.name} returned unexpected payload: {e}"
-            ) from e
+            raise ProviderUnavailable(f"{self.name} returned unexpected payload: {e}") from e
 
         return AIResponse(
             text=text,
@@ -288,7 +289,9 @@ class OpenAICompatibleProvider(AIProvider):
                         "%s returned request-error status %d during streaming "
                         "(not recoverable/transient — likely a malformed "
                         "request on our side): %s",
-                        self.name, r.status_code, r.text[:500],
+                        self.name,
+                        r.status_code,
+                        r.text[:500],
                     )
                     r.raise_for_status()
                 async for line in r.aiter_lines():
@@ -384,7 +387,8 @@ class AnthropicProvider(AIProvider):
                 client = httpx.AsyncClient(
                     timeout=self._timeout,
                     limits=httpx.Limits(
-                        max_connections=10, max_keepalive_connections=5,
+                        max_connections=10,
+                        max_keepalive_connections=5,
                     ),
                 )
                 self._client = client
@@ -401,7 +405,8 @@ class AnthropicProvider(AIProvider):
                 client = httpx.AsyncClient(
                     timeout=self._health_check_timeout,
                     limits=httpx.Limits(
-                        max_connections=2, max_keepalive_connections=1,
+                        max_connections=2,
+                        max_keepalive_connections=1,
                     ),
                 )
                 self._hc_client = client
@@ -456,7 +461,9 @@ class AnthropicProvider(AIProvider):
         # guaranteeing the response is valid JSON matching the schema.
         if response_format is not None:
             schema = response_format.get("json_schema", response_format)
-            tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            tool_name = (
+                schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            )
             # "schema" is the spec-compliant OpenAI json_schema key name;
             # "parameters" is kept for back-compat with the older shape
             # this adapter originally read.
@@ -524,9 +531,7 @@ class AnthropicProvider(AIProvider):
                     if block.get("type") == "text"
                 )
         except (KeyError, TypeError) as e:
-            raise ProviderUnavailable(
-                f"anthropic returned unexpected payload: {e}"
-            ) from e
+            raise ProviderUnavailable(f"anthropic returned unexpected payload: {e}") from e
 
         return AIResponse(
             text=text,
@@ -559,7 +564,9 @@ class AnthropicProvider(AIProvider):
             body["temperature"] = temperature
         if response_format is not None:
             schema = response_format.get("json_schema", response_format)
-            tool_name = schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            tool_name = (
+                schema.get("name", "json_output") if isinstance(schema, dict) else "json_output"
+            )
             # "schema" is the spec-compliant OpenAI json_schema key name;
             # "parameters" is kept for back-compat with the older shape
             # this adapter originally read.
@@ -575,40 +582,43 @@ class AnthropicProvider(AIProvider):
 
         try:
             async with self._get_client().stream(
-                "POST", f"{self._base_url}/v1/messages",
-                json=body, headers=self._headers(),
+                "POST",
+                f"{self._base_url}/v1/messages",
+                json=body,
+                headers=self._headers(),
             ) as r:
-                    if r.status_code >= 400:
-                        await r.aread()
-                        _raise_if_unavailable(r.status_code, "anthropic", r.text)
-                        # See OpenAICompatibleProvider.stream()'s identical
-                        # comment — a genuinely malformed request still
-                        # degrades to ProviderUnavailable (not raised
-                        # uncaught, to avoid breaking the SSE connection
-                        # mid-stream), but is logged at ERROR first so it's
-                        # not silently indistinguishable from a routine
-                        # provider outage.
-                        logger.error(
-                            "anthropic returned request-error status %d during "
-                            "streaming (not recoverable/transient — likely a "
-                            "malformed request on our side): %s",
-                            r.status_code, r.text[:500],
-                        )
-                        r.raise_for_status()
-                    async for line in r.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        try:
-                            evt = json.loads(line[5:].strip())
-                        except ValueError:
-                            continue
-                        etype = evt.get("type")
-                        if etype == "content_block_delta":
-                            piece = (evt.get("delta") or {}).get("text")
-                            if piece:
-                                yield piece
-                        elif etype in ("message_stop", "error"):
-                            break
+                if r.status_code >= 400:
+                    await r.aread()
+                    _raise_if_unavailable(r.status_code, "anthropic", r.text)
+                    # See OpenAICompatibleProvider.stream()'s identical
+                    # comment — a genuinely malformed request still
+                    # degrades to ProviderUnavailable (not raised
+                    # uncaught, to avoid breaking the SSE connection
+                    # mid-stream), but is logged at ERROR first so it's
+                    # not silently indistinguishable from a routine
+                    # provider outage.
+                    logger.error(
+                        "anthropic returned request-error status %d during "
+                        "streaming (not recoverable/transient — likely a "
+                        "malformed request on our side): %s",
+                        r.status_code,
+                        r.text[:500],
+                    )
+                    r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    try:
+                        evt = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    etype = evt.get("type")
+                    if etype == "content_block_delta":
+                        piece = (evt.get("delta") or {}).get("text")
+                        if piece:
+                            yield piece
+                    elif etype in ("message_stop", "error"):
+                        break
         except httpx.HTTPError as e:
             raise ProviderUnavailable(f"anthropic unreachable: {e}") from e
 

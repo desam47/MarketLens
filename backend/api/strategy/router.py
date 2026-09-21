@@ -1,6 +1,7 @@
 """
 API endpoints for strategy selection
 """
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -39,11 +40,13 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
 # Only the selector itself needs per-symbol state (selection history).
 _selectors: dict[str, StrategySelector] = {}
 
+
 def get_strategy_selector(symbol: str) -> StrategySelector:
     """Get or create strategy selector for symbol"""
     if symbol not in _selectors:
         _selectors[symbol] = StrategySelector(symbol)
     return _selectors[symbol]
+
 
 @router.get("/{symbol}/current")
 async def get_current_strategy(symbol: str):
@@ -67,7 +70,7 @@ async def get_current_strategy(symbol: str):
         strategy_signal = selector.select_strategy(
             regime_signal=regime_signal,
             trend_signal=trend_signal,
-            confluence_signal=confluence_signal
+            confluence_signal=confluence_signal,
         )
 
         payload = {
@@ -77,27 +80,52 @@ async def get_current_strategy(symbol: str):
             "timeframe": strategy_signal.timeframe,
             "parameters": strategy_signal.parameters,
             "regime_signal": {
-                "regime": strategy_signal.regime_signal.regime.value if strategy_signal.regime_signal else None,
-                "confidence": strategy_signal.regime_signal.confidence if strategy_signal.regime_signal else None,
-                "strength": strategy_signal.regime_signal.strength if strategy_signal.regime_signal else None
-            } if strategy_signal.regime_signal else None,
+                "regime": strategy_signal.regime_signal.regime.value
+                if strategy_signal.regime_signal
+                else None,
+                "confidence": strategy_signal.regime_signal.confidence
+                if strategy_signal.regime_signal
+                else None,
+                "strength": strategy_signal.regime_signal.strength
+                if strategy_signal.regime_signal
+                else None,
+            }
+            if strategy_signal.regime_signal
+            else None,
             "trend_signal": {
-                "direction": strategy_signal.trend_signal.direction.value if strategy_signal.trend_signal else None,
-                "strength": strategy_signal.trend_signal.strength.value if strategy_signal.trend_signal else None,
-                "confidence": strategy_signal.trend_signal.confidence if strategy_signal.trend_signal else None
-            } if strategy_signal.trend_signal else None,
+                "direction": strategy_signal.trend_signal.direction.value
+                if strategy_signal.trend_signal
+                else None,
+                "strength": strategy_signal.trend_signal.strength.value
+                if strategy_signal.trend_signal
+                else None,
+                "confidence": strategy_signal.trend_signal.confidence
+                if strategy_signal.trend_signal
+                else None,
+            }
+            if strategy_signal.trend_signal
+            else None,
             "confluence_signal": {
-                "direction": strategy_signal.confluence_signal.direction.value if strategy_signal.confluence_signal else None,
-                "strength": strategy_signal.confluence_signal.strength if strategy_signal.confluence_signal else None,
-                "alignment_score": strategy_signal.confluence_signal.alignment_score if strategy_signal.confluence_signal else None
-            } if strategy_signal.confluence_signal else None,
-            "timestamp": _to_dashboard_tz(strategy_signal.timestamp)
+                "direction": strategy_signal.confluence_signal.direction.value
+                if strategy_signal.confluence_signal
+                else None,
+                "strength": strategy_signal.confluence_signal.strength
+                if strategy_signal.confluence_signal
+                else None,
+                "alignment_score": strategy_signal.confluence_signal.alignment_score
+                if strategy_signal.confluence_signal
+                else None,
+            }
+            if strategy_signal.confluence_signal
+            else None,
+            "timestamp": _to_dashboard_tz(strategy_signal.timestamp),
         }
         _strategy_cache[key] = payload
         return payload
     except Exception as e:
         logger.error(f"Error getting strategy for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @router.get("/{symbol}/history")
 async def get_strategy_history(symbol: str, limit: int | None = 100):
@@ -117,11 +145,11 @@ async def get_strategy_history(symbol: str, limit: int | None = 100):
                     "strategy_type": signal.strategy_type.value,
                     "confidence": signal.confidence,
                     "timeframe": signal.timeframe,
-                    "timestamp": _to_dashboard_tz(signal.timestamp)
+                    "timestamp": _to_dashboard_tz(signal.timestamp),
                 }
                 for signal in history
             ],
-            "count": len(history)
+            "count": len(history),
         }
         _strategy_history_cache[key] = payload
         return payload
@@ -129,17 +157,20 @@ async def get_strategy_history(symbol: str, limit: int | None = 100):
         logger.error(f"Error getting strategy history for {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+
 @router.post("/{symbol}/select")
-async def select_strategy_manual(symbol: str,
-                               regime: str | None = None,
-                               regime_confidence: float | None = None,
-                               regime_strength: float | None = None,
-                               trend_direction: str | None = None,
-                               trend_strength: str | None = None,
-                               trend_confidence: float | None = None,
-                               confluence_direction: str | None = None,
-                               confluence_strength: float | None = None,
-                               confluence_alignment: float | None = None):
+async def select_strategy_manual(
+    symbol: str,
+    regime: str | None = None,
+    regime_confidence: float | None = None,
+    regime_strength: float | None = None,
+    trend_direction: str | None = None,
+    trend_strength: str | None = None,
+    trend_confidence: float | None = None,
+    confluence_direction: str | None = None,
+    confluence_strength: float | None = None,
+    confluence_alignment: float | None = None,
+):
     """Manually select strategy with provided signals (for testing)"""
     try:
         from backend.engines.timeframe import Timeframe
@@ -163,7 +194,7 @@ async def select_strategy_manual(symbol: str,
                 confidence=regime_confidence or 0.0,
                 strength=regime_strength or 0.0,
                 supporting_factors={},
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
 
         # Build trend signal if provided
@@ -173,9 +204,11 @@ async def select_strategy_manual(symbol: str,
                 symbol=symbol.upper(),
                 timeframe=Timeframe.ONE_HOUR,
                 direction=TrendDirection(trend_direction),
-                strength=TrendStrength(trend_strength) if trend_strength else TrendStrength.MODERATE,
+                strength=TrendStrength(trend_strength)
+                if trend_strength
+                else TrendStrength.MODERATE,
                 confidence=trend_confidence or 0.0,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
 
         # Build confluence signal if provided
@@ -187,7 +220,7 @@ async def select_strategy_manual(symbol: str,
                 strength=confluence_strength or 0.0,
                 alignment_score=confluence_alignment or 0.0,
                 timeframe_signals={},
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
             )
 
         # Select strategy
@@ -195,7 +228,7 @@ async def select_strategy_manual(symbol: str,
         strategy_signal = selector.select_strategy(
             regime_signal=regime_signal,
             trend_signal=trend_signal,
-            confluence_signal=confluence_signal
+            confluence_signal=confluence_signal,
         )
 
         return {
@@ -204,7 +237,7 @@ async def select_strategy_manual(symbol: str,
             "confidence": strategy_signal.confidence,
             "timeframe": strategy_signal.timeframe,
             "parameters": strategy_signal.parameters,
-            "timestamp": _to_dashboard_tz(strategy_signal.timestamp)
+            "timestamp": _to_dashboard_tz(strategy_signal.timestamp),
         }
     except Exception as e:
         logger.error(f"Error selecting strategy manually for {symbol}: {e}")

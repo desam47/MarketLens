@@ -4,6 +4,7 @@ Retention for the append-only quote / provider-status / market-status / backfill
 The ingestion loops insert into these on every tick and nothing ever deleted from them
 (only ``bars`` had a retention prune). Windows come from ``settings.retention``.
 """
+
 import logging
 from datetime import datetime, timedelta
 
@@ -16,7 +17,9 @@ from backend.models.market_data_sql import MarketStatusModel, ProviderStatusMode
 logger = logging.getLogger(__name__)
 
 
-def _prune_table(db: Session, model, cutoff: datetime, chunk_size: int, column: str = "timestamp") -> int:
+def _prune_table(
+    db: Session, model, cutoff: datetime, chunk_size: int, column: str = "timestamp"
+) -> int:
     """Delete rows of ``model`` whose ``column`` is older than ``cutoff`` in short transactions.
 
     One statement per chunk keeps SQLite's single write lock held briefly, so the ingestion
@@ -32,7 +35,9 @@ def _prune_table(db: Session, model, cutoff: datetime, chunk_size: int, column: 
             return total
 
 
-def prune_status_tables(db: Session, chunk_size: int = 5000, now: datetime | None = None) -> dict[str, int]:
+def prune_status_tables(
+    db: Session, chunk_size: int = 5000, now: datetime | None = None
+) -> dict[str, int]:
     """Prune quotes / provider_status / market_status to their configured windows.
 
     Returns ``{table: rows_deleted}`` for tables that actually lost rows (empty on the common

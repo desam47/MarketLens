@@ -1,6 +1,7 @@
 """
 Tests for ATR (Average True Range) indicator
 """
+
 import unittest
 
 from backend.indicators.atr import ATRIndicator
@@ -12,17 +13,21 @@ class TestATRIndicator(unittest.TestCase):
     def setUp(self):
         self.indicator = ATRIndicator(period=14)
 
-    def _make_ohlc(self, n: int = 30, base: float = 100.0, step: float = 0.5) -> list[dict[str, float]]:
+    def _make_ohlc(
+        self, n: int = 30, base: float = 100.0, step: float = 0.5
+    ) -> list[dict[str, float]]:
         """Generate a series of OHLC bars with constant daily range = 1.0."""
         bars = []
         for i in range(n):
             close = base + i * step
-            bars.append({
-                "open": close - 0.25,
-                "high": close + 0.5,
-                "low": close - 0.5,
-                "close": close,
-            })
+            bars.append(
+                {
+                    "open": close - 0.25,
+                    "high": close + 0.5,
+                    "low": close - 0.5,
+                    "close": close,
+                }
+            )
         return bars
 
     def test_atr_calculation(self):

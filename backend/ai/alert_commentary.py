@@ -17,6 +17,7 @@ NULL) rather than raising. This is enrichment on an event that's
 already meaningfully recorded without it — a failure here must never
 look like anything went wrong with the alert itself.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,7 +57,8 @@ def generate_commentary(trigger_id: int) -> str | None:
         if alert is None:
             logger.warning(
                 "generate_commentary: alert %s not found for trigger %s",
-                trigger.alert_id, trigger_id,
+                trigger.alert_id,
+                trigger_id,
             )
             return None
 
@@ -71,7 +73,9 @@ def generate_commentary(trigger_id: int) -> str | None:
         # conditions (RSI/MACD extremes, trend flips) relate to it.
         try:
             context = build_context(
-                trigger.symbol, include_news=False, include_fundamentals=False,
+                trigger.symbol,
+                include_news=False,
+                include_fundamentals=False,
             )
             context_dict = context.compact()
         except Exception as e:  # noqa: BLE001
@@ -80,7 +84,8 @@ def generate_commentary(trigger_id: int) -> str | None:
             # facts alone rather than giving up entirely.
             logger.info(
                 "generate_commentary: build_context failed for %s, using alert facts only: %s",
-                trigger.symbol, e,
+                trigger.symbol,
+                e,
             )
             context_dict = {}
 
@@ -100,11 +105,13 @@ def generate_commentary(trigger_id: int) -> str | None:
         }
 
         try:
-            resp = run_sync(ai_manager.complete(
-                prompt=build_alert_commentary_prompt(payload),
-                system=ALERT_COMMENTARY_SYSTEM_PROMPT,
-                max_tokens=200,
-            ))
+            resp = run_sync(
+                ai_manager.complete(
+                    prompt=build_alert_commentary_prompt(payload),
+                    system=ALERT_COMMENTARY_SYSTEM_PROMPT,
+                    max_tokens=200,
+                )
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("Alert commentary AI call raised: %s", e)
             return None

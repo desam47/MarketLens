@@ -4,6 +4,7 @@ Finnhub API routes — company data, news, and analyst sentiment (v2.2).
 All endpoints use Cache-Control: max-age=3600 (1 hour) since Finnhub
 free tier is rate-limited and company data changes infrequently.
 """
+
 import asyncio
 import logging
 from datetime import date, timedelta
@@ -95,8 +96,12 @@ async def get_company_news(
     symbol: str,
     service: Annotated[FinnhubService, Depends(_service)],
     response: Response,
-    from_date: date | None = Query(default=None, description="Start date (YYYY-MM-DD). Defaults to 7 days ago."),
-    to_date: date | None = Query(default=None, description="End date (YYYY-MM-DD). Defaults to today."),
+    from_date: date | None = Query(
+        default=None, description="Start date (YYYY-MM-DD). Defaults to 7 days ago."
+    ),
+    to_date: date | None = Query(
+        default=None, description="End date (YYYY-MM-DD). Defaults to today."
+    ),
 ):
     """Company-specific news articles."""
     if from_date is None:
@@ -117,7 +122,9 @@ async def get_company_news(
 async def get_market_news(
     service: Annotated[FinnhubService, Depends(_service)],
     response: Response,
-    category: str = Query(default="general", description="News category: general, forex, crypto, merger"),
+    category: str = Query(
+        default="general", description="News category: general, forex, crypto, merger"
+    ),
 ):
     """General market news articles."""
     try:
@@ -138,7 +145,9 @@ async def get_analyst_recommendations(
 ):
     """Analyst buy/hold/sell consensus over time."""
     try:
-        recommendations = await asyncio.to_thread(service.get_analyst_recommendations, symbol.upper())
+        recommendations = await asyncio.to_thread(
+            service.get_analyst_recommendations, symbol.upper()
+        )
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return recommendations
     except ValueError as e:
@@ -152,8 +161,12 @@ async def get_insider_sentiment(
     symbol: str,
     service: Annotated[FinnhubService, Depends(_service)],
     response: Response,
-    from_date: date | None = Query(default=None, description="Start date (YYYY-MM-DD). Defaults to 1 year ago."),
-    to_date: date | None = Query(default=None, description="End date (YYYY-MM-DD). Defaults to today."),
+    from_date: date | None = Query(
+        default=None, description="Start date (YYYY-MM-DD). Defaults to 1 year ago."
+    ),
+    to_date: date | None = Query(
+        default=None, description="End date (YYYY-MM-DD). Defaults to today."
+    ),
 ):
     """Insider trading sentiment by month."""
     if from_date is None:
@@ -161,7 +174,9 @@ async def get_insider_sentiment(
     if to_date is None:
         to_date = date.today()
     try:
-        sentiment = await asyncio.to_thread(service.get_insider_sentiment, symbol.upper(), from_date, to_date)
+        sentiment = await asyncio.to_thread(
+            service.get_insider_sentiment, symbol.upper(), from_date, to_date
+        )
         response.headers["Cache-Control"] = f"public, max-age={_CACHE_MAX_AGE}"
         return sentiment
     except ValueError as e:

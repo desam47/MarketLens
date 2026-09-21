@@ -7,6 +7,7 @@ cache duration behavior.
 CacheMiddleware is a plain ASGI middleware. The unit tests drive it as an ASGI app
 (``await middleware(scope, receive, send)``) and inspect the messages it sends.
 """
+
 import asyncio
 import hashlib
 import unittest
@@ -24,15 +25,19 @@ class TestCacheMiddlewareETagGeneration(unittest.TestCase):
     def _run(self, coro):
         return self.loop.run_until_complete(coro)
 
-    def _make_middleware(self, status_code=200, body=b'{"ok": true}', content_type="application/json"):
+    def _make_middleware(
+        self, status_code=200, body=b'{"ok": true}', content_type="application/json"
+    ):
         """Build a CacheMiddleware wrapping a minimal ASGI app."""
 
         async def app(scope, receive, send):
-            await send({
-                "type": "http.response.start",
-                "status": status_code,
-                "headers": [(b"content-type", content_type.encode())],
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": status_code,
+                    "headers": [(b"content-type", content_type.encode())],
+                }
+            )
             await send({"type": "http.response.body", "body": body})
 
         return CacheMiddleware(app)
@@ -150,11 +155,19 @@ class TestCacheMiddlewareIntegration(unittest.TestCase):
         _quote_cache.clear()
         db = SessionLocal()
         try:
-            quote_repository.add_quote(db, Quote(
-                symbol="AAPL", price=190.25, bid=190.2, ask=190.3, volume=1000,
-                timestamp=datetime(2026, 9, 18, 15, 59), provider="test",
-                data_status=DataStatus.LIVE,
-            ))
+            quote_repository.add_quote(
+                db,
+                Quote(
+                    symbol="AAPL",
+                    price=190.25,
+                    bid=190.2,
+                    ask=190.3,
+                    volume=1000,
+                    timestamp=datetime(2026, 9, 18, 15, 59),
+                    provider="test",
+                    data_status=DataStatus.LIVE,
+                ),
+            )
             db.commit()
         finally:
             db.close()

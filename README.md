@@ -218,7 +218,7 @@ cd frontend && npm install && cd ..
 ### 3. Initialize the database
 
 ```bash
-python3 scripts/init_db.py
+python scripts/init_db.py
 ```
 
 This creates all tables in `marketlens.db` and seeds the default AI prompt template.
@@ -892,6 +892,19 @@ Opens `stats.html` showing the JavaScript bundle composition.
 ---
 
 ## Development
+
+### Full Local Verification
+
+Run the complete non-Docker quality gate before committing:
+
+```bash
+make local-check
+```
+
+It checks Ruff formatting and linting, verifies a fresh Alembic migration,
+runs the backend and frontend test suites, and creates a production frontend
+build. The migration audit uses a temporary SQLite database and does not touch
+your local `marketlens.db`.
 
 ### Database Migrations
 

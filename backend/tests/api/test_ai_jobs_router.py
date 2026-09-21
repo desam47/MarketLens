@@ -1,4 +1,5 @@
 """Tests for the background AI jobs API (Phase 2.5)."""
+
 from unittest.mock import patch
 
 import pytest
@@ -39,8 +40,10 @@ def _patch_background():
     def fake_get_status(job_id: str):
         return _FAKE_JOBS.get(job_id)
 
-    with patch("backend.api.ai.jobs.enqueue_analyze_job", side_effect=fake_enqueue), \
-         patch("backend.api.ai.jobs.get_job_status", side_effect=fake_get_status):
+    with (
+        patch("backend.api.ai.jobs.enqueue_analyze_job", side_effect=fake_enqueue),
+        patch("backend.api.ai.jobs.get_job_status", side_effect=fake_get_status),
+    ):
         yield
 
 

@@ -30,6 +30,7 @@ to observe the wall-clock difference.
 Run ``--benchmark-save=baseline`` first, then again after the optimization, and
 ``--benchmark-compare=baseline`` to see the delta.
 """
+
 import asyncio
 import os
 import sys
@@ -39,15 +40,42 @@ from unittest.mock import patch
 import pytest
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.models.market_data import DataStatus, Quote
 from backend.scanner.scanner import Scanner
 
 SAMPLE_SYMBOLS = [
-    "AAPL", "MSFT", "GOOGL", "NVDA", "TSLA", "AMZN", "META", "NFLX", "AMD", "INTC",
-    "JPM", "BAC", "WFC", "GS", "MS", "XOM", "CVX", "PFE", "JNJ", "UNH",
-    "HD", "LOW", "MCD", "SBUX", "NKE", "DIS", "CMCSA", "T", "VZ", "KO",
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "NVDA",
+    "TSLA",
+    "AMZN",
+    "META",
+    "NFLX",
+    "AMD",
+    "INTC",
+    "JPM",
+    "BAC",
+    "WFC",
+    "GS",
+    "MS",
+    "XOM",
+    "CVX",
+    "PFE",
+    "JNJ",
+    "UNH",
+    "HD",
+    "LOW",
+    "MCD",
+    "SBUX",
+    "NKE",
+    "DIS",
+    "CMCSA",
+    "T",
+    "VZ",
+    "KO",
 ]
 
 pytestmark = pytest.mark.benchmark
@@ -56,7 +84,8 @@ pytestmark = pytest.mark.benchmark
 @pytest.fixture
 def fresh_scanner():
     """A fresh Scanner with a stubbed market_data_manager."""
-    with patch('backend.scanner.scanner.market_data_manager') as mock:
+    with patch("backend.scanner.scanner.market_data_manager") as mock:
+
         def get_quote_side_effect(symbol):
             return Quote(
                 symbol=symbol,
@@ -66,6 +95,7 @@ def fresh_scanner():
                 data_status=DataStatus.DELAYED,
                 volume=1_000_000,
             )
+
         mock.get_quote.side_effect = get_quote_side_effect
         yield Scanner()
 
@@ -89,6 +119,7 @@ def test_scan_symbols_async(fresh_scanner, benchmark):
     this slightly slower than the sync path. The win only shows when the
     per-symbol work is dominated by blocking I/O (real YFinance calls).
     """
+
     async def _run():
         return await fresh_scanner.scan_symbols_async(SAMPLE_SYMBOLS)
 
@@ -103,6 +134,7 @@ def test_scan_symbols_async_with_simulated_latency(fresh_scanner, benchmark):
     ~50ms × ceil(30 / workers) async. The benchmark makes the parallelism
     win visible without needing a real network.
     """
+
     async def _slow_quote(symbol):
         await asyncio.sleep(0.05)  # 50ms simulated HTTP round-trip
         return Quote(
@@ -125,11 +157,11 @@ def test_scan_symbols_async_with_simulated_latency(fresh_scanner, benchmark):
 
     fresh_scanner.scan_symbol = slow_scan
     try:
+
         async def _run():
             return await fresh_scanner.scan_symbols_async(SAMPLE_SYMBOLS)
+
         result = benchmark(lambda: asyncio.run(_run()))
         assert len(result) == len(SAMPLE_SYMBOLS)
     finally:
         fresh_scanner.scan_symbol = original_scan
-
-

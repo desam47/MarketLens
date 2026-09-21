@@ -10,6 +10,7 @@ Covers:
   - Rate limiter stats() reflect throttled-call counts
   - Rate limiting is skipped when limit is 0 (disabled)
 """
+
 import os
 import sys
 import threading
@@ -35,6 +36,7 @@ class TestGetPerProviderRateLimit(unittest.TestCase):
         A plain object with explicit attributes raises AttributeError on missing
         attributes (the same behavior as a real pydantic BaseSettings instance).
         """
+
         class FakeMarketData:
             pass
 
@@ -245,6 +247,7 @@ class TestRedisSharedBudget(unittest.TestCase):
             def expire(self, k, s):
                 self.ops.append(("expire", k, s))
                 return self
+
             def execute(self):
                 out = []
                 for op in self.ops:
@@ -265,10 +268,16 @@ class TestRedisSharedBudget(unittest.TestCase):
                 return out
 
         class FakeRedis:
-            def pipeline(self): return FakePipe()
+            def pipeline(self):
+                return FakePipe()
+
             def zrange(self, k, a, b, withscores=False):
                 items = sorted(store.get(k, {}).items(), key=lambda kv: kv[1])
-                return [(m, sc) for m, sc in items[a:b + 1]] if withscores else [m for m, _ in items[a:b + 1]]
+                return (
+                    [(m, sc) for m, sc in items[a : b + 1]]
+                    if withscores
+                    else [m for m, _ in items[a : b + 1]]
+                )
 
         return FakeRedis()
 

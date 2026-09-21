@@ -8,6 +8,7 @@ This is the single source of truth for the values exposed by
 ``GET /api/system/performance``. The endpoint reads ``get_snapshot()``
 to get a consistent view.
 """
+
 import os
 import resource
 import threading
@@ -50,6 +51,7 @@ _cpu_peak_pct: float = 0.0
 
 # ── tracemalloc (Python heap profiling) ────────────────────────────────────
 
+
 def start_memory_profiling() -> None:
     """Start tracemalloc if not already running. Idempotent."""
     global _tracemalloc_started
@@ -89,9 +91,7 @@ def get_tracemalloc_snapshot() -> dict | None:
             "frame": str(stat.traceback),
             "size_kb": round(stat.size / 1024, 1),
         }
-        for stat in sorted(top, key=lambda s: s.size, reverse=True)[
-            :_TRACEMALLOC_TOP_FRAMES
-        ]
+        for stat in sorted(top, key=lambda s: s.size, reverse=True)[:_TRACEMALLOC_TOP_FRAMES]
     ]
 
     return {
@@ -225,9 +225,7 @@ def get_snapshot() -> dict:
     """Return a JSON-serializable snapshot of the current metrics."""
     now = datetime.now()
     avg_scan_ms = (
-        _scanner_total_scan_time_ms / _scanner_total_scans
-        if _scanner_total_scans > 0
-        else 0.0
+        _scanner_total_scan_time_ms / _scanner_total_scans if _scanner_total_scans > 0 else 0.0
     )
     tf_latency_s: float | None = None
     if _ingestion_last_bar_time is not None:
@@ -252,9 +250,7 @@ def get_snapshot() -> dict:
         ingestion_last_bar_time=(
             _ingestion_last_bar_time.isoformat() if _ingestion_last_bar_time else None
         ),
-        tf_update_latency_seconds=(
-            round(tf_latency_s, 2) if tf_latency_s is not None else None
-        ),
+        tf_update_latency_seconds=(round(tf_latency_s, 2) if tf_latency_s is not None else None),
         http_request_count=_http_request_count,
         memory_profiling_enabled=(heap is not None),
         python_heap_current_mb=(heap["current_mb"] if heap else None),

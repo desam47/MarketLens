@@ -10,6 +10,7 @@ Two things about the ``historical_signals`` table:
   ``AttributeError`` was swallowed and its ``historical_signal_stats`` section was empty on every
   request.
 """
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -33,8 +34,9 @@ _REPO = "backend.repositories.signal_repository"
 
 class _Db(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                                    poolclass=StaticPool)
+        self.engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
         HistoricalSignal.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.addCleanup(self.engine.dispose)
@@ -42,11 +44,16 @@ class _Db(unittest.TestCase):
     def _add(self, tf="1m", days_old=0, symbol="AAPL", state="bullish", r5=None, r10=None, n=1):
         with self.Session() as db:
             for i in range(n):
-                db.add(HistoricalSignal(
-                    symbol=symbol, timeframe=tf,
-                    timestamp=NOW - timedelta(days=days_old, minutes=i),
-                    trend_state=state, return_5b=r5, return_10b=r10,
-                ))
+                db.add(
+                    HistoricalSignal(
+                        symbol=symbol,
+                        timeframe=tf,
+                        timestamp=NOW - timedelta(days=days_old, minutes=i),
+                        trend_state=state,
+                        return_5b=r5,
+                        return_10b=r10,
+                    )
+                )
             db.commit()
 
     def _count(self, **filters):
@@ -61,14 +68,19 @@ class TestSignalRetention(_Db):
 
     def test_intraday_signals_are_kept_for_the_bar_window_plus_the_margin(self):
         window = 16 + SIGNAL_RETENTION_MARGIN_DAYS
-        self._add("1m", days_old=window - 1)         # inside: kept
-        self._add("1m", days_old=window + 1)         # past the window: deleted
+        self._add("1m", days_old=window - 1)  # inside: kept
+        self._add("1m", days_old=window + 1)  # past the window: deleted
         self.assertEqual(self._prune(), {"1m": 1})
         self.assertEqual(self._count(timeframe="1m"), 1)
 
     def test_each_timeframe_uses_its_own_window(self):
-        for tf, kept, dropped in (("30m", 17, 20), ("1h", 300, 380), ("4h", 300, 380),
-                                  ("1d", 1000, 1110), ("1wk", 1000, 1110)):
+        for tf, kept, dropped in (
+            ("30m", 17, 20),
+            ("1h", 300, 380),
+            ("4h", 300, 380),
+            ("1d", 1000, 1110),
+            ("1wk", 1000, 1110),
+        ):
             self._add(tf, days_old=kept)
             self._add(tf, days_old=dropped)
         deleted = self._prune()
@@ -81,7 +93,7 @@ class TestSignalRetention(_Db):
         from backend.config.settings import settings
 
         for tf in ("1m", "5m", "30m", "1h", "4h", "1d", "1wk"):
-            self._add(tf, days_old=settings.retention.days_for(tf))      # exactly at the bar cutoff
+            self._add(tf, days_old=settings.retention.days_for(tf))  # exactly at the bar cutoff
         self.assertEqual(self._prune(), {})
 
     def test_the_margin_is_at_least_a_day(self):
@@ -118,27 +130,35 @@ class TestSignalStats(_Db):
             return SignalRepository(db).get_stats(symbol, timeframe)
 
     def test_no_signals(self):
-        self.assertEqual(self._stats(), {"total": 0, "with_outcomes": 0, "avg_return_5b": None,
-                                         "avg_return_10b": None, "win_rate": None})
+        self.assertEqual(
+            self._stats(),
+            {
+                "total": 0,
+                "with_outcomes": 0,
+                "avg_return_5b": None,
+                "avg_return_10b": None,
+                "win_rate": None,
+            },
+        )
 
     def test_win_rate_is_direction_aware(self):
-        self._add(state="bullish", r5=2.0, r10=3.0)      # called it
-        self._add(state="bullish", r5=-1.0, r10=-1.0)    # wrong
-        self._add(state="bearish", r5=-2.0, r10=-2.0)    # called it (price fell)
-        self._add(state="bearish", r5=1.0, r10=2.0)      # wrong
+        self._add(state="bullish", r5=2.0, r10=3.0)  # called it
+        self._add(state="bullish", r5=-1.0, r10=-1.0)  # wrong
+        self._add(state="bearish", r5=-2.0, r10=-2.0)  # called it (price fell)
+        self._add(state="bearish", r5=1.0, r10=2.0)  # wrong
         stats = self._stats()
         self.assertEqual(stats["win_rate"], 0.5)
         # a naive "return > 0" rate would have said 2/4 too, so pin the case where it differs:
         self._add(state="bearish", r5=-3.0, r10=-3.0)
-        self.assertEqual(self._stats()["win_rate"], 0.6)   # 3 of 5; "return > 0" would give 0.4
+        self.assertEqual(self._stats()["win_rate"], 0.6)  # 3 of 5; "return > 0" would give 0.4
 
     def test_neutral_and_outcomeless_signals_do_not_enter_the_win_rate(self):
         self._add(state="neutral", r5=5.0, r10=5.0)
-        self._add(state="bullish", r5=None)                # no outcome yet
+        self._add(state="bullish", r5=None)  # no outcome yet
         self._add(state="bullish", r5=1.0, r10=1.0)
         stats = self._stats()
         self.assertEqual((stats["total"], stats["with_outcomes"]), (3, 2))
-        self.assertEqual(stats["win_rate"], 1.0)   # the one directional signal with an outcome won
+        self.assertEqual(stats["win_rate"], 1.0)  # the one directional signal with an outcome won
 
     def test_only_neutral_signals_means_no_win_rate(self):
         self._add(state="neutral", r5=1.0, r10=1.0)
@@ -156,7 +176,7 @@ class TestSignalStats(_Db):
         self._add(tf="1d", symbol="MSFT", state="bullish", r5=-1.0, r10=-1.0)
         self.assertEqual(self._stats("aapl", "1d")["win_rate"], 1.0)
         self.assertEqual(self._stats("AAPL", "1h")["win_rate"], 0.0)
-        self.assertEqual(self._stats("AAPL")["total"], 2)          # no timeframe: all of the symbol's
+        self.assertEqual(self._stats("AAPL")["total"], 2)  # no timeframe: all of the symbol's
 
 
 class TestAiContextGetsRealStats(_Db):
@@ -169,8 +189,9 @@ class TestAiContextGetsRealStats(_Db):
         self._add(tf="1d", state="bearish", r5=1.0, r10=1.0)
         with patch("backend.services.signal_recorder.SessionLocal", self.Session):
             ctx = _signal_stats_context("AAPL", "1d")
-        self.assertEqual(ctx, {"total_signals": 2, "avg_return_5b": 1.5,
-                               "avg_return_10b": 2.5, "win_rate": 0.5})
+        self.assertEqual(
+            ctx, {"total_signals": 2, "avg_return_5b": 1.5, "avg_return_10b": 2.5, "win_rate": 0.5}
+        )
 
     def test_the_recorder_has_the_method_the_ai_calls(self):
         from backend.services.signal_recorder import signal_recorder
@@ -192,11 +213,13 @@ class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
 
         svc._jittered_sleep = stop_after_one
         svc.is_running = True
-        with patch(f"{_ING}.SessionLocal"), \
-             patch("backend.repositories.bar_repository.prune_bars_by_retention", return_value={}), \
-             patch("backend.repositories.status_retention.prune_status_tables", return_value={}), \
-             patch(f"{_QUEUE}.reap_orphaned_jobs", return_value=0) as reaper, \
-             patch(f"{_REPO}.prune_signals_by_retention", signal_prune):
+        with (
+            patch(f"{_ING}.SessionLocal"),
+            patch("backend.repositories.bar_repository.prune_bars_by_retention", return_value={}),
+            patch("backend.repositories.status_retention.prune_status_tables", return_value={}),
+            patch(f"{_QUEUE}.reap_orphaned_jobs", return_value=0) as reaper,
+            patch(f"{_REPO}.prune_signals_by_retention", signal_prune),
+        ):
             await svc._retention_prune_loop()
         return reaper
 

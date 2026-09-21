@@ -10,6 +10,7 @@ frontend doesn't have to guess.
 (EDT/EST). UTC datetimes are always timezone-aware. The boundary is
 at the provider layer — providers convert UTC → NY naive before returning.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

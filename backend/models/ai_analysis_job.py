@@ -4,6 +4,7 @@ AI Analysis Job model (Phase 2.5: Background AI processing with RQ).
 Stores an enqueued AI analysis job so the frontend can poll for results.
 Status transitions: queued → started → finished | failed
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text
@@ -51,23 +52,29 @@ class AIAnalysisJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True, index=True,
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
     )
     symbol: Mapped[str] = mapped_column(String(10), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False, default="1d")
     template_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     template_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="queued", index=True,
+        String(20),
+        nullable=False,
+        default="queued",
+        index=True,
     )
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.utcnow,
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    __table_args__ = (
-        Index("ix_ai_analysis_jobs_symbol_created", "symbol", "created_at"),
-    )
+    __table_args__ = (Index("ix_ai_analysis_jobs_symbol_created", "symbol", "created_at"),)

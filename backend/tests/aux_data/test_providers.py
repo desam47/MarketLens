@@ -1,6 +1,7 @@
 """
 Phase 18 — Unit tests for the aux_data provider implementations.
 """
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +9,6 @@ from backend.models.aux_data import FundamentalsResponse, NewsResponse, OptionsR
 
 
 class TestYFinanceNewsProvider(unittest.TestCase):
-
     @patch("yfinance.Ticker")
     def test_get_news_returns_items(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_news import YFinanceNewsProvider
@@ -86,6 +86,7 @@ class TestYFinanceNewsProvider(unittest.TestCase):
     @patch("yfinance.Ticker")
     def test_get_news_empty_on_exception(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_news import YFinanceNewsProvider
+
         mock_ticker_cls.side_effect = RuntimeError("network error")
 
         prov = YFinanceNewsProvider()
@@ -97,7 +98,6 @@ class TestYFinanceNewsProvider(unittest.TestCase):
 
 
 class TestYFinanceFundamentalsProvider(unittest.TestCase):
-
     @patch("yfinance.Ticker")
     def test_get_fundamentals_maps_fields(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_fundamentals import YFinanceFundamentalsProvider
@@ -133,6 +133,7 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
     @patch("yfinance.Ticker")
     def test_safe_float_handles_nan(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_fundamentals import YFinanceFundamentalsProvider
+
         mock_ticker = MagicMock()
         mock_ticker.info = {"trailingPE": float("nan")}
         mock_ticker_cls.return_value = mock_ticker
@@ -145,6 +146,7 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
     @patch("yfinance.Ticker")
     def test_get_fundamentals_empty_on_exception(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_fundamentals import YFinanceFundamentalsProvider
+
         mock_ticker_cls.side_effect = RuntimeError("fail")
 
         prov = YFinanceFundamentalsProvider()
@@ -216,23 +218,42 @@ class TestYFinanceFundamentalsProvider(unittest.TestCase):
 
 
 class TestYFinanceOptionsProvider(unittest.TestCase):
-
     @patch("yfinance.Ticker")
     def test_get_options_builds_chain(self, mock_ticker_cls):
         import pandas as pd
 
         from backend.aux_data.providers.yfinance_options import YFinanceOptionsProvider
 
-        calls_df = pd.DataFrame([
-            {"strike": 200.0, "expiration": "2026-12-18", "lastPrice": 5.0,
-             "volume": 1000, "openInterest": 500, "impliedVolatility": 0.30,
-             "inTheMoney": False, "bid": 4.8, "ask": 5.2},
-        ])
-        puts_df = pd.DataFrame([
-            {"strike": 200.0, "expiration": "2026-12-18", "lastPrice": 4.5,
-             "volume": 800, "openInterest": 400, "impliedVolatility": 0.28,
-             "inTheMoney": True, "bid": 4.3, "ask": 4.7},
-        ])
+        calls_df = pd.DataFrame(
+            [
+                {
+                    "strike": 200.0,
+                    "expiration": "2026-12-18",
+                    "lastPrice": 5.0,
+                    "volume": 1000,
+                    "openInterest": 500,
+                    "impliedVolatility": 0.30,
+                    "inTheMoney": False,
+                    "bid": 4.8,
+                    "ask": 5.2,
+                },
+            ]
+        )
+        puts_df = pd.DataFrame(
+            [
+                {
+                    "strike": 200.0,
+                    "expiration": "2026-12-18",
+                    "lastPrice": 4.5,
+                    "volume": 800,
+                    "openInterest": 400,
+                    "impliedVolatility": 0.28,
+                    "inTheMoney": True,
+                    "bid": 4.3,
+                    "ask": 4.7,
+                },
+            ]
+        )
 
         mock_opt_chain = MagicMock()
         mock_opt_chain.calls = calls_df
@@ -260,6 +281,7 @@ class TestYFinanceOptionsProvider(unittest.TestCase):
     @patch("yfinance.Ticker")
     def test_get_options_empty_on_exception(self, mock_ticker_cls):
         from backend.aux_data.providers.yfinance_options import YFinanceOptionsProvider
+
         mock_ticker_cls.side_effect = RuntimeError("network error")
 
         prov = YFinanceOptionsProvider()
@@ -271,6 +293,7 @@ class TestYFinanceOptionsProvider(unittest.TestCase):
 
     def test_classify_unusual(self):
         from backend.aux_data.providers.yfinance_options import YFinanceOptionsProvider
+
         prov = YFinanceOptionsProvider()
         # volume=1000, oi=5000 → ratio 0.2 → normal
         self.assertEqual(prov._classify_unusual(1000, 5000).value, "normal")

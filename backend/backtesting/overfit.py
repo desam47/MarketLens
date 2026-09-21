@@ -18,6 +18,7 @@ These are heuristics, not statistical proofs. A high score means
 "verify on out-of-sample data", not "this is overfit". The warning
 banner always reads that way.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -38,8 +39,8 @@ OVERFIT_RETURN_FLIP = True
 MIN_SIGNALS_PER_SLICE = 10
 
 # --- Overall score thresholds ---
-OVERFIT_SCORE_WARNING = 0.5   # Score >= this → show warning banner
-OVERFIT_SCORE_DANGER = 0.8     # Score >= this → strong caution banner
+OVERFIT_SCORE_WARNING = 0.5  # Score >= this → show warning banner
+OVERFIT_SCORE_DANGER = 0.8  # Score >= this → strong caution banner
 
 
 @dataclass
@@ -68,19 +69,13 @@ def _check_single(
     sh = _safe(m, "sharpe_ratio")
     n = _safe(m, "total_signals") or 0
     if wr is not None and wr > OVERFIT_WINRATE_THRESHOLD:
-        warnings.append(
-            f"{label}: win rate {wr:.0%} exceeds {OVERFIT_WINRATE_THRESHOLD:.0%}"
-        )
+        warnings.append(f"{label}: win rate {wr:.0%} exceeds {OVERFIT_WINRATE_THRESHOLD:.0%}")
         score.append(0.3)
     if sh is not None and sh > OVERFIT_SHARPE_THRESHOLD:
-        warnings.append(
-            f"{label}: Sharpe {sh:.1f} exceeds {OVERFIT_SHARPE_THRESHOLD:.1f}"
-        )
+        warnings.append(f"{label}: Sharpe {sh:.1f} exceeds {OVERFIT_SHARPE_THRESHOLD:.1f}")
         score.append(0.3)
     if n < MIN_SIGNALS_PER_SLICE and n > 0:
-        warnings.append(
-            f"{label}: only {n} signals — results may not be statistically meaningful"
-        )
+        warnings.append(f"{label}: only {n} signals — results may not be statistically meaningful")
         score.append(0.1)
 
 
@@ -125,8 +120,7 @@ def compute_overfit_report(
             oos_win_rate_gap = gap
             if gap > OVERFIT_WINRATE_GAP:
                 warnings.append(
-                    f"Win rate dropped {gap:.0%} from IS to OOS "
-                    f"(IS={is_wr:.0%}, OOS={oos_wr:.0%})"
+                    f"Win rate dropped {gap:.0%} from IS to OOS (IS={is_wr:.0%}, OOS={oos_wr:.0%})"
                 )
                 score_parts.append(0.3)
 
@@ -135,8 +129,7 @@ def compute_overfit_report(
         if OVERFIT_RETURN_FLIP and is_ret is not None and oos_ret is not None:
             if is_ret > 0 and oos_ret < 0:
                 warnings.append(
-                    f"Average return flipped sign: IS=+{is_ret:.2f}%, "
-                    f"OOS={oos_ret:.2f}%"
+                    f"Average return flipped sign: IS=+{is_ret:.2f}%, OOS={oos_ret:.2f}%"
                 )
                 score_parts.append(0.5)
             elif is_ret > 0 and oos_ret > 0 and oos_ret < is_ret * 0.5:

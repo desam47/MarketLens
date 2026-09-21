@@ -9,6 +9,7 @@ A per-provider state machine that fail-fast when a provider is unhealthy:
 
 State transitions are logged at INFO. Thread-safe via a lock per breaker instance.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,6 +43,7 @@ class CircuitBreakerOpen(Exception):
 @dataclass
 class CircuitBreakerStats:
     """Snapshot of circuit breaker state for health reporting."""
+
     provider_name: str
     state: CircuitState
     consecutive_failures: int
@@ -178,8 +180,7 @@ class CircuitBreaker:
                 and self._consecutive_failures >= self.failure_threshold
             ):
                 logger.info(
-                    "Circuit breaker '%s' CLOSED → OPEN "
-                    "(%d consecutive failures, threshold %d)",
+                    "Circuit breaker '%s' CLOSED → OPEN (%d consecutive failures, threshold %d)",
                     self.name,
                     self._consecutive_failures,
                     self.failure_threshold,
@@ -218,11 +219,14 @@ def circuit_breaker(
     Any exception raised by the function is re-raised after the breaker
     records the failure.
     """
+
     def decorator(fn: Callable[..., F]) -> Callable[..., F]:
         def wrapper(*args: Any, **kwargs: Any) -> F:
             return breaker.call(fn, *args, **kwargs)
+
         # Preserve identity for introspection.
         wrapper.__name__ = fn.__name__
         wrapper.__doc__ = fn.__doc__
         return wrapper
+
     return decorator

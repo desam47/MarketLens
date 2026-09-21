@@ -17,6 +17,7 @@ class CompanyProfile(BaseModel):
     Returns company identity information: country of incorporation,
     exchange of listing, industry classification, logo URL, etc.
     """
+
     country: str | None = None
     currency: str | None = None
     exchange: str | None = None
@@ -34,6 +35,7 @@ class CompanyMetrics(BaseModel):
 
     Valuation ratios, per-share data, margins, and analyst consensus.
     """
+
     symbol: str
     # Valuation
     pe_basic_eps: float | None = None
@@ -70,6 +72,7 @@ class CompanyFinancials(BaseModel):
 
     Aggregated income statement, balance sheet, and cash flow data.
     """
+
     symbol: str
     # Income statement
     total_revenue: float | None = None
@@ -96,6 +99,7 @@ class NewsItem(BaseModel):
 
     Used for both company-specific news and general market news.
     """
+
     id: int
     symbol: str | None = None  # Populated for company-news; None for market-news
     category: str | None = None
@@ -113,6 +117,7 @@ class AnalystRecommendation(BaseModel):
 
     Represents a single period's analyst ratings distribution.
     """
+
     symbol: str
     buy: int
     hold: int
@@ -129,6 +134,7 @@ class InsiderSentiment(BaseModel):
 
     Aggregated insider trading data per month.
     """
+
     symbol: str
     name: str | None = None
     sector: str | None = None
@@ -141,6 +147,7 @@ class InsiderSentiment(BaseModel):
 
 class StockSymbol(BaseModel):
     """A single stock symbol from Finnhub /stock/symbol."""
+
     description: str | None = None
     display_symbol: str | None = None
     symbol: str | None = None

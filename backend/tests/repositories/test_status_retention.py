@@ -5,6 +5,7 @@ Nothing pruned them: the ingestion loops inserted on every tick and only ``bars`
 retention prune. ``prune_status_tables`` trims each to its window, in short transactions,
 and the hourly ``_retention_prune_loop`` now calls it independently of the bar prune.
 """
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -32,18 +33,22 @@ _job_seq = iter(range(1, 10**6))
 
 
 def _job(ts):
-    return BackfillJob(job_id=f"backfill-{next(_job_seq)}", symbol="AAPL", status="partial", created_at=ts)
+    return BackfillJob(
+        job_id=f"backfill-{next(_job_seq)}", symbol="AAPL", status="partial", created_at=ts
+    )
 
 
 def _market(ts):
-    return MarketStatusModel(symbol="AAPL", is_open=False, timezone="America/New_York",
-                             provider="webull", timestamp=ts)
+    return MarketStatusModel(
+        symbol="AAPL", is_open=False, timezone="America/New_York", provider="webull", timestamp=ts
+    )
 
 
 class _Db(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
-                                    poolclass=StaticPool)
+        self.engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
         for model in (QuoteModel, ProviderStatusModel, MarketStatusModel, BackfillJob):
             model.__table__.create(self.engine)
         self.Session = sessionmaker(bind=self.engine)
@@ -67,8 +72,9 @@ class TestPruneStatusTables(_Db):
         self._seed(days_old=1, n=2)
         with self.Session() as db:
             deleted = prune_status_tables(db, now=NOW)
-        self.assertEqual(deleted, {"quotes": 3, "provider_status": 3, "market_status": 3,
-                                   "backfill_jobs": 3})
+        self.assertEqual(
+            deleted, {"quotes": 3, "provider_status": 3, "market_status": 3, "backfill_jobs": 3}
+        )
         for model in (QuoteModel, ProviderStatusModel, MarketStatusModel, BackfillJob):
             self.assertEqual(self._count(model), 2, model.__tablename__)
 
@@ -94,8 +100,9 @@ class TestPruneStatusTables(_Db):
 
     def test_each_table_uses_its_own_window(self):
         self._seed(days_old=10, n=1)
-        retention = MagicMock(quotes_days=7, provider_status_days=30, market_status_days=30,
-                              backfill_jobs_days=30)
+        retention = MagicMock(
+            quotes_days=7, provider_status_days=30, market_status_days=30, backfill_jobs_days=30
+        )
         with patch("backend.config.settings.settings.retention", retention), self.Session() as db:
             deleted = prune_status_tables(db, now=NOW)
         self.assertEqual(deleted, {"quotes": 1})
@@ -118,8 +125,10 @@ class TestPruneStatusTables(_Db):
         from backend.config.settings import RetentionSettings
 
         r = RetentionSettings()
-        self.assertEqual((r.quotes_days, r.provider_status_days, r.market_status_days,
-                          r.backfill_jobs_days), (30, 30, 30, 30))
+        self.assertEqual(
+            (r.quotes_days, r.provider_status_days, r.market_status_days, r.backfill_jobs_days),
+            (30, 30, 30, 30),
+        )
 
 
 class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
@@ -134,11 +143,15 @@ class TestRetentionLoopWiring(unittest.IsolatedAsyncioTestCase):
 
         svc._jittered_sleep = stop_after_one
         svc.is_running = True
-        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
-             patch("backend.repositories.bar_repository.prune_bars_by_retention", bar_prune), \
-             patch("backend.repositories.status_retention.prune_status_tables", status_prune), \
-             patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", return_value=0), \
-             patch("backend.repositories.signal_repository.prune_signals_by_retention", return_value={}):
+        with (
+            patch("backend.market_data.services.ingestion_service.SessionLocal"),
+            patch("backend.repositories.bar_repository.prune_bars_by_retention", bar_prune),
+            patch("backend.repositories.status_retention.prune_status_tables", status_prune),
+            patch("backend.market_data.services.backfill_queue.reap_orphaned_jobs", return_value=0),
+            patch(
+                "backend.repositories.signal_repository.prune_signals_by_retention", return_value={}
+            ),
+        ):
             # The reaper and the signal prune are patched too: unpatched they run for real.
             await svc._retention_prune_loop()
 

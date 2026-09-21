@@ -13,6 +13,7 @@ Routes:
 All endpoints read/write through ``SignalRepository`` so the API and the
 ingestion service share one path to the DB.
 """
+
 import logging
 from datetime import datetime
 
@@ -107,8 +108,12 @@ def list_signals(
     symbol: str | None = None,
     timeframe: str | None = None,
     limit: int = Query(100, le=1000),
-    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
-    completed_only: bool = Query(False, description="Only return signals with completed outcomes (return_5b IS NOT NULL)"),
+    include_all: bool = Query(
+        False, description="Include signals for symbols not in the active watchlist"
+    ),
+    completed_only: bool = Query(
+        False, description="Only return signals with completed outcomes (return_5b IS NOT NULL)"
+    ),
     db: Session = Depends(get_db),
 ):
     """List historical signals with optional filters.
@@ -145,7 +150,9 @@ def list_signals(
 
 @router.get("/research/regime-performance", response_model=list[RegimePerformance])
 def get_regime_performance(
-    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
+    include_all: bool = Query(
+        False, description="Include signals for symbols not in the active watchlist"
+    ),
     db: Session = Depends(get_db),
 ):
     """Average forward returns by market regime.
@@ -159,6 +166,7 @@ def get_regime_performance(
     watchlist_symbols: list[str] | None = None
     if not include_all:
         from backend.repositories.watchlist_repository import WatchlistRepository
+
         wl_repo = WatchlistRepository(db)
         for wl in wl_repo.get_watchlists(active_only=True):
             syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
@@ -173,7 +181,9 @@ def get_regime_performance(
 
 @router.get("/research/count-by-regime", response_model=list[RegimeCount])
 def get_signal_count_by_regime(
-    include_all: bool = Query(False, description="Include signals for symbols not in the active watchlist"),
+    include_all: bool = Query(
+        False, description="Include signals for symbols not in the active watchlist"
+    ),
     db: Session = Depends(get_db),
 ):
     """Count of historical signals grouped by market regime.
@@ -183,6 +193,7 @@ def get_signal_count_by_regime(
     watchlist_symbols: list[str] | None = None
     if not include_all:
         from backend.repositories.watchlist_repository import WatchlistRepository
+
         wl_repo = WatchlistRepository(db)
         for wl in wl_repo.get_watchlists(active_only=True):
             syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
@@ -260,7 +271,11 @@ def record_signal(
     )
     if sig is None:
         return {"status": "duplicate_or_skipped"}
-    return {"status": "recorded", "id": sig.id, "timestamp": _to_dashboard_tz(sig.timestamp).isoformat() if sig.timestamp else None}
+    return {
+        "status": "recorded",
+        "id": sig.id,
+        "timestamp": _to_dashboard_tz(sig.timestamp).isoformat() if sig.timestamp else None,
+    }
 
 
 @router.get("/{signal_id}", response_model=SignalResponse)

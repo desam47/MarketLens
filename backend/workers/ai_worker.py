@@ -19,6 +19,7 @@ Or, if you have the venv active and want a one-shot invocation::
 For a long-lived worker process, the RQ CLI is preferred. This file is
 mostly here so the project has a documented entry point.
 """
+
 import argparse
 import logging
 import sys

@@ -1,6 +1,7 @@
 """
 Repository for historical signal storage and research queries.
 """
+
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -39,9 +40,7 @@ class SignalRepository:
         return len(objects)
 
     def get_by_id(self, signal_id: int) -> HistoricalSignal | None:
-        return self.db.query(HistoricalSignal).filter(
-            HistoricalSignal.id == signal_id
-        ).first()
+        return self.db.query(HistoricalSignal).filter(HistoricalSignal.id == signal_id).first()
 
     def get_latest(self, symbol: str, timeframe: str) -> HistoricalSignal | None:
         """Most recent signal for a symbol/timeframe."""
@@ -113,11 +112,7 @@ class SignalRepository:
         if completed_only:
             q = q.filter(HistoricalSignal.return_5b.isnot(None))
 
-        return (
-            q.order_by(desc(HistoricalSignal.timestamp))
-            .limit(limit)
-            .all()
-        )
+        return q.order_by(desc(HistoricalSignal.timestamp)).limit(limit).all()
 
     def delete_older_than(self, days: int = 90) -> int:
         """Delete signals older than ``days`` days. Returns count deleted."""
@@ -193,9 +188,7 @@ class SignalRepository:
         self.db.refresh(signal)
         return signal
 
-    def count_by_regime(
-        self, symbols: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    def count_by_regime(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
         """Count of signals grouped by market regime.
 
         If ``symbols`` is given, only signals for those symbols are counted.
@@ -209,9 +202,7 @@ class SignalRepository:
         rows = q.group_by(HistoricalSignal.market_regime).all()
         return [{"regime": r.market_regime, "count": r.count} for r in rows]
 
-    def get_performance_by_regime(
-        self, symbols: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    def get_performance_by_regime(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
         """Average forward returns grouped by market regime.
 
         Only includes signals that have outcomes computed. If ``symbols``
@@ -281,9 +272,8 @@ class SignalRepository:
         with_outcome = HistoricalSignal.return_5b.isnot(None)
         directional = with_outcome & HistoricalSignal.trend_state.in_(("bullish", "bearish"))
         called_it = (
-            ((HistoricalSignal.trend_state == "bullish") & (HistoricalSignal.return_5b > 0))
-            | ((HistoricalSignal.trend_state == "bearish") & (HistoricalSignal.return_5b < 0))
-        )
+            (HistoricalSignal.trend_state == "bullish") & (HistoricalSignal.return_5b > 0)
+        ) | ((HistoricalSignal.trend_state == "bearish") & (HistoricalSignal.return_5b < 0))
         row = q.with_entities(
             func.count(HistoricalSignal.id),
             func.sum(case((with_outcome, 1), else_=0)),
@@ -311,7 +301,9 @@ SIGNAL_RETENTION_MARGIN_DAYS = 2
 
 
 def prune_signals_by_retention(
-    db: Session, chunk_size: int = 5000, now: datetime | None = None,
+    db: Session,
+    chunk_size: int = 5000,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Delete each timeframe's signals once they are older than that timeframe's BAR retention
     window (``settings.retention``: 16 days for 1m-30m, 366 for 1h/4h, 1096 for 1d/1wk) plus

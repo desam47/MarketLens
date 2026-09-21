@@ -1,13 +1,14 @@
 """
 Tests for trend engine
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 
 from backend.engines.timeframe import Timeframe
 from backend.trend.trend_engine import (
@@ -21,7 +22,6 @@ from backend.trend.trend_engine import (
 
 
 class TestTrendEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.engine = TrendEngine(self.symbol)
@@ -35,12 +35,17 @@ class TestTrendEngine(unittest.TestCase):
 
         # Check that indicators are initialized for major timeframes
         expected_timeframes = [
-            "ONE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE",
-            "ONE_HOUR", "FOUR_HOUR", "ONE_DAY"
+            "ONE_MINUTE",
+            "FIVE_MINUTE",
+            "FIFTEEN_MINUTE",
+            "ONE_HOUR",
+            "FOUR_HOUR",
+            "ONE_DAY",
         ]
         for tf_str in expected_timeframes:
             # Find the Timeframe enum member
             from backend.engines.timeframe import Timeframe
+
             tf = getattr(Timeframe, tf_str)
             self.assertIn(tf, self.engine.indicators)
             self.assertGreater(len(self.engine.indicators[tf]), 0)
@@ -59,6 +64,7 @@ class TestTrendEngine(unittest.TestCase):
         # Should have processed the data
         # Check that we have some trend signals
         from backend.engines.timeframe import Timeframe
+
         self.engine.get_current_trend(Timeframe.ONE_DAY)
         # Might not have enough data yet for a full signal, but engine should not crash
 
@@ -118,7 +124,7 @@ class TestTrendEngine(unittest.TestCase):
             direction=TrendDirection.UPTREND,
             strength=TrendStrength.MODERATE,
             confidence=0.8,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
 
         self.assertEqual(signal.symbol, self.symbol)
@@ -151,6 +157,7 @@ class TestTrendEngine(unittest.TestCase):
         """Test getting overall trend with no data"""
         overall = self.engine.get_overall_trend()
         self.assertIsNone(overall)
+
 
 class TestTrendEngineArchitecture(unittest.TestCase):
     """Phase 0 architectural assertions — locks in Principles 12 and 17."""
@@ -188,6 +195,7 @@ class TestTrendEngineArchitecture(unittest.TestCase):
 
         # Per-timeframe EMA is a lookup table, not magic numbers.
         from backend.trend.trend_engine import _TIMEFRAME_EMA
+
         self.assertEqual(_TIMEFRAME_EMA[Timeframe.ONE_MINUTE], (9, 21))
         self.assertEqual(_TIMEFRAME_EMA[Timeframe.ONE_DAY], (50, 200))
 
@@ -213,8 +221,7 @@ class TestDataQualityValidation(unittest.TestCase):
         self.assertIsNone(engine._last_update_time)
         self.assertIsNone(engine._last_price)
 
-        engine.update(price=100.0, volume=1_000_000,
-                      timestamp=datetime.now(), provider="test")
+        engine.update(price=100.0, volume=1_000_000, timestamp=datetime.now(), provider="test")
 
         self.assertIsNotNone(engine._last_update_time)
         self.assertEqual(engine._last_price, 100.0)
@@ -228,8 +235,7 @@ class TestDataQualityValidation(unittest.TestCase):
 
         # The stale_threshold_seconds default is 30; this tick arrives
         # well within that window so no stale warning fires.
-        engine.update(price=99.99, volume=1_000_000,
-                      timestamp=datetime.now(), provider="test")
+        engine.update(price=99.99, volume=1_000_000, timestamp=datetime.now(), provider="test")
         self.assertEqual(engine._last_price, 99.99)
 
     def test_data_quality_settings_defined(self):
@@ -266,11 +272,13 @@ class TestPhase6Scenarios(unittest.TestCase):
         # threshold. Disable the threshold for these tests by bumping
         # the global setting high enough that 60s ticks don't trip it.
         from backend.config.settings import settings
+
         self._original_gap = settings.data_quality.max_tick_gap_seconds
         settings.data_quality.max_tick_gap_seconds = 86400.0  # 1 day
 
     def tearDown(self):
         from backend.config.settings import settings
+
         settings.data_quality.max_tick_gap_seconds = self._original_gap
 
     def _feed(self, prices: list[float], volume: float = 1_000_000):
@@ -279,8 +287,7 @@ class TestPhase6Scenarios(unittest.TestCase):
         for i, price in enumerate(prices):
             self.engine.update(price, volume, base + timedelta(minutes=i))
 
-    def _feed_extra(self, prices: list[float], n_extra: int,
-                    volume: float = 1_000_000):
+    def _feed_extra(self, prices: list[float], n_extra: int, volume: float = 1_000_000):
         """Feed ``n_extra`` flat warmup bars then ``prices``.
 
         Many indicators (ema_slow=200 on ONE_DAY, ADX 2*period=28, etc.)
@@ -304,9 +311,7 @@ class TestPhase6Scenarios(unittest.TestCase):
         """Strong uptrend → positive score, bullish classification."""
         # Pad with 200 flat bars so ema_slow (period=200 on ONE_DAY)
         # warms up before the trend pattern begins.
-        self._feed_extra(
-            [100 + i * 0.5 for i in range(60)], n_extra=200
-        )
+        self._feed_extra([100 + i * 0.5 for i in range(60)], n_extra=200)
         score = self._score(Timeframe.ONE_DAY)
         cls = self._classification(Timeframe.ONE_DAY)
         self.assertIsNotNone(score, "Should have a score after 60 bars")
@@ -428,8 +433,7 @@ class TestPhase6Scenarios(unittest.TestCase):
         self._feed([peak - i * 1.5 for i in range(1, 21)])
         down_score = self._score(Timeframe.ONE_DAY)
         # Score should have dropped significantly
-        self.assertLess(down_score, up_score,
-                        "Sharp reversal should lower the score")
+        self.assertLess(down_score, up_score, "Sharp reversal should lower the score")
 
     def test_no_buy_signal(self):
         """Phase 6 spec: bullish trend must NOT become a BUY signal."""
@@ -499,6 +503,5 @@ class TestPhase6Scenarios(unittest.TestCase):
         self.assertLessEqual(signal.confidence, 1.0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-

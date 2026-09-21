@@ -6,6 +6,7 @@ cleared by reset(): ~90 bytes per entry and ~52k new entries a day across the 25
 symbols x 10 timeframe engines (~4.7 MB/day, ~140 MB per month of uptime). It is now
 a FIFO-bounded set; duplicate detection for anything recent is unchanged.
 """
+
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
@@ -40,8 +41,8 @@ class TestBoundedSeen(unittest.TestCase):
         s = _BoundedSeen(2)
         s.add(_t(1))
         s.add(_t(2))
-        s.add(_t(1))          # no-op: still the oldest
-        s.add(_t(3))          # evicts t1, not t2
+        s.add(_t(1))  # no-op: still the oldest
+        s.add(_t(3))  # evicts t1, not t2
         self.assertNotIn(_t(1), s)
         self.assertIn(_t(2), s)
 
@@ -69,12 +70,14 @@ class TestEngineDedupeIsBounded(unittest.TestCase):
         for i in range(200):
             engine.update_tick(100.0, 10, _t(i))
         before = engine.duplicate_count
-        engine.update_tick(100.0, 10, _t(199))          # same timestamp as the latest tick
-        engine.update_tick(100.0, 10, _t(180))          # and one from within the window
+        engine.update_tick(100.0, 10, _t(199))  # same timestamp as the latest tick
+        engine.update_tick(100.0, 10, _t(180))  # and one from within the window
         self.assertEqual(engine.duplicate_count, before + 2)
 
     def test_default_cap_covers_days_of_one_minute_bars(self):
-        self.assertGreaterEqual(tf_mod._SEEN_TIMESTAMPS_MAX, 960 * 3)   # 3 days of 1m bars, extended hours
+        self.assertGreaterEqual(
+            tf_mod._SEEN_TIMESTAMPS_MAX, 960 * 3
+        )  # 3 days of 1m bars, extended hours
         self.assertEqual(TimeframeEngine("X")._seen_timestamps.maxlen, tf_mod._SEEN_TIMESTAMPS_MAX)
 
     def test_reset_clears_the_memory(self):
@@ -83,7 +86,7 @@ class TestEngineDedupeIsBounded(unittest.TestCase):
             engine.update_tick(100.0, 10, _t(i))
         engine.reset()
         self.assertEqual(len(engine._seen_timestamps), 0)
-        engine.update_tick(100.0, 10, _t(3))            # not a duplicate any more
+        engine.update_tick(100.0, 10, _t(3))  # not a duplicate any more
         self.assertEqual(engine.duplicate_count, 0)
 
 

@@ -1,6 +1,7 @@
 """
 Tests for backend.symbols.validator.
 """
+
 import os
 import sys
 import unittest
@@ -8,14 +9,13 @@ from datetime import datetime
 from unittest.mock import patch
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.models.market_data import DataStatus, Quote
 from backend.symbols.validator import ValidationResult, validate_symbol
 
 
 class TestValidateSymbol(unittest.TestCase):
-
     def _quote(self, symbol: str, price: float) -> Quote:
         return Quote(
             symbol=symbol,

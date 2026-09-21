@@ -6,6 +6,7 @@ audit finds too MANY rows for a bucket, this one finds too FEW (zero).
 Introduced alongside the RQ-based backfill pipeline's gap-check-and-fill
 step (backend/market_data/services/backfill_service.py).
 """
+
 import os
 import sys
 import unittest
@@ -18,7 +19,6 @@ from backend.repositories.bar_repository import expected_bar_timestamps, find_ga
 
 
 class TestExpectedBarTimestamps(unittest.TestCase):
-
     def test_unsupported_timeframe_raises(self):
         with self.assertRaises(ValueError):
             expected_bar_timestamps("AAPL", "1wk", datetime(2026, 1, 2), datetime(2026, 1, 2))
@@ -43,7 +43,8 @@ class TestExpectedBarTimestamps(unittest.TestCase):
             "AAPL", "1d", datetime(2025, 12, 31), datetime(2026, 1, 2, 23, 59)
         )
         self.assertEqual(
-            out, [datetime(2025, 12, 31), datetime(2026, 1, 2)],
+            out,
+            [datetime(2025, 12, 31), datetime(2026, 1, 2)],
         )
 
     def test_1m_full_session_count(self):
@@ -89,13 +90,13 @@ class TestExpectedBarTimestamps(unittest.TestCase):
 
 
 class TestFindGaps(unittest.TestCase):
-
     def test_no_gaps_when_all_expected_present(self):
         expected = [datetime(2026, 1, 2), datetime(2026, 1, 5)]
 
         class _FakeQuery:
             def filter(self, *a, **kw):
                 return self
+
             def all(self):
                 return [(ts,) for ts in expected]
 
@@ -110,6 +111,7 @@ class TestFindGaps(unittest.TestCase):
         class _FakeQuery:
             def filter(self, *a, **kw):
                 return self
+
             def all(self):
                 return [(datetime(2026, 1, 2),)]
 

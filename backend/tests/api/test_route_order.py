@@ -9,6 +9,7 @@ that overlaps another router fails here, instead of silently changing which
 handler serves a request just because someone reordered two ``include_router``
 lines.
 """
+
 import re
 import unittest
 
@@ -25,7 +26,14 @@ def _probe(template: str) -> str:
 
 
 def _scope(method: str, path: str, kind: str = "http") -> dict:
-    return {"type": kind, "method": method, "path": path, "root_path": "", "headers": [], "query_string": b""}
+    return {
+        "type": kind,
+        "method": method,
+        "path": path,
+        "root_path": "",
+        "headers": [],
+        "query_string": b"",
+    }
 
 
 def _entries():
@@ -55,13 +63,17 @@ class TestRouteOrderIsBehaviourNeutral(unittest.TestCase):
                 hits = _matching_entries(_scope(method.upper(), _probe(template)))
                 if len(hits) > 1:
                     overlaps.append((method.upper(), template, hits))
-        self.assertEqual(overlaps, [], "order-sensitive overlap: reordering routers would change behaviour")
+        self.assertEqual(
+            overlaps, [], "order-sensitive overlap: reordering routers would change behaviour"
+        )
 
     def test_every_documented_route_is_reachable(self):
         unreachable = []
         for template, ops in app.openapi()["paths"].items():
             for method in ops:
-                if method.upper() in _HTTP and not _matching_entries(_scope(method.upper(), _probe(template))):
+                if method.upper() in _HTTP and not _matching_entries(
+                    _scope(method.upper(), _probe(template))
+                ):
                     unreachable.append((method.upper(), template))
         self.assertEqual(unreachable, [])
 
@@ -81,10 +93,26 @@ class TestRouteOrderIsBehaviourNeutral(unittest.TestCase):
 class TestBusiestRoutersComeFirst(unittest.TestCase):
     """The reason the order exists. Prefixes ranked by measured traffic share."""
 
-    HOT = ("/api/trend/", "/api/analysis/", "/api/regime/", "/api/scanner/", "/api/multitimeframe/",
-           "/api/strategy/", "/api/market-context/", "/api/market-data/")
-    COLD = ("/api/system/", "/api/ai/chat/", "/api/drawing-tools", "/api/custom-indicators",
-            "/api/strategy-lab/", "/api/backtest/", "/api/alerts/", "/api/finnhub/")
+    HOT = (
+        "/api/trend/",
+        "/api/analysis/",
+        "/api/regime/",
+        "/api/scanner/",
+        "/api/multitimeframe/",
+        "/api/strategy/",
+        "/api/market-context/",
+        "/api/market-data/",
+    )
+    COLD = (
+        "/api/system/",
+        "/api/ai/chat/",
+        "/api/drawing-tools",
+        "/api/custom-indicators",
+        "/api/strategy-lab/",
+        "/api/backtest/",
+        "/api/alerts/",
+        "/api/finnhub/",
+    )
 
     def _position(self, prefix: str) -> int:
         for i, entry in enumerate(_entries()):
@@ -96,8 +124,11 @@ class TestBusiestRoutersComeFirst(unittest.TestCase):
     def test_hot_routers_are_scanned_before_cold_ones(self):
         slowest_hot = max(self._position(p) for p in self.HOT)
         fastest_cold = min(self._position(p) for p in self.COLD)
-        self.assertLess(slowest_hot, fastest_cold,
-                        "a rarely-hit router was placed ahead of a busy one (each costs ~3.4 us/request)")
+        self.assertLess(
+            slowest_hot,
+            fastest_cold,
+            "a rarely-hit router was placed ahead of a busy one (each costs ~3.4 us/request)",
+        )
 
 
 if __name__ == "__main__":

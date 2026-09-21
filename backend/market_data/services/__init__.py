@@ -10,6 +10,7 @@ The package is split into focused submodules:
 This ``__init__`` re-exports the public API so existing call sites
 (``from backend.market_data.services.manager import ...``) keep working unchanged.
 """
+
 from backend.market_data.providers.yfinance_provider import YFinanceProvider
 
 from ._providers import _settings, get_redis, get_redis_cache, get_settings, redis

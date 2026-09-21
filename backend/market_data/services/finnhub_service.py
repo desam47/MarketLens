@@ -7,6 +7,7 @@ Routes in ``backend/api/finnhub/router.py`` call into this service.
 
 **Free tier:** 30 req/sec rate limit (IP-based, no API key required).
 """
+
 import asyncio
 import logging
 import os
@@ -52,9 +53,7 @@ class FinnhubService:
         if r.status_code == 403:
             raise RuntimeError("Finnhub forbidden — check API key (HTTP 403)")
         if not r.ok:
-            raise RuntimeError(
-                f"Finnhub HTTP {r.status_code} for {endpoint}: {r.text[:200]}"
-            )
+            raise RuntimeError(f"Finnhub HTTP {r.status_code} for {endpoint}: {r.text[:200]}")
 
         data = r.json()
         if not data:
@@ -116,7 +115,9 @@ class FinnhubService:
             target_mean_price=m.get("priceTargetMean"),
             target_high_price=m.get("priceTargetHigh"),
             target_low_price=m.get("priceTargetLow"),
-            recommendation=str(m.get("recommendationMean")) if m.get("recommendationMean") is not None else None,
+            recommendation=str(m.get("recommendationMean"))
+            if m.get("recommendationMean") is not None
+            else None,
             recommendation_count=m.get("numberOfAnalystOpinions"),
         )
 
@@ -270,9 +271,7 @@ class FinnhubService:
 
     # ---------------------------------------------------------------- news
 
-    def get_company_news(
-        self, symbol: str, from_date: date, to_date: date
-    ) -> list[NewsItem]:
+    def get_company_news(self, symbol: str, from_date: date, to_date: date) -> list[NewsItem]:
         """Fetch company-specific news from /company-news."""
         rows = self._get(
             "company-news",

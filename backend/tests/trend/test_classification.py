@@ -1,6 +1,7 @@
 """
 Tests for TrendClassification enum and classify_score helper (Phase 6).
 """
+
 import unittest
 
 from backend.trend.trend_engine import (
@@ -69,7 +70,8 @@ class TestClassifyScore(unittest.TestCase):
         for score in [-200, -100, -70, -30, -10, -9, 0, 9, 10, 30, 70, 100, 200]:
             result = classify_score(score)
             self.assertNotEqual(
-                result, TrendClassification.NO_SIGNAL,
+                result,
+                TrendClassification.NO_SIGNAL,
                 f"score={score} should not map to NO_SIGNAL",
             )
 

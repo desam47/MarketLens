@@ -6,13 +6,14 @@ The scanner itself is mocked at the import boundary
 exercised in isolation. The real scanner is covered by
 ``backend/tests/scanner/test_scanner.py``.
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi.testclient import TestClient
 
@@ -47,13 +48,16 @@ def _make_result(
     result = ScanResult(symbol, datetime(2025, 1, 1, 12, 0, 0))
     result.quote = _make_quote(symbol)
     result.change_pct = change_pct
-    for k, v in (indicators or {
-        "price": 150.0,
-        "volume": 1_000_000,
-        "rsi": 55.0,
-        "macd": 1.2,
-        "adx": 22.0,
-    }).items():
+    for k, v in (
+        indicators
+        or {
+            "price": 150.0,
+            "volume": 1_000_000,
+            "rsi": 55.0,
+            "macd": 1.2,
+            "adx": 22.0,
+        }
+    ).items():
         result.add_indicator(k, v)
     for k, v in (scores or {"momentum": 60.0, "volume": 80.0}).items():
         result.add_score(k, v)
@@ -63,27 +67,26 @@ def _make_result(
 
 
 class TestScannerAPI(unittest.TestCase):
-
     def setUp(self):
         self.client = TestClient(app)
         # Mock the scanner singleton the router imports.
-        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.scanner_patch = patch("backend.api.scanner.router.market_scanner")
         self.mock_scanner = self.scanner_patch.start()
         # Mock the market data manager the router now calls directly (for
         # historical_bars/quote pre-fetch ahead of scan_symbol — see
         # _scan_and_notify) so single-symbol scan tests don't hit real
         # providers.
-        self.mdm_patch = patch('backend.api.scanner.router.market_data_manager')
+        self.mdm_patch = patch("backend.api.scanner.router.market_data_manager")
         self.mock_mdm = self.mdm_patch.start()
         self.mock_mdm.get_historical_bars.return_value = []
         self.mock_mdm.get_quote.return_value = None
         # Mock the DB dependency to keep the watchlist endpoints self-contained.
-        self.db_patch = patch('backend.api.dependencies.get_db')
+        self.db_patch = patch("backend.api.dependencies.get_db")
         self.mock_get_db = self.db_patch.start()
         self.mock_db = MagicMock()
         self.mock_get_db.return_value = self.mock_db
         # Mock the watchlist repository used by the watchlist endpoints.
-        self.repo_patch = patch('backend.api.scanner.router.WatchlistRepository')
+        self.repo_patch = patch("backend.api.scanner.router.WatchlistRepository")
         self.mock_repo_class = self.repo_patch.start()
         self.mock_repo = MagicMock()
         self.mock_repo_class.return_value = self.mock_repo
@@ -132,10 +135,12 @@ class TestScannerAPI(unittest.TestCase):
         # Scanner was called with upper-case symbol (the router normalizes),
         # plus the pre-fetched historical_bars/quote (see _scan_and_notify).
         self.mock_scanner.scan_symbol.assert_called_once_with(
-            "AAPL", historical_bars=[], quote=None,
+            "AAPL",
+            historical_bars=[],
+            quote=None,
         )
 
-    @patch('backend.services.signal_recorder.signal_recorder')
+    @patch("backend.services.signal_recorder.signal_recorder")
     def test_scan_symbol_can_attach_historical_explanation_stats(self, mock_recorder):
         result = _make_result("AAPL")
         self.mock_scanner.scan_symbol.return_value = result
@@ -162,7 +167,9 @@ class TestScannerAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.mock_scanner.scan_symbol.assert_called_once_with(
-            "AAPL", historical_bars=[], quote=None,
+            "AAPL",
+            historical_bars=[],
+            quote=None,
         )
 
     def test_scan_symbol_passes_fetched_bars_and_quote_through(self):
@@ -178,12 +185,30 @@ class TestScannerAPI(unittest.TestCase):
         from backend.models.market_data import Bar, DataStatus
 
         bars = [
-            Bar(symbol="AAPL", timeframe="1d", open=1, high=1, low=1, close=140.0,
-                volume=100, timestamp=datetime(2025, 1, 1), provider="test",
-                data_status=DataStatus.HISTORICAL),
-            Bar(symbol="AAPL", timeframe="1d", open=1, high=1, low=1, close=150.0,
-                volume=100, timestamp=datetime(2025, 1, 2), provider="test",
-                data_status=DataStatus.HISTORICAL),
+            Bar(
+                symbol="AAPL",
+                timeframe="1d",
+                open=1,
+                high=1,
+                low=1,
+                close=140.0,
+                volume=100,
+                timestamp=datetime(2025, 1, 1),
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
+            Bar(
+                symbol="AAPL",
+                timeframe="1d",
+                open=1,
+                high=1,
+                low=1,
+                close=150.0,
+                volume=100,
+                timestamp=datetime(2025, 1, 2),
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
         ]
         quote = _make_quote("AAPL", price=155.0)
         self.mock_mdm.get_historical_bars.return_value = bars
@@ -194,7 +219,9 @@ class TestScannerAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.mock_scanner.scan_symbol.assert_called_once_with(
-            "AAPL", historical_bars=bars, quote=quote,
+            "AAPL",
+            historical_bars=bars,
+            quote=quote,
         )
 
     def test_scan_symbol_handles_exception(self):
@@ -326,9 +353,8 @@ class TestScannerAPI(unittest.TestCase):
         aapl_result = _make_result("AAPL", rank=1, indicators={"rsi": 60.0})
         googl_result = _make_result("GOOGL", rank=2, indicators={"rsi": 55.0})
         msft_result = _make_result("MSFT", rank=3, indicators={"rsi": 50.0})
-        self.mock_scanner.scan_symbol.side_effect = [
-            aapl_result, googl_result, msft_result
-        ]
+        self.mock_scanner.scan_symbol.side_effect = [aapl_result, googl_result, msft_result]
+
         # scan_symbols populates the in-memory cache the router reads from.
         def _populate(symbols):
             for sym in symbols:
@@ -336,10 +362,13 @@ class TestScannerAPI(unittest.TestCase):
                 self.mock_scanner.scan_results[sym] = result
             self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
             return [self.mock_scanner.scan_results[s] for s in symbols]
+
         self.mock_scanner.scan_symbols.side_effect = _populate
         # rank_symbols returns (sym, score) tuples in ranked order.
         self.mock_scanner.rank_symbols.return_value = [
-            ("AAPL", 80.0), ("GOOGL", 70.0), ("MSFT", 60.0)
+            ("AAPL", 80.0),
+            ("GOOGL", 70.0),
+            ("MSFT", 60.0),
         ]
         # scan_results exposes the result objects the router reads by symbol.
         self.mock_scanner.scan_results = {
@@ -361,9 +390,7 @@ class TestScannerAPI(unittest.TestCase):
         # Timestamp is serialized (not empty).
         self.assertNotEqual(data["timestamp"], "")
         # The watchlist symbols query used the all-inclusive variant.
-        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(
-            1, include_disabled=True
-        )
+        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(1, include_disabled=True)
 
     def test_watchlist_scan_passes_enabled_only(self):
         """The router should call the inclusive variant so disabled rows
@@ -373,9 +400,7 @@ class TestScannerAPI(unittest.TestCase):
 
         self.client.get("/api/scanner/watchlist/1")
 
-        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(
-            1, include_disabled=True
-        )
+        self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(1, include_disabled=True)
 
     # --- /api/scanner/watchlist/{id}/top ----------------------------------
 
@@ -392,7 +417,9 @@ class TestScannerAPI(unittest.TestCase):
         self.mock_scanner.scan_symbols.return_value = [aapl, googl, msft]
         self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
         self.mock_scanner.rank_symbols.return_value = [
-            ("AAPL", 90.0), ("GOOGL", 70.0), ("MSFT", 50.0),
+            ("AAPL", 90.0),
+            ("GOOGL", 70.0),
+            ("MSFT", 50.0),
         ]
 
         response = self.client.get("/api/scanner/watchlist/1/top?limit=2")
@@ -425,7 +452,7 @@ class TestScannerFilterAPI(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
-        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.scanner_patch = patch("backend.api.scanner.router.market_scanner")
         self.mock_scanner = self.scanner_patch.start()
 
     def tearDown(self):
@@ -518,13 +545,14 @@ class TestScannerRankingsAPI(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
-        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.scanner_patch = patch("backend.api.scanner.router.market_scanner")
         self.mock_scanner = self.scanner_patch.start()
-        self.engine_patch = patch('backend.api.scanner.router.default_ranking_engine')
+        self.engine_patch = patch("backend.api.scanner.router.default_ranking_engine")
         self.mock_engine = self.engine_patch.start()
         # Replace the MagicMock's CATEGORIES with the real engine's list
         # so the categories endpoint returns the real names by default.
         from backend.scanner.ranking import default_ranking_engine as real_engine
+
         self.mock_engine.CATEGORIES = real_engine.CATEGORIES
 
     def tearDown(self):
@@ -542,6 +570,7 @@ class TestScannerRankingsAPI(unittest.TestCase):
     def test_rankings_endpoint_returns_payload(self):
         # Mock the engine to avoid coupling this test to ranking logic
         from backend.scanner.ranking import NamedRanking, RankedEntry
+
         self.mock_engine.CATEGORIES = [
             {"name": "strongest_bullish", "label": "Strongest Bullish", "description": "x"},
         ]
@@ -567,7 +596,7 @@ class TestScannerRankingsAPI(unittest.TestCase):
         self.assertEqual(body[0]["entries"][0]["symbol"], "AAPL")
 
     def test_watchlist_rankings_404_when_missing(self):
-        with patch('backend.api.scanner.router.WatchlistRepository') as mock_repo_class:
+        with patch("backend.api.scanner.router.WatchlistRepository") as mock_repo_class:
             mock_repo = MagicMock()
             mock_repo_class.return_value = mock_repo
             mock_repo.get_watchlist.return_value = None
@@ -602,7 +631,7 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
-        self.scanner_patch = patch('backend.api.scanner.router.market_scanner')
+        self.scanner_patch = patch("backend.api.scanner.router.market_scanner")
         self.mock_scanner = self.scanner_patch.start()
         # The scoped endpoints await a pre-scan before reading the cache.
         self.mock_scanner.scan_symbols_async = AsyncMock()
@@ -625,9 +654,7 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         from backend.api.scanner.router import _build_filter
 
         downtrend = _make_result("AAPL")
-        downtrend.trend_signals = {
-            "ONE_DAY": {"direction": "downtrend", "confidence": 0.9}
-        }
+        downtrend.trend_signals = {"ONE_DAY": {"direction": "downtrend", "confidence": 0.9}}
 
         f = _build_filter([], "AND")
 
@@ -725,9 +752,7 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
             # Eligible count should be <= 1 because only AAPL is in scope.
             # Categories with guards might be 0.
             self.assertTrue(ranking["total_eligible"] <= 1)
-            self.assertTrue(
-                {e["symbol"] for e in ranking["entries"]} <= {"AAPL"}
-            )
+            self.assertTrue({e["symbol"] for e in ranking["entries"]} <= {"AAPL"})
 
     def test_scoped_cache_passes_through_without_symbols(self):
         from backend.api.scanner.router import _scoped_cache
@@ -752,13 +777,14 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         self._three_symbol_cache()
         self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
 
-        with patch('backend.api.scanner.router.WatchlistRepository') as repo_class:
+        with patch("backend.api.scanner.router.WatchlistRepository") as repo_class:
             repo = MagicMock()
             repo_class.return_value = repo
             repo.get_watchlists.return_value = [MagicMock(id=1)]
             repo.get_watchlist.return_value = MagicMock(id=1)
             repo.get_watchlist_symbols.return_value = [
-                MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT"),
+                MagicMock(symbol="AAPL"),
+                MagicMock(symbol="MSFT"),
             ]
 
             response = self.client.get("/api/scanner/top-movers?direction=bullish")
@@ -780,13 +806,14 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         }
         self.mock_scanner.last_scan_time = datetime(2025, 1, 1, 12, 0, 0)
 
-        with patch('backend.api.scanner.router.WatchlistRepository') as repo_class:
+        with patch("backend.api.scanner.router.WatchlistRepository") as repo_class:
             repo = MagicMock()
             repo_class.return_value = repo
             repo.get_watchlists.return_value = [MagicMock(id=1)]
             repo.get_watchlist.return_value = MagicMock(id=1)
             repo.get_watchlist_symbols.return_value = [
-                MagicMock(symbol="AAPL"), MagicMock(symbol="MSFT"),
+                MagicMock(symbol="AAPL"),
+                MagicMock(symbol="MSFT"),
             ]
 
             response = self.client.get("/api/scanner/top-movers/combined")
@@ -799,5 +826,5 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         self.assertEqual({r["symbol"] for r in body["bearish"]}, {"MSFT"})
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

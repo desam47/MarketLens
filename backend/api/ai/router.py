@@ -20,6 +20,7 @@ Query parameters:
 ``GET /api/ai/status`` — health snapshot of the AI provider chain.
 ``GET /api/ai/config`` — frontend-safe configuration (no API key).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -152,6 +153,7 @@ class AnalyzeResponse(BaseModel):
 def _sync_resolve_template(db: Session, template_id: int | None):
     """Synchronous helper: resolve which AI template to use for a call."""
     from backend.models import AITemplate
+
     if template_id is not None:
         tmpl_obj = db.query(AITemplate).filter(AITemplate.id == template_id).first()
         if tmpl_obj is None:
@@ -289,7 +291,8 @@ async def analyze_stream(
     max_tokens: int | None = Query(default=None, ge=100, le=8192),
     temperature: float | None = Query(default=None, ge=0.0, le=2.0),
     template_id: int | None = Query(
-        default=None, ge=1,
+        default=None,
+        ge=1,
     ),
     portfolio_symbols: str | None = Query(default=None),
     model: str | None = Query(default=None),
@@ -342,9 +345,7 @@ async def analyze_stream(
                     # Stamp the resolved template on the final response,
                     # matching the blocking endpoint's shape.
                     payload.setdefault("template_id", resolved_template_id)
-                    payload.setdefault(
-                        "template_name", tmpl_obj.name if tmpl_obj else None
-                    )
+                    payload.setdefault("template_name", tmpl_obj.name if tmpl_obj else None)
                     yield _sse("final", payload)
                 elif kind == "error":
                     yield _sse("error", {"message": payload})
@@ -354,7 +355,9 @@ async def analyze_stream(
             logger.exception("analyze stream failed for %s: %s", symbol, e)
             yield _sse(
                 "error",
-                {"message": "The analysis stream failed unexpectedly; retry, or use POST /api/ai/analyze."},
+                {
+                    "message": "The analysis stream failed unexpectedly; retry, or use POST /api/ai/analyze."
+                },
             )
 
     return StreamingResponse(
@@ -395,6 +398,7 @@ async def ai_config() -> ConfigResponse:
 
 class ConfigUpdateRequest(BaseModel):
     """Fields that can be updated at runtime without a server restart."""
+
     enabled: bool | None = None
 
 

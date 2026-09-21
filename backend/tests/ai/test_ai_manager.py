@@ -13,6 +13,7 @@ a live Ollama / OpenAI / Anthropic endpoint. The tests focus on:
 - ``is_available()`` / ``status()`` reflect the chain
 - exception flow (non-recoverable errors propagate)
 """
+
 import asyncio
 import os
 import sys
@@ -36,7 +37,6 @@ from backend.config.settings import AISettings
 
 
 class TestAISettings(unittest.TestCase):
-
     def test_defaults_disable_ai(self):
         # _env_file=None: test the field default in isolation from this
         # machine's real .env (which has AI_ENABLED=true as of
@@ -69,7 +69,6 @@ class TestAISettings(unittest.TestCase):
 
 
 class TestBuildProvider(unittest.TestCase):
-
     def test_known_names_dispatch(self):
         cases = {
             "ollama": OpenAICompatibleProvider,
@@ -80,8 +79,12 @@ class TestBuildProvider(unittest.TestCase):
         }
         for name, cls in cases.items():
             p = build_provider(
-                name, base_url=None, model=None, api_key="x",
-                timeout=1.0, health_check_timeout=1.0,
+                name,
+                base_url=None,
+                model=None,
+                api_key="x",
+                timeout=1.0,
+                health_check_timeout=1.0,
             )
             self.assertIsInstance(p, cls, f"{name} should be {cls.__name__}")
 
@@ -89,15 +92,21 @@ class TestBuildProvider(unittest.TestCase):
         # openai_compatible is the generic catch-all — no sensible default URL
         with self.assertRaises(ValueError):
             build_provider(
-                "openai_compatible", base_url=None, model=None, api_key=None,
-                timeout=1.0, health_check_timeout=1.0,
+                "openai_compatible",
+                base_url=None,
+                model=None,
+                api_key=None,
+                timeout=1.0,
+                health_check_timeout=1.0,
             )
         # With a URL it works
         p = build_provider(
             "openai_compatible",
             base_url="https://my-endpoint.example.com/v1",
-            model=None, api_key=None,
-            timeout=1.0, health_check_timeout=1.0,
+            model=None,
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
         )
         self.assertIsInstance(p, OpenAICompatibleProvider)
         self.assertEqual(p._base_url, "https://my-endpoint.example.com/v1")
@@ -105,14 +114,22 @@ class TestBuildProvider(unittest.TestCase):
     def test_unknown_name_raises(self):
         with self.assertRaises(ValueError):
             build_provider(
-                "bogus_provider", base_url=None, model=None, api_key=None,
-                timeout=1.0, health_check_timeout=1.0,
+                "bogus_provider",
+                base_url=None,
+                model=None,
+                api_key=None,
+                timeout=1.0,
+                health_check_timeout=1.0,
             )
 
     def test_ollama_default_base_url(self):
         p = build_provider(
-            "ollama", base_url=None, model=None, api_key=None,
-            timeout=1.0, health_check_timeout=1.0,
+            "ollama",
+            base_url=None,
+            model=None,
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
         )
         self.assertEqual(p._base_url, "http://localhost:11434/v1")
         self.assertEqual(p._model, "llama3.2")
@@ -120,8 +137,12 @@ class TestBuildProvider(unittest.TestCase):
 
     def test_openai_default_base_url(self):
         p = build_provider(
-            "openai", base_url=None, model=None, api_key="sk-test",
-            timeout=1.0, health_check_timeout=1.0,
+            "openai",
+            base_url=None,
+            model=None,
+            api_key="sk-test",
+            timeout=1.0,
+            health_check_timeout=1.0,
         )
         self.assertEqual(p._base_url, "https://api.openai.com/v1")
         self.assertEqual(p._model, "gpt-4o-mini")
@@ -129,8 +150,12 @@ class TestBuildProvider(unittest.TestCase):
 
     def test_anthropic_requires_api_key_for_health(self):
         p = build_provider(
-            "anthropic", base_url=None, model=None, api_key=None,
-            timeout=1.0, health_check_timeout=1.0,
+            "anthropic",
+            base_url=None,
+            model=None,
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
         )
         self.assertFalse(asyncio.run(p.health_check()))
 
@@ -152,12 +177,13 @@ class _MockResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise httpx.HTTPStatusError(
-                "boom", request=MagicMock(), response=MagicMock(status_code=self.status_code),
+                "boom",
+                request=MagicMock(),
+                response=MagicMock(status_code=self.status_code),
             )
 
 
 class TestOpenAICompatibleProvider(unittest.TestCase):
-
     def setUp(self):
         self.p = OpenAICompatibleProvider(
             provider_name="ollama",
@@ -191,10 +217,15 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
         client = MagicMock()
         client.__aenter__.return_value = client
         client.__aexit__.return_value = False
-        client.post = AsyncMock(return_value=_MockResponse(200, {
-            "model": "llama3.2",
-            "choices": [{"message": {"content": "Hello, world."}}],
-        }))
+        client.post = AsyncMock(
+            return_value=_MockResponse(
+                200,
+                {
+                    "model": "llama3.2",
+                    "choices": [{"message": {"content": "Hello, world."}}],
+                },
+            )
+        )
         MockClient.return_value = client
         resp = asyncio.run(self.p.complete("hi", system="be brief"))
         self.assertEqual(resp.text, "Hello, world.")
@@ -209,10 +240,15 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
         client = MagicMock()
         client.__aenter__.return_value = client
         client.__aexit__.return_value = False
-        client.post = AsyncMock(return_value=_MockResponse(200, {
-            "model": "llama3.2",
-            "choices": [{"message": {"content": "ok"}}],
-        }))
+        client.post = AsyncMock(
+            return_value=_MockResponse(
+                200,
+                {
+                    "model": "llama3.2",
+                    "choices": [{"message": {"content": "ok"}}],
+                },
+            )
+        )
         MockClient.return_value = client
         asyncio.run(self.p.complete("hi", response_format={"type": "json_object"}))
         body = client.post.call_args.kwargs["json"]
@@ -224,10 +260,15 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
         client = MagicMock()
         client.__aenter__.return_value = client
         client.__aexit__.return_value = False
-        client.post = AsyncMock(return_value=_MockResponse(200, {
-            "model": "llama3.2",
-            "choices": [{"message": {"content": "ok"}}],
-        }))
+        client.post = AsyncMock(
+            return_value=_MockResponse(
+                200,
+                {
+                    "model": "llama3.2",
+                    "choices": [{"message": {"content": "ok"}}],
+                },
+            )
+        )
         MockClient.return_value = client
         asyncio.run(self.p.complete("hi", response_format={"type": "json_object"}))
         body = client.post.call_args.kwargs["json"]
@@ -330,7 +371,6 @@ class TestOpenAICompatibleProvider(unittest.TestCase):
 
 
 class TestAnthropicProvider(unittest.TestCase):
-
     def setUp(self):
         self.p = AnthropicProvider(
             base_url="https://api.anthropic.com",
@@ -358,14 +398,19 @@ class TestAnthropicProvider(unittest.TestCase):
         client = MagicMock()
         client.__aenter__.return_value = client
         client.__aexit__.return_value = False
-        client.post = AsyncMock(return_value=_MockResponse(200, {
-            "model": "claude-3-5-sonnet-latest",
-            "content": [
-                {"type": "text", "text": "Hello "},
-                {"type": "text", "text": "world."},
-                {"type": "tool_use", "id": "x"},  # ignored
-            ],
-        }))
+        client.post = AsyncMock(
+            return_value=_MockResponse(
+                200,
+                {
+                    "model": "claude-3-5-sonnet-latest",
+                    "content": [
+                        {"type": "text", "text": "Hello "},
+                        {"type": "text", "text": "world."},
+                        {"type": "tool_use", "id": "x"},  # ignored
+                    ],
+                },
+            )
+        )
         MockClient.return_value = client
         resp = asyncio.run(self.p.complete("hi", system="be brief"))
         self.assertEqual(resp.text, "Hello world.")
@@ -415,7 +460,6 @@ class TestAnthropicProvider(unittest.TestCase):
 
 
 class TestAIManager(unittest.TestCase):
-
     def _make_manager(self, **overrides) -> AIManager:
         defaults = dict(
             enabled=True,
@@ -473,10 +517,14 @@ class TestAIManager(unittest.TestCase):
         self.assertIsNone(cfg["last_provider"])
         self.assertIsNone(cfg["last_model"])
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_safe_config_reflects_the_resolved_model_after_a_successful_call(
-        self, mock_complete, _hc,
+        self,
+        mock_complete,
+        _hc,
     ):
         # settings.model can be a gateway-side alias ("static-best-free")
         # that only resolves to a real model name once a request is
@@ -484,7 +532,9 @@ class TestAIManager(unittest.TestCase):
         # not just echo the configured alias back.
         m = self._make_manager(provider="ollama", model="static-best-free")
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="openai/gpt-oss-120b",
+            text="ok",
+            provider="ollama",
+            model="openai/gpt-oss-120b",
         )
         asyncio.run(m.complete("hi"))
         cfg = m.safe_config()
@@ -492,7 +542,9 @@ class TestAIManager(unittest.TestCase):
         self.assertEqual(cfg["last_provider"], "ollama")
         self.assertEqual(cfg["last_model"], "openai/gpt-oss-120b")
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_last_success_survives_a_later_disabled_call(self, mock_complete, _hc):
         # A disabled/unavailable response must never clobber the last
@@ -501,7 +553,9 @@ class TestAIManager(unittest.TestCase):
         # later.
         m = self._make_manager(provider="ollama")
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="llama3.2",
+            text="ok",
+            provider="ollama",
+            model="llama3.2",
         )
         asyncio.run(m.complete("hi"))
         m._enabled_override = False
@@ -525,12 +579,16 @@ class TestAIManager(unittest.TestCase):
         # them unhealthy so the UI can render the "off" state.
         self.assertFalse(any(p.healthy for p in s))
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_complete_uses_primary_when_healthy(self, mock_complete, _hc):
         m = self._make_manager(provider="ollama")
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="llama3.2",
+            text="ok",
+            provider="ollama",
+            model="llama3.2",
         )
         resp = asyncio.run(m.complete("hi"))
         self.assertEqual(resp.text, "ok")
@@ -558,29 +616,42 @@ class TestAIManager(unittest.TestCase):
         # health_check is no longer called from complete() at all
         mock_hc.assert_not_called()
 
-    @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock,
-                  side_effect=ProviderUnavailable("connection refused"))
+    @patch.object(
+        OpenAICompatibleProvider,
+        "complete",
+        new_callable=AsyncMock,
+        side_effect=ProviderUnavailable("connection refused"),
+    )
     def test_complete_returns_none_when_all_unhealthy(self, mock_complete):
         # complete() no longer pre-checks health_check() (O4): a provider that is down raises
         # ProviderUnavailable from complete() itself. This test used to patch health_check, which
         # nothing calls any more, so the fallback provider made a REAL request to api.openai.com.
         m = self._make_manager(
-            provider="ollama", fallback_providers="openai",
+            provider="ollama",
+            fallback_providers="openai",
         )
         resp = asyncio.run(m.complete("hi"))
         self.assertIsNone(resp.text)
         self.assertEqual(resp.provider, "none")
-        self.assertEqual(mock_complete.await_count, 2, "both chain entries were tried before giving up")
+        self.assertEqual(
+            mock_complete.await_count, 2, "both chain entries were tried before giving up"
+        )
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_complete_passes_max_tokens_and_temperature(self, mock_complete, _hc):
         m = self._make_manager(
-            enabled=True, provider="ollama",
-            max_tokens=500, temperature=0.9,
+            enabled=True,
+            provider="ollama",
+            max_tokens=500,
+            temperature=0.9,
         )
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="llama3.2",
+            text="ok",
+            provider="ollama",
+            model="llama3.2",
         )
         asyncio.run(m.complete("hi", max_tokens=222, temperature=0.5))
         # Verify the kwarg forwarding
@@ -588,21 +659,29 @@ class TestAIManager(unittest.TestCase):
         self.assertEqual(kwargs["max_tokens"], 222)
         self.assertEqual(kwargs["temperature"], 0.5)
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_complete_uses_settings_defaults_when_no_kwargs(self, mock_complete, _hc):
         m = self._make_manager(
-            provider="ollama", max_tokens=777, temperature=0.4,
+            provider="ollama",
+            max_tokens=777,
+            temperature=0.4,
         )
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="llama3.2",
+            text="ok",
+            provider="ollama",
+            model="llama3.2",
         )
         asyncio.run(m.complete("hi"))
         kwargs = mock_complete.call_args.kwargs
         self.assertEqual(kwargs["max_tokens"], 777)
         self.assertEqual(kwargs["temperature"], 0.4)
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_complete_skips_unknown_provider(self, mock_complete, _hc):
         # Configured with a name not in the factory — should log+skip
@@ -611,18 +690,24 @@ class TestAIManager(unittest.TestCase):
         self.assertIsNone(resp.text)
         self.assertEqual(resp.provider, "none")
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     @patch.object(OpenAICompatibleProvider, "complete", new_callable=AsyncMock)
     def test_complete_sends_system_prompt(self, mock_complete, _hc):
         m = self._make_manager(provider="ollama")
         mock_complete.return_value = AIResponse(
-            text="ok", provider="ollama", model="llama3.2",
+            text="ok",
+            provider="ollama",
+            model="llama3.2",
         )
         asyncio.run(m.complete("hi", system="you are a stock analyst"))
         self.assertEqual(mock_complete.call_args.args[0], "hi")
         self.assertEqual(mock_complete.call_args.kwargs["system"], "you are a stock analyst")
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     def test_is_available_true_when_any_provider_healthy(self, _hc):
         m = self._make_manager(provider="ollama", fallback_providers="openai")
         self.assertTrue(asyncio.run(m.is_available()))
@@ -642,7 +727,9 @@ class TestAIManager(unittest.TestCase):
         mock_sleep.assert_called_once()
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False
+    )
     def test_is_available_false_when_retry_also_fails(self, mock_hc, mock_sleep):
         # A genuinely-down provider still reports unhealthy — the retry
         # absorbs transient flakiness, it doesn't mask a real outage.
@@ -658,7 +745,9 @@ class TestAIManager(unittest.TestCase):
         s = asyncio.run(m.status())
         self.assertTrue(s[0].healthy)
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     def test_is_available_no_retry_when_first_check_succeeds(self, mock_hc):
         # The common healthy case shouldn't pay for a retry it doesn't need.
         m = self._make_manager(provider="ollama")
@@ -688,7 +777,9 @@ class TestHealthCheckCache(unittest.TestCase):
         return AIManager(AISettings(**defaults))
 
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     def test_cached_after_first_successful_is_available(self, mock_hc, _sleep):
         m = self._make_manager()
         self.assertTrue(asyncio.run(m.is_available()))
@@ -709,7 +800,9 @@ class TestHealthCheckCache(unittest.TestCase):
         self.assertTrue(asyncio.run(m.is_available()))
         self.assertEqual(mock_hc.call_count, 2)
 
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=False
+    )
     def test_unhealthy_result_cached_no_retry_on_second_call(self, mock_hc):
         # With return_value=False, _healthy() retries once per provider
         # (2 calls each), then caches False — the second is_available()
@@ -724,7 +817,9 @@ class TestHealthCheckCache(unittest.TestCase):
 
     @patch("backend.ai.manager.time.monotonic")
     @patch("asyncio.sleep", new_callable=AsyncMock)
-    @patch.object(OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True)
+    @patch.object(
+        OpenAICompatibleProvider, "health_check", new_callable=AsyncMock, return_value=True
+    )
     def test_cache_expires_after_ttl(self, mock_hc, _sleep, mock_time):
         # Freeze time at 0.0, then advance past TTL.
         mock_time.return_value = 0.0
@@ -806,7 +901,7 @@ class TestFallbackProviderIsolation(unittest.TestCase):
 
 
 class TestSameProviderMultipleModels(unittest.TestCase):
-    """"type:model" fallback-chain entries — running a second (or
+    """ "type:model" fallback-chain entries — running a second (or
     third) model through the same provider TYPE as another chain
     entry. Plain entries are cached/deduped by bare type name, so this
     syntax exists specifically to avoid that collision.
@@ -827,9 +922,7 @@ class TestSameProviderMultipleModels(unittest.TestCase):
         return AIManager(AISettings(**defaults))
 
     def test_second_entry_same_type_gets_its_own_model(self):
-        m = self._make_manager(
-            fallback_providers="openai_compatible:deepseek-v3,ollama"
-        )
+        m = self._make_manager(fallback_providers="openai_compatible:deepseek-v3,ollama")
         primary = m._get_provider("openai_compatible")
         second = m._get_provider("openai_compatible:deepseek-v3")
         self.assertEqual(primary._model, "deepseek-v4-flash")
@@ -838,9 +931,7 @@ class TestSameProviderMultipleModels(unittest.TestCase):
         self.assertIsNot(primary, second)
 
     def test_same_type_entry_reuses_primarys_base_url_and_key(self):
-        m = self._make_manager(
-            fallback_providers="openai_compatible:deepseek-v3"
-        )
+        m = self._make_manager(fallback_providers="openai_compatible:deepseek-v3")
         second = m._get_provider("openai_compatible:deepseek-v3")
         self.assertEqual(second._base_url, "https://gateway.test/v1")
         self.assertEqual(second._api_key, "sk-gateway-secret")
@@ -854,9 +945,7 @@ class TestSameProviderMultipleModels(unittest.TestCase):
         self.assertEqual(fallback._model, "qwen3:14b")
 
     def test_status_reports_resolved_model_per_entry(self):
-        m = self._make_manager(
-            fallback_providers="openai_compatible:deepseek-v3,ollama"
-        )
+        m = self._make_manager(fallback_providers="openai_compatible:deepseek-v3,ollama")
         statuses = asyncio.run(m.status())
         self.assertEqual(statuses[0].model, "deepseek-v4-flash")
         self.assertEqual(statuses[1].model, "deepseek-v3")
@@ -876,6 +965,7 @@ class TestQuantEngineIndependence(unittest.TestCase):
         # the AI module. If any of them were modified by the import,
         # the assertions below would break.
         from backend import ai
+
         # AI module exposes the expected public names
         self.assertTrue(hasattr(ai, "AIManager"))
         self.assertTrue(hasattr(ai, "ai_manager"))
@@ -916,7 +1006,9 @@ class _MockStreamCtx:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise httpx.HTTPStatusError(
-                "boom", request=MagicMock(), response=MagicMock(status_code=self.status_code),
+                "boom",
+                request=MagicMock(),
+                response=MagicMock(status_code=self.status_code),
             )
 
 
@@ -940,8 +1032,12 @@ async def _agen(items):
 class TestProviderStreaming(unittest.TestCase):
     def setUp(self):
         self.p = OpenAICompatibleProvider(
-            provider_name="ollama", base_url="http://localhost:11434/v1",
-            model="llama3.2", api_key=None, timeout=1.0, health_check_timeout=1.0,
+            provider_name="ollama",
+            base_url="http://localhost:11434/v1",
+            model="llama3.2",
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
         )
 
     @patch("backend.ai.providers.httpx.AsyncClient")
@@ -1018,8 +1114,10 @@ class TestProviderStreaming(unittest.TestCase):
 
         class _P(AIProvider):
             name = "x"
+
             async def health_check(self):
                 return True
+
             async def complete(self, *a, **k):
                 return AIResponse(text="whole thing", provider="x", model="m")
 
@@ -1029,16 +1127,23 @@ class TestProviderStreaming(unittest.TestCase):
 
 class TestManagerStreaming(unittest.TestCase):
     def _mgr(self, **ov):
-        d = dict(enabled=True, provider="ollama", fallback_providers="",
-                 model="llama3.2", base_url="http://localhost:11434/v1", api_key=None,
-                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3)
+        d = dict(
+            enabled=True,
+            provider="ollama",
+            fallback_providers="",
+            model="llama3.2",
+            base_url="http://localhost:11434/v1",
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
+            max_tokens=100,
+            temperature=0.3,
+        )
         d.update(ov)
         return AIManager(AISettings(**d))
 
     def test_disabled_yields_nothing(self):
-        self.assertEqual(
-            asyncio.run(_collect(self._mgr(enabled=False).stream("hi"))), []
-        )
+        self.assertEqual(asyncio.run(_collect(self._mgr(enabled=False).stream("hi"))), [])
 
     def test_streams_from_healthy_provider(self):
         m = self._mgr()
@@ -1071,9 +1176,7 @@ class TestManagerStreaming(unittest.TestCase):
         p1.stream = MagicMock(side_effect=lambda *a, **k: _boom())
         p2 = MagicMock()
         p2.health_check = AsyncMock(return_value=True)
-        p2.stream = MagicMock(
-            side_effect=lambda *a, **k: _agen(["SHOULD-NOT-APPEAR"])
-        )
+        p2.stream = MagicMock(side_effect=lambda *a, **k: _agen(["SHOULD-NOT-APPEAR"]))
         with patch.object(m, "_get_provider", side_effect=[p1, p2]):
             self.assertEqual(asyncio.run(_collect(m.stream("hi"))), ["part"])
 
@@ -1149,9 +1252,18 @@ class TestModelRouting(unittest.TestCase):
     reconfiguring the whole provider chain."""
 
     def _mgr(self, **ov):
-        d = dict(enabled=True, provider="ollama", fallback_providers="",
-                 model="llama3.2", base_url="http://localhost:11434/v1", api_key=None,
-                 timeout=1.0, health_check_timeout=1.0, max_tokens=100, temperature=0.3)
+        d = dict(
+            enabled=True,
+            provider="ollama",
+            fallback_providers="",
+            model="llama3.2",
+            base_url="http://localhost:11434/v1",
+            api_key=None,
+            timeout=1.0,
+            health_check_timeout=1.0,
+            max_tokens=100,
+            temperature=0.3,
+        )
         d.update(ov)
         return AIManager(AISettings(**d))
 

@@ -1,4 +1,5 @@
 """Tests for the NL search executor."""
+
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,7 +45,11 @@ def _make_result(
         "ONE_DAY": {"direction": "uptrend", "confidence": 0.8},
     }
     r.indicator_values = indicator_values or {
-        "price": 100.0, "rsi": 50.0, "macd": 1.0, "adx": 30.0, "volume": 1_000_000
+        "price": 100.0,
+        "rsi": 50.0,
+        "macd": 1.0,
+        "adx": 30.0,
+        "volume": 1_000_000,
     }
     r.scores = scores or {"momentum": 60.0, "volume": 70.0, "trend_strength": 75.0}
     r.signals = list(signals or [])
@@ -52,7 +57,6 @@ def _make_result(
 
 
 class TestBuildFilter(unittest.TestCase):
-
     def test_direction_only(self):
         f = NLFilters(direction="bullish")
         filt, desc = _build_filter(f)
@@ -136,7 +140,6 @@ class TestBuildFilter(unittest.TestCase):
 
 
 class TestCustomFilters(unittest.TestCase):
-
     def test_outperforms_qqq_match(self):
         result = _make_result("AAPL", indicator_values={"rs_pct_QQQ": 5.0})
         f = OutperformsBenchmark("QQQ", min_pct=0.0)
@@ -196,7 +199,6 @@ class TestCustomFilters(unittest.TestCase):
 
 
 class TestExecuteQuery(unittest.TestCase):
-
     @patch("backend.nl_search.executor.market_scanner")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")
     def test_direction_filters_cache(self, mock_resolve, mock_scanner):
@@ -272,7 +274,6 @@ class TestExecuteQuery(unittest.TestCase):
 
 
 class TestExecuteQueryWithRSPercent(unittest.TestCase):
-
     @patch("backend.nl_search.executor.market_scanner")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")
     def test_outperforms_filter(self, mock_resolve, mock_scanner):

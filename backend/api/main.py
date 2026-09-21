@@ -1,6 +1,7 @@
 """
 Main API application for MarketLens
 """
+
 import asyncio
 import logging
 import subprocess
@@ -65,6 +66,7 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
 
     return format_edt_iso(value)
 
+
 # Create FastAPI app
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -83,9 +85,19 @@ async def lifespan(app: FastAPI):
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            [sys.executable, "-m", "alembic", "-c", str(_PROJECT_ROOT / "alembic.ini"),
-             "upgrade", "head"],
-            capture_output=True, text=True, cwd=_PROJECT_ROOT, timeout=300,
+            [
+                sys.executable,
+                "-m",
+                "alembic",
+                "-c",
+                str(_PROJECT_ROOT / "alembic.ini"),
+                "upgrade",
+                "head",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=_PROJECT_ROOT,
+            timeout=300,
         )
         if completed.returncode == 0:
             for line in (completed.stdout + completed.stderr).strip().splitlines():
@@ -123,6 +135,7 @@ async def lifespan(app: FastAPI):
         import redis
 
         from backend.config.settings import settings as _s
+
         redis_url = _s.redis.url
         r = redis.from_url(redis_url)
         cleared = 0
@@ -142,6 +155,7 @@ async def lifespan(app: FastAPI):
     digest_service.start()
     if settings.ai_nudges.enabled:
         from backend.ai.nudges import nudge_service
+
         nudge_service.start()
     # start_memory_profiling() removed — tracemalloc is expensive and
     # grows with uptime.  Heap profiling is opt-in via the toggle
@@ -153,6 +167,7 @@ async def lifespan(app: FastAPI):
     # iterates over those symbols.
     try:
         from backend.market_data.services.ingestion_service import ingestion_service
+
         if not ingestion_service.is_running:
             ingestion_service.start()
             logger.info(
@@ -183,9 +198,7 @@ async def lifespan(app: FastAPI):
                 _stream.subscribe(ingestion_service.symbols)
                 _stream.start()
                 app.state.webull_stream = _stream
-                logger.info(
-                    "Webull stream started for %d symbols", len(ingestion_service.symbols)
-                )
+                logger.info("Webull stream started for %d symbols", len(ingestion_service.symbols))
     except Exception as e:
         logger.warning(f"Webull stream startup failed: {e}")
 
@@ -193,6 +206,7 @@ async def lifespan(app: FastAPI):
     # by the ingestion service have listeners from the first tick.
     try:
         from backend.api.trend.registry import warmup_engines
+
         warmed = warmup_engines()
         for sym, count in warmed.items():
             logger.info(f"Trend engine warmup: {sym} ({count} bars)")
@@ -204,6 +218,7 @@ async def lifespan(app: FastAPI):
     try:
         if settings.tape.enabled:
             from backend.api.tape.registry import warmup_tape_engines
+
             warmed_tape = warmup_tape_engines()
             logger.info("Tape engine warmup: %d symbols", len(warmed_tape))
     except Exception as e:
@@ -216,6 +231,7 @@ async def lifespan(app: FastAPI):
     try:
         if settings.ai_trade_plan_tracking.enabled:
             from backend.ai.trade_plan_tracker import start_trade_plan_tracker
+
             start_trade_plan_tracker()
             logger.info("Trade plan grading thread started")
     except Exception as e:
@@ -228,14 +244,15 @@ async def lifespan(app: FastAPI):
     # path. Mirrors the trend warmup pattern above.
     try:
         from backend.api.market_context.router import get_engine
+
         mc_engine = get_engine()
         seeded = sum(
-            1 for sym in mc_engine._cfg.indices
+            1
+            for sym in mc_engine._cfg.indices
             if mc_engine.sub_engines[sym].get_current_regime() is not None
         )
         logger.info(
-            f"Market-context warmup: {seeded}/{len(mc_engine._cfg.indices)} "
-            f"sub-engines warmed"
+            f"Market-context warmup: {seeded}/{len(mc_engine._cfg.indices)} sub-engines warmed"
         )
     except Exception as e:
         logger.warning(f"Market-context warmup failed: {e}")
@@ -244,6 +261,7 @@ async def lifespan(app: FastAPI):
     # any ticker added before these fixes get patched automatically.
     try:
         from backend.api.main_helpers import run_signal_hygiene
+
         gaps = run_signal_hygiene()
         for sym, tfs in gaps.items():
             for tf, filled in tfs.items():
@@ -259,6 +277,7 @@ async def lifespan(app: FastAPI):
     try:
         from backend.database import SessionLocal as _SessionLocal
         from backend.repositories.bar_repository import find_duplicate_calendar_bars
+
         _db = _SessionLocal()
         try:
             dupes = []
@@ -282,6 +301,7 @@ async def lifespan(app: FastAPI):
     # stalled every API request once every few minutes. See backend/utils/gc_tuning.py.
     try:
         from backend.utils.gc_tuning import freeze_startup_heap
+
         freeze_startup_heap()
     except Exception as e:
         logger.warning(f"GC freeze failed: {e}")
@@ -295,6 +315,7 @@ async def lifespan(app: FastAPI):
     # thread, so run it off the event loop.
     try:
         from backend.market_data.services.ingestion_service import ingestion_service
+
         await asyncio.to_thread(ingestion_service.stop)
     except Exception as e:
         logger.warning(f"Ingestion shutdown failed: {e}")
@@ -305,6 +326,7 @@ async def lifespan(app: FastAPI):
     if settings.ai_nudges.enabled:
         try:
             from backend.ai.nudges import nudge_service
+
             nudge_service.stop()
         except Exception as e:
             logger.warning(f"Nudge service shutdown failed: {e}")
@@ -318,12 +340,14 @@ async def lifespan(app: FastAPI):
     if settings.tape.enabled:
         try:
             from backend.api.tape.registry import stop_tape_flusher
+
             stop_tape_flusher()
         except Exception as e:
             logger.warning(f"Tape flusher shutdown failed: {e}")
     if settings.ai_trade_plan_tracking.enabled:
         try:
             from backend.ai.trade_plan_tracker import stop_trade_plan_tracker
+
             stop_trade_plan_tracker()
         except Exception as e:
             logger.warning(f"Trade plan tracker shutdown failed: {e}")
@@ -347,6 +371,7 @@ app = FastAPI(
 
 
 # ── Exception handlers ────────────────────────────────────────────────────────
+
 
 def _get_correlation_id(request: Request) -> str | None:
     """Read correlation ID from request state or context variable.
@@ -496,16 +521,14 @@ app.include_router(system_router)
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "service": settings.app_name,
-        "version": get_version()
-    }
+    return {"status": "healthy", "service": settings.app_name, "version": get_version()}
+
 
 @app.get("/api/system/status")
 async def system_status():
     """System status endpoint"""
     from datetime import datetime
+
     return {
         "service": settings.app_name,
         "version": get_version(),
@@ -513,7 +536,7 @@ async def system_status():
         "market_data_provider": settings.market_data.primary_provider,
         "market_data_fallback_providers": settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,
-        "timestamp": _to_dashboard_tz(datetime.now(UTC))
+        "timestamp": _to_dashboard_tz(datetime.now(UTC)),
     }
 
 
@@ -544,6 +567,7 @@ async def system_config():
         env_primary = env_vars.get("MARKET_DATA_PRIMARY_PROVIDER")
         # fallback is stored as a JSON list string, e.g. '["yahoo_finance"]'
         import json as _json
+
         raw_fallback = env_vars.get("MARKET_DATA_FALLBACK_PROVIDERS", "[]")
         try:
             env_fallbacks = _json.loads(raw_fallback)
@@ -573,4 +597,5 @@ async def system_config():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host=settings.host, port=settings.port)

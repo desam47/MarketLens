@@ -5,6 +5,7 @@ Uses an in-memory SQLite engine so the sqlite_master-based unique
 constraint detection in upsert_bars is exercised end-to-end. We attach
 the Base.metadata to the new engine and create only the bars table.
 """
+
 import os
 import sqlite3
 import sys
@@ -16,7 +17,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.models.market_data import Bar, DataStatus
 from backend.models.market_data_sql import BarModel
@@ -45,7 +46,6 @@ def _make_bar(symbol: str, ts: datetime, close: float = 100.0, timeframe: str = 
 
 
 class TestBarRepository(unittest.TestCase):
-
     def setUp(self):
         # Fresh in-memory DB per test so persistence is fully isolated.
         self.engine = create_engine(
@@ -54,9 +54,7 @@ class TestBarRepository(unittest.TestCase):
         )
         # Only the bars table — keep tests focused.
         BarModel.__table__.create(self.engine, checkfirst=True)
-        self.Session = sessionmaker(
-            autocommit=False, autoflush=False, bind=self.engine
-        )
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def tearDown(self):
         self.engine.dispose()
@@ -117,15 +115,10 @@ class TestBarRepository(unittest.TestCase):
     def test_get_bars_returns_oldest_first(self):
         """get_bars must order by timestamp ASC."""
         t0 = datetime(2025, 1, 1, 9, 30)
-        bars = [
-            _make_bar("AAPL", t0 + timedelta(minutes=i), 100 + i)
-            for i in range(5)
-        ]
+        bars = [_make_bar("AAPL", t0 + timedelta(minutes=i), 100 + i) for i in range(5)]
         # Insert in scrambled order
         with self.Session() as db:
-            bar_repository.upsert_bars(
-                db, [bars[3], bars[0], bars[4], bars[1], bars[2]]
-            )
+            bar_repository.upsert_bars(db, [bars[3], bars[0], bars[4], bars[1], bars[2]])
 
         with self.Session() as db:
             stored = bar_repository.get_bars(db, "AAPL", "1m")
@@ -136,8 +129,7 @@ class TestBarRepository(unittest.TestCase):
 
     def test_get_bars_respects_limit(self):
         bars = [
-            _make_bar("AAPL", datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i))
-            for i in range(10)
+            _make_bar("AAPL", datetime(2025, 1, 1, 9, 30) + timedelta(minutes=i)) for i in range(10)
         ]
         with self.Session() as db:
             bar_repository.upsert_bars(db, bars)
@@ -160,8 +152,10 @@ class TestBarRepository(unittest.TestCase):
         derived from it at read time, no longer applies.)
         """
         base = datetime(2025, 1, 2, 14, 0)
-        aapl_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1, timeframe="1m")
-                   for i in range(60)]
+        aapl_1m = [
+            _make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1, timeframe="1m")
+            for i in range(60)
+        ]
         # A directly-stored 1h bar for AAPL (as the resample-write loop
         # would write), distinct from the 1m rows above.
         aapl_1h = [_make_bar("AAPL", base, 999.0, timeframe="1h")]
@@ -200,7 +194,6 @@ class TestBarRepository(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0].data_status, DataStatus.HISTORICAL)
         self.assertEqual(stored[0].source, "raw")
-
 
     def test_slow_query_logging_threshold(self):
         """``get_bars`` logs a WARNING when the slow-query threshold is breached.
@@ -243,12 +236,17 @@ class TestBarRepository(unittest.TestCase):
         hybrid-fallback path, since removed). An empty DB returns an empty
         list even when a fallback_provider is supplied.
         """
+
         def fallback_provider(symbol: str, timeframe: str) -> list[Bar]:
             raise AssertionError("fallback_provider should never be invoked")
 
         with self.Session() as db:
             bars = bar_repository.get_bars(
-                db, "AAPL", "1d", limit=3, fallback_provider=fallback_provider,
+                db,
+                "AAPL",
+                "1d",
+                limit=3,
+                fallback_provider=fallback_provider,
             )
         self.assertEqual(bars, [])
 
@@ -256,15 +254,18 @@ class TestBarRepository(unittest.TestCase):
         """from_ts/to_ts narrow the 1m fast path by timestamp range."""
         # 30 consecutive 1m bars starting at 09:30.
         base = datetime(2025, 1, 2, 9, 30)
-        bars_1m = [_make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1)
-                   for i in range(30)]
+        bars_1m = [
+            _make_bar("AAPL", base + timedelta(minutes=i), 100.0 + i * 0.1) for i in range(30)
+        ]
         with self.Session() as db:
             bar_repository.upsert_bars(db, bars_1m)
 
         # Window: 09:35–09:40 (5 bars inclusive)
         with self.Session() as db:
             res = bar_repository.get_bars(
-                db, "AAPL", "1m",
+                db,
+                "AAPL",
+                "1m",
                 from_ts=datetime(2025, 1, 2, 9, 35),
                 to_ts=datetime(2025, 1, 2, 9, 40),
             )
@@ -290,7 +291,9 @@ class TestBarRepository(unittest.TestCase):
         # Window: 14:15 onwards excludes the 14:00 bar, keeps the 15:00 bar.
         with self.Session() as db:
             res = bar_repository.get_bars(
-                db, "AAPL", "1h",
+                db,
+                "AAPL",
+                "1h",
                 from_ts=datetime(2025, 1, 2, 14, 15),
             )
         self.assertEqual(len(res), 1)
@@ -311,11 +314,14 @@ class TestFromTsToTsCap(unittest.TestCase):
         """Patch ``datetime.now`` with a fixed time for deterministic testing."""
         import datetime
         import unittest.mock
+
         original = datetime.datetime
+
         class FixedDatetime(original):
             @staticmethod
             def now(tz=None):
                 return original(2025, 6, 15, 12, 0, 0, tzinfo=tz)
+
         return unittest.mock.patch.object(datetime, "datetime", FixedDatetime)
 
     def _make_db_with_filter_capture(self):
@@ -327,7 +333,9 @@ class TestFromTsToTsCap(unittest.TestCase):
         from backend.repositories import bar_repository
 
         # Prime the cache so we don't hit sqlite_master.
-        bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = True
+        bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = (
+            True
+        )
 
         db = MagicMock()
         db.bind.dialect.name = "sqlite"
@@ -354,14 +362,17 @@ class TestFromTsToTsCap(unittest.TestCase):
 
         with self._spy_now():
             bar_repository.get_bars(
-                db, "AAPL", "1d",
+                db,
+                "AAPL",
+                "1d",
                 from_ts=datetime(2025, 1, 2, 0, 0),
             )
 
         # Expected filter chain: symbol+timeframe, from_ts. No to_ts cap.
         self.assertEqual(
-            chain.filter.call_count, 2,
-            "expected 2 filter calls: symbol+tf, from_ts (no implicit to_ts cap)"
+            chain.filter.call_count,
+            2,
+            "expected 2 filter calls: symbol+tf, from_ts (no implicit to_ts cap)",
         )
         self.assertEqual(chain.order_by.call_count, 1)
 
@@ -375,15 +386,16 @@ class TestFromTsToTsCap(unittest.TestCase):
 
         with self._spy_now():
             bar_repository.get_bars(
-                db, "AAPL", "1d",
+                db,
+                "AAPL",
+                "1d",
                 from_ts=datetime(2025, 1, 1),
                 limit=5,
             )
 
         # Expected filter chain: symbol+timeframe, from_ts. No to_ts cap.
         self.assertEqual(
-            chain.filter.call_count, 2,
-            "expected 2 filter calls: symbol+tf, from_ts (no to_ts cap)"
+            chain.filter.call_count, 2, "expected 2 filter calls: symbol+tf, from_ts (no to_ts cap)"
         )
 
     def test_resampled_with_to_ts_not_overridden(self):
@@ -396,7 +408,9 @@ class TestFromTsToTsCap(unittest.TestCase):
 
         with self._spy_now():
             bar_repository.get_bars(
-                db, "AAPL", "1d",
+                db,
+                "AAPL",
+                "1d",
                 from_ts=datetime(2025, 1, 2, 0, 0),
                 to_ts=datetime(2025, 1, 5, 0, 0),
             )
@@ -414,15 +428,14 @@ class TestFromTsToTsCap(unittest.TestCase):
 
         with self._spy_now():
             bar_repository.get_bars(
-                db, "AAPL", "1m",
+                db,
+                "AAPL",
+                "1m",
                 from_ts=datetime(2025, 1, 1),
             )
 
         # 1m path: only symbol+tf filter + from_ts filter. No to_ts cap.
-        self.assertEqual(
-            chain.filter.call_count, 2,
-            "1m path: symbol+tf + from_ts (no to_ts cap)"
-        )
+        self.assertEqual(chain.filter.call_count, 2, "1m path: symbol+tf + from_ts (no to_ts cap)")
 
 
 class TestWideningHours(unittest.TestCase):
@@ -436,6 +449,7 @@ class TestWideningHours(unittest.TestCase):
 
     def test_widening_hours_table_values(self):
         from backend.repositories import bar_repository
+
         # Dict values are unchanged, but unused by get_bars/_fetch_bars —
         # see class docstring.
         self.assertEqual(bar_repository._WIDENING_HOURS["1d"], 24)
@@ -461,20 +475,21 @@ class TestWideningHours(unittest.TestCase):
         db.query.return_value = chain
 
         # Prime the unique-constraint cache to bypass the sqlite_master check.
-        bar_repository._UNIQUE_CONSTRAINT_CACHE[
-            ("bars", ("symbol", "timeframe", "timestamp"))
-        ] = True
+        bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = (
+            True
+        )
 
         from_ts = datetime(2025, 6, 1, 0, 0)
         bar_repository.get_bars(db, "AAPL", "1wk", from_ts=from_ts)
 
         filter_args = [
-            call.args[0] for call in chain.filter.call_args_list
+            call.args[0]
+            for call in chain.filter.call_args_list
             if call.args and hasattr(call.args[0], "right")
         ]
         self.assertTrue(
             any(getattr(arg.right, "value", None) == from_ts for arg in filter_args),
-            f"1wk path should not widen from_ts; got {filter_args}"
+            f"1wk path should not widen from_ts; got {filter_args}",
         )
 
     def test_1d_from_ts_not_widened(self):
@@ -493,20 +508,21 @@ class TestWideningHours(unittest.TestCase):
         chain.all = MagicMock(return_value=[])
         db.query.return_value = chain
 
-        bar_repository._UNIQUE_CONSTRAINT_CACHE[
-            ("bars", ("symbol", "timeframe", "timestamp"))
-        ] = True
+        bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = (
+            True
+        )
 
         from_ts = datetime(2025, 6, 1, 0, 0)
         bar_repository.get_bars(db, "AAPL", "1d", from_ts=from_ts)
 
         filter_args = [
-            call.args[0] for call in chain.filter.call_args_list
+            call.args[0]
+            for call in chain.filter.call_args_list
             if call.args and hasattr(call.args[0], "right")
         ]
         self.assertTrue(
             any(getattr(arg.right, "value", None) == from_ts for arg in filter_args),
-            f"1d path should not widen from_ts; got {filter_args}"
+            f"1d path should not widen from_ts; got {filter_args}",
         )
 
     def test_1m_path_not_widened(self):
@@ -525,25 +541,23 @@ class TestWideningHours(unittest.TestCase):
         chain.all = MagicMock(return_value=[])
         db.query.return_value = chain
 
-        bar_repository._UNIQUE_CONSTRAINT_CACHE[
-            ("bars", ("symbol", "timeframe", "timestamp"))
-        ] = True
+        bar_repository._UNIQUE_CONSTRAINT_CACHE[("bars", ("symbol", "timeframe", "timestamp"))] = (
+            True
+        )
 
         from_ts = datetime(2025, 6, 1, 0, 0)
         bar_repository.get_bars(db, "AAPL", "1m", from_ts=from_ts)
 
         filter_args = [
-            call.args[0] for call in chain.filter.call_args_list
+            call.args[0]
+            for call in chain.filter.call_args_list
             if call.args and hasattr(call.args[0], "right")
         ]
         # The from_ts filter should be the original value, NOT widened.
         # (1m is not resampled, so widen_hours lookup is skipped.)
         self.assertTrue(
-            any(
-                getattr(arg.right, "value", None) == from_ts
-                for arg in filter_args
-            ),
-            f"1m path should not widen from_ts; got {filter_args}"
+            any(getattr(arg.right, "value", None) == from_ts for arg in filter_args),
+            f"1m path should not widen from_ts; got {filter_args}",
         )
 
 
@@ -556,6 +570,7 @@ class TestUniqueConstraintCache(unittest.TestCase):
     def setUp(self):
         # Reset the module-level cache so each test starts clean.
         from backend.repositories import bar_repository
+
         bar_repository._UNIQUE_CONSTRAINT_CACHE.clear()
 
     def _make_db(self) -> MagicMock:
@@ -577,7 +592,9 @@ class TestUniqueConstraintCache(unittest.TestCase):
 
         db = self._make_db()
         # First call populates the cache.
-        first = bar_repository._has_unique_constraint(db, "bars", ("symbol", "timeframe", "timestamp"))
+        first = bar_repository._has_unique_constraint(
+            db, "bars", ("symbol", "timeframe", "timestamp")
+        )
         self.assertTrue(first)
         self.assertEqual(db.execute.call_count, 1)
 
@@ -652,7 +669,9 @@ class TestUniqueConstraintCache(unittest.TestCase):
 
             # Five more calls — all cache hits, no new sqlite_master queries.
             for _ in range(5):
-                bar_repository._has_unique_constraint(db, "bars", ("symbol", "timeframe", "timestamp"))
+                bar_repository._has_unique_constraint(
+                    db, "bars", ("symbol", "timeframe", "timestamp")
+                )
             self.assertEqual(call_counter["n"], 1, "cache hits must not call sqlite_master")
 
 
@@ -761,9 +780,7 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
             connect_args={"check_same_thread": False},
         )
         BarModel.__table__.create(self.engine, checkfirst=True)
-        self.Session = sessionmaker(
-            autocommit=False, autoflush=False, bind=self.engine
-        )
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def tearDown(self):
         self.engine.dispose()
@@ -838,6 +855,7 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
         """The no-unique-constraint fallback path (existing.session = ...)
         must apply the same recompute, not just the bulk ON CONFLICT path."""
         from unittest.mock import patch
+
         bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 30), timeframe="1m")
         with patch.object(bar_repository, "_has_unique_constraint", return_value=False):
             with self.Session() as db:
@@ -873,9 +891,11 @@ class TestUpsertBarsBulkWrite(unittest.TestCase):
     def _engine(self, variable_limit=None):
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
         if variable_limit is not None:
+
             @event.listens_for(engine, "connect")
             def _lower_limit(dbapi_conn, _record):
                 dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, variable_limit)
+
         BarModel.__table__.create(engine, checkfirst=True)
         self.addCleanup(engine.dispose)
         return engine, sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -888,10 +908,15 @@ class TestUpsertBarsBulkWrite(unittest.TestCase):
     def test_one_executemany_with_a_twelve_variable_statement(self):
         engine, Session = self._engine()
         seen = []
-        event.listen(engine, "before_cursor_execute",
-                     lambda conn, cur, stmt, params, ctx, many:
-                     seen.append((stmt, many, len(params) if many else 1))
-                     if stmt.lstrip().upper().startswith("INSERT") else None)
+        event.listen(
+            engine,
+            "before_cursor_execute",
+            lambda conn, cur, stmt, params, ctx, many: (
+                seen.append((stmt, many, len(params) if many else 1))
+                if stmt.lstrip().upper().startswith("INSERT")
+                else None
+            ),
+        )
         with Session() as db:
             written = bar_repository.upsert_bars(db, self._bars(250))
         self.assertEqual(written, 250)
@@ -927,10 +952,24 @@ class TestUpsertBarsBulkWrite(unittest.TestCase):
         with Session() as db:
             # Self-check that the emulation is real: the old statement shape fails.
             from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-            rows = [{"symbol": "AAPL", "timeframe": "1m", "open": 1.0, "high": 1.0, "low": 1.0,
-                     "close": 1.0, "volume": 1, "timestamp": datetime(2025, 1, 1) + timedelta(minutes=i),
-                     "provider": "p", "data_status": "LIVE", "source": "raw", "session": "regular"}
-                    for i in range(200)]
+
+            rows = [
+                {
+                    "symbol": "AAPL",
+                    "timeframe": "1m",
+                    "open": 1.0,
+                    "high": 1.0,
+                    "low": 1.0,
+                    "close": 1.0,
+                    "volume": 1,
+                    "timestamp": datetime(2025, 1, 1) + timedelta(minutes=i),
+                    "provider": "p",
+                    "data_status": "LIVE",
+                    "source": "raw",
+                    "session": "regular",
+                }
+                for i in range(200)
+            ]
             with self.assertRaises(OperationalError) as ctx:
                 db.execute(sqlite_insert(BarModel).values(rows))
             self.assertIn("too many SQL variables", str(ctx.exception))

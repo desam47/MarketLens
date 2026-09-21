@@ -47,6 +47,7 @@ When per-symbol granularity is required, prefer:
   - OpenTelemetry native metrics (which handle high-cardinality natively),
     and scrape those from Jaeger or a dedicated Otel collector.
 """
+
 from collections.abc import Iterable
 
 from ..api.rate_limit import RedisRateLimiter
@@ -68,17 +69,11 @@ def _format_line(
     """Render one Prometheus metric (with optional labels)."""
     if labels:
         # Quote label values; escape internal backslashes and quotes.
-        rendered_labels = ",".join(
-            f'{k}="{_escape(v)}"' for k, v in sorted(labels.items())
-        )
+        rendered_labels = ",".join(f'{k}="{_escape(v)}"' for k, v in sorted(labels.items()))
         metric_line = f"{name}{{{rendered_labels}}} {_format_value(value)}"
     else:
         metric_line = f"{name} {_format_value(value)}"
-    return (
-        f"# HELP {name} {help_text}\n"
-        f"# TYPE {name} {metric_type}\n"
-        f"{metric_line}\n"
-    )
+    return f"# HELP {name} {help_text}\n# TYPE {name} {metric_type}\n{metric_line}\n"
 
 
 def _format_value(v: float) -> str:
@@ -280,6 +275,7 @@ def _rate_limit_metrics(rate_limiter: RedisRateLimiter | None = None) -> list[st
         # avoid circular imports at module load time.
         try:
             from ..main import _write_limiter
+
             rate_limiter = _write_limiter
         except Exception:
             return []
@@ -445,7 +441,9 @@ def _provider_metrics() -> list[str]:
 
     # Emit a series for every provider the manager knows about, even
     # if it has 0 throttled calls, so dashboards can render zero-baselines.
-    known_providers: set[str] = set(market_data_manager.providers.keys()) | set(throttle_stats.keys())
+    known_providers: set[str] = set(market_data_manager.providers.keys()) | set(
+        throttle_stats.keys()
+    )
     for provider_name in sorted(known_providers):
         lines.append(
             _format_line(

@@ -1,4 +1,5 @@
 """Tests for FinnhubNewsProvider — requests.get mocked."""
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +16,20 @@ def _resp(json_body, status=200, ok=True):
 
 
 _ROWS = [
-    {"datetime": 1_700_000_100, "headline": "Older", "source": "Reuters", "related": "AAPL", "url": "https://example.com/older"},
-    {"datetime": 1_700_000_900, "headline": "Newer", "source": "CNBC", "related": "MSFT", "url": "https://example.com/newer"},
+    {
+        "datetime": 1_700_000_100,
+        "headline": "Older",
+        "source": "Reuters",
+        "related": "AAPL",
+        "url": "https://example.com/older",
+    },
+    {
+        "datetime": 1_700_000_900,
+        "headline": "Newer",
+        "source": "CNBC",
+        "related": "MSFT",
+        "url": "https://example.com/newer",
+    },
     {"datetime": 1_700_000_500, "headline": "", "source": "X", "related": "AAPL"},  # dropped
 ]
 
@@ -25,7 +38,9 @@ class TestFinnhubNewsProvider(unittest.TestCase):
     def setUp(self):
         self._p = patch.object(
             __import__("backend.config.settings", fromlist=["settings"]).settings.finnhub,
-            "api_key", "test-key")
+            "api_key",
+            "test-key",
+        )
         self._p.start()
         self.addCleanup(self._p.stop)
 
@@ -35,10 +50,12 @@ class TestFinnhubNewsProvider(unittest.TestCase):
         prov = FinnhubNewsProvider()
         out = prov.get_news("AAPL", limit=10)
         self.assertEqual(prov.name, "finnhub_news")
-        self.assertEqual([i.headline for i in out.items], ["Newer", "Older"])  # newest first, blank dropped
+        self.assertEqual(
+            [i.headline for i in out.items], ["Newer", "Older"]
+        )  # newest first, blank dropped
         self.assertEqual(out.items[1].source, "Reuters")
-        self.assertEqual(out.items[1].relevance, 0.75)   # AAPL in `related`
-        self.assertEqual(out.items[0].relevance, 0.55)   # not related
+        self.assertEqual(out.items[1].relevance, 0.75)  # AAPL in `related`
+        self.assertEqual(out.items[0].relevance, 0.55)  # not related
         self.assertEqual(out.items[0].url, "https://example.com/newer")
         self.assertTrue(prov._is_healthy)
 
@@ -58,7 +75,9 @@ class TestFinnhubNewsProvider(unittest.TestCase):
     def test_missing_key_raises(self):
         with patch.object(
             __import__("backend.config.settings", fromlist=["settings"]).settings.finnhub,
-            "api_key", ""):
+            "api_key",
+            "",
+        ):
             with self.assertRaises(RuntimeError):
                 FinnhubNewsProvider().get_news("AAPL")
 

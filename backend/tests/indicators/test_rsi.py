@@ -1,6 +1,7 @@
 """
 Tests for RSI (Relative Strength Index) indicator
 """
+
 import unittest
 
 from backend.indicators.rsi import RSIIndicator
@@ -16,9 +17,7 @@ class TestRSIIndicator(unittest.TestCase):
         """RSI calculated on a 15-bar uptrend is high (near 100)"""
         # 15 bars: 13 alternating ±1s (net 0), then big up day.
         # avg_gain = 14*1/14 = 1.0, avg_loss = 0 → RS = ∞ → RSI = 100
-        data = [
-            {"close": 100.0 + i} for i in range(15)
-        ]
+        data = [{"close": 100.0 + i} for i in range(15)]
         values = self.indicator.calculate(data)
         self.assertGreater(len(values), 0)
         self.assertGreaterEqual(values[-1], 90.0)

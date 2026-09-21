@@ -1,10 +1,11 @@
 """Tests for TrendTransitionEngine."""
+
 import os
 import sys
 import unittest
 from datetime import datetime
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.transitions.trend_transition_engine import (
     TransitionDirection,
@@ -14,7 +15,6 @@ from backend.transitions.trend_transition_engine import (
 
 
 class TestTrendTransitionEngine(unittest.TestCase):
-
     def test_initialization_defaults(self):
         engine = TrendTransitionEngine()
         self.assertEqual(engine.window, 5)

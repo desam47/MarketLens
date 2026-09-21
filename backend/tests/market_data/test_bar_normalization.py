@@ -10,6 +10,7 @@ yahoo_finance (09:30) 1d bars never collided — 63% of all stored 1d rows
 ended up duplicated, with close prices differing by up to 2.4% between
 the two rows for the same trading day.
 """
+
 import os
 import sys
 import unittest

@@ -2,6 +2,7 @@
 """
 Production Hardening Checker
 """
+
 import os
 import re
 import subprocess
@@ -23,8 +24,8 @@ class ProductionHardeningChecker:
             r'["\'](?:password|passwd|pwd)["\']\s*[:=]\s*["\'][^"\']{6,}["\']',
         ]
 
-        exclude_dirs = {'.git', '__pycache__', 'node_modules', '.env', 'venv', '.venv'}
-        exclude_files = {'production_hardening.py', '.env.example'}
+        exclude_dirs = {".git", "__pycache__", "node_modules", ".env", "venv", ".venv"}
+        exclude_files = {"production_hardening.py", ".env.example"}
 
         for py_file in self.root_path.rglob("*.py"):
             if any(exclude_dir in str(py_file) for exclude_dir in exclude_dirs):
@@ -33,13 +34,23 @@ class ProductionHardeningChecker:
                 continue
 
             try:
-                content = py_file.read_text(encoding='utf-8')
+                content = py_file.read_text(encoding="utf-8")
                 for pattern in secret_patterns:
                     matches = re.finditer(pattern, content, re.IGNORECASE)
                     for match in matches:
                         matched_text = match.group(0)
-                        if not any(skip in matched_text.lower() for skip in
-                                 ['example', 'test', 'dummy', 'placeholder', 'your_', '<', '>']):
+                        if not any(
+                            skip in matched_text.lower()
+                            for skip in [
+                                "example",
+                                "test",
+                                "dummy",
+                                "placeholder",
+                                "your_",
+                                "<",
+                                ">",
+                            ]
+                        ):
                             self.issues.append(
                                 f"POTENTIAL SECRET in {py_file.relative_to(self.root_path)}: {matched_text[:50]}..."
                             )
@@ -48,8 +59,8 @@ class ProductionHardeningChecker:
 
     def check_frontend_keys(self):
         print("Checking frontend for API keys...")
-        frontend_dirs = ['frontend', 'src/frontend', 'public', 'static']
-        frontend_extensions = {'.js', '.ts', '.jsx', '.tsx', '.html', '.vue', '.svelte'}
+        frontend_dirs = ["frontend", "src/frontend", "public", "static"]
+        frontend_extensions = {".js", ".ts", ".jsx", ".tsx", ".html", ".vue", ".svelte"}
 
         for frontend_dir in frontend_dirs:
             dir_path = self.root_path / frontend_dir
@@ -61,7 +72,7 @@ class ProductionHardeningChecker:
                     continue
 
                 try:
-                    content = file_path.read_text(encoding='utf-8')
+                    content = file_path.read_text(encoding="utf-8")
                     patterns = [
                         r'["\'](?:api[_-]?key|apikey)["\']\s*[:=]\s*["\'][^"\']{10,}["\']',
                         r'process\.env\.\[["\'](?:REACT_APP_|VITE_|NEXT_PUBLIC_)',
@@ -79,14 +90,17 @@ class ProductionHardeningChecker:
     def check_env_handling(self):
         print("Checking environment handling...")
         for py_file in self.root_path.rglob("*.py"):
-            if any(exclude_dir in str(py_file) for exclude_dir in ['.git', '__pycache__', 'venv', '.venv']):
+            if any(
+                exclude_dir in str(py_file)
+                for exclude_dir in [".git", "__pycache__", "venv", ".venv"]
+            ):
                 continue
 
             try:
-                content = py_file.read_text(encoding='utf-8')
-                env_accesses = re.finditer(r'os\.environ\[[^\]]+\]', content)
+                content = py_file.read_text(encoding="utf-8")
+                env_accesses = re.finditer(r"os\.environ\[[^\]]+\]", content)
                 for match in env_accesses:
-                    line_num = content[:match.start()].count('\n') + 1
+                    line_num = content[: match.start()].count("\n") + 1
                     self.warnings.append(
                         f"Direct os.environ access in {py_file.relative_to(self.root_path)}:{line_num} "
                         f"- consider using os.environ.get() with defaults"
@@ -97,22 +111,25 @@ class ProductionHardeningChecker:
     def check_error_handling(self):
         print("Checking error handling...")
         for py_file in self.root_path.rglob("*.py"):
-            if any(exclude_dir in str(py_file) for exclude_dir in ['.git', '__pycache__', 'tests', 'venv', '.venv']):
+            if any(
+                exclude_dir in str(py_file)
+                for exclude_dir in [".git", "__pycache__", "tests", "venv", ".venv"]
+            ):
                 continue
 
             try:
-                content = py_file.read_text(encoding='utf-8')
-                bare_excepts = re.finditer(r'except\s*:', content)
+                content = py_file.read_text(encoding="utf-8")
+                bare_excepts = re.finditer(r"except\s*:", content)
                 for match in bare_excepts:
-                    line_num = content[:match.start()].count('\n') + 1
+                    line_num = content[: match.start()].count("\n") + 1
                     self.issues.append(
                         f"Bare except clause in {py_file.relative_to(self.root_path)}:{line_num} "
                         f"- should specify exception types"
                     )
 
-                except_pass = re.finditer(r'except\s*.*?:\s*\n\s*pass', content, re.DOTALL)
+                except_pass = re.finditer(r"except\s*.*?:\s*\n\s*pass", content, re.DOTALL)
                 for match in except_pass:
-                    line_num = content[:match.start()].count('\n') + 1
+                    line_num = content[: match.start()].count("\n") + 1
                     self.warnings.append(
                         f"Empty except block in {py_file.relative_to(self.root_path)}:{line_num} "
                         f"- consider logging or handling the exception"
@@ -123,20 +140,23 @@ class ProductionHardeningChecker:
     def check_logging(self):
         print("Checking logging...")
         for py_file in self.root_path.rglob("*.py"):
-            if any(exclude_dir in str(py_file) for exclude_dir in ['.git', '__pycache__', 'tests', 'venv', '.venv']):
+            if any(
+                exclude_dir in str(py_file)
+                for exclude_dir in [".git", "__pycache__", "tests", "venv", ".venv"]
+            ):
                 continue
 
             try:
-                content = py_file.read_text(encoding='utf-8')
-                print_statements = re.finditer(r'^\s*print\(', content, re.MULTILINE)
+                content = py_file.read_text(encoding="utf-8")
+                print_statements = re.finditer(r"^\s*print\(", content, re.MULTILINE)
                 for match in print_statements:
-                    line_num = content[:match.start()].count('\n') + 1
+                    line_num = content[: match.start()].count("\n") + 1
                     self.warnings.append(
                         f"Print statement in {py_file.relative_to(self.root_path)}:{line_num} "
                         f"- consider using logging instead"
                     )
 
-                if 'import logging' not in content and 'from logging' not in content:
+                if "import logging" not in content and "from logging" not in content:
                     if len(content.splitlines()) > 10:
                         self.warnings.append(
                             f"No logging import in {py_file.relative_to(self.root_path)} "
@@ -154,9 +174,9 @@ class ProductionHardeningChecker:
         self.check_error_handling()
         self.check_logging()
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("PRODUCTION HARDENING CHECK RESULTS")
-        print("="*60)
+        print("=" * 60)
 
         if self.issues:
             print(f"\n❌ ISSUES FOUND ({len(self.issues)}):")
@@ -175,7 +195,7 @@ class ProductionHardeningChecker:
             for passed in self.passed:
                 print(f"  • {passed}")
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         total_issues = len(self.issues) + len(self.warnings)
         if total_issues == 0:
             print("🎉 ALL CHECKS PASSED - READY FOR PRODUCTION!")
@@ -192,12 +212,22 @@ class ProductionHardeningChecker:
         docs_dir = self.root_path / "docs"
         docs_dir.mkdir(exist_ok=True)
 
-        (docs_dir / "README.md").write_text("# MarketLens\n\nA comprehensive market analysis platform.\n")
-        (docs_dir / "ARCHITECTURE.md").write_text("# MarketLens Architecture\n\nModular platform for market analysis.\n")
-        (docs_dir / "PROVIDERS.md").write_text("# Market Data Providers\n\nInformation about supported data providers.\n")
-        (docs_dir / "AI.md").write_text("# AI Integration\n\nOptional AI capabilities for enhanced analysis.\n")
+        (docs_dir / "README.md").write_text(
+            "# MarketLens\n\nA comprehensive market analysis platform.\n"
+        )
+        (docs_dir / "ARCHITECTURE.md").write_text(
+            "# MarketLens Architecture\n\nModular platform for market analysis.\n"
+        )
+        (docs_dir / "PROVIDERS.md").write_text(
+            "# Market Data Providers\n\nInformation about supported data providers.\n"
+        )
+        (docs_dir / "AI.md").write_text(
+            "# AI Integration\n\nOptional AI capabilities for enhanced analysis.\n"
+        )
         (docs_dir / "TESTING.md").write_text("# Testing Guide\n\nHow to run and write tests.\n")
-        (docs_dir / "TROUBLESHOOTING.md").write_text("# Troubleshooting Guide\n\nCommon issues and solutions.\n")
+        (docs_dir / "TROUBLESHOOTING.md").write_text(
+            "# Troubleshooting Guide\n\nCommon issues and solutions.\n"
+        )
 
         print("📄 Documentation files created in docs/")
 
@@ -206,10 +236,15 @@ class ProductionHardeningChecker:
         try:
             test_dir = self.root_path / "MarketLens" / "backend"
             env = os.environ.copy()
-            env['PYTHONPATH'] = str(self.root_path)
-            result = subprocess.run([
-                sys.executable, "-m", "pytest", "tests/", "-v"
-            ], cwd=test_dir, capture_output=True, text=True, timeout=120, env=env)
+            env["PYTHONPATH"] = str(self.root_path)
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", "tests/", "-v"],
+                cwd=test_dir,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
 
             if result.returncode == 0:
                 print("✅ All tests passed!")
@@ -234,9 +269,13 @@ class ProductionHardeningChecker:
     def run_linting(self):
         print("\nRunning linting...")
         try:
-            result = subprocess.run([
-                sys.executable, "-m", "flake8", "MarketLens/", "--count"
-            ], cwd=self.root_path, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                [sys.executable, "-m", "flake8", "MarketLens/", "--count"],
+                cwd=self.root_path,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
 
             if result.returncode == 0:
                 print("✅ Linting passed!")
@@ -255,6 +294,7 @@ class ProductionHardeningChecker:
             self.warnings.append(f"Linting check skipped: {e}")
             return True
 
+
 def main():
     checker = ProductionHardeningChecker(".")
 
@@ -269,6 +309,7 @@ def main():
     else:
         print("\n🛑 Production hardening check found issues that need attention!")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

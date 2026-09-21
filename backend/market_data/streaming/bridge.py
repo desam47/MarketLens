@@ -14,6 +14,7 @@ callbacks (set in main.py's lifespan). They run on the SDK's thread.
   trade    -> engine_registry.dispatch_trade  (kind "trade"; tape is the only consumer)
   snapshot -> TapeEngine.note_price           (keeps last_price fresh between prints)
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,7 +36,11 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_) -> None:
 def on_stream_trade(symbol, price, size, ts, side) -> None:
     try:
         engine_registry.dispatch_trade(
-            symbol, price, size or 0, timestamp=_ensure_aware(ts), side=side,
+            symbol,
+            price,
+            size or 0,
+            timestamp=_ensure_aware(ts),
+            side=side,
         )
     except Exception as e:  # noqa: BLE001
         # Mirrors on_stream_snapshot's guard: without this, a malformed

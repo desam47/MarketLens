@@ -86,17 +86,15 @@ _RANGE_SECONDS: dict[str, int] = {
     "1y": 31536000,
     "2y": 63072000,
     "5y": 157680000,
-    "15m": 2700,    # Phase 3.8: 45 min — covers 15-min lookback + buffer
-    "3h":  18000,   # Phase 3.8: 5 hours — covers 3h lookback + buffer
+    "15m": 2700,  # Phase 3.8: 45 min — covers 15-min lookback + buffer
+    "3h": 18000,  # Phase 3.8: 5 hours — covers 3h lookback + buffer
 }
 
 
 def _resolve_tf(timeframe: str) -> TimeFrame:
     tf = _TF_MAP.get(timeframe)
     if tf is None:
-        raise ValueError(
-            f"Unsupported timeframe {timeframe!r}; supported: {sorted(_TF_MAP)}"
-        )
+        raise ValueError(f"Unsupported timeframe {timeframe!r}; supported: {sorted(_TF_MAP)}")
     return tf
 
 
@@ -529,9 +527,13 @@ class AlpacaProvider(BaseMarketDataProvider):
             tf = _resolve_tf(timeframe)
             # Today midnight in NY → convert to UTC for the SDK.
             from backend.utils.timezone import now_ny as _now_ny
+
             today_ny = _now_ny().replace(hour=0, minute=0, second=0, microsecond=0)
-            start_utc = NY.localize(today_ny) if hasattr(NY, "localize") else \
-                today_ny.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(UTC)
+            start_utc = (
+                NY.localize(today_ny)
+                if hasattr(NY, "localize")
+                else today_ny.replace(tzinfo=ZoneInfo("America/New_York")).astimezone(UTC)
+            )
             # Cap end at now-15min to avoid the IEX 403 on recent SIP data.
             end_utc = datetime.now(UTC) - timedelta(minutes=15)
             req = StockBarsRequest(
@@ -595,9 +597,7 @@ class AlpacaProvider(BaseMarketDataProvider):
             client = self._get_data_client()
             barset = client.get_stock_bars(req)
             bars_raw = barset.data.get(symbol.upper(), [])
-            bars: list[Bar] = [
-                self._bar_from_sdk(symbol, item, timeframe) for item in bars_raw
-            ]
+            bars: list[Bar] = [self._bar_from_sdk(symbol, item, timeframe) for item in bars_raw]
             self._reset_error_state()
             return bars
 
@@ -681,14 +681,8 @@ class AlpacaProvider(BaseMarketDataProvider):
             status = MarketStatus(
                 symbol=symbol.upper(),
                 is_open=bool(clock.is_open),
-                next_open=(
-                    _ts_to_ny(clock.next_open) if clock.next_open is not None else None
-                ),
-                next_close=(
-                    _ts_to_ny(clock.next_close)
-                    if clock.next_close is not None
-                    else None
-                ),
+                next_open=(_ts_to_ny(clock.next_open) if clock.next_open is not None else None),
+                next_close=(_ts_to_ny(clock.next_close) if clock.next_close is not None else None),
                 timezone="America/New_York",
                 provider=self.name,
                 timestamp=now,

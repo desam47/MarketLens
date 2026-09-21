@@ -35,6 +35,7 @@ live price the UI shows). Keeping it off the contract avoids the penny-stock
 Historical-only: all levels are computed from data available at
 ``end_index + 1`` — no look-ahead.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -70,6 +71,7 @@ class SRType(StrEnum):
 @dataclass(frozen=True)
 class SRLevel:
     """A single support or resistance level."""
+
     price: float
     type: SRType
     timeframe: str
@@ -102,6 +104,7 @@ class SRLevel:
 @dataclass
 class SRResult:
     """All S/R levels for a symbol/timeframe scan."""
+
     symbol: str
     timeframe: str
     levels: list[SRLevel]
@@ -200,11 +203,12 @@ class SupportResistanceEngine:
         """
         n = len(bars)
         if n < 2 * self.lookback_period + 2:
-            return SRResult(symbol=symbol, timeframe=timeframe,
-                            levels=[], last_index=0, latest_close=None)
+            return SRResult(
+                symbol=symbol, timeframe=timeframe, levels=[], last_index=0, latest_close=None
+            )
 
         if self.lookback_bars is not None and n > self.lookback_bars:
-            bars = list(bars[-self.lookback_bars:])
+            bars = list(bars[-self.lookback_bars :])
             n = len(bars)
 
         last_index = n - 1
@@ -262,18 +266,19 @@ class SupportResistanceEngine:
 
             today_high = max(ref_highs[i] for i in today_indices)
             today_low = min(ref_lows[i] for i in today_indices)
-            for price, stype in ((today_high, SRType.TODAY_HIGH),
-                                  (today_low, SRType.TODAY_LOW)):
-                levels.append(SRLevel(
-                    price=price,
-                    type=stype,
-                    timeframe=timeframe,
-                    strength=0.8,
-                    touch_count=1,
-                    age=0,
-                    origin_index=0,
-                    timestamp=ref_timestamps[0] if ref_timestamps else None,
-                ))
+            for price, stype in ((today_high, SRType.TODAY_HIGH), (today_low, SRType.TODAY_LOW)):
+                levels.append(
+                    SRLevel(
+                        price=price,
+                        type=stype,
+                        timeframe=timeframe,
+                        strength=0.8,
+                        touch_count=1,
+                        age=0,
+                        origin_index=0,
+                        timestamp=ref_timestamps[0] if ref_timestamps else None,
+                    )
+                )
 
         # 2. This week's running high / low — scan from newest to oldest
         #     until we hit a week boundary. Computed from `ref` (see step 1).
@@ -312,20 +317,30 @@ class SupportResistanceEngine:
             # this week* (last_in_week_idx), not the oldest bar in the whole
             # ref array — otherwise this drifts arbitrarily stale on any
             # fetch window wider than a week.
-            levels.append(SRLevel(
-                price=week_high, type=SRType.THIS_WEEK_HIGH,
-                timeframe=timeframe, strength=0.75, touch_count=1,
-                age=self._age(last_in_week_idx),
-                origin_index=last_in_week_idx,
-                timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
-            ))
-            levels.append(SRLevel(
-                price=week_low, type=SRType.THIS_WEEK_LOW,
-                timeframe=timeframe, strength=0.75, touch_count=1,
-                age=self._age(last_in_week_idx),
-                origin_index=last_in_week_idx,
-                timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
-            ))
+            levels.append(
+                SRLevel(
+                    price=week_high,
+                    type=SRType.THIS_WEEK_HIGH,
+                    timeframe=timeframe,
+                    strength=0.75,
+                    touch_count=1,
+                    age=self._age(last_in_week_idx),
+                    origin_index=last_in_week_idx,
+                    timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
+                )
+            )
+            levels.append(
+                SRLevel(
+                    price=week_low,
+                    type=SRType.THIS_WEEK_LOW,
+                    timeframe=timeframe,
+                    strength=0.75,
+                    touch_count=1,
+                    age=self._age(last_in_week_idx),
+                    origin_index=last_in_week_idx,
+                    timestamp=ref_timestamps[last_in_week_idx] if ref_timestamps else None,
+                )
+            )
 
         # 3. Previous day high / low — skip the entire *today* group (not just
         #     ref[0]) so the first detected day change is yesterday→day
@@ -334,9 +349,12 @@ class SupportResistanceEngine:
         day_skip = len(today_indices) if ref_n > 0 else 0
         if ref_n > day_skip:
             day_levels = self._prev_period_levels(
-                ref_highs[day_skip:], ref_lows[day_skip:], "day",
+                ref_highs[day_skip:],
+                ref_lows[day_skip:],
+                "day",
                 ref_timestamps[day_skip:] if ref_timestamps else None,
-                index_offset=day_skip, latest_close=latest_close,
+                index_offset=day_skip,
+                latest_close=latest_close,
             )
             day_levels = self._keep_most_recent_of_each_type(day_levels)
             levels.extend(day_levels)
@@ -348,9 +366,12 @@ class SupportResistanceEngine:
         week_skip = this_week_bar_count or day_skip
         if ref_n > week_skip:
             week_levels = self._prev_period_levels(
-                ref_highs[week_skip:], ref_lows[week_skip:], "week",
+                ref_highs[week_skip:],
+                ref_lows[week_skip:],
+                "week",
                 ref_timestamps[week_skip:] if ref_timestamps else None,
-                index_offset=week_skip, latest_close=latest_close,
+                index_offset=week_skip,
+                latest_close=latest_close,
             )
             week_levels = self._keep_most_recent_of_each_type(week_levels)
             levels.extend(week_levels)
@@ -383,13 +404,18 @@ class SupportResistanceEngine:
                 (w52_high_price, w52_high_idx, SRType.WEEK_52_HIGH),
                 (w52_low_price, w52_low_idx, SRType.WEEK_52_LOW),
             ):
-                levels.append(SRLevel(
-                    price=price, type=stype, timeframe=timeframe,
-                    strength=0.9, touch_count=1,
-                    age=self._age(idx),
+                levels.append(
+                    SRLevel(
+                        price=price,
+                        type=stype,
+                        timeframe=timeframe,
+                        strength=0.9,
+                        touch_count=1,
+                        age=self._age(idx),
                         origin_index=idx,
-                    timestamp=ref_timestamps[idx] if ref_timestamps else None,
-                ))
+                        timestamp=ref_timestamps[idx] if ref_timestamps else None,
+                    )
+                )
 
         # 6. Swing highs / lows — local peaks / troughs confirmed by lookback_period bars
         # Filter out noise: only keep swings with strength >= 0.1
@@ -402,34 +428,54 @@ class SupportResistanceEngine:
             touch_count = self._count_touches(price, highs)
             volume_ratio = self._volume_ratio(idx, volumes)
             strength = self._swing_strength(
-                price, latest_close, age, touch_count, volume_ratio, atr_bars,
+                price,
+                latest_close,
+                age,
+                touch_count,
+                volume_ratio,
+                atr_bars,
             )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
-            levels.append(SRLevel(
-                price=price, type=SRType.SWING_HIGH, timeframe=timeframe,
-                strength=strength, touch_count=touch_count,
-                age=age,
-                origin_index=idx,
-                timestamp=timestamps[idx] if timestamps else None,
-            ))
+            levels.append(
+                SRLevel(
+                    price=price,
+                    type=SRType.SWING_HIGH,
+                    timeframe=timeframe,
+                    strength=strength,
+                    touch_count=touch_count,
+                    age=age,
+                    origin_index=idx,
+                    timestamp=timestamps[idx] if timestamps else None,
+                )
+            )
         for idx in swing_low_indices:
             price = lows[idx]
             age = self._age(idx)
             touch_count = self._count_touches(price, lows)
             volume_ratio = self._volume_ratio(idx, volumes)
             strength = self._swing_strength(
-                price, latest_close, age, touch_count, volume_ratio, atr_bars,
+                price,
+                latest_close,
+                age,
+                touch_count,
+                volume_ratio,
+                atr_bars,
             )
             if strength < SWING_STRENGTH_FLOOR:
                 continue
-            levels.append(SRLevel(
-                price=price, type=SRType.SWING_LOW, timeframe=timeframe,
-                strength=strength, touch_count=touch_count,
-                age=age,
-                origin_index=idx,
-                timestamp=timestamps[idx] if timestamps else None,
-            ))
+            levels.append(
+                SRLevel(
+                    price=price,
+                    type=SRType.SWING_LOW,
+                    timeframe=timeframe,
+                    strength=strength,
+                    touch_count=touch_count,
+                    age=age,
+                    origin_index=idx,
+                    timestamp=timestamps[idx] if timestamps else None,
+                )
+            )
 
         # 7. Classic pivot table (PP / R1-R3 / S1-S3) — the standard
         #    5-point pivot set, derived from the PRIOR completed session's
@@ -448,7 +494,9 @@ class SupportResistanceEngine:
         #    that's now below price is dropped), so the panel shows what's
         #    actually ahead of the market.
         prev_session = self._prev_day_ohlc(
-            ref_highs[day_skip:], ref_lows[day_skip:], ref_closes[day_skip:],
+            ref_highs[day_skip:],
+            ref_lows[day_skip:],
+            ref_closes[day_skip:],
             ref_timestamps[day_skip:] if ref_timestamps else None,
             index_offset=day_skip,
         )
@@ -481,20 +529,28 @@ class SupportResistanceEngine:
             # consumer re-buckets by price <= latest_close, so nothing else
             # depends on the old asymmetry.
             for stype, price, is_resistance in pivot_specs:
-                touch_count = self._count_touches(
-                    price, ref_highs if is_resistance else ref_lows
-                )
+                touch_count = self._count_touches(price, ref_highs if is_resistance else ref_lows)
                 volume_ratio = self._volume_ratio(s_origin, ref_volumes)
                 strength = self._swing_strength(
-                    price, latest_close, aget, touch_count, volume_ratio, atr_ref,
+                    price,
+                    latest_close,
+                    aget,
+                    touch_count,
+                    volume_ratio,
+                    atr_ref,
                 )
-                levels.append(SRLevel(
-                    price=price, type=stype, timeframe=timeframe,
-                    strength=strength, touch_count=touch_count,
-                    age=aget,
-                    origin_index=s_origin,
-                    timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
-                ))
+                levels.append(
+                    SRLevel(
+                        price=price,
+                        type=stype,
+                        timeframe=timeframe,
+                        strength=strength,
+                        touch_count=touch_count,
+                        age=aget,
+                        origin_index=s_origin,
+                        timestamp=ref_timestamps[s_origin] if ref_timestamps else None,
+                    )
+                )
 
         # 8. Merge levels into consolidation zones
         zones = self._build_zones(levels, latest_close)
@@ -520,7 +576,7 @@ class SupportResistanceEngine:
         n = len(highs)
         out: list[int] = []
         for i in range(lb, n - lb):
-            if highs[i] == max(highs[i - lb: i + lb + 1]):
+            if highs[i] == max(highs[i - lb : i + lb + 1]):
                 if not out or i - out[-1] > lb:
                     out.append(i)
         return out
@@ -530,7 +586,7 @@ class SupportResistanceEngine:
         n = len(lows)
         out: list[int] = []
         for i in range(lb, n - lb):
-            if lows[i] == min(lows[i - lb: i + lb + 1]):
+            if lows[i] == min(lows[i - lb : i + lb + 1]):
                 if not out or i - out[-1] > lb:
                     out.append(i)
         return out
@@ -573,12 +629,7 @@ class SupportResistanceEngine:
         age_score = min(age / 50.0, 1.0)
         touch_score = min(max(touch_count - 1, 0) / 4.0, 1.0)
         volume_score = min(max(volume_ratio, 0.0) / 3.0, 1.0)
-        return (
-            dist_score * 0.40
-            + age_score * 0.30
-            + touch_score * 0.15
-            + volume_score * 0.15
-        )
+        return dist_score * 0.40 + age_score * 0.30 + touch_score * 0.15 + volume_score * 0.15
 
     def _true_atr(
         self,
@@ -701,23 +752,25 @@ class SupportResistanceEngine:
             if prev_period is not None and cur != prev_period:
                 if bar_indices:
                     ph = max(highs[j] for j in bar_indices)
-                    pl = min(lows[j]  for j in bar_indices)
+                    pl = min(lows[j] for j in bar_indices)
                     # bar_indices is ascending within this slice; since bars
                     # run newest→oldest, the smallest index is this group's
                     # most recent bar — that's the level's true origin.
                     origin_idx = bar_indices[0] + index_offset
                     age = self._age(origin_idx)
                     for price, stype in ((ph, hi_type), (pl, lo_type)):
-                        levels.append(SRLevel(
-                            price=price,
-                            type=stype,
-                            timeframe="",
-                            strength=0.6 if is_day else 0.5,
-                            touch_count=1,
-                            age=age,
-                            origin_index=origin_idx,
-                            timestamp=timestamps[bar_indices[0]],
-                        ))
+                        levels.append(
+                            SRLevel(
+                                price=price,
+                                type=stype,
+                                timeframe="",
+                                strength=0.6 if is_day else 0.5,
+                                touch_count=1,
+                                age=age,
+                                origin_index=origin_idx,
+                                timestamp=timestamps[bar_indices[0]],
+                            )
+                        )
                 bar_indices = []
 
             bar_indices.append(i)
@@ -770,15 +823,25 @@ class SupportResistanceEngine:
         self, levels: list[SRLevel], latest_close: float | None = None
     ) -> list[SRLevel]:
         """Merge nearby resistance (high) and support (low) levels into zones."""
-        candidates = [level for level in levels
-                      if level.type in (
-                          SRType.TODAY_HIGH, SRType.PREV_DAY_HIGH,
-                          SRType.THIS_WEEK_HIGH, SRType.PREV_WEEK_HIGH,
-                          SRType.WEEK_52_HIGH, SRType.WEEK_52_LOW,
-                          SRType.TODAY_LOW, SRType.PREV_DAY_LOW,
-                          SRType.THIS_WEEK_LOW, SRType.PREV_WEEK_LOW,
-                          SRType.SWING_HIGH, SRType.SWING_LOW,
-                      )]
+        candidates = [
+            level
+            for level in levels
+            if level.type
+            in (
+                SRType.TODAY_HIGH,
+                SRType.PREV_DAY_HIGH,
+                SRType.THIS_WEEK_HIGH,
+                SRType.PREV_WEEK_HIGH,
+                SRType.WEEK_52_HIGH,
+                SRType.WEEK_52_LOW,
+                SRType.TODAY_LOW,
+                SRType.PREV_DAY_LOW,
+                SRType.THIS_WEEK_LOW,
+                SRType.PREV_WEEK_LOW,
+                SRType.SWING_HIGH,
+                SRType.SWING_LOW,
+            )
+        ]
         if len(candidates) < 2:
             return []
 
@@ -815,19 +878,20 @@ class SupportResistanceEngine:
             # recomputing via min(origin_index), which would incorrectly
             # mix the two index spaces.
             youngest = min(group, key=lambda c: c.age if c.age is not None else 0)
-            latest_ts = max((c.timestamp for c in group if c.timestamp),
-                            default=None)
-            out.append(SRLevel(
-                price=avg_price,
-                type=SRType.CONSOLIDATION_ZONE,
-                timeframe=group[0].timeframe,
-                strength=strength,
-                touch_count=len(group),
-                age=youngest.age,
-                origin_index=youngest.origin_index,
-                component_prices=components,
-                timestamp=latest_ts,
-            ))
+            latest_ts = max((c.timestamp for c in group if c.timestamp), default=None)
+            out.append(
+                SRLevel(
+                    price=avg_price,
+                    type=SRType.CONSOLIDATION_ZONE,
+                    timeframe=group[0].timeframe,
+                    strength=strength,
+                    touch_count=len(group),
+                    age=youngest.age,
+                    origin_index=youngest.origin_index,
+                    component_prices=components,
+                    timestamp=latest_ts,
+                )
+            )
         return out
 
     def _deduplicate(self, levels: list[SRLevel]) -> list[SRLevel]:
@@ -847,9 +911,7 @@ class SupportResistanceEngine:
                 seen[key] = level
         return list(seen.values())
 
-    def _keep_most_recent_of_each_type(
-        self, levels: list[SRLevel]
-    ) -> list[SRLevel]:
+    def _keep_most_recent_of_each_type(self, levels: list[SRLevel]) -> list[SRLevel]:
         """Keep only the most recent level per SRType.
 
         Bars are ordered newest→oldest, so lower origin_index = more recent.
@@ -864,9 +926,7 @@ class SupportResistanceEngine:
         return list(by_type.values())
 
     @staticmethod
-    def _is_more_recent(
-        candidate: SRLevel, incumbent: SRLevel
-    ) -> bool:
+    def _is_more_recent(candidate: SRLevel, incumbent: SRLevel) -> bool:
         """Return ``True`` if ``candidate`` is more recent than ``incumbent``.
 
         Bars are ordered newest→oldest, so a *smaller* ``origin_index`` means

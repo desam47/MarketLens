@@ -13,6 +13,7 @@ use ``httpx`` so the test suite doesn't have to install ``openai`` or
 ``anthropic`` SDKs. Real-world deployments are free to add SDK-backed
 adapters in addition to (or in place of) the HTTP ones.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -123,8 +124,11 @@ class AIProvider(ABC):
         provider that hasn't implemented real streaming still works.
         """
         resp = await self.complete(
-            prompt, system=system, max_tokens=max_tokens,
-            temperature=temperature, response_format=response_format,
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=response_format,
         )
         if resp.text:
             yield resp.text

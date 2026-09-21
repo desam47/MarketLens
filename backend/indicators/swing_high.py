@@ -1,6 +1,7 @@
 """
 Swing High indicator
 """
+
 from typing import Any, cast
 
 from .base_indicator import BaseIndicator
@@ -26,14 +27,14 @@ class SwingHighIndicator(BaseIndicator):
             return []
 
         # Extract high prices
-        highs = [float(d['high']) for d in data]
+        highs = [float(d["high"]) for d in data]
 
         # Add to history
         self._high_history.extend(highs)
 
         # Keep history reasonable size
         if len(self._high_history) > len(data) + self.lookback_period * 2:
-            self._high_history = self._high_history[-(len(data) + self.lookback_period * 2):]
+            self._high_history = self._high_history[-(len(data) + self.lookback_period * 2) :]
 
         # Calculate swing high values
         swing_values: list[float | None] = []
@@ -43,8 +44,10 @@ class SwingHighIndicator(BaseIndicator):
             history_index = start_index + i
 
             # Need enough data on both sides
-            if (history_index < self.lookback_period or
-                history_index >= len(self._high_history) - self.lookback_period):
+            if (
+                history_index < self.lookback_period
+                or history_index >= len(self._high_history) - self.lookback_period
+            ):
                 swing_values.append(None)
                 continue
 
@@ -76,7 +79,7 @@ class SwingHighIndicator(BaseIndicator):
 
     def update(self, new_data: dict[str, Any]) -> float | None:
         """Update Swing High with new data point"""
-        high_price = float(new_data['high'])
+        high_price = float(new_data["high"])
 
         # Add to history
         self._high_history.append(high_price)
@@ -84,7 +87,7 @@ class SwingHighIndicator(BaseIndicator):
         # Keep only recent data needed for calculation
         # We need lookback_period on both sides, so keep at least lookback_period*2+1
         if len(self._high_history) > self.lookback_period * 2 + 10:
-            self._high_history = self._high_history[-(self.lookback_period * 2 + 10):]
+            self._high_history = self._high_history[-(self.lookback_period * 2 + 10) :]
 
         # Need enough data to calculate swing high
         if len(self._high_history) < self.lookback_period * 2 + 1:

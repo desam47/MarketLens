@@ -11,6 +11,7 @@ Phase 2 MarketDataProvider ABC:
 They are intentionally separate from the core trend engine and never
 called by it. Each is disabled by default (AUX_*_ENABLED=false).
 """
+
 from abc import ABC, abstractmethod
 
 from backend.models.aux_data import (

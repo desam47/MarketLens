@@ -9,6 +9,7 @@ The "Market Analysis Default" template is seeded on first use and
 mirrors the existing ``SYSTEM_PROMPT`` constant in ``backend.ai.prompt``,
 so users always have a known-good starting point.
 """
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
@@ -51,6 +52,7 @@ class AITemplate(Base):
     user-created or the seeded system default. The ``is_default`` flag
     marks the canonical fallback when no template is selected.
     """
+
     __tablename__ = "ai_templates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -68,9 +70,7 @@ class AITemplate(Base):
     # True for the system-seeded template; prevents deletion.
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

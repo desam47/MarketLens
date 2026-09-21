@@ -6,6 +6,7 @@ bounded queries, and return primitive values. They're called
 inline from the evaluator/payload functions when the alert engine hasn't
 pre-computed a value.
 """
+
 import logging
 
 from backend.database import SessionLocal
@@ -59,12 +60,19 @@ def _get_recent_bars(symbol: str, timeframe: str, limit: int) -> list:
     """Fetch the most recent ``limit`` closed bars for a symbol/timeframe."""
     try:
         from backend.models import BarModel
+
         db = SessionLocal()
         try:
-            bars = db.query(BarModel).filter(
-                BarModel.symbol == symbol.upper(),
-                BarModel.timeframe == timeframe,
-            ).order_by(BarModel.timestamp.desc()).limit(limit).all()
+            bars = (
+                db.query(BarModel)
+                .filter(
+                    BarModel.symbol == symbol.upper(),
+                    BarModel.timeframe == timeframe,
+                )
+                .order_by(BarModel.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
             return list(reversed(bars))  # oldest first for easier delta computation
         finally:
             db.close()

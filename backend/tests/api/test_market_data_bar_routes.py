@@ -12,6 +12,7 @@ Two things changed there and both need guarding:
 
 Behaviour (tier order, fallbacks, response key order) must be unchanged.
 """
+
 import asyncio
 import unittest
 from datetime import datetime
@@ -26,8 +27,15 @@ from backend.models.market_data import Bar, DataStatus
 
 def _bar(symbol: str, timeframe: str, close: float, provider: str) -> Bar:
     return Bar(
-        symbol=symbol, timestamp=datetime(2026, 9, 18, 15, 0), open=close, high=close,
-        low=close, close=close, volume=100, timeframe=timeframe, provider=provider,
+        symbol=symbol,
+        timestamp=datetime(2026, 9, 18, 15, 0),
+        open=close,
+        high=close,
+        low=close,
+        close=close,
+        volume=100,
+        timeframe=timeframe,
+        provider=provider,
         data_status=DataStatus.LIVE,
     )
 
@@ -106,8 +114,9 @@ class TestLatestBars(_RouteTestCase):
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(list(body), ["1m", "5m", "1h"], "key order must follow the timeframes")
-        self.assertEqual([body[tf]["provider"] for tf in ("1m", "5m", "1h")],
-                         ["redis", "db", "provider"])
+        self.assertEqual(
+            [body[tf]["provider"] for tf in ("1m", "5m", "1h")], ["redis", "db", "provider"]
+        )
         self.mgr.get_latest_bar.assert_called_once_with("AAPL", "1h")  # only the missing one
 
     def test_a_missing_timeframe_is_skipped_not_fatal(self):
@@ -119,7 +128,9 @@ class TestLatestBars(_RouteTestCase):
             r = self.client.get("/api/market-data/bars/AAPL")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(list(r.json()), ["1m", "1h"])
-        self.assertTrue(any(rec.exc_info for rec in logs.records), "the skipped timeframe is logged")
+        self.assertTrue(
+            any(rec.exc_info for rec in logs.records), "the skipped timeframe is logged"
+        )
 
     def test_no_timeframes_returns_empty(self):
         self.svc.timeframes = []
@@ -134,6 +145,7 @@ class TestBlockingIoRunsOffTheEventLoop(_RouteTestCase):
         def side_effect(*_args):
             seen.append(_on_event_loop())
             return None
+
         return side_effect
 
     def test_bar_lookup_tiers_run_in_a_worker_thread(self):
@@ -156,13 +168,17 @@ class TestBlockingIoRunsOffTheEventLoop(_RouteTestCase):
 
     def test_bars_uses_a_single_thread_hop_for_the_local_tiers(self):
         """One hop for all timeframes, not one per timeframe."""
-        with patch("backend.api.market_data_routes.asyncio.to_thread",
-                   wraps=asyncio.to_thread) as hop:
+        with patch(
+            "backend.api.market_data_routes.asyncio.to_thread", wraps=asyncio.to_thread
+        ) as hop:
             self.mgr.get_latest_bar.return_value = None
             self.mgr.get_latest_bar.side_effect = RuntimeError("none")
             self.client.get("/api/market-data/bars/AAPL")
-        local_hops = [c for c in hop.call_args_list
-                      if c.args and getattr(c.args[0], "__name__", "") == "_local_latest_bars"]
+        local_hops = [
+            c
+            for c in hop.call_args_list
+            if c.args and getattr(c.args[0], "__name__", "") == "_local_latest_bars"
+        ]
         self.assertEqual(len(local_hops), 1)
 
 

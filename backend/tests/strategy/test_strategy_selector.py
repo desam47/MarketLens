@@ -1,13 +1,14 @@
 """
 Tests for strategy selector
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.engines.timeframe import Timeframe
 from backend.multitimeframe.multi_timeframe_engine import (
@@ -24,7 +25,6 @@ from backend.trend.trend_engine import TrendDirection, TrendSignal, TrendStrengt
 
 
 class TestStrategySelector(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.selector = StrategySelector(self.symbol)
@@ -44,7 +44,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.8,
             strength=0.7,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Create strong uptrend signal
@@ -54,7 +54,7 @@ class TestStrategySelector(unittest.TestCase):
             direction=TrendDirection.UPTREND,
             strength=TrendStrength.STRONG,
             confidence=0.9,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Create aligned confluence signal
@@ -64,7 +64,7 @@ class TestStrategySelector(unittest.TestCase):
             strength=0.8,
             alignment_score=0.9,
             timeframe_signals={Timeframe.ONE_HOUR: trend_signal},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Select strategy
@@ -73,8 +73,8 @@ class TestStrategySelector(unittest.TestCase):
         # Should select trend following
         self.assertEqual(signal.strategy_type, StrategyType.TREND_FOLLOWING)
         self.assertGreater(signal.confidence, 0.5)
-        self.assertIn('fast_ma', signal.parameters)
-        self.assertIn('slow_ma', signal.parameters)
+        self.assertIn("fast_ma", signal.parameters)
+        self.assertIn("slow_ma", signal.parameters)
 
     def test_select_strategy_neutral_regime(self):
         """Test strategy selection for neutral (ranging) regime"""
@@ -85,7 +85,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.7,
             strength=0.3,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Create weak sideways trend signal
@@ -95,7 +95,7 @@ class TestStrategySelector(unittest.TestCase):
             direction=TrendDirection.SIDEWAYS,
             strength=TrendStrength.WEAK,
             confidence=0.6,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Create neutral confluence signal
@@ -105,7 +105,7 @@ class TestStrategySelector(unittest.TestCase):
             strength=0.4,
             alignment_score=0.5,
             timeframe_signals={Timeframe.ONE_HOUR: trend_signal},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Select strategy
@@ -113,7 +113,9 @@ class TestStrategySelector(unittest.TestCase):
 
         # Should favor mean reversion for ranging market
         # (Could be trend following if trend is strong, but here it's weak)
-        self.assertIn(signal.strategy_type, [StrategyType.MEAN_REVERSION, StrategyType.TREND_FOLLOWING])
+        self.assertIn(
+            signal.strategy_type, [StrategyType.MEAN_REVERSION, StrategyType.TREND_FOLLOWING]
+        )
         self.assertGreater(signal.confidence, 0.3)
 
     def test_select_strategy_transition_regime(self):
@@ -125,7 +127,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.8,
             strength=0.8,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Select strategy
@@ -144,7 +146,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.9,
             strength=0.2,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Select strategy
@@ -163,7 +165,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.85,
             strength=0.9,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Select strategy
@@ -182,7 +184,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.0,  # Low confidence
             strength=0.0,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Should still return a valid signal (fallback to mean reversion)
@@ -201,7 +203,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.8,
             strength=0.7,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Make multiple selections
@@ -223,7 +225,7 @@ class TestStrategySelector(unittest.TestCase):
             confidence=0.8,
             strength=0.7,
             supporting_factors={},
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         # Initially no strategy
@@ -238,5 +240,5 @@ class TestStrategySelector(unittest.TestCase):
         self.assertEqual(current.strategy_type, signal.strategy_type)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

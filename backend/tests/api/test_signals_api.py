@@ -4,6 +4,7 @@ Tests for the /api/signals/* endpoints.
 Covers: list, get-by-id, latest-per-symbol, regime performance,
 count-by-regime, backfill trigger, and delete-old.
 """
+
 import os
 import sys
 import unittest
@@ -22,25 +23,25 @@ from backend.models.signal import HistoricalSignal
 
 def _override_get_db(session_factory):
     """Return a FastAPI dependency override that uses the given session factory."""
+
     def _get_db():
         db = session_factory()
         try:
             yield db
         finally:
             db.close()
+
     return _get_db
 
 
 class TestSignalsAPI(unittest.TestCase):
-
     def setUp(self):
         # Fresh per-test SQLite file. We can't use :memory: because the
         # TestClient runs in a different thread, and each connection would
         # see a different DB.
         import tempfile
-        tmp = tempfile.NamedTemporaryFile(
-            prefix="signals_test_", suffix=".db", delete=False
-        )
+
+        tmp = tempfile.NamedTemporaryFile(prefix="signals_test_", suffix=".db", delete=False)
         tmp.close()
         self._db_file = tmp.name
         self.engine = create_engine(
@@ -54,6 +55,7 @@ class TestSignalsAPI(unittest.TestCase):
         # test file never populates them (get_watchlists() just returns []
         # against an empty-but-present table).
         from backend.database import Base
+
         Base.metadata.create_all(bind=self.engine)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
@@ -62,12 +64,11 @@ class TestSignalsAPI(unittest.TestCase):
         # is keyed on the original callable, so the signals router's
         # `from ..dependencies import get_db` doesn't matter.
         from backend.api.dependencies import get_db as get_db_dep
+
         app.dependency_overrides[get_db_dep] = self._iter_session
 
         # Prevent alerts engine startup from hitting the DB
-        self._alerts_patch = patch(
-            "backend.alerts.engine.AlertsEngine.startup", return_value=None
-        )
+        self._alerts_patch = patch("backend.alerts.engine.AlertsEngine.startup", return_value=None)
         self._alerts_patch.start()
         self.addCleanup(self._alerts_patch.stop)
 
@@ -81,6 +82,7 @@ class TestSignalsAPI(unittest.TestCase):
     def _cleanup_db(self):
         try:
             import os
+
             os.unlink(self._db_file)
         except OSError:
             pass
@@ -201,9 +203,19 @@ class TestSignalsAPI(unittest.TestCase):
     # --- research: regime-performance ---
 
     def test_regime_performance(self):
-        self._seed(symbol="AAPL", market_regime="risk_on", return_5b=1.0, return_10b=2.0, return_20b=4.0)
-        self._seed(symbol="MSFT", market_regime="risk_on", return_5b=3.0, return_10b=4.0, return_20b=6.0)
-        self._seed(symbol="GOOGL", market_regime="risk_off", return_5b=-1.0, return_10b=-2.0, return_20b=-3.0)
+        self._seed(
+            symbol="AAPL", market_regime="risk_on", return_5b=1.0, return_10b=2.0, return_20b=4.0
+        )
+        self._seed(
+            symbol="MSFT", market_regime="risk_on", return_5b=3.0, return_10b=4.0, return_20b=6.0
+        )
+        self._seed(
+            symbol="GOOGL",
+            market_regime="risk_off",
+            return_5b=-1.0,
+            return_10b=-2.0,
+            return_20b=-3.0,
+        )
         r = self.client.get("/api/signals/research/regime-performance?include_all=true")
         self.assertEqual(r.status_code, 200)
         body = r.json()

@@ -13,6 +13,7 @@ Phase 19 changes:
     step with a coarse regime ("risk_on" / "risk_off" / "neutral")
     using only the same bar window the indicators already consume.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -107,9 +108,9 @@ def build_indicator_values(
     rsi_series = RSIIndicator(period=rsi_period).calculate(bar_dicts)
     rsi_value = rsi_series[-1] if rsi_series else None
 
-    macd_series = MACDIndicator(
-        fast=macd_fast, slow=macd_slow, signal=macd_signal
-    ).calculate(bar_dicts)
+    macd_series = MACDIndicator(fast=macd_fast, slow=macd_slow, signal=macd_signal).calculate(
+        bar_dicts
+    )
     macd_value = macd_series[-1] if macd_series else None
 
     return {

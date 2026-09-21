@@ -12,6 +12,7 @@ Phase 3.3.17: CLI tool for seeding a fresh DB or rebuilding history after
 a BACKFILL_1M/1H/1D_DAYS change. Runs synchronously so it can be used in
 a cron job or deployment script without worrying about asyncio event loops.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,9 +55,7 @@ def _get_symbols(symbols: list[str]) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Backfill bar history for symbols (Phase 3.3.17)"
-    )
+    parser = argparse.ArgumentParser(description="Backfill bar history for symbols (Phase 3.3.17)")
     parser.add_argument(
         "symbols",
         nargs="*",
@@ -95,7 +94,8 @@ def main() -> None:
 
     days = args.days
     logger.info(
-        f"Window: override={days}d" if days is not None
+        f"Window: override={days}d"
+        if days is not None
         else "Window: each tier's own BACKFILL_1M/1H/1D_DAYS default"
     )
 
@@ -109,16 +109,14 @@ def main() -> None:
         try:
             result = backfill_symbol_history_sync(symbol, days=days)
             if result.get("skipped"):
-                logger.info(f"  skipped (already in progress)")
+                logger.info("  skipped (already in progress)")
                 continue
             t1 = result["tier1_written"]
             t2 = result["tier2_written"]
             dur = result["duration_s"]
             total_t1 += t1
             total_t2 += t2
-            logger.info(
-                f"  done in {dur:.1f}s — tier1={t1} 1m bars, tier2={t2} 1d bars"
-            )
+            logger.info(f"  done in {dur:.1f}s — tier1={t1} 1m bars, tier2={t2} 1d bars")
         except Exception as e:
             errors += 1
             logger.error(f"  FAILED: {e}")

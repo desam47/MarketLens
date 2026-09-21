@@ -6,6 +6,7 @@ Thin wrapper around the existing IndicatorEngine that:
 - Fetches bars from the database
 - Returns a list of {timestamp, value} points
 """
+
 import logging
 
 from backend.database import SessionLocal
@@ -57,7 +58,7 @@ class CustomIndicatorEngine:
         values = self._calculate(formula_type, parameters, data)
         if not values:
             return []
-        timestamps = [b.timestamp for b in bars[-len(values):]]
+        timestamps = [b.timestamp for b in bars[-len(values) :]]
         return [
             {"timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts, "value": v}
             for ts, v in zip(timestamps, values, strict=False)
@@ -102,7 +103,7 @@ class CustomIndicatorEngine:
         # Use attribute access on BarModel rows.
         if not values:
             return []
-        timestamps = [b.timestamp for b in bars[-len(values):]]
+        timestamps = [b.timestamp for b in bars[-len(values) :]]
         return [
             {"timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts, "value": v}
             for ts, v in zip(timestamps, values, strict=False)

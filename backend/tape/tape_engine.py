@@ -15,6 +15,7 @@ when the buffer gets large — no dedicated flush thread).
 
 Nothing here raises for bad input — a malformed print is dropped.
 """
+
 from __future__ import annotations
 
 import statistics
@@ -150,9 +151,16 @@ class TapeEngine:
     def _open_bucket(self, sec: int) -> None:
         self._bucket_sec = sec
         self._bucket = {
-            "open": None, "high": -_INF, "low": _INF, "close": None,
-            "volume": 0, "buy_volume": 0, "sell_volume": 0,
-            "trade_count": 0, "block_count": 0, "notional": 0.0,
+            "open": None,
+            "high": -_INF,
+            "low": _INF,
+            "close": None,
+            "volume": 0,
+            "buy_volume": 0,
+            "sell_volume": 0,
+            "trade_count": 0,
+            "block_count": 0,
+            "notional": 0.0,
         }
 
     def _close_bucket(self) -> None:
@@ -162,14 +170,20 @@ class TapeEngine:
         signed = b["buy_volume"] - b["sell_volume"]
         self._sv_history.append(float(signed))
         if len(self._sv_history) > self._long_w:
-            self._sv_history = self._sv_history[-self._long_w:]
+            self._sv_history = self._sv_history[-self._long_w :]
         row = {
             "symbol": self.symbol,
             "timestamp": _epoch_s_to_naive_ny(sec),
-            "open": b["open"], "high": b["high"], "low": b["low"], "close": b["close"],
-            "volume": b["volume"], "buy_volume": b["buy_volume"],
-            "sell_volume": b["sell_volume"], "signed_volume": signed,
-            "trade_count": b["trade_count"], "block_count": b["block_count"],
+            "open": b["open"],
+            "high": b["high"],
+            "low": b["low"],
+            "close": b["close"],
+            "volume": b["volume"],
+            "buy_volume": b["buy_volume"],
+            "sell_volume": b["sell_volume"],
+            "signed_volume": signed,
+            "trade_count": b["trade_count"],
+            "block_count": b["block_count"],
             "vwap": (b["notional"] / b["volume"]) if b["volume"] else None,
         }
         self._pending.append(row)
@@ -235,15 +249,20 @@ class TapeEngine:
         accel = (speed_fast / speed_main) if speed_main else None
 
         blocks = [
-            (ts, pr, sz, s) for ts, pr, sz, s in long_
+            (ts, pr, sz, s)
+            for ts, pr, sz, s in long_
             if pr * sz >= settings.tape.block_notional or sz >= settings.tape.block_size
         ]
         last_block = None
         if blocks:
             bt, bp, bs, bside = blocks[-1]
-            last_block = {"price": bp, "size": bs, "side": bside,
-                          "notional": round(bp * bs, 2),
-                          "age_s": round(now_s - bt, 1)}
+            last_block = {
+                "price": bp,
+                "size": bs,
+                "side": bside,
+                "notional": round(bp * bs, 2),
+                "age_s": round(now_s - bt, 1),
+            }
 
         pressure = self._pressure(signed_v, buy_ratio, len(main), sv_hist)
 
@@ -291,7 +310,7 @@ class TapeEngine:
                 # the expected baseline sum, producing a spurious signal.
                 n = min(len(sv_hist), self._main_w)
                 mu_w = mu * n
-                sd_w = sd * (n ** 0.5)
+                sd_w = sd * (n**0.5)
                 if sd_w > 0:
                     z = (signed_v - mu_w) / sd_w
         thr = settings.tape.heavy_pressure_z

@@ -8,6 +8,7 @@ one of the allowed values; Pydantic rejects anything else. The
 (trend_min <= trend_max, etc.) and sanitises the ``signals`` list to a
 known allowlist.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -109,9 +110,7 @@ class NLFilters(BaseModel):
             and self.rsi_overbought_above is not None
             and self.rsi_oversold_below >= self.rsi_overbought_above
         ):
-            raise ValueError(
-                "rsi_oversold_below must be < rsi_overbought_above"
-            )
+            raise ValueError("rsi_oversold_below must be < rsi_overbought_above")
         # Sanitise signals: upper-case, dedupe, cap to the known set.
         if self.signals:
             cleaned: list[str] = []

@@ -22,8 +22,10 @@ Concurrency model
   stays responsive while the scan is in flight.
 - WebSocket sends happen only on the event loop.
 """
+
 import asyncio
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -42,6 +44,15 @@ logger = logging.getLogger(__name__)
 # prefix keeps the two route families from colliding.
 router = APIRouter(prefix="/api/scanner-stream", tags=["scanner-ws"])
 
+# Scanner pushes trigger a real market scan, so keep one local browser from
+# accidentally fanning provider work out to an unbounded symbol set. The
+# regular realtime socket uses the same 50-subscription ceiling.
+_MAX_SUBSCRIPTIONS_PER_SOCKET = 50
+# Yahoo's index symbols use a leading caret (for example ``^VIX``), which
+# MarketLens already supports elsewhere. Keep that valid while rejecting paths,
+# whitespace, and arbitrary provider-query strings.
+_SYMBOL_RE = re.compile(r"^\^?[A-Z][A-Z0-9.-]{0,9}$")
+
 
 # ---------------------------------------------------------------------------
 # Broadcast manager
@@ -50,6 +61,7 @@ router = APIRouter(prefix="/api/scanner-stream", tags=["scanner-ws"])
 # dispatcher reads this to decide whether a fresh quote is worth re-scanning
 # for, and the WebSocket receive loop mutates it on subscribe / unsubscribe /
 # disconnect.
+
 
 class ScannerBroadcastManager:
     """Process-wide subscription registry for scanner WebSocket clients.
@@ -79,6 +91,15 @@ class ScannerBroadcastManager:
             ws_id = id(ws)
             self._sockets.setdefault(ws_id, ws)
             self._subs.setdefault(key, set()).add(ws_id)
+
+    def subscription_count(self, ws: WebSocket) -> int:
+        """Return the number of distinct symbols subscribed by ``ws``."""
+        ws_id = id(ws)
+        return sum(ws_id in subscribers for subscribers in self._subs.values())
+
+    def has_subscription(self, ws: WebSocket, symbol: str) -> bool:
+        """True when ``ws`` is already subscribed to ``symbol``."""
+        return id(ws) in self._subs.get(symbol.upper(), set())
 
     async def unsubscribe(self, ws: WebSocket, symbol: str) -> None:
         async with self._lock:
@@ -180,6 +201,7 @@ broadcast_manager = ScannerBroadcastManager()
 # event loop (captured at app startup); the actual scan runs in a thread
 # so the loop isn't blocked.
 
+
 class ScannerDispatcher:
     """Re-scan on every fresh quote and broadcast to subscribers.
 
@@ -225,6 +247,7 @@ class ScannerDispatcher:
         # ``register_for_symbol``.
         try:
             from backend.market_data.services.ingestion_service import ingestion_service
+
             for sym in ingestion_service.symbols:
                 engine_registry.register("quote", sym, self._on_quote)
         except Exception as e:
@@ -273,6 +296,7 @@ class ScannerDispatcher:
         batch fetch + parallel scans.
         """
         import time as _time
+
         symbols = self._manager.get_subscribed_symbols()
         now = _time.monotonic()
 
@@ -374,6 +398,7 @@ def reset_dispatcher() -> None:
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
+
 @router.websocket("/ws")
 async def scanner_websocket(websocket: WebSocket):
     """WebSocket scanner push channel.
@@ -411,28 +436,46 @@ async def scanner_websocket(websocket: WebSocket):
                 # the connection alive.
                 logger.debug(f"Bad WS frame: {e}")
                 try:
-                    await websocket.send_json(
-                        {"type": "error", "message": f"Invalid frame: {e}"}
-                    )
+                    await websocket.send_json({"type": "error", "message": f"Invalid frame: {e}"})
                 except Exception:
                     break
                 continue
 
             action = msg.get("action") if isinstance(msg, dict) else None
-            symbol = (msg.get("symbol") if isinstance(msg, dict) else None)
+            symbol = msg.get("symbol") if isinstance(msg, dict) else None
 
-            if action == "subscribe" and isinstance(symbol, str) and symbol:
-                await broadcast_manager.subscribe(websocket, symbol)
-                await websocket.send_json({"type": "subscribed", "symbol": symbol.upper()})
-            elif action == "unsubscribe" and isinstance(symbol, str) and symbol:
-                await broadcast_manager.unsubscribe(websocket, symbol)
-                await websocket.send_json({"type": "unsubscribed", "symbol": symbol.upper()})
+            if action in ("subscribe", "unsubscribe"):
+                normalized = symbol.strip().upper() if isinstance(symbol, str) else ""
+                if not _SYMBOL_RE.fullmatch(normalized):
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Invalid symbol: {symbol!r}"}
+                    )
+                    continue
+
+            if action == "subscribe":
+                if broadcast_manager.subscription_count(
+                    websocket
+                ) >= _MAX_SUBSCRIPTIONS_PER_SOCKET and not broadcast_manager.has_subscription(
+                    websocket, normalized
+                ):
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": (
+                                f"Subscription limit reached ({_MAX_SUBSCRIPTIONS_PER_SOCKET})"
+                            ),
+                        }
+                    )
+                    continue
+                await broadcast_manager.subscribe(websocket, normalized)
+                await websocket.send_json({"type": "subscribed", "symbol": normalized})
+            elif action == "unsubscribe":
+                await broadcast_manager.unsubscribe(websocket, normalized)
+                await websocket.send_json({"type": "unsubscribed", "symbol": normalized})
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
             elif action in (None, ""):
-                await websocket.send_json(
-                    {"type": "error", "message": "Missing 'action'"}
-                )
+                await websocket.send_json({"type": "error", "message": "Missing 'action'"})
             else:
                 await websocket.send_json(
                     {"type": "error", "message": f"Unknown action: {action!r}"}

@@ -1,6 +1,7 @@
 """
 Watchlist data models for MarketLens
 """
+
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
@@ -10,6 +11,7 @@ from backend.utils.timezone import now_ny
 
 class Watchlist(Base):
     """Watchlist model"""
+
     __tablename__ = "watchlists"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -20,13 +22,17 @@ class Watchlist(Base):
     updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
 
     # Relationship to watchlist symbols
-    symbols = relationship("WatchlistSymbol", back_populates="watchlist", cascade="all, delete-orphan")
+    symbols = relationship(
+        "WatchlistSymbol", back_populates="watchlist", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Watchlist(id={self.id}, name='{self.name}')>"
 
+
 class WatchlistSymbol(Base):
     """WatchlistSymbol model - represents a symbol within a watchlist"""
+
     __tablename__ = "watchlist_symbols"
 
     id = Column(Integer, primary_key=True, index=True)

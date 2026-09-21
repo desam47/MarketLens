@@ -9,6 +9,7 @@ Covers:
   - Circuit breaker stats are accessible from the global registry
   - Retry exhaustion triggers fallback to the next provider
 """
+
 import os
 import sys
 import time
@@ -168,11 +169,13 @@ class TestProviderStatusEnrichment(unittest.TestCase):
                     manager.providers = {
                         "test_status": MagicMock(
                             is_available=MagicMock(return_value=True),
-                            get_provider_status=MagicMock(return_value=ProviderStatus(
-                                provider_name="test_status",
-                                is_healthy=True,
-                                timestamp=datetime.now(UTC),
-                            )),
+                            get_provider_status=MagicMock(
+                                return_value=ProviderStatus(
+                                    provider_name="test_status",
+                                    is_healthy=True,
+                                    timestamp=datetime.now(UTC),
+                                )
+                            ),
                         ),
                     }
 
@@ -219,11 +222,13 @@ class TestProviderStatusEnrichment(unittest.TestCase):
                     manager.providers = {
                         "no_breaker": MagicMock(
                             is_available=MagicMock(return_value=True),
-                            get_provider_status=MagicMock(return_value=ProviderStatus(
-                                provider_name="no_breaker",
-                                is_healthy=True,
-                                timestamp=datetime.now(UTC),
-                            )),
+                            get_provider_status=MagicMock(
+                                return_value=ProviderStatus(
+                                    provider_name="no_breaker",
+                                    is_healthy=True,
+                                    timestamp=datetime.now(UTC),
+                                )
+                            ),
                         ),
                     }
 
@@ -253,9 +258,7 @@ class TestCallProviderWithBreaker(unittest.TestCase):
 
         noop_limiter = MagicMock()
         noop_limiter.acquire = MagicMock()
-        with patch(
-            "backend.market_data.services.manager._rate_limiter", noop_limiter
-        ):
+        with patch("backend.market_data.services.manager._rate_limiter", noop_limiter):
             result = _call_provider(mock_provider, "get_value")
 
         self.assertEqual(result, "success")
@@ -275,9 +278,7 @@ class TestCallProviderWithBreaker(unittest.TestCase):
 
         noop_limiter = MagicMock()
         noop_limiter.acquire = MagicMock()
-        with patch(
-            "backend.market_data.services.manager._rate_limiter", noop_limiter
-        ):
+        with patch("backend.market_data.services.manager._rate_limiter", noop_limiter):
             with self.assertRaises(CircuitBreakerOpen) as ctx:
                 _call_provider(mock_provider, "get_value")
         self.assertEqual(ctx.exception.provider_name, "test_cp_open")
@@ -301,9 +302,7 @@ class TestCallProviderWithBreaker(unittest.TestCase):
 
         noop_limiter = MagicMock()
         noop_limiter.acquire = MagicMock()
-        with patch(
-            "backend.market_data.services.manager._rate_limiter", noop_limiter
-        ):
+        with patch("backend.market_data.services.manager._rate_limiter", noop_limiter):
             with self.assertRaises(ValueError):
                 _call_provider(mock_provider, "get_value")
 
@@ -325,9 +324,7 @@ class TestCallProviderWithBreaker(unittest.TestCase):
 
         noop_limiter = MagicMock()
         noop_limiter.acquire = MagicMock()
-        with patch(
-            "backend.market_data.services.manager._rate_limiter", noop_limiter
-        ):
+        with patch("backend.market_data.services.manager._rate_limiter", noop_limiter):
             # Should raise CircuitBreakerOpen immediately — tenacity should not retry it
             with self.assertRaises(CircuitBreakerOpen):
                 _call_provider(mock_provider, "get_value")

@@ -13,6 +13,7 @@ The actual counters live in ``backend/observability/metrics.py`` so the
 scanner, ingestion, and bar repository can import them without pulling
 in FastAPI (avoids circular imports).
 """
+
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
@@ -104,10 +105,12 @@ def _safe_bar_counts() -> dict | None:
     """
     try:
         from ...database import SessionLocal
+
         db = SessionLocal()
         try:
             # Single round-trip with all 6 aggregates (Phase 3.9.4).
-            row = db.execute(text("""
+            row = db.execute(
+                text("""
                 SELECT
                     COUNT(*) AS total,
                     SUM(CASE WHEN timeframe = '1m' THEN 1 ELSE 0 END) AS bars_1m,
@@ -116,18 +119,25 @@ def _safe_bar_counts() -> dict | None:
                     MAX(timestamp) AS newest_bar,
                     COUNT(DISTINCT symbol) AS distinct_symbols
                 FROM bars
-            """)).fetchone()
+            """)
+            ).fetchone()
             if row is None:
                 return None
             total, bars_1m, bars_resampled, oldest_bar, newest_bar, distinct_symbols = row
             try:
                 from ...config.settings import settings as _s
+
                 retention_by_tf = {
-                    "1m": _s.retention.tf_1m_days, "2m": _s.retention.tf_2m_days,
-                    "3m": _s.retention.tf_3m_days, "5m": _s.retention.tf_5m_days,
-                    "15m": _s.retention.tf_15m_days, "30m": _s.retention.tf_30m_days,
-                    "1h": _s.retention.tf_1h_days, "4h": _s.retention.tf_4h_days,
-                    "1d": _s.retention.tf_1d_days, "1wk": _s.retention.tf_1wk_days,
+                    "1m": _s.retention.tf_1m_days,
+                    "2m": _s.retention.tf_2m_days,
+                    "3m": _s.retention.tf_3m_days,
+                    "5m": _s.retention.tf_5m_days,
+                    "15m": _s.retention.tf_15m_days,
+                    "30m": _s.retention.tf_30m_days,
+                    "1h": _s.retention.tf_1h_days,
+                    "4h": _s.retention.tf_4h_days,
+                    "1d": _s.retention.tf_1d_days,
+                    "1wk": _s.retention.tf_1wk_days,
                 }
             except Exception:
                 retention_by_tf = {}
@@ -185,6 +195,7 @@ def _safe_rate_limit_stats() -> dict | None:
     """
     try:
         from ..main import _write_limiter
+
         return _write_limiter.get_stats()
     except Exception:
         return None
@@ -195,6 +206,7 @@ def _safe_websocket_stats() -> dict | None:
     try:
         from ..realtime.ws_router import broadcast_manager as realtime_bm
         from ..scanner.ws_router import broadcast_manager as scanner_bm
+
         return {
             "scanner": scanner_bm.get_stats(),
             "realtime": realtime_bm.get_stats(),
@@ -367,6 +379,7 @@ def prometheus_metrics() -> Response:
 # Phase 3.3.3 — Backup / WAL health
 # ---------------------------------------------------------------------------
 
+
 def _safe_backup_status() -> dict | None:
     """Return WAL checkpoint + Litestream health snapshot.
 
@@ -414,6 +427,7 @@ def _safe_backup_status() -> dict | None:
         litestream_dbs = None
         try:
             import urllib.request
+
             req = urllib.request.Request(
                 "http://localhost:9090/health",
                 headers={"Accept": "application/json"},
@@ -421,6 +435,7 @@ def _safe_backup_status() -> dict | None:
             with urllib.request.urlopen(req, timeout=1.0) as resp:
                 if resp.status == 200:
                     import json
+
                     data = json.loads(resp.read())
                     litestream_reachable = True
                     litestream_generation = data.get("generation")
@@ -430,9 +445,9 @@ def _safe_backup_status() -> dict | None:
 
         return {
             "journal_mode": str(journal_mode),
-            "wal_checkpoint_busy": bool(checkpoint_result[0]),   # pages still in WAL
-            "wal_checkpoint_frames": int(checkpoint_result[1]),   # total WAL frames
-            "wal_checkpoint_end": int(checkpoint_result[2]),      # WAL end page
+            "wal_checkpoint_busy": bool(checkpoint_result[0]),  # pages still in WAL
+            "wal_checkpoint_frames": int(checkpoint_result[1]),  # total WAL frames
+            "wal_checkpoint_end": int(checkpoint_result[2]),  # WAL end page
             "wal_size_bytes": wal_size_bytes,
             "shm_size_bytes": shm_size_bytes,
             "litestream_reachable": litestream_reachable,
@@ -445,6 +460,7 @@ def _safe_backup_status() -> dict | None:
 
 class BackupStatusResponse(BaseModel):
     """Response shape for GET /api/system/backup-status."""
+
     timestamp: str
     journal_mode: str
     wal_checkpoint_busy: bool

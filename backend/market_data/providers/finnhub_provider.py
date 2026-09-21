@@ -43,17 +43,17 @@ _BASE_URL = "https://finnhub.io/api/v1"
 # Finnhub resolution: 1, 5, 15, 30, 60, D, W, M
 _FINNHUB_RESOLUTION_MAP: dict[str, str] = {
     "1m": "1",
-    "2m": "1",    # No 2m on Finnhub, fall back to 1m
+    "2m": "1",  # No 2m on Finnhub, fall back to 1m
     "5m": "5",
     "15m": "15",
     "30m": "30",
     "60m": "60",
-    "1h": "60",   # Finnhub uses "60" for hourly
-    "4h": "60",   # Finnhub has no 4h; fetch 60-min bars and let the
-                    # caller resample to 4h at read time
+    "1h": "60",  # Finnhub uses "60" for hourly
+    "4h": "60",  # Finnhub has no 4h; fetch 60-min bars and let the
+    # caller resample to 4h at read time
     "90m": "60",  # No 90m, approximate with 60
     "1d": "D",
-    "5d": "D",    # No 5d, approximate with daily
+    "5d": "D",  # No 5d, approximate with daily
     "1wk": "W",
     "1mo": "M",
 }
@@ -79,8 +79,7 @@ def _resolve_resolution(timeframe: str) -> str:
     res = _FINNHUB_RESOLUTION_MAP.get(timeframe)
     if res is None:
         raise ValueError(
-            f"Unsupported timeframe {timeframe!r}; "
-            f"supported: {sorted(_FINNHUB_RESOLUTION_MAP)}"
+            f"Unsupported timeframe {timeframe!r}; supported: {sorted(_FINNHUB_RESOLUTION_MAP)}"
         )
     return res
 
@@ -122,9 +121,7 @@ class FinnhubProvider(BaseMarketDataProvider):
         if r.status_code == 403:
             raise RuntimeError("Finnhub forbidden — check API key (HTTP 403)")
         if not r.ok:
-            raise RuntimeError(
-                f"Finnhub HTTP {r.status_code} for {endpoint}: {r.text[:200]}"
-            )
+            raise RuntimeError(f"Finnhub HTTP {r.status_code} for {endpoint}: {r.text[:200]}")
 
         # Free tier quirk: some endpoints (e.g. /market-status) return
         # 200 OK with an HTML body instead of JSON. Detect via Content-Type

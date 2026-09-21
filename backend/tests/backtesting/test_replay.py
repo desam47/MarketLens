@@ -4,6 +4,7 @@ Unit tests for ``backend.backtesting.replay`` helpers.
 All functions are pure and do not touch the database, so testing
 requires only the indicator implementations and the Pydantic Bar model.
 """
+
 import math
 import os
 import sys
@@ -29,14 +30,20 @@ def _bar(close, high=None, low=None, volume=1_000_000, days_ago=0):
     high = high or (close * 1.01)
     low = low or (close * 0.99)
     return Bar(
-        symbol="AAPL", timestamp=ts, open=close, high=high, low=low,
-        close=close, volume=volume, timeframe="1d",
-        provider="test", data_status=DataStatus.LIVE,
+        symbol="AAPL",
+        timestamp=ts,
+        open=close,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        timeframe="1d",
+        provider="test",
+        data_status=DataStatus.LIVE,
     )
 
 
 class TestBarsToDicts(unittest.TestCase):
-
     def test_converts_close_high_low(self):
         bars = [_bar(100.0), _bar(101.0)]
         dicts = _bars_to_dicts(bars)
@@ -48,7 +55,6 @@ class TestBarsToDicts(unittest.TestCase):
 
 
 class TestBuildIndicatorValues(unittest.TestCase):
-
     def _rsi_window(self, closes):
         """Return len(closes) bars ordered oldest→newest, last is "current"."""
         n = len(closes)
@@ -101,7 +107,6 @@ class TestBuildIndicatorValues(unittest.TestCase):
 
 
 class TestBuildScanResult(unittest.TestCase):
-
     def test_trend_signals_left_empty(self):
         # Build a window of warmup bars + current bar.
         bars = [_bar(100.0 + i, volume=500_000, days_ago=14 - i) for i in range(15)]
@@ -118,7 +123,6 @@ class TestBuildScanResult(unittest.TestCase):
 
 
 class TestRelativeVolume(unittest.TestCase):
-
     def test_empty_history_returns_zero(self):
         self.assertEqual(relative_volume(1_000_000, []), 0.0)
 
@@ -142,10 +146,9 @@ class TestRelativeVolume(unittest.TestCase):
     def test_volume_lookback_respected(self):
         # Only the last VOLUME_LOOKBACK bars are used.
         # First 10 bars have volume=100k, last 20 have volume=500k.
-        bars = (
-            [_bar(100.0, volume=100_000) for _ in range(10)] +
-            [_bar(100.0, volume=500_000) for _ in range(VOLUME_LOOKBACK)]
-        )
+        bars = [_bar(100.0, volume=100_000) for _ in range(10)] + [
+            _bar(100.0, volume=500_000) for _ in range(VOLUME_LOOKBACK)
+        ]
         rel = relative_volume(500_000, bars)
         # Should be based on last VOLUME_LOOKBACK bars with mean=500k → ratio=1.
         self.assertAlmostEqual(rel, 1.0, places=1)

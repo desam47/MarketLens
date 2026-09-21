@@ -55,6 +55,7 @@ therefore has exactly one loop ever touching a provider's httpx client
 — two loops sharing one cached client is the same cross-loop bug, just
 without the ``asyncio.run()`` teardown to make it crash loudly.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -109,9 +110,7 @@ def _get_bridge_loop() -> asyncio.AbstractEventLoop:
                         task.cancel()
                     loop.close()
 
-            thread = threading.Thread(
-                target=_serve, name="ai-sync-bridge", daemon=True
-            )
+            thread = threading.Thread(target=_serve, name="ai-sync-bridge", daemon=True)
             _bridge_thread = thread
             thread.start()
             ready.wait(timeout=5.0)

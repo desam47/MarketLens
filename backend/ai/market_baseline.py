@@ -14,6 +14,7 @@ Every section is best-effort; a failure degrades that section to ``{}``
 and never raises. In particular it must NEVER call
 ``build_digest_payload()`` — that runs ``analyze_symbol`` per mover.
 """
+
 from __future__ import annotations
 
 import json
@@ -88,8 +89,11 @@ def _active_alerts() -> list[dict[str, Any]]:
     try:
         return [
             {
-                "id": a.id, "symbol": a.symbol, "name": a.name,
-                "condition_type": a.condition_type, "parameter": a.parameter,
+                "id": a.id,
+                "symbol": a.symbol,
+                "name": a.name,
+                "condition_type": a.condition_type,
+                "parameter": a.parameter,
             }
             for a in repo.get_all_enabled()
         ]

@@ -4,6 +4,7 @@ The alert engine persists the in-app trigger synchronously, then calls this
 module asynchronously. External failures are isolated in ``AlertDelivery``
 rows and can be retried from the API without re-firing the alert.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,7 +100,9 @@ def send_test_delivery(alert: Alert, channel: str) -> dict[str, str]:
         else:
             response = _deliver_email(str(profile.get("email_to") or ""), payload)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Alert test delivery failed: alert=%s channel=%s: %s", alert.id, channel, exc)
+        logger.warning(
+            "Alert test delivery failed: alert=%s channel=%s: %s", alert.id, channel, exc
+        )
         return {"status": "failed", "response": str(exc)[:1000]}
     return {"status": "delivered", "response": response}
 
@@ -109,7 +112,12 @@ def _deliver_webhook(url: str, payload: dict) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("webhook URL must use http or https")
     body = json.dumps(payload).encode("utf-8")
-    request = Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "MarketLens/alert"}, method="POST")
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "MarketLens/alert"},
+        method="POST",
+    )
     with urlopen(request, timeout=settings.notifications.request_timeout) as response:  # noqa: S310
         return f"HTTP {response.status}"
 
@@ -136,7 +144,9 @@ def _deliver_email(recipient: str, payload: dict) -> str:
     return "SMTP accepted message"
 
 
-def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, profile: dict) -> str:
+def _attempt(
+    db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, profile: dict
+) -> str:
     delivery.attempts = int(delivery.attempts or 0) + 1
     delivery.status = "pending"
     db.commit()
@@ -147,7 +157,9 @@ def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, p
             result = "Delivered by connected browser clients"
             delivery.status = "skipped"
         elif delivery.channel == "webhook":
-            result = _deliver_webhook(str(profile.get("webhook_url") or ""), _payload(trigger, alert))
+            result = _deliver_webhook(
+                str(profile.get("webhook_url") or ""), _payload(trigger, alert)
+            )
         elif delivery.channel == "email":
             result = _deliver_email(str(profile.get("email_to") or ""), _payload(trigger, alert))
         else:
@@ -159,7 +171,9 @@ def _attempt(db, delivery: AlertDelivery, trigger: AlertTrigger, alert: Alert, p
     except Exception as exc:  # noqa: BLE001
         delivery.status = "failed"
         delivery.response = str(exc)[:1000]
-        logger.warning("Alert delivery failed: trigger=%s channel=%s: %s", trigger.id, delivery.channel, exc)
+        logger.warning(
+            "Alert delivery failed: trigger=%s channel=%s: %s", trigger.id, delivery.channel, exc
+        )
     db.commit()
     return delivery.status
 

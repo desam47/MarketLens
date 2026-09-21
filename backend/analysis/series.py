@@ -14,6 +14,7 @@ duplicating it).
 ``backend/api/analysis/router.py`` still owns the endpoints; it now
 imports these functions from here rather than defining them locally.
 """
+
 from __future__ import annotations
 
 from cachetools import TTLCache
@@ -45,16 +46,20 @@ def load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
 
     out: list[dict] = []
     for b in bars:
-        out.append({
-            "open": b.open,
-            "high": b.high,
-            "low": b.low,
-            "close": b.close,
-            "volume": b.volume,
-            "timestamp": b.timestamp,
-            "source": b.source,
-            "data_status": b.data_status.value if hasattr(b.data_status, "value") else b.data_status,
-        })
+        out.append(
+            {
+                "open": b.open,
+                "high": b.high,
+                "low": b.low,
+                "close": b.close,
+                "volume": b.volume,
+                "timestamp": b.timestamp,
+                "source": b.source,
+                "data_status": b.data_status.value
+                if hasattr(b.data_status, "value")
+                else b.data_status,
+            }
+        )
     return out
 
 
@@ -85,8 +90,12 @@ def bar_dicts_to_arrays(bars: list[dict]) -> dict:
     """Convert a list of bar dicts to parallel arrays for the engines."""
     if not bars:
         return {
-            "opens": [], "highs": [], "lows": [], "closes": [],
-            "volumes": [], "timestamps": [],
+            "opens": [],
+            "highs": [],
+            "lows": [],
+            "closes": [],
+            "volumes": [],
+            "timestamps": [],
         }
     opens: list[float] = []
     highs: list[float] = []
@@ -125,8 +134,8 @@ def rsi_series(closes: list[float], period: int = 14) -> list[float]:
         diff = closes[i] - closes[i - 1]
         gains.append(max(diff, 0.0))
         losses.append(max(-diff, 0.0))
-    avg_gain = sum(gains[1:period + 1]) / period
-    avg_loss = sum(losses[1:period + 1]) / period
+    avg_gain = sum(gains[1 : period + 1]) / period
+    avg_loss = sum(losses[1 : period + 1]) / period
     if avg_loss == 0:
         out[period] = 100.0
     else:
@@ -178,10 +187,8 @@ def macd_histogram_series(
         first_sig_idx = slow - 1 + signal - 1
         if first_sig_idx < n:
             k = 2.0 / (signal + 1.0)
-            seed = sum(macd_line[slow - 1: slow - 1 + signal]) / signal
+            seed = sum(macd_line[slow - 1 : slow - 1 + signal]) / signal
             signal_line[first_sig_idx] = seed
             for i in range(first_sig_idx + 1, n):
-                signal_line[i] = (
-                    macd_line[i] * k + signal_line[i - 1] * (1 - k)
-                )
+                signal_line[i] = macd_line[i] * k + signal_line[i - 1] * (1 - k)
     return [macd_line[i] - signal_line[i] for i in range(n)]

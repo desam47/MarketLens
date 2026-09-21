@@ -1,6 +1,7 @@
 """
 Moving Average Convergence Divergence (MACD) indicator
 """
+
 from typing import Any
 
 import numpy as np
@@ -34,11 +35,11 @@ class MACDIndicator(BaseIndicator):
             return []
 
         # Extract close prices
-        closes = np.array([float(d['close']) for d in data])
+        closes = np.array([float(d["close"]) for d in data])
 
         # Calculate EMAs using the EMAIndicator instances
-        ema_fast_values = self.ema_fast.calculate([{'close': c} for c in closes])
-        ema_slow_values = self.ema_slow.calculate([{'close': c} for c in closes])
+        ema_fast_values = self.ema_fast.calculate([{"close": c} for c in closes])
+        ema_slow_values = self.ema_slow.calculate([{"close": c} for c in closes])
 
         # Calculate MACD line (fast EMA - slow EMA)
         macd_line = []
@@ -57,7 +58,7 @@ class MACDIndicator(BaseIndicator):
 
         # Calculate signal line (EMA of MACD line) using the EMAIndicator instance
         if len(macd_line) >= self.signal:
-            signal_values = self.ema_signal.calculate([{'close': val} for val in macd_line])
+            signal_values = self.ema_signal.calculate([{"close": val} for val in macd_line])
 
             # Align MACD and signal lines for histogram calculation
             # The signal line will be shorter by (signal-1) values due to EMA warmup period
@@ -72,7 +73,10 @@ class MACDIndicator(BaseIndicator):
                     if min_len > 0:
                         aligned_macd = aligned_macd[-min_len:]
                         aligned_signal = aligned_signal[-min_len:]
-                        histogram = [macd - sig for macd, sig in zip(aligned_macd, aligned_signal, strict=False)]
+                        histogram = [
+                            macd - sig
+                            for macd, sig in zip(aligned_macd, aligned_signal, strict=False)
+                        ]
                         self.values = histogram.copy()  # Store histogram as main values
                         return self.values.copy()
 
@@ -89,11 +93,11 @@ class MACDIndicator(BaseIndicator):
         first ``signal`` MACD values, then the standard EMA for every
         subsequent bar.
         """
-        close_price = float(new_data['close'])
+        close_price = float(new_data["close"])
 
         # Update underlying EMAs
-        fast_value = self.ema_fast.update({'close': close_price})
-        slow_value = self.ema_slow.update({'close': close_price})
+        fast_value = self.ema_fast.update({"close": close_price})
+        slow_value = self.ema_slow.update({"close": close_price})
 
         # Calculate MACD line if we have both EMA values
         if fast_value is not None and slow_value is not None:
@@ -106,11 +110,12 @@ class MACDIndicator(BaseIndicator):
                     # ---- Warmup: SMA of the first `signal` MACD values ----
                     # Only the first `signal` bars of macd_line contribute;
                     # afterwards we apply the standard EMA smoothing.
-                    signal_value = sum(self.macd_line[-self.signal:]) / self.signal
+                    signal_value = sum(self.macd_line[-self.signal :]) / self.signal
                 else:
                     # EMA calculation
-                    signal_value = (macd_value * (2 / (self.signal + 1))) + \
-                                 (self.signal_line[-1] * (1 - (2 / (self.signal + 1))))
+                    signal_value = (macd_value * (2 / (self.signal + 1))) + (
+                        self.signal_line[-1] * (1 - (2 / (self.signal + 1)))
+                    )
 
                 self.signal_line.append(signal_value)
 

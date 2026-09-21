@@ -11,6 +11,7 @@ Covers:
   - stats() snapshot correctness
   - Reset on repeated success
 """
+
 import os
 import sys
 import threading
@@ -233,7 +234,10 @@ class TestCircuitBreakerEdgeCases(unittest.TestCase):
                 cb.call(_raise, RuntimeError("boom"))
         # Should have at least one record mentioning the transition
         any_transition = any("OPEN" in r.getMessage() for r in log_ctx.records)
-        self.assertTrue(any_transition, f"Expected an OPEN transition log, got: {[r.getMessage() for r in log_ctx.records]}")
+        self.assertTrue(
+            any_transition,
+            f"Expected an OPEN transition log, got: {[r.getMessage() for r in log_ctx.records]}",
+        )
 
 
 if __name__ == "__main__":

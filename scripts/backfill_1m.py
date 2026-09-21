@@ -21,13 +21,14 @@ Webull 1m historical limit:
   data must come from yfinance. The backfill script uses yfinance
   exclusively to avoid this limitation.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # ── repo root on sys.path ──────────────────────────────────────────────────────
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,9 +36,9 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from backend.database import SessionLocal
-from backend.repositories.bar_repository import upsert_bars
 from backend.market_data.providers.yfinance_provider import YFinanceProvider
-from backend.models.market_data import Bar, DataStatus
+from backend.models.market_data import Bar
+from backend.repositories.bar_repository import upsert_bars
 
 # ── config ──────────────────────────────────────────────────────────────────────
 # How far back to backfill. 3 months is sufficient for Phase 3.1's NYSE
@@ -57,13 +58,17 @@ def _ensure_flag_dir():
 def _write_flag(complete: bool, symbols: list[str], bars_written: int, ts: str):
     _ensure_flag_dir()
     with open(_FLAG_FILE, "w") as f:
-        json.dump({
-            "completed": complete,
-            "symbols": symbols,
-            "bars_written": bars_written,
-            "timestamp": ts,
-            "backfill_days": _BACKFILL_DAYS,
-        }, f, indent=2)
+        json.dump(
+            {
+                "completed": complete,
+                "symbols": symbols,
+                "bars_written": bars_written,
+                "timestamp": ts,
+                "backfill_days": _BACKFILL_DAYS,
+            },
+            f,
+            indent=2,
+        )
 
 
 def _read_flag() -> dict | None:
@@ -78,9 +83,11 @@ def _read_flag() -> dict | None:
 
 # ── symbols ────────────────────────────────────────────────────────────────────
 
+
 def _load_watchlist_symbols() -> list[str]:
     """Load all enabled watchlist symbols from the DB."""
     from backend.repositories.watchlist_repository import WatchlistRepository
+
     db = SessionLocal()
     try:
         repo = WatchlistRepository(db)
@@ -101,6 +108,7 @@ def _load_watchlist_symbols() -> list[str]:
 
 # ── main ────────────────────────────────────────────────────────────────────────
 
+
 def backfill_1m(force: bool = False):
     """Fetch and store 3 months of 1m bars for all watched symbols.
 
@@ -119,24 +127,24 @@ def backfill_1m(force: bool = False):
     symbols = _load_watchlist_symbols()
     if not symbols:
         print("⚠  No watchlist symbols found. Nothing to backfill.")
-        _write_flag(complete=False, symbols=[], bars_written=0,
-                    ts=datetime.now(timezone.utc).isoformat())
+        _write_flag(complete=False, symbols=[], bars_written=0, ts=datetime.now(UTC).isoformat())
         return
 
     # yfinance is the only provider that can reliably backfill 3mo of 1m.
     provider = YFinanceProvider()
-    end_date = datetime.now(timezone.utc)
+    end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=_BACKFILL_DAYS)
     total_written = 0
 
-    print(f"📥 Starting 1m backfill: {len(symbols)} symbols, "
-          f"{_BACKFILL_DAYS} days ({start_date.date()} → {end_date.date()})")
-    print(f"   Using yfinance (Webull/Finnhub 1m is limited to ~30 days)")
+    print(
+        f"📥 Starting 1m backfill: {len(symbols)} symbols, "
+        f"{_BACKFILL_DAYS} days ({start_date.date()} → {end_date.date()})"
+    )
+    print("   Using yfinance (Webull/Finnhub 1m is limited to ~30 days)")
     print(f"   Flag file: {_FLAG_FILE}")
 
     # Write a "running" flag so a crashed run is distinguishable from a completed one.
-    _write_flag(complete=False, symbols=symbols, bars_written=0,
-                ts=datetime.now(timezone.utc).isoformat())
+    _write_flag(complete=False, symbols=symbols, bars_written=0, ts=datetime.now(UTC).isoformat())
 
     for i, symbol in enumerate(symbols, 1):
         range_days = _BACKFILL_DAYS
@@ -145,7 +153,9 @@ def backfill_1m(force: bool = False):
         print(f"[{i}/{len(symbols)}] {symbol}: fetching {range_str} of 1m...", end=" ", flush=True)
         try:
             bars: list[Bar] = provider.get_historical_bars(
-                symbol, timeframe="1m", range_=range_str,
+                symbol,
+                timeframe="1m",
+                range_=range_str,
             )
             if not bars:
                 print("0 bars (no data or outside trading hours)")
@@ -170,13 +180,13 @@ def backfill_1m(force: bool = False):
         # Respect yfinance rate limits: be kind to their servers.
         time.sleep(0.5)
 
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     if total_written > 0:
         _write_flag(complete=True, symbols=symbols, bars_written=total_written, ts=ts)
         print(f"\n✅ Backfill complete: {total_written} bars stored for {len(symbols)} symbols")
         print(f"   Flag written to {_FLAG_FILE}")
     else:
-        print(f"\n⚠  Backfill completed but no bars were stored. Check provider credentials.")
+        print("\n⚠  Backfill completed but no bars were stored. Check provider credentials.")
         _write_flag(complete=False, symbols=symbols, bars_written=0, ts=ts)
 
 

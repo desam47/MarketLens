@@ -13,6 +13,7 @@ the same registry the scanner already uses) and run
 TrendTransitionEngine.latest() on it directly — no new bar fetch, no
 non-existent singleton.
 """
+
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -40,7 +41,6 @@ def _fake_scan_result() -> ScanResult:
 
 
 class TestBuildContextTransitionFix(unittest.TestCase):
-
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
     def test_populates_trend_transition_from_real_score_history(
@@ -73,9 +73,7 @@ class TestBuildContextTransitionFix(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_insufficient_history_degrades_to_empty_dict(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_insufficient_history_degrades_to_empty_dict(self, mock_scanner, mock_get_engine):
         """Fewer than 7 signals (the > 6 gate) must not crash — just no
         transition reported, same as any other degraded sub-engine."""
         from backend.engines.timeframe import Timeframe
@@ -90,9 +88,7 @@ class TestBuildContextTransitionFix(unittest.TestCase):
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
-    def test_registry_exception_degrades_gracefully(
-        self, mock_scanner, mock_get_engine
-    ):
+    def test_registry_exception_degrades_gracefully(self, mock_scanner, mock_get_engine):
         """A broken trend registry must not take the whole context
         down — matches every other section's _safe_call-style
         degrade-to-empty behavior."""

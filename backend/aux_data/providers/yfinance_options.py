@@ -14,6 +14,7 @@ endpoint; they're left as ``None`` in the response. Put/call ratio,
 average IV, total volume, and unusual-activity classification are all
 computed from the raw DataFrames in this module.
 """
+
 import logging
 
 import pandas as pd
@@ -52,7 +53,8 @@ class YFinanceOptionsProvider(OptionsProvider):
             all_expirations: tuple[str, ...] = tuple(ticker.options or [])
 
             target_expirations = (
-                [expiration] if expiration and expiration in all_expirations
+                [expiration]
+                if expiration and expiration in all_expirations
                 else list(all_expirations[:4])
             )
 
@@ -64,7 +66,9 @@ class YFinanceOptionsProvider(OptionsProvider):
                 except Exception as exc:
                     logger.warning(
                         "yfinance option_chain failed for %s %s: %s",
-                        symbol, exp, exc,
+                        symbol,
+                        exp,
+                        exc,
                     )
                     continue
 

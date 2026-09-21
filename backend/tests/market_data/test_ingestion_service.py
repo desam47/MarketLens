@@ -5,6 +5,7 @@ Covers:
   - start/stop lifecycle
   - correlation ID propagation from request context into the daemon thread
 """
+
 import asyncio
 import os
 import sys
@@ -34,6 +35,7 @@ class TestResampleWideningHours(unittest.TestCase):
         from backend.market_data.services.ingestion_service import (
             MarketDataIngestionService,
         )
+
         widening = MarketDataIngestionService._RESAMPLE_WIDENING_HOURS
         self.assertGreaterEqual(widening["15m"], 1)
         self.assertEqual(widening["15m"], widening["30m"])
@@ -45,6 +47,7 @@ class TestResampleWideningHours(unittest.TestCase):
         from backend.market_data.services.ingestion_service import (
             MarketDataIngestionService,
         )
+
         widening = MarketDataIngestionService._RESAMPLE_WIDENING_HOURS
         self.assertEqual(widening["2m"], 0)
         self.assertEqual(widening["3m"], 0)
@@ -66,7 +69,7 @@ class TestIngestionServiceLifecycle(unittest.TestCase):
             return None
 
         async def _idle(*_a, **_k):
-            await asyncio.sleep(3600)          # until stop() cancels it
+            await asyncio.sleep(3600)  # until stop() cancels it
 
         self.service._seed_check = _noop
         self.service._startup_resample_tiers = _noop
@@ -115,12 +118,15 @@ class TestIngestionWatchlistTracking(unittest.TestCase):
             [SimpleNamespace(symbol="MSFT"), SimpleNamespace(symbol="NVDA")],
         ]
 
-        with patch(
-            "backend.market_data.services.ingestion_service.SessionLocal",
-            return_value=db,
-        ), patch(
-            "backend.market_data.services.ingestion_service.WatchlistRepository",
-            return_value=repo,
+        with (
+            patch(
+                "backend.market_data.services.ingestion_service.SessionLocal",
+                return_value=db,
+            ),
+            patch(
+                "backend.market_data.services.ingestion_service.WatchlistRepository",
+                return_value=repo,
+            ),
         ):
             self.assertEqual(
                 service.get_tracking_watchlists(),
@@ -214,11 +220,13 @@ class TestCorrelationIdPropagation(unittest.TestCase):
                     break
 
             self.assertEqual(
-                len(self.seen_ids), 1,
+                len(self.seen_ids),
+                1,
                 "Daemon thread should have recorded exactly one ID snapshot",
             )
             self.assertEqual(
-                self.seen_ids[0], corr_id,
+                self.seen_ids[0],
+                corr_id,
                 f"Daemon thread should see the request's correlation ID "
                 f"(expected {corr_id!r}, got {self.seen_ids[0]!r})",
             )
@@ -313,11 +321,14 @@ class TestPhase31LastBarUpdate(unittest.TestCase):
         # Simulate the watchlist gaining a new symbol. (This used to patch
         # ``_load_symbols_from_watchlist``, which refresh never calls, so the test read the
         # developer's live database and only passed because TSLA happens to be in it.)
-        with patch.object(
-            service, "_query_active_watchlists", return_value=(["AAPL", "TSLA"], ["wl"])
-        ), patch(
-            "backend.market_data.streaming.webull_stream.get_webull_stream_client",
-            return_value=MagicMock(),
+        with (
+            patch.object(
+                service, "_query_active_watchlists", return_value=(["AAPL", "TSLA"], ["wl"])
+            ),
+            patch(
+                "backend.market_data.streaming.webull_stream.get_webull_stream_client",
+                return_value=MagicMock(),
+            ),
         ):
             service.refresh_symbols_from_watchlist()
         self.assertIn("TSLA", service.last_bar_update)
@@ -345,22 +356,35 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
     def _insert_bar(self, db, ts, session, close=100.0):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1m",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session=session,
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session=session,
+            )
+        )
 
     def setUp(self):
         from backend.database import SessionLocal
         from backend.models.market_data_sql import BarModel
+
         self.db = SessionLocal()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
         self.db.close()
@@ -377,14 +401,23 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         written = await service._resample_and_upsert(
-            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+            target_tf="5m",
+            source_tf="1m",
+            _symbol=self.SYMBOL,
+            full_history=True,
         )
         self.assertGreaterEqual(written, 1)
 
         from backend.models.market_data_sql import BarModel
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-        ).first()
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+            )
+            .first()
+        )
         self.assertIsNotNone(row)
         self.assertEqual(row.timestamp, datetime(2026, 9, 8, 8, 0))
         self.assertEqual(row.session, "premarket")
@@ -400,13 +433,22 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         await service._resample_and_upsert(
-            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+            target_tf="5m",
+            source_tf="1m",
+            _symbol=self.SYMBOL,
+            full_history=True,
         )
 
         from backend.models.market_data_sql import BarModel
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-        ).first()
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+            )
+            .first()
+        )
         self.assertIsNotNone(row)
         self.assertEqual(row.session, "after_hours")
 
@@ -422,14 +464,23 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         written = await service._resample_and_upsert(
-            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+            target_tf="5m",
+            source_tf="1m",
+            _symbol=self.SYMBOL,
+            full_history=True,
         )
         self.assertGreaterEqual(written, 1)
 
         from backend.models.market_data_sql import BarModel
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-        ).first()
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+            )
+            .first()
+        )
         self.assertIsNotNone(row)
         self.assertEqual(row.timestamp, datetime(2026, 9, 8, 10, 0))
         self.assertEqual(row.session, "regular")
@@ -450,14 +501,22 @@ class TestResampleSessionFilter(unittest.IsolatedAsyncioTestCase):
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         await service._resample_and_upsert(
-            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+            target_tf="5m",
+            source_tf="1m",
+            _symbol=self.SYMBOL,
+            full_history=True,
         )
 
         from backend.models.market_data_sql import BarModel
+
         rows = {
-            r.timestamp: r for r in self.db.query(BarModel).filter(
-                BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-            ).all()
+            r.timestamp: r
+            for r in self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+            )
+            .all()
         }
         pre = rows[datetime(2026, 9, 8, 8, 0)]
         reg = rows[datetime(2026, 9, 8, 10, 0)]
@@ -525,6 +584,7 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self._clock_patch.stop()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
@@ -535,12 +595,23 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
 
     def _insert_1m_bar(self, db, ts, close, session="regular"):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1m",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session=session,
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session=session,
+            )
+        )
 
     async def test_builds_incomplete_bar_from_this_hours_1m_bars(self):
         from datetime import timedelta
@@ -558,10 +629,15 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         written = await service._resample_1h_from_1m_and_upsert()
         self.assertGreaterEqual(written, 1)
 
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
-            BarModel.timestamp == hour_start,
-        ).first()
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == hour_start,
+            )
+            .first()
+        )
         self.assertIsNotNone(row)
         self.assertEqual(row.open, 100.0)
         self.assertEqual(row.high, 105.0)
@@ -583,17 +659,24 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
 
         hour_start = self._hour_start()
         self._insert_1m_bar(self.db, hour_start, close=100.0, session="premarket")
-        self._insert_1m_bar(self.db, hour_start + timedelta(minutes=1), close=999.0, session="premarket")
+        self._insert_1m_bar(
+            self.db, hour_start + timedelta(minutes=1), close=999.0, session="premarket"
+        )
         self.db.commit()
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         written = await service._resample_1h_from_1m_and_upsert()
         self.assertGreaterEqual(written, 1)
 
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
-            BarModel.timestamp == hour_start,
-        ).first()
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == hour_start,
+            )
+            .first()
+        )
         self.assertIsNotNone(row)
         self.assertEqual(row.open, 100.0)
         self.assertEqual(row.high, 999.0)
@@ -631,17 +714,28 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         await service._resample_1h_from_1m_and_upsert()
 
         real_bar = Bar(
-            symbol=self.SYMBOL, timeframe="1h",
-            open=100.0, high=110.0, low=99.0, close=108.0, volume=50000,
-            timestamp=hour_start, provider="webull",
+            symbol=self.SYMBOL,
+            timeframe="1h",
+            open=100.0,
+            high=110.0,
+            low=99.0,
+            close=108.0,
+            volume=50000,
+            timestamp=hour_start,
+            provider="webull",
             data_status=DataStatus.HISTORICAL,
         )
         upsert_bars(self.db, [real_bar])
 
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
-            BarModel.timestamp == hour_start,
-        ).first()
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == hour_start,
+            )
+            .first()
+        )
         self.assertEqual(row.provider, "webull")
         self.assertEqual(row.data_status, "HISTORICAL")
         self.assertEqual(row.close, 108.0)
@@ -667,9 +761,15 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         # data from the FOLLOWING hour (like the real SPY 10:00 bar
         # whose low/high matched the 11:00 hour's true values).
         bad_bar = Bar(
-            symbol=self.SYMBOL, timeframe="1h",
-            open=100.0, high=999.0, low=1.0, close=50.0, volume=1,
-            timestamp=past_hour, provider="webull",
+            symbol=self.SYMBOL,
+            timeframe="1h",
+            open=100.0,
+            high=999.0,
+            low=1.0,
+            close=50.0,
+            volume=1,
+            timestamp=past_hour,
+            provider="webull",
             data_status=DataStatus.HISTORICAL,
         )
         upsert_bars(self.db, [bad_bar])
@@ -684,10 +784,15 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         written = await service._resample_1h_from_1m_and_upsert(hour_starts=[past_hour])
         self.assertGreaterEqual(written, 1)
 
-        row = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1h",
-            BarModel.timestamp == past_hour,
-        ).first()
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == past_hour,
+            )
+            .first()
+        )
         self.assertEqual(row.provider, "live_from_1m")
         self.assertEqual(row.data_status, "HISTORICAL")  # closed hour, not live
         self.assertEqual(row.high, 101.0)
@@ -702,11 +807,14 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         start = datetime(2026, 9, 9, 4, 0)
         end = datetime(2026, 9, 9, 6, 30)
         hours = MarketDataIngestionService._hour_starts_between(start, end)
-        self.assertEqual(hours, [
-            datetime(2026, 9, 9, 4, 0),
-            datetime(2026, 9, 9, 5, 0),
-            datetime(2026, 9, 9, 6, 0),
-        ])
+        self.assertEqual(
+            hours,
+            [
+                datetime(2026, 9, 9, 4, 0),
+                datetime(2026, 9, 9, 5, 0),
+                datetime(2026, 9, 9, 6, 0),
+            ],
+        )
 
 
 class TestSubHourResampleLive(unittest.IsolatedAsyncioTestCase):
@@ -743,6 +851,7 @@ class TestSubHourResampleLive(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self._clock_patch.stop()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
@@ -750,12 +859,23 @@ class TestSubHourResampleLive(unittest.IsolatedAsyncioTestCase):
 
     def _insert_1m_bar(self, db, ts, close):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1m",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session="regular",
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session="regular",
+            )
+        )
 
     async def test_forming_bucket_incomplete_closed_bucket_historical(self):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
@@ -771,18 +891,31 @@ class TestSubHourResampleLive(unittest.IsolatedAsyncioTestCase):
 
         service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
         written = await service._resample_and_upsert(
-            target_tf="5m", source_tf="1m", _symbol=self.SYMBOL, full_history=True,
+            target_tf="5m",
+            source_tf="1m",
+            _symbol=self.SYMBOL,
+            full_history=True,
         )
         self.assertGreaterEqual(written, 2)
 
-        closed = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-            BarModel.timestamp == datetime(2026, 9, 9, 14, 0),
-        ).first()
-        forming = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "5m",
-            BarModel.timestamp == datetime(2026, 9, 9, 14, 5),
-        ).first()
+        closed = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+                BarModel.timestamp == datetime(2026, 9, 9, 14, 0),
+            )
+            .first()
+        )
+        forming = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "5m",
+                BarModel.timestamp == datetime(2026, 9, 9, 14, 5),
+            )
+            .first()
+        )
         self.assertIsNotNone(closed)
         self.assertIsNotNone(forming)
         self.assertEqual(closed.data_status, "HISTORICAL")
@@ -823,6 +956,7 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self._clock_patch.stop()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
@@ -830,12 +964,23 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
 
     def _insert_1h_bar(self, db, ts, close):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1h",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session="regular",
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1h",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session="regular",
+            )
+        )
 
     async def test_forming_bucket_incomplete_closed_bucket_historical(self):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
@@ -853,14 +998,24 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
         written = await service._resample_1h_to_4h_and_upsert()
         self.assertGreaterEqual(written, 2)
 
-        closed = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "4h",
-            BarModel.timestamp == datetime(2026, 9, 9, 8, 0),
-        ).first()
-        forming = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "4h",
-            BarModel.timestamp == datetime(2026, 9, 9, 12, 0),
-        ).first()
+        closed = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "4h",
+                BarModel.timestamp == datetime(2026, 9, 9, 8, 0),
+            )
+            .first()
+        )
+        forming = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "4h",
+                BarModel.timestamp == datetime(2026, 9, 9, 12, 0),
+            )
+            .first()
+        )
         self.assertIsNotNone(closed)
         self.assertIsNotNone(forming)
         self.assertEqual(closed.data_status, "HISTORICAL")
@@ -902,6 +1057,7 @@ class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self._clock_patch.stop()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
@@ -909,12 +1065,23 @@ class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):
 
     def _insert_1d_bar(self, db, ts, close):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1d",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session="regular",
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1d",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session="regular",
+            )
+        )
 
     async def test_current_week_incomplete_prior_week_historical(self):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
@@ -934,9 +1101,12 @@ class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(written, 2)
 
         rows = sorted(
-            self.db.query(BarModel).filter(
-                BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1wk",
-            ).all(),
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1wk",
+            )
+            .all(),
             key=lambda r: r.timestamp,
         )
         self.assertEqual(len(rows), 2)
@@ -962,24 +1132,37 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from backend.database import SessionLocal
         from backend.models.market_data_sql import BarModel
+
         self.db = SessionLocal()
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
 
     def tearDown(self):
         from backend.models.market_data_sql import BarModel
+
         self.db.query(BarModel).filter(BarModel.symbol == self.SYMBOL).delete()
         self.db.commit()
         self.db.close()
 
     def _insert_1m_bar(self, db, ts, close):
         from backend.models.market_data_sql import BarModel
-        db.add(BarModel(
-            symbol=self.SYMBOL, timeframe="1m",
-            open=close, high=close, low=close, close=close, volume=1000,
-            timestamp=ts, provider="test", data_status="HISTORICAL",
-            source="raw", session="regular",
-        ))
+
+        db.add(
+            BarModel(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=close,
+                high=close,
+                low=close,
+                close=close,
+                volume=1000,
+                timestamp=ts,
+                provider="test",
+                data_status="HISTORICAL",
+                source="raw",
+                session="regular",
+            )
+        )
 
     async def test_only_writes_bars_newer_than_latest_db_row(self):
         from datetime import timedelta
@@ -997,18 +1180,54 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
         # one bar before, one AT, and two genuinely new ones after the
         # already-stored latest row.
         fetched = [
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=99, high=99, low=99, close=99,
-                volume=100, timestamp=latest - timedelta(minutes=1), provider="test",
-                data_status=DataStatus.HISTORICAL),
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
-                volume=100, timestamp=latest, provider="test",
-                data_status=DataStatus.HISTORICAL),
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=101, high=101, low=101, close=101,
-                volume=100, timestamp=latest + timedelta(minutes=1), provider="test",
-                data_status=DataStatus.HISTORICAL),
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=102, high=102, low=102, close=102,
-                volume=100, timestamp=latest + timedelta(minutes=2), provider="test",
-                data_status=DataStatus.HISTORICAL),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=99,
+                high=99,
+                low=99,
+                close=99,
+                volume=100,
+                timestamp=latest - timedelta(minutes=1),
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=100,
+                high=100,
+                low=100,
+                close=100,
+                volume=100,
+                timestamp=latest,
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=101,
+                high=101,
+                low=101,
+                close=101,
+                volume=100,
+                timestamp=latest + timedelta(minutes=1),
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=102,
+                high=102,
+                low=102,
+                close=102,
+                volume=100,
+                timestamp=latest + timedelta(minutes=2),
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
         ]
 
         with patch(
@@ -1019,10 +1238,15 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
             written = await service._gapfill_1m_once()
 
         self.assertEqual(written, 2)
-        rows = self.db.query(BarModel).filter(
-            BarModel.symbol == self.SYMBOL, BarModel.timeframe == "1m",
-            BarModel.timestamp > latest,
-        ).all()
+        rows = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1m",
+                BarModel.timestamp > latest,
+            )
+            .all()
+        )
         self.assertEqual(len(rows), 2)
 
     async def test_writes_nothing_when_no_bars_are_newer(self):
@@ -1038,9 +1262,18 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
         # Every fetched bar is at-or-before the DB's latest row — a
         # steady-state cycle with nothing actually missing.
         fetched = [
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
-                volume=100, timestamp=latest, provider="test",
-                data_status=DataStatus.HISTORICAL),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=100,
+                high=100,
+                low=100,
+                close=100,
+                volume=100,
+                timestamp=latest,
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
         ]
 
         with patch(
@@ -1074,12 +1307,30 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
 
         new_bar_ts = latest + timedelta(minutes=1)
         fetched = [
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=100, high=100, low=100, close=100,
-                volume=100, timestamp=latest, provider="test",
-                data_status=DataStatus.HISTORICAL),
-            Bar(symbol=self.SYMBOL, timeframe="1m", open=101, high=102, low=100, close=101.5,
-                volume=555, timestamp=new_bar_ts, provider="test",
-                data_status=DataStatus.HISTORICAL),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=100,
+                high=100,
+                low=100,
+                close=100,
+                volume=100,
+                timestamp=latest,
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
+            Bar(
+                symbol=self.SYMBOL,
+                timeframe="1m",
+                open=101,
+                high=102,
+                low=100,
+                close=101.5,
+                volume=555,
+                timestamp=new_bar_ts,
+                provider="test",
+                data_status=DataStatus.HISTORICAL,
+            ),
         ]
 
         received = []
@@ -1121,6 +1372,7 @@ class TestInstantiateBackfillProviderUsesCache(unittest.TestCase):
 
     def setUp(self):
         from backend.market_data.services import manager as manager_mod
+
         self.manager_mod = manager_mod
         manager_mod._clear_provider_cache()
 
@@ -1173,9 +1425,18 @@ class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
 
         base = datetime(2026, 9, 18, 4, 0)
         return [
-            Bar(symbol=symbol, timestamp=base + timedelta(minutes=i), open=1.0, high=1.0,
-                low=1.0, close=1.0, volume=1, timeframe="1m", provider="yahoo_finance",
-                data_status=DataStatus.LIVE)
+            Bar(
+                symbol=symbol,
+                timestamp=base + timedelta(minutes=i),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+                timeframe="1m",
+                provider="yahoo_finance",
+                data_status=DataStatus.LIVE,
+            )
             for i in range(n)
         ]
 
@@ -1192,8 +1453,8 @@ class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
 
         bars = self._bars("AAPL", 100)
         short = bars[:30]
-        self.assertIs(_newest_bars(short), short)          # at/under the cap: untouched
-        out = _newest_bars(list(reversed(bars)))          # unsorted input
+        self.assertIs(_newest_bars(short), short)  # at/under the cap: untouched
+        out = _newest_bars(list(reversed(bars)))  # unsorted input
         self.assertEqual(len(out), 30)
         self.assertEqual([b.timestamp for b in out], [b.timestamp for b in bars[-30:]])
         self.assertEqual(len(_newest_bars(self._bars("AAPL", 5))), 5)  # short lists untouched
@@ -1202,12 +1463,14 @@ class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
     async def test_batch_path_writes_only_the_newest_bars_per_symbol(self):
         svc = self._service()
         svc.manager.get_historical_bars_batch.return_value = {
-            "AAPL": self._bars("AAPL", 1900),   # what Yahoo returned for "15m"
-            "MSFT": self._bars("MSFT", 891),    # what Webull returned for "15m"
+            "AAPL": self._bars("AAPL", 1900),  # what Yahoo returned for "15m"
+            "MSFT": self._bars("MSFT", 891),  # what Webull returned for "15m"
         }
-        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
-                patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up, \
-                patch("backend.market_data.services.cache._redis_cache"):
+        with (
+            patch("backend.market_data.services.ingestion_service.SessionLocal"),
+            patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up,
+            patch("backend.market_data.services.cache._redis_cache"),
+        ):
             await svc._ingest_1m_recent_window()
 
         written = up.call_args.args[1]
@@ -1222,11 +1485,15 @@ class TestRecentWindowIngestVolume(unittest.IsolatedAsyncioTestCase):
         svc = self._service()
         svc.manager.get_historical_bars_batch.side_effect = RuntimeError("batch endpoint down")
         svc.manager.get_historical_bars.side_effect = lambda sym, *a, **k: self._bars(sym, 1900)
-        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
-                patch("backend.market_data.services.ingestion_service.asyncio.sleep",
-                      new=lambda *_a, **_k: asyncio.sleep(0)), \
-                patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up, \
-                patch("backend.market_data.services.cache._redis_cache"):
+        with (
+            patch("backend.market_data.services.ingestion_service.SessionLocal"),
+            patch(
+                "backend.market_data.services.ingestion_service.asyncio.sleep",
+                new=lambda *_a, **_k: asyncio.sleep(0),
+            ),
+            patch("backend.repositories.bar_repository.upsert_bars", return_value=60) as up,
+            patch("backend.market_data.services.cache._redis_cache"),
+        ):
             await svc._ingest_1m_recent_window()
         self.assertEqual(len(up.call_args.args[1]), 60)  # 2 symbols x 30
 
@@ -1255,9 +1522,16 @@ class TestSharedManager(unittest.TestCase):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
         from backend.market_data.services.manager_class import MarketDataManager
 
-        with patch.object(MarketDataManager, "__init__", side_effect=AssertionError("built a manager")), \
-                patch.object(MarketDataManager, "_initialize_providers",
-                             side_effect=AssertionError("constructed providers")):
+        with (
+            patch.object(
+                MarketDataManager, "__init__", side_effect=AssertionError("built a manager")
+            ),
+            patch.object(
+                MarketDataManager,
+                "_initialize_providers",
+                side_effect=AssertionError("constructed providers"),
+            ),
+        ):
             for _ in range(3):
                 MarketDataIngestionService(symbols=["AAPL"], timeframes=["1m"])
 
@@ -1277,9 +1551,18 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
 
         base = datetime(2026, 9, 18, 10, 0)
         return [
-            Bar(symbol=symbol, timestamp=base + timedelta(minutes=i), open=1.0, high=1.0,
-                low=1.0, close=1.0, volume=1, timeframe="1m", provider="webull",
-                data_status=DataStatus.LIVE)
+            Bar(
+                symbol=symbol,
+                timestamp=base + timedelta(minutes=i),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+                timeframe="1m",
+                provider="webull",
+                data_status=DataStatus.LIVE,
+            )
             for i in range(n)
         ]
 
@@ -1293,10 +1576,12 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
         return svc
 
     async def _cycle(self, svc, registry):
-        with patch("backend.market_data.services.ingestion_service.SessionLocal"), \
-                patch("backend.market_data.services.ingestion_service.engine_registry", registry), \
-                patch("backend.repositories.bar_repository.upsert_bars", return_value=0), \
-                patch("backend.market_data.services.cache._redis_cache"):
+        with (
+            patch("backend.market_data.services.ingestion_service.SessionLocal"),
+            patch("backend.market_data.services.ingestion_service.engine_registry", registry),
+            patch("backend.repositories.bar_repository.upsert_bars", return_value=0),
+            patch("backend.market_data.services.cache._redis_cache"),
+        ):
             await svc._ingest_1m_recent_window()
 
     @staticmethod
@@ -1308,23 +1593,28 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
 
     async def test_repeat_cycles_only_resend_the_newest_bar(self):
         window = {"n": 30}
-        svc = self._service(lambda: {"AAPL": self._bars("AAPL", window["n"]),
-                                     "MSFT": self._bars("MSFT", window["n"])})
+        svc = self._service(
+            lambda: {
+                "AAPL": self._bars("AAPL", window["n"]),
+                "MSFT": self._bars("MSFT", window["n"]),
+            }
+        )
         registry = MagicMock()
 
-        await self._cycle(svc, registry)                       # first sight: everything is new
-        self.assertEqual({k: len(v) for k, v in self._dispatched(registry).items()},
-                         {"AAPL": 30, "MSFT": 30})
+        await self._cycle(svc, registry)  # first sight: everything is new
+        self.assertEqual(
+            {k: len(v) for k, v in self._dispatched(registry).items()}, {"AAPL": 30, "MSFT": 30}
+        )
 
         registry.reset_mock()
-        await self._cycle(svc, registry)                       # identical window again
+        await self._cycle(svc, registry)  # identical window again
         got = self._dispatched(registry)
         self.assertEqual({k: len(v) for k, v in got.items()}, {"AAPL": 1, "MSFT": 1})
         newest = max(b.timestamp for b in self._bars("AAPL", 30))
-        self.assertEqual(got["AAPL"], [newest])                # the (possibly forming) newest bar
+        self.assertEqual(got["AAPL"], [newest])  # the (possibly forming) newest bar
 
         registry.reset_mock()
-        window["n"] = 31                                       # a new minute closes
+        window["n"] = 31  # a new minute closes
         await self._cycle(svc, registry)
         got = self._dispatched(registry)
         self.assertEqual({k: len(v) for k, v in got.items()}, {"AAPL": 2, "MSFT": 2})
@@ -1336,7 +1626,7 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
         registry = MagicMock()
         await self._cycle(svc, registry)
         registry.reset_mock()
-        fetched["MSFT"] = self._bars("MSFT", 5)                # MSFT appears late
+        fetched["MSFT"] = self._bars("MSFT", 5)  # MSFT appears late
         await self._cycle(svc, registry)
         got = self._dispatched(registry)
         self.assertEqual(len(got["MSFT"]), 5, "a symbol with no watermark dispatches everything")
@@ -1346,9 +1636,9 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
         svc = self._service(lambda: {"AAPL": self._bars("AAPL", 3), "MSFT": []})
         registry = MagicMock()
         registry.dispatch_bar.side_effect = RuntimeError("engine down")
-        await self._cycle(svc, registry)                       # every dispatch fails
+        await self._cycle(svc, registry)  # every dispatch fails
         registry.reset_mock(side_effect=True)
-        await self._cycle(svc, registry)                       # so all 3 must be retried
+        await self._cycle(svc, registry)  # so all 3 must be retried
         self.assertEqual(len(self._dispatched(registry)["AAPL"]), 3)
 
     def test_naive_vs_aware_timestamps_fail_open(self):
@@ -1364,4 +1654,4 @@ class TestDispatchOnlyBarsTheEnginesHaveNotSeen(unittest.IsolatedAsyncioTestCase
         self.assertFalse(svc._should_dispatch_bar("aapl", t - timedelta(minutes=1)))
         self.assertTrue(svc._should_dispatch_bar("AAPL", t))
         self.assertTrue(svc._should_dispatch_bar("AAPL", t + timedelta(minutes=1)))
-        self.assertTrue(svc._should_dispatch_bar("NVDA", t - timedelta(days=9)))   # unseen symbol
+        self.assertTrue(svc._should_dispatch_bar("NVDA", t - timedelta(days=9)))  # unseen symbol

@@ -1,13 +1,14 @@
 """
 Tests for multi-timeframe engine
 """
+
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
 
 # Add the backend directory to the path so we can import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.engines.timeframe import Timeframe
 from backend.multitimeframe.multi_timeframe_engine import (
@@ -25,7 +26,6 @@ from backend.trend.trend_engine import (
 
 
 class TestMultiTimeframeEngine(unittest.TestCase):
-
     def setUp(self):
         self.symbol = "AAPL"
         self.engine = MultiTimeframeEngine(self.symbol)
@@ -33,11 +33,13 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         # data-quality gap check (added later) flags 300s > 60s as a gap
         # and would log a warning per bar. Disable for these tests.
         from backend.config.settings import settings
+
         self._original_gap = settings.data_quality.max_tick_gap_seconds
         settings.data_quality.max_tick_gap_seconds = 86400.0
 
     def tearDown(self):
         from backend.config.settings import settings
+
         settings.data_quality.max_tick_gap_seconds = self._original_gap
 
     def test_engine_initialization(self):
@@ -68,7 +70,7 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         prices = [100 + i * 0.2 for i in range(n)]
 
         for i, price in enumerate(prices):
-            timestamp = base_time + timedelta(minutes=i*5)  # 5-minute intervals
+            timestamp = base_time + timedelta(minutes=i * 5)  # 5-minute intervals
             self.engine.update(price, 1000, timestamp)
 
         # Should have processed the data
@@ -100,13 +102,13 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         # Update with some data
         for i in range(5):
             price = 100 + i
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             self.engine.update(price, 1000, timestamp)
 
         # Should be able to get trend for a timeframe
         trend = self.engine.get_timeframe_trend(Timeframe.FIVE_MINUTE)
         # Might be None if not enough data, but should not crash
-        self.assertTrue(trend is None or hasattr(trend, 'direction'))
+        self.assertTrue(trend is None or hasattr(trend, "direction"))
 
     def test_get_all_timeframe_trends(self):
         """Test getting trends for all timeframes"""
@@ -115,7 +117,7 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         # Update with some data
         for i in range(5):
             price = 100 + i
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             self.engine.update(price, 1000, timestamp)
 
         # Should be able to get all trends
@@ -125,9 +127,9 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         # Each trend should be a TrendSignal or None
         for _tf, trend in trends.items():
             if trend is not None:
-                self.assertTrue(hasattr(trend, 'direction'))
-                self.assertTrue(hasattr(trend, 'strength'))
-                self.assertTrue(hasattr(trend, 'confidence'))
+                self.assertTrue(hasattr(trend, "direction"))
+                self.assertTrue(hasattr(trend, "strength"))
+                self.assertTrue(hasattr(trend, "confidence"))
 
     def test_confluence_calculation(self):
         """Test that confluence calculations work correctly"""
@@ -138,7 +140,7 @@ class TestMultiTimeframeEngine(unittest.TestCase):
         prices = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112]
 
         for i, price in enumerate(prices):
-            timestamp = base_time + timedelta(minutes=i*5)
+            timestamp = base_time + timedelta(minutes=i * 5)
             self.engine.update(price, 1000, timestamp)
 
         # Get confluence signal
@@ -161,10 +163,14 @@ class TestPhase7Presets(unittest.TestCase):
     def test_all_8_timeframes_constant(self):
         """ALL_TIMEFRAMES exposes all 8 spec timeframes (1m..1wk)."""
         expected = {
-            Timeframe.ONE_MINUTE, Timeframe.FIVE_MINUTE,
-            Timeframe.FIFTEEN_MINUTE, Timeframe.THIRTY_MINUTE,
-            Timeframe.ONE_HOUR, Timeframe.FOUR_HOUR,
-            Timeframe.ONE_DAY, Timeframe.ONE_WEEK,
+            Timeframe.ONE_MINUTE,
+            Timeframe.FIVE_MINUTE,
+            Timeframe.FIFTEEN_MINUTE,
+            Timeframe.THIRTY_MINUTE,
+            Timeframe.ONE_HOUR,
+            Timeframe.FOUR_HOUR,
+            Timeframe.ONE_DAY,
+            Timeframe.ONE_WEEK,
         }
         self.assertEqual(ALL_TIMEFRAMES, expected)
 
@@ -175,8 +181,13 @@ class TestPhase7Presets(unittest.TestCase):
         self.assertEqual(engine.active_timeframes, PRESET_DAY_TRADING)
         self.assertEqual(len(engine.trend_engines), 5)
         # Day trading spec: 5m, 15m, 30m, 1h, 4h
-        for tf in (Timeframe.FIVE_MINUTE, Timeframe.FIFTEEN_MINUTE,
-                   Timeframe.THIRTY_MINUTE, Timeframe.ONE_HOUR, Timeframe.FOUR_HOUR):
+        for tf in (
+            Timeframe.FIVE_MINUTE,
+            Timeframe.FIFTEEN_MINUTE,
+            Timeframe.THIRTY_MINUTE,
+            Timeframe.ONE_HOUR,
+            Timeframe.FOUR_HOUR,
+        ):
             self.assertIn(tf, engine.trend_engines)
 
     def test_day_trading_preset_excludes_1m_1d_1wk(self):
@@ -191,8 +202,7 @@ class TestPhase7Presets(unittest.TestCase):
         self.assertEqual(engine.active_timeframes, PRESET_SWING)
         self.assertEqual(len(engine.trend_engines), 5)
         self.assertIn(Timeframe.ONE_WEEK, engine.trend_engines)
-        for tf in (Timeframe.ONE_MINUTE, Timeframe.FIVE_MINUTE,
-                   Timeframe.THIRTY_MINUTE):
+        for tf in (Timeframe.ONE_MINUTE, Timeframe.FIVE_MINUTE, Timeframe.THIRTY_MINUTE):
             self.assertNotIn(tf, engine.trend_engines)
 
     def test_all_preset_builds_8_trend_engines(self):
@@ -220,8 +230,13 @@ class TestPhase7Presets(unittest.TestCase):
     def test_scalper_preset_excludes_longer_tfs(self):
         """Scalper preset excludes 30m, 1h, 4h, 1d, 1wk."""
         engine = MultiTimeframeEngine("AAPL", preset="scalper")
-        for tf in (Timeframe.THIRTY_MINUTE, Timeframe.ONE_HOUR,
-                   Timeframe.FOUR_HOUR, Timeframe.ONE_DAY, Timeframe.ONE_WEEK):
+        for tf in (
+            Timeframe.THIRTY_MINUTE,
+            Timeframe.ONE_HOUR,
+            Timeframe.FOUR_HOUR,
+            Timeframe.ONE_DAY,
+            Timeframe.ONE_WEEK,
+        ):
             self.assertNotIn(tf, engine.trend_engines)
 
 
@@ -231,6 +246,7 @@ class TestPhase7Architectural(unittest.TestCase):
     def test_timeframe_weights_from_settings(self):
         """Principle 11: timeframe weights come from settings, not hard-coded."""
         from backend.config.settings import settings
+
         engine = MultiTimeframeEngine("AAPL", preset="all")
         # The engine's weights must match the settings block.
         for tf_value, weight in settings.multitimeframe.weights.items():
@@ -264,6 +280,7 @@ class TestPhase7Alignments(unittest.TestCase):
 
     def setUp(self):
         from backend.config.settings import settings
+
         self._original_gap = settings.data_quality.max_tick_gap_seconds
         settings.data_quality.max_tick_gap_seconds = 86400.0
         self.engine = MultiTimeframeEngine("AAPL")
@@ -271,10 +288,12 @@ class TestPhase7Alignments(unittest.TestCase):
 
     def tearDown(self):
         from backend.config.settings import settings
+
         settings.data_quality.max_tick_gap_seconds = self._original_gap
 
-    def _warmup(self, engine: MultiTimeframeEngine, n_bars: int = 200,
-                 base: datetime | None = None):
+    def _warmup(
+        self, engine: MultiTimeframeEngine, n_bars: int = 200, base: datetime | None = None
+    ):
         """Feed ``n_bars`` of flat warmup bars so slow EMAs (period=50/200)
         can complete their warmup. The MultiTimeframeEngine aggregates
         minute-level ticks into each TF's candle; 200 minute-bars feeds
@@ -285,8 +304,13 @@ class TestPhase7Alignments(unittest.TestCase):
         for i in range(n_bars):
             engine.update(100.0, 1_000_000, base + timedelta(minutes=i))
 
-    def _feed(self, engine: MultiTimeframeEngine, prices: list[float],
-              start: datetime, step: timedelta = timedelta(minutes=1)):
+    def _feed(
+        self,
+        engine: MultiTimeframeEngine,
+        prices: list[float],
+        start: datetime,
+        step: timedelta = timedelta(minutes=1),
+    ):
         for i, price in enumerate(prices):
             engine.update(price, 1_000_000, start + step * i)
 
@@ -303,8 +327,9 @@ class TestPhase7Alignments(unittest.TestCase):
         self._feed(engine, prices, base + timedelta(minutes=200))
         signal = engine.get_current_confluence()
         self.assertIsNotNone(signal)
-        self.assertGreater(signal.bullish_alignment, 0.5,
-                           "Uptrend should produce bullish_alignment > 0.5")
+        self.assertGreater(
+            signal.bullish_alignment, 0.5, "Uptrend should produce bullish_alignment > 0.5"
+        )
         self.assertEqual(signal.bearish_alignment, 0.0)
         self.assertEqual(signal.conflicting, 0)
 
@@ -317,8 +342,11 @@ class TestPhase7Alignments(unittest.TestCase):
         self._feed(engine, prices, base + timedelta(minutes=200))
         signal = engine.get_current_confluence()
         self.assertIsNotNone(signal)
-        self.assertGreater(signal.bearish_alignment, 0,
-                          f"Expected bearish_alignment > 0, got {signal.bearish_alignment}")
+        self.assertGreater(
+            signal.bearish_alignment,
+            0,
+            f"Expected bearish_alignment > 0, got {signal.bearish_alignment}",
+        )
         self.assertEqual(signal.bullish_alignment, 0.0)
 
     def test_short_intermediate_higher_directions(self):
@@ -336,14 +364,18 @@ class TestPhase7Alignments(unittest.TestCase):
         signal = engine.get_current_confluence()
         self.assertIsNotNone(signal)
         # The 3 horizon buckets must be real TrendDirection values.
-        for attr in ("short_term_direction", "intermediate_direction",
-                     "higher_direction"):
+        for attr in ("short_term_direction", "intermediate_direction", "higher_direction"):
             val = getattr(signal, attr)
             self.assertIsInstance(val, TrendDirection)
-            self.assertIn(val, (
-                TrendDirection.UPTREND, TrendDirection.DOWNTREND,
-                TrendDirection.SIDEWAYS, TrendDirection.UNKNOWN,
-            ))
+            self.assertIn(
+                val,
+                (
+                    TrendDirection.UPTREND,
+                    TrendDirection.DOWNTREND,
+                    TrendDirection.SIDEWAYS,
+                    TrendDirection.UNKNOWN,
+                ),
+            )
         # At least the higher_timeframe (1d) should not be SIDEWAYS on
         # a 120-tick uptrend. The short and intermediate may be sideways
         # depending on EMA warmup, so we don't pin them.
@@ -391,5 +423,5 @@ class TestPhase7Alignments(unittest.TestCase):
         self.assertEqual(signal.quality_weighted_score, snapshot.quality_weighted_score)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

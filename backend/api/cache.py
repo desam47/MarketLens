@@ -12,6 +12,7 @@ and the original ``ETag`` so clients can serve their cached copy.
 Per-path cache durations let us give market data a 5-minute TTL while
 system status refreshes every 30 seconds.
 """
+
 import hashlib
 import logging
 

@@ -8,6 +8,7 @@ Two prompts live here:
 - :data:`NL_EXPLAIN_PROMPT` — used AFTER deterministic execution to
   ask the AI for a 1-2 sentence summary of the result list.
 """
+
 from __future__ import annotations
 
 NL_TRANSLATION_PROMPT: str = """\
@@ -96,8 +97,7 @@ def build_explain_prompt(
     """
     # Cap the entries shown to the AI so the prompt stays small.
     shown = entries[:10]
-    lines = [f"- {e.get('symbol')}: score={e.get('score'):.2f}"
-             for e in shown if e.get("symbol")]
+    lines = [f"- {e.get('symbol')}: score={e.get('score'):.2f}" for e in shown if e.get("symbol")]
     body = "\n".join(lines) if lines else "(no entries)"
     return (
         f"Original query: {query.strip()}\n"

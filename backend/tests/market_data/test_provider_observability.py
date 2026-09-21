@@ -10,6 +10,7 @@ Covers:
   - _provider_metrics() handles gracefully when no breakers are registered
   - Prometheus text format is valid (HELP, TYPE, labelled metrics render)
 """
+
 import os
 import sys
 import unittest
@@ -34,13 +35,12 @@ class TestCorrelationIdPlaceholder(unittest.TestCase):
 
     def test_returns_dash_when_unavailable(self):
         """When no correlation ID is active, the placeholder returns '-'."""
+
         # When get_correlation_id returns None, placeholder returns '-'
         def fake_get_corr_id():
             return None
 
-        with patch(
-            "backend.market_data.services.manager._corr_id_fn", fake_get_corr_id
-        ):
+        with patch("backend.market_data.services.manager._corr_id_fn", fake_get_corr_id):
             self.assertEqual(_correlation_id_placeholder(), "-")
 
     def test_returns_id_when_available(self):
@@ -50,9 +50,7 @@ class TestCorrelationIdPlaceholder(unittest.TestCase):
         def fake_get_corr_id():
             return fake_id
 
-        with patch(
-            "backend.market_data.services.manager._corr_id_fn", fake_get_corr_id
-        ):
+        with patch("backend.market_data.services.manager._corr_id_fn", fake_get_corr_id):
             self.assertEqual(_correlation_id_placeholder(), fake_id)
 
 
@@ -85,11 +83,12 @@ class TestProviderLogging(unittest.TestCase):
         def capture_debug(msg, *args, **kwargs):
             log_lines.append(msg % args)
 
-        with patch(
-            "backend.market_data.services.manager.logger.debug", capture_debug
-        ), patch(
-            "backend.market_data.services.manager._correlation_id_placeholder",
-            return_value="-",
+        with (
+            patch("backend.market_data.services.manager.logger.debug", capture_debug),
+            patch(
+                "backend.market_data.services.manager._correlation_id_placeholder",
+                return_value="-",
+            ),
         ):
             result = _call_provider(mock_provider, "get_quote", "AAPL")
 
@@ -123,11 +122,12 @@ class TestProviderLogging(unittest.TestCase):
         def capture_debug(msg, *args, **kwargs):
             log_lines.append(msg % args)
 
-        with patch(
-            "backend.market_data.services.manager.logger.debug", capture_debug
-        ), patch(
-            "backend.market_data.services.manager._correlation_id_placeholder",
-            return_value="-",
+        with (
+            patch("backend.market_data.services.manager.logger.debug", capture_debug),
+            patch(
+                "backend.market_data.services.manager._correlation_id_placeholder",
+                return_value="-",
+            ),
         ):
             with self.assertRaises(RuntimeError):
                 _call_provider(mock_provider, "get_quote", "AAPL")
@@ -150,8 +150,11 @@ class TestProviderLogging(unittest.TestCase):
         mock_provider = MagicMock()
         mock_provider.name = "yahoo_finance"
         mock_provider.get_quote.return_value = MagicMock(
-            symbol="AAPL", price=150.0, timestamp=datetime.now(),
-            provider="yahoo_finance", data_status=MagicMock(value="live"),
+            symbol="AAPL",
+            price=150.0,
+            timestamp=datetime.now(),
+            provider="yahoo_finance",
+            data_status=MagicMock(value="live"),
         )
 
         log_lines = []
@@ -159,11 +162,12 @@ class TestProviderLogging(unittest.TestCase):
         def capture_debug(msg, *args, **kwargs):
             log_lines.append(msg % args)
 
-        with patch(
-            "backend.market_data.services.manager.logger.debug", capture_debug
-        ), patch(
-            "backend.market_data.services.manager._correlation_id_placeholder",
-            return_value="req-abc-123",
+        with (
+            patch("backend.market_data.services.manager.logger.debug", capture_debug),
+            patch(
+                "backend.market_data.services.manager._correlation_id_placeholder",
+                return_value="req-abc-123",
+            ),
         ):
             _call_provider(mock_provider, "get_quote", "MSFT")
 
@@ -282,11 +286,12 @@ class TestProviderMetricsPrometheus(unittest.TestCase):
         fake_limiter = MagicMock()
         fake_limiter.stats = MagicMock(return_value={})
 
-        with patch(
-            "backend.market_data.services.manager.market_data_manager",
-            fake_manager,
-        ), patch(
-            "backend.market_data.services.manager._rate_limiter", fake_limiter
+        with (
+            patch(
+                "backend.market_data.services.manager.market_data_manager",
+                fake_manager,
+            ),
+            patch("backend.market_data.services.manager._rate_limiter", fake_limiter),
         ):
             from backend.observability.prometheus import _provider_metrics
 

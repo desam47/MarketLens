@@ -5,6 +5,7 @@ The WebSocket endpoint is exercised end-to-end through ``TestClient``;
 the broadcast manager and dispatcher are reset between tests so
 subscriptions from one test don't leak into another.
 """
+
 import asyncio
 import os
 import sys
@@ -13,13 +14,14 @@ from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
 from backend.api.scanner import ws_router
 from backend.api.scanner.ws_router import (
+    _MAX_SUBSCRIPTIONS_PER_SOCKET,
     ScannerBroadcastManager,
     reset_dispatcher,
 )
@@ -81,9 +83,7 @@ class TestScannerWebSocket(unittest.TestCase):
         # engine_registry — it would register a callback that fires for
         # every test's first connect. Patch the registry so registration
         # is a no-op.
-        self._registry_patcher = patch(
-            "backend.api.scanner.ws_router.engine_registry"
-        )
+        self._registry_patcher = patch("backend.api.scanner.ws_router.engine_registry")
         self.mock_registry = self._registry_patcher.start()
 
     def tearDown(self):
@@ -132,8 +132,10 @@ class TestScannerWebSocket(unittest.TestCase):
     def test_two_sockets_to_same_symbol(self):
         """Two sockets to the same symbol are tracked independently."""
         # Open both sockets, subscribe them to AAPL.
-        with self.client.websocket_connect("/api/scanner-stream/ws") as ws_a, \
-             self.client.websocket_connect("/api/scanner-stream/ws") as ws_b:
+        with (
+            self.client.websocket_connect("/api/scanner-stream/ws") as ws_a,
+            self.client.websocket_connect("/api/scanner-stream/ws") as ws_b,
+        ):
             ws_a.send_json({"action": "subscribe", "symbol": "AAPL"})
             ws_b.send_json({"action": "subscribe", "symbol": "AAPL"})
             ws_a.receive_json()
@@ -170,6 +172,38 @@ class TestScannerWebSocket(unittest.TestCase):
             ws.send_json({"action": "subscribe"})
             response = ws.receive_json()
             self.assertEqual(response["type"], "error")
+
+    def test_invalid_symbol_is_rejected(self):
+        with self.client.websocket_connect("/api/scanner-stream/ws") as ws:
+            ws.send_json({"action": "subscribe", "symbol": "not a ticker!"})
+            response = ws.receive_json()
+            self.assertEqual(response["type"], "error")
+            self.assertIn("Invalid symbol", response["message"])
+            self.assertEqual(self._state.get_subscribed_symbols(), set())
+
+    def test_index_symbol_is_allowed(self):
+        """Yahoo-style index tickers remain valid scanner subscriptions."""
+        with self.client.websocket_connect("/api/scanner-stream/ws") as ws:
+            ws.send_json({"action": "subscribe", "symbol": "^vix"})
+            self.assertEqual(
+                ws.receive_json(),
+                {"type": "subscribed", "symbol": "^VIX"},
+            )
+
+    def test_subscription_limit_rejects_new_symbols(self):
+        with self.client.websocket_connect("/api/scanner-stream/ws") as ws:
+            for index in range(_MAX_SUBSCRIPTIONS_PER_SOCKET):
+                symbol = f"S{index:02d}"
+                ws.send_json({"action": "subscribe", "symbol": symbol})
+                self.assertEqual(ws.receive_json()["type"], "subscribed")
+
+            ws.send_json({"action": "subscribe", "symbol": "OVERFLOW"})
+            response = ws.receive_json()
+            self.assertEqual(response["type"], "error")
+            self.assertIn("Subscription limit", response["message"])
+            self.assertEqual(
+                len(self._state.get_subscribed_symbols()), _MAX_SUBSCRIPTIONS_PER_SOCKET
+            )
 
     def test_invalid_json_sends_error(self):
         """A non-JSON frame yields an error and the connection stays open."""
@@ -271,8 +305,9 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
 
             # Simulate a fresh quote callback.
-            dispatcher._on_quote(price=150.0, volume=1_000_000,
-                                 timestamp=datetime.now(), symbol="AAPL")
+            dispatcher._on_quote(
+                price=150.0, volume=1_000_000, timestamp=datetime.now(), symbol="AAPL"
+            )
 
             # Yield once so any scheduled task can run.
             await asyncio.sleep(0)
@@ -284,9 +319,7 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbols_async = AsyncMock(
-                return_value=[_make_scan_result("AAPL")]
-            )
+            mock_scanner.scan_symbols_async = AsyncMock(return_value=[_make_scan_result("AAPL")])
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Drive the full flow directly.
@@ -307,9 +340,7 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbols_async = AsyncMock(
-                side_effect=RuntimeError("upstream down")
-            )
+            mock_scanner.scan_symbols_async = AsyncMock(side_effect=RuntimeError("upstream down"))
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             await dispatcher._scan_and_broadcast_all()
@@ -334,9 +365,7 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbols_async = AsyncMock(
-                return_value=[_make_scan_result("AAPL")]
-            )
+            mock_scanner.scan_symbols_async = AsyncMock(return_value=[_make_scan_result("AAPL")])
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Make the cooldown effectively infinite so the second
@@ -361,9 +390,7 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         await manager.subscribe(ws, "AAPL")
 
         with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
-            mock_scanner.scan_symbols_async = AsyncMock(
-                return_value=[_make_scan_result("AAPL")]
-            )
+            mock_scanner.scan_symbols_async = AsyncMock(return_value=[_make_scan_result("AAPL")])
             loop = asyncio.get_running_loop()
             dispatcher = ws_router.ScannerDispatcher(manager, loop)
             # Zero cooldown means every call is allowed through.
@@ -377,5 +404,5 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ws.send_json.await_count, 3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

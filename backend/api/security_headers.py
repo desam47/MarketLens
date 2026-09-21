@@ -22,6 +22,7 @@ Header reference:
 - Permissions-Policy https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Permissions-Policy
 - Cross-Origin-Resource-Policy https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cross-Origin-Resource-Policy
 """
+
 import logging
 
 from starlette.datastructures import MutableHeaders

@@ -10,6 +10,7 @@ Tests the Redis-backed and in-memory rate limiters with focus on:
 RateLimitMiddleware is a plain ASGI middleware. Tests drive it as an ASGI app
 (``await middleware(scope, receive, send)``) and inspect the messages it sends.
 """
+
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
@@ -84,7 +85,6 @@ class TestInMemoryRateLimiter(unittest.TestCase):
         allowed, remaining = self.limiter.is_allowed("127.0.0.1")
         self.assertTrue(allowed)
         self.assertEqual(remaining, 4)
-
 
     def test_idle_ips_are_pruned(self):
         """IPs whose hits all aged out must not accumulate forever."""
@@ -199,9 +199,7 @@ class TestRedisRateLimiterWithMockedRedis(unittest.TestCase):
 
         mock_redis = MagicMock()
         mock_redis.ping.return_value = True
-        mock_redis.pipeline.return_value.__enter__ = MagicMock(
-            return_value=mock_redis
-        )
+        mock_redis.pipeline.return_value.__enter__ = MagicMock(return_value=mock_redis)
         mock_redis.pipeline.return_value.__exit__ = MagicMock(return_value=False)
         mock_redis.pipeline.return_value.execute.return_value = [1, True]
 
@@ -283,8 +281,10 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
         mock_settings.redis.enabled = True
         mock_settings.redis.url = "redis://localhost:6379"
         mock_settings.redis.password = None
-        with patch("backend.api.rate_limit.redis.Redis.from_url", return_value=fake_redis), \
-                patch("backend.api.rate_limit.time", clock):
+        with (
+            patch("backend.api.rate_limit.redis.Redis.from_url", return_value=fake_redis),
+            patch("backend.api.rate_limit.time", clock),
+        ):
             return RedisRateLimiter(max_requests=10, window_seconds=60, **kw)
 
     @patch("backend.api.rate_limit._settings")
@@ -317,7 +317,9 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
         mock_settings.redis.enabled = True
         mock_settings.redis.url = "not-a-valid-url"
         mock_settings.redis.password = None
-        with patch("backend.api.rate_limit.redis.Redis.from_url", side_effect=ValueError("bad url")):
+        with patch(
+            "backend.api.rate_limit.redis.Redis.from_url", side_effect=ValueError("bad url")
+        ):
             limiter = RedisRateLimiter(max_requests=5, window_seconds=60)
         self.assertIsNone(limiter._redis_client)
         allowed, remaining = limiter.is_allowed("1.2.3.4")
@@ -333,15 +335,15 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
         limiter = self._limiter(mock_settings, fake, clock)
 
         with patch("backend.api.rate_limit.time", clock):
-            limiter.is_allowed("a")                      # fails -> breaker opens
-            limiter.is_allowed("a")                      # skipped
+            limiter.is_allowed("a")  # fails -> breaker opens
+            limiter.is_allowed("a")  # skipped
             self.assertEqual(fake.pipeline.call_count, 1)
 
             clock.now += rl._REDIS_RETRY_AFTER_SECONDS - 0.1
-            limiter.is_allowed("a")                      # still inside the window
+            limiter.is_allowed("a")  # still inside the window
             self.assertEqual(fake.pipeline.call_count, 1)
 
-            clock.now += 0.2                             # window elapsed
+            clock.now += 0.2  # window elapsed
             allowed, remaining = limiter.is_allowed("a")
             self.assertEqual(fake.pipeline.call_count, 2)
             self.assertTrue(allowed)
@@ -354,17 +356,21 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
         fake = MagicMock()
         fake.ping.return_value = True
         fake.pipeline.return_value.execute.side_effect = [
-            ConnectionError("down"), ConnectionError("still down"), [1, True],
+            ConnectionError("down"),
+            ConnectionError("still down"),
+            [1, True],
         ]
         limiter = self._limiter(mock_settings, fake, clock)
 
-        with patch("backend.api.rate_limit.time", clock), \
-                self.assertLogs("backend.api.rate_limit", level="INFO") as logs:
-            limiter.is_allowed("a")                      # 1st failure -> warn
+        with (
+            patch("backend.api.rate_limit.time", clock),
+            self.assertLogs("backend.api.rate_limit", level="INFO") as logs,
+        ):
+            limiter.is_allowed("a")  # 1st failure -> warn
             clock.now += rl._REDIS_RETRY_AFTER_SECONDS + 1
-            limiter.is_allowed("a")                      # 2nd failure -> no new warning
+            limiter.is_allowed("a")  # 2nd failure -> no new warning
             clock.now += rl._REDIS_RETRY_AFTER_SECONDS + 1
-            limiter.is_allowed("a")                      # success -> recovery info
+            limiter.is_allowed("a")  # success -> recovery info
 
         warnings = [r for r in logs.records if r.levelname == "WARNING"]
         recovered = [r for r in logs.records if "recovered" in r.getMessage()]
@@ -381,7 +387,7 @@ class TestRedisRateLimiterLifecycle(unittest.TestCase):
         limiter = self._limiter(mock_settings, fake, clock)
 
         with patch("backend.api.rate_limit.time", clock):
-            limiter.is_allowed("a")                      # opens the breaker
+            limiter.is_allowed("a")  # opens the breaker
             fake.ping.reset_mock()
             stats = limiter.get_stats()
         fake.ping.assert_not_called()
@@ -410,25 +416,29 @@ class TestRateLimitMiddleware(unittest.TestCase):
         self.loop = asyncio.new_event_loop()
         self.addCleanup(self.loop.close)
         self.limiter = InMemoryRateLimiter(max_requests=3, window_seconds=60)
-        self.middleware = RateLimitMiddleware(
-            self._downstream_app(), limiter=self.limiter
-        )
+        self.middleware = RateLimitMiddleware(self._downstream_app(), limiter=self.limiter)
 
     def _run(self, coro):
         return self.loop.run_until_complete(coro)
 
     def _downstream_app(self):
         """Minimal ASGI app that always returns 200."""
+
         async def app(scope, receive, send):
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"application/json")],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": b'{"ok": true}',
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b'{"ok": true}',
+                }
+            )
+
         return app
 
     def _dispatch(self, method="POST", path="/api/data", ip="127.0.0.1"):
@@ -511,9 +521,11 @@ class TestRateLimitMiddlewareIntegration(unittest.TestCase):
         from starlette.testclient import TestClient
 
         from backend.api.main import app
+
         self.client = TestClient(app)
         # Reset the limiter between tests.
         from backend.api.main import _write_limiter
+
         _write_limiter.reset()
 
     def _headers_lower(self, response) -> dict:
@@ -524,6 +536,7 @@ class TestRateLimitMiddlewareIntegration(unittest.TestCase):
         from the outer SecurityHeadersMiddleware via BaseHTTPMiddleware's
         call_next chain."""
         from backend.api.main import _write_limiter
+
         _write_limiter.reset()
 
         # Exhaust the write-rate-limit window. /ingestion/start is only a convenient write endpoint

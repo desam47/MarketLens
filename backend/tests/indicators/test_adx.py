@@ -1,6 +1,7 @@
 """
 Tests for ADX (Average Directional Index) indicator
 """
+
 import unittest
 
 from backend.indicators.adx import ADXIndicator
@@ -17,11 +18,13 @@ class TestADXIndicator(unittest.TestCase):
         bars = []
         for i in range(n):
             base = 100.0 + i * 0.5
-            bars.append({
-                "high": base + 1.0,
-                "low": base - 1.0,
-                "close": base + 0.5,
-            })
+            bars.append(
+                {
+                    "high": base + 1.0,
+                    "low": base - 1.0,
+                    "close": base + 0.5,
+                }
+            )
         return bars
 
     def test_adx_calculation(self):

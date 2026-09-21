@@ -77,7 +77,8 @@ _SCAN_CACHE_TTL = 5.0
 # registered with Python's interpreter shutdown handler, which joins the
 # pool on exit — no explicit shutdown needed.
 _CONTEXT_EXECUTOR = ThreadPoolExecutor(
-    max_workers=_CONTEXT_WORKERS, thread_name_prefix="context-build",
+    max_workers=_CONTEXT_WORKERS,
+    thread_name_prefix="context-build",
 )
 
 
@@ -187,9 +188,7 @@ class AnalysisContext:
         """
         d = self.to_dict()
         return {
-            k: v
-            for k, v in d.items()
-            if not (v is None or (isinstance(v, (dict, list)) and not v))
+            k: v for k, v in d.items() if not (v is None or (isinstance(v, (dict, list)) and not v))
         }
 
 
@@ -405,15 +404,26 @@ def _sr_context(sym: str, timeframe: str) -> dict[str, Any]:
                 # close rule (a zone straddling the close is ambiguous
                 # either way).
                 resistance_types = {
-                    "today_high", "prev_day_high", "this_week_high",
-                    "prev_week_high", "week_52_high",
-                    "pivot_r1", "pivot_r2", "pivot_r3",
+                    "today_high",
+                    "prev_day_high",
+                    "this_week_high",
+                    "prev_week_high",
+                    "week_52_high",
+                    "pivot_r1",
+                    "pivot_r2",
+                    "pivot_r3",
                     "swing_high",
                 }
                 support_types = {
-                    "today_low", "prev_day_low", "this_week_low",
-                    "prev_week_low", "week_52_low",
-                    "pivot_pp", "pivot_s1", "pivot_s2", "pivot_s3",
+                    "today_low",
+                    "prev_day_low",
+                    "this_week_low",
+                    "prev_week_low",
+                    "week_52_low",
+                    "pivot_pp",
+                    "pivot_s1",
+                    "pivot_s2",
+                    "pivot_s3",
                     "swing_low",
                 }
                 supports: list[dict[str, Any]] = []
@@ -736,11 +746,13 @@ def _correlation_context(
                 # "weak_bearish", etc.) to a compact "bullish"/"bearish"/"neutral"
                 # for the correlation summary.
                 norm = _normalize_direction(direction)
-                summary["peers"].append({
-                    "symbol": psym,
-                    "direction": norm,
-                    "strength": strength,
-                })
+                summary["peers"].append(
+                    {
+                        "symbol": psym,
+                        "direction": norm,
+                        "strength": strength,
+                    }
+                )
                 if norm == "bullish":
                     aligned += 1
                 elif norm == "bearish":

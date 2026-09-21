@@ -27,6 +27,7 @@ We take the most recent quarter per metric (``_latest``). If nothing
 numeric resolves the provider raises, so ``AuxDataManager`` advances the
 chain (it only falls through on an exception, never on an empty item).
 """
+
 import logging
 
 from pydantic import ValidationError
@@ -113,7 +114,12 @@ class WebullFundamentalsProvider(FundamentalProvider):
             self._mark_error(exc)
             raise exc
 
-        kwargs: dict = {"symbol": sym, "provider": self.name, "timestamp": now_ny(), "company_name": issuer}
+        kwargs: dict = {
+            "symbol": sym,
+            "provider": self.name,
+            "timestamp": now_ny(),
+            "company_name": issuer,
+        }
         for field, keys in _METRIC_KEYS.items():
             for k in keys:
                 if k in values:
@@ -125,7 +131,9 @@ class WebullFundamentalsProvider(FundamentalProvider):
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         kwargs.setdefault("symbol", sym)
 
-        numeric = sum(1 for k, v in kwargs.items() if k != "timestamp" and isinstance(v, (int, float)))
+        numeric = sum(
+            1 for k, v in kwargs.items() if k != "timestamp" and isinstance(v, (int, float))
+        )
         if numeric == 0:
             exc = RuntimeError(
                 f"Webull fundamentals: no usable numeric fields "

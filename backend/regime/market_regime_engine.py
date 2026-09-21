@@ -1,6 +1,7 @@
 """
 Market regime detection engine for identifying market conditions.
 """
+
 import logging
 from collections import deque
 from datetime import datetime
@@ -39,6 +40,7 @@ class MarketRegime(StrEnum):
     its old internal buckets (TRENDING_UP, RANGING, etc.) collapse
     to the 4 spec names before being returned.
     """
+
     RISK_ON = "risk_on"
     RISK_OFF = "risk_off"
     NEUTRAL = "neutral"
@@ -49,13 +51,15 @@ class MarketRegime(StrEnum):
 class RegimeSignal:
     """Represents a market regime signal"""
 
-    def __init__(self,
-                 symbol: str,
-                 regime: MarketRegime,
-                 confidence: float,  # 0.0 to 1.0
-                 strength: float,   # 0.0 to 1.0
-                 supporting_factors: dict[str, Any],
-                 timestamp: datetime):
+    def __init__(
+        self,
+        symbol: str,
+        regime: MarketRegime,
+        confidence: float,  # 0.0 to 1.0
+        strength: float,  # 0.0 to 1.0
+        supporting_factors: dict[str, Any],
+        timestamp: datetime,
+    ):
         self.symbol = symbol
         self.regime = regime
         self.confidence = confidence
@@ -64,15 +68,21 @@ class RegimeSignal:
         self.timestamp = timestamp
 
     def __repr__(self):
-        return (f"RegimeSignal({self.symbol} {self.regime.value} "
-                f"conf:{self.confidence:.2f} str:{self.strength:.2f})")
+        return (
+            f"RegimeSignal({self.symbol} {self.regime.value} "
+            f"conf:{self.confidence:.2f} str:{self.strength:.2f})"
+        )
 
 
 class MarketRegimeEngine:
     """Engine for detecting market regime conditions"""
 
-    def __init__(self, symbol: str, trend_engine: TrendEngine | None = None,
-                 multitimeframe_engine: MultiTimeframeEngine | None = None):
+    def __init__(
+        self,
+        symbol: str,
+        trend_engine: TrendEngine | None = None,
+        multitimeframe_engine: MultiTimeframeEngine | None = None,
+    ):
         self.symbol = symbol
 
         # Phase 3.9.2: accept injected component engines so all callers
@@ -93,7 +103,8 @@ class MarketRegimeEngine:
         self.trend_engine = (
             trend_engine
             if trend_engine is not None
-            else mtf_trends[0] if mtf_trends
+            else mtf_trends[0]
+            if mtf_trends
             else TrendEngine(symbol)
         )
         self.multitimeframe_engine = (
@@ -119,20 +130,25 @@ class MarketRegimeEngine:
 
         # Price history for breakout detection
         self.max_price_history = 100
-        self.price_history: deque[tuple[datetime, float]] = deque(
-            maxlen=self.max_price_history
-        )
+        self.price_history: deque[tuple[datetime, float]] = deque(maxlen=self.max_price_history)
 
         # Regime thresholds (these would ideally be configurable)
         self.volatility_threshold_high = 0.05  # 5% ATR as % of price
-        self.volatility_threshold_low = 0.01   # 1% ATR as % of price
-        self.adx_trending_threshold = 25       # ADX > 25 indicates trending
-        self.adx_strong_threshold = 40         # ADX > 40 indicates strong trend
-        self.bb_width_threshold = 0.05         # Bollinger Band width threshold for squeeze
+        self.volatility_threshold_low = 0.01  # 1% ATR as % of price
+        self.adx_trending_threshold = 25  # ADX > 25 indicates trending
+        self.adx_strong_threshold = 40  # ADX > 40 indicates strong trend
+        self.bb_width_threshold = 0.05  # Bollinger Band width threshold for squeeze
 
-    def update(self, price: float, volume: float, timestamp: datetime,
-               provider: str = "", high: float | None = None, low: float | None = None,
-               open_price: float | None = None) -> None:
+    def update(
+        self,
+        price: float,
+        volume: float,
+        timestamp: datetime,
+        provider: str = "",
+        high: float | None = None,
+        low: float | None = None,
+        open_price: float | None = None,
+    ) -> None:
         """Update regime detection with new market data"""
         # Use provided OHLC or approximate from price
         high_price = high if high is not None else price
@@ -147,11 +163,11 @@ class MarketRegimeEngine:
         # For simplicity, we'll use price as close, and approximate high/low/volume
         # In a real implementation, you'd pass actual OHLCV data
         ohlcv_data_point = {
-            'open': open_price_val,
-            'high': high_price,
-            'low': low_price,
-            'close': price,
-            'volume': volume
+            "open": open_price_val,
+            "high": high_price,
+            "low": low_price,
+            "close": price,
+            "volume": volume,
         }
 
         # Update ATR (needs historical data)
@@ -164,8 +180,8 @@ class MarketRegimeEngine:
         self.bb_indicator.update(ohlcv_data_point)
 
         # Update EMAs
-        self.ema_fast.update({'close': price})
-        self.ema_slow.update({'close': price})
+        self.ema_fast.update({"close": price})
+        self.ema_slow.update({"close": price})
 
         # Update price history for breakout detection. The deque's maxlen
         # evicts the oldest entry automatically — no manual re-slice needed.
@@ -184,9 +200,9 @@ class MarketRegimeEngine:
         atr_value = self.atr_indicator.get_latest()
         adx_value = self.adx_indicator.get_latest()
         bb_bands = self.bb_indicator.get_bands()
-        bb_upper = bb_bands['upper'][-1] if bb_bands['upper'] else None
-        bb_middle = bb_bands['middle'][-1] if bb_bands['middle'] else None
-        bb_lower = bb_bands['lower'][-1] if bb_bands['lower'] else None
+        bb_upper = bb_bands["upper"][-1] if bb_bands["upper"] else None
+        bb_middle = bb_bands["middle"][-1] if bb_bands["middle"] else None
+        bb_lower = bb_bands["lower"][-1] if bb_bands["lower"] else None
         ema_fast_val = self.ema_fast.get_latest()
         ema_slow_val = self.ema_slow.get_latest()
 
@@ -197,11 +213,17 @@ class MarketRegimeEngine:
 
         # Determine regime
         regime, confidence, strength, factors = self._classify_regime(
-            confluence_signal, overall_trend,
-            volatility_pct, adx_value,
-            bb_upper, bb_middle, bb_lower,
-            ema_fast_val, ema_slow_val,
-            current_price, timestamp
+            confluence_signal,
+            overall_trend,
+            volatility_pct,
+            adx_value,
+            bb_upper,
+            bb_middle,
+            bb_lower,
+            ema_fast_val,
+            ema_slow_val,
+            current_price,
+            timestamp,
         )
 
         # Create regime signal
@@ -211,82 +233,90 @@ class MarketRegimeEngine:
             confidence=confidence,
             strength=strength,
             supporting_factors=factors,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
 
         # Store in history. The deque's maxlen caps it at
         # self.max_regime_history and evicts the oldest on overflow.
         self.regime_history.append(signal)
 
-    def _classify_regime(self, confluence_signal: ConfluenceSignal,
-                        overall_trend: TrendSignal,
-                        volatility_pct: float, adx_value: float | None,
-                        bb_upper: float | None, bb_middle: float | None, bb_lower: float | None,
-                        ema_fast_val: float | None, ema_slow_val: float | None,
-                        current_price: float, timestamp: datetime) -> tuple[MarketRegime, float, float, dict[str, Any]]:
+    def _classify_regime(
+        self,
+        confluence_signal: ConfluenceSignal,
+        overall_trend: TrendSignal,
+        volatility_pct: float,
+        adx_value: float | None,
+        bb_upper: float | None,
+        bb_middle: float | None,
+        bb_lower: float | None,
+        ema_fast_val: float | None,
+        ema_slow_val: float | None,
+        current_price: float,
+        timestamp: datetime,
+    ) -> tuple[MarketRegime, float, float, dict[str, Any]]:
         """Classify the current market regime"""
 
         factors = {}
 
         # Handle case where we don't have enough data
         if overall_trend is None or confluence_signal is None:
-            factors['reason'] = 'insufficient_data'
+            factors["reason"] = "insufficient_data"
             return MarketRegime.UNKNOWN, 0.0, 0.0, factors
 
         # Store key values for debugging
-        factors['confluence_direction'] = confluence_signal.direction.value
-        factors['confluence_alignment'] = confluence_signal.alignment_score
-        factors['confluence_strength'] = confluence_signal.strength
-        factors['trend_direction'] = overall_trend.direction.value
-        factors['trend_strength'] = overall_trend.strength.value
-        factors['trend_confidence'] = overall_trend.confidence
-        factors['volatility_pct'] = volatility_pct
-        factors['adx_value'] = adx_value if adx_value else 0
+        factors["confluence_direction"] = confluence_signal.direction.value
+        factors["confluence_alignment"] = confluence_signal.alignment_score
+        factors["confluence_strength"] = confluence_signal.strength
+        factors["trend_direction"] = overall_trend.direction.value
+        factors["trend_strength"] = overall_trend.strength.value
+        factors["trend_confidence"] = overall_trend.confidence
+        factors["volatility_pct"] = volatility_pct
+        factors["adx_value"] = adx_value if adx_value else 0
 
         # Calculate additional factors
         # BB Squeeze detection (low volatility)
         bb_width = None
         if bb_upper and bb_lower and bb_middle and bb_middle > 0:
             bb_width = (bb_upper - bb_lower) / bb_middle
-            factors['bb_width'] = bb_width
+            factors["bb_width"] = bb_width
 
         # EMA alignment
         ema_aligned = None
         if ema_fast_val and ema_slow_val and current_price > 0:
-            ema_aligned = (ema_fast_val > ema_slow_val)  # Fast above slow = uptrend bias
-            factors['ema_fast_above_slow'] = ema_aligned
-            factors['ema_fast'] = ema_fast_val
-            factors['ema_slow'] = ema_slow_val
+            ema_aligned = ema_fast_val > ema_slow_val  # Fast above slow = uptrend bias
+            factors["ema_fast_above_slow"] = ema_aligned
+            factors["ema_fast"] = ema_fast_val
+            factors["ema_slow"] = ema_slow_val
 
         # Price relative to Bollinger Bands
         bb_position = None
         if bb_upper and bb_lower and bb_middle:
             if current_price > bb_upper:
-                bb_position = 'above_upper'
+                bb_position = "above_upper"
             elif current_price < bb_lower:
-                bb_position = 'below_lower'
+                bb_position = "below_lower"
             else:
-                bb_position = 'within_bands'
-            factors['bb_position'] = bb_position
+                bb_position = "within_bands"
+            factors["bb_position"] = bb_position
 
             # Distance from middle band as percentage
             if bb_middle > 0:
                 bb_distance_pct = abs(current_price - bb_middle) / bb_middle
-                factors['bb_distance_pct'] = bb_distance_pct
+                factors["bb_distance_pct"] = bb_distance_pct
 
         # Regime classification logic
 
         # 1. Check for extreme volatility → TRANSITION
         if volatility_pct > self.volatility_threshold_high:
-            factors['primary_reason'] = 'high_volatility'
+            factors["primary_reason"] = "high_volatility"
             return MarketRegime.TRANSITION, min(0.9, volatility_pct * 10), 0.8, factors
 
         # 2. Check for low volatility → NEUTRAL (or breakout direction)
         if volatility_pct < self.volatility_threshold_low:
-            factors['primary_reason'] = 'low_volatility'
+            factors["primary_reason"] = "low_volatility"
             if bb_width and bb_width < self.bb_width_threshold:
                 # Bollinger Band squeeze — potential breakout coming
-                factors['squeeze_detected'] = True
+                factors["squeeze_detected"] = True
                 if overall_trend.direction == TrendDirection.UPTREND:
                     return MarketRegime.RISK_ON, 0.7, 0.6, factors
                 elif overall_trend.direction == TrendDirection.DOWNTREND:
@@ -301,7 +331,7 @@ class MarketRegimeEngine:
         good_alignment = confluence_signal.alignment_score > 0.6
 
         if is_trending and good_alignment:
-            factors['primary_reason'] = 'strong_trend_good_alignment'
+            factors["primary_reason"] = "strong_trend_good_alignment"
             if overall_trend.direction == TrendDirection.UPTREND:
                 confidence = min(0.9, 0.5 + (adx_value - 25) / 50 * 0.4)
                 strength = min(0.9, 0.4 + confluence_signal.alignment_score * 0.5)
@@ -313,7 +343,7 @@ class MarketRegimeEngine:
 
         # 4. Check for weak/trending but poor alignment → NEUTRAL
         if is_trending and not good_alignment:
-            factors['primary_reason'] = 'trending_poor_alignment'
+            factors["primary_reason"] = "trending_poor_alignment"
             if overall_trend.confidence < 0.5:
                 return MarketRegime.NEUTRAL, 0.6, 0.4, factors
             else:
@@ -321,7 +351,7 @@ class MarketRegimeEngine:
 
         # 5. Check for ranging markets (low ADX, mixed signals) → NEUTRAL
         if not is_trending or (adx_value and adx_value < self.adx_trending_threshold):
-            factors['primary_reason'] = 'low_adx_ranging'
+            factors["primary_reason"] = "low_adx_ranging"
             if bb_width and bb_width > self.bb_width_threshold * 1.5:
                 return MarketRegime.NEUTRAL, 0.7, 0.5, factors
             elif ema_fast_val and ema_slow_val:
@@ -330,7 +360,7 @@ class MarketRegimeEngine:
                 return MarketRegime.NEUTRAL, 0.5, 0.3, factors
 
         # 6. Default fallback
-        factors['primary_reason'] = 'default_fallback'
+        factors["primary_reason"] = "default_fallback"
         return MarketRegime.NEUTRAL, 0.4, 0.2, factors
 
     def get_current_regime(self) -> RegimeSignal | None:
@@ -347,8 +377,7 @@ class MarketRegimeEngine:
             return list(self.regime_history)
         if limit <= 0:
             return []
-        return list(islice(self.regime_history,
-                           len(self.regime_history) - limit, None))
+        return list(islice(self.regime_history, len(self.regime_history) - limit, None))
 
     def get_regime_for_timeframe(self, timeframe: Timeframe) -> RegimeSignal | None:
         """Get regime analysis for a specific timeframe (simplified - returns overall)"""
@@ -372,14 +401,14 @@ class MarketRegimeEngine:
 
         recent_regimes = [
             signal.regime
-            for signal in islice(self.regime_history,
-                                 len(self.regime_history) - lookback, None)
+            for signal in islice(self.regime_history, len(self.regime_history) - lookback, None)
         ]
         if not recent_regimes:
             return 0.0
 
         # Count the most common regime
         from collections import Counter
+
         regime_counts = Counter(recent_regimes)
         most_common_count = regime_counts.most_common(1)[0][1]
 

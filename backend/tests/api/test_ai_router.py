@@ -1,4 +1,5 @@
 """Phase 16 — API router tests for /api/ai/* endpoints."""
+
 import asyncio
 import json
 import os
@@ -16,11 +17,11 @@ client = TestClient(app)
 
 
 class TestAnalyzeEndpoint(unittest.TestCase):
-
     @patch("backend.api.ai.router.analyze_symbol")
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_ai_analysis(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import AnalysisResponse
+
         mock_analyze.return_value = AnalysisResponse(
             summary="AAPL looks bullish.",
             trend="bullish",
@@ -68,6 +69,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         primary while the actual result says 'ollama' answered — the
         response must reflect the real answering provider."""
         from backend.ai.prompt import AnalysisResponse
+
         mock_analyze.return_value = AnalysisResponse(
             summary="AAPL looks bullish on the local fallback model.",
             trend="bullish",
@@ -88,6 +90,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_confidence_capped_at_95(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import AnalysisResponse
+
         mock_analyze.return_value = AnalysisResponse(
             summary="AAPL looks extremely bullish with high conviction here.",
             trend="bullish",
@@ -108,6 +111,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_context_fields_surfaced(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import AnalysisResponse
+
         mock_analyze.return_value = AnalysisResponse(
             summary="AAPL looks bullish.",
             trend="bullish",
@@ -140,6 +144,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_uncertainty_with_flag(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import UncertaintyResponse
+
         mock_analyze.return_value = UncertaintyResponse(
             summary="AI analysis is disabled (set AI_ENABLED=true to enable)",
             trend="uncertain",
@@ -168,15 +173,26 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             yield ("meta", {"symbol": "AAPL", "timeframe": "1d", "track_record": {}, "model": None})
             yield ("delta", "AAPL looks")
             yield ("delta", " bullish.")
-            yield ("final", {
-                "summary": "AAPL looks bullish.", "trend": "bullish", "confidence": 0.9,
-                "supporting_factors": ["Above SMA 50"], "risk_factors": ["RSI overbought"],
-                "key_levels": ["$200"], "trade_plan": None,
-                "provider": "ollama", "model": "llama3.2", "is_uncertain": False,
-                "uncertainty_reason": "none",
-                "market_regime": {"regime": "risk_on"},
-                "timeframe_scores": {}, "track_record": {}, "correlation_context": {},
-            })
+            yield (
+                "final",
+                {
+                    "summary": "AAPL looks bullish.",
+                    "trend": "bullish",
+                    "confidence": 0.9,
+                    "supporting_factors": ["Above SMA 50"],
+                    "risk_factors": ["RSI overbought"],
+                    "key_levels": ["$200"],
+                    "trade_plan": None,
+                    "provider": "ollama",
+                    "model": "llama3.2",
+                    "is_uncertain": False,
+                    "uncertainty_reason": "none",
+                    "market_regime": {"regime": "risk_on"},
+                    "timeframe_scores": {},
+                    "track_record": {},
+                    "correlation_context": {},
+                },
+            )
 
         mock_stream.return_value = _gen()
         mock_ai_mgr.settings.provider = "ollama"
@@ -192,10 +208,10 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         events = []
         for f in frames:
             lines = f.splitlines()
-            ev = next((ln[len("event: "):] for ln in lines if ln.startswith("event: ")), None)
+            ev = next((ln[len("event: ") :] for ln in lines if ln.startswith("event: ")), None)
             data_line = next((ln for ln in lines if ln.startswith("data: ")), None)
             if ev and data_line:
-                events.append((ev, data_line[len("data: "):]))
+                events.append((ev, data_line[len("data: ") :]))
         kinds = [ev for ev, _ in events]
         self.assertEqual(kinds[0], "meta")
         self.assertEqual(kinds[-1], "final")
@@ -215,6 +231,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_symbol_uppercased(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import UncertaintyResponse
+
         mock_analyze.return_value = UncertaintyResponse(summary="x")
         mock_ai_mgr.settings.provider = "ollama"
         mock_ai_mgr.settings.model = "llama3.2"
@@ -227,6 +244,7 @@ class TestAnalyzeEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_forwards_max_tokens_and_temperature(self, mock_ai_mgr, mock_analyze):
         from backend.ai.prompt import UncertaintyResponse
+
         mock_analyze.return_value = UncertaintyResponse(summary="x")
         mock_ai_mgr.settings.provider = "ollama"
         mock_ai_mgr.settings.model = "llama3.2"
@@ -251,18 +269,21 @@ class TestAnalyzeEndpoint(unittest.TestCase):
 
 
 class TestAIStatusEndpoint(unittest.TestCase):
-
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_provider_statuses(self, mock_ai_mgr):
         from backend.ai.manager import ProviderStatus
+
         # status() is async now — the endpoint awaits it, so the stub
         # must be an AsyncMock (a plain MagicMock return_value makes the
         # endpoint choke on `await <list>`).
-        mock_ai_mgr.status = AsyncMock(return_value=[
-            ProviderStatus(name="ollama", healthy=True, is_primary=True),
-            ProviderStatus(name="anthropic", healthy=False, is_primary=False,
-                          error="connection refused"),
-        ])
+        mock_ai_mgr.status = AsyncMock(
+            return_value=[
+                ProviderStatus(name="ollama", healthy=True, is_primary=True),
+                ProviderStatus(
+                    name="anthropic", healthy=False, is_primary=False, error="connection refused"
+                ),
+            ]
+        )
 
         resp = client.get("/api/ai/status")
         self.assertEqual(resp.status_code, 200)
@@ -277,7 +298,6 @@ class TestAIStatusEndpoint(unittest.TestCase):
 
 
 class TestAIConfigEndpoint(unittest.TestCase):
-
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_safe_config(self, mock_ai_mgr):
         mock_ai_mgr.safe_config.return_value = {
@@ -307,9 +327,14 @@ class TestAIConfigEndpoint(unittest.TestCase):
         # cached mock/fixture) — ConfigResponse must still validate,
         # defaulting both to null rather than 422ing.
         mock_ai_mgr.safe_config.return_value = {
-            "enabled": True, "provider": "ollama", "fallback_providers": [],
-            "model": "llama3.2", "base_url": "http://localhost:11434",
-            "timeout": 30.0, "max_tokens": 1000, "temperature": 0.3,
+            "enabled": True,
+            "provider": "ollama",
+            "fallback_providers": [],
+            "model": "llama3.2",
+            "base_url": "http://localhost:11434",
+            "timeout": 30.0,
+            "max_tokens": 1000,
+            "temperature": 0.3,
             "api_key_set": False,
         }
         resp = client.get("/api/ai/config")
@@ -321,11 +346,17 @@ class TestAIConfigEndpoint(unittest.TestCase):
     @patch("backend.api.ai.router.ai_manager")
     def test_returns_the_resolved_last_provider_and_model(self, mock_ai_mgr):
         mock_ai_mgr.safe_config.return_value = {
-            "enabled": True, "provider": "ollama", "fallback_providers": [],
-            "model": "static-best-free", "last_provider": "ollama",
+            "enabled": True,
+            "provider": "ollama",
+            "fallback_providers": [],
+            "model": "static-best-free",
+            "last_provider": "ollama",
             "last_model": "openai/gpt-oss-120b",
-            "base_url": "http://localhost:11434", "timeout": 30.0,
-            "max_tokens": 1000, "temperature": 0.3, "api_key_set": False,
+            "base_url": "http://localhost:11434",
+            "timeout": 30.0,
+            "max_tokens": 1000,
+            "temperature": 0.3,
+            "api_key_set": False,
         }
         resp = client.get("/api/ai/config")
         self.assertEqual(resp.status_code, 200)

@@ -8,6 +8,7 @@ provider/caching/circuit-breaking infrastructure that lives next to it.
 ``_settings`` is imported from ``_providers`` so test patches at
 ``backend.market_data.services.manager._settings`` propagate here.
 """
+
 import asyncio
 import logging
 from datetime import datetime
@@ -172,9 +173,7 @@ class MarketDataManager:
             raise last_error
         raise RuntimeError("No available providers")
 
-    def get_latest_bar(
-        self, symbol: str, timeframe: str, use_cache: bool = True
-    ) -> Bar:
+    def get_latest_bar(self, symbol: str, timeframe: str, use_cache: bool = True) -> Bar:
         """Get latest bar for a symbol with fallback.
 
         Reads from Redis first (if ``use_cache=True``), then falls through the
@@ -237,8 +236,7 @@ class MarketDataManager:
             if cached_bars is not None and len(cached_bars) > 0:
                 self._cache_stats["bar_hits"] += 1
                 logger.debug(
-                    f"Redis cache hit for bars {symbol}:{timeframe} "
-                    f"({len(cached_bars)} bars)"
+                    f"Redis cache hit for bars {symbol}:{timeframe} ({len(cached_bars)} bars)"
                 )
                 if cache_threshold == 0 or len(cached_bars) >= cache_threshold:
                     age = _newest_bar_age_seconds(cached_bars)
@@ -273,12 +271,9 @@ class MarketDataManager:
         if use_cache and db is not None:
             try:
                 from backend.repositories import bar_repository
-                cached = bar_repository.get_bars(
-                    db, symbol=symbol, timeframe=timeframe, limit=None
-                )
-                if cached and (
-                    cache_threshold == 0 or len(cached) >= cache_threshold
-                ):
+
+                cached = bar_repository.get_bars(db, symbol=symbol, timeframe=timeframe, limit=None)
+                if cached and (cache_threshold == 0 or len(cached) >= cache_threshold):
                     age = _newest_bar_age_seconds(cached)
                     ttl = get_settings().market_data.cache_ttl_seconds
                     is_intraday = timeframe in _INTRADAY_TIMEFRAMES
@@ -299,7 +294,9 @@ class MarketDataManager:
                     )
                     if get_settings().redis.enabled:
                         get_redis_cache().set_bars(
-                            symbol, timeframe, cached,
+                            symbol,
+                            timeframe,
+                            cached,
                             ttl=get_bar_cache_ttl(timeframe),
                         )
                     return cached
@@ -312,8 +309,11 @@ class MarketDataManager:
             try:
                 provider = self.providers[provider_name]
                 bars = _call_provider(
-                    provider, "get_historical_bars", symbol,
-                    timeframe=timeframe, range_=range_,
+                    provider,
+                    "get_historical_bars",
+                    symbol,
+                    timeframe=timeframe,
+                    range_=range_,
                     include_extended_hours=include_extended_hours,
                 )
                 logger.debug(
@@ -323,8 +323,7 @@ class MarketDataManager:
                 break
             except Exception as e:
                 logger.warning(
-                    f"Failed to get historical bars for {symbol} from "
-                    f"{provider_name}: {e}"
+                    f"Failed to get historical bars for {symbol} from {provider_name}: {e}"
                 )
                 continue
 
@@ -334,16 +333,17 @@ class MarketDataManager:
         if db is not None:
             try:
                 from backend.repositories import bar_repository
+
                 written = bar_repository.upsert_bars(db, bars)
                 logger.debug(f"Persisted {written} bars for {symbol} {timeframe}")
             except Exception as e:
-                logger.warning(
-                    f"Failed to persist bars for {symbol} {timeframe}: {e}"
-                )
+                logger.warning(f"Failed to persist bars for {symbol} {timeframe}: {e}")
 
         if get_settings().redis.enabled and use_cache:
             get_redis_cache().set_bars(
-                symbol, timeframe, bars,
+                symbol,
+                timeframe,
+                bars,
                 ttl=get_bar_cache_ttl(timeframe),
             )
             if bars:
@@ -380,32 +380,34 @@ class MarketDataManager:
                     for sym in symbols:
                         try:
                             bars = _call_provider(
-                                provider, "get_historical_bars", sym,
-                                timeframe=timeframe, range_=range_,
+                                provider,
+                                "get_historical_bars",
+                                sym,
+                                timeframe=timeframe,
+                                range_=range_,
                                 include_extended_hours=include_extended_hours,
                             )
                             if bars:
                                 result[sym] = bars
                         except Exception as e:
-                            logger.debug(
-                                f"Batch fallback failed for {sym}: {e}"
-                            )
+                            logger.debug(f"Batch fallback failed for {sym}: {e}")
                     break
                 else:
                     # Call the batch method via _call_provider_direct so rate limiting,
                     # circuit breaking, and structured logging are applied consistently.
                     result = _call_provider_direct(
-                        provider, batch_fn, symbols,
-                        timeframe=timeframe, range_=range_,
+                        provider,
+                        batch_fn,
+                        symbols,
+                        timeframe=timeframe,
+                        range_=range_,
                         include_extended_hours=include_extended_hours,
                     )
                     if not isinstance(result, dict):
                         result = {}
                     break
             except Exception as e:
-                logger.warning(
-                    f"Batch bars failed from {provider_name}: {e}"
-                )
+                logger.warning(f"Batch bars failed from {provider_name}: {e}")
                 continue
 
         return result
@@ -426,9 +428,7 @@ class MarketDataManager:
                 else:
                     uncached_symbols.append(symbol)
             quotes.update(cached_quotes)
-            logger.debug(
-                f"Redis cache hits for quotes: {len(cached_quotes)}/{len(symbols)}"
-            )
+            logger.debug(f"Redis cache hits for quotes: {len(cached_quotes)}/{len(symbols)}")
             if not uncached_symbols:
                 return quotes
             symbols_to_fetch = uncached_symbols
@@ -449,8 +449,7 @@ class MarketDataManager:
                         for symbol in symbols_to_fetch
                     ):
                         logger.debug(
-                            f"Got complete batch quotes for {symbols_to_fetch} "
-                            f"from {provider_name}"
+                            f"Got complete batch quotes for {symbols_to_fetch} from {provider_name}"
                         )
                         for symbol, quote in batch_quotes.items():
                             if symbol in symbols_to_fetch and quote.data_status != "ERROR":
@@ -535,8 +534,7 @@ class MarketDataManager:
                             if symbol in batch_bars and batch_bars[symbol]:
                                 results[symbol] = batch_bars[symbol]
                         if all(
-                            symbol in results and results[symbol]
-                            for symbol in symbols_to_fetch
+                            symbol in results and results[symbol] for symbol in symbols_to_fetch
                         ):
                             logger.debug(
                                 f"Got complete batch historical bars for {symbols_to_fetch} "
@@ -545,7 +543,9 @@ class MarketDataManager:
                             for symbol, bars in batch_bars.items():
                                 if symbol in symbols_to_fetch and bars:
                                     get_redis_cache().set_bars(
-                                        symbol, timeframe, bars,
+                                        symbol,
+                                        timeframe,
+                                        bars,
                                         ttl=get_bar_cache_ttl(timeframe),
                                     )
                                     if bars:
@@ -570,10 +570,7 @@ class MarketDataManager:
                     )
                     continue
 
-            if not all(
-                symbol in results and results[symbol]
-                for symbol in symbols_to_fetch
-            ):
+            if not all(symbol in results and results[symbol] for symbol in symbols_to_fetch):
                 logger.info(
                     "Falling back to individual historical bar requests for missing symbols"
                 )
@@ -593,8 +590,11 @@ class MarketDataManager:
                             # this one").
                             bars = await asyncio.to_thread(
                                 self.get_historical_bars,
-                                symbol, timeframe=timeframe, range_=range_,
-                                use_cache=use_cache, db=db,
+                                symbol,
+                                timeframe=timeframe,
+                                range_=range_,
+                                use_cache=use_cache,
+                                db=db,
                             )
                             results[symbol] = bars
                         except Exception as e:
@@ -614,7 +614,9 @@ class MarketDataManager:
                 return status
             except Exception as e:
                 last_error = e
-                logger.warning(f"Failed to get market status for {symbol} from {provider_name}: {e}")
+                logger.warning(
+                    f"Failed to get market status for {symbol} from {provider_name}: {e}"
+                )
                 continue
         if last_error:
             raise last_error
@@ -670,13 +672,15 @@ class MarketDataManager:
                 "quote_hits": self._cache_stats["quote_hits"],
                 "quote_misses": self._cache_stats["quote_misses"],
                 "bar_hit_rate": (
-                    self._cache_stats["bar_hits"] /
-                    max(self._cache_stats["bar_hits"] + self._cache_stats["bar_misses"], 1)
-                ) * 100,
+                    self._cache_stats["bar_hits"]
+                    / max(self._cache_stats["bar_hits"] + self._cache_stats["bar_misses"], 1)
+                )
+                * 100,
                 "quote_hit_rate": (
-                    self._cache_stats["quote_hits"] /
-                    max(self._cache_stats["quote_hits"] + self._cache_stats["quote_misses"], 1)
-                ) * 100,
+                    self._cache_stats["quote_hits"]
+                    / max(self._cache_stats["quote_hits"] + self._cache_stats["quote_misses"], 1)
+                )
+                * 100,
             }
         }
         if get_settings().redis.enabled:

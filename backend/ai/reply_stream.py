@@ -19,21 +19,28 @@ decoded suffix of the ``reply`` value. It tolerates:
 Once the closing unescaped ``"`` is seen, ``finished`` is True and
 further ``feed`` calls return ``""``.
 """
+
 from __future__ import annotations
 
 import re
 
 _REPLY_KEY_RE = re.compile(r'"reply"\s*:\s*"')
 _SIMPLE_ESCAPES = {
-    '"': '"', "\\": "\\", "/": "/",
-    "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "b": "\b",
+    "f": "\f",
 }
 
 
 class ReplyExtractor:
     def __init__(self) -> None:
         self._val_start: int | None = None  # index just past the opening quote
-        self._pos = 0                       # how far we've decoded into `raw`
+        self._pos = 0  # how far we've decoded into `raw`
         self._decoded = ""
         self.finished = False
 
@@ -69,7 +76,7 @@ class ReplyExtractor:
                 if nxt == "u":
                     if i + 6 > n:
                         break  # need the 4 hex digits
-                    hexs = raw[i + 2:i + 6]
+                    hexs = raw[i + 2 : i + 6]
                     try:
                         out.append(chr(int(hexs, 16)))
                     except ValueError:

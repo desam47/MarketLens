@@ -11,6 +11,7 @@ The MTF engine still owns its own confluence weight and alignment
 computations (per-preset), but delegates its per-TF trend data to the
 shared engines.
 """
+
 import logging
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -157,7 +158,10 @@ def _serialize_snapshot(snap: MultiTimeframeSnapshot) -> dict:
 @router.get("/{symbol}/confluence")
 async def get_current_confluence(
     symbol: str,
-    preset: str = Query(default="day_trading", description="Trading style preset: scalper, day_trading, swing, or all"),
+    preset: str = Query(
+        default="day_trading",
+        description="Trading style preset: scalper, day_trading, swing, or all",
+    ),
 ):
     """Get current multi-timeframe confluence for symbol (30s TTL cache)."""
     # Validate preset - reject unknown presets with 422
@@ -219,7 +223,9 @@ async def get_current_confluence(
                 "intermediate_direction": confluence_signal.intermediate_direction.value,
                 "higher_direction": confluence_signal.higher_direction.value,
                 "short_term_state": getattr(confluence_signal, "short_term_state", "neutral").value,
-                "intermediate_state": getattr(confluence_signal, "intermediate_state", "neutral").value,
+                "intermediate_state": getattr(
+                    confluence_signal, "intermediate_state", "neutral"
+                ).value,
                 "higher_state": getattr(confluence_signal, "higher_state", "neutral").value,
                 "preset": getattr(confluence_signal, "preset", engine.preset_name),
                 "valid_coverage": getattr(confluence_signal, "valid_coverage", 0.0),

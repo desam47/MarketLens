@@ -1,10 +1,11 @@
 """Tests for SupportResistanceEngine."""
+
 import os
 import sys
 import unittest
 from datetime import datetime, timedelta
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.support_resistance.sr_engine import (
     SRType,
@@ -36,13 +37,11 @@ def _make_bars(n=50, base=100.0, with_timestamps=True):
         if with_timestamps:
             bars.append(_bar(base_t + timedelta(hours=i), c, h, low))
         else:
-            bars.append({"open": c, "high": h, "low": low, "close": c,
-                         "volume": 1000})
+            bars.append({"open": c, "high": h, "low": low, "close": c, "volume": 1000})
     return bars
 
 
 class TestSupportResistanceEngine(unittest.TestCase):
-
     def test_initialization_defaults(self):
         engine = SupportResistanceEngine()
         self.assertEqual(engine.lookback_period, 2)
@@ -86,8 +85,7 @@ class TestSupportResistanceEngine(unittest.TestCase):
         engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100)
         bars = _make_bars(80)
         result = engine.detect(bars, symbol="AAPL", timeframe="1d")
-        swing = [lvl for lvl in result.levels
-                 if lvl.type in (SRType.SWING_HIGH, SRType.SWING_LOW)]
+        swing = [lvl for lvl in result.levels if lvl.type in (SRType.SWING_HIGH, SRType.SWING_LOW)]
         self.assertGreater(len(swing), 0)
         lvl = swing[0]
         # Spec requires: price, type, timeframe, strength, touch_count, age,
@@ -110,10 +108,20 @@ class TestSupportResistanceEngine(unittest.TestCase):
         engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100)
         bars = _make_bars(80)
         result = engine.detect(bars)
-        pivots = [lvl for lvl in result.levels
-                  if lvl.type in (SRType.PIVOT_PP, SRType.PIVOT_R1, SRType.PIVOT_R2,
-                                  SRType.PIVOT_R3, SRType.PIVOT_S1, SRType.PIVOT_S2,
-                                  SRType.PIVOT_S3)]
+        pivots = [
+            lvl
+            for lvl in result.levels
+            if lvl.type
+            in (
+                SRType.PIVOT_PP,
+                SRType.PIVOT_R1,
+                SRType.PIVOT_R2,
+                SRType.PIVOT_R3,
+                SRType.PIVOT_S1,
+                SRType.PIVOT_S2,
+                SRType.PIVOT_S3,
+            )
+        ]
         self.assertGreater(len(pivots), 0)
 
     def test_pivot_table_ordering_and_sides(self):
@@ -123,24 +131,42 @@ class TestSupportResistanceEngine(unittest.TestCase):
         result = engine.detect(bars)
         by_index: dict = {}
         for lvl in result.levels:
-            if lvl.type in (SRType.PIVOT_PP, SRType.PIVOT_R1, SRType.PIVOT_R2,
-                            SRType.PIVOT_R3, SRType.PIVOT_S1, SRType.PIVOT_S2,
-                            SRType.PIVOT_S3):
+            if lvl.type in (
+                SRType.PIVOT_PP,
+                SRType.PIVOT_R1,
+                SRType.PIVOT_R2,
+                SRType.PIVOT_R3,
+                SRType.PIVOT_S1,
+                SRType.PIVOT_S2,
+                SRType.PIVOT_S3,
+            ):
                 by_index.setdefault(lvl.origin_index, []).append(lvl)
         for idx, group in by_index.items():
             prices = {lvl.type: lvl.price for lvl in group}
             if SRType.PIVOT_PP in prices:
                 pp = prices[SRType.PIVOT_PP]
                 if SRType.PIVOT_R1 in prices:
-                    self.assertGreater(prices[SRType.PIVOT_R1], pp,
-                        f"at bar {idx}: R1 {prices[SRType.PIVOT_R1]} should be > PP {pp}")
+                    self.assertGreater(
+                        prices[SRType.PIVOT_R1],
+                        pp,
+                        f"at bar {idx}: R1 {prices[SRType.PIVOT_R1]} should be > PP {pp}",
+                    )
                 if SRType.PIVOT_S1 in prices:
-                    self.assertLess(prices[SRType.PIVOT_S1], pp,
-                        f"at bar {idx}: S1 {prices[SRType.PIVOT_S1]} should be < PP {pp}")
+                    self.assertLess(
+                        prices[SRType.PIVOT_S1],
+                        pp,
+                        f"at bar {idx}: S1 {prices[SRType.PIVOT_S1]} should be < PP {pp}",
+                    )
                 # Monotonic: R3 > R2 > R1 > PP > S1 > S2 > S3
-                seq = [SRType.PIVOT_R3, SRType.PIVOT_R2, SRType.PIVOT_R1,
-                       SRType.PIVOT_PP, SRType.PIVOT_S1, SRType.PIVOT_S2,
-                       SRType.PIVOT_S3]
+                seq = [
+                    SRType.PIVOT_R3,
+                    SRType.PIVOT_R2,
+                    SRType.PIVOT_R1,
+                    SRType.PIVOT_PP,
+                    SRType.PIVOT_S1,
+                    SRType.PIVOT_S2,
+                    SRType.PIVOT_S3,
+                ]
                 present = [prices[s] for s in seq if s in prices]
                 for a, b in zip(present, present[1:], strict=False):
                     self.assertGreater(a, b, f"at bar {idx}: pivot sequence must be decreasing")
@@ -155,8 +181,9 @@ class TestSupportResistanceEngine(unittest.TestCase):
             c = 100.0 + (i % 10) * 0.5
             bars.append(_bar(t, c, c + 1, c - 1))
         result = engine.detect(bars)
-        prev_day = [lvl for lvl in result.levels
-                    if lvl.type in (SRType.PREV_DAY_HIGH, SRType.PREV_DAY_LOW)]
+        prev_day = [
+            lvl for lvl in result.levels if lvl.type in (SRType.PREV_DAY_HIGH, SRType.PREV_DAY_LOW)
+        ]
         self.assertGreater(len(prev_day), 0)
 
     def test_prev_week_levels_with_timestamps(self):
@@ -169,8 +196,11 @@ class TestSupportResistanceEngine(unittest.TestCase):
             c = 100.0 + (i % 10) * 0.5
             bars.append(_bar(t, c, c + 1, c - 1))
         result = engine.detect(bars)
-        prev_week = [lvl for lvl in result.levels
-                     if lvl.type in (SRType.PREV_WEEK_HIGH, SRType.PREV_WEEK_LOW)]
+        prev_week = [
+            lvl
+            for lvl in result.levels
+            if lvl.type in (SRType.PREV_WEEK_HIGH, SRType.PREV_WEEK_LOW)
+        ]
         self.assertGreater(len(prev_week), 0)
 
     def test_consolidation_zones_form(self):
@@ -186,8 +216,7 @@ class TestSupportResistanceEngine(unittest.TestCase):
             c = 100.0 + (i - 40) * 0.5
             bars.append(_bar(base_t + timedelta(hours=i), c, c + 1, c - 1))
 
-        engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100,
-                                          zone_width_pct=0.01)
+        engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100, zone_width_pct=0.01)
         result = engine.detect(bars)
         zones = [lvl for lvl in result.levels if lvl.type == SRType.CONSOLIDATION_ZONE]
         # We may or may not get a zone depending on the synthetic data;
@@ -252,14 +281,14 @@ class TestSupportResistanceEngine(unittest.TestCase):
 
     def test_deduplication(self):
         """Levels at nearly identical prices are deduped to the strongest."""
-        engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100,
-                                          zone_width_pct=0.001)
+        engine = SupportResistanceEngine(lookback_period=2, lookback_bars=100, zone_width_pct=0.001)
         bars = _make_bars(80)
         result = engine.detect(bars)
         # All swing highs (excluding zones) should have unique prices
         # to within 0.01 (2 decimal places)
-        swing_prices = [lvl.price for lvl in result.levels
-                        if lvl.type in (SRType.SWING_HIGH, SRType.SWING_LOW)]
+        swing_prices = [
+            lvl.price for lvl in result.levels if lvl.type in (SRType.SWING_HIGH, SRType.SWING_LOW)
+        ]
         rounded = [round(p, 2) for p in swing_prices]
         self.assertEqual(len(rounded), len(set(rounded)))
 

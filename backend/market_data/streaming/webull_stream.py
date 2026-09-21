@@ -16,6 +16,7 @@ we (re)subscribe the full symbol set there.
 Streaming limits (Webull): 5 MQTT connections per App Key, unique
 session_id per connection, ~3 pushes/sec/connection.
 """
+
 from __future__ import annotations
 
 import logging
@@ -59,8 +60,16 @@ def _patch_quotes_client_logger() -> None:
 
     orig_set_file_logger = QuotesClient.set_file_logger
 
-    def _patched(self, path, log_level=logging.INFO, logger_name="webull.data",
-                 format_string=None, when="H", interval=1, backup_count=72):
+    def _patched(
+        self,
+        path,
+        log_level=logging.INFO,
+        logger_name="webull.data",
+        format_string=None,
+        when="H",
+        interval=1,
+        backup_count=72,
+    ):
         abs_path = str(_STREAM_LOG) if Path(path).name == path else path
         key = (logger_name, abs_path)
         if key in _quotes_file_logger_paths_registered:
@@ -82,8 +91,9 @@ def _patch_quotes_client_logger() -> None:
     orig_set_stream_logger = QuotesClient.set_stream_logger
     _quotes_stream_logger_names_registered: set[str] = set()
 
-    def _patched_stream(self, log_level=logging.INFO, logger_name="webull.data",
-                         stream=None, format_string=None):
+    def _patched_stream(
+        self, log_level=logging.INFO, logger_name="webull.data", stream=None, format_string=None
+    ):
         if logger_name in _quotes_stream_logger_names_registered:
             return None
         _quotes_stream_logger_names_registered.add(logger_name)
@@ -112,22 +122,35 @@ class _ExpectedStopFilter(logging.Filter):
     """Demote the SDK's "loop ack code" ERROR to INFO while we are the ones stopping it."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno == logging.ERROR and _teardowns_in_flight \
-                and "loop ack code" in record.getMessage():
+        if (
+            record.levelno == logging.ERROR
+            and _teardowns_in_flight
+            and "loop ack code" in record.getMessage()
+        ):
             record.levelno, record.levelname = logging.INFO, "INFO"
         return True
 
 
 logging.getLogger("webull.data").addFilter(_ExpectedStopFilter())
 
-_SnapshotCb = Callable[[str, float, float | None, "object", float | None, float | None, float | None], None]
+_SnapshotCb = Callable[
+    [str, float, float | None, "object", float | None, float | None, float | None], None
+]
 _TradeCb = Callable[[str, float, float | None, "object", str | None], None]
 _StatusCb = Callable[[str], None]
 
 # Webull tick "side" codes seen in the wild. 1 = buy-initiated,
 # 2 = sell-initiated; anything else (incl. 3 = neutral) → unknown.
-_SIDE_MAP = {1: "buy", 2: "sell", "1": "buy", "2": "sell",
-             "BUY": "buy", "SELL": "sell", "B": "buy", "S": "sell"}
+_SIDE_MAP = {
+    1: "buy",
+    2: "sell",
+    "1": "buy",
+    "2": "sell",
+    "BUY": "buy",
+    "SELL": "sell",
+    "B": "buy",
+    "S": "sell",
+}
 
 
 def _stream_logger() -> logging.Logger:
@@ -136,10 +159,12 @@ def _stream_logger() -> logging.Logger:
     lg = logging.getLogger("webull.data.streaming")
     if not any(getattr(h, "_marketlens_stream", False) for h in lg.handlers):
         _STREAM_LOG.parent.mkdir(exist_ok=True)
-        h = TimedRotatingFileHandler(_STREAM_LOG, when="H", interval=1,
-                                     backupCount=24, encoding="utf-8")
-        h.setFormatter(logging.Formatter(
-            "%(thread)d %(asctime)s %(name)s %(levelname)s %(message)s"))
+        h = TimedRotatingFileHandler(
+            _STREAM_LOG, when="H", interval=1, backupCount=24, encoding="utf-8"
+        )
+        h.setFormatter(
+            logging.Formatter("%(thread)d %(asctime)s %(name)s %(levelname)s %(message)s")
+        )
         h._marketlens_stream = True  # type: ignore[attr-defined]
         lg.addHandler(h)
         lg.setLevel(logging.INFO)
@@ -194,8 +219,12 @@ class WebullStreamClient:
 
         session_id = uuid.uuid4().hex
         client = DataStreamingClient(
-            self._app_key, self._app_secret, self._region, session_id,
-            http_host=self._http_host, mqtt_host=self._mqtt_host,
+            self._app_key,
+            self._app_secret,
+            self._region,
+            session_id,
+            http_host=self._http_host,
+            mqtt_host=self._mqtt_host,
         )
         try:
             Path(self._token_dir).mkdir(parents=True, exist_ok=True)
@@ -214,7 +243,8 @@ class WebullStreamClient:
             self._started = True
         self._stop.clear()
         self._supervisor = threading.Thread(
-            target=self._supervise, name="webull-stream-supervisor", daemon=True)
+            target=self._supervise, name="webull-stream-supervisor", daemon=True
+        )
         self._supervisor.start()
 
     def _sdk_alive(self) -> bool:
@@ -235,7 +265,11 @@ class WebullStreamClient:
                 # disconnect() before loop_stop(): loop_stop() is the call that blocks on the
                 # SDK's 10 s sleep, and the broker allows only 5 connections per App Key, so the
                 # DISCONNECT must not queue behind it.
-                for call in (lambda: c.unsubscribe(unsubscribe_all=True), c.disconnect, c.loop_stop):
+                for call in (
+                    lambda: c.unsubscribe(unsubscribe_all=True),
+                    c.disconnect,
+                    c.loop_stop,
+                ):
                     try:
                         call()
                     except Exception:  # noqa: BLE001
@@ -261,8 +295,7 @@ class WebullStreamClient:
             try:
                 self._client = self._build_client()
                 self._client.connect_and_loop_start(customer_logger=_stream_logger())
-                logger.info("Webull stream: connecting (%d symbols queued)",
-                            len(self._subscribed))
+                logger.info("Webull stream: connecting (%d symbols queued)", len(self._subscribed))
             except Exception as e:  # noqa: BLE001
                 logger.warning("Webull stream: connect attempt failed: %s", e)
                 self._client = None
@@ -322,7 +355,8 @@ class WebullStreamClient:
                 from webull.data.common.subscribe_type import SubscribeType
 
                 self._client.unsubscribe(
-                    symbols=sorted(drop), category=Category.US_STOCK.name,
+                    symbols=sorted(drop),
+                    category=Category.US_STOCK.name,
                     sub_types=[SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
                 )
             except Exception as e:  # noqa: BLE001
@@ -336,7 +370,8 @@ class WebullStreamClient:
             from webull.data.common.subscribe_type import SubscribeType
 
             self._client.subscribe(
-                symbols, Category.US_STOCK.name,
+                symbols,
+                Category.US_STOCK.name,
                 [SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
             )
             logger.info("Webull stream: subscribed %d symbols", len(symbols))
@@ -398,8 +433,13 @@ class WebullStreamClient:
         self._mark(sym)
         if self.on_snapshot:
             self.on_snapshot(
-                sym, price, _num(r.get_volume()), ts,
-                _num(r.get_high()), _num(r.get_low()), _num(r.get_open()),
+                sym,
+                price,
+                _num(r.get_volume()),
+                ts,
+                _num(r.get_high()),
+                _num(r.get_low()),
+                _num(r.get_open()),
             )
 
     def _handle_tick(self, r) -> None:
@@ -432,7 +472,10 @@ def get_webull_stream_client() -> WebullStreamClient | None:
     if not (wb.streaming_enabled and wb.app_key and wb.app_secret):
         return None
     _client = WebullStreamClient(
-        wb.app_key, wb.app_secret,
-        region="us", sandbox=wb.use_sandbox, mqtt_host=wb.streaming_mqtt_host,
+        wb.app_key,
+        wb.app_secret,
+        region="us",
+        sandbox=wb.use_sandbox,
+        mqtt_host=wb.streaming_mqtt_host,
     )
     return _client
