@@ -7,6 +7,7 @@ import api, {
   PriceHistoryItem,
   TapeSnapshot,
   Transition,
+  MarketQuote,
 } from '../services/api';
 import { formatETDate, formatETDateTime } from '../components/chartMath';
 import { CandlestickChart } from '../components/CandlestickChart';
@@ -17,6 +18,7 @@ import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
 import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
+import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
@@ -498,7 +500,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
 
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
-  const [quote, setQuote] = useState<any>(null);
+  const [quote, setQuote] = useState<MarketQuote | null>(null);
 
   const [transitions, setTransitions] = useState<Transition[]>([]);
   const [latestScore, setLatestScore] = useState(0);
@@ -918,8 +920,18 @@ const fetchBars = useCallback(async () => {
                     {formatETDateTime(quote.timestamp)}
                   </span>
                 )}
+                <MarketDataFreshnessBadge
+                  dataStatus={quote.data_status}
+                  timestamp={quote.timestamp}
+                />
               </>
             ) : '—'}
+            {quote?.price == null && (
+              <MarketDataFreshnessBadge
+                dataStatus={quote?.data_status}
+                timestamp={quote?.timestamp}
+              />
+            )}
           </p>
         </div>
         <div className="header-actions">

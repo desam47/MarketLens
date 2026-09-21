@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { FilterSpec, ScanResult, Watchlist } from '../services/api';
 import { FilterBuilder } from '../components/FilterBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
+import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
 
 interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
@@ -208,6 +209,11 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                     <strong>{result.symbol}</strong>
                     <span className={result.total_score >= 0 ? 'scanner-score-positive' : 'scanner-score-negative'}>{result.total_score >= 0 ? '+' : ''}{result.total_score.toFixed(1)}</span>
                     <span className="scanner-result-reason">{matchReason(result)}</span>
+                    <MarketDataFreshnessBadge
+                      dataStatus={result.quote?.data_status}
+                      freshness={result.explanation?.data_freshness?.status}
+                      timestamp={result.quote?.timestamp ?? result.timestamp}
+                    />
                     <span className="scanner-result-price">{result.quote?.price != null ? `$${result.quote.price.toFixed(2)}` : '—'}</span>
                   </button>
                 ))}

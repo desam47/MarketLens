@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api, { Bar, BarsResult } from '../services/api';
 import { CandlestickChart, ChartType } from './CandlestickChart';
+import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import { OVERLAYS, type OverlayKey } from './chartMath';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
@@ -241,7 +242,13 @@ export function MultiTimeframeChartGrid({
               {panel.loading && <span className="mtf-loading">Loading…</span>}
               {panel.error && <span className="mtf-error">⚠ {panel.error}</span>}
               {!panel.loading && !panel.error && (
-                <span className="mtf-bar-count">{panel.bars.length} bars</span>
+                <>
+                  <span className="mtf-bar-count">{panel.bars.length} bars</span>
+                  <MarketDataFreshnessBadge
+                    dataStatus={panel.bars[0]?.data_status}
+                    timestamp={panel.bars[0]?.timestamp}
+                  />
+                </>
               )}
             </div>
             {panel.error ? (

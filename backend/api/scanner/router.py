@@ -62,6 +62,7 @@ class _QuoteResponse(BaseModel):
     volume: int | None = None
     timestamp: str | None = None
     provider: str | None = None
+    data_status: str | None = None
 
 
 class _ScanResultResponse(BaseModel):
@@ -132,6 +133,7 @@ class _FilterBody(BaseModel):
 def _quote_to_dict(quote) -> _QuoteResponse | None:
     if quote is None:
         return None
+    data_status = getattr(quote, "data_status", None)
     return _QuoteResponse(
         symbol=quote.symbol,
         price=getattr(quote, "price", None),
@@ -140,6 +142,7 @@ def _quote_to_dict(quote) -> _QuoteResponse | None:
         volume=getattr(quote, "volume", None),
         timestamp=_to_dashboard_tz(getattr(quote, "timestamp", None)) or None,
         provider=getattr(quote, "provider", None),
+        data_status=str(data_status) if data_status is not None else None,
     )
 
 

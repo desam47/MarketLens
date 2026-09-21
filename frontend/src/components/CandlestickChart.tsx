@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Bar, Transition } from '../services/api';
+import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import {
   type ChartType,
   CHART_TYPES,
@@ -399,6 +400,10 @@ function CandlestickChartImpl({
           <h2>{symbol} Price Chart</h2>
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className="bar-count">{bars.length} bars</span>
+            <MarketDataFreshnessBadge
+              dataStatus={bars[0]?.data_status}
+              timestamp={bars[0]?.timestamp}
+            />
             {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
               <select
                 className="timeframe-select chart-timeframe-select"

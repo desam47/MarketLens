@@ -379,6 +379,8 @@ export interface Bar {
   low: number;
   close: number;
   volume: number;
+  data_status?: string | null;
+  source?: string | null;
 }
 
 export interface BarsResult {
@@ -481,6 +483,12 @@ export interface ScanQuote {
   volume: number | null;
   timestamp: string | null;
   provider: string | null;
+  data_status?: string | null;
+}
+
+export interface MarketQuote extends ScanQuote {
+  extended_hours_price?: number | null;
+  extended_hours_timestamp?: string | null;
 }
 
 export interface ScanResult {
@@ -1725,8 +1733,8 @@ class ApiService {
   }
 
   // Market Data
-  async getQuote(symbol: string): Promise<any> {
-    return this.fetch(`/market-data/quote/${symbol}`);
+  async getQuote(symbol: string): Promise<MarketQuote> {
+    return this.fetch<MarketQuote>(`/market-data/quote/${symbol}`);
   }
 
   async getLatestBars(symbol: string): Promise<Record<string, any>> {

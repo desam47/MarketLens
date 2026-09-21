@@ -1,8 +1,10 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, lazy, Suspense, useCallback } from 'react';
 import api from './services/api';
 import { Dashboard } from './pages/Dashboard';
 import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { StartupModeNotice } from './components/StartupModeNotice';
+import { StartupModeContext, type StartupMode } from './contexts/StartupModeContext';
+import { hashForPage, pageForHash, type AppPage } from './utils/appNavigation';
 import './styles/App.css';
 
 // Phase 3.6.6: code-split all non-dashboard pages.
@@ -26,10 +28,8 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub' | 'risk' | 'journal';
-
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
+  const [currentPage, setCurrentPage] = useState<AppPage>(() => pageForHash(window.location.hash));
   // Default to the first symbol from the first populated watchlist.
   // Falls back to 'SPY' only if no watchlist has symbols (e.g. first run).
   const [symbol, setSymbol] = useState<string>('SPY');
@@ -38,7 +38,7 @@ export default function App() {
   // want without disturbing (or being disturbed by) the rest of the app.
   // Lifted to App (not page-local) so it survives nav-tab switches.
   const [hubSymbol, setHubSymbol] = useState<string>('SPY');
-  const [startupMode, setStartupMode] = useState<'full' | 'api' | null>(null);
+  const [startupMode, setStartupMode] = useState<StartupMode>(null);
 
   useEffect(() => {
     // Fetch the first populated watchlist and set its first symbol as default.
@@ -63,6 +63,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncPageFromHash = () => {
+      setCurrentPage(pageForHash(window.location.hash));
+    };
+
+    window.addEventListener('hashchange', syncPageFromHash);
+    return () => window.removeEventListener('hashchange', syncPageFromHash);
+  }, []);
+
+  const navigateTo = useCallback((page: AppPage) => {
+    const nextHash = hashForPage(page);
+    setCurrentPage(page);
+
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash;
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     api.getSystemStatus()
       .then(status => {
@@ -80,7 +98,7 @@ export default function App() {
       case 'dashboard':
         return <PageErrorBoundary key={currentPage} pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
       case 'watchlist':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'hub':
@@ -94,7 +112,7 @@ export default function App() {
       case 'signals':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
       case 'scanner':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'risk':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage /></PageErrorBoundary></Suspense>;
       case 'journal':
@@ -115,7 +133,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'scanner' ? 'active' : ''}
-              onClick={() => setCurrentPage('scanner')}
+              onClick={() => navigateTo('scanner')}
             >
               <span className="nav-icon">🧭</span>
               Scanner
@@ -124,7 +142,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'dashboard' ? 'active' : ''}
-              onClick={() => setCurrentPage('dashboard')}
+              onClick={() => navigateTo('dashboard')}
             >
               <span className="nav-icon">📈</span>
               Dashboard
@@ -133,7 +151,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'risk' ? 'active' : ''}
-              onClick={() => setCurrentPage('risk')}
+              onClick={() => navigateTo('risk')}
             >
               <span className="nav-icon">🛡️</span>
               Risk Dashboard
@@ -142,7 +160,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'journal' ? 'active' : ''}
-              onClick={() => setCurrentPage('journal')}
+              onClick={() => navigateTo('journal')}
             >
               <span className="nav-icon">📝</span>
               Trade Journal
@@ -151,7 +169,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'symbol' ? 'active' : ''}
-              onClick={() => setCurrentPage('symbol')}
+              onClick={() => navigateTo('symbol')}
             >
               <span className="nav-icon">🔬</span>
               Symbol
@@ -160,7 +178,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'hub' ? 'active' : ''}
-              onClick={() => setCurrentPage('hub')}
+              onClick={() => navigateTo('hub')}
             >
               <span className="nav-icon">🤖</span>
               AI Hub
@@ -169,7 +187,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'watchlist' ? 'active' : ''}
-              onClick={() => setCurrentPage('watchlist')}
+              onClick={() => navigateTo('watchlist')}
             >
               <span className="nav-icon">📋</span>
               Watchlist
@@ -178,7 +196,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'alerts' ? 'active' : ''}
-              onClick={() => setCurrentPage('alerts')}
+              onClick={() => navigateTo('alerts')}
             >
               <span className="nav-icon">🔔</span>
               Alerts
@@ -187,7 +205,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'backtest' ? 'active' : ''}
-              onClick={() => setCurrentPage('backtest')}
+              onClick={() => navigateTo('backtest')}
             >
               <span className="nav-icon">⏪</span>
               Backtest
@@ -196,7 +214,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'signals' ? 'active' : ''}
-              onClick={() => setCurrentPage('signals')}
+              onClick={() => navigateTo('signals')}
             >
               <span className="nav-icon">📜</span>
               Historical Signals
@@ -205,7 +223,7 @@ export default function App() {
           <li>
             <button
               className={currentPage === 'health' ? 'active' : ''}
-              onClick={() => setCurrentPage('health')}
+              onClick={() => navigateTo('health')}
             >
               <span className="nav-icon">💚</span>
               System Health
@@ -213,10 +231,12 @@ export default function App() {
           </li>
         </ul>
       </nav>
-      <main className="main-content">
-        <StartupModeNotice startupMode={startupMode} />
-        {renderPage()}
-      </main>
+      <StartupModeContext.Provider value={startupMode}>
+        <main className="main-content">
+          <StartupModeNotice startupMode={startupMode} />
+          {renderPage()}
+        </main>
+      </StartupModeContext.Provider>
     </div>
   );
 }

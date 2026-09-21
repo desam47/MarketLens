@@ -1,6 +1,7 @@
 import React from 'react';
+import { type StartupMode } from '../contexts/StartupModeContext';
 
-export function StartupModeNotice({ startupMode }: { startupMode: 'full' | 'api' | null }) {
+export function StartupModeNotice({ startupMode }: { startupMode: StartupMode }) {
   if (startupMode !== 'api') return null;
 
   return (

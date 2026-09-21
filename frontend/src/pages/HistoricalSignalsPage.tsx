@@ -1,10 +1,20 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { HistoricalReplayPanel } from '../components/HistoricalReplayPanel';
 import { HistoricalSignalCard } from '../components/HistoricalSignalCard';
 import { SignalResearchDashboard } from '../components/SignalResearchDashboard';
 import { SignalAlertCenter } from '../components/SignalAlertCenter';
 
 export function HistoricalSignalsPage() {
+  useEffect(() => {
+    if (window.location.hash !== '#historical-replay') return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById('historical-replay')?.scrollIntoView({ block: 'start' });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   return (
     <div className="page">
       <div className="dashboard-header">
