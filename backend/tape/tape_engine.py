@@ -231,6 +231,9 @@ class TapeEngine:
         sell_v = 0
         notional = 0.0
         largest = 0
+        upticks = 0
+        downticks = 0
+        previous_price: float | None = None
         for _, pr, sz, s in main:
             if s == "buy":
                 buy_v += sz
@@ -239,10 +242,22 @@ class TapeEngine:
             notional += pr * sz
             if sz > largest:
                 largest = sz
+            if previous_price is not None:
+                if pr > previous_price:
+                    upticks += 1
+                elif pr < previous_price:
+                    downticks += 1
+            previous_price = pr
         tot_v = buy_v + sell_v
         signed_v = buy_v - sell_v
         buy_ratio = (buy_v / tot_v) if tot_v else None
         vwap = (notional / tot_v) if tot_v else None
+
+        fast_buy_v = sum(sz for _, _, sz, side in fast if side == "buy")
+        fast_sell_v = sum(sz for _, _, sz, side in fast if side == "sell")
+        fast_total_v = fast_buy_v + fast_sell_v
+        fast_buy_ratio = (fast_buy_v / fast_total_v) if fast_total_v else None
+        uptick_ratio = (upticks / (upticks + downticks)) if (upticks + downticks) else None
 
         speed_main = len(main) / self._main_w
         speed_fast = len(fast) / self._fast_w
@@ -265,6 +280,17 @@ class TapeEngine:
             }
 
         pressure = self._pressure(signed_v, buy_ratio, len(main), sv_hist)
+        pressure_trend = self._pressure_trend(buy_ratio, fast_buy_ratio, len(fast))
+        recent_prints = [
+            {
+                "timestamp": datetime.fromtimestamp(ts, tz=UTC).astimezone(NY).isoformat(),
+                "price": pr,
+                "size": sz,
+                "side": side,
+                "is_block": pr * sz >= settings.tape.block_notional or sz >= settings.tape.block_size,
+            }
+            for ts, pr, sz, side in reversed(main[-12:])
+        ]
 
         return {
             "symbol": self.symbol,
@@ -280,9 +306,32 @@ class TapeEngine:
             "largest_print": largest,
             "tape_speed": round(speed_main, 2),
             "tape_accel": round(accel, 2) if accel is not None else None,
+            "trade_velocity": round(speed_fast, 2),
+            "uptick_count": upticks,
+            "downtick_count": downticks,
+            "uptick_ratio": round(uptick_ratio, 3) if uptick_ratio is not None else None,
+            "recent_buy_ratio": round(fast_buy_ratio, 3) if fast_buy_ratio is not None else None,
+            "pressure_trend": pressure_trend,
             "block_count_5m": len(blocks),
             "last_block": last_block,
+            "recent_prints": recent_prints,
         }
+
+    @staticmethod
+    def _pressure_trend(main_buy_ratio, fast_buy_ratio, fast_count: int) -> str:
+        """Describe whether the short tape is confirming or reversing flow."""
+        if fast_count < 3 or main_buy_ratio is None or fast_buy_ratio is None:
+            return "balanced"
+        delta = fast_buy_ratio - main_buy_ratio
+        if fast_buy_ratio >= 0.57 and delta >= 0.08:
+            return "strengthening_buy"
+        if fast_buy_ratio <= 0.43 and delta <= -0.08:
+            return "strengthening_sell"
+        if main_buy_ratio >= 0.57 and fast_buy_ratio <= 0.48:
+            return "reversing_sell"
+        if main_buy_ratio <= 0.43 and fast_buy_ratio >= 0.52:
+            return "reversing_buy"
+        return "balanced"
 
     def _pressure(self, signed_v, buy_ratio, n_trades, sv_hist) -> str:
         if n_trades < 5 or buy_ratio is None:

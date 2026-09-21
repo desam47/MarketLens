@@ -2518,8 +2518,15 @@ export interface TapeSnapshot {
   largest_print: number;
   tape_speed: number;
   tape_accel: number | null;
+  trade_velocity: number;
+  uptick_count: number;
+  downtick_count: number;
+  uptick_ratio: number | null;
+  recent_buy_ratio: number | null;
+  pressure_trend: 'strengthening_buy' | 'strengthening_sell' | 'reversing_buy' | 'reversing_sell' | 'balanced';
   block_count_5m: number;
   last_block: { price: number; size: number; side: string; notional: number; age_s: number } | null;
+  recent_prints: Array<{ timestamp: string; price: number; size: number; side: 'buy' | 'sell'; is_block: boolean }>;
 }
 
 export interface TapeResponse {

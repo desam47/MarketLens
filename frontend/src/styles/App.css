@@ -637,6 +637,14 @@ h4 {
   padding: 0 0.4rem; font-size: 0.72rem; font-weight: 700;
 }
 .tape-last-block { margin: 0.6rem 0 0; font-size: 0.72rem; color: var(--text-muted); }
+.tape-flow-trend { margin: 0.65rem 0 0; font-size: 0.78rem; font-weight: 600; }
+.tape-recent-prints { margin-top: 0.7rem; border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.tape-recent-heading, .tape-print { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.72rem; }
+.tape-recent-heading { color: var(--text-muted); margin-bottom: 0.2rem; }
+.tape-print { padding: 0.15rem 0; font-variant-numeric: tabular-nums; }
+.tape-print-buy { color: #4ade80; }
+.tape-print-sell { color: #f87171; }
+.tape-print-block { font-weight: 700; }
 
 .regime-main {
   margin: 1rem 0;

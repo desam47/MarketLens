@@ -85,6 +85,31 @@ class TestTapeEngine(unittest.TestCase):
         self.assertIsNotNone(snap["tape_accel"])
         self.assertGreater(snap["tape_accel"], 1.0)  # recent faster than the minute avg
 
+    def test_snapshot_includes_tick_direction_and_recent_prints(self):
+        e = TapeEngine("AAPL")
+        base = time.time() - 10
+        _feed(e, base, [
+            (1, 100.0, 100, "buy"),
+            (2, 100.1, 200, "buy"),
+            (3, 100.0, 300, "sell"),
+            (4, 100.2, 400, "buy"),
+        ])
+        snap = e.get_snapshot(now_s=base + 5)
+        self.assertEqual(snap["uptick_count"], 2)
+        self.assertEqual(snap["downtick_count"], 1)
+        self.assertAlmostEqual(snap["uptick_ratio"], 2 / 3, places=3)
+        self.assertGreater(snap["trade_velocity"], 0)
+        self.assertEqual(len(snap["recent_prints"]), 4)
+        self.assertEqual(snap["recent_prints"][0]["side"], "buy")
+
+    def test_pressure_trend_detects_recent_buying_strength(self):
+        e = TapeEngine("AAPL")
+        base = time.time() - 60
+        _feed(e, base, [(i, 100.0, 100, "sell" if i % 2 else "buy") for i in range(50)])
+        _feed(e, base, [(51 + i * 0.5, 100.1, 100, "buy") for i in range(8)])
+        snap = e.get_snapshot(now_s=base + 59)
+        self.assertEqual(snap["pressure_trend"], "strengthening_buy")
+
     def test_empty_engine_snapshot_is_safe(self):
         snap = TapeEngine("AAPL").get_snapshot()
         self.assertEqual(snap["pressure"], "neutral")
