@@ -131,25 +131,28 @@ async def lifespan(app: FastAPI):
     # "rate_limit:*" keys, and the backfill enqueue lock's
     # "backfill:enqueue-lock:*" keys (self-expiring in 10s regardless) are
     # untouched.
-    try:
-        import redis
+    if settings.startup_mode == "full":
+        try:
+            import redis
 
-        from backend.config.settings import settings as _s
+            from backend.config.settings import settings as _s
 
-        redis_url = _s.redis.url
-        r = redis.from_url(redis_url)
-        cleared = 0
-        cursor = 0
-        while True:
-            cursor, keys = r.scan(cursor=cursor, match="marketlens:*", count=500)
-            if keys:
-                r.delete(*keys)
-                cleared += len(keys)
-            if cursor == 0:
-                break
-        logger.info(f"Redis bar/quote cache cleared on startup ({cleared} keys)")
-    except Exception:
-        logger.warning("Redis cache clear failed; continuing", exc_info=True)
+            redis_url = _s.redis.url
+            r = redis.from_url(redis_url)
+            cleared = 0
+            cursor = 0
+            while True:
+                cursor, keys = r.scan(cursor=cursor, match="marketlens:*", count=500)
+                if keys:
+                    r.delete(*keys)
+                    cleared += len(keys)
+                if cursor == 0:
+                    break
+            logger.info(f"Redis bar/quote cache cleared on startup ({cleared} keys)")
+        except Exception:
+            logger.warning("Redis cache clear failed; continuing", exc_info=True)
+    else:
+        logger.info("STARTUP_MODE=api: skipping market-data cache reset")
 
     alerts_engine.startup()
     digest_service.start()
@@ -165,25 +168,28 @@ async def lifespan(app: FastAPI):
     # Start the market data ingestion service FIRST so it loads its
     # symbol list from the active watchlist before the trend warmup
     # iterates over those symbols.
-    try:
-        from backend.market_data.services.ingestion_service import ingestion_service
+    if settings.startup_mode == "full":
+        try:
+            from backend.market_data.services.ingestion_service import ingestion_service
 
-        if not ingestion_service.is_running:
-            ingestion_service.start()
-            logger.info(
-                f"Market data ingestion started for {len(ingestion_service.symbols)} "
-                f"symbols: {ingestion_service.symbols}"
-            )
-        else:
-            logger.info("Market data ingestion already running")
-    except Exception as e:
-        logger.warning(f"Ingestion service startup failed: {e}")
+            if not ingestion_service.is_running:
+                ingestion_service.start()
+                logger.info(
+                    f"Market data ingestion started for {len(ingestion_service.symbols)} "
+                    f"symbols: {ingestion_service.symbols}"
+                )
+            else:
+                logger.info("Market data ingestion already running")
+        except Exception as e:
+            logger.warning(f"Ingestion service startup failed: {e}")
+    else:
+        logger.info("STARTUP_MODE=api: skipping market-data ingestion and provider connections")
 
     # Webull MQTT streaming (2026-09-10) — push L1 snapshots + trade ticks.
     # Off unless WEBULL_STREAMING_ENABLED=true. When live, the polled quote
     # loop backs off to a stale-fallback for covered symbols.
     try:
-        if settings.webull.streaming_enabled:
+        if settings.startup_mode == "full" and settings.webull.streaming_enabled:
             from backend.market_data.services.ingestion_service import ingestion_service
             from backend.market_data.streaming.bridge import (
                 on_stream_snapshot,
@@ -204,19 +210,20 @@ async def lifespan(app: FastAPI):
 
     # Pre-register trend engines for all ingested symbols so bars dispatched
     # by the ingestion service have listeners from the first tick.
-    try:
-        from backend.api.trend.registry import warmup_engines
+    if settings.startup_mode == "full":
+        try:
+            from backend.api.trend.registry import warmup_engines
 
-        warmed = warmup_engines()
-        for sym, count in warmed.items():
-            logger.info(f"Trend engine warmup: {sym} ({count} bars)")
-    except Exception as e:
-        logger.warning(f"Trend engine warmup failed: {e}")
+            warmed = warmup_engines()
+            for sym, count in warmed.items():
+                logger.info(f"Trend engine warmup: {sym} ({count} bars)")
+        except Exception as e:
+            logger.warning(f"Trend engine warmup failed: {e}")
 
     # Tape (Time & Sales) analytics — pre-warm per-symbol engines + start
     # the 1-second-bar persistence flusher. Off unless TAPE_ENABLED=true.
     try:
-        if settings.tape.enabled:
+        if settings.startup_mode == "full" and settings.tape.enabled:
             from backend.api.tape.registry import warmup_tape_engines
 
             warmed_tape = warmup_tape_engines()
@@ -229,7 +236,7 @@ async def lifespan(app: FastAPI):
     # (analyze_symbol's choke point) is gated independently and doesn't
     # need anything started here.
     try:
-        if settings.ai_trade_plan_tracking.enabled:
+        if settings.startup_mode == "full" and settings.ai_trade_plan_tracking.enabled:
             from backend.ai.trade_plan_tracker import start_trade_plan_tracker
 
             start_trade_plan_tracker()
@@ -242,20 +249,21 @@ async def lifespan(app: FastAPI):
     # (SPY/QQQ/IWM/VIX sub-regimes warm from 1d history + live-tick
     # registration), not a cold singleton that has to seed on the request
     # path. Mirrors the trend warmup pattern above.
-    try:
-        from backend.api.market_context.router import get_engine
+    if settings.startup_mode == "full":
+        try:
+            from backend.api.market_context.router import get_engine
 
-        mc_engine = get_engine()
-        seeded = sum(
-            1
-            for sym in mc_engine._cfg.indices
-            if mc_engine.sub_engines[sym].get_current_regime() is not None
-        )
-        logger.info(
-            f"Market-context warmup: {seeded}/{len(mc_engine._cfg.indices)} sub-engines warmed"
-        )
-    except Exception as e:
-        logger.warning(f"Market-context warmup failed: {e}")
+            mc_engine = get_engine()
+            seeded = sum(
+                1
+                for sym in mc_engine._cfg.indices
+                if mc_engine.sub_engines[sym].get_current_regime() is not None
+            )
+            logger.info(
+                f"Market-context warmup: {seeded}/{len(mc_engine._cfg.indices)} sub-engines warmed"
+            )
+        except Exception as e:
+            logger.warning(f"Market-context warmup failed: {e}")
 
     # Signal hygiene: fill gaps and enforce retention caps on every restart so
     # any ticker added before these fixes get patched automatically.
@@ -313,12 +321,13 @@ async def lifespan(app: FastAPI):
     # writes finish instead of being cut off mid-transaction. Each stop is
     # isolated so one failure can't skip the rest. ``stop()`` joins its
     # thread, so run it off the event loop.
-    try:
-        from backend.market_data.services.ingestion_service import ingestion_service
+    if settings.startup_mode == "full":
+        try:
+            from backend.market_data.services.ingestion_service import ingestion_service
 
-        await asyncio.to_thread(ingestion_service.stop)
-    except Exception as e:
-        logger.warning(f"Ingestion shutdown failed: {e}")
+            await asyncio.to_thread(ingestion_service.stop)
+        except Exception as e:
+            logger.warning(f"Ingestion shutdown failed: {e}")
     try:
         digest_service.stop()
     except Exception as e:
@@ -337,14 +346,14 @@ async def lifespan(app: FastAPI):
             _stream.stop()
         except Exception as e:
             logger.warning(f"Webull stream shutdown failed: {e}")
-    if settings.tape.enabled:
+    if settings.startup_mode == "full" and settings.tape.enabled:
         try:
             from backend.api.tape.registry import stop_tape_flusher
 
             stop_tape_flusher()
         except Exception as e:
             logger.warning(f"Tape flusher shutdown failed: {e}")
-    if settings.ai_trade_plan_tracking.enabled:
+    if settings.startup_mode == "full" and settings.ai_trade_plan_tracking.enabled:
         try:
             from backend.ai.trade_plan_tracker import stop_trade_plan_tracker
 
@@ -533,6 +542,7 @@ async def system_status():
         "service": settings.app_name,
         "version": get_version(),
         "debug": settings.debug,
+        "startup_mode": settings.startup_mode,
         "market_data_provider": settings.market_data.primary_provider,
         "market_data_fallback_providers": settings.market_data.fallback_providers,
         "ai_enabled": settings.ai.enabled,

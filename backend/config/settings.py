@@ -4,6 +4,7 @@ Application configuration settings
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -967,6 +968,10 @@ class Settings(BaseSettings):
     # is absent, so the server always starts with a valid version string.
     app_version: str = Field(default_factory=_version_factory)
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG", "debug"))
+    # ``api`` keeps local frontend/API work fast without live market-data
+    # services: providers are not initialized and automatic ingestion/warmups
+    # are skipped. Switch back to ``full`` and restart for live market data.
+    startup_mode: Literal["full", "api"] = Field(default="full")
     # Log level for the root logger (DEBUG/INFO/WARNING/ERROR/CRITICAL).
     # Takes precedence over the DEBUG flag. Reads from LOG_LEVEL env var.
     log_level: str = Field(default="INFO")

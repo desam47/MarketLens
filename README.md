@@ -237,6 +237,12 @@ exported environment variables). They pass the API URL and a separate frontend
 port to CRA, then stop all child processes cleanly on `Ctrl+C`. When Redis is
 disabled, workers are skipped.
 
+For frontend or ordinary API-route work that does not need fresh market data,
+set `STARTUP_MODE=api` in `.env` and restart. It prevents market-data provider
+initialization, automatic ingestion/streaming, data-engine warmups, and local
+RQ workers; previously stored data remains available. Set it back to `full`
+before using live quotes, scans, backfills, or streaming data.
+
 If you run Uvicorn manually instead, start workers yourself when Redis is
 enabled — without them, AI analysis and ticker backfill (step 6) queue but do
 not run:

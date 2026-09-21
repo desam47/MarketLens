@@ -46,6 +46,7 @@ file_config_value() {
 BACKEND_HOST="$(config_value HOST "0.0.0.0")"
 BACKEND_PORT="$(config_value PORT "5001")"
 FRONTEND_PORT="$(config_value FRONTEND_PORT "3000")"
+STARTUP_MODE="$(config_value STARTUP_MODE "full")"
 DEBUG_VALUE="$(file_config_value DEBUG "false")"
 validate_port() {
     local name="$1"
@@ -57,6 +58,13 @@ validate_port() {
 }
 validate_port "PORT" "$BACKEND_PORT"
 validate_port "FRONTEND_PORT" "$FRONTEND_PORT"
+case "$(printf '%s' "$STARTUP_MODE" | tr '[:upper:]' '[:lower:]')" in
+    full|api) STARTUP_MODE="$(printf '%s' "$STARTUP_MODE" | tr '[:upper:]' '[:lower:]')" ;;
+    *)
+        echo "STARTUP_MODE must be 'full' or 'api', got '$STARTUP_MODE'." >&2
+        exit 1
+        ;;
+esac
 case "$(printf '%s' "$DEBUG_VALUE" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on) DEBUG_VALUE=true ;;
     0|false|no|off) DEBUG_VALUE=false ;;
@@ -102,7 +110,7 @@ trap 'exit 0' INT TERM
 echo "📁 Working directory: $SCRIPT_DIR"
 echo "🚀 Starting backend on $BACKEND_URL ..."
 # Reload excludes tests so editing them does not restart the whole application.
-DEBUG="$DEBUG_VALUE" python -m uvicorn backend.api.main:app \
+DEBUG="$DEBUG_VALUE" STARTUP_MODE="$STARTUP_MODE" python -m uvicorn backend.api.main:app \
     --host "$BACKEND_HOST" \
     --port "$BACKEND_PORT" \
     --reload \
@@ -125,7 +133,9 @@ fi
 
 case "$(printf '%s' "$REDIS_ENABLED" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes|on)
-        if command -v rq >/dev/null 2>&1; then
+        if [[ "$STARTUP_MODE" == "api" ]]; then
+            echo "ℹ️  STARTUP_MODE=api — skipping background workers."
+        elif command -v rq >/dev/null 2>&1; then
             echo "🚀 Starting AI analysis worker (marketlens-workers) ..."
             DEBUG="$DEBUG_VALUE" rq worker --url "$REDIS_URL" --worker-class rq.worker.SimpleWorker marketlens-workers &
             PIDS+=("$!")

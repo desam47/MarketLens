@@ -143,6 +143,9 @@ def get_cached_provider(name: str):
     (never raises) if the name is unknown or construction fails —
     failures are never cached, so the next call retries.
     """
+    if _settings.startup_mode == "api":
+        logger.info("Provider %r is unavailable while STARTUP_MODE=api", name)
+        return None
     if name in _provider_instance_cache:
         return _provider_instance_cache[name]
     provider_cls = _PROVIDER_CLASSES.get(name)

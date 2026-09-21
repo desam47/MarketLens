@@ -37,6 +37,14 @@ def _debug_value() -> bool:
     raise SystemExit(f"DEBUG must be a boolean, got {raw_value!r}")
 
 
+def _startup_mode_value() -> str:
+    """Return the validated local startup mode."""
+    mode = _env_value("STARTUP_MODE", "full").lower()
+    if mode not in {"full", "api"}:
+        raise SystemExit(f"STARTUP_MODE must be 'full' or 'api', got {mode!r}")
+    return mode
+
+
 def _display_host(host: str) -> str:
     """Return a browser-reachable representation of a listening host."""
     if host in {"0.0.0.0", "::"}:
@@ -50,6 +58,7 @@ class LocalConfig:
     port: int
     frontend_port: int
     debug: bool
+    startup_mode: str
     api_base_url: str
     redis_url: str
     redis_enabled: bool
@@ -94,6 +103,7 @@ def load_config() -> LocalConfig:
         port=port,
         frontend_port=frontend_port,
         debug=_debug_value(),
+        startup_mode=_startup_mode_value(),
         api_base_url=_env_value("REACT_APP_API_BASE_URL", f"{backend_url}/api"),
         redis_url=_env_value("REDIS_URL", "redis://localhost:6379/0"),
         redis_enabled=redis_enabled,
@@ -109,6 +119,7 @@ def _backend_env(config: LocalConfig) -> dict[str, str]:
         "PORT": str(config.port),
         "REDIS_URL": config.redis_url,
         "REDIS_ENABLED": str(config.redis_enabled).lower(),
+        "STARTUP_MODE": config.startup_mode,
     }
 
 
@@ -154,6 +165,9 @@ def start_workers(config: LocalConfig) -> list[subprocess.Popen]:
     """Start optional RQ workers when Redis-backed jobs are enabled."""
     import shutil
 
+    if config.startup_mode == "api":
+        print("ℹ️  STARTUP_MODE=api — skipping background workers.")
+        return []
     if not config.redis_enabled:
         print("ℹ️  Redis is disabled — skipping background workers.")
         return []

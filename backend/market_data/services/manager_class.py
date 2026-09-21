@@ -71,8 +71,13 @@ class MarketDataManager:
         Priority is the index in the [primary, *fallbacks] list — primary
         is priority 0, the first fallback is priority 1, etc.
         """
-        primary = get_settings().market_data.primary_provider
-        fallbacks = list(get_settings().market_data.fallback_providers)
+        settings = get_settings()
+        if settings.startup_mode == "api":
+            logger.info("Market-data provider initialization skipped (STARTUP_MODE=api)")
+            return
+
+        primary = settings.market_data.primary_provider
+        fallbacks = list(settings.market_data.fallback_providers)
         ordered = [primary] + [f for f in fallbacks if f != primary]
         for priority, name in enumerate(ordered):
             cls = _PROVIDER_CLASSES.get(name)

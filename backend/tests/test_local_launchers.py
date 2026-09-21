@@ -21,6 +21,7 @@ def isolated_launcher_config(monkeypatch: pytest.MonkeyPatch) -> None:
         "REACT_APP_API_BASE_URL",
         "REDIS_ENABLED",
         "REDIS_URL",
+        "STARTUP_MODE",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(local_run, "_DOTENV_VALUES", {})
@@ -44,6 +45,7 @@ def test_load_config_uses_distinct_api_and_frontend_ports(
     assert config.api_base_url == "http://localhost:5101/api"
     assert config.debug is False
     assert config.redis_enabled is False
+    assert config.startup_mode == "full"
     assert local_run._backend_env(config)["DEBUG"] == "false"
 
 
@@ -75,6 +77,31 @@ def test_load_config_rejects_shared_api_and_frontend_port(
 
     with pytest.raises(SystemExit, match="PORT and FRONTEND_PORT must use different values"):
         local_run.load_config()
+
+
+def test_load_config_rejects_unknown_startup_mode(
+    monkeypatch: pytest.MonkeyPatch, isolated_launcher_config: None
+) -> None:
+    monkeypatch.setenv("STARTUP_MODE", "offline")
+
+    with pytest.raises(SystemExit, match="STARTUP_MODE must be 'full' or 'api'"):
+        local_run.load_config()
+
+
+def test_api_mode_skips_background_workers(capsys: pytest.CaptureFixture[str]) -> None:
+    config = local_run.LocalConfig(
+        host="0.0.0.0",
+        port=5101,
+        frontend_port=3101,
+        debug=False,
+        startup_mode="api",
+        api_base_url="http://localhost:5101/api",
+        redis_url="redis://localhost:6379/0",
+        redis_enabled=True,
+    )
+
+    assert local_run.start_workers(config) == []
+    assert "STARTUP_MODE=api — skipping background workers." in capsys.readouterr().out
 
 
 def test_shell_launcher_rejects_shared_api_and_frontend_port() -> None:
