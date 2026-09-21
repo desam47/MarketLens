@@ -84,6 +84,8 @@ class TestTapeEngine(unittest.TestCase):
         self.assertGreater(snap["tape_speed"], 0)
         self.assertIsNotNone(snap["tape_accel"])
         self.assertGreater(snap["tape_accel"], 1.0)  # recent faster than the minute avg
+        self.assertIsNotNone(snap["volume_accel"])
+        self.assertGreater(snap["volume_accel"], 1.0)  # recent volume rate also accelerated
 
     def test_snapshot_includes_tick_direction_and_recent_prints(self):
         e = TapeEngine("AAPL")

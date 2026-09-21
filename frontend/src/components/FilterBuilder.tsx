@@ -266,6 +266,57 @@ const FILTER_DEFS: FilterDef[] = [
     ],
   },
   {
+    type: 'tight_spread',
+    label: 'Tight Spread',
+    description: 'Live best-bid/offer spread is within the selected width',
+    paramDefs: [{ key: 'max_spread_bps', label: 'Max Spread (bps)', type: 'number', default: 10, min: 0, max: 1000, step: 0.5 }],
+  },
+  {
+    type: 'spread_widening',
+    label: 'Spread Widening',
+    description: 'Live best-bid/offer spread widened from its prior update',
+    paramDefs: [{ key: 'min_change_bps', label: 'Min Widening (bps)', type: 'number', default: 3, min: 0, max: 1000, step: 0.5 }],
+  },
+  {
+    type: 'tape_pressure',
+    label: 'Tape Pressure',
+    description: 'Recent Time & Sales flow is buy-side or sell-side',
+    paramDefs: [{
+      key: 'direction', label: 'Direction', type: 'select', default: 'buy',
+      options: [{ value: 'buy', label: 'Buy Side' }, { value: 'sell', label: 'Sell Side' }],
+    }],
+  },
+  {
+    type: 'large_print_activity',
+    label: 'Large-Print Activity',
+    description: 'Recent tape contains block-sized prints',
+    paramDefs: [{ key: 'min_blocks', label: 'Min Large Prints', type: 'number', default: 1, min: 1, max: 100, step: 1 }],
+  },
+  {
+    type: 'trade_rate_spike',
+    label: 'Trade-Rate Spike',
+    description: 'Recent trade arrival rate exceeds its baseline',
+    paramDefs: [{ key: 'min_acceleration', label: 'Min Acceleration', type: 'number', default: 1.5, min: 1, max: 20, step: 0.1 }],
+  },
+  {
+    type: 'bid_ask_imbalance',
+    label: 'Bid/Ask Imbalance',
+    description: 'Displayed BBO size is tilted toward bids or asks',
+    paramDefs: [
+      {
+        key: 'direction', label: 'Side', type: 'select', default: 'bid',
+        options: [{ value: 'bid', label: 'Bid Heavy' }, { value: 'ask', label: 'Ask Heavy' }],
+      },
+      { key: 'min_imbalance', label: 'Min Imbalance', type: 'number', default: 0.2, min: 0.01, max: 1, step: 0.05 },
+    ],
+  },
+  {
+    type: 'live_volume_acceleration',
+    label: 'Live Volume Acceleration',
+    description: 'Recent tape volume rate exceeds its baseline',
+    paramDefs: [{ key: 'min_acceleration', label: 'Min Acceleration', type: 'number', default: 1.5, min: 1, max: 20, step: 0.1 }],
+  },
+  {
     type: 'exclude_earnings_within_days',
     label: 'Exclude Upcoming Earnings',
     description: 'Exclude symbols with a provider-estimated earnings date inside this window',

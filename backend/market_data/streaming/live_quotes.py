@@ -33,6 +33,22 @@ class LiveQuoteCache:
             "timestamp": timestamp.isoformat() if hasattr(timestamp, "isoformat") else timestamp,
             "received_at": time.time(), "provider": provider, "event_type": event_type,
         }
+        # Keep lightweight BBO-derived values beside the raw quote.  They are
+        # shared by the scanner, alerts, and UI, so consumers do not each need
+        # their own stateful spread calculation.
+        current_bid, current_ask = payload["bid"], payload["ask"]
+        if (
+            isinstance(current_bid, (int, float))
+            and isinstance(current_ask, (int, float))
+            and current_bid > 0
+            and current_ask >= current_bid
+        ):
+            midpoint = (current_bid + current_ask) / 2
+            spread_bps = ((current_ask - current_bid) / midpoint) * 10_000 if midpoint else 0.0
+            payload["spread_bps"] = round(spread_bps, 3)
+            previous_spread = previous.get("spread_bps")
+            if isinstance(previous_spread, (int, float)):
+                payload["spread_change_bps"] = round(spread_bps - previous_spread, 3)
         with self._lock:
             # Webull can replay a message after reconnect. Suppress an exact
             # duplicate before it fans out to every browser and tape engine.

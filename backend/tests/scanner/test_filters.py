@@ -12,11 +12,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 from backend.scanner.filters import (
     ADXStrong,
     AndFilter,
+    BidAskImbalance,
     Breakdown,
     Breakout,
     DailyBearish,
     DailyBullish,
     HighVolume,
+    LargePrintActivity,
+    LiveVolumeAcceleration,
     MACDBearish,
     MACDBullish,
     MinTimeframeBearish,
@@ -33,7 +36,11 @@ from backend.scanner.filters import (
     RSIOverbought,
     RSIOversold,
     SignalPresent,
+    SpreadWidening,
+    TapePressure,
     TimeframeDirection,
+    TightSpread,
+    TradeRateSpike,
     TrendScoreGt,
     TrendScoreLt,
     TrueFilter,
@@ -234,6 +241,28 @@ class TestConcreteFilters(unittest.TestCase):
         self.assertFalse(VolatilityExpansion(1.25).matches(r))
         self.assertTrue(RelativeStrengthAbove("SPY", 2).matches(r))
         self.assertFalse(RelativeStrengthBelow("SPY", -1).matches(r))
+
+    def test_microstructure_filters(self):
+        r = _result()
+        r.indicator_values.update({
+            "spread_bps": 4.5,
+            "spread_change_bps": 3.2,
+            "tape_pressure": "heavy_buy",
+            "tape_block_count": 2,
+            "tape_acceleration": 1.8,
+            "bid_ask_imbalance": 0.35,
+            "tape_volume_acceleration": 2.1,
+        })
+        self.assertTrue(TightSpread(5).matches(r))
+        self.assertFalse(TightSpread(4).matches(r))
+        self.assertTrue(SpreadWidening(3).matches(r))
+        self.assertTrue(TapePressure("buy").matches(r))
+        self.assertFalse(TapePressure("sell").matches(r))
+        self.assertTrue(LargePrintActivity(2).matches(r))
+        self.assertTrue(TradeRateSpike(1.5).matches(r))
+        self.assertTrue(BidAskImbalance("bid", 0.3).matches(r))
+        self.assertFalse(BidAskImbalance("ask", 0.3).matches(r))
+        self.assertTrue(LiveVolumeAcceleration(2).matches(r))
 
 
 class TestComposition(unittest.TestCase):

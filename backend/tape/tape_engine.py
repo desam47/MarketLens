@@ -262,6 +262,9 @@ class TapeEngine:
         speed_main = len(main) / self._main_w
         speed_fast = len(fast) / self._fast_w
         accel = (speed_fast / speed_main) if speed_main else None
+        volume_rate_main = tot_v / self._main_w
+        volume_rate_fast = fast_total_v / self._fast_w
+        volume_accel = (volume_rate_fast / volume_rate_main) if volume_rate_main else None
 
         blocks = [
             (ts, pr, sz, s)
@@ -306,6 +309,7 @@ class TapeEngine:
             "largest_print": largest,
             "tape_speed": round(speed_main, 2),
             "tape_accel": round(accel, 2) if accel is not None else None,
+            "volume_accel": round(volume_accel, 2) if volume_accel is not None else None,
             "trade_velocity": round(speed_fast, 2),
             "uptick_count": upticks,
             "downtick_count": downticks,

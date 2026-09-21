@@ -609,6 +609,113 @@ class RelativeStrengthBelow(Filter):
         return f"RS({self.benchmark}) ≤ {self.max_pct:.1f}%"
 
 
+class TightSpread(Filter):
+    """Best bid/offer spread is at or below a maximum basis-point width."""
+
+    def __init__(self, max_spread_bps: float = 10.0):
+        self.max_spread_bps = float(max_spread_bps)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("spread_bps")
+        return isinstance(value, (int, float)) and float(value) <= self.max_spread_bps
+
+    def describe(self) -> str:
+        return f"spread ≤ {self.max_spread_bps:.1f} bps"
+
+
+class SpreadWidening(Filter):
+    """Current BBO spread has widened by the requested number of basis points."""
+
+    def __init__(self, min_change_bps: float = 3.0):
+        self.min_change_bps = float(min_change_bps)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("spread_change_bps")
+        return isinstance(value, (int, float)) and float(value) >= self.min_change_bps
+
+    def describe(self) -> str:
+        return f"spread widening ≥ {self.min_change_bps:.1f} bps"
+
+
+class TapePressure(Filter):
+    """Classified live tape pressure is buy-side or sell-side."""
+
+    def __init__(self, direction: str = "buy"):
+        direction = direction.lower()
+        if direction not in {"buy", "sell"}:
+            raise ValueError("direction must be 'buy' or 'sell'")
+        self.direction = direction
+
+    def matches(self, result: ScanResult) -> bool:
+        pressure = result.indicator_values.get("tape_pressure")
+        return pressure in {self.direction, f"heavy_{self.direction}"}
+
+    def describe(self) -> str:
+        return f"{self.direction}-side tape pressure"
+
+
+class LargePrintActivity(Filter):
+    """At least N block-sized prints appeared in the recent tape window."""
+
+    def __init__(self, min_blocks: int = 1):
+        self.min_blocks = int(min_blocks)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("tape_block_count")
+        return isinstance(value, (int, float)) and value >= self.min_blocks
+
+    def describe(self) -> str:
+        return f"large prints ≥ {self.min_blocks}"
+
+
+class TradeRateSpike(Filter):
+    """Recent trade arrival rate exceeds its main-window baseline."""
+
+    def __init__(self, min_acceleration: float = 1.5):
+        self.min_acceleration = float(min_acceleration)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("tape_acceleration")
+        return isinstance(value, (int, float)) and float(value) >= self.min_acceleration
+
+    def describe(self) -> str:
+        return f"trade rate acceleration ≥ {self.min_acceleration:.1f}×"
+
+
+class BidAskImbalance(Filter):
+    """Displayed BBO size is materially tilted toward bids or asks."""
+
+    def __init__(self, direction: str = "bid", min_imbalance: float = 0.2):
+        direction = direction.lower()
+        if direction not in {"bid", "ask"}:
+            raise ValueError("direction must be 'bid' or 'ask'")
+        self.direction = direction
+        self.min_imbalance = abs(float(min_imbalance))
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("bid_ask_imbalance")
+        if not isinstance(value, (int, float)):
+            return False
+        return float(value) >= self.min_imbalance if self.direction == "bid" else float(value) <= -self.min_imbalance
+
+    def describe(self) -> str:
+        return f"{self.direction}-side size imbalance ≥ {self.min_imbalance:.2f}"
+
+
+class LiveVolumeAcceleration(Filter):
+    """Recent tape volume rate exceeds its main-window baseline."""
+
+    def __init__(self, min_acceleration: float = 1.5):
+        self.min_acceleration = float(min_acceleration)
+
+    def matches(self, result: ScanResult) -> bool:
+        value = result.indicator_values.get("tape_volume_acceleration")
+        return isinstance(value, (int, float)) and float(value) >= self.min_acceleration
+
+    def describe(self) -> str:
+        return f"live volume acceleration ≥ {self.min_acceleration:.1f}×"
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -642,6 +749,13 @@ _FILTER_REGISTRY: dict[str, type[Filter]] = {
     "volatility_expansion": VolatilityExpansion,
     "relative_strength_above": RelativeStrengthAbove,
     "relative_strength_below": RelativeStrengthBelow,
+    "tight_spread": TightSpread,
+    "spread_widening": SpreadWidening,
+    "tape_pressure": TapePressure,
+    "large_print_activity": LargePrintActivity,
+    "trade_rate_spike": TradeRateSpike,
+    "bid_ask_imbalance": BidAskImbalance,
+    "live_volume_acceleration": LiveVolumeAcceleration,
 }
 
 

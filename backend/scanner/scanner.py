@@ -817,14 +817,53 @@ class Scanner:
                     else:
                         snap = get_tape_engine(result.symbol).get_snapshot()
                         self._tape_cache[result.symbol] = (now, snap)
+                    # Persist live metrics on the scan result so the
+                    # composable filter endpoint can evaluate the same shared
+                    # microstructure snapshot without additional stream work.
+                    result.indicator_values.update({
+                        "tape_pressure": snap["pressure"],
+                        "tape_block_count": snap["block_count_5m"],
+                        "tape_acceleration": snap["tape_accel"],
+                        "tape_trade_velocity": snap["trade_velocity"],
+                        "tape_volume_acceleration": snap["volume_accel"],
+                        "tape_recent_buy_ratio": snap["recent_buy_ratio"],
+                    })
                     if snap["pressure"] == "heavy_buy":
                         signals.append("HEAVY_BUY_PRESSURE")
                     elif snap["pressure"] == "heavy_sell":
                         signals.append("HEAVY_SELL_PRESSURE")
                     if snap["block_count_5m"] > 0:
                         signals.append("BLOCK_ACTIVITY")
+                    if isinstance(snap["tape_accel"], (int, float)) and snap["tape_accel"] >= 1.5:
+                        signals.append("TRADE_RATE_SPIKE")
+                    if isinstance(snap["volume_accel"], (int, float)) and snap["volume_accel"] >= 1.5:
+                        signals.append("LIVE_VOLUME_ACCELERATION")
                 except Exception:  # noqa: BLE001
                     pass
+
+            # BBO metrics are supplied by the shared live quote cache.  A
+            # missing or stale BBO simply leaves these absent, making the
+            # corresponding filters safely not match rather than guessing.
+            try:
+                from backend.market_data.streaming.live_quotes import live_quote_cache
+
+                live_quote = live_quote_cache.get(result.symbol)
+                if live_quote is not None:
+                    for key in ("spread_bps", "spread_change_bps"):
+                        value = live_quote.get(key)
+                        if isinstance(value, (int, float)):
+                            result.indicator_values[key] = value
+                    bid_size, ask_size = live_quote.get("bid_size"), live_quote.get("ask_size")
+                    if (
+                        isinstance(bid_size, (int, float))
+                        and isinstance(ask_size, (int, float))
+                        and bid_size + ask_size > 0
+                    ):
+                        result.indicator_values["bid_ask_imbalance"] = round(
+                            (bid_size - ask_size) / (bid_size + ask_size), 3
+                        )
+            except Exception:  # noqa: BLE001
+                pass
 
             result.signals = signals
 
