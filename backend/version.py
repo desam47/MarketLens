@@ -1,7 +1,7 @@
 """
 Git-based version info.
 
-Read from ``version.txt`` (written by the pre-commit hook on every commit).
+Read from ``version.txt`` (written by the post-commit hook on every commit).
 Falls back to "dev" when not available so the server starts without git.
 
 Important: the file is re-read on every call so the version reflects the

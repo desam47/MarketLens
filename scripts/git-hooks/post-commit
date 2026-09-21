@@ -15,9 +15,11 @@
 # hook file belongs to the ruff/mypy framework (`pre-commit install`
 # overwrites .git/hooks/pre-commit), so the two never collide.
 #
-# Format:  v<tag>                if HEAD is exactly on a version tag
-#          v<tag>+<n>.g<hash>    if N commits past the nearest v* tag
-#          v0.0.0+g.<hash>       if no version tag exists in history yet
+# Format:  <version> · committed <ISO-8601 timestamp>
+#
+# The timestamp comes from Git's commit object, not the clock when this hook
+# happens to run. That makes it an exact, stable record of when the code was
+# committed and preserves the original timestamp after a restart or re-stamp.
 #
 # Examples:
 #   v3.3.0                  HEAD is the v3.3.0 tag itself
@@ -40,7 +42,7 @@ VERSION_FILE="$REPO_ROOT/version.txt"
 
 # If HEAD is exactly on a version tag, that IS the version.
 if TAG=$(git describe --tags --match 'v*' --exact-match HEAD 2>/dev/null); then
-    echo "$TAG" > "$VERSION_FILE"
+    VERSION="$TAG"
 else
     # Find the most recent version tag reachable from HEAD.
     # ``--match 'v*'`` restricts to version tags; ``--abbrev=7`` keeps the
@@ -57,11 +59,14 @@ else
         AHEAD="${DESC#*-}"            # 206-g8326937
         COMMITS="${AHEAD%%-*}"        # 206
         HASH="${DESC##*-g}"           # 8326937
-        echo "${BASE}+${COMMITS}.g${HASH}" > "$VERSION_FILE"
+        VERSION="${BASE}+${COMMITS}.g${HASH}"
     else
         # No version tag in history — use v0.0.0 as a placeholder.
-        echo "v0.0.0+g.${DESC}" > "$VERSION_FILE"
+        VERSION="v0.0.0+g.${DESC}"
     fi
 fi
+
+COMMITTED_AT=$(git show -s --format=%cI HEAD)
+printf '%s · committed %s\n' "$VERSION" "$COMMITTED_AT" > "$VERSION_FILE"
 
 echo "version.txt stamped: $(cat "$VERSION_FILE")"
