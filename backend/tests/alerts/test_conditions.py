@@ -14,7 +14,10 @@ from backend.alerts.conditions import (
     _eval_breakout,
     _eval_divergence,
     _eval_full_timeframe_alignment,
+    _eval_insider_sentiment_change,
     _eval_market_regime_change,
+    _eval_news_arrival,
+    _eval_options_activity_change,
     _eval_pct_change_above,
     _eval_price_above,
     _eval_price_below,
@@ -231,6 +234,23 @@ class TestConditionEvaluators(unittest.TestCase):
     def test_volume_expansion_non_dict(self):
         self.assertFalse(_eval_volume_expansion("2.0", 50000))
 
+    # --- auxiliary provider events --------------------------------------
+
+    def test_news_arrival_relevance_floor(self):
+        self.assertTrue(_eval_news_arrival("0.5", {"new_count": 1, "max_relevance": 0.8}))
+        self.assertFalse(_eval_news_arrival("0.9", {"new_count": 1, "max_relevance": 0.8}))
+        self.assertFalse(_eval_news_arrival("0.0", {"new_count": 0, "max_relevance": 1.0}))
+
+    def test_insider_sentiment_change_threshold(self):
+        value = {"current_sentiment": 0.4, "previous_sentiment": -0.1}
+        self.assertTrue(_eval_insider_sentiment_change("0.4", value))
+        self.assertFalse(_eval_insider_sentiment_change("0.6", value))
+
+    def test_options_activity_change_checks_volume_and_open_interest(self):
+        self.assertTrue(_eval_options_activity_change("50", {"volume_change_pct": 60}))
+        self.assertTrue(_eval_options_activity_change("50", {"open_interest_change_pct": -55}))
+        self.assertFalse(_eval_options_activity_change("50", {"volume_change_pct": 10, "open_interest_change_pct": 20}))
+
     # --- divergence ----------------------------------------------------
 
     def test_negative_divergence_price_up_rsi_down(self):
@@ -360,7 +380,8 @@ class TestEvaluateDispatcher(unittest.TestCase):
             "trend_direction_changes", "trend_strengthens", "trend_weakens",
             "full_timeframe_alignment", "timeframe_conflict",
             "volume_expansion", "divergence", "breakout", "breakdown",
-            "market_regime_change", "signal_profile",
+            "market_regime_change", "signal_profile", "news_arrival",
+            "insider_sentiment_change", "options_activity_change",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 

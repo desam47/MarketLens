@@ -54,6 +54,29 @@ describe('OptionsPanel', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('Expiration:')).toHaveValue('2026-12-18');
     });
-    expect(screen.getByText('📊 Options Chain')).toBeInTheDocument();
+    expect(screen.getByText('📊 Options Snapshot')).toBeInTheDocument();
+  });
+
+  it('shows an IV-based expected move and flow flags', async () => {
+    mockApi.getOptions.mockResolvedValue({
+      ...response('AAPL', ['2026-10-16']),
+      near_term_iv: 0.3,
+      chains: [{
+        ...chain('AAPL', '2026-10-16'),
+        put_call_ratio: 1.8,
+        avg_iv_call: 0.3,
+        avg_iv_put: 0.32,
+        unusual_activity: 'high',
+        calls: [{ strike: 100, expiration: '2026-10-16', option_type: 'call', bid: 1, ask: 1.2, last: 1.1, volume: 10, open_interest: 100, implied_volatility: 0.3, delta: null, gamma: null, theta: null, vega: null, rho: null, in_the_money: true }],
+        puts: [{ strike: 100, expiration: '2026-10-16', option_type: 'put', bid: 2, ask: 2.2, last: 2.1, volume: 20, open_interest: 200, implied_volatility: 0.32, delta: null, gamma: null, theta: null, vega: null, rho: null, in_the_money: false }],
+      }],
+    });
+
+    render(<OptionsPanel symbol="AAPL" underlyingPrice={100} />);
+
+    expect(await screen.findByText(/±\$/)).toBeInTheDocument();
+    expect(screen.getByText('high provider activity')).toBeInTheDocument();
+    expect(screen.getByText('Put volume elevated')).toBeInTheDocument();
+    expect(screen.getByText('Put open interest elevated')).toBeInTheDocument();
   });
 });

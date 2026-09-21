@@ -7,11 +7,13 @@ import sys
 import time
 import unittest
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../"))
 
 from backend.alerts.engine import (
+    AUX_CONDITIONS,
     BAR_CONDITIONS,
     DEDUP_WINDOW_SECONDS,
     PRICE_CONDITIONS,
@@ -59,7 +61,7 @@ class TestConditionGroupConstants(unittest.TestCase):
     def test_every_non_signal_condition_type_is_covered(self):
         from backend.alerts.conditions import VALID_CONDITION_TYPES
 
-        covered = set(PRICE_CONDITIONS) | set(BAR_CONDITIONS) | {"signal_equals"}
+        covered = set(PRICE_CONDITIONS) | set(BAR_CONDITIONS) | set(AUX_CONDITIONS) | {"signal_equals"}
         self.assertEqual(set(VALID_CONDITION_TYPES), covered)
 
 
@@ -177,6 +179,40 @@ class TestAlertsEngineDedup(unittest.TestCase):
             fired = self.engine._try_fire(alert, 150.0, extra_value=["RSI_OVERSOLD"])
 
         self.assertTrue(fired)
+
+
+class TestAuxiliaryAlertBaselines(unittest.TestCase):
+    def setUp(self):
+        self.engine = AlertsEngine()
+        self.engine._started = True
+
+    def test_news_baseline_then_new_headline(self):
+        item = SimpleNamespace(
+            timestamp=datetime(2026, 9, 20, tzinfo=UTC),
+            headline="First headline", url="https://example.test/1", relevance=0.7,
+        )
+        newer = SimpleNamespace(
+            timestamp=datetime(2026, 9, 21, tzinfo=UTC),
+            headline="New headline", url="https://example.test/2", relevance=0.9,
+        )
+        with patch("backend.aux_data.services.manager.aux_data_manager") as manager:
+            manager.get_news.side_effect = [
+                SimpleNamespace(items=[item]),
+                SimpleNamespace(items=[newer, item]),
+            ]
+            self.assertIsNone(self.engine._build_aux_payload("news_arrival", "AAPL"))
+            payload = self.engine._build_aux_payload("news_arrival", "AAPL")
+        self.assertEqual(payload["new_count"], 1)
+        self.assertEqual(payload["headline"], "New headline")
+
+    def test_insider_baseline_does_not_fire(self):
+        rows = [
+            SimpleNamespace(year=2026, month=8, sentiment=-0.1),
+            SimpleNamespace(year=2026, month=9, sentiment=0.4),
+        ]
+        with patch("backend.market_data.services.finnhub_service.finnhub_service") as service:
+            service.get_insider_sentiment.return_value = rows
+            self.assertIsNone(self.engine._build_aux_payload("insider_sentiment_change", "AAPL"))
 
 
 class TestAlertsEngineQuoteDispatchIntegration(unittest.TestCase):

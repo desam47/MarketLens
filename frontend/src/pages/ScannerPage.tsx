@@ -62,6 +62,11 @@ function signalLabel(signal: string): string {
 function matchReason(result: ScanResult): string {
   const details: string[] = [];
   const indicators = result.indicator_values || {};
+  const explanation = result.explanation;
+  if (typeof explanation?.confidence === 'number') details.push(`${explanation.confidence.toFixed(0)}% confidence`);
+  if (typeof explanation?.timeframe_agreement?.alignment_pct === 'number' && explanation.timeframe_agreement.total > 0) {
+    details.push(`TF ${explanation.timeframe_agreement.alignment_pct.toFixed(0)}% aligned`);
+  }
   const primaryRs = Object.entries(indicators).find(([key, value]) => key.startsWith('rs_pct_') && typeof value === 'number');
   if (primaryRs) details.push(`RS ${Number(primaryRs[1]) >= 0 ? '+' : ''}${Number(primaryRs[1]).toFixed(1)}%`);
   if (typeof indicators.volume_ratio === 'number') details.push(`Vol ${indicators.volume_ratio.toFixed(1)}×`);

@@ -8,7 +8,7 @@ export function AlertsPage() {
         <div>
           <h1>Alerts</h1>
           <p className="subtitle">
-            Price and signal alerts that fire during the next scan.
+            Price, scanner, technical, and provider-data alerts with in-app and external delivery options.
           </p>
         </div>
       </div>

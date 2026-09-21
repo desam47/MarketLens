@@ -4,6 +4,7 @@ interface ScoreDetailPanelProps {
   totalScore: number;
   scores: Record<string, number>;
   signals?: string[];
+  confidence?: number;
   symbol: string;
 }
 
@@ -45,9 +46,10 @@ export function ScoreDetailPanel({
   totalScore,
   scores,
   signals,
+  confidence: confidenceOverride,
   symbol,
 }: ScoreDetailPanelProps) {
-  const confidence = estimateConfidence(totalScore);
+  const confidence = confidenceOverride ?? estimateConfidence(totalScore);
   const scoreColor = totalScore > 0 ? '#10b981' : totalScore < 0 ? '#ef4444' : '#9ca3af';
   const confColor = confidence >= 70 ? '#10b981' : confidence >= 50 ? '#22c55e' : confidence >= 30 ? '#f59e0b' : '#9ca3af';
   const topScores = pickTopScores(scores);

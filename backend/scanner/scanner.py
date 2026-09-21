@@ -14,6 +14,7 @@ from ..engines.timeframe import Timeframe
 from ..market_data.services.manager import market_data_manager
 from ..models.market_data import Quote
 from ..observability import record_scan
+from .explanation import build_signal_explanation
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class ScanResult:
         self.scores: dict[str, float] = {}
         self.rank: int | None = None
         self.signals: list[str] = []
+        self.explanation: dict[str, Any] = {}
 
     def add_indicator(self, name: str, value: Any):
         """Add an indicator value"""
@@ -139,6 +141,7 @@ class Scanner:
         benchmark_bars: dict[str, list] | None = None,
     ) -> ScanResult:
         """Scan a single symbol and return results"""
+        previous_result = self.scan_results.get(symbol) or self.scan_results.get(symbol.upper())
         result = ScanResult(symbol, datetime.now())
 
         try:
@@ -189,10 +192,22 @@ class Scanner:
 
             # Generate trading signals
             self._generate_signals(result)
+            result.explanation = build_signal_explanation(result, previous_result)
 
         except Exception as e:
             logger.error(f"Error scanning symbol {symbol}: {e}")
             # Still return a result, but it may be incomplete
+
+        if not result.explanation:
+            try:
+                result.explanation = build_signal_explanation(result, previous_result)
+            except Exception as explanation_error:  # pragma: no cover - defensive fallback
+                logger.debug(
+                    "Could not build scanner explanation for %s: %s",
+                    symbol,
+                    explanation_error,
+                )
+                result.explanation = {}
 
         self.scan_results[symbol] = result
         return result
@@ -840,6 +855,7 @@ class Scanner:
             )
             results.append(result)
 
+        self._notify_alerts(results)
         self.last_scan_time = datetime.now()
         return results
 
@@ -946,10 +962,26 @@ class Scanner:
 
         tasks = [_throttled_scan(s) for s in symbols]
         results = await asyncio.gather(*tasks)
+        self._notify_alerts(results)
         duration_ms = (time.monotonic() - start) * 1000
         record_scan(duration_ms)
         self.last_scan_time = datetime.now()
         return list(results)
+
+    @staticmethod
+    def _notify_alerts(results: list[ScanResult]) -> None:
+        """Send completed batch scans to the alert engine.
+
+        Kept as a lazy import so the scanner remains usable in isolation and
+        avoids importing the alert/database stack during module initialization.
+        The single-symbol API path performs the same notification explicitly.
+        """
+        try:
+            from backend.alerts.engine import alerts_engine
+            for result in results:
+                alerts_engine.evaluate_scan_result(result)
+        except Exception:
+            logger.debug("Alert evaluation unavailable for batch scan", exc_info=True)
 
     def rank_symbols(self, symbols: list[str] | None = None) -> list[tuple[str, float]]:
         """Rank symbols by their total score"""

@@ -14,7 +14,7 @@ subsequent quick reads.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,19 +22,19 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.api.ttl_cache import _scan_cache, ttl_cached
 from backend.repositories.watchlist_repository import WatchlistRepository
+
+from ...market_data.services.manager import market_data_manager
 from ...scanner.filters import (
     AndFilter,
     OrFilter,
     TrueFilter,
     default_registry,
 )
-from ...market_data.services.manager import market_data_manager
 from ...scanner.ranking import RankingEngine, default_ranking_engine
 from ...scanner.scanner import ScanResult, market_scanner
-
 from ..dependencies import get_db
-from backend.api.ttl_cache import _scan_cache, ttl_cached
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,7 @@ class _ScanResultResponse(BaseModel):
     rank: int | None = None
     signals: list[str]
     trend_signals: dict[str, Any]
+    explanation: dict[str, Any] = Field(default_factory=dict)
     # True when the symbol's watchlist row is enabled. Surfaced in the UI so
     # disabled rows can still be shown (greyed out) and re-enabled from the
     # watchlist table. Defaults to True for non-watchlist scan endpoints
@@ -137,7 +138,10 @@ def _quote_to_dict(quote) -> _QuoteResponse | None:
     )
 
 
-def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
+def _result_to_dict(
+    result: ScanResult,
+    historical_performance: dict[str, Any] | None = None,
+) -> _ScanResultResponse:
     """Serialize a ScanResult to a JSON-friendly shape.
 
     The scanner stores arbitrary Python objects in ``trend_signals`` (the
@@ -148,6 +152,10 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
     ``total_score`` is the *signed* weighted average so the dashboard can
     separate bullish (positive) from bearish (negative) entries.
     """
+    explanation = dict(getattr(result, "explanation", None) or {})
+    if historical_performance is not None:
+        explanation["historical_performance"] = historical_performance
+
     return _ScanResultResponse(
         symbol=result.symbol,
         timestamp=_to_dashboard_tz(result.timestamp),
@@ -160,6 +168,7 @@ def _result_to_dict(result: ScanResult) -> _ScanResultResponse:
         rank=result.rank,
         signals=list(result.signals or []),
         trend_signals=result.trend_signals or {},
+        explanation=explanation,
         is_enabled=getattr(result, "is_enabled", True),
     )
 
@@ -196,6 +205,7 @@ def _result_to_lite_dict(result: ScanResult) -> _ScanResultResponse:
         rank=None,
         signals=list(result.signals or []),
         trend_signals=trend_lite,
+        explanation=getattr(result, "explanation", None) or {},
         is_enabled=getattr(result, "is_enabled", True),
     )
 
@@ -556,7 +566,13 @@ async def _cached_scan(symbol: str) -> _ScanResultResponse:
 
 
 @router.get("/{symbol}", response_model=_ScanResultResponse)
-async def scan_symbol(symbol: str):
+async def scan_symbol(
+    symbol: str,
+    include_history: bool = Query(
+        False,
+        description="Attach completed daily signal outcome statistics to the explanation.",
+    ),
+):
     """Scan a single symbol and return the full result.
 
     Wrapped in a 10s TTL cache (v2.1 Item 1.2). Repeated requests
@@ -566,7 +582,24 @@ async def scan_symbol(symbol: str):
     reads via ``GET /api/scanner/{symbol}/cached`` are cheap.
     """
     try:
-        return await _cached_scan(symbol.upper())
+        response = await _cached_scan(symbol.upper())
+        if include_history:
+            # signal_recorder owns its own short-lived DB session. Keep this
+            # off the event loop because it performs a synchronous SQL query.
+            try:
+                from backend.services.signal_recorder import signal_recorder
+
+                stats = await asyncio.to_thread(
+                    signal_recorder.get_stats, symbol.upper(), "1d"
+                )
+            except Exception as exc:  # pragma: no cover - DB/provider dependent
+                logger.debug("Historical signal stats unavailable for %s: %s", symbol, exc)
+                stats = None
+            if stats is not None:
+                explanation = dict(response.explanation or {})
+                explanation["historical_performance"] = stats
+                response = response.model_copy(update={"explanation": explanation})
+        return response
     except Exception as e:
         logger.error(f"Error scanning symbol {symbol}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

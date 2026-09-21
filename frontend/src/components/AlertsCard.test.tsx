@@ -158,12 +158,11 @@ describe('AlertsCard signal parameter picker', () => {
     const paramSelect = screen.getByDisplayValue('Select a signal…') as HTMLSelectElement;
     const optionValues = Array.from(paramSelect.options).map(o => o.value);
     expect(optionValues).toEqual([
-      '', 'RSI_OVERSOLD', 'RSI_OVERBOUGHT', 'MACD_BULLISH', 'MACD_BEARISH',
-      'MULTI_TIMEFRAME_BULLISH', 'MULTI_TIMEFRAME_BEARISH', 'HIGH_VOLUME',
-      'VOLUME_SPIKE', 'RSI_OVERSOLD_REVERSAL', 'BREAKOUT', 'BREAKDOWN',
-      'VOLATILITY_CONTRACTION', 'VOLATILITY_EXPANSION',
-      'RELATIVE_STRENGTH_OUTPERFORMER', 'RELATIVE_STRENGTH_UNDERPERFORMER',
-      'HEAVY_BUY_PRESSURE', 'HEAVY_SELL_PRESSURE', 'BLOCK_ACTIVITY',
+      '', 'BLOCK_ACTIVITY', 'BREAKDOWN', 'BREAKOUT', 'HEAVY_BUY_PRESSURE', 'HEAVY_SELL_PRESSURE',
+      'HIGH_VOLUME', 'MACD_BEARISH', 'MACD_BULLISH',
+      'MULTI_TIMEFRAME_BEARISH', 'MULTI_TIMEFRAME_BULLISH', 'RELATIVE_STRENGTH_OUTPERFORMER',
+      'RELATIVE_STRENGTH_UNDERPERFORMER', 'RSI_OVERBOUGHT', 'RSI_OVERSOLD', 'RSI_OVERSOLD_REVERSAL',
+      'VOLATILITY_CONTRACTION', 'VOLATILITY_EXPANSION', 'VOLUME_SPIKE',
     ]);
   });
 
@@ -193,6 +192,22 @@ describe('AlertsCard signal parameter picker', () => {
 
     await waitFor(() => expect(mockApi.createAlert).toHaveBeenCalledWith({
       name: 'AAPL RSI', symbol: 'AAPL', condition_type: 'signal_equals', parameter: 'MACD_BULLISH',
+    }));
+  });
+
+  it('exposes provider and multi-timeframe conditions with optional parameters', async () => {
+    mockApi.createAlert.mockResolvedValue(alert({ condition_type: 'full_timeframe_alignment', parameter: '' }) as any);
+    render(<AlertsCard />);
+    await screen.findByText('No alerts configured.');
+
+    fireEvent.change(screen.getByLabelText('Alert Name'), { target: { value: 'AAPL alignment' } });
+    fireEvent.change(screen.getByPlaceholderText('AAPL'), { target: { value: 'AAPL' } });
+    fireEvent.change(screen.getByDisplayValue('Signal equals'), { target: { value: 'full_timeframe_alignment' } });
+    expect(screen.getByDisplayValue('Not required')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Alert' }));
+
+    await waitFor(() => expect(mockApi.createAlert).toHaveBeenCalledWith({
+      name: 'AAPL alignment', symbol: 'AAPL', condition_type: 'full_timeframe_alignment', parameter: '',
     }));
   });
 });

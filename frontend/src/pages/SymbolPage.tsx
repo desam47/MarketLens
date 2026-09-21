@@ -14,6 +14,7 @@ import { MultiTimeframeChartGrid } from '../components/MultiTimeframeChartGrid';
 // import { MTFScoreGrid, TrendSignalsMap } from '../components/MTFScoreGrid';
 import { ConfluenceCard } from '../components/ConfluenceCard';
 import { ScoreDetailPanel } from '../components/ScoreDetailPanel';
+import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
@@ -23,18 +24,17 @@ import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABEL
 const AIAnalysisPanel = lazy(() =>
   import('../components/AIAnalysisPanel').then(m => ({ default: m.AIAnalysisPanel })),
 );
-const NewsPanel = lazy(() =>
-  import('../components/NewsPanel').then(m => ({ default: m.NewsPanel })),
+const CatalystTimelinePanel = lazy(() =>
+  import('../components/CatalystTimelinePanel').then(m => ({ default: m.CatalystTimelinePanel })),
 );
-const FundamentalsPanel = lazy(() =>
-  import('../components/FundamentalsPanel').then(m => ({ default: m.FundamentalsPanel })),
+const OptionsPanel = lazy(() =>
+  import('../components/OptionsPanel').then(m => ({ default: m.OptionsPanel })),
 );
 const CustomIndicatorsPanel = lazy(() =>
   import('../components/CustomIndicatorsPanel').then(m => ({ default: m.CustomIndicatorsPanel })),
 );
-// OptionsPanel and DrawingToolsPanel removed from the Symbol page
-// (2026-09-17); the components still exist under src/components/ if
-// they're ever needed again.
+// DrawingToolsPanel remains available as a component but is not mounted on
+// the Symbol page. Options are surfaced here as the provider-backed snapshot.
 // AITemplatesPanel and ChatPanel moved to the AI Hub page (2026-09-10).
 
 interface SymbolPageProps {
@@ -710,7 +710,7 @@ const fetchBars = useCallback(async () => {
     scanRequestSymbolRef.current = requestedSymbol;
     setScanLoading(true);
     try {
-      const data = await api.getScanResult(requestedSymbol);
+      const data = await api.getScanResult(requestedSymbol, true);
       if (scanRequestSymbolRef.current !== requestedSymbol) return;
       setScanResult(data);
     } catch (err: any) {
@@ -974,18 +974,19 @@ const fetchBars = useCallback(async () => {
             totalScore={scanResult?.total_score ?? 0}
             scores={scanResult?.scores ?? {}}
             signals={scanResult?.signals}
+            confidence={scanResult?.explanation?.confidence}
             symbol={symbol}
+          />
+        </div>
+        <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>
+          <SignalExplanationPanel
+            symbol={symbol}
+            explanation={scanResult?.explanation}
           />
         </div>
         <TapePressureCard tape={tape} disabled={tapeDisabled} error={tapeError} />
         <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
           <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading news…</div>}>
-          <NewsPanel symbol={symbol} />
-        </Suspense>
-        <Suspense fallback={<div className="panel-skeleton">Loading fundamentals…</div>}>
-          <FundamentalsPanel symbol={symbol} />
         </Suspense>
         <Suspense fallback={<div className="panel-skeleton">Loading indicators…</div>}>
           <CustomIndicatorsPanel symbol={symbol} timeframe={timeframe} />
@@ -1034,6 +1035,12 @@ const fetchBars = useCallback(async () => {
             )}
           />
         )}
+        <Suspense fallback={<div className="panel-skeleton">Loading catalyst timeline…</div>}>
+          <CatalystTimelinePanel symbol={symbol} scanResult={scanResult} />
+        </Suspense>
+        <Suspense fallback={<div className="panel-skeleton">Loading options snapshot…</div>}>
+          <OptionsPanel symbol={symbol} underlyingPrice={scanResult?.quote?.price} />
+        </Suspense>
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
           {/* Table stays bounded to the most recent rows (plain HTML
               table, not virtualized) — the chart above gets the full

@@ -15,6 +15,7 @@ const SymbolPage = lazy(() => import('./pages/SymbolPage').then(m => ({ default:
 const HistoricalSignalsPage = lazy(() => import('./pages/HistoricalSignalsPage').then(m => ({ default: m.HistoricalSignalsPage })));
 const ScannerPage = lazy(() => import('./pages/ScannerPage').then(m => ({ default: m.ScannerPage })));
 const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m.AIHubPage })));
+const RiskDashboardPage = lazy(() => import('./pages/RiskDashboardPage').then(m => ({ default: m.RiskDashboardPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -23,7 +24,7 @@ const PageLoader = () => (
   </div>
 );
 
-type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub';
+type Page = 'dashboard' | 'watchlist' | 'health' | 'alerts' | 'backtest' | 'symbol' | 'signals' | 'scanner' | 'hub' | 'risk';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
@@ -78,6 +79,8 @@ export default function App() {
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
       case 'scanner':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); setCurrentPage('symbol'); }} /></PageErrorBoundary></Suspense>;
+      case 'risk':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }
@@ -107,6 +110,15 @@ export default function App() {
             >
               <span className="nav-icon">📈</span>
               Dashboard
+            </button>
+          </li>
+          <li>
+            <button
+              className={currentPage === 'risk' ? 'active' : ''}
+              onClick={() => setCurrentPage('risk')}
+            >
+              <span className="nav-icon">🛡️</span>
+              Risk Dashboard
             </button>
           </li>
           <li>

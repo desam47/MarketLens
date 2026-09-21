@@ -44,6 +44,10 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "breakdown",
     "market_regime_change",
     "signal_profile",
+    # Auxiliary provider events (evaluated from scanner refreshes).
+    "news_arrival",
+    "insider_sentiment_change",
+    "options_activity_change",
 )
 
 
@@ -401,6 +405,52 @@ def _eval_signal_profile(parameter: str, value: object) -> bool:
     return True
 
 
+def _eval_news_arrival(parameter: str, value: object) -> bool:
+    """Fire when a newly observed headline meets a relevance threshold.
+
+    ``parameter`` is an optional relevance floor from 0 to 1. The engine
+    supplies ``new_count`` and the highest relevance among new items.
+    """
+    if not isinstance(value, dict) or int(value.get("new_count", 0) or 0) <= 0:
+        return False
+    try:
+        threshold = float(parameter) if parameter else 0.0
+    except (TypeError, ValueError):
+        threshold = 0.0
+    return float(value.get("max_relevance", 0.0) or 0.0) >= max(0.0, min(1.0, threshold))
+
+
+def _eval_insider_sentiment_change(parameter: str, value: object) -> bool:
+    """Fire when the latest insider sentiment moves by a material amount."""
+    if not isinstance(value, dict):
+        return False
+    current = value.get("current_sentiment")
+    previous = value.get("previous_sentiment")
+    if not isinstance(current, (int, float)) or not isinstance(previous, (int, float)):
+        return False
+    try:
+        threshold = float(parameter) if parameter else 0.2
+    except (TypeError, ValueError):
+        threshold = 0.2
+    return abs(float(current) - float(previous)) >= max(0.0, threshold)
+
+
+def _eval_options_activity_change(parameter: str, value: object) -> bool:
+    """Fire when aggregate option volume or open interest changes materially."""
+    if not isinstance(value, dict):
+        return False
+    try:
+        threshold = float(parameter) if parameter else 50.0
+    except (TypeError, ValueError):
+        threshold = 50.0
+    threshold = max(0.0, threshold)
+    for key in ("volume_change_pct", "open_interest_change_pct"):
+        change = value.get(key)
+        if isinstance(change, (int, float)) and abs(float(change)) >= threshold:
+            return True
+    return False
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -421,6 +471,9 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "breakdown": _eval_breakdown,
     "market_regime_change": _eval_market_regime_change,
     "signal_profile": _eval_signal_profile,
+    "news_arrival": _eval_news_arrival,
+    "insider_sentiment_change": _eval_insider_sentiment_change,
+    "options_activity_change": _eval_options_activity_change,
 }
 
 

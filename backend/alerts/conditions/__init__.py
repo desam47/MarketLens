@@ -12,7 +12,7 @@ required values inline. These queries are lightweight (LIMIT 50-100) so
 the overhead is negligible.
 
 The module is split into submodules for readability:
-  - ``evaluators`` — the 18 ``_eval_*`` functions and the ``evaluate`` dispatcher
+  - ``evaluators`` — the condition evaluators and the ``evaluate`` dispatcher
   - ``payloads``   — the 7 ``build_*_payload`` functions used by the engine
   - ``helpers``    — small DB-backed computations shared by both
 
@@ -33,7 +33,10 @@ from .evaluators import (
     _eval_breakout,
     _eval_divergence,
     _eval_full_timeframe_alignment,
+    _eval_insider_sentiment_change,
     _eval_market_regime_change,
+    _eval_news_arrival,
+    _eval_options_activity_change,
     _eval_pct_change_above,
     _eval_price_above,
     _eval_price_below,
@@ -87,6 +90,9 @@ __all__ = [
     "_eval_breakout",
     "_eval_breakdown",
     "_eval_market_regime_change",
+    "_eval_news_arrival",
+    "_eval_insider_sentiment_change",
+    "_eval_options_activity_change",
     "_eval_signal_profile",
     # Payload builders
     "build_trend_payload",

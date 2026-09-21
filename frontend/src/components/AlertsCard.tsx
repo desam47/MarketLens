@@ -15,8 +15,28 @@ const CONDITIONS: { value: string; label: string; hint: string }[] = [
   { value: 'price_above', label: 'Price above', hint: 'price threshold (e.g. 150.00)' },
   { value: 'price_below', label: 'Price below', hint: 'price threshold (e.g. 140.00)' },
   { value: 'pct_change_above', label: 'Pct change above', hint: 'percent (e.g. 5 for 5%)' },
+  { value: 'trend_crosses_above_70', label: 'Trend crosses bullish', hint: 'No parameter required' },
+  { value: 'trend_crosses_below_70', label: 'Trend crosses bearish', hint: 'No parameter required' },
+  { value: 'trend_direction_changes', label: 'Trend direction changes', hint: 'No parameter required' },
+  { value: 'trend_strengthens', label: 'Trend strengthens', hint: 'minimum score delta (e.g. 5)' },
+  { value: 'trend_weakens', label: 'Trend weakens', hint: 'minimum score delta (e.g. 5)' },
+  { value: 'full_timeframe_alignment', label: 'Multi-timeframe alignment', hint: 'No parameter required' },
+  { value: 'timeframe_conflict', label: 'Multi-timeframe conflict', hint: 'No parameter required' },
+  { value: 'volume_expansion', label: 'Volume spike', hint: 'volume multiple (e.g. 2 for 2× average)' },
+  { value: 'divergence', label: 'Momentum divergence', hint: 'Choose positive or negative' },
+  { value: 'breakout', label: 'Breakout', hint: 'lookback bars (e.g. 20)' },
+  { value: 'breakdown', label: 'Breakdown', hint: 'lookback bars (e.g. 20)' },
+  { value: 'market_regime_change', label: 'Market regime change', hint: 'Optional regime filter' },
+  { value: 'news_arrival', label: 'News arrival', hint: 'minimum relevance 0–1 (e.g. 0.5)' },
+  { value: 'insider_sentiment_change', label: 'Insider sentiment change', hint: 'minimum sentiment delta (e.g. 0.2)' },
+  { value: 'options_activity_change', label: 'Options activity change', hint: 'minimum volume/OI change % (e.g. 50)' },
   { value: 'signal_profile', label: 'Signal profile', hint: 'Use Signal Alert Center for guided filters' },
 ];
+
+const NO_PARAMETER_CONDITIONS = new Set([
+  'trend_crosses_above_70', 'trend_crosses_below_70', 'trend_direction_changes',
+  'full_timeframe_alignment', 'timeframe_conflict',
+]);
 
 // Every signal name the scanner can emit — mirrors
 // backend/scanner/scanner.py::_generate_signals. A signal_equals alert's
@@ -43,6 +63,11 @@ const SIGNAL_PARAMETERS: { value: string; label: string }[] = [
   { value: 'BLOCK_ACTIVITY', label: 'Block Activity (tape)' },
 ];
 
+// Keep the canonical arrays stable for backwards-compatible defaults and
+// tests, but present both pickers in a predictable alphabetical order.
+const SORTED_CONDITIONS = [...CONDITIONS].sort((left, right) => left.label.localeCompare(right.label));
+const SORTED_SIGNAL_PARAMETERS = [...SIGNAL_PARAMETERS].sort((left, right) => left.label.localeCompare(right.label));
+
 function conditionLabel(c: string, p: string): React.ReactNode {
   // Short human-readable rule string per condition type. Mirrors the
   // backend's VALID_CONDITION_TYPES set in alerts/conditions.py.
@@ -57,6 +82,32 @@ function conditionLabel(c: string, p: string): React.ReactNode {
       return <>Δ% &gt; {p}%</>;
     case 'signal_profile':
       return <>guided signal profile</>;
+    case 'trend_crosses_above_70':
+      return <>trend crosses bullish threshold</>;
+    case 'trend_crosses_below_70':
+      return <>trend crosses bearish threshold</>;
+    case 'trend_direction_changes':
+      return <>trend direction changes</>;
+    case 'full_timeframe_alignment':
+      return <>all timeframes align</>;
+    case 'timeframe_conflict':
+      return <>timeframes conflict</>;
+    case 'volume_expansion':
+      return <>volume ≥ {p || '2'}× average</>;
+    case 'divergence':
+      return <>{p || 'negative'} divergence</>;
+    case 'breakout':
+      return <>breakout ({p || '20'} bars)</>;
+    case 'breakdown':
+      return <>breakdown ({p || '20'} bars)</>;
+    case 'market_regime_change':
+      return <>market regime changes{p ? ` to ${p}` : ''}</>;
+    case 'news_arrival':
+      return <>new news (relevance ≥ {p || '0'})</>;
+    case 'insider_sentiment_change':
+      return <>insider sentiment Δ ≥ {p || '0.2'}</>;
+    case 'options_activity_change':
+      return <>options volume/OI Δ ≥ {p || '50'}%</>;
     default:
       return <>{c}({p})</>;
   }
@@ -155,7 +206,7 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
       condition_type: conditionType,
       parameter: parameter.trim(),
     };
-    if (!payload.name || !payload.symbol || !payload.parameter) {
+    if (!payload.name || !payload.symbol || (!NO_PARAMETER_CONDITIONS.has(payload.condition_type) && !payload.parameter && payload.condition_type !== 'market_regime_change')) {
       setStatus({ msg: 'All fields are required.', isError: true });
       return;
     }
@@ -229,7 +280,7 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
       <p className="label" style={{ marginTop: 0 }}>
         {editingId !== null
           ? 'Editing an existing alert — the symbol can\'t be changed here; delete and recreate for that.'
-          : 'Create price and signal alerts that fire during the next scan.'}
+          : 'Create price, scanner, technical, and provider-data alerts that fire during the next scan.'}
       </p>
 
       <form className="alerts-form" onSubmit={handleSubmit}>
@@ -269,23 +320,39 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
             }}
             disabled={submitting}
           >
-            {CONDITIONS.map(c => (
+            {SORTED_CONDITIONS.map(c => (
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
         </label>
         <label>
-          <span>Parameter</span>
-          {conditionType === 'signal_equals' ? (
+          <span>Parameter{NO_PARAMETER_CONDITIONS.has(conditionType) ? ' (optional)' : ''}</span>
+          {NO_PARAMETER_CONDITIONS.has(conditionType) ? (
+            <input type="text" value="Not required" disabled aria-label="Parameter not required" />
+          ) : conditionType === 'signal_equals' ? (
             <select
               value={parameter}
               onChange={e => setParameter(e.target.value)}
               disabled={submitting}
             >
               <option value="" disabled>Select a signal…</option>
-              {SIGNAL_PARAMETERS.map(s => (
+              {SORTED_SIGNAL_PARAMETERS.map(s => (
                 <option key={s.value} value={s.value}>{s.label}</option>
               ))}
+            </select>
+          ) : conditionType === 'divergence' ? (
+            <select value={parameter} onChange={e => setParameter(e.target.value)} disabled={submitting}>
+              <option value="" disabled>Select divergence…</option>
+              <option value="negative">Negative (price up, momentum weak)</option>
+              <option value="positive">Positive (price down, momentum strong)</option>
+            </select>
+          ) : conditionType === 'market_regime_change' ? (
+            <select value={parameter} onChange={e => setParameter(e.target.value)} disabled={submitting}>
+              <option value="">Any new regime</option>
+              <option value="risk_on">Risk on</option>
+              <option value="risk_off">Risk off</option>
+              <option value="neutral">Neutral</option>
+              <option value="transition">Transition</option>
             </select>
           ) : (
             <input

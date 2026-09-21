@@ -3,6 +3,7 @@ import api, { OptionsChain } from '../services/api';
 
 interface OptionsPanelProps {
   symbol: string;
+  underlyingPrice?: number | null;
 }
 
 const unusualColor: Record<string, string> = {
@@ -32,7 +33,17 @@ function nearestExpiration(chains: OptionsChain[]): OptionsChain | null {
   return [...chains].sort((a, b) => a.expiration.localeCompare(b.expiration))[0];
 }
 
-export function OptionsPanel({ symbol }: OptionsPanelProps) {
+function total(values: Array<number | null | undefined>): number {
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+function daysToExpiration(expiration: string): number {
+  const expiry = Date.parse(`${expiration}T16:00:00`);
+  if (!Number.isFinite(expiry)) return 0;
+  return Math.max(1, Math.ceil((expiry - Date.now()) / 86400000));
+}
+
+export function OptionsPanel({ symbol, underlyingPrice = null }: OptionsPanelProps) {
   const [chains, setChains] = useState<OptionsChain[]>([]);
   const [expirations, setExpirations] = useState<string[]>([]);
   const [nearTermIv, setNearTermIv] = useState<number | null>(null);
@@ -110,10 +121,27 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
     .filter(c => Math.abs(c.strike - center) <= window)
     .sort((a, b) => a.strike - b.strike);
 
+  const selectedIv = activeChain.avg_iv_call != null && activeChain.avg_iv_put != null
+    ? (activeChain.avg_iv_call + activeChain.avg_iv_put) / 2
+    : activeChain.avg_iv_call ?? activeChain.avg_iv_put ?? nearTermIv;
+  const expectedMove = underlyingPrice != null && selectedIv != null
+    ? underlyingPrice * selectedIv * Math.sqrt(daysToExpiration(activeChain.expiration) / 365)
+    : null;
+  const callVolume = total(activeChain.calls.map(contract => contract.volume));
+  const putVolume = total(activeChain.puts.map(contract => contract.volume));
+  const callOpenInterest = total(activeChain.calls.map(contract => contract.open_interest));
+  const putOpenInterest = total(activeChain.puts.map(contract => contract.open_interest));
+  const activityFlags: string[] = [];
+  if (activeChain.unusual_activity !== 'normal') activityFlags.push(`${activeChain.unusual_activity} provider activity`);
+  if (callVolume > 0 && putVolume / callVolume >= 1.5) activityFlags.push('Put volume elevated');
+  if (putVolume > 0 && callVolume / putVolume >= 1.5) activityFlags.push('Call volume elevated');
+  if (callOpenInterest > 0 && putOpenInterest / callOpenInterest >= 1.5) activityFlags.push('Put open interest elevated');
+  if (putOpenInterest > 0 && callOpenInterest / putOpenInterest >= 1.5) activityFlags.push('Call open interest elevated');
+
   return (
     <div className="card analysis-card">
       <div className="card-header-row">
-        <h2>📊 Options Chain</h2>
+        <h2>📊 Options Snapshot</h2>
         {provider && <span className="provider-badge">{provider}</span>}
       </div>
 
@@ -139,6 +167,18 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
             {activeChain.unusual_activity}
           </span>
         </div>
+        <div className="options-stat">
+          <span className="options-stat-label">Expected Move</span>
+          <span className="options-stat-value">{expectedMove == null ? '—' : `±$${expectedMove.toFixed(2)}`}</span>
+        </div>
+      </div>
+
+      <p className="options-caveat">Expected move is an IV-based estimate for the selected expiry. Options quotes may be delayed.</p>
+      <div className="options-flags" aria-label="Unusual options activity">
+        <span className="options-flags-label">Flags</span>
+        {activityFlags.length > 0 ? activityFlags.map(flag => (
+          <span className="options-flag" key={flag}>{flag}</span>
+        )) : <span className="options-flag options-flag-normal">No unusual flow detected</span>}
       </div>
 
       <div className="options-controls">
@@ -161,12 +201,12 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
             <tr>
               <th colSpan={4} style={{ color: '#10b981' }}>Calls</th>
               <th style={{ borderLeft: '1px solid #374151', borderRight: '1px solid #374151' }}>Strike</th>
-              <th colSpan={3} style={{ color: '#ef4444' }}>Puts</th>
+              <th colSpan={4} style={{ color: '#ef4444' }}>Puts</th>
             </tr>
             <tr>
               <th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th>
               <th style={{ borderLeft: '1px solid #374151', borderRight: '1px solid #374151' }}>$</th>
-              <th>Bid</th><th>Ask</th><th>Vol</th>
+              <th>Bid</th><th>Ask</th><th>Vol</th><th>OI</th>
             </tr>
           </thead>
           <tbody>
@@ -193,9 +233,10 @@ export function OptionsPanel({ symbol }: OptionsPanelProps) {
                       <td>{fmtNum(p.bid)}</td>
                       <td>{fmtNum(p.ask)}</td>
                       <td>{fmtInt(p.volume)}</td>
+                      <td>{fmtInt(p.open_interest)}</td>
                     </>
                   ) : (
-                    <><td colSpan={3}>—</td></>
+                    <><td colSpan={4}>—</td></>
                   )}
                 </tr>
               );

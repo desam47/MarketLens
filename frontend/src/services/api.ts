@@ -494,6 +494,67 @@ export interface ScanResult {
   rank: number | null;
   signals: string[];
   trend_signals: Record<string, any>;
+  explanation?: SignalExplanation;
+}
+
+export interface SignalDriver {
+  key: string;
+  label: string;
+  value: any;
+  direction: 'bullish' | 'bearish' | 'neutral';
+  impact: 'bullish' | 'bearish' | 'context';
+  description: string;
+}
+
+export interface SignalTimeframeAgreement {
+  bullish: number;
+  bearish: number;
+  neutral: number;
+  total: number;
+  dominant: 'bullish' | 'bearish' | 'neutral';
+  alignment_pct: number;
+  timeframes: Array<{
+    timeframe: string;
+    direction: 'bullish' | 'bearish' | 'neutral';
+    raw_direction: string;
+    confidence: number | null;
+  }>;
+}
+
+export interface SignalDataFreshness {
+  status: 'fresh' | 'recent' | 'stale' | 'unavailable';
+  age_seconds: number | null;
+  quote_timestamp: string | null;
+  scan_timestamp: string;
+  provider: string | null;
+}
+
+export interface SignalChangeSummary {
+  previous_timestamp: string;
+  signals_added: string[];
+  signals_removed: string[];
+  score_delta: number;
+  score_direction: 'bullish' | 'bearish' | 'neutral';
+  changed: boolean;
+}
+
+export interface SignalHistoricalPerformance {
+  total: number;
+  with_outcomes: number;
+  avg_return_5b: number | null;
+  avg_return_10b: number | null;
+  win_rate: number | null;
+}
+
+export interface SignalExplanation {
+  direction: 'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  drivers: SignalDriver[];
+  timeframe_agreement: SignalTimeframeAgreement;
+  data_freshness: SignalDataFreshness;
+  changes: SignalChangeSummary | null;
+  historical_performance: SignalHistoricalPerformance | null;
+  historical_basis?: string;
 }
 
 // ---- Phase 10: composable filters + named rankings ----
@@ -1836,8 +1897,9 @@ class ApiService {
   }
 
   // Phase 12: scan a single symbol (for SymbolPage MTF grid + score panel)
-  async getScanResult(symbol: string): Promise<ScanResult> {
-    return this.fetch<ScanResult>(`/scanner/${encodeURIComponent(symbol)}`);
+  async getScanResult(symbol: string, includeHistory = false): Promise<ScanResult> {
+    const suffix = includeHistory ? '?include_history=true' : '';
+    return this.fetch<ScanResult>(`/scanner/${encodeURIComponent(symbol)}${suffix}`);
   }
 
   // Tape (Time & Sales) analytics — 2026-09-10. 503 when TAPE_ENABLED is off.

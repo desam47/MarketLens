@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../'))
 
 from fastapi.testclient import TestClient
 
-from backend.api.main import app
 from backend.api import ttl_cache as _ttl_cache_module
+from backend.api.main import app
 from backend.api.scanner import router as scanner_router
 from backend.models.market_data import DataStatus, Quote
 from backend.scanner.scanner import ScanResult
@@ -134,6 +134,24 @@ class TestScannerAPI(unittest.TestCase):
         self.mock_scanner.scan_symbol.assert_called_once_with(
             "AAPL", historical_bars=[], quote=None,
         )
+
+    @patch('backend.services.signal_recorder.signal_recorder')
+    def test_scan_symbol_can_attach_historical_explanation_stats(self, mock_recorder):
+        result = _make_result("AAPL")
+        self.mock_scanner.scan_symbol.return_value = result
+        mock_recorder.get_stats.return_value = {
+            "total": 12,
+            "with_outcomes": 10,
+            "avg_return_5b": 1.25,
+            "avg_return_10b": 2.5,
+            "win_rate": 0.7,
+        }
+
+        response = self.client.get("/api/scanner/AAPL?include_history=true")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["explanation"]["historical_performance"]["total"], 12)
+        mock_recorder.get_stats.assert_called_once_with("AAPL", "1d")
 
     def test_scan_symbol_uppercases_input(self):
         """Lower-case path input is normalized to upper-case before scanning."""
