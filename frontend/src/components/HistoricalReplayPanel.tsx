@@ -10,6 +10,15 @@ interface HistoricalReplayPanelProps {
   defaultSymbol?: string;
 }
 
+interface SimulatedTrade {
+  signal: HistoricalSignal;
+  entry: number;
+  exit: number | null;
+  result: 'target' | 'stop' | 'open';
+  returnPct: number | null;
+  barsHeld: number;
+}
+
 function fmt(value: number | null | undefined, digits = 2): string {
   return value == null || !Number.isFinite(value) ? '—' : value.toFixed(digits);
 }
@@ -46,6 +55,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   const [speed, setSpeed] = useState(700);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [stopPct, setStopPct] = useState(1);
+  const [targetPct, setTargetPct] = useState(2);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -124,6 +135,27 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       averageMae: average(completedOutcomes.map((signal) => signal.mae)),
     };
   }, [completedOutcomes, replaySignals.length]);
+  const simulatedTrades = useMemo<SimulatedTrade[]>(() => replaySignals.map((signal) => {
+    const index = replayBars.findIndex((bar) => Date.parse(bar.timestamp) >= Date.parse(signal.timestamp));
+    if (index < 0) return { signal, entry: 0, exit: null, result: 'open', returnPct: null, barsHeld: 0 };
+    const entry = replayBars[index].close;
+    const bearish = /bear|down|sell/i.test(signal.trend_state || '');
+    const stop = bearish ? entry * (1 + stopPct / 100) : entry * (1 - stopPct / 100);
+    const target = bearish ? entry * (1 - targetPct / 100) : entry * (1 + targetPct / 100);
+    for (let i = index + 1; i < replayBars.length; i += 1) {
+      const bar = replayBars[i];
+      const hitStop = bearish ? bar.high >= stop : bar.low <= stop;
+      const hitTarget = bearish ? bar.low <= target : bar.high >= target;
+      if (hitStop || hitTarget) {
+        const result = hitStop ? 'stop' : 'target';
+        const exit = result === 'stop' ? stop : target;
+        return { signal, entry, exit, result, returnPct: (bearish ? (entry - exit) : (exit - entry)) / entry * 100, barsHeld: i - index };
+      }
+    }
+    return { signal, entry, exit: null, result: 'open', returnPct: null, barsHeld: replayBars.length - index - 1 };
+  }), [replayBars, replaySignals, stopPct, targetPct]);
+  const simulatedCompleted = simulatedTrades.filter((trade) => trade.returnPct != null);
+  const simulatedNet = simulatedCompleted.reduce((sum, trade) => sum + (trade.returnPct || 0), 0);
 
   useEffect(() => {
     setCursor((current) => Math.min(current, Math.max(0, replayBars.length - 1)));
@@ -212,6 +244,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
           <span>To</span>
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="Replay end date" />
         </label>
+        <label><span>Stop %</span><input type="number" min="0.1" step="0.1" value={stopPct} onChange={(event) => setStopPct(Math.max(0.1, Number(event.target.value) || 1))} aria-label="Simulated stop percentage" /></label>
+        <label><span>Target %</span><input type="number" min="0.1" step="0.1" value={targetPct} onChange={(event) => setTargetPct(Math.max(0.1, Number(event.target.value) || 2))} aria-label="Simulated target percentage" /></label>
         {(fromDate || toDate) && (
           <button className="btn" onClick={() => { setFromDate(''); setToDate(''); }}>
             Clear Dates
@@ -239,6 +273,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             <div><small>Avg 5-bar return</small><strong>{fmtPct(replayStats.averageReturn)}</strong></div>
             <div><small>Avg MFE</small><strong>{fmtPct(replayStats.averageMfe)}</strong></div>
             <div><small>Avg MAE</small><strong>{fmtPct(replayStats.averageMae)}</strong></div>
+            <div><small>Simulated trades</small><strong>{simulatedCompleted.length} / {simulatedTrades.length}</strong></div>
+            <div><small>Simulated net</small><strong className={simulatedNet >= 0 ? 'positive' : 'negative'}>{fmtPct(simulatedNet)}</strong></div>
           </div>
 
           <div className="replay-toolbar">
@@ -296,6 +332,17 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
               )}
             </div>
           </div>
+
+          {simulatedTrades.length > 0 && (
+            <div className="replay-section-title" style={{ marginTop: '0.9rem' }}>Simulated trade outcomes</div>
+          )}
+          {simulatedTrades.slice(-8).map((trade) => (
+            <div className="replay-sim-trade" key={`${trade.signal.id}-${trade.signal.timestamp}`}>
+              <span>{formatETDateTime(trade.signal.timestamp)} · {trade.signal.trend_state || 'signal'}</span>
+              <span>Entry {fmt(trade.entry)} · {trade.result === 'open' ? `${trade.barsHeld} bars open` : `${trade.result} after ${trade.barsHeld} bars`}</span>
+              <strong className={trade.returnPct == null ? '' : trade.returnPct >= 0 ? 'positive' : 'negative'}>{fmtPct(trade.returnPct)}</strong>
+            </div>
+          ))}
 
           <div className="replay-bars" aria-label="Recent replay candles">
             {visibleBars.map((bar, index) => {

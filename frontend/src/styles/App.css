@@ -920,6 +920,7 @@ h4 {
 .replay-signal-values strong { font-size: 1.1rem; text-transform: capitalize; }
 .replay-signal-values span { color: var(--text-secondary); font-size: 0.85rem; }
 .replay-muted { color: var(--text-muted); font-size: 0.85rem; }
+.replay-sim-trade { display: grid; grid-template-columns: 1.2fr 1.5fr auto; gap: .7rem; padding: .35rem 0; border-bottom: 1px solid var(--border); font-size: .76rem; color: var(--text-secondary); }
 
 .replay-outcome {
   display: flex;
