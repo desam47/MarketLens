@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import api, { Bar, BarsResult } from '../services/api';
 import { CandlestickChart, ChartType } from './CandlestickChart';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
-import { OVERLAYS, type OverlayKey } from './chartMath';
+import { OVERLAYS, parseET, type OverlayKey } from './chartMath';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -82,8 +82,9 @@ export function MultiTimeframeChartGrid({
 
   const { latestBars } = useMarketStream({ subscriptions });
 
-  // Apply incoming bars to panels. The incoming bar either replaces the last
-  // bar (same timestamp = tick update) or appends a new one (new bar close).
+  // Apply incoming bars to panels. API history is newest-first, so locate the
+  // matching minute bucket instead of assuming the last array element is the
+  // active candle. The local Webull stream can update that candle repeatedly.
   useEffect(() => {
     setPanels(prev => {
       let changed = false;
@@ -92,35 +93,48 @@ export function MultiTimeframeChartGrid({
         const update = latestBars[key];
         if (!update || panel.loading || panel.bars.length === 0) return panel;
 
-        const lastBar = panel.bars[panel.bars.length - 1];
         const updateTs = update.timestamp;
+        if (updateTs == null || update.close == null) return panel;
+        const updateBucket = Math.floor(parseET(updateTs).getTime() / 60_000);
+        const index = panel.bars.findIndex(
+          bar => Math.floor(parseET(bar.timestamp).getTime() / 60_000) === updateBucket,
+        );
+        const existing = index >= 0 ? panel.bars[index] : null;
 
-        // Match by timestamp string (ISO format from backend).
-        if (lastBar.timestamp === updateTs) {
-          // Same bar — update its fields in-place.
+        if (existing) {
           const updatedBar: Bar = {
-            ...lastBar,
-            open: update.open ?? lastBar.open,
-            high: update.high ?? lastBar.high,
-            low: update.low ?? lastBar.low,
-            close: update.close ?? lastBar.close,
-            volume: update.volume ?? lastBar.volume,
+            ...existing,
+            open: update.open ?? existing.open,
+            high: update.high ?? existing.high,
+            low: update.low ?? existing.low,
+            close: update.close,
+            volume: update.volume ?? existing.volume,
+            data_status: update.data_status ?? 'LIVE',
+            source: update.source ?? 'webull_stream',
           };
           changed = true;
-          return { ...panel, bars: [...panel.bars.slice(0, -1), updatedBar] };
-        } else {
-          // New bar — append.
-          const newBar: Bar = {
-            timestamp: updateTs ?? lastBar.timestamp,
-            open: update.open ?? lastBar.open,
-            high: update.high ?? lastBar.high,
-            low: update.low ?? lastBar.low,
-            close: update.close ?? lastBar.close,
-            volume: update.volume ?? 0,
-          };
-          changed = true;
-          return { ...panel, bars: [...panel.bars, newBar] };
+          const next = [...panel.bars];
+          next[index] = updatedBar;
+          return { ...panel, bars: next };
         }
+
+        const newBar: Bar = {
+          timestamp: updateTs,
+          open: update.open ?? update.close,
+          high: update.high ?? update.close,
+          low: update.low ?? update.close,
+          close: update.close,
+          volume: update.volume ?? 0,
+          data_status: update.data_status ?? 'LIVE',
+          source: update.source ?? 'webull_stream',
+        };
+        changed = true;
+        return {
+          ...panel,
+          bars: [...panel.bars, newBar].sort(
+            (a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime(),
+          ),
+        };
       });
       return changed ? next : prev;
     });

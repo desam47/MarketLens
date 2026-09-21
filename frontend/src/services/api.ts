@@ -761,6 +761,10 @@ export interface BarUpdateData {
   close: number | null;
   volume: number | null;
   timestamp: string | null;
+  timeframe?: string;
+  provider?: string;
+  data_status?: string | null;
+  source?: string | null;
 }
 
 export interface LiveQuoteUpdateData {

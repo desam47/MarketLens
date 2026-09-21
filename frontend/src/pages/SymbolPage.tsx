@@ -9,6 +9,7 @@ import api, {
   Transition,
   MarketQuote,
   CalendarEvent,
+  BarUpdateData,
   RealtimeEvent,
   RealtimeConnectionStatus,
   LiveQuoteUpdateData,
@@ -571,6 +572,36 @@ function mergeLiveTradeIntoMinuteBars(bars: Bar[], live: LiveQuoteUpdateData): B
   return [...bars, newBar].sort((a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime());
 }
 
+/** Merge the shared backend candle update into the active 1-minute history. */
+function mergeLiveBarIntoMinuteBars(bars: Bar[], update: BarUpdateData): Bar[] {
+  if (update.timestamp == null || update.close == null) return bars;
+  const updateTime = parseET(update.timestamp).getTime();
+  if (!Number.isFinite(updateTime)) return bars;
+  const bucketMs = Math.floor(updateTime / 60_000) * 60_000;
+  const index = bars.findIndex(
+    bar => Math.floor(parseET(bar.timestamp).getTime() / 60_000) * 60_000 === bucketMs,
+  );
+  const existing = index >= 0 ? bars[index] : null;
+  const nextBar: Bar = {
+    timestamp: update.timestamp,
+    open: update.open ?? existing?.open ?? update.close,
+    high: update.high ?? existing?.high ?? update.close,
+    low: update.low ?? existing?.low ?? update.close,
+    close: update.close,
+    volume: update.volume ?? existing?.volume ?? 0,
+    data_status: update.data_status ?? 'LIVE',
+    source: update.source ?? 'webull_stream',
+  };
+  if (index >= 0) {
+    const next = [...bars];
+    next[index] = { ...existing, ...nextBar };
+    return next;
+  }
+  return [...bars, nextBar].sort(
+    (a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime(),
+  );
+}
+
 // --- Main page ---
 export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
@@ -979,6 +1010,17 @@ const fetchBars = useCallback(async () => {
       return () => clearInterval(id);
     }
     const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
+      if (event.type === 'bar_update') {
+        const current = analysisContextRef.current;
+        if (
+          event.symbol === symbol.toUpperCase()
+          && event.timeframe === '1m'
+          && current.timeframe === '1m'
+        ) {
+          setBars(previous => mergeLiveBarIntoMinuteBars(previous, event.data));
+        }
+        return;
+      }
       if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
       const live = event.data;
       setLiveQuote(live);
@@ -1006,11 +1048,16 @@ const fetchBars = useCallback(async () => {
     });
     const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
     subscriber.subscribeQuote(symbol);
+    // The backend aggregates the same shared Webull trades into a 1-minute
+    // candle and pushes it to every chart subscriber. Keep the client-side
+    // trade merge above as a graceful fallback when the bar channel is stale.
+    subscriber.subscribe(symbol, '1m');
     return () => {
       clearInterval(id);
       unsubscribe();
       unsubscribeStatus();
       subscriber.unsubscribeQuote(symbol);
+      subscriber.unsubscribe(symbol, '1m');
       subscriber.disconnect();
     };
   }, [fetchQuote, symbol]);

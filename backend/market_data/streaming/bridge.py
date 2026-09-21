@@ -1,17 +1,17 @@
 """
 Wiring between the Webull MQTT stream and the rest of the app.
 
-Scoped MQTT (2026-09-10): the stream feeds ONLY the tape engine, which
-is consumed by the AI features (build_context's `tape` section -> chat /
-analysis / digest). It does NOT feed the trend / regime / scanner
-engines or write quote/bar rows — those stay 100% REST-fed, so there's
-no second source of truth for anything load-bearing and a stream outage
-only empties the `tape` section.
+The stream feeds the tape engine and a bounded local 1-minute bar
+aggregator. The aggregator updates the shared realtime chart channel
+immediately and dispatches completed candles to in-memory analysis engines;
+REST remains the durable historical/fallback source.
 
 ``on_stream_snapshot`` / ``on_stream_trade`` are the WebullStreamClient
 callbacks (set in main.py's lifespan). They run on the SDK's thread.
 
-  trade    -> engine_registry.dispatch_trade  (kind "trade"; tape is the only consumer)
+  trade    -> engine_registry.dispatch_trade  (Time & Sales)
+           -> local 1m OHLCV aggregation -> realtime bar broadcast
+              and completed-bar dispatch
   snapshot -> TapeEngine.note_price           (keeps last_price fresh between prints)
 """
 
@@ -76,6 +76,33 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
         # symbol-less handler in webull_stream.py, making it harder to
         # tell which symbol's tape feed broke from the logs alone.
         logger.debug("stream trade -> tape failed for %s: %s", symbol, e)
+    try:
+        from backend.market_data.streaming.live_bars import live_bar_aggregator
+
+        update = live_bar_aggregator.update(symbol, price, size, _ensure_aware(ts))
+        if update is not None:
+            # Completed bars advance the shared in-memory analysis engines at
+            # the same cadence as REST-ingested 1m bars. The current forming
+            # candle is sent directly to chart subscribers below.
+            for bar in update.completed:
+                engine_registry.dispatch_bar(
+                    symbol=bar.symbol,
+                    timeframe=bar.timeframe,
+                    price=bar.close,
+                    volume=bar.volume,
+                    timestamp=bar.timestamp,
+                    high=bar.high,
+                    low=bar.low,
+                    open_price=bar.open,
+                )
+            from backend.api.realtime.ws_router import publish_live_bar
+
+            publish_live_bar(symbol, update.current.as_payload(), "1m")
+    except Exception as e:  # noqa: BLE001
+        # Aggregation is an enhancement over the REST fallback and must never
+        # interrupt the tape or quote path when a malformed trade slips
+        # through or a browser broadcast is unavailable.
+        logger.debug("stream trade -> local bar aggregation failed for %s: %s", symbol, e)
     engine_registry.dispatch_microstructure(symbol, payload)
 
 

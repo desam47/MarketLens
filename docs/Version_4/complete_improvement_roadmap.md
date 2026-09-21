@@ -22,16 +22,17 @@ Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
 ### 3. Real-time chart updates — [~] Partial
 
-The active Symbol Page candle is updated locally from live ticks. Broader local bar aggregation and eliminating all REST backfill dependence remain.
+The backend now aggregates Webull trades into a shared live 1-minute candle and pushes it to chart subscribers; the Symbol Page also keeps a client-side fallback. Persisting completed stream bars and eliminating all REST backfill dependence remain.
 
 - Update the active candle from incoming ticks
 - Build 1-minute bars locally
+- Push the forming candle to every chart subscriber
 - Reduce dependence on REST backfills
 - Preserve REST history as a fallback
 
 ### 4. Reliability and rate-limit controls — [~] Partial
 
-Shared subscriptions, reconnect backoff, deduplication, cache limits, and stream-status alerts are implemented. Per-symbol stale watchdogs and complete fallback observability remain.
+Shared subscriptions, reconnect backoff, deduplication, cache limits, stream-status alerts, and per-symbol stale-data status alerts are implemented. Complete fallback observability remains.
 
 - Shared subscriptions
 - Reconnect backoff
@@ -215,7 +216,7 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, and failover labels are implemented. A unified per-symbol last-successful-update view and complete per-provider failover history remain.
+Reconnect state, provider health, freshness badges, failover labels, and per-symbol stale-data alerts are implemented. A unified per-symbol last-successful-update view and complete per-provider failover history remain.
 
 - Stream reconnect status
 - Provider health
@@ -226,4 +227,4 @@ Reconnect state, provider health, freshness badges, and failover labels are impl
 
 ## Recommended implementation order
 
-Build the shared Webull microstructure cache and quote WebSocket first. Nearly every later feature—live charts, scanner filters, alerts, signal explanations, BBO, replay, and provider transparency—can reuse that data foundation.
+The shared Webull microstructure cache, quote WebSocket, and live 1-minute candle path are now in place. Next prioritize completed-bar persistence, event-driven scanner refreshes, unified per-symbol freshness visibility, and exact tick-level signal reconstruction. These close the remaining gaps in chart durability, scanner timeliness, operational transparency, and replay fidelity.

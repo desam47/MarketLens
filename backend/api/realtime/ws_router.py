@@ -305,6 +305,49 @@ def publish_live_quote(symbol: str, payload: dict[str, Any]) -> None:
         pass
 
 
+def publish_live_bar(symbol: str, payload: dict[str, Any], timeframe: str = "1m") -> None:
+    """Push a locally aggregated bar from the Webull SDK thread.
+
+    The bar channel is intentionally separate from ``publish_live_quote``:
+    quote subscribers receive every L1/trade event, while chart subscribers
+    receive the current OHLCV candle for their requested timeframe.
+    """
+    loop = _realtime_loop
+    sym = symbol.upper()
+    tf = timeframe.lower()
+    if (
+        loop is None
+        or loop.is_closed()
+        or not broadcast_manager.has_subscribers(sym, tf)
+    ):
+        return
+
+    data = dict(payload)
+    timestamp = data.get("timestamp")
+    if isinstance(timestamp, datetime):
+        data["timestamp"] = _to_dashboard_tz(timestamp)
+    message = {
+        "type": "bar_update",
+        "symbol": sym,
+        "timeframe": tf,
+        "data": data,
+    }
+
+    def _schedule() -> None:
+        task = asyncio.ensure_future(
+            broadcast_manager.broadcast(
+                RealtimeBroadcastManager._make_key(sym, tf), message
+            )
+        )
+        _broadcast_tasks.add(task)
+        task.add_done_callback(_broadcast_tasks.discard)
+
+    try:
+        loop.call_soon_threadsafe(_schedule)
+    except RuntimeError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Provider-aware broadcasting (v3.6 — Alpaca WebSocket integration)
 # ---------------------------------------------------------------------------
