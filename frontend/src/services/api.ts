@@ -2522,6 +2522,7 @@ export interface TapeSnapshot {
   largest_print: number;
   tape_speed: number;
   tape_accel: number | null;
+  volume_accel: number | null;
   trade_velocity: number;
   uptick_count: number;
   downtick_count: number;

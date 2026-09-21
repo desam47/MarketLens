@@ -1217,6 +1217,8 @@ const fetchBars = useCallback(async () => {
           <SignalExplanationPanel
             symbol={symbol}
             explanation={scanResult?.explanation}
+            liveQuote={liveQuote}
+            tape={tape}
           />
         </div>
         <div className={scanLoading && !scanResult ? 'card-loading-skeleton' : ''}>

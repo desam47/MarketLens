@@ -4784,6 +4784,12 @@ div.td-trend {
   font-size: 11px;
 }
 
+.signal-live-verdict { display: flex; gap: 0.45rem; align-items: baseline; font-size: 0.82rem; color: var(--text-secondary); }
+.signal-live-confirmed strong { color: var(--success, #10b981); }
+.signal-live-contradicted strong { color: var(--danger, #ef4444); }
+.signal-live-mixed strong { color: var(--warning, #f59e0b); }
+.signal-live-no-live-data strong { color: var(--text-muted); }
+
 .signal-explanation-meta strong {
   color: var(--text-secondary);
 }

@@ -1,9 +1,11 @@
 import React from 'react';
-import { SignalExplanation } from '../services/api';
+import { LiveQuoteUpdateData, SignalExplanation, TapeSnapshot } from '../services/api';
 
 interface SignalExplanationPanelProps {
   symbol: string;
   explanation?: SignalExplanation;
+  liveQuote?: LiveQuoteUpdateData | null;
+  tape?: TapeSnapshot | null;
 }
 
 const directionColors: Record<string, string> = {
@@ -28,7 +30,7 @@ function formatReturn(value: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
-export function SignalExplanationPanel({ symbol, explanation }: SignalExplanationPanelProps) {
+export function SignalExplanationPanel({ symbol, explanation, liveQuote, tape }: SignalExplanationPanelProps) {
   if (
     !explanation
     || !Number.isFinite(explanation.confidence)
@@ -49,6 +51,28 @@ export function SignalExplanationPanel({ symbol, explanation }: SignalExplanatio
   const changes = explanation.changes;
   const color = directionColors[explanation.direction] || directionColors.neutral;
   const drivers = explanation.drivers.slice(0, 8);
+  const bullish = explanation.direction === 'bullish';
+  const bearish = explanation.direction === 'bearish';
+  const evidence: string[] = [];
+  let confirms = 0;
+  let contradicts = 0;
+  if (liveQuote && liveQuote.bid_size != null && liveQuote.ask_size != null && liveQuote.bid_size + liveQuote.ask_size > 0) {
+    const imbalance = (liveQuote.bid_size - liveQuote.ask_size) / (liveQuote.bid_size + liveQuote.ask_size);
+    const aligned = bullish ? imbalance >= 0.15 : bearish ? imbalance <= -0.15 : false;
+    const opposed = bullish ? imbalance <= -0.15 : bearish ? imbalance >= 0.15 : false;
+    if (aligned) confirms += 1;
+    if (opposed) contradicts += 1;
+    evidence.push(`BBO ${imbalance >= 0 ? 'bid' : 'ask'} imbalance ${Math.abs(imbalance * 100).toFixed(0)}%`);
+  }
+  if (tape) {
+    const buyFlow = tape.pressure.includes('buy') || tape.pressure_trend.includes('buy');
+    const sellFlow = tape.pressure.includes('sell') || tape.pressure_trend.includes('sell');
+    if ((bullish && buyFlow) || (bearish && sellFlow)) confirms += 1;
+    if ((bullish && sellFlow) || (bearish && buyFlow)) contradicts += 1;
+    evidence.push(`Tape ${titleCase(tape.pressure_trend === 'balanced' ? tape.pressure : tape.pressure_trend)}`);
+    if ((tape.tape_accel ?? 0) >= 1.5 || (tape.volume_accel ?? 0) >= 1.5) evidence.push('Live activity accelerating');
+  }
+  const liveVerdict = confirms > contradicts ? 'Confirmed' : contradicts > confirms ? 'Contradicted' : evidence.length ? 'Mixed' : 'No live data';
 
   return (
     <div className="card analysis-card signal-explanation-card">
@@ -65,6 +89,11 @@ export function SignalExplanationPanel({ symbol, explanation }: SignalExplanatio
           {explanation.direction === 'bullish' ? '↑' : explanation.direction === 'bearish' ? '↓' : '→'} {titleCase(explanation.direction)}
         </span>
         <span className="signal-explanation-confidence">{explanation.confidence.toFixed(0)}% confidence</span>
+      </div>
+
+      <div className="signal-explanation-section">
+        <div className="score-breakdown-title">Live confirmation</div>
+        <div className={`signal-live-verdict signal-live-${liveVerdict.toLowerCase().replace(/ /g, '-')}`}><strong>{liveVerdict}</strong><span>{evidence.length ? evidence.join(' · ') : 'Waiting for live BBO or Time & Sales data.'}</span></div>
       </div>
 
       <div className="signal-explanation-section">
