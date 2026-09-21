@@ -50,6 +50,13 @@ VALID_CONDITION_TYPES: tuple[str, ...] = (
     "insider_sentiment_change",
     "options_activity_change",
     "earnings_approaching",
+    # Shared live BBO and Time & Sales conditions.
+    "spread_widening",
+    "bid_ask_imbalance",
+    "large_print_activity",
+    "tape_pressure_reversal",
+    "trade_rate_spike",
+    "live_volume_acceleration",
 )
 
 
@@ -479,6 +486,45 @@ def _eval_earnings_approaching(parameter: str, value: object) -> bool:
     return isinstance(days_until, int) and 0 <= days_until <= max(0, window_days)
 
 
+def _micro_threshold(parameter: str, default: float) -> float:
+    try:
+        return float(parameter) if parameter else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _eval_spread_widening(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("spread_change_bps"), (int, float)) and value["spread_change_bps"] >= _micro_threshold(parameter, 3.0)
+
+
+def _eval_bid_ask_imbalance(parameter: str, value: object) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("bid_ask_imbalance"), (int, float)):
+        return False
+    threshold = _micro_threshold(parameter, 0.2)
+    imbalance = float(value["bid_ask_imbalance"])
+    return imbalance <= threshold if threshold < 0 else imbalance >= threshold
+
+
+def _eval_large_print_activity(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("block_count"), (int, float)) and value["block_count"] >= max(1, _micro_threshold(parameter, 1))
+
+
+def _eval_tape_pressure_reversal(parameter: str, value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    direction = (parameter or "any").lower()
+    trend = value.get("pressure_trend")
+    return trend in ({"reversing_buy", "reversing_sell"} if direction == "any" else {f"reversing_{direction}"})
+
+
+def _eval_trade_rate_spike(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("tape_accel"), (int, float)) and value["tape_accel"] >= _micro_threshold(parameter, 1.5)
+
+
+def _eval_live_volume_acceleration(parameter: str, value: object) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("volume_accel"), (int, float)) and value["volume_accel"] >= _micro_threshold(parameter, 1.5)
+
+
 # --- Dispatcher ----------------------------------------------------------
 
 _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
@@ -503,6 +549,12 @@ _EVALUATORS: dict[str, Callable[[str, object], bool]] = {
     "insider_sentiment_change": _eval_insider_sentiment_change,
     "options_activity_change": _eval_options_activity_change,
     "earnings_approaching": _eval_earnings_approaching,
+    "spread_widening": _eval_spread_widening,
+    "bid_ask_imbalance": _eval_bid_ask_imbalance,
+    "large_print_activity": _eval_large_print_activity,
+    "tape_pressure_reversal": _eval_tape_pressure_reversal,
+    "trade_rate_spike": _eval_trade_rate_spike,
+    "live_volume_acceleration": _eval_live_volume_acceleration,
 }
 
 

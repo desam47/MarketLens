@@ -82,6 +82,10 @@ AUX_CONDITIONS: tuple[str, ...] = (
     "options_activity_change",
     "earnings_approaching",
 )
+MICROSTRUCTURE_CONDITIONS: tuple[str, ...] = (
+    "spread_widening", "bid_ask_imbalance", "large_print_activity",
+    "tape_pressure_reversal", "trade_rate_spike", "live_volume_acceleration",
+)
 
 BAR_CONDITIONS: tuple[str, ...] = (
     TREND_CONDITIONS
@@ -105,6 +109,7 @@ class AlertsEngine:
     def __init__(self) -> None:
         # symbol.upper() -> list of alert IDs registered for price callbacks.
         self._price_alert_ids: dict[str, list[int]] = defaultdict(list)
+        self._microstructure_alert_ids: dict[str, list[int]] = defaultdict(list)
         # (alert_id, symbol) -> last fired timestamp (Unix float).
         # Cleared at startup, repopulated on each fire.
         self._fired_at: dict[tuple[int, str], float] = {}
@@ -155,6 +160,7 @@ class AlertsEngine:
             set(self._bar_alert_ids.keys()) if hasattr(self, "_bar_alert_ids") else set()
         )
         new_price_symbols: set[str] = set()
+        new_micro_symbols: set[str] = set()
         new_bar_symbols: set[str] = set()
         # Track which symbols we've already registered in this reload pass to
         # avoid duplicate registrations when multiple alerts share the same symbol.
@@ -170,6 +176,11 @@ class AlertsEngine:
                     if sym not in current_price_symbols and sym not in _price_registered:
                         engine_registry.register("quote", sym, self._on_quote)
                         _price_registered.add(sym)
+            elif alert.condition_type in MICROSTRUCTURE_CONDITIONS:
+                new_micro_symbols.add(sym)
+                if alert.id not in self._microstructure_alert_ids.setdefault(sym, []):
+                    self._microstructure_alert_ids[sym].append(alert.id)
+                engine_registry.register("microstructure", sym, self._on_microstructure)
             elif alert.condition_type in BAR_CONDITIONS:
                 new_bar_symbols.add(sym)
                 if not hasattr(self, "_bar_alert_ids"):
@@ -185,6 +196,9 @@ class AlertsEngine:
             if sym in self._price_alert_ids:
                 engine_registry.unregister("quote", sym, self._on_quote)
                 del self._price_alert_ids[sym]
+        for sym in set(self._microstructure_alert_ids) - new_micro_symbols:
+            engine_registry.unregister("microstructure", sym, self._on_microstructure)
+            del self._microstructure_alert_ids[sym]
 
         # Unregister bar callbacks for symbols with no bar alerts.
         if hasattr(self, "_bar_alert_ids"):
@@ -243,7 +257,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache[alert.id] = alert
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -253,6 +267,12 @@ class AlertsEngine:
                 self._price_alert_ids.setdefault(sym, []).append(alert.id)
                 if not already_registered:
                     engine_registry.register("quote", sym, self._on_quote)
+            elif alert.condition_type in MICROSTRUCTURE_CONDITIONS:
+                already_registered = sym in self._microstructure_alert_ids
+                if alert.id not in self._microstructure_alert_ids.setdefault(sym, []):
+                    self._microstructure_alert_ids[sym].append(alert.id)
+                if not already_registered:
+                    engine_registry.register("microstructure", sym, self._on_microstructure)
             elif alert.condition_type in BAR_CONDITIONS:
                 if not hasattr(self, "_bar_alert_ids"):
                     self._bar_alert_ids = defaultdict(list)
@@ -277,7 +297,7 @@ class AlertsEngine:
             with self._lock:
                 self._alerts_cache.pop(alert.id, None)
             return
-        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS:
+        if alert.condition_type not in PRICE_CONDITIONS + BAR_CONDITIONS + AUX_CONDITIONS + MICROSTRUCTURE_CONDITIONS:
             return
         sym = alert.symbol.upper()
         with self._lock:
@@ -289,6 +309,13 @@ class AlertsEngine:
                 if not self._price_alert_ids.get(sym):
                     self._price_alert_ids.pop(sym, None)
                     engine_registry.unregister("quote", sym, self._on_quote)
+            elif alert.condition_type in MICROSTRUCTURE_CONDITIONS:
+                ids = self._microstructure_alert_ids.get(sym)
+                if ids and alert.id in ids:
+                    ids.remove(alert.id)
+                if not self._microstructure_alert_ids.get(sym):
+                    self._microstructure_alert_ids.pop(sym, None)
+                    engine_registry.unregister("microstructure", sym, self._on_microstructure)
             elif alert.condition_type in BAR_CONDITIONS:
                 if hasattr(self, "_bar_alert_ids"):
                     ids = self._bar_alert_ids.get(sym)
@@ -490,6 +517,31 @@ class AlertsEngine:
             elif alert.condition_type == "pct_change_above":
                 if pct_change is not None:
                     self._try_fire(alert, pct_change, extra_value=pct_change)
+
+    def _on_microstructure(self, symbol: str, payload: dict, **_: object) -> None:
+        """Evaluate live BBO/tape alerts from the shared stream cache."""
+        if not self._started:
+            return
+        sym = symbol.upper()
+        with self._lock:
+            alerts = [self._alerts_cache[aid] for aid in self._microstructure_alert_ids.get(sym, []) if aid in self._alerts_cache]
+        if not alerts:
+            return
+        snapshot = dict(payload)
+        try:
+            from backend.api.tape.registry import get_tape_engine
+            tape = get_tape_engine(sym).get_snapshot()
+            snapshot.update({
+                "block_count": tape["block_count_5m"], "pressure_trend": tape["pressure_trend"],
+                "tape_accel": tape["tape_accel"], "volume_accel": tape["volume_accel"],
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        bid_size, ask_size = snapshot.get("bid_size"), snapshot.get("ask_size")
+        if isinstance(bid_size, (int, float)) and isinstance(ask_size, (int, float)) and bid_size + ask_size > 0:
+            snapshot["bid_ask_imbalance"] = round((bid_size - ask_size) / (bid_size + ask_size), 3)
+        for alert in alerts:
+            self._try_fire(alert, snapshot.get("price"), extra_value=snapshot)
 
     # --- Bar callback (called from engine_registry, any thread) -----------
 

@@ -405,12 +405,24 @@ class TestEvaluateDispatcher(unittest.TestCase):
             "insider_sentiment_change",
             "options_activity_change",
             "earnings_approaching",
+            "spread_widening", "bid_ask_imbalance", "large_print_activity",
+            "tape_pressure_reversal", "trade_rate_spike", "live_volume_acceleration",
         }
         self.assertEqual(set(VALID_CONDITION_TYPES), expected)
 
     def test_dispatcher_signal_equals(self):
         self.assertTrue(evaluate("signal_equals", "RSI_OVERSOLD", ["RSI_OVERSOLD"]))
         self.assertFalse(evaluate("signal_equals", "RSI_OVERSOLD", []))
+
+    def test_dispatcher_microstructure_conditions(self):
+        value = {"spread_change_bps": 4, "bid_ask_imbalance": -0.3, "block_count": 2,
+                 "pressure_trend": "reversing_sell", "tape_accel": 1.8, "volume_accel": 2.0}
+        self.assertTrue(evaluate("spread_widening", "3", value))
+        self.assertTrue(evaluate("bid_ask_imbalance", "-0.2", value))
+        self.assertTrue(evaluate("large_print_activity", "1", value))
+        self.assertTrue(evaluate("tape_pressure_reversal", "sell", value))
+        self.assertTrue(evaluate("trade_rate_spike", "1.5", value))
+        self.assertTrue(evaluate("live_volume_acceleration", "1.5", value))
 
     def test_dispatcher_price_above(self):
         self.assertTrue(evaluate("price_above", "100", 110))

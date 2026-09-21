@@ -235,6 +235,18 @@ class EngineRegistry:
                 logger.warning(f"Engine update failed for {symbol} (trade): {e}")
         return notified
 
+    def dispatch_microstructure(self, symbol: str, payload: dict) -> int:
+        """Fan out a cached live BBO/tape event without provider polling."""
+        key = self._key("microstructure", symbol)
+        with self._lock:
+            callbacks = list(self._entries.get(key, []))
+        for cb in callbacks:
+            try:
+                cb(symbol=symbol, payload=payload)
+            except Exception as e:
+                logger.warning("Engine update failed for %s (microstructure): %s", symbol, e)
+        return len(callbacks)
+
     def dispatch_bar(
         self,
         symbol: str,

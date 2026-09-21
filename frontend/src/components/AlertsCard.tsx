@@ -31,6 +31,12 @@ const CONDITIONS: { value: string; label: string; hint: string }[] = [
   { value: 'insider_sentiment_change', label: 'Insider sentiment change', hint: 'minimum sentiment delta (e.g. 0.2)' },
   { value: 'options_activity_change', label: 'Options activity change', hint: 'minimum volume/OI change % (e.g. 50)' },
   { value: 'earnings_approaching', label: 'Earnings approaching', hint: 'days before estimated earnings' },
+  { value: 'spread_widening', label: 'Spread widening (live)', hint: 'minimum widening in bps (e.g. 3)' },
+  { value: 'bid_ask_imbalance', label: 'Bid/ask imbalance (live)', hint: 'bid positive / ask negative (e.g. 0.2 or -0.2)' },
+  { value: 'large_print_activity', label: 'Large-print activity (live)', hint: 'minimum recent block prints (e.g. 1)' },
+  { value: 'tape_pressure_reversal', label: 'Tape-pressure reversal (live)', hint: 'buy, sell, or any' },
+  { value: 'trade_rate_spike', label: 'Trade-rate spike (live)', hint: 'minimum acceleration (e.g. 1.5)' },
+  { value: 'live_volume_acceleration', label: 'Live volume acceleration', hint: 'minimum acceleration (e.g. 1.5)' },
   { value: 'signal_profile', label: 'Signal profile', hint: 'Use Signal Alert Center for guided filters' },
 ];
 
@@ -111,6 +117,18 @@ function conditionLabel(c: string, p: string): React.ReactNode {
       return <>options volume/OI Δ ≥ {p || '50'}%</>;
     case 'earnings_approaching':
       return <>earnings expected within {p} days</>;
+    case 'spread_widening':
+      return <>live spread widened ≥ {p || '3'} bps</>;
+    case 'bid_ask_imbalance':
+      return <>live bid/ask imbalance {p || '0.2'}</>;
+    case 'large_print_activity':
+      return <>live large-print activity ≥ {p || '1'}</>;
+    case 'tape_pressure_reversal':
+      return <>live tape reverses {p || 'any'} side</>;
+    case 'trade_rate_spike':
+      return <>live trade rate ≥ {p || '1.5'}× baseline</>;
+    case 'live_volume_acceleration':
+      return <>live volume ≥ {p || '1.5'}× baseline</>;
     default:
       return <>{c}({p})</>;
   }

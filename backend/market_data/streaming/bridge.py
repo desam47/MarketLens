@@ -44,6 +44,7 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, as
         get_tape_engine(symbol).note_price(price, ts)
     except Exception as e:  # noqa: BLE001
         logger.debug("stream snapshot -> tape failed for %s: %s", symbol, e)
+    engine_registry.dispatch_microstructure(symbol, payload)
 
 
 def on_stream_trade(symbol, price, size, ts, side) -> None:
@@ -71,6 +72,7 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
         # symbol-less handler in webull_stream.py, making it harder to
         # tell which symbol's tape feed broke from the logs alone.
         logger.debug("stream trade -> tape failed for %s: %s", symbol, e)
+    engine_registry.dispatch_microstructure(symbol, payload)
 
 
 def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
@@ -93,3 +95,4 @@ def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
         publish_live_quote(symbol, payload)
     except Exception as e:  # noqa: BLE001
         logger.debug("stream BBO -> quote broadcast failed for %s: %s", symbol, e)
+    engine_registry.dispatch_microstructure(symbol, payload)
