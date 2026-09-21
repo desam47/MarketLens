@@ -2,9 +2,11 @@
 
 This roadmap combines the real-time, microstructure, market intelligence, portfolio, replay, and usability improvements planned for MarketLens. Features are ordered by dependency and implementation priority.
 
+Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
+
 ## Phase 1 — Shared real-time data foundation
 
-### 1. Shared live microstructure cache
+### 1. Shared live microstructure cache — [x] Done
 
 - One Webull MQTT stream for all subscribed symbols
 - Shared BBO and Time & Sales data across every page
@@ -13,19 +15,23 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Duplicate-tick protection
 - Local retention limits
 
-### 2. True real-time quote WebSocket
+### 2. True real-time quote WebSocket — [x] Done
 
 - Stream live price, bid, ask, sizes, and volume to the Symbol Page, Dashboard, Watchlists, Scanner, and Alerts
 - Show `LIVE`, `STALE`, or `REST FALLBACK`
 
-### 3. Real-time chart updates
+### 3. Real-time chart updates — [~] Partial
+
+The active Symbol Page candle is updated locally from live ticks. Broader local bar aggregation and eliminating all REST backfill dependence remain.
 
 - Update the active candle from incoming ticks
 - Build 1-minute bars locally
 - Reduce dependence on REST backfills
 - Preserve REST history as a fallback
 
-### 4. Reliability and rate-limit controls
+### 4. Reliability and rate-limit controls — [~] Partial
+
+Shared subscriptions, reconnect backoff, deduplication, cache limits, and stream-status alerts are implemented. Per-symbol stale watchdogs and complete fallback observability remain.
 
 - Shared subscriptions
 - Reconnect backoff
@@ -37,7 +43,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 ## Phase 2 — Microstructure features
 
-### 5. Symbol-page BBO panel
+### 5. Symbol-page BBO panel — [x] Done
 
 - Bid
 - Ask
@@ -48,7 +54,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Provider status
 - Webull connection state
 
-### 6. Better Time & Sales analytics
+### 6. Better Time & Sales analytics — [x] Done
 
 - Buy/sell volume
 - Large prints
@@ -57,7 +63,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Tape-pressure trend
 - Recent trade imbalance
 
-### 7. Microstructure Scanner filters
+### 7. Microstructure Scanner filters — [x] Done
 
 - Tight spread
 - Spread widening
@@ -67,7 +73,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Bid/ask imbalance
 - Live volume acceleration
 
-### 8. Microstructure alerts
+### 8. Microstructure alerts — [x] Done
 
 - Spread widening
 - Bid/ask imbalance changes
@@ -76,7 +82,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Trade-rate spikes
 - Stream disconnects
 
-### 9. Tick-level replay
+### 9. Tick-level replay — [~] Partial
+
+Local bounded retention and BBO/tape playback are implemented. Replaying derived signals and simulated trade outcomes directly from ticks remains.
 
 - Store ticks locally
 - Replay Time & Sales and BBO changes
@@ -85,7 +93,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 ## Phase 3 — Intelligence and scanning
 
-### 10. Better live market scanner
+### 10. Better live market scanner — [~] Partial
+
+Breakouts, volume, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. Explicit VWAP/EMA alignment and event-driven scan refreshes remain.
 
 - Breakouts
 - Volume spikes
@@ -95,7 +105,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Multi-timeframe confirmation
 - Microstructure confirmation
 
-### 11. Signal Explanation Center
+### 11. Signal Explanation Center — [x] Done
 
 - Explain which indicators triggered
 - Show signal age
@@ -105,7 +115,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Display historical performance of similar signals
 - Show whether BBO and tape confirm or contradict the signal
 
-### 12. Expanded alerts
+### 12. Expanded alerts — [x] Done
 
 - Live price and volume
 - News arrival
@@ -119,7 +129,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 ## Phase 4 — Symbol research
 
-### 13. Catalyst timeline
+### 13. Catalyst timeline — [x] Done
 
 - News
 - Earnings
@@ -130,7 +140,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Price and volume reaction
 - Technical signals
 
-### 14. Options Snapshot improvements
+### 14. Options Snapshot improvements — [x] Done
 
 - Expiration selector
 - Seven ITM and seven OTM strikes
@@ -143,7 +153,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Basic unusual-activity flags
 - Delayed/estimated data labeling
 
-### 15. Provider and data-quality transparency
+### 15. Provider and data-quality transparency — [~] Partial
+
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. Entitlement status and complete provider attribution for every timeframe still need work.
 
 - Actual provider used
 - Provider per timeframe
@@ -157,7 +169,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 ## Phase 5 — Portfolio and learning tools
 
-### 16. Risk Dashboard
+### 16. Risk Dashboard — [x] Done
 
 - Position size
 - Stop-loss risk
@@ -167,7 +179,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Volatility
 - Maximum drawdown
 
-### 17. Trade journal
+### 17. Trade journal — [~] Partial
+
+Manual journal entries, screenshots, P&L, review notes, local persistence, and signal attachment are implemented. Automatic attachment of live tape and full market context remains.
 
 - Thesis
 - Entry and exit
@@ -178,7 +192,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Mistake/review notes
 - Automatic signal and market-context attachment
 
-### 18. Historical replay
+### 18. Historical replay — [~] Partial
+
+Candle replay, signal timing, performance summaries, and tick replay are implemented. Simulated entries/exits with stop/target tracking remain.
 
 - Candle-by-candle replay
 - Tick-level replay
@@ -189,7 +205,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 ## Phase 6 — Personalization and usability
 
-### 19. Saved dashboard layouts
+### 19. Saved dashboard layouts — [x] Done
 
 - Day trading
 - Swing trading
@@ -197,7 +213,9 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 - Options research
 - Long-term investing
 
-### 20. Operational reliability UI
+### 20. Operational reliability UI — [~] Partial
+
+Reconnect state, provider health, freshness badges, and failover labels are implemented. A unified per-symbol last-successful-update view and complete per-provider failover history remain.
 
 - Stream reconnect status
 - Provider health
