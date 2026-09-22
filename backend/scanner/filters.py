@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from backend.engines.market_calendar import classify_bar_session
+from backend.engines.market_calendar import EASTERN, us_market_calendar
 from backend.engines.timeframe import Timeframe
 
 if TYPE_CHECKING:
@@ -136,7 +136,10 @@ class MarketSession(Filter):
         timestamp = result.timestamp
         if isinstance(timestamp, str):
             timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        return classify_bar_session(timestamp) == self.session
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=EASTERN)
+        session = us_market_calendar.get_session_type(timestamp)
+        return session.value == self.session
 
     def describe(self) -> str:
         return f"market session is {self.session.replace('_', ' ')}"

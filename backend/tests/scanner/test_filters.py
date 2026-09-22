@@ -95,6 +95,8 @@ class TestConcreteFilters(unittest.TestCase):
         result = ScanResult("AAPL", datetime(2026, 9, 21, 8, 15, tzinfo=ZoneInfo("America/New_York")))
         self.assertTrue(MarketSession("premarket").matches(result))
         self.assertFalse(MarketSession("regular").matches(result))
+        overnight = ScanResult("AAPL", datetime(2026, 9, 22, 2, 15, tzinfo=ZoneInfo("America/New_York")))
+        self.assertFalse(MarketSession("regular").matches(overnight))
         self.assertIsInstance(default_registry.build({"type": "market_session", "params": {"session": "regular"}}), MarketSession)
 
     def test_trend_score_gt(self):
