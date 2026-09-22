@@ -15,6 +15,7 @@ from typing import Any
 from ..config.settings import settings
 from ..repositories.bar_repository import get_bars as _get_db_bars
 from ..trend.trend_engine import TrendEngine
+from .sector_engine import SECTOR_ETFS, SECTOR_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,23 @@ class RelativeStrengthEngine:
         self.lookback_days = lookback_days or settings.relative_strength.lookback_days
         self._cfg = settings.relative_strength
 
+        # Resolve this symbol's sector ETF the same way SectorEngine does
+        # (symbol -> sector name -> sector ETF ticker). None when the
+        # symbol isn't in SECTOR_MAP, when its "sector ETF" is itself
+        # (e.g. SPY maps to "Broad Market" -> "SPY"), or when it's
+        # already one of the configured benchmarks — comparing a symbol
+        # to itself is meaningless and would just duplicate a benchmark
+        # signal under a different label.
+        sector_name = SECTOR_MAP.get(self.symbol, "Unknown")
+        resolved_sector_etf = SECTOR_ETFS.get(sector_name)
+        self.sector_etf: str | None = (
+            resolved_sector_etf
+            if resolved_sector_etf
+            and resolved_sector_etf != self.symbol
+            and resolved_sector_etf not in self._cfg.benchmark_list()
+            else None
+        )
+
         # Phase 3.9.2: accept injected shared TrendEngines (one per price
         # stream — the stock plus its benchmarks). Default to building
         # fresh engines so unit tests and one-off scripts still work.
@@ -88,8 +106,12 @@ class RelativeStrengthEngine:
         self._signals: list[RelativeStrengthSignal] = []
 
     def _all_symbols(self) -> list[str]:
-        """Symbol list for the stock + its configured benchmarks."""
-        return [self.symbol, *self._cfg.benchmark_list()]
+        """Symbol list for the stock + its configured benchmarks + its
+        sector ETF (if resolved)."""
+        symbols = [self.symbol, *self._cfg.benchmark_list()]
+        if self.sector_etf:
+            symbols.append(self.sector_etf)
+        return symbols
 
     # ------------------------------------------------------------------
     # Public API
@@ -120,8 +142,11 @@ class RelativeStrengthEngine:
             self.update(price, volume, timestamp, sym)
 
     def get_signals(self) -> list[RelativeStrengthSignal]:
-        """Return signals for the configured benchmarks. Call compute() first."""
+        """Return signals for the configured benchmarks plus the sector
+        ETF signal (if resolved). Call compute() first."""
         benchmarks = set(self._cfg.benchmark_list())
+        if self.sector_etf:
+            benchmarks.add(self.sector_etf)
         return [s for s in self._signals if s.benchmark in benchmarks]
 
     def _ensure_historical_data(self) -> None:
@@ -165,7 +190,8 @@ class RelativeStrengthEngine:
         Compute relative-strength signals vs all configured benchmarks.
 
         Returns one RelativeStrengthSignal per configured benchmark plus
-        the sector ETF signal if the engine was seeded with sector ETF data.
+        the sector ETF signal if this symbol resolved to one (see
+        ``self.sector_etf`` in ``__init__``).
         """
         self._ensure_historical_data()
         ts = timestamp or datetime.now(UTC)
@@ -176,10 +202,10 @@ class RelativeStrengthEngine:
             if sig:
                 signals.append(sig)
 
-        # Also compute vs sector ETF if a third engine was registered
-        sector_sig = self._compute_vs_benchmark("SECTOR", ts)
-        if sector_sig:
-            signals.append(sector_sig)
+        if self.sector_etf:
+            sector_sig = self._compute_vs_benchmark(self.sector_etf, ts)
+            if sector_sig:
+                signals.append(sector_sig)
 
         self._signals = signals
         return signals
@@ -206,7 +232,7 @@ class RelativeStrengthEngine:
             )
 
         sym_ret = self._return_over_lookback(sym_hist)
-        bmk_ret = self._return_over_lookback(bmk_hist) if benchmark != "SECTOR" else sym_ret
+        bmk_ret = self._return_over_lookback(bmk_hist)
         rs = sym_ret - bmk_ret
 
         cls = self._classify(rs)

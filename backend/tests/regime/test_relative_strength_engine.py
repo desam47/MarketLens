@@ -26,11 +26,39 @@ class TestRelativeStrengthEngine(unittest.TestCase):
     # Init
     # ------------------------------------------------------------------
 
-    def test_engine_initializes_3_engines(self):
-        """Engine has TrendEngines for the symbol, SPY, and QQQ."""
-        self.assertEqual(len(self.engine._engines), 3)
-        for sym in (self.symbol, "SPY", "QQQ"):
+    def test_engine_initializes_4_engines(self):
+        """Engine has TrendEngines for the symbol, SPY, QQQ, and AAPL's
+        resolved sector ETF (XLK, Technology)."""
+        self.assertEqual(len(self.engine._engines), 4)
+        for sym in (self.symbol, "SPY", "QQQ", "XLK"):
             self.assertIn(sym, self.engine._engines)
+
+    def test_sector_etf_resolved_for_known_symbol(self):
+        """AAPL (SECTOR_MAP: Technology) resolves to XLK."""
+        self.assertEqual(self.engine.sector_etf, "XLK")
+
+    def test_sector_etf_none_for_unmapped_symbol(self):
+        """A symbol absent from SECTOR_MAP has no sector ETF."""
+        engine = RelativeStrengthEngine("ZZZZ_NOT_A_REAL_TICKER", lookback_days=5)
+        self.assertIsNone(engine.sector_etf)
+        self.assertNotIn("ZZZZ_NOT_A_REAL_TICKER's sector", engine._all_symbols())
+
+    def test_sector_etf_none_when_it_equals_the_symbol_itself(self):
+        """SPY's own SECTOR_MAP entry ("Broad Market" -> "SPY") must not
+        resolve to a self-comparison sector ETF."""
+        engine = RelativeStrengthEngine("SPY", lookback_days=5)
+        self.assertIsNone(engine.sector_etf)
+
+    def test_sector_etf_none_when_already_a_benchmark(self):
+        """QQQ's sector (Technology -> XLK) is fine, but if XLK is itself
+        configured as a benchmark, it must not also be added as a
+        duplicate "sector ETF" entry."""
+        from backend.config.settings import settings
+
+        with patch.object(settings.relative_strength, "benchmarks", "SPY,XLK"):
+            engine = RelativeStrengthEngine("AAPL", lookback_days=5)
+            self.assertIsNone(engine.sector_etf)
+            self.assertEqual(engine._all_symbols().count("XLK"), 1)
 
     def test_default_lookback_from_settings(self):
         """No lookback param → reads from settings."""
@@ -171,14 +199,15 @@ class TestThresholdConfigurable(unittest.TestCase):
         from backend.config.settings import settings
 
         engine = RelativeStrengthEngine("AAPL")
-        # Default is SPY + QQQ per the Phase 8 spec.
+        # Default is SPY + QQQ per the Phase 8 spec, plus AAPL's resolved
+        # sector ETF (XLK, Technology).
         self.assertEqual(engine._cfg.benchmark_list(), ("SPY", "QQQ"))
-        self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ"])
+        self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ", "XLK"])
 
         # When the config string changes, the engine follows.
         with patch.object(settings.relative_strength, "benchmarks", "SPY,QQQ,IWM"):
             self.assertEqual(engine._cfg.benchmark_list(), ("SPY", "QQQ", "IWM"))
-            self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ", "IWM"])
+            self.assertEqual(engine._all_symbols(), ["AAPL", "SPY", "QQQ", "IWM", "XLK"])
 
     def test_benchmark_list_drops_empty_entries(self):
         """Trailing/empty entries in the benchmarks string are dropped."""
