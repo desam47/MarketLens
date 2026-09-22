@@ -668,6 +668,11 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [loadingOlderBars, setLoadingOlderBars] = useState(false);
   const [hasOlderBars, setHasOlderBars] = useState(false);
   const lastLiveTradeKeyRef = useRef<string | null>(null);
+  // A new streamed 1-minute bucket means the previous candle has closed.
+  // Refresh levels then (rather than on every tick) so pivots remain stable
+  // while the displayed distance follows the live quote immediately.
+  const lastSrBarTimestampRef = useRef<string | null>(null);
+  const srRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(true);
@@ -1074,6 +1079,7 @@ const fetchBars = useCallback(async () => {
     setDivergences([]);
     setBars([]);
     lastLiveTradeKeyRef.current = null;
+    lastSrBarTimestampRef.current = null;
   }, [symbol, timeframe]);
 
   useEffect(() => {
@@ -1088,6 +1094,21 @@ const fetchBars = useCallback(async () => {
     const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
       if (event.type === 'bar_update') {
         const current = analysisContextRef.current;
+        if (
+          event.symbol === symbol.toUpperCase()
+          && event.timeframe === '1m'
+          && event.data.timestamp
+          && event.data.timestamp !== lastSrBarTimestampRef.current
+        ) {
+          lastSrBarTimestampRef.current = event.data.timestamp;
+          if (srRefreshTimerRef.current !== null) clearTimeout(srRefreshTimerRef.current);
+          // Give the backend live-bar persistence a moment to commit the
+          // completed candle before re-reading the price-range analysis.
+          srRefreshTimerRef.current = setTimeout(() => {
+            srRefreshTimerRef.current = null;
+            void fetchSR();
+          }, 750);
+        }
         if (
           event.symbol === symbol.toUpperCase()
           && event.timeframe === '1m'
@@ -1130,13 +1151,17 @@ const fetchBars = useCallback(async () => {
     subscriber.subscribe(symbol, '1m');
     return () => {
       clearInterval(id);
+      if (srRefreshTimerRef.current !== null) {
+        clearTimeout(srRefreshTimerRef.current);
+        srRefreshTimerRef.current = null;
+      }
       unsubscribe();
       unsubscribeStatus();
       subscriber.unsubscribeQuote(symbol);
       subscriber.unsubscribe(symbol, '1m');
       subscriber.disconnect();
     };
-  }, [fetchQuote, symbol]);
+  }, [fetchQuote, fetchSR, symbol]);
 
   useEffect(() => {
     fetchTransitions();
@@ -1210,6 +1235,7 @@ const fetchBars = useCallback(async () => {
   const liveChangePct = liveChange != null && prevClose != null
     ? (liveChange / prevClose) * 100
     : null;
+  const srDisplayClose = liveQuote?.price ?? quote?.price ?? latestClose;
   const displayQuote = liveQuote || (quote ? {
     price: quote.price,
     volume: quote.volume,
@@ -1321,7 +1347,7 @@ const fetchBars = useCallback(async () => {
         <div className={srLoading && srLevels.length === 0 ? 'card-loading-skeleton' : ''}>
           <SRPanel
             levels={srLevels}
-            latestClose={latestClose}
+            latestClose={srDisplayClose}
           />
         </div>
         <div className={transitionsLoading && transitions.length === 0 ? 'card-loading-skeleton' : ''}>
