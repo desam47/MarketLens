@@ -84,6 +84,18 @@ describe('FilterBuilder auto-apply debounce', () => {
     expect(onResults).toHaveBeenCalledTimes(1);
   });
 
+  it('clears stale matches when the last filter is removed', () => {
+    const onClear = jest.fn();
+    render(<FilterBuilder symbols={['AAPL']} onResults={jest.fn()} onClear={onClear} />);
+
+    open();
+    fireEvent.click(screen.getByText('+ Add Filter'));
+    fireEvent.click(screen.getByTitle('Remove filter'));
+
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.filter-item')).not.toBeInTheDocument();
+  });
+
   it('adds the provider-backed upcoming-earnings exclusion with its default window', () => {
     render(<FilterBuilder symbols={['AAPL']} onResults={jest.fn()} onClear={jest.fn()} />);
     open();

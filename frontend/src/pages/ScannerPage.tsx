@@ -273,7 +273,9 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                 {sortedResults.map(result => (
                   <button className="scanner-result-row" key={result.symbol} onClick={() => onSelectSymbol(result.symbol)}>
                     <strong>{result.symbol}</strong>
-                    <EarningsBadge events={eventsBySymbol[result.symbol] || []} />
+                    <span className="scanner-result-earnings">
+                      <EarningsBadge events={eventsBySymbol[result.symbol] || []} />
+                    </span>
                     <span className={result.total_score >= 0 ? 'scanner-score-positive' : 'scanner-score-negative'}>{result.total_score >= 0 ? '+' : ''}{result.total_score.toFixed(1)}</span>
                     <span className="scanner-result-reason">{matchReason(result)}</span>
                     <MarketDataFreshnessBadge

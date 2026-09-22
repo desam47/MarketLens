@@ -438,8 +438,16 @@ export function FilterBuilder({
 
   // Remove a filter by index
   const removeFilter = useCallback((index: number) => {
-    setFilters(prev => prev.filter((_, i) => i !== index));
-  }, []);
+    const next = filters.filter((_, i) => i !== index);
+    setFilters(next);
+    // An empty filter list intentionally skips auto-apply (it means
+    // "browse all" in the backend), so clear the parent result set here
+    // instead of leaving matches from the deleted filter on screen.
+    if (next.length === 0) {
+      setError(null);
+      onClear();
+    }
+  }, [filters, onClear]);
 
   // Update a param on a filter
   const updateParam = useCallback((index: number, paramKey: string, value: any) => {
