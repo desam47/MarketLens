@@ -150,7 +150,7 @@ describe('column toggle', () => {
 
     expect(screen.queryByRole('columnheader', { name: /Type/ })).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Price/ })).toHaveStyle({ width: '110px' });
-    expect(screen.getByRole('columnheader', { name: /Trend/ })).toHaveStyle({ width: '320px' });
+    expect(screen.getByRole('columnheader', { name: /Trend/ })).toHaveStyle({ width: '240px' });
   });
 
   it('renders one cell per visible column in the virtualized list', async () => {
@@ -159,11 +159,11 @@ describe('column toggle', () => {
 
     const header = getVirtHeader();
     const row = getVirtRow('SYM00');
-    expect(cellCount(header)).toBe(6);
-    expect(cellCount(row)).toBe(6);
-    // Header and rows must share the same (6-track) grid template.
+    expect(cellCount(header)).toBe(7);
+    expect(cellCount(row)).toBe(7);
+    // Header and rows must share the same (7-track) grid template.
     expect(header.style.gridTemplateColumns).toBe(row.style.gridTemplateColumns);
-    expect(row.style.gridTemplateColumns.split(' ').length).toBeGreaterThanOrEqual(6);
+    expect(row.style.gridTemplateColumns.split(' ').length).toBeGreaterThanOrEqual(7);
     expect(row.style.gridTemplateColumns).not.toContain('64px');
   });
 });
@@ -187,7 +187,7 @@ describe('narrow viewport', () => {
     expect(screen.queryByRole('columnheader', { name: /Trend/ })).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Rel\. Strength/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Actions/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByRole('columnheader')).toHaveLength(6));
+    await waitFor(() => expect(screen.getAllByRole('columnheader')).toHaveLength(7));
   });
 });
 

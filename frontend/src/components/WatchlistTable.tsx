@@ -81,7 +81,22 @@ interface RowData {
   // All benchmarks' signals; `rs` is picked from these for the selected benchmark.
   rsSignals: RelativeStrengthSignal[];
   trendSignals: Record<string, any>;
+  liveQuote?: LiveQuoteUpdateData;
   raw: WatchlistScanResult;
+}
+
+function RowFreshness({ row, connectionStatus }: { row: RowData; connectionStatus: RealtimeConnectionStatus }) {
+  const live = row.liveQuote;
+  const quote = row.raw.quote;
+  return (
+    <MarketDataFreshnessBadge
+      dataStatus={live ? 'LIVE' : quote?.data_status}
+      timestamp={live?.timestamp ?? quote?.timestamp ?? row.raw.timestamp}
+      showAge
+      connectionStatus={connectionStatus}
+      provider={live?.provider ?? quote?.provider}
+    />
+  );
 }
 
 // Threshold: above this row count, switch to a virtualized list. Below, a
@@ -135,9 +150,10 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
   pendingAction: 'delete' | null;
   visibleColKeys: Set<string>;
   gridTemplate: string;
+  quoteConnectionStatus: RealtimeConnectionStatus;
 }>) {
   const { rows, onSelectSymbol, onToggleSymbol, onDeleteSymbol,
-    togglingSymbol, pendingSymbol, pendingAction, visibleColKeys, gridTemplate } = data;
+    togglingSymbol, pendingSymbol, pendingAction, visibleColKeys, gridTemplate, quoteConnectionStatus } = data;
   const row = rows[index];
 
   const isPending = pendingSymbol === row.symbol;
@@ -188,6 +204,9 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
             ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
             : '—'}
         </div>
+      )}
+      {visibleColKeys.has('freshness') && (
+        <div className="virt-cell td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} /></div>
       )}
       {visibleColKeys.has('trend') && (
         <div className="virt-cell td-trend"><TrendColumn trendSignals={row.trendSignals} /></div>
@@ -449,6 +468,7 @@ export function WatchlistTable({
       const liveChange = live.price - priorClose;
       return {
         ...withRelativeStrength,
+        liveQuote: live,
         price: live.price,
         change: liveChange,
         changePct: priorClose !== 0 ? (liveChange / priorClose) * 100 : r.changePct,
@@ -486,8 +506,9 @@ export function WatchlistTable({
       pendingAction,
       visibleColKeys: effectiveColKeys,
       gridTemplate: virtGridTemplate,
+      quoteConnectionStatus,
     }),
-    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction, effectiveColKeys, virtGridTemplate],
+    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction, effectiveColKeys, virtGridTemplate, quoteConnectionStatus],
   );
 
   const toggleSort = (col: typeof sortCol) => {
@@ -662,6 +683,7 @@ export function WatchlistTable({
                   pendingSymbol={pendingSymbol}
                   pendingAction={pendingAction}
                   visibleColKeys={effectiveColKeys}
+                  quoteConnectionStatus={quoteConnectionStatus}
                 />
               ))}
             </tbody>
@@ -684,6 +706,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
   pendingSymbol,
   pendingAction,
   visibleColKeys,
+  quoteConnectionStatus,
 }: {
   row: RowData;
   onSelectSymbol: (symbol: string) => void;
@@ -693,6 +716,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
   pendingSymbol: string | null;
   pendingAction: 'delete' | null;
   visibleColKeys: Set<string>;
+  quoteConnectionStatus: RealtimeConnectionStatus;
 }) {
   const rowEnabled = isRowEnabled(row.raw);
   const isPending = pendingSymbol === row.symbol;
@@ -741,6 +765,9 @@ const WatchlistRow = React.memo(function WatchlistRow({
             ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
             : '—'}
         </td>
+      )}
+      {visibleColKeys.has('freshness') && (
+        <td className="td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} /></td>
       )}
       {visibleColKeys.has('trend') && (
         <td className="td-trend"><TrendColumn trendSignals={row.trendSignals} /></td>

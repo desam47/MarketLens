@@ -97,7 +97,7 @@ Local bounded retention and BBO/tape playback are implemented. Replaying derived
 
 ### 10. Better live market scanner — [x] Done
 
-Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. The scanner WebSocket now refreshes only symbols affected by quote or microstructure events, coalesces bursts through one debounced worker, and preserves per-symbol cooldowns.
+Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. The scanner WebSocket now refreshes only symbols affected by quote or microstructure events, coalesces bursts through one debounced worker, and preserves per-symbol cooldowns. Filter requests correctly preserve the watchlist symbol scope, including legacy comma-separated clients, and the Matches panel keeps all result fields aligned for tickers with or without earnings events.
 
 - Breakouts
 - Volume spikes
@@ -108,6 +108,9 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 - Microstructure confirmation
 - Event-driven quote and microstructure refresh
 - Debounced symbol-level scan batching
+- Correct symbol-scoped filter query serialization
+- Clear stale matches when the final filter is removed
+- Consistent Matches-row alignment across optional earnings data
 
 ### 11. Signal Explanation Center — [x] Done
 
@@ -159,7 +162,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 
 ### 15. Provider and data-quality transparency — [~] Partial
 
-Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. Entitlement status and complete provider attribution for every timeframe still need work.
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. Entitlement status and complete provider attribution for every timeframe still need work.
 
 - Actual provider used
 - Provider per timeframe
@@ -224,6 +227,7 @@ Reconnect state, provider health, freshness badges, failover labels, and per-sym
 - Stream reconnect status
 - Provider health
 - Last successful update per symbol
+- Per-symbol Watchlist data status (provider, age, and connection state)
 - Per-provider failover visibility
 - Better stale-data warnings
 - Clear API and entitlement error messages
