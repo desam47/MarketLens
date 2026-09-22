@@ -21,6 +21,22 @@ function changeBadge(changePct: number | null): { label: string; color: string }
   return { label: '0.00%', color: '#9ca3af' };
 }
 
+function liveChangePct(
+  mover: TopMoverResult,
+  liveQuotes: Record<string, LiveQuoteUpdateData>,
+): number | null {
+  const live = liveQuotes[mover.symbol.toUpperCase()];
+  const livePrice = live?.price ?? mover.quote?.price ?? null;
+  // The scan's change is the captured price minus its prior-close baseline.
+  // Reusing that baseline lets the stream update ranking without another API call.
+  const baseline = mover.quote?.price != null && mover.change != null
+    ? mover.quote.price - mover.change
+    : null;
+  return livePrice != null && baseline != null && baseline !== 0
+    ? ((livePrice - baseline) / baseline) * 100
+    : mover.change_pct;
+}
+
 function MoverPanel({
   title,
   movers,
@@ -56,17 +72,7 @@ function MoverPanel({
       <div className="top-movers-scroll">
         {movers.map(m => {
           const live = quoteConnectionStatus === 'open' ? liveQuotes[m.symbol.toUpperCase()] : undefined;
-          const livePrice = live?.price ?? m.quote?.price ?? null;
-          // The scan's change is the captured price minus its prior-close
-          // baseline. Reuse that baseline so a live quote can update the
-          // percentage without another provider request.
-          const baseline = m.quote?.price != null && m.change != null
-            ? m.quote.price - m.change
-            : null;
-          const liveChangePct = livePrice != null && baseline != null && baseline !== 0
-            ? ((livePrice - baseline) / baseline) * 100
-            : m.change_pct;
-          const badge = changeBadge(liveChangePct);
+          const badge = changeBadge(liveChangePct(m, liveQuotes));
           return (
             <div
               key={m.symbol}
@@ -105,6 +111,32 @@ export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversC
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteUpdateData>>({});
   const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
+
+  const rankedMovers = useMemo(() => {
+    type RankedMover = { mover: TopMoverResult; original: 'bullish' | 'bearish'; change: number | null; index: number };
+    const source: RankedMover[] = [
+      ...bullish.map((mover, index) => ({ mover, original: 'bullish' as const, change: liveChangePct(mover, liveQuotes), index })),
+      ...bearish.map((mover, index) => ({ mover, original: 'bearish' as const, change: liveChangePct(mover, liveQuotes), index })),
+    ];
+    const compare = (a: RankedMover, b: RankedMover) => {
+      const aChange = a.change ?? Number.NEGATIVE_INFINITY;
+      const bChange = b.change ?? Number.NEGATIVE_INFINITY;
+      return bChange - aChange || a.index - b.index;
+    };
+    const nextBullish = source
+      .filter(item => item.change == null
+        ? item.original === 'bullish'
+        : item.change >= 0)
+      .sort(compare)
+      .map(item => item.mover);
+    const nextBearish = source
+      .filter(item => item.change == null
+        ? item.original === 'bearish'
+        : item.change < 0)
+      .sort((a, b) => (a.change ?? Number.POSITIVE_INFINITY) - (b.change ?? Number.POSITIVE_INFINITY) || a.index - b.index)
+      .map(item => item.mover);
+    return { bullish: nextBullish, bearish: nextBearish };
+  }, [bullish, bearish, liveQuotes]);
 
   const liveSymbols = useMemo(
     () => Array.from(new Set([...bullish, ...bearish].map(m => m.symbol.toUpperCase()))).sort(),
@@ -216,7 +248,7 @@ export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversC
         <div className="top-movers-grid">
           <MoverPanel
             title="Top Bullish"
-            movers={bullish}
+            movers={rankedMovers.bullish}
             onSelectSymbol={onSelectSymbol}
             variant="bullish"
             liveQuotes={liveQuotes}
@@ -224,7 +256,7 @@ export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversC
           />
           <MoverPanel
             title="Top Bearish"
-            movers={bearish}
+            movers={rankedMovers.bearish}
             onSelectSymbol={onSelectSymbol}
             variant="bearish"
             liveQuotes={liveQuotes}

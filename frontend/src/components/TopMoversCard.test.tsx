@@ -71,5 +71,20 @@ describe('TopMoversCard empty and unavailable states', () => {
     expect(screen.getByText('LIVE')).toBeInTheDocument();
     expect(api.getTopMoversCombined).toHaveBeenCalledTimes(1);
     expect(subscriber.subscribeQuote).toHaveBeenCalledWith('AAPL');
+
+    // A realtime reversal must move the symbol out of Bullish and into
+    // Bearish, not merely repaint the existing pill.
+    act(() => {
+      onEvent?.({
+        type: 'quote_update',
+        symbol: 'AAPL',
+        data: {
+          price: 85, volume: 3, bid: 84.9, ask: 85.1, bid_size: 10, ask_size: 12,
+          timestamp: '2026-01-01T12:02:00Z', received_at: Date.now(), provider: 'webull', event_type: 'trade',
+        },
+      });
+    });
+    expect(screen.getByText('-5.56%')).toBeInTheDocument();
+    expect(screen.getByText('No bullish signals — add symbols to a watchlist')).toBeInTheDocument();
   });
 });

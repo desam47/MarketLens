@@ -338,6 +338,47 @@ def _scoped_cache(symbols: list[str] | None) -> list[ScanResult]:
     return cache
 
 
+def _apply_canonical_previous_close(db: Session, results: list[ScanResult]) -> None:
+    """Use the persisted previous regular close for mover percentages.
+
+    Scanner bars may come from a provider/cache while Dashboard price-range
+    data comes from the local bar store. Recomputing the change from the same
+    persisted daily baseline keeps Top Movers and Latest Price identical,
+    including during premarket and after-hours.
+    """
+    if not results:
+        return
+    symbols = {result.symbol.upper() for result in results if result.quote is not None}
+    if not symbols:
+        return
+    today = datetime.now(_DASHBOARD_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+    )
+    rows = (
+        db.query(BarModel.symbol, BarModel.close)
+        .filter(
+            BarModel.symbol.in_(symbols),
+            BarModel.timeframe == "1d",
+            BarModel.timestamp < today,
+            BarModel.data_status != "INCOMPLETE",
+        )
+        .order_by(BarModel.symbol.asc(), BarModel.timestamp.desc())
+        .all()
+    )
+    previous_close: dict[str, float] = {}
+    for symbol, close in rows:
+        key = str(symbol).upper()
+        if key not in previous_close and close:
+            previous_close[key] = float(close)
+    for result in results:
+        baseline = previous_close.get(result.symbol.upper())
+        price = result.quote.price if result.quote is not None else None
+        if baseline is None or price is None or baseline == 0:
+            continue
+        result.change = price - baseline
+        result.change_pct = result.change / baseline * 100
+
+
 def _normalize_symbol_query(symbols: list[str] | None) -> list[str] | None:
     """Normalize repeated or legacy comma-separated symbol query values.
 
@@ -554,6 +595,7 @@ async def get_top_movers(
     await market_scanner.scan_symbols_async(symbols)
 
     cache = _scoped_cache(symbols)
+    _apply_canonical_previous_close(db, cache)
     ranking_key = "strongest_bullish" if direction == "bullish" else "strongest_bearish"
     named = default_ranking_engine.rank(cache, top_n=limit)
     by_symbol = {r.symbol.upper(): r for r in cache}
@@ -588,6 +630,7 @@ async def get_top_movers_combined(
     await market_scanner.scan_symbols_async(symbols)
 
     cache = _scoped_cache(symbols)
+    _apply_canonical_previous_close(db, cache)
     named = default_ranking_engine.rank(cache, top_n=limit)
     by_symbol = {r.symbol.upper(): r for r in cache}
     return _TopMoversCombinedResponse(
