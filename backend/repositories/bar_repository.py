@@ -102,9 +102,10 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     # session. Safe to reclassify unconditionally: sub-hour bucket
     # boundaries all divide evenly into the 09:30/16:00/04:00/20:00
     # session edges, so a bucket never straddles two sessions.
-    # 1h/4h/1d/1wk are excluded — never fetched/resampled with extended
-    # hours, so they keep whatever they arrive with (always 'regular').
-    _SESSION_TAGGED_TFS = ("1m", "2m", "3m", "5m", "15m", "30m")
+    # 1h/4h are also built from extended-hours 1m data by the live
+    # resamplers, so classify them here as well. Daily/weekly bars remain
+    # regular-session aggregates.
+    _SESSION_TAGGED_TFS = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h")
     for b in bars:
         if b.timeframe in _SESSION_TAGGED_TFS:
             b.session = classify_bar_session(b.timestamp)

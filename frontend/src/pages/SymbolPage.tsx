@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, memo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo, lazy, Suspense, useMemo } from 'react';
 import api, {
   Bar,
   Divergence,
@@ -27,6 +27,7 @@ import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
 // Each panel makes its own API calls and isn't needed for the first paint.
@@ -89,6 +90,18 @@ const srTypeLabel: Record<string, string> = {
   swing_low: 'Swing Low',
   consolidation_zone: 'Zone',
 };
+
+type SessionFilter = SessionPreference;
+const SESSION_LABELS: Record<SessionFilter, string> = {
+  all: 'All sessions',
+  premarket: 'Premarket (04:00–09:30 ET)',
+  regular: 'Regular (09:30–16:00 ET)',
+  after_hours: 'After-hours (16:00–20:00 ET)',
+};
+
+function barSession(bar: Bar): 'premarket' | 'regular' | 'after_hours' {
+  return bar.session === 'premarket' || bar.session === 'after_hours' ? bar.session : 'regular';
+}
 
 function formatDelta(delta: number): string {
   return (delta > 0 ? '+' : '') + delta.toFixed(1);
@@ -445,7 +458,13 @@ const DivergencesPanel = memo(function DivergencesPanel({ divergences }: { diver
 });
 
 // --- Bars table ---
-const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
+const BarsTable = memo(function BarsTable({
+  bars,
+  sessionFilter,
+}: {
+  bars: Bar[];
+  sessionFilter: SessionFilter;
+}) {
   const BARS_PER_PAGE = 50;
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(bars.length / BARS_PER_PAGE));
@@ -460,7 +479,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
   // Backend returns newest→oldest (desc=True), so index 0 is already latest
   return (
     <div className="card analysis-card">
-      <h2>Recent Bars</h2>
+      <h2>Recent Bars <span className="health-meta">· {SESSION_LABELS[sessionFilter]}</span></h2>
       {bars.length === 0 ? (
         <p className="empty-state">No bars available</p>
       ) : (
@@ -469,6 +488,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Session</th>
                 <th>Open</th>
                 <th>High</th>
                 <th>Low</th>
@@ -494,6 +514,7 @@ const BarsTable = memo(function BarsTable({ bars }: { bars: Bar[] }) {
                 return (
                   <tr key={b.timestamp || pageStart + i}>
                     <td>{b.timestamp ? formatETDateTime(b.timestamp) : '—'}</td>
+                    <td><span className={`session-badge session-${barSession(b)}`}>{barSession(b).replace('_', ' ')}</span></td>
                     <td>${strPrice(b.open)}</td>
                     <td>${strPrice(b.high)}</td>
                     <td>${strPrice(b.low)}</td>
@@ -568,8 +589,22 @@ function mergeLiveTradeIntoMinuteBars(bars: Bar[], live: LiveQuoteUpdateData): B
     volume: size,
     data_status: 'LIVE',
     source: 'webull_stream',
+    session: sessionFromTimestamp(live.timestamp),
   };
   return [...bars, newBar].sort((a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime());
+}
+
+function sessionFromTimestamp(timestamp: string | null): 'premarket' | 'regular' | 'after_hours' {
+  if (!timestamp) return 'regular';
+  const et = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(timestamp));
+  const hour = Number(et.find(part => part.type === 'hour')?.value ?? 0);
+  const minute = Number(et.find(part => part.type === 'minute')?.value ?? 0);
+  const totalMinutes = hour * 60 + minute;
+  if (totalMinutes >= 240 && totalMinutes < 570) return 'premarket';
+  if (totalMinutes >= 960 && totalMinutes < 1200) return 'after_hours';
+  return 'regular';
 }
 
 /** Merge the shared backend candle update into the active 1-minute history. */
@@ -591,6 +626,7 @@ function mergeLiveBarIntoMinuteBars(bars: Bar[], update: BarUpdateData): Bar[] {
     volume: update.volume ?? existing?.volume ?? 0,
     data_status: update.data_status ?? 'LIVE',
     source: update.source ?? 'webull_stream',
+    session: update.session ?? existing?.session ?? sessionFromTimestamp(update.timestamp),
   };
   if (index >= 0) {
     const next = [...bars];
@@ -627,7 +663,10 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [divergencesLoading, setDivergencesLoading] = useState(true);
 
   const [bars, setBars] = useState<Bar[]>([]);
+  const [sessionFilter, setSessionFilter] = useState<SessionFilter>(() => readSessionPreference());
   const [barsLoading, setBarsLoading] = useState(true);
+  const [loadingOlderBars, setLoadingOlderBars] = useState(false);
+  const [hasOlderBars, setHasOlderBars] = useState(false);
   const lastLiveTradeKeyRef = useRef<string | null>(null);
 
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -820,7 +859,9 @@ const fetchBars = useCallback(async () => {
       const data = await api.getAnalysisBars(requestedSymbol, requestedTimeframe, LIMITS[requestedTimeframe] ?? 5000);
       const current = analysisContextRef.current;
       if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
-      setBars(data?.bars || []);
+      const fetchedBars = data?.bars || [];
+      setBars(fetchedBars);
+      setHasOlderBars(fetchedBars.length >= (LIMITS[requestedTimeframe] ?? 5000));
       clearLoadError('bars');
     } catch (err: any) {
       const current = analysisContextRef.current;
@@ -834,6 +875,41 @@ const fetchBars = useCallback(async () => {
       }
     }
   }, [symbol, timeframe, clearLoadError, setLoadError]);
+
+  const loadOlderBars = useCallback(async () => {
+    const requestedSymbol = symbol;
+    const requestedTimeframe = timeframe;
+    const oldest = bars.reduce<string | null>((current, bar) => {
+      if (!bar.timestamp) return current;
+      if (!current) return bar.timestamp;
+      return parseET(bar.timestamp).getTime() < parseET(current).getTime() ? bar.timestamp : current;
+    }, null);
+    if (!oldest) return;
+    setLoadingOlderBars(true);
+    try {
+      const LIMITS: Record<string, number> = { '1m': 2000, '5m': 3000, '15m': 4000, '30m': 4000, '1h': 4000, '4h': 3000, '1d': 2000 };
+      const before = new Date(parseET(oldest).getTime() - 1).toISOString();
+      const data = await api.getAnalysisBars(requestedSymbol, requestedTimeframe, LIMITS[requestedTimeframe] ?? 5000, before);
+      const current = analysisContextRef.current;
+      if (current.symbol !== requestedSymbol || current.timeframe !== requestedTimeframe) return;
+      const older = data?.bars || [];
+      setBars(previous => {
+        const merged = [...previous, ...older];
+        const seen = new Set<string>();
+        return merged.filter(bar => {
+          const key = bar.timestamp;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).sort((a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime());
+      });
+      setHasOlderBars(older.length >= (LIMITS[requestedTimeframe] ?? 5000));
+    } catch (err) {
+      console.error('Failed to load older bars:', err);
+    } finally {
+      setLoadingOlderBars(false);
+    }
+  }, [bars, symbol, timeframe]);
 
   const fetchTape = useCallback(async () => {
     const requestedSymbol = symbol;
@@ -1146,6 +1222,16 @@ const fetchBars = useCallback(async () => {
     provider: quote.provider || 'rest',
     event_type: 'rest_fallback',
   } : null);
+  const sessionStats = useMemo(() => {
+    const visible = bars.filter((bar) => sessionMatchesPreference(bar, sessionFilter));
+    if (!visible.length) return null;
+    return {
+      bars: visible.length,
+      high: Math.max(...visible.map((bar) => bar.high)),
+      low: Math.min(...visible.map((bar) => bar.low)),
+      volume: visible.reduce((sum, bar) => sum + (bar.volume || 0), 0),
+    };
+  }, [bars, sessionFilter]);
 
   return (
     <div className="symbol-page">
@@ -1287,9 +1373,29 @@ const fetchBars = useCallback(async () => {
             onPresetChange={setMtfPreset}
           />
         </div>
+        <div className="session-filter-bar" aria-label="Market session filter">
+          <label htmlFor="symbol-session-filter"><strong>Market session:</strong></label>
+          <select id="symbol-session-filter" value={sessionFilter} onChange={event => { const value = event.target.value as SessionFilter; setSessionFilter(value); window.localStorage.setItem(SESSION_PREFERENCE_KEY, value); }}>
+            {(Object.keys(SESSION_LABELS) as SessionFilter[]).map(value => <option key={value} value={value}>{SESSION_LABELS[value]}</option>)}
+          </select>
+          {hasOlderBars && (
+            <button className="btn btn-small" onClick={loadOlderBars} disabled={loadingOlderBars}>
+              {loadingOlderBars ? 'Loading older bars…' : 'Load older bars'}
+            </button>
+          )}
+          <span className="session-legend">Times shown in US/Eastern</span>
+        </div>
+        {sessionStats && (
+          <div className="session-stats" aria-label="Selected session statistics">
+            <span><small>Bars</small><strong>{sessionStats.bars.toLocaleString()}</strong></span>
+            <span><small>High</small><strong>{sessionStats.high.toFixed(2)}</strong></span>
+            <span><small>Low</small><strong>{sessionStats.low.toFixed(2)}</strong></span>
+            <span><small>Volume</small><strong>{sessionStats.volume.toLocaleString()}</strong></span>
+          </div>
+        )}
         {chartMode === 'single' ? (
           <CandlestickChart
-            bars={bars}
+            bars={bars.filter(bar => sessionMatchesPreference(bar, sessionFilter))}
             symbol={symbol}
             transitions={transitions}
             initialActiveOverlays={['supertrend']}
@@ -1313,6 +1419,7 @@ const fetchBars = useCallback(async () => {
             timeframes={DEFAULT_GRID_TIMEFRAMES}
             chartMode={chartMode}
             onChartModeChange={setChartMode}
+            sessionFilter={sessionFilter}
             tickerSearch={(
               <SymbolInput
                 ref={chartTickerSearchRef}
@@ -1327,10 +1434,13 @@ const fetchBars = useCallback(async () => {
           <OptionsPanel symbol={symbol} underlyingPrice={quote?.price ?? scanResult?.quote?.price} />
         </Suspense>
         <div className={barsLoading && bars.length === 0 ? 'card-loading-skeleton' : ''}>
-          {/* Table stays bounded to the most recent rows (plain HTML
+          {/* Table stays bounded to the most recent 1,000 rows (plain HTML
               table, not virtualized) — the chart above gets the full
               `bars` fetched by fetchBars. */}
-          <BarsTable bars={bars.slice(0, 500)} />
+          <BarsTable
+            bars={bars.filter(bar => sessionMatchesPreference(bar, sessionFilter)).slice(0, 1000)}
+            sessionFilter={sessionFilter}
+          />
         </div>
       </div>
     </div>

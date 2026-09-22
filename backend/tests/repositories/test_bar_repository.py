@@ -863,18 +863,16 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
             row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
         self.assertEqual(row.session, "premarket")
 
-    def test_1h_and_above_are_not_touched(self):
-        """1h/4h/1d/1wk are never fetched or resampled with extended
-        hours, so they keep whatever they arrive with (always 'regular'
-        in practice) regardless of their own timestamp."""
+    def test_extended_1h_and_4h_are_classified(self):
+        """1h/4h builders now include extended hours and must be classified
+        from their bucket timestamp, while daily/weekly aggregates remain
+        regular-session values."""
         bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="1h")
         with self.Session() as db:
             bar_repository.upsert_bars(db, [bar])
         with self.Session() as db:
             row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
-        # Unaffected by the 08:00 premarket timestamp — stays at the
-        # Bar model's default.
-        self.assertEqual(row.session, "regular")
+        self.assertEqual(row.session, "premarket")
 
     def test_fallback_merge_path_also_recomputes_session(self):
         """The no-unique-constraint fallback path (existing.session = ...)

@@ -5,6 +5,7 @@ import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import { OVERLAYS, parseET, type OverlayKey } from './chartMath';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { sessionMatchesPreference, type SessionPreference } from '../utils/marketSession';
 
 interface MultiTimeframeChartGridProps {
   symbol: string;
@@ -23,6 +24,7 @@ interface MultiTimeframeChartGridProps {
   chartMode?: 'single' | 'multi';
   /** Switch back to the single-chart card. */
   onChartModeChange?: (mode: 'single' | 'multi') => void;
+  sessionFilter?: SessionPreference;
 }
 
 const DEFAULT_TIMEFRAMES = DEFAULT_GRID_TIMEFRAMES;
@@ -50,6 +52,7 @@ export function MultiTimeframeChartGrid({
   tickerSearch,
   chartMode,
   onChartModeChange,
+  sessionFilter = 'all',
 }: MultiTimeframeChartGridProps) {
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
   // Shared overlay state — one toolbar at the top of the grid toggles
@@ -217,6 +220,12 @@ export function MultiTimeframeChartGrid({
         </span>
       </div>
       <div className="mtf-shared-toolbars">
+        <div className="chart-session-legend" aria-label="Multi-timeframe market session legend">
+          <span className="chart-session-legend-title">Session: {sessionFilter}</span>
+          <span className="chart-session-key session-premarket"><span className="chart-session-swatch" />Premarket</span>
+          <span className="chart-session-key session-regular"><span className="chart-session-swatch" />Regular</span>
+          <span className="chart-session-key session-after_hours"><span className="chart-session-swatch" />After-hours</span>
+        </div>
         <div className="chart-type-toolbar">
           <span className="mtf-shared-label">All panels:</span>
           {(['candlestick', 'bar', 'line', 'area', 'heikin-ashi'] as ChartType[]).map(t => (
@@ -269,7 +278,7 @@ export function MultiTimeframeChartGrid({
               <div className="mtf-panel-error">Unable to load {panel.timeframe} data.</div>
             ) : (
               <CandlestickChart
-                bars={panel.bars}
+                bars={panel.bars.filter((bar) => sessionMatchesPreference(bar, sessionFilter))}
                 symbol={symbol}
                 height={panelHeight}
                 initialChartType={chartType}

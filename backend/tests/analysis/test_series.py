@@ -32,6 +32,7 @@ class TestLoadBars(unittest.TestCase):
                 volume=1_000_000,
                 timestamp=datetime(2024, 1, 1, tzinfo=UTC),
                 source="raw",
+                session="premarket",
                 data_status=MagicMock(value="historical"),
             )
         ]
@@ -41,6 +42,7 @@ class TestLoadBars(unittest.TestCase):
         self.assertEqual(b["open"], 100.0)
         self.assertEqual(b["close"], 100.5)
         self.assertEqual(b["source"], "raw")
+        self.assertEqual(b["session"], "premarket")
         self.assertEqual(b["data_status"], "historical")
 
     @patch("backend.analysis.series.bar_repository")

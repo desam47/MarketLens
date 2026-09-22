@@ -381,7 +381,7 @@ def _eval_signal_profile(parameter: str, value: object) -> bool:
     """Evaluate a configurable trend-signal profile.
 
     ``parameter`` is JSON containing optional ``direction``, ``min_score``,
-    ``min_strength``, ``market_regime`` and ``timeframe`` filters. The engine
+    ``min_strength``, ``market_regime``, ``timeframe`` and ``session`` filters. The engine
     supplies the current trend payload plus the bar timeframe and current
     market regime.
     """
@@ -396,6 +396,10 @@ def _eval_signal_profile(parameter: str, value: object) -> bool:
 
     timeframe = str(profile.get("timeframe") or "").strip().lower()
     if timeframe and timeframe != str(value.get("timeframe") or "").lower():
+        return False
+    session = str(profile.get("session") or "any").strip().lower()
+    current_session = str(value.get("session") or "").lower()
+    if session not in ("", "any") and current_session != session:
         return False
     direction = str(profile.get("direction") or "any").strip().lower()
     current_direction = str(value.get("current_direction") or "").lower()

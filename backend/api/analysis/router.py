@@ -514,6 +514,7 @@ async def get_recent_bars(
     timeframe: str = "1d",
     limit: int = 60,
     resample_from: str | None = None,
+    before: datetime | None = None,
 ):
     """Return the most recent bars for charting / table views.
 
@@ -526,7 +527,7 @@ async def get_recent_bars(
     """
     symbol = symbol.upper()
     try:
-        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit)
+        bars = await asyncio.to_thread(_load_bars, symbol, timeframe, limit=limit, before=before)
         return {
             "symbol": symbol,
             "timeframe": timeframe,
@@ -540,6 +541,7 @@ async def get_recent_bars(
                     "close": b["close"],
                     "volume": b["volume"],
                     "source": b.get("source"),
+                    "session": b.get("session", "regular"),
                     "data_status": b.get("data_status"),
                 }
                 for b in bars

@@ -1117,8 +1117,9 @@ class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):
 
 
 class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
-    """_gapfill_1m_once must only write bars newer than the DB's latest 1m
-    row, not unconditionally re-write the whole fetched day. Regression
+    """_gapfill_1m_once must only write missing 1m timestamps, including
+    holes before the DB's latest row, not unconditionally re-write the whole
+    fetched day. Regression
     for a live bug (2026-09-16): it fetched a full day (~900-1200 bars)
     per symbol every 2 min but wrote all of them regardless — its own
     docstring claimed it wrote "only bars newer than the DB's latest
@@ -1164,7 +1165,7 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_only_writes_bars_newer_than_latest_db_row(self):
+    async def test_only_writes_missing_bars(self):
         from datetime import timedelta
         from unittest.mock import AsyncMock, patch
 
@@ -1177,8 +1178,8 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         # Simulate the provider chain returning a full day's worth of bars:
-        # one bar before, one AT, and two genuinely new ones after the
-        # already-stored latest row.
+        # one missing bar before, one already stored, and two new ones after
+        # the already-stored latest row.
         fetched = [
             Bar(
                 symbol=self.SYMBOL,
@@ -1237,17 +1238,17 @@ class TestGapfill1mOnce(unittest.IsolatedAsyncioTestCase):
             service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
             written = await service._gapfill_1m_once()
 
-        self.assertEqual(written, 2)
+        self.assertEqual(written, 3)
         rows = (
             self.db.query(BarModel)
             .filter(
                 BarModel.symbol == self.SYMBOL,
                 BarModel.timeframe == "1m",
-                BarModel.timestamp > latest,
+                BarModel.timestamp >= latest - timedelta(minutes=1),
             )
             .all()
         )
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 4)
 
     async def test_writes_nothing_when_no_bars_are_newer(self):
         from unittest.mock import AsyncMock, patch

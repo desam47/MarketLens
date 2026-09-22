@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from math import isfinite
 from threading import RLock
 
+from backend.engines.market_calendar import classify_bar_session
 from backend.utils.timezone import ensure_aware_ny
 
 _ONE_MINUTE = timedelta(minutes=1)
@@ -53,6 +54,7 @@ class LiveBar:
             "provider": self.provider,
             "data_status": self.data_status,
             "source": self.source,
+            "session": classify_bar_session(self.timestamp),
         }
 
 

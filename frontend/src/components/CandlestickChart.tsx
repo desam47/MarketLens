@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Bar, Transition } from '../services/api';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import {
@@ -87,12 +87,29 @@ function CandlestickChartImpl({
   const seriesRef = useRef<SeriesLike | null>(null);
   const volumeRef = useRef<SeriesLike | null>(null);
   const overlaySeriesRef = useRef<Map<OverlayKey, SeriesLike>>(new Map());
+  const fittedDataKeyRef = useRef<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [internalOverlays, setInternalOverlays] = useState<Set<OverlayKey>>(
     () => new Set<OverlayKey>(initialActiveOverlays),
   );
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
+  const sessionCounts = bars.reduce<Record<string, number>>((counts, bar) => {
+    if (bar.session) counts[bar.session] = (counts[bar.session] || 0) + 1;
+    return counts;
+  }, {});
+  const sessionBands = useMemo(() => bars.length > 0 ? (() => {
+    const sorted = [...bars].sort((a, b) => toTime(a) - toTime(b));
+    const bands: Array<{ session: string; start: number; end: number }> = [];
+    sorted.forEach((bar, index) => {
+      const session = bar.session || 'regular';
+      const previous = bands[bands.length - 1];
+      if (previous?.session === session) previous.end = index + 1;
+      else bands.push({ session, start: index, end: index + 1 });
+    });
+    return bands;
+  })() : [], [bars]);
+  const [sessionBandPositions, setSessionBandPositions] = useState<Array<{ session: string; left: number; width: number }>>([]);
 
   // The multi-timeframe grid controls all child chart types from one shared
   // toolbar. Keep the local chart state in sync when that controlled initial
@@ -129,6 +146,8 @@ function CandlestickChartImpl({
   useEffect(() => {
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
+    let wheelContainer: HTMLDivElement | null = null;
+    let wheelHandler: ((event: WheelEvent) => void) | null = null;
     const overlayMap = overlaySeriesRef.current;
 
     (async () => {
@@ -166,6 +185,21 @@ function CandlestickChartImpl({
           crosshair: {
             mode: lwc.CrosshairMode.Normal,
           },
+          // Keep navigation explicit. This matters inside the multi-TF grid,
+          // where parent layout handlers/browser trackpad defaults can
+          // otherwise prevent lightweight-charts from receiving scale input.
+          handleScale: {
+            mouseWheel: true,
+            pinch: true,
+            axisPressedMouseMove: true,
+            axisDoubleClickReset: true,
+          },
+          handleScroll: {
+            mouseWheel: true,
+            pressedMouseMove: true,
+            horzTouchDrag: true,
+            vertTouchDrag: true,
+          },
         });
 
         if (showVolume) {
@@ -181,6 +215,27 @@ function CandlestickChartImpl({
 
         chartRef.current = chart;
         setReady(true);
+
+        // Fallback wheel navigation for embedded/multi-panel layouts. Some
+        // browsers route wheel events to the scrolling page before the
+        // library's default handler; handling it on the chart element keeps
+        // zoom reliable without changing the surrounding page scroll.
+        wheelContainer = containerRef.current;
+        wheelHandler = (event: WheelEvent) => {
+          const range = chart.timeScale().getVisibleLogicalRange();
+          if (!range || !wheelContainer || wheelContainer.clientWidth <= 0) return;
+          event.preventDefault();
+          const span = Math.max(2, range.to - range.from);
+          const factor = event.deltaY > 0 ? 1.15 : 0.87;
+          const anchor = Math.max(0, Math.min(1, event.offsetX / wheelContainer.clientWidth));
+          const nextSpan = Math.max(2, Math.min(span * factor, 10000));
+          const anchorTime = range.from + span * anchor;
+          chart.timeScale().setVisibleLogicalRange({
+            from: anchorTime - nextSpan * anchor,
+            to: anchorTime + nextSpan * (1 - anchor),
+          });
+        };
+        wheelContainer?.addEventListener('wheel', wheelHandler, { passive: false });
 
         resizeObserver = new ResizeObserver(entries => {
           for (const entry of entries) {
@@ -201,6 +256,7 @@ function CandlestickChartImpl({
     return () => {
       cancelled = true;
       if (resizeObserver) resizeObserver.disconnect();
+      if (wheelContainer && wheelHandler) wheelContainer.removeEventListener('wheel', wheelHandler);
       const chart = chartRef.current;
       if (chart) {
         try {
@@ -212,6 +268,7 @@ function CandlestickChartImpl({
       chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
+      fittedDataKeyRef.current = null;
       overlayMap.clear();
     };
   }, [height, onError, showVolume]);
@@ -371,8 +428,52 @@ function CandlestickChartImpl({
       }
     }
 
-    chart.timeScale().fitContent();
-  }, [bars, transitions, ready, activeOverlays, chartType, showMarkers, timeframe]);
+    // Fit only when this chart first receives data or its symbol/timeframe
+    // changes. Calling fitContent for every live candle update resets a
+    // user's zoom immediately, which made multi-TF panels appear unzoomable.
+    const dataKey = `${symbol}:${timeframe || 'default'}`;
+    if (fittedDataKeyRef.current !== dataKey) {
+      chart.timeScale().fitContent();
+      fittedDataKeyRef.current = dataKey;
+    }
+  }, [bars, transitions, ready, activeOverlays, chartType, showMarkers, timeframe, symbol]);
+
+  // Session shading must follow the chart's actual time scale. Percentage
+  // positions based on the loaded array drift as the user pans/zooms, so map
+  // each contiguous session range through lightweight-charts coordinates and
+  // recompute whenever the visible range or chart size changes.
+  useEffect(() => {
+    if (!ready || !chartRef.current || !sessionBands.length) {
+      setSessionBandPositions([]);
+      return undefined;
+    }
+    const chart = chartRef.current;
+    const updatePositions = () => {
+      const width = containerRef.current?.clientWidth || 0;
+      if (!width) return;
+      const scale = chart.timeScale();
+      const sorted = bars.slice().sort((a, b) => toTime(a) - toTime(b));
+      const next = sessionBands.flatMap((band) => {
+        const left = scale.timeToCoordinate(toTime(sorted[band.start]));
+        const endBar = sorted[Math.min(band.end, sorted.length - 1)];
+        const right = band.end >= sorted.length ? width : scale.timeToCoordinate(toTime(endBar));
+        if (left == null || right == null) return [];
+        const start = Math.max(0, Math.min(width, Math.min(left, right)));
+        const end = Math.max(0, Math.min(width, Math.max(left, right)));
+        return end > start ? [{ session: band.session, left: start, width: end - start }] : [];
+      });
+      setSessionBandPositions(next);
+    };
+    updatePositions();
+    const timeScale = chart.timeScale();
+    timeScale.subscribeVisibleTimeRangeChange(updatePositions);
+    const resizeObserver = containerRef.current ? new ResizeObserver(updatePositions) : null;
+    if (resizeObserver && containerRef.current) resizeObserver.observe(containerRef.current);
+    return () => {
+      timeScale.unsubscribeVisibleTimeRangeChange(updatePositions);
+      resizeObserver?.disconnect();
+    };
+  }, [bars, ready, sessionBands]);
 
   if (err) {
     return (
@@ -385,11 +486,12 @@ function CandlestickChartImpl({
 
   if (bare) {
     return (
-      <div
-        ref={containerRef}
-        className="candlestick-container"
-        style={{ width: '100%', height: `${height}px` }}
-      />
+      <div className="chart-viewport" style={{ height: `${height}px` }}>
+        <div className="chart-session-bands" aria-hidden="true">
+          {sessionBandPositions.map((band, index) => <span key={`${band.session}-${index}`} className={`chart-session-band session-${band.session}`} style={{ left: `${band.left}px`, width: `${band.width}px` }} />)}
+        </div>
+        <div ref={containerRef} className="candlestick-container" style={{ width: '100%', height: `${height}px` }} />
+      </div>
     );
   }
 
@@ -477,11 +579,23 @@ function CandlestickChartImpl({
           </div>
         </>
       )}
-      <div
-        ref={containerRef}
-        className="candlestick-container"
-        style={{ width: '100%', height: `${height}px` }}
-      />
+      {!bare && Object.keys(sessionCounts).length > 0 && (
+        <div className="chart-session-legend" aria-label="Chart market session legend">
+          <span className="chart-session-legend-title">Sessions</span>
+          {(['premarket', 'regular', 'after_hours'] as const).filter((session) => sessionCounts[session]).map((session) => (
+            <span key={session} className={`chart-session-key session-${session}`}>
+              <span className="chart-session-swatch" />
+              {session.replace('_', ' ')} <small>{sessionCounts[session].toLocaleString()}</small>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="chart-viewport" style={{ height: `${height}px` }}>
+        <div className="chart-session-bands" aria-hidden="true">
+          {sessionBandPositions.map((band, index) => <span key={`${band.session}-${index}`} className={`chart-session-band session-${band.session}`} style={{ left: `${band.left}px`, width: `${band.width}px` }} />)}
+        </div>
+        <div ref={containerRef} className="candlestick-container" style={{ width: '100%', height: `${height}px` }} />
+      </div>
     </div>
   );
 }

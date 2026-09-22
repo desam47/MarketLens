@@ -2,9 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { Bar, HistoricalSignal, TickSignalReplayResponse } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
 
 const REPLAY_TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'] as const;
 const REPLAY_LIMIT = 180;
+const REPLAY_SESSIONS = [
+  { value: 'all', label: 'All sessions' },
+  { value: 'premarket', label: 'Premarket (04:00–09:30 ET)' },
+  { value: 'regular', label: 'Regular (09:30–16:00 ET)' },
+  { value: 'after_hours', label: 'After-hours (16:00–20:00 ET)' },
+] as const;
 
 interface HistoricalReplayPanelProps {
   defaultSymbol?: string;
@@ -82,6 +89,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   const [speed, setSpeed] = useState(700);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [sessionFilter, setSessionFilter] = useState<SessionPreference>(() => readSessionPreference());
   const [stopPct, setStopPct] = useState(1);
   const [targetPct, setTargetPct] = useState(2);
   const [tickReplay, setTickReplay] = useState<TickSignalReplayResponse | null>(null);
@@ -153,8 +161,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
     return bars.filter((bar) => {
       const day = dateKey(bar.timestamp);
       return (!fromDate || day >= fromDate) && (!toDate || day <= toDate);
-    });
-  }, [bars, fromDate, toDate, validDateRange]);
+    }).filter((bar) => sessionMatchesPreference(bar, sessionFilter));
+  }, [bars, fromDate, toDate, validDateRange, sessionFilter]);
   const replaySignals = useMemo(() => {
     if (!replayBars.length) return [];
     const firstDay = dateKey(replayBars[0].timestamp);
@@ -210,7 +218,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   useEffect(() => {
     setCursor(0);
     setPlaying(false);
-  }, [fromDate, toDate]);
+  }, [fromDate, toDate, sessionFilter]);
 
   useEffect(() => {
     if (!playing || replayBars.length < 2) return undefined;
@@ -292,6 +300,12 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
           <span>To</span>
           <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="Replay end date" />
         </label>
+        <label>
+          <span>Market session</span>
+          <select value={sessionFilter} onChange={(event) => { const value = event.target.value as SessionPreference; setSessionFilter(value); window.localStorage.setItem(SESSION_PREFERENCE_KEY, value); }} aria-label="Replay market session">
+            {REPLAY_SESSIONS.map((session) => <option key={session.value} value={session.value}>{session.label}</option>)}
+          </select>
+        </label>
         <label><span>Stop %</span><input type="number" min="0.1" step="0.1" value={stopPct} onChange={(event) => setStopPct(Math.max(0.1, Number(event.target.value) || 1))} aria-label="Simulated stop percentage" /></label>
         <label><span>Target %</span><input type="number" min="0.1" step="0.1" value={targetPct} onChange={(event) => setTargetPct(Math.max(0.1, Number(event.target.value) || 2))} aria-label="Simulated target percentage" /></label>
         {(fromDate || toDate) && (
@@ -364,7 +378,10 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
 
           <div className="replay-current-grid">
             <div className="replay-current-bar">
-              <div className="replay-date">{formatETDateTime(currentBar.timestamp)} ET</div>
+              <div className="replay-date">
+                {formatETDateTime(currentBar.timestamp)} ET
+                {currentBar.session && <span className={`session-badge session-${currentBar.session}`}>{currentBar.session.replace('_', ' ')}</span>}
+              </div>
               <div className="replay-ohlc-grid">
                 <span><small>Open</small>{fmt(currentBar.open)}</span>
                 <span><small>High</small>{fmt(currentBar.high)}</span>

@@ -471,6 +471,7 @@ export interface Bar {
   volume: number;
   data_status?: string | null;
   source?: string | null;
+  session?: 'premarket' | 'regular' | 'after_hours' | string | null;
 }
 
 export interface BarsResult {
@@ -793,6 +794,7 @@ export interface BarUpdateData {
   provider?: string;
   data_status?: string | null;
   source?: string | null;
+  session?: 'premarket' | 'regular' | 'after_hours' | string | null;
 }
 
 export interface LiveQuoteUpdateData {
@@ -1918,9 +1920,10 @@ class ApiService {
     );
   }
 
-  async getAnalysisBars(symbol: string, timeframe = '1d', limit = 60): Promise<BarsResult> {
+  async getAnalysisBars(symbol: string, timeframe = '1d', limit = 60, before?: string): Promise<BarsResult> {
+    const beforeParam = before ? `&before=${encodeURIComponent(before)}` : '';
     return this.fetch<BarsResult>(
-      `/analysis/${symbol}/bars?timeframe=${timeframe}&limit=${limit}`
+      `/analysis/${symbol}/bars?timeframe=${timeframe}&limit=${limit}${beforeParam}`
     );
   }
 

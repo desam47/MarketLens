@@ -17,13 +17,20 @@ imports these functions from here rather than defining them locally.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from cachetools import TTLCache
 
 from backend.database import SessionLocal
 from backend.repositories import bar_repository
 
 
-def load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
+def load_bars(
+    symbol: str,
+    timeframe: str,
+    limit: int = 500,
+    before: datetime | None = None,
+) -> list[dict]:
     """Load bars from DB and reshape for engine consumption.
 
     Returns dicts with ``open/high/low/close/volume/timestamp`` keys
@@ -40,7 +47,9 @@ def load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
     try:
         # Use desc=True so the most recent bars come first — charts and
         # tables need the latest data, not the oldest.
-        bars = bar_repository.get_bars(db, symbol, timeframe, limit=limit, desc=True)
+        bars = bar_repository.get_bars(
+            db, symbol, timeframe, limit=limit, to_ts=before, desc=True,
+        )
     finally:
         db.close()
 
@@ -55,6 +64,7 @@ def load_bars(symbol: str, timeframe: str, limit: int = 500) -> list[dict]:
                 "volume": b.volume,
                 "timestamp": b.timestamp,
                 "source": b.source,
+                "session": getattr(b, "session", None) or "regular",
                 "data_status": b.data_status.value
                 if hasattr(b.data_status, "value")
                 else b.data_status,

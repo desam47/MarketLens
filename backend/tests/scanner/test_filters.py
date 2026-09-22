@@ -22,6 +22,7 @@ from backend.scanner.filters import (
     LiveVolumeAcceleration,
     MACDBearish,
     MACDBullish,
+    MarketSession,
     MinTimeframeBearish,
     MinTimeframeBullish,
     MTFAlignment,
@@ -87,6 +88,15 @@ def _result(
 
 
 class TestConcreteFilters(unittest.TestCase):
+    def test_market_session(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        result = ScanResult("AAPL", datetime(2026, 9, 21, 8, 15, tzinfo=ZoneInfo("America/New_York")))
+        self.assertTrue(MarketSession("premarket").matches(result))
+        self.assertFalse(MarketSession("regular").matches(result))
+        self.assertIsInstance(default_registry.build({"type": "market_session", "params": {"session": "regular"}}), MarketSession)
+
     def test_trend_score_gt(self):
         f = TrendScoreGt(50.0)
         r1 = _result(score=75.0)

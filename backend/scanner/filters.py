@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from backend.engines.market_calendar import classify_bar_session
 from backend.engines.timeframe import Timeframe
 
 if TYPE_CHECKING:
@@ -120,6 +122,24 @@ class TrueFilter(Filter):
 
     def describe(self) -> str:
         return "match all"
+
+
+class MarketSession(Filter):
+    """Match scanner results whose evaluation timestamp falls in a US session."""
+
+    def __init__(self, session: str = "regular"):
+        self.session = str(session).lower()
+        if self.session not in {"premarket", "regular", "after_hours"}:
+            raise ValueError("session must be premarket, regular, or after_hours")
+
+    def matches(self, result: ScanResult) -> bool:
+        timestamp = result.timestamp
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return classify_bar_session(timestamp) == self.session
+
+    def describe(self) -> str:
+        return f"market session is {self.session.replace('_', ' ')}"
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +785,7 @@ class LiveVolumeAcceleration(Filter):
 
 _FILTER_REGISTRY: dict[str, type[Filter]] = {
     "true": TrueFilter,
+    "market_session": MarketSession,
     "trend_score_gt": TrendScoreGt,
     "trend_score_lt": TrendScoreLt,
     "timeframe_direction": TimeframeDirection,

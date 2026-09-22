@@ -23,6 +23,7 @@ def _make_bar(close: float, ts: datetime) -> dict:
         "volume": 1_000_000,
         "timestamp": ts,
         "source": "historical",
+        "session": "premarket",
         "data_status": "historical",
     }
 
@@ -393,6 +394,7 @@ class TestBarsEndpoint(unittest.TestCase):
         self.assertIn("low", bar)
         self.assertIn("close", bar)
         self.assertIn("volume", bar)
+        self.assertIn("session", bar)
 
     @patch("backend.analysis.series.bar_repository")
     def test_empty_bars(self, mock_repo):

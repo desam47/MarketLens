@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21, commit `ea069ca`): provider observability, durable bounded failover history, runtime-observed entitlement checks, explicit SDK entitlement limitations, optional user-declared entitlement coverage, manager-enforced request-level provider attribution, durable tick replay with date/session filters and charted microstructure analytics, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
+Latest checkpoint (2026-09-22, working tree): provider observability, durable bounded failover history, runtime-observed entitlement checks, explicit SDK entitlement limitations, optional user-declared entitlement coverage, manager-enforced request-level provider attribution, durable tick replay with date/session filters and charted microstructure analytics, per-timeframe source mapping, the System Health Last Successful Update table, shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts, session-aware chart bands and multi-timeframe legends, shared All/Premarket/Regular/After-hours preference, candle replay session filtering, session-specific statistics, session-aware signal alerts, and a canonical Scanner market-session filter are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 
@@ -31,6 +31,8 @@ The backend aggregates Webull trades into shared live 1-minute candles, pushes f
 - Push the forming candle to every chart subscriber
 - Reduce dependence on REST backfills
 - Preserve REST history as a fallback
+- Show a session legend on chart cards for loaded premarket, regular, and after-hours bars
+- Shade premarket, regular, and after-hours regions on single and multi-timeframe charts
 
 ### 4. Reliability and rate-limit controls — [x] Done
 
@@ -111,6 +113,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 - Event-driven quote and microstructure refresh
 - Debounced symbol-level scan batching
 - Correct symbol-scoped filter query serialization
+- Market-session filter using the canonical US/Eastern session classifier
 - Clear stale matches when the final filter is removed
 - Consistent Matches-row alignment across optional earnings data
 
@@ -211,6 +214,7 @@ Candle replay, signal timing, performance summaries, durable tick replay, date-r
 - Simulated entries and exits
 - Stop and target tracking
 - Replay performance summary
+- Shared All / Premarket / Regular / After-hours session preference
 
 ## Phase 6 — Personalization and usability
 
@@ -233,6 +237,12 @@ Reconnect state, provider health, freshness badges, failover labels, per-symbol 
 - Per-provider failover visibility (durable 30-day/10,000-event history implemented)
 - Better stale-data warnings
 - Clear API and entitlement error messages
+
+### 21. Session-aware analytics and alerts — [x] Done
+
+- Session-specific bars, high/low, and volume statistics
+- Scanner session filter using the canonical US/Eastern classifier
+- Signal-profile alert conditions can require premarket, regular, or after-hours
 
 ## Recommended implementation order
 

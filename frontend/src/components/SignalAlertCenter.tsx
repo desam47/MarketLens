@@ -11,6 +11,7 @@ interface SignalProfile {
   min_score: number;
   min_strength: number;
   market_regime: string;
+  session: string;
   timeframe: string;
   cooldown_minutes: number;
   channels: string[];
@@ -27,6 +28,7 @@ interface SignalAlertForm {
   minScore: number;
   minStrength: number;
   market_regime: string;
+  session: string;
   timeframe: string;
   cooldown_minutes: number;
   channels: string[];
@@ -41,6 +43,7 @@ const DEFAULT_PROFILE: SignalProfile = {
   min_score: 70,
   min_strength: 0.7,
   market_regime: 'any',
+  session: 'any',
   timeframe: '1d',
   cooldown_minutes: 60,
   channels: ['in_app', 'browser'],
@@ -53,6 +56,7 @@ const INITIAL_FORM: SignalAlertForm = {
   minScore: DEFAULT_PROFILE.min_score,
   minStrength: DEFAULT_PROFILE.min_strength,
   market_regime: DEFAULT_PROFILE.market_regime,
+  session: DEFAULT_PROFILE.session,
   timeframe: DEFAULT_PROFILE.timeframe,
   cooldown_minutes: DEFAULT_PROFILE.cooldown_minutes,
   channels: DEFAULT_PROFILE.channels,
@@ -78,7 +82,8 @@ function parseProfile(alert: Alert): SignalProfile {
 function profileSummary(profile: SignalProfile): string {
   const direction = profile.direction === 'any' ? 'Any direction' : profile.direction;
   const regime = profile.market_regime === 'any' ? 'any regime' : profile.market_regime;
-  return `${direction} · score ≥ ${profile.min_score} · strength ≥ ${profile.min_strength} · ${profile.timeframe || 'all TF'} · ${regime}`;
+  const session = profile.session === 'any' ? 'any session' : profile.session.replace('_', ' ');
+  return `${direction} · score ≥ ${profile.min_score} · strength ≥ ${profile.min_strength} · ${profile.timeframe || 'all TF'} · ${regime} · ${session}`;
 }
 
 function isQuietNow(profile: SignalProfile): boolean {
@@ -220,6 +225,7 @@ export function SignalAlertCenter() {
     min_score: Number(form.minScore),
     min_strength: Number(form.minStrength),
     market_regime: form.market_regime,
+    session: form.session,
     timeframe: form.timeframe,
     cooldown_minutes: Number(form.cooldown_minutes),
     channels: form.channels,
@@ -240,6 +246,7 @@ export function SignalAlertCenter() {
       minScore: profile.min_score,
       minStrength: profile.min_strength,
       market_regime: profile.market_regime,
+      session: profile.session,
       timeframe: profile.timeframe,
       cooldown_minutes: profile.cooldown_minutes,
       channels: profile.channels,
@@ -393,6 +400,7 @@ export function SignalAlertCenter() {
         <label><span>Min score</span><input type="number" min="0" max="100" step="1" value={form.minScore} onChange={(event) => updateProfile('minScore', Number(event.target.value))} /></label>
         <label><span>Min strength</span><input type="number" min="0" max="1" step="0.05" value={form.minStrength} onChange={(event) => updateProfile('minStrength', Number(event.target.value))} /></label>
         <label><span>Regime</span><select value={form.market_regime} onChange={(event) => updateProfile('market_regime', event.target.value)}><option value="any">Any regime</option><option value="risk_on">Risk on</option><option value="risk_off">Risk off</option><option value="neutral">Neutral</option><option value="transition">Transition</option></select></label>
+        <label><span>Market session</span><select value={form.session} onChange={(event) => updateProfile('session', event.target.value)}><option value="any">Any session</option><option value="premarket">Premarket</option><option value="regular">Regular</option><option value="after_hours">After-hours</option></select></label>
         <label><span>Cooldown (min)</span><input type="number" min="1" max="1440" step="1" value={form.cooldown_minutes} onChange={(event) => updateProfile('cooldown_minutes', Number(event.target.value))} /></label>
         <fieldset className="signal-alert-notifications"><legend>Notification channels</legend><label className="signal-alert-check"><input type="checkbox" checked disabled /> In-app</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('browser')} onChange={() => toggleChannel('browser')} /> Browser</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('webhook')} onChange={() => toggleChannel('webhook')} /> Webhook</label><label className="signal-alert-check"><input type="checkbox" checked={form.channels.includes('email')} onChange={() => toggleChannel('email')} /> Email</label><button type="button" className="btn btn-secondary btn-small" onClick={() => void requestBrowserPermission()}>{typeof Notification !== 'undefined' && Notification.permission === 'granted' ? 'Browser notifications enabled' : 'Enable Browser Notifications'}</button></fieldset>
         {form.channels.includes('webhook') && <label><span>Webhook URL</span><input type="url" value={form.webhookUrl} onChange={(event) => updateProfile('webhookUrl', event.target.value)} placeholder="https://example.com/hooks/…" /></label>}

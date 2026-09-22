@@ -46,7 +46,7 @@ describe('SignalAlertCenter', () => {
     render(<SignalAlertCenter />);
 
     await waitFor(() => expect(screen.getByText('SPY setup')).toBeInTheDocument());
-    expect(screen.getByText('SPY · bullish · score ≥ 70 · strength ≥ 0.7 · 1d · risk_on')).toBeInTheDocument();
+    expect(screen.getByText('SPY · bullish · score ≥ 70 · strength ≥ 0.7 · 1d · risk_on · any session')).toBeInTheDocument();
     expect(screen.getByText('SPY signal profile matched')).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText('SPY bullish setup'), { target: { value: 'New setup' } });

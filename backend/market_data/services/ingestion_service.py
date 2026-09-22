@@ -1699,10 +1699,11 @@ class MarketDataIngestionService:
     async def _gapfill_1m_loop(self, initial_delay: float = 0.0):
         """Phase 3.8 — auto gap-fill for 1m bars.
 
-        Runs every 2 minutes during market hours. For each watched symbol,
-        fetches the last 1 day of 1m bars via the existing tier-1
-        backfill (Alpaca + yfinance gap-fill) and writes only the bars
-        whose timestamp is newer than the DB's latest row.
+        Runs every 2 minutes during the extended-hours window. For each
+        watched symbol, fetches the last 1 day of 1m bars via the existing
+        tier-1 backfill (Alpaca + yfinance gap-fill) and writes only bars
+        whose timestamps are missing from the DB, including gaps before the
+        latest stored row.
 
         Why every 2 min:
           - Catches mid-day gaps from provider hiccups within 2 min.
@@ -1710,34 +1711,68 @@ class MarketDataIngestionService:
           - Lower cadence than the 1m ingest loop (60s) so it doesn't
             compete for provider rate-limit headroom.
 
-        Why only during market hours:
-          - Outside RTH no new bars are generated, so the loop is a no-op
-            and just adds provider load. We gate on 09:30-16:00 ET weekdays.
+        The 04:00-20:00 ET gate avoids overnight provider calls while still
+        repairing premarket and after-hours gaps after a restart.
         """
         if initial_delay > 0:
             await asyncio.sleep(initial_delay)
+        # Reconcile once at startup regardless of the current clock. This
+        # repairs a missed premarket/after-hours window after a restart
+        # instead of waiting for the next 04:00 ET session gate.
+        try:
+            await self._gapfill_1m_once(days=2)
+            # The repaired 1m history may include an older session than the
+            # normal rolling resample window. Rebuild sub-hour buckets once
+            # so 2m/3m/5m/15m/30m rows reflect the repaired premarket and
+            # after-hours bars immediately after a restart.
+            for timeframe in self._SUBHOUR_TFS:
+                await self._resample_and_upsert(
+                    timeframe, source_tf="1m", full_history=True,
+                )
+            # 1h/4h use dedicated builders rather than the generic
+            # sub-hour resampler. Rebuild the same startup window so their
+            # premarket and after-hours buckets catch up too.
+            now = datetime.now(_NY_TZ).replace(tzinfo=None)
+            startup_hours = self._hour_starts_between(now - timedelta(days=2), now)
+            for symbol in self.symbols:
+                await self._resample_1h_from_1m_and_upsert(
+                    hour_starts=startup_hours, _symbol=symbol,
+                )
+                await self._resample_1h_to_4h_and_upsert(_symbol=symbol)
+        except Exception as e:
+            logger.error(f"Startup gap-fill 1m pass failed: {e}")
         while self.is_running:
             try:
                 ny = datetime.now(_NY_TZ)
-                # 09:30-16:00 ET, Mon-Fri (RTH only)
-                in_rth = (
+                # 04:00-20:00 ET, Mon-Fri (premarket + RTH + after-hours)
+                in_extended_hours = (
                     ny.weekday() < 5
-                    and (ny.hour > 9 or (ny.hour == 9 and ny.minute >= 30))
-                    and ny.hour < 16
+                    and 4 <= ny.hour < 20
                 )
-                if in_rth:
+                if in_extended_hours:
                     await self._gapfill_1m_once()
             except Exception as e:
                 logger.error(f"Error in gap-fill 1m loop: {e}")
-            await self._jittered_sleep(120, jitter=10.0)
+            # Reconcile RTH gaps more aggressively; extended-hours gaps are
+            # still repaired, but at a slower cadence to avoid multiplying
+            # provider requests during the long 04:00-09:30/16:00-20:00
+            # windows.
+            in_regular_hours = (
+                ny.weekday() < 5
+                and (ny.hour > 9 or (ny.hour == 9 and ny.minute >= 30))
+                and ny.hour < 16
+            )
+            await self._jittered_sleep(120 if in_regular_hours else 300, jitter=10.0)
 
-    async def _gapfill_1m_once(self) -> int:
+    async def _gapfill_1m_once(self, days: int = 1) -> int:
         """Run a single gap-fill pass for all watched symbols.
 
-        For each symbol, queries the DB for the latest 1m timestamp,
-        then calls _fetch_tier1_1m_bars for the last 1 day and upserts
-        only the bars newer than that timestamp. Returns the total
-        number of bars written across all symbols.
+        For each symbol, calls _fetch_tier1_1m_bars for the requested recent
+        window (two days for startup recovery, one day for the recurring pass),
+        compares the returned timestamps with the stored rows in that
+        window, and upserts only missing bars. This repairs both forward
+        gaps and holes earlier in the day (for example, premarket data
+        missed before a restart).
         """
         from sqlalchemy import func as _func
 
@@ -1750,7 +1785,8 @@ class MarketDataIngestionService:
         written_total = 0
         for symbol in self.symbols:
             try:
-                # Find the DB's latest 1m bar for this symbol.
+                # Find the DB's latest 1m bar for this symbol. A symbol with
+                # no history is handled by the startup seed/backfill path.
                 db = SessionLocal()
                 try:
                     latest_ts = (
@@ -1765,7 +1801,7 @@ class MarketDataIngestionService:
                     db.close()
 
                 # If no data yet, skip — _seed_check on startup handles
-                # cold-start backfills. We only fill mid-session gaps.
+                # cold-start backfills.
                 if latest_ts is None:
                     continue
 
@@ -1773,23 +1809,41 @@ class MarketDataIngestionService:
                 # merges Alpaca primary + yfinance gap-fill and deduplicates
                 # by timestamp. Manager and db_session are not used inside
                 # that function — pass None.
-                bars = await _fetch_tier1_1m_bars(symbol, days=1, manager=None, db_session=None)
+                bars = await _fetch_tier1_1m_bars(symbol, days=days, manager=None, db_session=None)
                 if not bars:
                     continue
 
-                # Only write bars strictly newer than the DB's latest row —
-                # this function fetches a full day (~900-1200 bars) every
-                # cycle just to find the handful that are actually missing.
-                # Writing the whole fetched batch unconditionally (as this
-                # previously did, contradicting this function's own
-                # docstring) meant ~21 symbols x ~1000 row upserts every 2
-                # min, even when nothing was actually missing — found live
-                # 2026-09-16 via a steadily growing gap between "Ingested"
-                # log lines (100s -> 227s) traced to this loop's redundant
-                # write volume slowing down the whole DB, which in turn
-                # made every other ingestion loop (and the regime engine's
-                # "last tick" freshness) fall further behind each cycle.
-                new_bars = [b for b in bars if b.timestamp > latest_ts]
+                # Compare normalized timestamps inside the fetched window,
+                # rather than only checking `> latest_ts`. This keeps the
+                # operation bounded while repairing holes before the latest
+                # row as well as newly arrived bars.
+                from backend.utils.timezone import ensure_aware_ny
+
+                def timestamp_key(value: datetime) -> int:
+                    return int(ensure_aware_ny(value).timestamp() * 1000)
+
+                first_ts = min(b.timestamp for b in bars)
+                last_ts = max(b.timestamp for b in bars)
+                db = SessionLocal()
+                try:
+                    existing_timestamps = {
+                        timestamp_key(ts)
+                        for (ts,) in db.query(_BarModel.timestamp).filter(
+                            _BarModel.symbol == symbol.upper(),
+                            _BarModel.timeframe == "1m",
+                            _BarModel.timestamp >= first_ts,
+                            _BarModel.timestamp <= last_ts,
+                        ).all()
+                    }
+                finally:
+                    db.close()
+
+                latest_key = timestamp_key(latest_ts) if latest_ts is not None else None
+                new_bars = [
+                    b for b in bars
+                    if timestamp_key(b.timestamp) not in existing_timestamps
+                    and timestamp_key(b.timestamp) != latest_key
+                ]
                 if not new_bars:
                     continue
 

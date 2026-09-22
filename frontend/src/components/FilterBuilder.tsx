@@ -36,6 +36,19 @@ interface ParamDef {
 /** Every filter known to the backend, with their param schemas. */
 const FILTER_DEFS: FilterDef[] = [
   {
+    type: 'market_session',
+    label: 'Market Session',
+    description: 'Scanner timestamp falls inside a selected US equity session',
+    paramDefs: [{
+      key: 'session', label: 'Session', type: 'select', default: 'regular',
+      options: [
+        { value: 'after_hours', label: 'After-hours (16:00–20:00 ET)' },
+        { value: 'premarket', label: 'Premarket (04:00–09:30 ET)' },
+        { value: 'regular', label: 'Regular (09:30–16:00 ET)' },
+      ],
+    }],
+  },
+  {
     type: 'trend_score_gt',
     label: 'Trend Score >',
     description: 'Total score is above threshold',

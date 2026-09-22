@@ -26,6 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 
 from backend.database import SessionLocal
+from backend.engines.market_calendar import EASTERN, classify_bar_session
 from backend.market_data.services.engine_seeder import engine_registry
 from backend.models import Alert, AlertTrigger
 from backend.utils.timezone import now_ny
@@ -609,6 +610,7 @@ class AlertsEngine:
             signal_profile_payload = dict(trend_payload)
             signal_profile_payload["timeframe"] = tf
             signal_profile_payload["symbol"] = sym
+            signal_profile_payload["session"] = classify_bar_session(datetime.now(EASTERN))
             signal_profile_payload["strength"] = min(
                 abs(float(trend_payload.get("current", 0.0))) / 100.0, 1.0
             )
