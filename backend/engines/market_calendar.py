@@ -15,7 +15,7 @@ and fully covered here.
 """
 
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
@@ -195,6 +195,26 @@ class USMarketCalendar:
         if t < _AFTER_HOURS_CLOSE:
             return SessionType.AFTER_HOURS
         return SessionType.CLOSED
+
+    def regular_session_bounds(self, dt: datetime) -> tuple[datetime, datetime]:
+        """Return the current/next regular-session open and close in ET.
+
+        This is shared market state and avoids querying a provider once per
+        symbol just to determine the exchange schedule. If ``dt`` is during
+        regular hours, today's bounds are returned; otherwise the next
+        trading day's bounds are returned.
+        """
+        et = self.to_et(dt)
+        for offset in range(8):
+            session_date = et.date() + timedelta(days=offset)
+            probe = datetime.combine(session_date, time(12, 0), tzinfo=EASTERN)
+            if not self.is_trading_day(probe):
+                continue
+            opening = datetime.combine(session_date, _REGULAR_OPEN, tzinfo=EASTERN)
+            closing = datetime.combine(session_date, _REGULAR_CLOSE, tzinfo=EASTERN)
+            if offset > 0 or et < opening or et <= closing:
+                return opening, closing
+        raise RuntimeError("Unable to find a future US regular session")
 
 
 # Module-level singleton for the default US equity calendar.

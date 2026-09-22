@@ -15,11 +15,11 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
+from backend.engines.market_calendar import us_market_calendar
 from backend.models import (
     Bar,
     BarModel,
     DataStatus,
-    MarketStatus,
     MarketStatusModel,
     ProviderStatusModel,
     Quote,
@@ -2473,10 +2473,20 @@ class MarketDataIngestionService:
         await self._ingest_1m_recent_window()
 
     async def _ingest_market_status(self):
-        """Ingest market status for all symbols"""
+        """Ingest shared calendar status for all symbols.
+
+        US equities share the same regular-session schedule, so querying
+        Webull once per symbol here only burns rate-limit budget. Provider
+        market-status calls remain available through the on-demand API path
+        for symbol-specific halt checks.
+        """
         logger.debug("Ingesting market status")
         db: Session = SessionLocal()
         try:
+            now = datetime.now(_NY_TZ)
+            session_type = us_market_calendar.get_session_type(now)
+            next_open, next_close = us_market_calendar.regular_session_bounds(now)
+            is_open = session_type.value == "regular"
             for symbol in self.symbols:
                 # Check if we need to update
                 last_update = self.last_status_update.get(symbol, datetime.min)
@@ -2486,30 +2496,22 @@ class MarketDataIngestionService:
                     continue
 
                 try:
-                    # to_thread: get_market_status makes a blocking
-                    # provider network call on a miss — same event-loop-
-                    # blocking risk as the other manager calls fixed
-                    # nearby (get_batch_quotes, get_historical_bars).
-                    status: MarketStatus = await asyncio.to_thread(
-                        self.manager.get_market_status, symbol
-                    )
-
                     # Store in database
                     db_status = MarketStatusModel(
-                        symbol=status.symbol,
-                        is_open=status.is_open,
-                        next_open=status.next_open,
-                        next_close=status.next_close,
-                        timezone=status.timezone,
-                        provider=status.provider,
-                        timestamp=status.timestamp,
+                        symbol=symbol,
+                        is_open=is_open,
+                        next_open=next_open,
+                        next_close=next_close,
+                        timezone="America/New_York",
+                        provider="market_calendar",
+                        timestamp=now,
                     )
                     db.add(db_status)
 
                     self.last_status_update[symbol] = datetime.now()
-                    self.last_status_provider[symbol] = status.provider or "unknown"
+                    self.last_status_provider[symbol] = "market_calendar"
                     logger.debug(
-                        f"Ingested market status for {symbol}: {'OPEN' if status.is_open else 'CLOSED'}"
+                        f"Ingested market status for {symbol}: {'OPEN' if is_open else 'CLOSED'}"
                     )
 
                 except Exception as e:
