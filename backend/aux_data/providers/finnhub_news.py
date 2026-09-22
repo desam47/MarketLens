@@ -42,10 +42,14 @@ class FinnhubNewsProvider(NewsProvider):
             "symbol": sym,
             "from": (today - timedelta(days=_LOOKBACK_DAYS)).isoformat(),
             "to": today.isoformat(),
-            "token": self._api_key,
         }
+        # The key goes in a header, not a query param: connection/timeout
+        # exceptions from requests/urllib3 embed the full request URL
+        # (including the query string) in their message, and that message
+        # is logged verbatim below — a header never appears in that text.
+        headers = {"X-Finnhub-Token": self._api_key}
         try:
-            r = requests.get(_URL, params=params, timeout=self._timeout)
+            r = requests.get(_URL, params=params, headers=headers, timeout=self._timeout)
             if r.status_code == 429:
                 raise RuntimeError("Finnhub rate limited (HTTP 429)")
             if not r.ok:

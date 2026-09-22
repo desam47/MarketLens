@@ -289,13 +289,17 @@ class TestFinnhubServiceAuth(unittest.TestCase):
             self.service = FinnhubService()
 
     @patch("backend.market_data.services.finnhub_service.requests.get")
-    def test_api_key_passed_in_params(self, mock_get):
+    def test_api_key_passed_in_header(self, mock_get):
         mock_get.return_value = _mock_response(200, {"ticker": "AAPL", "name": "Apple"})
         self.service.get_company_profile("AAPL")
-        # Verify the API key was passed in params
+        # The key must go in a header, not a query param — request
+        # exceptions embed the URL (with its query string) verbatim in
+        # logs, so a param-based token can leak into log files.
         call_args = mock_get.call_args
         params = call_args.kwargs.get("params", {})
-        self.assertEqual(params.get("token"), "test_key_123")
+        headers = call_args.kwargs.get("headers", {})
+        self.assertNotIn("token", params)
+        self.assertEqual(headers.get("X-Finnhub-Token"), "test_key_123")
         self.assertEqual(params.get("symbol"), "AAPL")
 
     @patch("backend.market_data.services.finnhub_service.requests.get")

@@ -99,6 +99,17 @@ class FinnhubProvider(BaseMarketDataProvider):
 
     # ---------------------------------------------------------------- helpers
 
+    def _headers(self) -> dict:
+        """Auth header for Finnhub requests.
+
+        The key goes in a header, not a query param: ``requests``/``urllib3``
+        embed the full request URL — including its query string — in
+        connection/timeout exception messages, and those exceptions get
+        logged verbatim (see ``_get`` below). A header never appears in
+        that text, so a network blip can't leak the key into the logs.
+        """
+        return {"X-Finnhub-Token": self._api_key} if self._api_key else {}
+
     def _get(self, endpoint: str, params: dict | None = None) -> dict:
         """Make an authenticated GET request to the Finnhub API.
 
@@ -108,11 +119,9 @@ class FinnhubProvider(BaseMarketDataProvider):
         """
         url = f"{_BASE_URL}/{endpoint}"
         all_params: dict = params.copy() if params else {}
-        if self._api_key:
-            all_params["token"] = self._api_key
 
         try:
-            r = requests.get(url, params=all_params, timeout=self._timeout)
+            r = requests.get(url, params=all_params, headers=self._headers(), timeout=self._timeout)
         except requests.RequestException as e:
             raise RuntimeError(f"Finnhub request failed: {e}") from e
 
@@ -139,11 +148,8 @@ class FinnhubProvider(BaseMarketDataProvider):
         return data
 
     def _get_symbol_params(self, symbol: str) -> dict:
-        """Return the base params dict with symbol and optional API key."""
-        params: dict = {"symbol": symbol.upper()}
-        if self._api_key:
-            params["token"] = self._api_key
-        return params
+        """Return the base params dict with symbol. Auth goes via ``_headers()``."""
+        return {"symbol": symbol.upper()}
 
     # ---------------------------------------------------------------- quote
 

@@ -41,10 +41,13 @@ class FinnhubService:
         """Authenticated GET. Rate limits and other HTTP errors → RuntimeError."""
         url = f"{_BASE_URL}/{endpoint}"
         all_params: dict = dict(params) if params else {}
-        if self.api_key:
-            all_params["token"] = self.api_key
+        # The key goes in a header, not a query param: requests/urllib3
+        # embed the full request URL (including the query string) in
+        # connection/timeout exception messages, and those get logged
+        # verbatim (e.g. line ~161 below) — a header never appears there.
+        headers = {"X-Finnhub-Token": self.api_key} if self.api_key else {}
         try:
-            r = requests.get(url, params=all_params, timeout=self.timeout)
+            r = requests.get(url, params=all_params, headers=headers, timeout=self.timeout)
         except requests.RequestException as e:
             raise RuntimeError(f"Finnhub request failed: {e}") from e
 
