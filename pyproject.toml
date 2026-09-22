@@ -71,6 +71,14 @@ extend-exclude = [
     ".ruff_cache",
 ]
 
+[tool.pytest.ini_options]
+# The Web/AI SDK can leave an asyncio selector transport alive until Python's
+# interpreter teardown after a mocked streaming test.  It is third-party
+# cleanup noise, not a failed assertion or an application error.
+filterwarnings = [
+    "ignore:unclosed transport:ResourceWarning",
+]
+
 [tool.ruff.lint]
 # E/W = pycodestyle errors + warnings
 # F   = pyflakes (imports, names)
