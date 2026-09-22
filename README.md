@@ -905,6 +905,29 @@ Opens `stats.html` showing the JavaScript bundle composition.
 
 ## Development
 
+### Branch Workflow
+
+Development work is committed and pushed on `development`. The `main`
+branch is the stable release branch and is updated only through an approved
+pull request or merge from `development`; direct commits to `main` are
+blocked locally and should also be protected in GitHub repository settings.
+
+```bash
+# daily work
+git switch development
+git pull
+git add .
+git commit -m "Describe the change"
+git push origin development
+
+# release after review
+git switch main
+git pull
+git merge --no-ff development
+git push origin main
+git switch development
+```
+
 ### Full Local Verification
 
 Run the complete non-Docker quality gate before committing:
