@@ -16,11 +16,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..config.settings import settings
 from .market_regime_engine import MarketRegime, MarketRegimeEngine
 
 logger = logging.getLogger(__name__)
+_MARKET_TZ = ZoneInfo("America/New_York")
 
 
 @dataclass
@@ -104,6 +106,12 @@ class MarketContextEngine:
             logger.warning(f"MarketContextEngine: unknown index {symbol}, ignoring")
             return
 
+        # Stored bars historically use naive America/New_York timestamps,
+        # while live dispatches may be UTC-aware. Normalize before storing or
+        # comparing sub-index timestamps so one mixed event cannot turn the
+        # aggregate endpoint into a 500 response.
+        timestamp = self._normalize_timestamp(timestamp)
+
         self.sub_engines[symbol].update(
             price=price,
             volume=volume,
@@ -131,7 +139,11 @@ class MarketContextEngine:
             if (signal := engine.get_current_regime()) is not None
         }
         ts = max(
-            (signal.timestamp for engine in self.sub_engines.values() if (signal := engine.get_current_regime())),
+            (
+                self._normalize_timestamp(signal.timestamp)
+                for engine in self.sub_engines.values()
+                if (signal := engine.get_current_regime())
+            ),
             default=datetime.now(UTC),
         )
         age = self._age_seconds(ts)
@@ -168,8 +180,14 @@ class MarketContextEngine:
             return None
         now = datetime.now(UTC)
         if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
+            timestamp = timestamp.replace(tzinfo=_MARKET_TZ)
         return max(0.0, (now - timestamp.astimezone(UTC)).total_seconds())
+
+    @staticmethod
+    def _normalize_timestamp(timestamp: datetime) -> datetime:
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=_MARKET_TZ).astimezone(UTC)
+        return timestamp.astimezone(UTC)
 
     @staticmethod
     def _freshness(age: float | None) -> str:
