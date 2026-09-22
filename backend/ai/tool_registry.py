@@ -239,6 +239,7 @@ def build_default_registry() -> ToolRegistry:
         FundamentalsRequest,
         IndicatorRequest,
         NewsRequest,
+        OptionsRequest,
         SymbolRequest,
         get_bars_tool,
         get_fundamentals_tool,
@@ -246,6 +247,7 @@ def build_default_registry() -> ToolRegistry:
         get_market_context_tool,
         get_market_regime_tool,
         get_news_tool,
+        get_options_tool,
         get_quote_tool,
         get_support_resistance_tool,
     )
@@ -258,6 +260,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_market_context", kind="read_only", description="Get the current warmed market context.", input_model=BaseModel, handler=get_market_context_tool))
     registry.register(ToolSpec(name="get_news", kind="read_only", description="Get recent provider news.", input_model=NewsRequest, handler=get_news_tool))
     registry.register(ToolSpec(name="get_fundamentals", kind="read_only", description="Get a fundamentals snapshot.", input_model=FundamentalsRequest, handler=get_fundamentals_tool))
+    registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))
     return registry
 
 

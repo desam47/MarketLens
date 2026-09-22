@@ -1694,6 +1694,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_market_context",
     "get_news",
     "get_fundamentals",
+    "get_options_snapshot",
 }
 
 

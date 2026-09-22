@@ -38,6 +38,13 @@ class FundamentalsRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
 
 
+class OptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    expiration: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _manager():
     from backend.market_data.services.manager import market_data_manager
 
@@ -164,6 +171,19 @@ def get_fundamentals_tool(request: FundamentalsRequest) -> BaseModel:
     return _Payload(
         symbol=response.symbol,
         data=response.data.model_dump(mode="json"),
+        provider=response.provider,
+        source_timestamp=response.timestamp,
+    )
+
+
+def get_options_tool(request: OptionsRequest) -> BaseModel:
+    response = _aux_manager().get_options(request.symbol.upper(), expiration=request.expiration)
+    return _Payload(
+        symbol=response.symbol,
+        chains=[chain.model_dump(mode="json") for chain in response.chains],
+        expirations=response.expirations,
+        near_term_iv=response.near_term_iv,
+        iv_rank=response.iv_rank,
         provider=response.provider,
         source_timestamp=response.timestamp,
     )

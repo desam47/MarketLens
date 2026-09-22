@@ -869,6 +869,7 @@ class ChatReplyResponse(BaseModel):
         "get_market_context",
         "get_news",
         "get_fundamentals",
+        "get_options_snapshot",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -970,7 +971,8 @@ _ACTION_TOOL_DOCS = (
       Never do the arithmetic in reply; the app returns verified values, \
       formulas, and assumptions.
     - get_quote / get_bars / get_indicator / get_support_resistance / \
-      get_market_regime / get_market_context / get_news / get_fundamentals \
+      get_market_regime / get_market_context / get_news / get_fundamentals / \
+      get_options_snapshot \
       are read-only grounded tools. \
       Set action to the exact tool name and put only its request fields in \
       action_tool_arguments (for example, symbol, timeframe, session, and \
@@ -1055,12 +1057,12 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have NINETEEN more tools, via "action": create_alert, modify_alert, \
+10. You have TWENTY more tools, via "action": create_alert, modify_alert, \
     delete_alert, add_to_watchlist, remove_from_watchlist, \
     create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
     run_screen, calculate, get_quote, get_bars, get_indicator, \
     get_support_resistance, get_market_regime, get_market_context, get_news, \
-    get_fundamentals.
+    get_fundamentals, get_options_snapshot.
 """
     + _ACTION_TOOL_DOCS
     + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
@@ -1122,7 +1124,8 @@ Tools, via "action": create_alert, modify_alert, delete_alert, \
 add_to_watchlist, remove_from_watchlist, create_watchlist, \
       delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
       get_quote, get_bars, get_indicator, get_support_resistance, \
-      get_market_regime, get_market_context, get_news, get_fundamentals.
+      get_market_regime, get_market_context, get_news, get_fundamentals, \
+      get_options_snapshot.
 """
     + _ACTION_TOOL_DOCS
 )

@@ -23,6 +23,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_market_context",
         "get_market_regime",
         "get_news",
+        "get_options_snapshot",
         "get_quote",
         "get_support_resistance",
     )
