@@ -30,6 +30,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_options_snapshot",
         "get_quote",
         "get_risk_dashboard",
+        "get_sector_data",
         "get_support_resistance",
         "get_trade_journal",
         "get_watchlist",

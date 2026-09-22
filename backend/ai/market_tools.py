@@ -205,6 +205,15 @@ def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
     return _Payload(symbol=request.symbol.upper(), **signal.model_dump(mode="json"))
 
 
+def get_sector_data_tool(request: SymbolRequest) -> BaseModel:
+    """Get the symbol's sector alignment vs. its sector ETF and SPY."""
+    from backend.api.regime.router import _get_sector_engine
+
+    engine = _get_sector_engine(request.symbol.upper())
+    signal = engine.get_current_signal()
+    return _Payload(**signal.to_dict())
+
+
 def get_market_context_tool(_: BaseModel) -> BaseModel:
     from backend.api.market_context.router import _engine
 

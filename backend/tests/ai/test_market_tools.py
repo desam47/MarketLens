@@ -15,6 +15,7 @@ from backend.ai.market_tools import (
     get_indicator_tool,
     get_quote_tool,
     get_risk_dashboard_tool,
+    get_sector_data_tool,
     get_support_resistance_tool,
     get_trade_journal_tool,
 )
@@ -114,6 +115,44 @@ def test_alerts_tool_reads_database_backed_rules_and_triggers() -> None:
         for row in repository.get_all():
             repository.delete(row.id)
         repository.close()
+
+
+def test_sector_data_tool_reports_alignment(monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    class _FakeSignal:
+        def to_dict(self):
+            return {
+                "symbol": "AAPL",
+                "sector": "Technology",
+                "sector_etf": "XLK",
+                "stock_trend": "up",
+                "sector_trend": "up",
+                "market_trend": "up",
+                "alignment_score": 1.0,
+                "alignment_level": "perfect",
+                "contributing_factors": {},
+                "timestamp": datetime(2026, 9, 22, tzinfo=UTC).isoformat(),
+            }
+
+    class _FakeSectorEngine:
+        def get_current_signal(self):
+            return _FakeSignal()
+
+    import importlib
+
+    # backend.api.regime's __init__ does `from .router import router as router`,
+    # which rebinds the package's "router" attribute to the APIRouter instance
+    # and shadows the submodule name — importlib.import_module bypasses that
+    # by going through sys.modules instead of attribute lookup.
+    regime_router_module = importlib.import_module("backend.api.regime.router")
+    monkeypatch.setattr(regime_router_module, "_get_sector_engine", lambda symbol: _FakeSectorEngine())
+
+    result = get_sector_data_tool(SymbolRequest(symbol="AAPL"))
+
+    assert result.sector == "Technology"
+    assert result.sector_etf == "XLK"
+    assert result.alignment_level == "perfect"
 
 
 def test_application_help_returns_verified_routes() -> None:

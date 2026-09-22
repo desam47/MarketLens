@@ -1700,6 +1700,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_trade_journal",
     "get_application_help",
     "get_alerts",
+    "get_sector_data",
 }
 
 
