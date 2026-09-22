@@ -531,6 +531,30 @@ class TestGetBatchQuotes(unittest.TestCase):
         self.assertEqual(result["MSFT"].price, 0.0)
         self.assertEqual(result["MSFT"].data_status.value, "ERROR")
 
+    def test_batch_quotes_total_failure_returns_error_quotes_for_all(self):
+        """A total failure (e.g. the snapshot request itself raises) must
+        degrade to per-symbol ERROR quotes, per this method's own
+        docstring -- not propagate the exception.
+
+        Regression test: BaseMarketDataProvider._handle_error() used to
+        unconditionally re-raise, so this except block's "return error
+        quotes for all on failure" line was unreachable dead code and a
+        total batch failure raised instead of degrading gracefully.
+        """
+        mock_data = MagicMock()
+        mock_data.market_data.get_snapshot.side_effect = RuntimeError("connection reset")
+        p = _make_provider(mock_data)
+
+        result = p.get_batch_quotes(["AAPL", "MSFT"])
+
+        self.assertEqual(set(result.keys()), {"AAPL", "MSFT"})
+        for sym in ("AAPL", "MSFT"):
+            self.assertEqual(result[sym].price, 0.0)
+            self.assertEqual(result[sym].data_status.value, "ERROR")
+        # _handle_error must still record the error (WebullProvider.is_available()
+        # checks SDK bootstrap state, not this flag, so assert it directly).
+        self.assertFalse(p._is_healthy)
+
 
 # ---------------------------------------------------------------------------
 # Error handling tests

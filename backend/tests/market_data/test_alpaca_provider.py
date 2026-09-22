@@ -292,6 +292,30 @@ class TestAlpacaProviderBatchAndStatus(unittest.TestCase):
         result = self.provider.get_batch_quotes(["CTNT"])
         self.assertEqual(result["CTNT"].price, 0.04)
 
+    def test_get_batch_quotes_total_failure_returns_error_quotes_for_all(self):
+        """A total failure (the SDK call itself raises) must degrade to
+        per-symbol ERROR quotes, per this method's own docstring -- not
+        propagate the exception.
+
+        Regression test: BaseMarketDataProvider._handle_error() used to
+        unconditionally re-raise, so this except block's "return ERROR
+        quotes for all symbols" line was unreachable dead code and a
+        total batch failure raised instead of degrading gracefully.
+        """
+        self._mock_data_client.get_stock_latest_quote.side_effect = RuntimeError(
+            "connection reset"
+        )
+
+        result = self.provider.get_batch_quotes(["AAPL", "MSFT"])
+
+        self.assertEqual(set(result.keys()), {"AAPL", "MSFT"})
+        for sym in ("AAPL", "MSFT"):
+            self.assertEqual(result[sym].price, 0.0)
+            self.assertEqual(result[sym].data_status, DataStatus.ERROR)
+        # _handle_error must still record the error (is_available() does its
+        # own live get_quote() check, not this flag, so assert it directly).
+        self.assertFalse(self.provider._is_healthy)
+
     def test_get_market_status_returns_open_status(self):
         clock = SimpleNamespace(
             is_open=True,

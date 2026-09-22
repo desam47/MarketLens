@@ -114,8 +114,21 @@ class BaseMarketDataProvider(MarketDataProvider):
         self._last_error: str | None = None
         self._is_healthy = True
 
-    def _handle_error(self, error: Exception, context: str = ""):
-        """Handle and record provider errors"""
+    def _handle_error(self, error: Exception, context: str = "") -> None:
+        """Record a provider error (health state + log). Does NOT raise.
+
+        Every call site except get_batch_quotes on WebullProvider/
+        AlpacaProvider immediately re-raises right after calling this, so
+        those two behaved identically either way. But get_batch_quotes on
+        both is documented ("failed symbols return an ERROR quote rather
+        than raising") to fall through into building a per-symbol ERROR
+        quote dict on total failure -- this used to unconditionally raise
+        here first, making that fallback dead code and turning a
+        should-degrade-gracefully batch failure into an unhandled
+        exception for the whole batch. Callers that want to propagate
+        (everyone else) already have their own explicit ``raise`` right
+        after this call.
+        """
         self._last_error = f"{context}: {error!s}" if context else str(error)
         self._is_healthy = False
         logger.error(
@@ -125,7 +138,6 @@ class BaseMarketDataProvider(MarketDataProvider):
             error,
             exc_info=True,
         )
-        raise error
 
     def _reset_error_state(self):
         """Reset error state after successful operation"""
