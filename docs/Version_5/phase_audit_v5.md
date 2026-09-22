@@ -74,8 +74,9 @@ capabilities are already present and must be preserved throughout the migration:
 - Deterministic handling for several watchlist queries and confirmations.
 - Grounded/partial/unavailable symbol provenance in the frontend.
 
-These are baseline behavior, not completed Version 5 items. Version 5 begins
-when the typed general-purpose tool foundation in Phase 5.1 is implemented.
+These are baseline behavior, not completed Version 5 items. Version 5 work is
+now active: the typed tool foundation and calculator are implemented on
+`development`, while the remaining phases are still pending.
 
 ---
 
@@ -90,12 +91,12 @@ allocation, volatility, drawdown, correlation, and basic options metrics.
 Seven focused tests pass with `DEBUG=false`; the full suite remains subject to
 the repository's existing Alembic test-database initialization prerequisite.
 
-Remaining Phase 5.1 work includes the common tool envelope, time/session/unit
-normalization, centralized registry and permissions, custom verified-result
-formulas, and the canonical metric catalog. Audit this phase with
-formula-level test results, separate per-share/total/portfolio-risk outputs,
-verified-result formula references, tool schema coverage, invalid-input
-behavior, and proof that arbitrary code execution is impossible.
+Remaining Phase 5.1 work is focused on completing the canonical metric catalog,
+formalizing tool permissions/rate limits, and adding richer provenance fields
+to Chat responses. Audit this phase with formula-level test results, separate
+per-share/total/portfolio-risk outputs, verified-result formula references,
+tool schema coverage, invalid-input behavior, and proof that arbitrary code
+execution is impossible.
 
 ---
 
