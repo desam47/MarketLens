@@ -512,6 +512,18 @@ def reset() -> None:
     _dispatcher = None
 
 
+def get_realtime_loop() -> asyncio.AbstractEventLoop | None:
+    """Return the event loop captured at ``install()`` time, if any.
+
+    Lets other SDK-thread callback sites (e.g. ``streaming/bridge.py``)
+    bounce work back onto the loop thread via ``call_soon_threadsafe``,
+    the same way ``publish_live_quote``/``publish_live_bar`` already do.
+    Returns ``None`` before ``install()`` has run (e.g. in tests that
+    exercise bridge.py directly without starting the app lifespan).
+    """
+    return _realtime_loop
+
+
 # ---------------------------------------------------------------------------
 # Provider stream management (v3.6)
 # ---------------------------------------------------------------------------

@@ -8,7 +8,13 @@ queues completed candles for durable storage. REST remains the authoritative
 historical/fallback source.
 
 ``on_stream_snapshot`` / ``on_stream_trade`` are the WebullStreamClient
-callbacks (set in main.py's lifespan). They run on the SDK's thread.
+callbacks (set in main.py's lifespan). They run on the SDK's thread, so
+every ``engine_registry.dispatch_*`` call here goes through
+``_dispatch_on_loop`` to hop back onto the app's event loop before running
+registered engine callbacks (``MarketContextEngine``, ``TrendEngine``, etc.)
+— those assume single-threaded, loop-thread execution and have no locking
+of their own. ``live_quote_cache``/``live_bar_aggregator``/``TapeEngine``
+are separately thread-safe and are called directly.
 
   trade    -> engine_registry.dispatch_trade  (Time & Sales)
            -> local 1m OHLCV aggregation -> realtime bar broadcast
@@ -23,6 +29,37 @@ import logging
 from backend.market_data.services.engine_seeder import _ensure_aware, engine_registry
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_on_loop(fn, /, *args, **kwargs) -> None:
+    """Run an ``engine_registry.dispatch_*`` call on the app's event loop.
+
+    ``on_stream_trade``/``on_stream_snapshot`` run on the Webull SDK's own
+    thread. ``EngineRegistry.dispatch_*`` synchronously invokes every
+    registered callback for a symbol — including ``MarketContextEngine``'s
+    ``on_bar`` closure and ``TrendEngine.update``, neither of which is safe
+    to mutate from a non-loop thread: their TTL caches and internal state
+    have no locking, and the REST ingestion path (the only other dispatch
+    source) already runs on the loop thread, so those callbacks were never
+    built to expect concurrent entry. Calling through
+    ``loop.call_soon_threadsafe`` serializes every dispatch onto the loop
+    thread, matching the pattern ``publish_live_quote``/``publish_live_bar``
+    already use for the same SDK thread in ``ws_router.py``.
+
+    Falls back to a direct call when no loop has been captured yet (e.g. a
+    test that drives bridge.py without the app lifespan) — that path only
+    runs single-threaded, so a direct call is safe there.
+    """
+    from backend.api.realtime.ws_router import get_realtime_loop
+
+    loop = get_realtime_loop()
+    if loop is None or loop.is_closed():
+        fn(*args, **kwargs)
+        return
+    try:
+        loop.call_soon_threadsafe(fn, *args, **kwargs)
+    except RuntimeError:
+        pass
 
 
 def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, ask=None, bid_size=None, ask_size=None) -> None:
@@ -47,7 +84,7 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, as
         get_tape_engine(symbol, seed=False).note_price(price, ts)
     except Exception as e:  # noqa: BLE001
         logger.debug("stream snapshot -> tape failed for %s: %s", symbol, e)
-    engine_registry.dispatch_microstructure(symbol, payload)
+    _dispatch_on_loop(engine_registry.dispatch_microstructure, symbol, payload)
 
 
 def on_stream_trade(symbol, price, size, ts, side) -> None:
@@ -64,7 +101,8 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
     except Exception as e:  # noqa: BLE001
         logger.debug("stream trade -> quote broadcast failed for %s: %s", symbol, e)
     try:
-        engine_registry.dispatch_trade(
+        _dispatch_on_loop(
+            engine_registry.dispatch_trade,
             symbol,
             price,
             size or 0,
@@ -86,7 +124,8 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
             # the same cadence as REST-ingested 1m bars. The current forming
             # candle is sent directly to chart subscribers below.
             for bar in update.completed:
-                engine_registry.dispatch_bar(
+                _dispatch_on_loop(
+                    engine_registry.dispatch_bar,
                     symbol=bar.symbol,
                     timeframe=bar.timeframe,
                     price=bar.close,
@@ -113,7 +152,7 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
         # interrupt the tape or quote path when a malformed trade slips
         # through or a browser broadcast is unavailable.
         logger.debug("stream trade -> local bar aggregation failed for %s: %s", symbol, e)
-    engine_registry.dispatch_microstructure(symbol, payload)
+    _dispatch_on_loop(engine_registry.dispatch_microstructure, symbol, payload)
 
 
 def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
@@ -138,4 +177,4 @@ def on_stream_bbo(symbol, bid, ask, bid_size, ask_size, ts) -> None:
         publish_live_quote(symbol, payload)
     except Exception as e:  # noqa: BLE001
         logger.debug("stream BBO -> quote broadcast failed for %s: %s", symbol, e)
-    engine_registry.dispatch_microstructure(symbol, payload)
+    _dispatch_on_loop(engine_registry.dispatch_microstructure, symbol, payload)
