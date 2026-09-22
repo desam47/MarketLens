@@ -45,29 +45,29 @@ export function useMarketStream({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const subRef = useRef(api.createRealtimeSubscriber());
-  const prevSubsRef = useRef<Set<string>>(new Set());
 
   // Subscribe/unsubscribe when the subscription list changes.
+  //
+  // Every run subscribes to the full current list and cleanup unsubscribes
+  // exactly that — no cross-run diffing. subscribe()/unsubscribe() on
+  // RealtimeSubscriber are Set-based and idempotent, so resubscribing to a
+  // symbol+timeframe pair that's already active is a harmless no-op; this
+  // trades a few redundant WS messages on a real membership change for
+  // correctness. (A prior version tracked prev-vs-next subscriptions in a
+  // ref to only send the delta, but its cleanup unconditionally
+  // unsubscribed everything without updating that ref — so after any
+  // cleanup+re-run with the same subscriptions (e.g. React 18 StrictMode's
+  // dev-only mount→cleanup→mount, or any parent that doesn't memoize the
+  // subscriptions array) the diff believed those keys were still
+  // subscribed and never resubscribed them, silently dropping live
+  // updates. This mirrors the always-resubscribe pattern already used
+  // safely elsewhere for the same subscriber, e.g. useLiveQuotes.ts.)
   useEffect(() => {
     const sub = subRef.current;
-    const prev = prevSubsRef.current;
-    const next = new Set(subscriptions.map(s => subKey(s.symbol, s.timeframe)));
-
-    for (const key of Array.from(prev)) {
-      if (!next.has(key)) {
-        const [sym, tf] = key.split(':');
-        sub.unsubscribe(sym, tf);
-      }
-    }
 
     for (const s of subscriptions) {
-      const key = subKey(s.symbol, s.timeframe);
-      if (!prev.has(key)) {
-        sub.subscribe(s.symbol, s.timeframe);
-      }
+      sub.subscribe(s.symbol, s.timeframe);
     }
-
-    prevSubsRef.current = next;
 
     if (subscriptions.length === 0) {
       sub.disconnect();
