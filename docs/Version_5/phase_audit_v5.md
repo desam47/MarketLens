@@ -16,7 +16,7 @@ has started; Phase 5.1 is the next delivery gate.
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 5.1 | Tool foundation and safe calculator | ⬜ NOT STARTED | Typed tools, deterministic calculations, session/time/unit normalization, permissions, canonical metric catalog. |
+| 5.1 | Tool foundation and safe calculator | 🟡 IN PROGRESS | Deterministic calculator foundation and read-only `/api/ai/calculate` endpoint are implemented; typed Chat envelope, normalization, registry, and metric catalog remain. |
 | 5.2 | Grounded market-data tools and provenance | ⬜ NOT STARTED | Market/user tools, evidence, conflict reconciliation, application help, safe local imports. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
@@ -50,13 +50,21 @@ when the typed general-purpose tool foundation in Phase 5.1 is implemented.
 
 ## Phase 5.1 — Tool foundation and safe calculator
 
-Not started. Planned items 5.1.1–5.1.4 and their verification criteria are in
-`docs/Version_5/v5_plan.md`. Audit this phase with formula-level test results,
-separate per-share/total/portfolio-risk outputs, verified-result formula
-references, tool schema coverage, invalid-input behavior, and proof that
-arbitrary code execution is impossible. The canonical metric catalog must also
-be checked against the owning page/API for formula, units, timeframe/session
-behavior, and terminology consistency.
+The first safe-calculator slice is implemented in
+`backend/ai/calculator.py`, with a strict Pydantic request schema, named
+operations, formula/assumption metadata, and no dynamic evaluation. It covers
+change, return/CAGR, weighted averages, position sizing, reward/risk,
+allocation, volatility, drawdown, correlation, and basic options metrics.
+`POST /api/ai/calculate` exposes the calculation as a read-only endpoint.
+Seven focused tests pass with `DEBUG=false`; the full suite remains subject to
+the repository's existing Alembic test-database initialization prerequisite.
+
+Remaining Phase 5.1 work includes the common tool envelope, time/session/unit
+normalization, centralized registry and permissions, custom verified-result
+formulas, and the canonical metric catalog. Audit this phase with
+formula-level test results, separate per-share/total/portfolio-risk outputs,
+verified-result formula references, tool schema coverage, invalid-input
+behavior, and proof that arbitrary code execution is impossible.
 
 ---
 

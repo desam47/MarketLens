@@ -38,6 +38,7 @@ from ...ai import (
     ai_manager,
 )
 from ...ai.analyze import analyze_symbol, analyze_symbol_stream
+from ...ai.calculator import CalculationRequest, CalculationResult, calculate
 from ...ai.prompt import TradePlan
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
@@ -148,6 +149,21 @@ class AnalyzeResponse(BaseModel):
 
 
 # --- Endpoints -----------------------------------------------------
+
+
+@router.post("/calculate", response_model=CalculationResult, status_code=status.HTTP_200_OK)
+async def calculate_metric(request: CalculationRequest) -> CalculationResult:
+    """Run one deterministic, read-only MarketLens calculation.
+
+    This endpoint is intentionally independent of the AI provider: callers
+    receive validated arithmetic, formulas, and assumptions even when AI is
+    disabled or unavailable.
+    """
+
+    try:
+        return calculate(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _sync_resolve_template(db: Session, template_id: int | None):
