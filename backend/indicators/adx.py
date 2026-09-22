@@ -215,23 +215,31 @@ class ADXIndicator(BaseIndicator):
             self._tr_history.append(tr)
             if len(self._tr_history) < self.period:
                 return None
-            # Seed the smoothed averages from the warmup values
+            # Seed the smoothed averages from the warmup values, which
+            # already include this bar's dm_plus/dm_minus/tr (appended
+            # just above). This branch and Phase 2 below must be
+            # mutually exclusive — falling through into Phase 2 after
+            # seeding would re-apply the Wilder update formula using
+            # this same bar's dm_plus/dm_minus/tr a second time,
+            # double-weighting it and skewing every ADX/DI value for a
+            # long stretch afterward (Wilder smoothing has a long
+            # memory). Compare ATRIndicator.update()/EMAIndicator.update(),
+            # which both return immediately after seeding instead.
             self._smoothed_dm_plus = sum(self._dm_plus_history) / self.period
             self._smoothed_dm_minus = sum(self._dm_minus_history) / self.period
             self._smoothed_tr = sum(self._tr_history) / self.period
             self._dm_plus_history = []
             self._dm_minus_history = []
             self._tr_history = []
-            # Fall through to compute the first DX for this bar.
-
-        # ---- Phase 2: stream-update smoothed averages (O(1)) ----
-        self._smoothed_dm_plus = (
-            self._smoothed_dm_plus * (self.period - 1) + dm_plus
-        ) / self.period
-        self._smoothed_dm_minus = (
-            self._smoothed_dm_minus * (self.period - 1) + dm_minus
-        ) / self.period
-        self._smoothed_tr = (self._smoothed_tr * (self.period - 1) + tr) / self.period
+        else:
+            # ---- Phase 2: stream-update smoothed averages (O(1)) ----
+            self._smoothed_dm_plus = (
+                self._smoothed_dm_plus * (self.period - 1) + dm_plus
+            ) / self.period
+            self._smoothed_dm_minus = (
+                self._smoothed_dm_minus * (self.period - 1) + dm_minus
+            ) / self.period
+            self._smoothed_tr = (self._smoothed_tr * (self.period - 1) + tr) / self.period
 
         # ---- Compute DI+/DI- and DX for this bar ----
         if self._smoothed_tr == 0:
