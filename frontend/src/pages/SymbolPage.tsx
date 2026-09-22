@@ -687,6 +687,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [mtfConfluence, setMtfConfluence] = useState<any>(null);
   const [mtfLoading, setMtfLoading] = useState(true);
   const [mtfError, setMtfError] = useState<string | null>(null);
+  const [mtfBarVersion, setMtfBarVersion] = useState(0);
   const mtfRequestSymbolRef = useRef<string>(symbol);
   const mtfPresetRef = useRef<string>('day_trading');
   mtfPresetRef.current = mtfPreset;
@@ -1101,6 +1102,7 @@ const fetchBars = useCallback(async () => {
           && event.data.timestamp !== lastSrBarTimestampRef.current
         ) {
           lastSrBarTimestampRef.current = event.data.timestamp;
+          setMtfBarVersion(version => version + 1);
           if (srRefreshTimerRef.current !== null) clearTimeout(srRefreshTimerRef.current);
           // Give the backend live-bar persistence a moment to commit the
           // completed candle before re-reading the price-range analysis.
@@ -1186,6 +1188,14 @@ const fetchBars = useCallback(async () => {
   useEffect(() => {
     fetchMTF();
   }, [fetchMTF]);
+
+  // Refresh confluence after the shared realtime pipeline closes a new
+  // 1-minute bucket. The snapshot is computed from in-memory trend state, so
+  // this does not create a provider request for every tick.
+  useEffect(() => {
+    if (mtfBarVersion === 0) return;
+    void fetchMTF();
+  }, [mtfBarVersion, fetchMTF]);
 
   useEffect(() => {
     fetchTape();

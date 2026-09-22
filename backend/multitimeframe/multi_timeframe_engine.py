@@ -394,6 +394,31 @@ class MultiTimeframeEngine:
     # Confluence signal + snapshot
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _same_signal_state(
+        previous: ConfluenceSignal,
+        current: dict[Timeframe, TrendSignal],
+    ) -> bool:
+        """Return whether the underlying timeframe signals are unchanged.
+
+        API reads can happen many times between bars. Do not turn those reads
+        into duplicate history entries; history should represent new trend
+        states, not polling frequency.
+        """
+        if set(previous.timeframe_signals) != set(current):
+            return False
+        for timeframe, signal in current.items():
+            prior = previous.timeframe_signals[timeframe]
+            if (
+                prior.timestamp != signal.timestamp
+                or prior.classification != signal.classification
+                or prior.score != signal.score
+                or prior.confidence != signal.confidence
+                or prior.data_quality != signal.data_quality
+            ):
+                return False
+        return True
+
     def _generate_confluence_signal(self, timestamp: datetime) -> None:
         """Generate a multi-timeframe confluence signal and snapshot."""
         # Get current trends from all active timeframes
@@ -404,36 +429,8 @@ class MultiTimeframeEngine:
                 timeframe_signals[timeframe] = trend
 
         if not timeframe_signals:
-            # No per-TF trend signals available for this bar. Fall back to
-            # the last known confluence signal (with the new bar's timestamp)
-            # so the MTF display always shows live data rather than going
-            # silent when a bar arrives but doesn't cross any trend threshold.
-            # Only fall back when we have a previous signal to base on.
-            if self.confluence_history:
-                prev = self.confluence_history[-1]
-                signal = ConfluenceSignal(
-                    symbol=self.symbol,
-                    direction=prev.direction,
-                    strength=prev.strength,
-                    alignment_score=prev.alignment_score,
-                    timeframe_signals=prev.timeframe_signals,
-                    timestamp=timestamp,
-                    bullish_alignment=prev.bullish_alignment,
-                    bearish_alignment=prev.bearish_alignment,
-                    conflicting=prev.conflicting,
-                    short_term_direction=prev.short_term_direction,
-                    intermediate_direction=prev.intermediate_direction,
-                    higher_direction=prev.higher_direction,
-                    short_term_state=prev.short_term_state,
-                    intermediate_state=prev.intermediate_state,
-                    higher_state=prev.higher_state,
-                    preset=self.preset_name,
-                    valid_coverage=prev.valid_coverage,
-                    quality_weighted_score=prev.quality_weighted_score,
-                )
-                self.confluence_history.append(signal)
-                if len(self.confluence_history) > 1000:
-                    self.confluence_history = self.confluence_history[-1000:]
+            # Keep the last known signal visible, but do not append a fake
+            # history event merely because a consumer polled the API.
             return
 
         # Build the richer snapshot first. When available, the confluence
@@ -496,6 +493,16 @@ class MultiTimeframeEngine:
             valid_coverage=valid_coverage,
             quality_weighted_score=quality_weighted_score,
         )
+
+        if self.confluence_history and self._same_signal_state(
+            self.confluence_history[-1], timeframe_signals
+        ):
+            # Keep the latest read timestamp/quality fields current while
+            # replacing, rather than appending, an unchanged history entry.
+            self.confluence_history[-1] = signal
+            if snapshot is not None and self.snapshot_history:
+                self.snapshot_history[-1] = snapshot
+            return
 
         # Store in history (capped at 1000)
         self.confluence_history.append(signal)
@@ -959,13 +966,28 @@ class MultiTimeframeEngine:
                 quality_weight=quality_weight,
             )
 
+        # Aggregate explanatory metrics from the same valid/fresh subset used
+        # by the quality-weighted score. A stale higher timeframe should not
+        # continue to drive the displayed bias or conflict count.
+        valid_signals = {
+            tf: signal
+            for tf, signal in timeframe_signals.items()
+            if tf_snapshots[tf].valid
+        }
+        # During early warmup there may be no valid timeframe yet. Preserve
+        # the directional context for legacy callers in that state, while
+        # valid_coverage remains 0 so the UI clearly marks the result as
+        # unconfirmed. Once any timeframe is valid, all summaries use only
+        # the valid subset.
+        summary_signals = valid_signals or timeframe_signals
+
         # Aggregate metrics
         bullish_align, bearish_align, conflicting = self._calculate_directional_alignment(
-            timeframe_signals
+            summary_signals
         )
         alignment_score = self._calculate_alignment(timeframe_signals, tf_snapshots)
         short_dir, inter_dir, higher_dir = self._calculate_horizon_directions(
-            timeframe_signals,
+            summary_signals,
         )
         direction, strength = self._calculate_overall_direction(timeframe_signals, tf_snapshots)
 
