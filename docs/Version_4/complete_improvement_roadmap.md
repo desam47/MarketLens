@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21, commit `f88591a`): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, configured per-timeframe source mapping, provider attribution for ingestion updates, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
+Latest checkpoint (2026-09-21): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, manager-enforced request-level provider attribution, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 
@@ -164,7 +164,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 
 ### 15. Provider and data-quality transparency — [~] Partial
 
-Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, and configured source mapping for each bar timeframe; provider-reported exchange entitlement verification and request-level attribution for every timeframe still need work.
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, configured source mapping for each bar timeframe, and manager-enforced provider attribution on fetched quotes and bars; provider-reported exchange entitlement verification remains.
 
 - Actual provider used
 - Provider per timeframe

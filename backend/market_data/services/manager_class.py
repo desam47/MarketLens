@@ -42,6 +42,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _tag_bars(bars: list[Bar], provider_name: str) -> list[Bar]:
+    """Attach the manager-selected provider to every returned bar."""
+    return [bar.model_copy(update={"provider": provider_name}) for bar in bars]
+
+
+def _tag_quote(quote: Quote, provider_name: str) -> Quote:
+    """Attach the manager-selected provider to a returned quote."""
+    return quote.model_copy(update={"provider": provider_name})
+
+
 class MarketDataManager:
     """Manages market data providers with fallback and caching"""
 
@@ -150,6 +160,7 @@ class MarketDataManager:
             try:
                 provider = self.providers[provider_name]
                 quote = _call_provider(provider, "get_quote", symbol)
+                quote = _tag_quote(quote, provider_name)
                 logger.debug(f"Got quote for {symbol} from {provider_name}")
                 if failed_providers:
                     try:
@@ -182,6 +193,7 @@ class MarketDataManager:
             try:
                 provider = self.providers[provider_name]
                 bar = _call_provider(provider, "get_bar", symbol, timeframe, timestamp)
+                bar = bar.model_copy(update={"provider": provider_name})
                 logger.debug(f"Got bar for {symbol} from {provider_name}")
                 return bar
             except Exception as e:
@@ -212,6 +224,7 @@ class MarketDataManager:
             try:
                 provider = self.providers[provider_name]
                 bar = _call_provider(provider, "get_latest_bar", symbol, timeframe)
+                bar = bar.model_copy(update={"provider": provider_name})
                 logger.debug(f"Got latest bar for {symbol} from {provider_name}")
                 if failed_providers:
                     try:
@@ -349,6 +362,7 @@ class MarketDataManager:
                     range_=range_,
                     include_extended_hours=include_extended_hours,
                 )
+                bars = _tag_bars(bars, provider_name)
                 logger.debug(
                     f"Got {len(bars)} historical bars for {symbol} "
                     f"({timeframe}, {range_}) from {provider_name}"
@@ -420,6 +434,7 @@ class MarketDataManager:
                                 range_=range_,
                                 include_extended_hours=include_extended_hours,
                             )
+                            bars = _tag_bars(bars, provider_name)
                             if bars:
                                 result[sym] = bars
                         except Exception as e:
@@ -438,6 +453,11 @@ class MarketDataManager:
                     )
                     if not isinstance(result, dict):
                         result = {}
+                    else:
+                        result = {
+                            symbol: _tag_bars(bars, provider_name)
+                            for symbol, bars in result.items()
+                        }
                     break
             except Exception as e:
                 logger.warning(f"Batch bars failed from {provider_name}: {e}")
@@ -473,6 +493,10 @@ class MarketDataManager:
                 try:
                     provider = self.providers[provider_name]
                     batch_quotes = provider.get_batch_quotes(symbols_to_fetch)
+                    batch_quotes = {
+                        symbol: _tag_quote(quote, provider_name)
+                        for symbol, quote in batch_quotes.items()
+                    }
                     for symbol in symbols_to_fetch:
                         if symbol in batch_quotes and batch_quotes[symbol].data_status != "ERROR":
                             quotes[symbol] = batch_quotes[symbol]
