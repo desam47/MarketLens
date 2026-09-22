@@ -1692,6 +1692,8 @@ _MARKET_TOOL_ACTIONS = {
     "get_support_resistance",
     "get_market_regime",
     "get_market_context",
+    "get_news",
+    "get_fundamentals",
 }
 
 

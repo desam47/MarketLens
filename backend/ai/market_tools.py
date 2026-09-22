@@ -25,6 +25,19 @@ class IndicatorRequest(BarsRequest):
     period: int = Field(default=14, ge=2, le=200)
 
 
+class NewsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class FundamentalsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+
+
 def _manager():
     from backend.market_data.services.manager import market_data_manager
 
@@ -128,3 +141,29 @@ def get_market_context_tool(_: BaseModel) -> BaseModel:
     if signal is None:
         raise ValueError("Market context is not available")
     return _Payload(**signal.model_dump(mode="json"))
+
+
+def _aux_manager():
+    from backend.aux_data.services.manager import aux_data_manager
+
+    return aux_data_manager
+
+
+def get_news_tool(request: NewsRequest) -> BaseModel:
+    response = _aux_manager().get_news(request.symbol.upper(), limit=request.limit)
+    return _Payload(
+        symbol=response.symbol,
+        items=[item.model_dump(mode="json") for item in response.items],
+        provider=response.provider,
+        source_timestamp=response.timestamp,
+    )
+
+
+def get_fundamentals_tool(request: FundamentalsRequest) -> BaseModel:
+    response = _aux_manager().get_fundamentals(request.symbol.upper())
+    return _Payload(
+        symbol=response.symbol,
+        data=response.data.model_dump(mode="json"),
+        provider=response.provider,
+        source_timestamp=response.timestamp,
+    )

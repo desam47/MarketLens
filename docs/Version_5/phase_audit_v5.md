@@ -118,7 +118,7 @@ execution is impossible.
 The first read-only tool slice is implemented in `backend/ai/market_tools.py`
 and registered through the shared registry: `get_quote`, `get_bars`,
 `get_indicator`, `get_support_resistance`, `get_market_regime`, and
-`get_market_context`. Bar and indicator tools reuse the existing manager/cache
+`get_market_context`, `get_news`, and `get_fundamentals`. Bar and indicator tools reuse the existing manager/cache
 path, preserve provider/session/timeframe metadata, and never write to the
 database. The shared registry now derives actual provider, source timestamp,
 freshness age, fallback state, and stale/delayed warnings from each tool
@@ -127,7 +127,7 @@ the verified payload provenance in its response. Nine focused market-tool,
 registry, and Chat integration tests pass with `DEBUG=false`.
 
 Remaining work includes explicit provider conflict reconciliation, complete
-freshness/fallback contracts for every tool, news/fundamentals/options and
+freshness/fallback contracts for every tool, options and
 watchlist/risk/journal tools, application-help metadata, and safe local import
 handling. Audit must record each tool's source API/service, cache behavior,
 provider-call impact, freshness fields, delayed/fallback handling, and contract

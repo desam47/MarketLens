@@ -18,9 +18,11 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
         "calculate",
         "get_bars",
+        "get_fundamentals",
         "get_indicator",
         "get_market_context",
         "get_market_regime",
+        "get_news",
         "get_quote",
         "get_support_resistance",
     )
