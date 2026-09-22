@@ -657,7 +657,9 @@ class MarketContextSettings(BaseSettings):
         env_file=_ENV_FILE, env_prefix="MARKET_CONTEXT_", extra="ignore"
     )
     # Indices to analyze for the market-wide regime aggregate.
-    indices: tuple[str, ...] = ("SPY", "QQQ", "IWM", "^VIX")
+    # VIXY is used as the locally-supported volatility proxy. Deployments
+    # with a direct VIX entitlement can override this with ^VIX.
+    indices: tuple[str, ...] = ("SPY", "QQQ", "IWM", "VIXY")
     # Number of sub-regimes that must agree for a consensus regime.
     consensus_threshold: int = 3
     # VIX level below which VIX sub-engine signals RISK_ON.

@@ -125,18 +125,37 @@ def get_engine() -> MarketContextEngine:
                     logger.warning(f"Failed to seed sub-engine for {sym}: {e}")
         finally:
             db.close()
-        # Register each sub-engine with the live-tick path so it
-        # automatically receives any incoming quotes for SPY/QQQ/IWM/VIX.
-        # The lambda uses **kwargs because ``dispatch_quote`` invokes callbacks
-        # as ``cb(price=..., volume=..., timestamp=..., high=..., low=...,
-        # open_price=...)`` — fixed kwargs, not positional.
+        # Register each sub-engine with the canonical completed-bar path so
+        # ATR/ADX/Bollinger receive real OHLCV rather than flat quote candles.
         for sym in _engine._cfg.indices:
+            def on_bar(
+                price,
+                volume,
+                timestamp,
+                high=None,
+                low=None,
+                open_price=None,
+                data_status=None,
+                session=None,
+                _s=sym,
+                **_,
+            ):
+                _engine.update(
+                    price=price,
+                    volume=volume,
+                    timestamp=timestamp,
+                    symbol=_s,
+                    high=high,
+                    low=low,
+                    open_price=open_price,
+                    provider="market_data",
+                )
+                _context_cache.pop("market_context", None)
+
             engine_registry.register(
-                "quote",
+                "bar:1m",
                 sym,
-                lambda price, volume, timestamp, _s=sym, **_: _engine.update(
-                    price=price, volume=volume, timestamp=timestamp, symbol=_s
-                ),
+                on_bar,
             )
     return _engine
 
@@ -179,7 +198,9 @@ async def get_context_history(limit: int | None = 100):
     """Get historical market-context signals (most recent first)."""
     try:
         engine = get_engine()
-        history = engine.get_history(limit=limit)
+        # Engine history is chronological for alert consumers; API history is
+        # presented newest-first as documented.
+        history = list(reversed(engine.get_history(limit=limit)))
         out = []
         for s in history:
             d = s.to_dict()

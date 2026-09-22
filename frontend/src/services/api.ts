@@ -24,6 +24,9 @@ export interface MarketContextData {
   sub_regimes: Record<string, RegimeType>;
   contributing_factors: Record<string, any>;
   timestamp: string | null;
+  data_age_seconds?: number | null;
+  freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown';
+  sub_data_age_seconds?: Record<string, number | null>;
 }
 
 // Phase 8: relative strength signal vs a benchmark

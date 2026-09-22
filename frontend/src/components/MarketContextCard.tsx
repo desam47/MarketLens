@@ -16,6 +16,7 @@ const indexLabels: Record<string, string> = {
   QQQ: 'Nasdaq (QQQ)',
   IWM: 'Russell 2K (IWM)',
   '^VIX': 'Volatility (VIX)',
+  VIXY: 'Volatility ETF (VIXY)',
 };
 
 interface MarketContextCardProps {
@@ -95,7 +96,10 @@ export const MarketContextCard = memo(function MarketContextCard({ context, erro
           <div className="mc-sub-rows">
             {Object.entries(context.sub_regimes).map(([sym, reg]) => (
               <div key={sym} className="mc-sub-row">
-                <span className="mc-sub-name" title={indexLabels[sym] ?? sym}>
+                <span
+                  className="mc-sub-name"
+                  title={`${indexLabels[sym] ?? sym}${context.sub_data_age_seconds?.[sym] != null ? ` · ${Math.round(context.sub_data_age_seconds[sym] as number)}s old` : ''}`}
+                >
                   {sym}
                 </span>
                 <span
@@ -112,7 +116,9 @@ export const MarketContextCard = memo(function MarketContextCard({ context, erro
 
       {context.timestamp && (
         <div className="timestamp">
-          Updated: {formatETDateTime(context.timestamp)}
+          {(context.freshness || 'unknown').toUpperCase()}
+          {context.data_age_seconds != null && ` · Signal age: ${Math.round(context.data_age_seconds)}s`}
+          {' · '}Last index bar: {formatETDateTime(context.timestamp)}
         </div>
       )}
     </div>
