@@ -61,7 +61,7 @@ provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator, typed envelope, normalization, registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 17 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | ⬜ NOT STARTED | Market/user tools, evidence, conflict reconciliation, application help, safe local imports. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS | Quote, bars, indicators, support/resistance, regime, and market-context tools are registered; provider reconciliation and full provenance contracts remain. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -115,7 +115,17 @@ execution is impossible.
 
 ## Phase 5.2 — Grounded market-data tools and provenance
 
-Not started. Audit must record each tool's source API/service, cache behavior,
+The first read-only tool slice is implemented in `backend/ai/market_tools.py`
+and registered through the shared registry: `get_quote`, `get_bars`,
+`get_indicator`, `get_support_resistance`, `get_market_regime`, and
+`get_market_context`. Bar and indicator tools reuse the existing manager/cache
+path, preserve provider/session/timeframe metadata, and never write to the
+database. Five focused market-tool/registry tests pass with `DEBUG=false`.
+
+Remaining work includes explicit provider conflict reconciliation, complete
+freshness/fallback contracts for every tool, news/fundamentals/options and
+watchlist/risk/journal tools, application-help metadata, and safe local import
+handling. Audit must record each tool's source API/service, cache behavior,
 provider-call impact, freshness fields, delayed/fallback handling, and contract
 tests against existing page APIs. The audit must explicitly account for the
 quote, bars, indicator, support/resistance, regime, market-context, sector,

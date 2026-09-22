@@ -207,6 +207,24 @@ def build_default_registry() -> ToolRegistry:
             handler=calculate,
         )
     )
+    from backend.ai.market_tools import (
+        BarsRequest,
+        IndicatorRequest,
+        SymbolRequest,
+        get_bars_tool,
+        get_indicator_tool,
+        get_market_context_tool,
+        get_market_regime_tool,
+        get_quote_tool,
+        get_support_resistance_tool,
+    )
+
+    registry.register(ToolSpec(name="get_quote", kind="read_only", description="Get a verified quote.", input_model=SymbolRequest, handler=get_quote_tool))
+    registry.register(ToolSpec(name="get_bars", kind="read_only", description="Get verified historical bars.", input_model=BarsRequest, handler=get_bars_tool))
+    registry.register(ToolSpec(name="get_indicator", kind="read_only", description="Compute a supported indicator from verified bars.", input_model=IndicatorRequest, handler=get_indicator_tool))
+    registry.register(ToolSpec(name="get_support_resistance", kind="read_only", description="Get range support and resistance from verified bars.", input_model=BarsRequest, handler=get_support_resistance_tool))
+    registry.register(ToolSpec(name="get_market_regime", kind="read_only", description="Get the current warmed market regime.", input_model=SymbolRequest, handler=get_market_regime_tool))
+    registry.register(ToolSpec(name="get_market_context", kind="read_only", description="Get the current warmed market context.", input_model=BaseModel, handler=get_market_context_tool))
     return registry
 
 

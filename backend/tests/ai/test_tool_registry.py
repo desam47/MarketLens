@@ -14,7 +14,15 @@ from backend.ai.tool_registry import (
 
 
 def test_default_registry_exposes_only_named_calculator() -> None:
-    assert default_registry.names() == ("calculate",)
+    assert default_registry.names() == (
+        "calculate",
+        "get_bars",
+        "get_indicator",
+        "get_market_context",
+        "get_market_regime",
+        "get_quote",
+        "get_support_resistance",
+    )
     result = default_registry.execute(
         ToolRequest(
             tool_name="calculate",
