@@ -121,7 +121,7 @@ def _register_sqlite_pragmas(engine: Engine) -> None:
 # a larger pool is cheap; real write contention is handled by busy_timeout.
 _engine_kwargs: dict = {}
 if _is_sqlite_url(_db_url):
-    _engine_kwargs.update(pool_size=20, max_overflow=30)
+    _engine_kwargs.update(pool_size=settings.database.pool_size, max_overflow=30)
 engine = create_engine(
     _db_url,
     connect_args={"check_same_thread": False} if _is_sqlite_url(_db_url) else {},

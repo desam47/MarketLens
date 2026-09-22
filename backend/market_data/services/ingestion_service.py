@@ -38,6 +38,16 @@ logger = logging.getLogger(__name__)
 _NY_TZ = ZoneInfo("America/New_York")
 
 
+def _ny_now_naive() -> datetime:
+    """Return the current New York wall-clock time without tzinfo.
+
+    Ingestion status dictionaries and the related in-memory timestamps use
+    the project's historical naive-NY convention.  Calling ``datetime.now()``
+    directly would instead use the host operating system timezone.
+    """
+    return datetime.now(_NY_TZ).replace(tzinfo=None)
+
+
 def _instantiate_backfill_provider(name: str):
     """Resolve a backfill provider name (e.g. 'alpaca', 'webull', 'yahoo_finance')
     to a (cached) instance, for the 1h ingestion loops' fallback path.
@@ -1220,7 +1230,7 @@ class MarketDataIngestionService:
                 logger.info(f"Ingested {written} 1m bars across {len(self.symbols)} symbols")
                 db.commit()
                 upserted_symbols = {b.symbol.upper() for b in bars_to_upsert}
-                now = datetime.now()
+                now = _ny_now_naive()
                 for symbol in upserted_symbols:
                     symbol_bars = [b for b in bars_to_upsert if b.symbol.upper() == symbol]
                     latest = max(symbol_bars, key=lambda b: b.timestamp)
@@ -2249,7 +2259,7 @@ class MarketDataIngestionService:
         from backend.models import BackfillJob
         from backend.models.market_data_sql import BarModel as _BarModel
 
-        threshold = datetime.now() - _td(days=_SEED_MIN_HISTORY_DAYS)
+        threshold = _ny_now_naive() - _td(days=_SEED_MIN_HISTORY_DAYS)
         retry_after = datetime.now(UTC).replace(tzinfo=None) - _td(hours=_SEED_RETRY_HOURS)
         symbols = list(self.symbols)
         if not symbols:
@@ -2414,7 +2424,7 @@ class MarketDataIngestionService:
             # MQTT stream is deliberately scoped to the tape only, so REST
             # remains the sole quote source for the trend/regime/scanner
             # engines. The ~10s per-symbol throttle still applies.
-            now = datetime.now()
+            now = _ny_now_naive()
             wanted = [
                 s
                 for s in self.symbols
@@ -2529,7 +2539,7 @@ class MarketDataIngestionService:
             for symbol in self.symbols:
                 # Check if we need to update
                 last_update = self.last_status_update.get(symbol, datetime.min)
-                if datetime.now() - last_update < timedelta(
+                if _ny_now_naive() - last_update < timedelta(
                     minutes=5
                 ):  # Min 5min between status updates
                     continue
@@ -2547,7 +2557,7 @@ class MarketDataIngestionService:
                     )
                     db.add(db_status)
 
-                    self.last_status_update[symbol] = datetime.now()
+                    self.last_status_update[symbol] = _ny_now_naive()
                     self.last_status_provider[symbol] = "market_calendar"
                     logger.debug(
                         f"Ingested market status for {symbol}: {'OPEN' if is_open else 'CLOSED'}"

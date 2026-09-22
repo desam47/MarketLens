@@ -809,8 +809,8 @@ class TestRecentWindowBarCount(unittest.TestCase):
         self.assertEqual(_m1_target_bars("15m", False), 30)
         # Day-based ranges are unchanged.
         self.assertEqual(_m1_target_bars("1d", False), 390)
-        self.assertEqual(_m1_target_bars("1d", True), 891)
-        self.assertEqual(_m1_target_bars("5d", True), 5 * 390 * 16 // 7)
+        self.assertEqual(_m1_target_bars("1d", True), 960)
+        self.assertEqual(_m1_target_bars("5d", True), 5 * 390 * 32 // 13)
         self.assertEqual(_m1_target_bars("1mo", False), 22 * 390)
         self.assertEqual(_m1_target_bars("no-such-range", False), 65 * 390)  # legacy default
 
@@ -827,7 +827,7 @@ class TestRecentWindowBarCount(unittest.TestCase):
         p = self._provider({"result": []})
         p.get_historical_bars_batch(["AAPL"], "1m", range_="1d", include_extended_hours=True)
         _, kwargs = p._data_client.market_data.get_batch_history_bar.call_args
-        self.assertEqual(kwargs["count"], "891")
+        self.assertEqual(kwargs["count"], "960")
 
     def test_single_symbol_paginated_path_honours_15m(self):
         """_fetch_1m_paginated used to ignore its ``count`` and recompute the

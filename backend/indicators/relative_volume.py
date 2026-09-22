@@ -71,7 +71,6 @@ class RelativeVolumeIndicator(BaseIndicator):
             result = self.calculate([{"volume": vol} for vol in self._volume_history])
             if result:
                 latest_value = result[-1]
-                self.values.append(latest_value)
                 return latest_value
         except Exception:
             logger.debug("relative-volume update failed; value skipped", exc_info=True)

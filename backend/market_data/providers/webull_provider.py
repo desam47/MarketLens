@@ -267,7 +267,10 @@ def _m1_target_bars(range_: str, ext_hours: bool) -> int:
         # PRE (5.5h) + RTH (6.5h) + ATH (4h) = 16h vs RTH-only's 6.5h — scale
         # the per-day bar budget so a multi-day range still requests enough
         # bars to cover all three sessions instead of being capped mid-day.
-        target = target * 16 // 7
+        # Extended equities coverage is 16 hours (04:00–20:00 ET), while
+        # the base budget represents 6.5 regular-session hours.  Use the
+        # actual 16/6.5 ratio so pagination does not under-fetch by ~7%.
+        target = target * 32 // 13
     return target
 
 

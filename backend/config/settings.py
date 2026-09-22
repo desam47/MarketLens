@@ -469,7 +469,9 @@ class DatabaseSettings(BaseSettings):
     # forces this value, ignoring anything pydantic-settings read from env.
     url: str = ""  # Set by the validator below; never read from env.
     echo: bool = Field(default=False)
-    pool_size: int = Field(default=5)
+    # SQLite serves many concurrent dashboard/ingestion requests locally.
+    # Keep the existing effective default while allowing .env configuration.
+    pool_size: int = Field(default=20, ge=1)
 
     @field_validator("url", mode="before")
     @classmethod

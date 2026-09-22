@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import threading
 
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level registry: one TrendEngine per symbol, shared across all callers.
 _engines: dict[str, TrendEngine] = {}
+_engines_lock = threading.RLock()
 
 # Timeframes to register for live-tick ingestion.
 # Must match what the ingestion service publishes.
@@ -299,7 +301,10 @@ def get_engine(symbol: str) -> TrendEngine:
     same warmup history — no divergence.
     """
     symbol = symbol.upper()
-    if symbol not in _engines:
+    with _engines_lock:
+        if symbol in _engines:
+            return _engines[symbol]
+
         engine = _create_and_register_engine(symbol)
 
         # Seed with bar OHLCV for full indicator warmup.

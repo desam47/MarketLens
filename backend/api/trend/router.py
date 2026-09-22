@@ -221,8 +221,12 @@ async def update_trend(
 
         engine = get_engine(symbol.upper())
 
-        # Parse timestamp if provided
-        ts = datetime.fromisoformat(timestamp) if timestamp else datetime.now()
+        # Parse timestamp if provided. Invalid client input is a 400, not an
+        # internal server error from the generic handler below.
+        try:
+            ts = datetime.fromisoformat(timestamp) if timestamp else datetime.now()
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid timestamp") from exc
 
         engine.update(
             price=price,

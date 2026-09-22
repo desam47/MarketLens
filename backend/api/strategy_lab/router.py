@@ -5,8 +5,9 @@ Prefix: ``/api/strategy-lab``
 
 Exposes the parameterized 3-way IS/Val/OOS experiment layer. All
 experiments run asynchronously: the POST endpoint spawns a
-``BacktestEngine.run`` per (symbol, slice) pair and returns the
-experiment_id immediately so the front-end can poll ``GET /{id}``.
+``BacktestEngine.run`` per (symbol, slice) pair in a worker thread. The POST
+request waits for completion and returns the completed experiment; clients can
+still poll ``GET /{id}`` when inspecting a previously saved run.
 """
 
 from __future__ import annotations
@@ -272,8 +273,8 @@ def _build_slice_metrics(exp: Any, prefix: str) -> SliceMetrics:
 async def create_experiment(body: ExperimentCreate) -> ExperimentResponse:
     """Create and immediately run a 3-way IS/Val/OOS experiment.
 
-    The experiment is queued and runs synchronously in this process.
-    Poll ``GET /api/strategy-lab/{id}`` for status and results.
+    The experiment runs in a worker thread so it does not block the event
+    loop, but this request waits for completion before returning the result.
     """
     params = (
         body.parameters.to_experiment_parameters() if body.parameters else ExperimentParameters()

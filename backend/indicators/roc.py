@@ -62,7 +62,6 @@ class ROCIndicator(BaseIndicator):
             result = self.calculate([{"close": price} for price in self._price_history])
             if result:
                 latest_value = result[-1]
-                self.values.append(latest_value)
                 return latest_value
         except Exception:
             logger.debug("ROC update failed; value skipped", exc_info=True)
