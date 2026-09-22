@@ -14,10 +14,10 @@ analyze_symbol() run (the same function AIAnalysisPanel's "Re-run"
 button calls) when the trader explicitly asks for a fresh/official
 analysis, via ChatReplyResponse.wants_reanalysis.
 
-2026-09-11: extended to a small closed set of further tools, via
+2026-09-11 onward: extended to a small closed set of further tools, via
 ChatReplyResponse.action — create/delete an alert, add/remove a
 watchlist ticker, create/delete a watchlist, and run a fresh on-demand
-backtest (see _run_action and its handlers below). Still no open-ended
+backtest or deterministic calculation (see _run_action and its handlers below). Still no open-ended
 function-calling loop: exactly
 one action, decided in the same completion call that would otherwise
 produce a normal reply, executed synchronously before the turn's
@@ -83,6 +83,7 @@ from backend.ai.reply_stream import ReplyExtractor
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
 # bridged with run_sync/stream_sync rather than awaited.
 from backend.ai.sync_bridge import run_sync, stream_sync
+from backend.ai.tool_registry import ToolRequest, default_registry
 from backend.config.settings import settings
 from backend.models import AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
@@ -1611,6 +1612,22 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
     )
 
 
+def _calculate(db, parsed) -> tuple[str, bool]:
+    """Run a validated deterministic calculation and explain its result."""
+    del db  # The calculator is read-only and does not need a database session.
+    request = parsed.action_calculation
+    if request is None:
+        return "Tell me the values and calculation you want me to run.", False
+    result = default_registry.execute(
+        ToolRequest(tool_name="calculate", arguments=request.model_dump())
+    )
+    if not result.ok:
+        return f"I couldn't calculate that safely: {result.error}", False
+    values = ", ".join(f"{key}={value}" for key, value in result.data["values"].items())
+    formula = result.data["formulas"][0]
+    return f"Verified calculation: {values}. Formula: {formula}.", True
+
+
 _ACTION_HANDLERS = {
     "create_alert": _create_alert,
     "modify_alert": _modify_alert,
@@ -1622,6 +1639,7 @@ _ACTION_HANDLERS = {
     "run_backtest": _run_backtest,
     "set_entity_type": _set_entity_type,
     "run_screen": _run_screen,
+    "calculate": _calculate,
 }
 
 

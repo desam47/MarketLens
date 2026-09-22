@@ -143,11 +143,26 @@ def normalize_percentage(value: float, *, input_is_percent: bool = True) -> floa
 
 METRIC_CATALOG: Mapping[str, dict[str, str]] = {
     "price_change_percent": {"formula": "(new - old) / abs(old) * 100", "unit": "percent", "owner": "calculator"},
+    "dollar_change": {"formula": "new - old", "unit": "currency", "owner": "calculator"},
+    "return": {"formula": "(end - start) / abs(start) * 100", "unit": "percent", "owner": "calculator"},
+    "cagr": {"formula": "((end / start) ** (1 / years) - 1) * 100", "unit": "percent", "owner": "calculator"},
+    "weighted_average": {"formula": "sum(value[i] * weight[i]) / sum(weight)", "unit": "currency", "owner": "calculator"},
     "position_risk": {"formula": "abs(entry - stop) * shares", "unit": "currency", "owner": "calculator"},
+    "position_size": {"formula": "account_value * risk_percent / 100 / abs(entry - stop)", "unit": "shares", "owner": "calculator"},
     "risk_reward": {"formula": "abs(target - entry) / abs(entry - stop)", "unit": "ratio", "owner": "calculator"},
+    "allocation": {"formula": "position_value / portfolio_value * 100", "unit": "percent", "owner": "calculator"},
+    "relative_volume": {"formula": "current_volume / average_volume", "unit": "ratio", "owner": "scanner"},
+    "tape_pressure": {"formula": "(buy_volume - sell_volume) / total_volume", "unit": "ratio", "owner": "microstructure"},
+    "bid_ask_imbalance": {"formula": "(bid_size - ask_size) / (bid_size + ask_size)", "unit": "ratio", "owner": "microstructure"},
+    "confidence": {"formula": "owning_signal_engine", "unit": "score", "owner": "signal_engine"},
+    "trend_strength": {"formula": "owning_trend_engine", "unit": "score", "owner": "trend_engine"},
+    "confluence": {"formula": "owning_confluence_engine", "unit": "score", "owner": "confluence_engine"},
+    "market_regime": {"formula": "owning_regime_engine", "unit": "label", "owner": "regime_engine"},
     "expected_move": {"formula": "price * implied_volatility * sqrt(days / 365)", "unit": "currency", "owner": "calculator"},
     "volatility": {"formula": "sample_stddev(sequential_returns)", "unit": "percent", "owner": "calculator"},
     "maximum_drawdown": {"formula": "max((running_peak - price) / running_peak * 100)", "unit": "percent", "owner": "calculator"},
+    "options_breakeven": {"formula": "strike +/- premium by option type", "unit": "currency", "owner": "calculator"},
+    "options_intrinsic_value": {"formula": "max(in_the_money_amount, 0)", "unit": "currency", "owner": "calculator"},
 }
 
 

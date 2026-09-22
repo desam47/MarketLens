@@ -33,6 +33,14 @@ verified result fields. Calls, attributes, indexing, imports, and unknown
 values are rejected. Five formula/protocol tests pass, bringing the focused
 Phase 5.1 total to 15.
 
+The Chat integration slice registers `calculate` as a closed action with a
+validated nested `CalculationRequest`. Chat now receives backend-verified
+values and formulas instead of performing arithmetic in model prose. The
+metric catalog was expanded with scanner, microstructure, signal, trend,
+confluence, regime, risk, and options identifiers. Sixteen focused Phase 5.1
+tests pass in total; full multi-step Chat orchestration and richer provenance
+cards remain later work.
+
 ---
 
 ## Scorecard

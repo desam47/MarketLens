@@ -29,6 +29,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend.ai.calculator import CalculationRequest
 from backend.alerts.conditions.evaluators import (
     VALID_CONDITION_TYPES as _VALID_ALERT_CONDITION_TYPES,
 )
@@ -836,7 +837,7 @@ class ChatReplyResponse(BaseModel):
     # which ticker in `reply` instead.
     reanalysis_symbol: str | None = Field(default=None, max_length=20)
 
-    # Six more tools (2026-09-11): the chat can create/delete an alert
+    # Closed action tools (2026-09-11 onward): the chat can create/delete an alert
     # and add/remove a watchlist ticker or watchlist itself. Flat
     # fields, not a nested object — this codebase's chat schema stays
     # flat deliberately; a weak local model mangles nested JSON far more
@@ -859,6 +860,7 @@ class ChatReplyResponse(BaseModel):
         "run_backtest",
         "set_entity_type",
         "run_screen",
+        "calculate",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -874,6 +876,8 @@ class ChatReplyResponse(BaseModel):
     # POST /api/nl-search — rather than the model inventing filter logic
     # itself.
     action_query: str | None = Field(default=None, max_length=300)
+    # calculate only: validated request passed to the backend calculator.
+    action_calculation: CalculationRequest | None = None
     action_confirmed: bool = False
 
     @field_validator("action_condition_type")
@@ -946,6 +950,14 @@ _ACTION_TOOL_DOCS = (
       list otherwise. Use for any find/screen/scan request or "which \
       of my names look weak" — never answer those from the <market> \
       block (market-wide only, no per-name results).
+    - calculate is a read-only deterministic tool. Set action_calculation \
+      to a validated request with one named calculation (percentage_change, \
+      dollar_change, return, cagr, weighted_average, position_size, \
+      risk_reward, allocation, volatility, drawdown, max_drawdown, \
+      correlation, options_breakeven, options_intrinsic_value, \
+      options_extrinsic_value, options_max_gain_loss, or expected_move). \
+      Never do the arithmetic in reply; the app returns verified values, \
+      formulas, and assumptions.
     - set_entity_type needs action_symbol and action_entity_type \
       ("stock" or "etf") — use when a ticker is mislabeled or the \
       trader asks to reclassify it. A real, changeable per-watchlist \
@@ -1025,10 +1037,10 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have TEN more tools, via "action": create_alert, modify_alert, \
+10. You have ELEVEN more tools, via "action": create_alert, modify_alert, \
     delete_alert, add_to_watchlist, remove_from_watchlist, \
     create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
-    run_screen.
+    run_screen, calculate.
 """
     + _ACTION_TOOL_DOCS
     + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
@@ -1088,7 +1100,7 @@ runs.
 
 Tools, via "action": create_alert, modify_alert, delete_alert, \
 add_to_watchlist, remove_from_watchlist, create_watchlist, \
-delete_watchlist, run_backtest, set_entity_type, run_screen.
+      delete_watchlist, run_backtest, set_entity_type, run_screen, calculate.
 """
     + _ACTION_TOOL_DOCS
 )

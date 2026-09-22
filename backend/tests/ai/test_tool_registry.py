@@ -40,6 +40,7 @@ def test_normalizers_and_catalog_are_canonical() -> None:
     assert normalize_timeframe("1H") == "1h"
     assert normalize_percentage(0.38, input_is_percent=False) == 38
     assert "risk_reward" in METRIC_CATALOG
+    assert {"relative_volume", "tape_pressure", "market_regime"} <= METRIC_CATALOG.keys()
 
     with pytest.raises(ValueError):
         normalize_session("overnight")
