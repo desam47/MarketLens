@@ -68,13 +68,27 @@ class _InMemoryDBMixin:
             self.MemSession,
         )
         self._db_patch.start()
+        # The shared TrendEngine registry imports its own SessionLocal for
+        # BarModel warmup; route that read to the same isolated fixture DB.
+        self._trend_db_patch = patch(
+            "backend.api.trend.registry.SessionLocal",
+            self.MemSession,
+        )
+        self._trend_db_patch.start()
         # A prior test may have cached a regime engine keyed "AAPL";
         # clear so seeding actually runs against the patched DB.
         from backend.api.regime.router import _engines as _regime_engines
 
         _regime_engines.pop("AAPL", None)
+        # The regime engine shares the trend registry. Clear that cache too so
+        # this fixture always seeds the fresh in-memory database below rather
+        # than reusing state from an earlier test.
+        from backend.api.trend.registry import _engines as _trend_engines
+
+        _trend_engines.pop("AAPL", None)
 
     def tearDown(self):
+        self._trend_db_patch.stop()
         self._db_patch.stop()
         self._mem_engine.dispose()
         super().tearDown()
@@ -342,27 +356,30 @@ class TestRouterSeedingIntegration(_InMemoryDBMixin, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        # 60 synthetic 1m bars with a clear uptrend — enough for regime
-        # classification, mirroring _SeededDBMixin's quote fixture.
+        # Seed each configured confluence timeframe with a clear uptrend.
+        # Regime classification requires an overall trend plus a confluence
+        # snapshot; a 1m-only fixture leaves the other timeframe signals
+        # absent and correctly produces ``unknown``.
         base_time = datetime.now(UTC) - timedelta(minutes=60)
         with self.MemSession() as db:
-            for i in range(60):
-                price = 150.0 + i * 0.10
-                db.add(
-                    BarModel(
-                        symbol="AAPL",
-                        timeframe="1m",
-                        open=price - 0.05,
-                        high=price + 0.05,
-                        low=price - 0.10,
-                        close=price,
-                        volume=1_000_000,
-                        timestamp=base_time + timedelta(minutes=i),
-                        provider="test",
-                        data_status="HISTORICAL",
-                        source="raw",
+            for timeframe in ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"):
+                for i in range(60):
+                    price = 150.0 + i * 0.10
+                    db.add(
+                        BarModel(
+                            symbol="AAPL",
+                            timeframe=timeframe,
+                            open=price - 0.05,
+                            high=price + 0.05,
+                            low=price - 0.10,
+                            close=price,
+                            volume=1_000_000,
+                            timestamp=base_time + timedelta(minutes=i),
+                            provider="test",
+                            data_status="HISTORICAL",
+                            source="raw",
+                        )
                     )
-                )
             db.commit()
 
     def test_regime_engine_returns_non_unknown_on_first_request(self):

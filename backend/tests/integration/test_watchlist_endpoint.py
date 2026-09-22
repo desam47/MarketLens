@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
@@ -28,6 +29,20 @@ class TestWatchlistCRUD(unittest.TestCase):
         from backend.api.main import app
 
         self.client = TestClient(app)
+        # Symbol validation normally performs a provider quote lookup.  CRUD
+        # tests exercise watchlist persistence, not provider connectivity, so
+        # keep them deterministic when the suite runs offline.
+        from backend.symbols.validator import ValidationResult
+
+        self._validation_patch = patch(
+            "backend.api.watchlist.router.validate_symbol",
+            return_value=ValidationResult(symbol="TEST", valid=True),
+        )
+        self._validation_patch.start()
+
+    def tearDown(self) -> None:
+        self._validation_patch.stop()
+        self.client.close()
 
     def test_create_and_list_watchlist(self) -> None:
         # Create a named watchlist.

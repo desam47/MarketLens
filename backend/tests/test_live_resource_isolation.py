@@ -162,7 +162,11 @@ class TestNetworkGuard(unittest.TestCase):
         import socket
 
         server = socket.socket()
-        server.bind(("127.0.0.1", 0))
+        try:
+            server.bind(("127.0.0.1", 0))
+        except PermissionError as exc:
+            server.close()
+            self.skipTest(f"sandbox forbids loopback sockets: {exc}")
         server.listen(1)
         try:
             client = socket.create_connection(server.getsockname(), timeout=2)
