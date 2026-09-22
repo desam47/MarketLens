@@ -284,7 +284,41 @@ class TestYFinanceProvider(unittest.TestCase):
         self.assertEqual(bar.provider, "yahoo_finance")
         self.assertEqual(bar.data_status, DataStatus.DELAYED)
         self.assertIsInstance(bar.timestamp, datetime)
-        self.assertGreater(bar.close, 0)
+        # Must be the actual newest row (close=107, ts=timestamps[-1]), not
+        # the second-newest (close=106) — regression check for a bug where
+        # `i == -1 or closes[i] is None` short-circuited to True on the
+        # first check and always skipped past a valid latest close.
+        self.assertEqual(bar.close, 107)
+        self.assertEqual(int(bar.timestamp.timestamp()), timestamps[-1])
+
+    @patch.object(YFinanceProvider, "_fetch_chart")
+    def test_get_latest_bar_skips_forming_candle_with_none_close(self, mock_fetch_chart):
+        """The current (still-forming) candle has a None close on Yahoo's
+        intraday feed; get_latest_bar must walk back to the last bar that
+        actually closed rather than returning it as-is."""
+        import pandas as pd
+
+        dates = pd.date_range(end=datetime.now(), periods=5, freq="1D")
+        timestamps = [int(d.timestamp()) for d in dates]
+        mock_fetch_chart.return_value = {
+            "timestamp": timestamps,
+            "indicators": {
+                "quote": [
+                    {
+                        "open": [100, 101, 102, 103, 104],
+                        "high": [105, 106, 107, 108, 109],
+                        "low": [95, 96, 97, 98, 99],
+                        "close": [103, 104, 105, 106, None],
+                        "volume": [1000, 1100, 1200, 1300, 1400],
+                    }
+                ]
+            },
+        }
+
+        bar = self.provider.get_latest_bar("AAPL", "1d")
+
+        self.assertEqual(bar.close, 106)
+        self.assertEqual(int(bar.timestamp.timestamp()), timestamps[-2])
 
     def test_get_capabilities(self):
         """Test provider capabilities"""

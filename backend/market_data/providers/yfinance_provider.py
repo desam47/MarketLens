@@ -278,9 +278,18 @@ class YFinanceProvider(BaseMarketDataProvider):
             ts_arr, opens, highs, lows, closes, volumes = self._rows(chart)
             if not ts_arr:
                 raise ValueError(f"No historical data found for {symbol}")
+            # Walk backward from the newest bar, skipping any with a None
+            # close (the still-forming current candle, which Yahoo includes
+            # with open/high/low/volume set but no close yet). `i == -1`
+            # must NOT be part of the loop condition: `or` short-circuits
+            # it to True on the very first check, before `closes[-1]` is
+            # ever examined, so the loop always advanced past the true
+            # latest bar even when it already had a valid close.
             i = -1
-            while abs(i) <= len(ts_arr) and (i == -1 or closes[i] is None):
+            while abs(i) <= len(ts_arr) and closes[i] is None:
                 i -= 1
+            if abs(i) > len(ts_arr):
+                raise ValueError(f"No bar with a valid close found for {symbol} ({timeframe})")
             bar = self._bar_from_chart_data(
                 symbol,
                 i,
