@@ -106,10 +106,18 @@ class MACDIndicator(BaseIndicator):
 
             # Calculate signal line if we have enough MACD values
             if len(self.macd_line) >= self.signal:
-                if len(self.signal_line) < self.signal - 1:
-                    # ---- Warmup: SMA of the first `signal` MACD values ----
-                    # Only the first `signal` bars of macd_line contribute;
-                    # afterwards we apply the standard EMA smoothing.
+                if not self.signal_line:
+                    # ---- Warmup: SMA of the first `signal` MACD values, ONCE ----
+                    # This must fire exactly once (the bar macd_line first
+                    # reaches length `signal`), not for `signal - 1` bars in
+                    # a row: the old `len(self.signal_line) < self.signal - 1`
+                    # guard kept recomputing this sliding-window SMA well
+                    # past the single seed bar, so the "signal line" was
+                    # really a rolling SMA(signal) for several bars instead
+                    # of the canonical single-SMA-seed-then-EMA sequence —
+                    # diverging from both this docstring and the offline
+                    # calculate() path (which uses a real EMAIndicator and
+                    # only seeds once).
                     signal_value = sum(self.macd_line[-self.signal :]) / self.signal
                 else:
                     # EMA calculation
