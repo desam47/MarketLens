@@ -1,4 +1,5 @@
 import pytest
+from pydantic import BaseModel
 
 from backend.ai.calculator import CalculationRequest, calculate
 from backend.ai.tool_registry import (
@@ -82,3 +83,29 @@ def test_registry_enforces_per_tool_rate_limit() -> None:
     limited = registry.execute(request)
     assert limited.ok is False
     assert "rate limit" in (limited.error or "").lower()
+
+
+def test_registry_surfaces_provider_freshness_and_quality_warning() -> None:
+    class EmptyRequest(BaseModel):
+        pass
+
+    class ProviderPayload(BaseModel):
+        provider: str = "webull"
+        source_timestamp: str = "2020-01-01T00:00:00+00:00"
+        data_status: str = "STALE"
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="provider_test",
+            kind="read_only",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: ProviderPayload(),
+        )
+    )
+    result = registry.execute(ToolRequest(tool_name="provider_test"))
+
+    assert result.provider == "webull"
+    assert result.freshness_seconds and result.freshness_seconds > 0
+    assert any("STALE" in warning for warning in result.warnings)

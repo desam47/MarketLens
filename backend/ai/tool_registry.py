@@ -108,22 +108,27 @@ class ToolRegistry:
             result = spec.handler(parsed)
             duration_ms = (time.perf_counter() - started) * 1000
             finished_at = datetime.now(UTC).isoformat()
-            warnings = []
+            payload = result.model_dump(mode="json")
+            provider = str(payload.get("provider") or ("MarketLens calculator" if spec.name == "calculate" else "MarketLens"))
+            source_timestamp = payload.get("source_timestamp") or payload.get("timestamp")
+            freshness_seconds = _freshness_seconds(source_timestamp)
+            warnings = _data_quality_warnings(payload, freshness_seconds)
             if duration_ms > spec.max_duration_ms:
                 warnings.append("Tool exceeded its expected duration budget.")
             return ToolResult(
                 tool_name=spec.name,
                 ok=True,
-                data=result.model_dump(mode="json"),
+                data=payload,
                 duration_ms=round(duration_ms, 3),
                 warnings=warnings,
                 started_at=started_at,
                 finished_at=finished_at,
                 session=request.session,
                 timeframe=request.timeframe,
-                provider="MarketLens calculator" if spec.name == "calculate" else "MarketLens",
-                source_timestamp=started_at,
-                freshness_seconds=0,
+                provider=provider,
+                source_timestamp=source_timestamp or started_at,
+                freshness_seconds=freshness_seconds,
+                fallback=bool(payload.get("fallback", False)),
             )
         except (ValueError, TypeError) as exc:
             return ToolResult(
@@ -139,6 +144,28 @@ class ToolRegistry:
             )
 
 
+def _freshness_seconds(source_timestamp: Any) -> float | None:
+    if not source_timestamp:
+        return None
+    try:
+        source = datetime.fromisoformat(str(source_timestamp).replace("Z", "+00:00"))
+        if source.tzinfo is None:
+            source = source.replace(tzinfo=UTC)
+        return round(max(0.0, (datetime.now(UTC) - source).total_seconds()), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _data_quality_warnings(payload: Mapping[str, Any], freshness_seconds: float | None) -> list[str]:
+    warnings: list[str] = []
+    status = str(payload.get("data_status") or "").upper()
+    if status in {"STALE", "DELAYED", "ERROR", "GAP", "INCOMPLETE"}:
+        warnings.append(f"Provider data status: {status}.")
+    if freshness_seconds is None and payload.get("provider"):
+        warnings.append("Provider returned no parseable source timestamp.")
+    if payload.get("fallback"):
+        warnings.append("Fallback provider data was used.")
+    return warnings
 def normalize_session(value: str | None) -> MarketSession:
     normalized = (value or "all").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {"premarket": "premarket", "pre_market": "premarket", "regular": "regular", "regular_hours": "regular", "afterhours": "after_hours", "after_hours": "after_hours", "all_sessions": "all", "all": "all"}
