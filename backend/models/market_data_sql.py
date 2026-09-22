@@ -203,3 +203,17 @@ class ProviderEventModel(Base):
         Index("ix_provider_events_provider_timestamp", "provider", "timestamp"),
         Index("ix_provider_events_outcome_timestamp", "outcome", "timestamp"),
     )
+
+
+class TickReplayEventModel(Base):
+    """Bounded durable copy of selected live trade/BBO replay events."""
+
+    __tablename__ = "tick_replay_events"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
+    event_timestamp = Column(String(64), nullable=True)
+    received_at = Column(Float, nullable=False)
+    payload = Column(Text, nullable=False)
+
+    __table_args__ = (Index("ix_tick_replay_symbol_received", "symbol", "received_at"),)

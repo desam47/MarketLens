@@ -75,6 +75,9 @@ from .market_data_sql import (
 from .market_data_sql import (
     TapeBarModel as TapeBarModel,
 )
+from .market_data_sql import (
+    TickReplayEventModel as TickReplayEventModel,
+)
 
 # Import signal models
 from .signal import HistoricalSignal as HistoricalSignal

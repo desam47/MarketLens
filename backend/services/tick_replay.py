@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict, deque
@@ -16,11 +17,25 @@ from backend.utils.timezone import format_edt_iso, to_ny
 class TickReplayStore:
     """Keep a local, finite tick history; it never calls a provider to replay."""
 
-    def __init__(self, max_events_per_symbol: int = 10_000, retention_seconds: int = 7_200) -> None:
+    def __init__(
+        self,
+        max_events_per_symbol: int = 10_000,
+        retention_seconds: int = 7_200,
+        *,
+        persist: bool = False,
+    ) -> None:
         self._events: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
         self._max_events = max_events_per_symbol
         self._retention_seconds = retention_seconds
         self._lock = threading.RLock()
+        self._persist = persist
+        self._pending: deque[dict[str, Any]] = deque()
+        self._wake = threading.Event()
+        if persist:
+            self._writer = threading.Thread(
+                target=self._persistence_loop, name="tick-replay-writer", daemon=True
+            )
+            self._writer.start()
 
     def record(self, symbol: str, payload: dict[str, Any]) -> None:
         event = {
@@ -49,10 +64,81 @@ class TickReplayStore:
             cutoff = now - self._retention_seconds
             while events and (len(events) > self._max_events or events[0]["_recorded_at"] < cutoff):
                 events.popleft()
+            if self._persist:
+                self._pending.append(event.copy())
+                if len(self._pending) >= 100:
+                    self._wake.set()
+
+    def _persistence_loop(self) -> None:
+        while True:
+            self._wake.wait(1.0)
+            self._wake.clear()
+            self._flush_persisted()
+
+    def _flush_persisted(self) -> None:
+        with self._lock:
+            if not self._pending:
+                return
+            pending = list(self._pending)
+            self._pending.clear()
+        try:
+            from backend.database import SessionLocal
+            from backend.models.market_data_sql import TickReplayEventModel
+
+            db = SessionLocal()
+            try:
+                db.add_all(
+                    [
+                        TickReplayEventModel(
+                            symbol=event["symbol"],
+                            event_timestamp=str(event.get("timestamp"))
+                            if event.get("timestamp")
+                            else None,
+                            received_at=float(event["_recorded_at"]),
+                            payload=json.dumps(event, default=str),
+                        )
+                        for event in pending
+                    ]
+                )
+                cutoff = time.time() - self._retention_seconds
+                db.query(TickReplayEventModel).filter(
+                    TickReplayEventModel.received_at < cutoff
+                ).delete(synchronize_session=False)
+                db.commit()
+            finally:
+                db.close()
+        except Exception:
+            # Restore the batch so a transient DB/migration issue is recoverable.
+            with self._lock:
+                self._pending.extendleft(reversed(pending))
 
     def get(self, symbol: str, limit: int = 2_000) -> list[dict[str, Any]]:
         with self._lock:
             events = deepcopy(list(self._events.get(symbol.upper(), ()))[-limit:])
+        if self._persist and len(events) < limit:
+            try:
+                from backend.database import SessionLocal
+                from backend.models.market_data_sql import TickReplayEventModel
+
+                db = SessionLocal()
+                try:
+                    rows = (
+                        db.query(TickReplayEventModel)
+                        .filter(TickReplayEventModel.symbol == symbol.upper())
+                        .order_by(TickReplayEventModel.received_at.desc())
+                        .limit(limit)
+                        .all()
+                    )
+                    persisted = [json.loads(row.payload) for row in rows]
+                    seen = {event.get("_recorded_at") for event in events}
+                    events = [
+                        event for event in persisted[::-1] if event.get("_recorded_at") not in seen
+                    ] + events
+                    events = events[-limit:]
+                finally:
+                    db.close()
+            except Exception:
+                pass
         for event in events:
             event.pop("_recorded_at", None)
         return events
@@ -137,4 +223,4 @@ def reconstruct_tick_signals(
     return reconstructed
 
 
-tick_replay_store = TickReplayStore()
+tick_replay_store = TickReplayStore(persist=True)
