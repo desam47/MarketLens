@@ -19,13 +19,20 @@ supports the documented change, return, risk, portfolio, volatility,
 drawdown, correlation, and options calculations. Seven focused calculator
 tests pass with `DEBUG=false`; no changes have been merged to `main`.
 
+The follow-up registry slice adds `ToolRequest`, `ToolResult`, `ToolSpec`, and
+`ToolRegistry` in `backend/ai/tool_registry.py`. The default registry exposes
+only the named `calculate` tool, rejects unknown tools/fields, records duration
+and warnings, and includes canonical session, timeframe, percentage, and metric
+metadata helpers. Three registry tests pass in addition to the calculator tests
+(10 focused tests total).
+
 ---
 
 ## Scorecard
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 5.1 | Tool foundation and safe calculator | 🟡 IN PROGRESS | Deterministic calculator foundation and read-only `/api/ai/calculate` endpoint are implemented; typed Chat envelope, normalization, registry, and metric catalog remain. |
+| 5.1 | Tool foundation and safe calculator | 🟡 IN PROGRESS | Deterministic calculator, typed tool envelope/registry, normalization helpers, and initial metric catalog are implemented; Chat orchestration and broader catalog coverage remain. |
 | 5.2 | Grounded market-data tools and provenance | ⬜ NOT STARTED | Market/user tools, evidence, conflict reconciliation, application help, safe local imports. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
