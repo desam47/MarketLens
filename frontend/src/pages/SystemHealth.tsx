@@ -489,6 +489,11 @@ const ProviderHealthCard = memo(function ProviderHealthCard({
                   {entitlement.status.replace(/_/g, ' ')}
                 </span>
                 <small>{entitlement.provider || entitlement.providers?.join(' → ') || '—'} · {entitlement.verification.replace(/_/g, ' ')}</small>
+                {entitlement.timeframe_sources && (
+                  <small className="provider-timeframe-sources">
+                    {Object.entries(entitlement.timeframe_sources).map(([timeframe, source]) => `${timeframe}: ${source.observed.length ? source.observed.join(', ') : source.primary}`).join(' · ')}
+                  </small>
+                )}
               </div>
             ))}
           </div>

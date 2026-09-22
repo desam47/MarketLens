@@ -305,6 +305,21 @@ def _safe_provider_observability() -> dict | None:
                         settings.market_data.primary_provider,
                         *settings.market_data.fallback_providers,
                     ],
+                    "timeframe_sources": {
+                        timeframe: {
+                            "primary": settings.backfill.get_primary_provider(timeframe),
+                            "fallbacks": settings.backfill.get_fallback_providers(timeframe),
+                            "observed": [
+                                provider
+                                for provider in {
+                                    settings.backfill.get_primary_provider(timeframe),
+                                    *settings.backfill.get_fallback_providers(timeframe),
+                                }
+                                if observed(provider, {"get_historical_bars", "get_latest_bar"})
+                            ],
+                        }
+                        for timeframe in ("1m", "1h", "4h", "1d", "1wk")
+                    },
                     "status": "verified"
                     if observed(primary, {"get_latest_bar", "get_historical_bars"})
                     else "configured"

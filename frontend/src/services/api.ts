@@ -223,6 +223,7 @@ export interface SystemPerformance {
     entitlements: Record<string, {
       provider?: string;
       providers?: string[];
+      timeframe_sources?: Record<string, { primary: string; fallbacks: string[]; observed: string[] }>;
       status: string;
       verification: string;
     }>;
