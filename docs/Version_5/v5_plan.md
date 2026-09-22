@@ -4,6 +4,7 @@
 **Last updated:** 2026-09-22
 **Status:** Active. Phase 5.1 not started.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
+**Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
 ---
 

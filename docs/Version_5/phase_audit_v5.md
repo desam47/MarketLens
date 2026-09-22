@@ -3,6 +3,7 @@
 **Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
 **Status:** Active. Planning complete; implementation not started.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
+**Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
 ---
 

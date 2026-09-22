@@ -852,14 +852,18 @@ Event-driven backtester. Replays historical bars and scanner signals. Computes e
 
 | Page | Route | Description |
 |------|-------|-------------|
-| Dashboard | `/` | Market regime, MTF trends, confluence, strategy, top movers |
-| Symbol | `/symbol` | Deep-dive on a single symbol |
-| Watchlist | `/watchlist` | Manage watchlists + symbol scanning |
-| Scanner | `/scanner` | Live scanner with WebSocket updates |
-| Alerts | `/alerts` | Create and manage alerts |
-| Backtest | `/backtest` | Run and compare backtests |
-| Historical Signals | `/signals` | Signal history + research |
-| System Health | `/health` | Provider status, config, memory |
+| Dashboard | `#dashboard` | Market regime, MTF trends, confluence, strategy, top movers |
+| Symbol | `#symbol` | Deep-dive on a single symbol |
+| Watchlist | `#watchlist` | Manage watchlists + symbol scanning |
+| Scanner | `#scanner` | Live scanner with WebSocket updates |
+| AI Hub | `#hub` | Grounded AI analysis, chat, and research tools |
+| Earnings & Events | `#calendar` | Earnings and market-event calendar |
+| Risk Dashboard | `#risk` | Position, concentration, exposure, and drawdown review |
+| Trade Journal | `#journal` | Manual trades, outcomes, and review notes |
+| Alerts | `#alerts` | Create and manage alerts |
+| Backtest | `#backtest` | Run and compare backtests |
+| Historical Signals | `#signals` | Signal history + research |
+| System Health | `#health` | Provider status, config, memory |
 
 ### Key Components
 
@@ -904,6 +908,29 @@ Opens `stats.html` showing the JavaScript bundle composition.
 ---
 
 ## Development
+
+### Branch Workflow
+
+Development work is committed and pushed on `development`. The `main`
+branch is the stable release branch and is updated only through an approved
+pull request or merge from `development`; direct commits to `main` are
+blocked locally and should also be protected in GitHub repository settings.
+
+```bash
+# daily work
+git switch development
+git pull
+git add .
+git commit -m "Describe the change"
+git push origin development
+
+# release after review
+git switch main
+git pull
+git merge --no-ff development
+git push origin main
+git switch development
+```
 
 ### Full Local Verification
 
@@ -962,23 +989,25 @@ mypy backend/
 
 ### Git Hooks & Versioning
 
-After cloning, install the post-commit hook so `version.txt` is stamped with the
-current semantic version after every commit.  The version is read by
+After cloning, install the hooks so `version.txt` is stamped with the
+current semantic version after every commit and direct commits on `main` are
+blocked locally. The version is read by
 `backend/config/settings.py` and exposed as the `version` field in
 `/api/health` and `/api/system/status`, and shown on the System Health page.
 
 ```bash
+ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/pre-commit" .git/hooks/pre-commit
 ln -sf "$(git rev-parse --show-toplevel)/scripts/git-hooks/post-commit" .git/hooks/post-commit
 ```
 
-Use an **absolute** symlink target — git resolves hook paths relative to
-`.git/hooks/`, so a relative `ln -sf scripts/...` would dangle.  The stamping
-lives in *post*-commit on purpose: a pre-commit hook runs before the new commit
-exists and would always describe the *previous* one.  `version.txt` is a local
-build artifact and is gitignored (absent in a fresh clone or Docker build,
-where `backend/version.py` falls back to `dev`).  The `.git/hooks/pre-commit`
-slot is reserved for the ruff/mypy framework (`pre-commit install`), so the two
-never overwrite each other.
+Use absolute symlink targets — Git resolves hook paths relative to `.git/hooks/`.
+The version stamp lives in *post*-commit because a pre-commit hook runs before
+the new commit exists and would describe the previous commit. The pre-commit
+shim blocks commits on `main` and otherwise forwards to the existing hook
+workflow. GitHub branch protection remains the authoritative cross-clone
+enforcement. `version.txt` is a local build artifact and is gitignored (absent
+in a fresh clone or Docker build, where `backend/version.py` falls back to
+`dev`).
 
 **Create a new release by tagging a commit:**
 
