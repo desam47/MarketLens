@@ -167,7 +167,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 
 ### 15. Provider and data-quality transparency — [~] Partial
 
-Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, optional user-declared coverage, configured source mapping for each bar timeframe, and manager-enforced provider attribution on fetched quotes and bars; provider-reported exchange entitlement verification remains unavailable through the installed SDK.
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, optional user-declared coverage, configured source mapping for each bar timeframe, and manager-enforced provider attribution on fetched quotes and bars; provider-reported exchange entitlement verification remains unavailable through the installed SDK and is explicitly deferred from this roadmap.
 
 - Actual provider used
 - Provider per timeframe
@@ -228,7 +228,7 @@ Candle replay, signal timing, performance summaries, durable tick replay, date-r
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, durable bounded provider activity history, runtime-observed entitlement details, the System Health last-successful-update table, and shared update-status indicators across the primary market-data pages are implemented. Provider-reported entitlement verification remains.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, durable bounded provider activity history, runtime-observed entitlement details, the System Health last-successful-update table, and shared update-status indicators across the primary market-data pages are implemented. Provider-reported entitlement verification is explicitly deferred because the installed Webull SDK does not expose it.
 
 - Stream reconnect status
 - Provider health
@@ -246,4 +246,8 @@ Reconnect state, provider health, freshness badges, failover labels, per-symbol 
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, complete tick/historical replay workflow, durable bounded provider failover history, runtime-observed entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. The remaining limitation is provider-reported entitlement verification, which the installed Webull SDK does not expose.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, complete tick/historical replay workflow, durable bounded provider failover history, runtime-observed entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. Provider-reported entitlement verification is intentionally deferred and is not part of the current implementation scope.
+
+## Explicitly deferred
+
+- Provider-reported exchange entitlement verification. The installed Webull SDK does not expose this information, and MarketLens will not implement it unless the provider adds supported API access in the future.
