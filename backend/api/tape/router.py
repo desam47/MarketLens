@@ -92,4 +92,25 @@ async def get_tick_replay(symbol: str, limit: int = Query(default=2_000, ge=1, l
     return {"symbol": symbol.upper(), "events": events, "retained": len(events)}
 
 
+@router.get("/{symbol}/replay/signals")
+async def get_tick_signal_replay(
+    symbol: str,
+    limit: int = Query(default=2_000, ge=1, le=10_000),
+    warmup: int = Query(default=0, ge=0, le=500),
+):
+    """Reconstruct causal signal state from locally retained ticks."""
+    _require_enabled()
+    from backend.services.tick_replay import reconstruct_tick_signals, tick_replay_store
+
+    events = tick_replay_store.get(symbol, limit)
+    candles = reconstruct_tick_signals(symbol, events, warmup=warmup)
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": "1m",
+        "retained_events": len(events),
+        "reconstructed_candles": len(candles),
+        "candles": candles,
+    }
+
+
 __all__ = ["router"]

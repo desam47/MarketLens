@@ -921,6 +921,8 @@ h4 {
 .replay-signal-values span { color: var(--text-secondary); font-size: 0.85rem; }
 .replay-muted { color: var(--text-muted); font-size: 0.85rem; }
 .replay-sim-trade { display: grid; grid-template-columns: 1.2fr 1.5fr auto; gap: .7rem; padding: .35rem 0; border-bottom: 1px solid var(--border); font-size: .76rem; color: var(--text-secondary); }
+.replay-tick-summary { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: .75rem 0; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: .78rem; }
+.replay-tick-summary strong { color: var(--text-primary); }
 
 .replay-outcome {
   display: flex;

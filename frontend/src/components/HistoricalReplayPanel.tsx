@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { Bar, HistoricalSignal } from '../services/api';
+import api, { Bar, HistoricalSignal, TickSignalReplayResponse } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -57,6 +57,9 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   const [toDate, setToDate] = useState('');
   const [stopPct, setStopPct] = useState(1);
   const [targetPct, setTargetPct] = useState(2);
+  const [tickReplay, setTickReplay] = useState<TickSignalReplayResponse | null>(null);
+  const [tickReplayLoading, setTickReplayLoading] = useState(false);
+  const [tickReplayError, setTickReplayError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestRef = useRef(0);
@@ -101,6 +104,21 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
   useEffect(() => {
     void loadReplay();
   }, [loadReplay]); // Load the default symbol once; symbol changes are applied with Load.
+
+  const reconstructTicks = useCallback(async () => {
+    const requestedSymbol = symbol.trim().toUpperCase();
+    if (!requestedSymbol) return;
+    setTickReplayLoading(true);
+    setTickReplayError(null);
+    try {
+      setTickReplay(await api.getTickSignalReplay(requestedSymbol));
+    } catch (err: any) {
+      setTickReplay(null);
+      setTickReplayError(err?.message || 'No retained ticks are available for reconstruction.');
+    } finally {
+      setTickReplayLoading(false);
+    }
+  }, [symbol]);
 
   const validDateRange = !fromDate || !toDate || fromDate <= toDate;
   const replayBars = useMemo(() => {
@@ -228,6 +246,9 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
         <button className="btn btn-primary" onClick={() => void loadReplay()} disabled={loading}>
           {loading ? 'Loading…' : 'Load Replay'}
         </button>
+        <button className="btn" onClick={() => void reconstructTicks()} disabled={tickReplayLoading}>
+          {tickReplayLoading ? 'Reconstructing…' : 'Reconstruct Retained Ticks'}
+        </button>
         <label>
           <span>Speed</span>
           <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-label="Replay speed">
@@ -254,6 +275,17 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       </div>
 
       {error && <div className="error-text replay-status">{error}</div>}
+      {tickReplayError && <div className="error-text replay-status">{tickReplayError}</div>}
+      {tickReplay && (
+        <div className="replay-tick-summary" aria-label="Tick signal reconstruction">
+          <strong>Tick-level reconstruction</strong>
+          <span>{tickReplay.retained_events.toLocaleString()} retained events → {tickReplay.reconstructed_candles} one-minute candles</span>
+          <span>{tickReplay.candles.filter((c) => c.signal_score != null).length} causal signal states reconstructed</span>
+          {tickReplay.candles.length > 0 && (
+            <span>Latest: {tickReplay.candles[tickReplay.candles.length - 1].signal_state || 'warm-up'} · Score {fmt(tickReplay.candles[tickReplay.candles.length - 1].signal_score, 1)}</span>
+          )}
+        </div>
+      )}
       {!loading && !error && !validDateRange && (
         <div className="error-text replay-status">The start date must be on or before the end date.</div>
       )}

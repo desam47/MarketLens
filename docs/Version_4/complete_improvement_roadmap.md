@@ -201,10 +201,10 @@ Manual journal entries, screenshots, P&L, review notes, local persistence, signa
 
 ### 18. Historical replay — [~] Partial
 
-Candle replay, signal timing, performance summaries, tick replay, simulated entries/exits, stop/target tracking, and simulated outcomes are implemented. Exact tick-level signal reconstruction remains.
+Candle replay, signal timing, performance summaries, tick replay, simulated entries/exits, stop/target tracking, simulated outcomes, and causal signal reconstruction from retained ticks are implemented. Longer-history reconstruction across sessions remains limited by local tick retention.
 
 - Candle-by-candle replay
-- Tick-level replay
+- Tick-level replay and causal 1-minute signal reconstruction
 - Show when signals appeared
 - Simulated entries and exits
 - Stop and target tracking
@@ -222,16 +222,16 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, and per-symbol stale-data alerts are implemented. A unified per-symbol last-successful-update view and complete per-provider failover history remain.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, and the unified per-symbol Watchlist data view are implemented. Complete per-provider failover history, entitlement details, and a dedicated last-successful-update view outside the Watchlist remain.
 
 - Stream reconnect status
 - Provider health
-- Last successful update per symbol
-- Per-symbol Watchlist data status (provider, age, and connection state)
+- Last successful update per symbol (Watchlist view implemented)
+- Per-symbol Watchlist data status (provider, age, and connection state) — [x] Done
 - Per-provider failover visibility
 - Better stale-data warnings
 - Clear API and entitlement error messages
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, and event-driven scanner refresh path are now in place. Next prioritize unified per-symbol freshness visibility and exact tick-level signal reconstruction. These close the remaining gaps in operational transparency and replay fidelity.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, and unified Watchlist freshness view are now in place. Next prioritize exact tick-level signal reconstruction for Historical Replay, followed by complete provider failover history and entitlement visibility.
