@@ -1,8 +1,11 @@
 import pytest
 
+from backend.ai.calculator import CalculationRequest, calculate
 from backend.ai.tool_registry import (
     METRIC_CATALOG,
+    ToolRegistry,
     ToolRequest,
+    ToolSpec,
     default_registry,
     normalize_percentage,
     normalize_session,
@@ -21,6 +24,8 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert result.ok is True
     assert result.data["values"]["dollar_change"] == 3
     assert result.duration_ms >= 0
+    assert result.provider == "MarketLens calculator"
+    assert result.source_timestamp
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:
@@ -40,9 +45,32 @@ def test_normalizers_and_catalog_are_canonical() -> None:
     assert normalize_timeframe("1H") == "1h"
     assert normalize_percentage(0.38, input_is_percent=False) == 38
     assert "risk_reward" in METRIC_CATALOG
-    assert {"relative_volume", "tape_pressure", "market_regime"} <= METRIC_CATALOG.keys()
+    assert {"relative_volume", "tape_pressure", "market_regime", "win_rate", "put_call_ratio"} <= METRIC_CATALOG.keys()
 
     with pytest.raises(ValueError):
         normalize_session("overnight")
     with pytest.raises(ValueError):
         normalize_timeframe("10m")
+
+
+def test_registry_enforces_per_tool_rate_limit() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="calculate_once",
+            kind="calculation",
+            permission="calculation",
+            description="test",
+            input_model=CalculationRequest,
+            handler=calculate,
+            rate_limit_per_minute=1,
+        )
+    )
+    request = ToolRequest(
+        tool_name="calculate_once",
+        arguments={"calculation": "dollar_change", "old_value": 1, "new_value": 2},
+    )
+    assert registry.execute(request).ok is True
+    limited = registry.execute(request)
+    assert limited.ok is False
+    assert "rate limit" in (limited.error or "").lower()

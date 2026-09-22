@@ -37,9 +37,16 @@ The Chat integration slice registers `calculate` as a closed action with a
 validated nested `CalculationRequest`. Chat now receives backend-verified
 values and formulas instead of performing arithmetic in model prose. The
 metric catalog was expanded with scanner, microstructure, signal, trend,
-confluence, regime, risk, and options identifiers. Sixteen focused Phase 5.1
-tests pass in total; full multi-step Chat orchestration and richer provenance
-cards remain later work.
+confluence, regime, risk, options, and performance identifiers. Registry
+permissions, per-tool rate limits, provider/source timestamps, and freshness
+metadata are now part of the result envelope. Seventeen focused Phase 5.1
+tests pass in total.
+
+**Phase 5.1 completion:** The planned tool foundation, safe calculator,
+normalization, registry/permissions, restricted verified formulas, initial
+metric catalog, Chat calculation action, provenance metadata, and focused
+verification are complete. Broader market-data tools and richer structured
+provenance cards belong to Phase 5.2 and later phases.
 
 ---
 
@@ -47,7 +54,7 @@ cards remain later work.
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 5.1 | Tool foundation and safe calculator | 🟡 IN PROGRESS | Deterministic calculator, typed tool envelope/registry, normalization helpers, and initial metric catalog are implemented; Chat orchestration and broader catalog coverage remain. |
+| 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator, typed envelope, normalization, registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 17 focused tests are complete. |
 | 5.2 | Grounded market-data tools and provenance | ⬜ NOT STARTED | Market/user tools, evidence, conflict reconciliation, application help, safe local imports. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |

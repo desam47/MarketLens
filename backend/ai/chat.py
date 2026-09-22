@@ -1625,7 +1625,12 @@ def _calculate(db, parsed) -> tuple[str, bool]:
         return f"I couldn't calculate that safely: {result.error}", False
     values = ", ".join(f"{key}={value}" for key, value in result.data["values"].items())
     formula = result.data["formulas"][0]
-    return f"Verified calculation: {values}. Formula: {formula}.", True
+    source_time = result.source_timestamp or "unknown time"
+    return (
+        f"Verified calculation ({result.provider}, source {source_time}, "
+        f"session {result.session}): {values}. Formula: {formula}.",
+        True,
+    )
 
 
 _ACTION_HANDLERS = {

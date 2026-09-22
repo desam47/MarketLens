@@ -7,7 +7,9 @@ through this interface.
 
 from __future__ import annotations
 
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -50,6 +52,10 @@ class ToolResult(BaseModel):
     finished_at: str | None = None
     session: MarketSession = "all"
     timeframe: str | None = None
+    provider: str = "MarketLens"
+    source_timestamp: str | None = None
+    freshness_seconds: float | None = Field(default=0, ge=0)
+    fallback: bool = False
 
 
 class ToolSpec(BaseModel):
@@ -61,11 +67,15 @@ class ToolSpec(BaseModel):
     input_model: type[BaseModel]
     handler: Callable[[BaseModel], BaseModel]
     max_duration_ms: int = Field(default=5_000, gt=0, le=30_000)
+    permission: ToolKind = "read_only"
+    rate_limit_per_minute: int = Field(default=60, gt=0, le=10_000)
 
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        self._calls: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
 
     def register(self, spec: ToolSpec) -> None:
         if spec.name in self._tools:
@@ -85,6 +95,14 @@ class ToolRegistry:
         started_at = datetime.now(UTC).isoformat()
         try:
             spec = self.get(request.tool_name)
+            now = time.monotonic()
+            with self._lock:
+                calls = self._calls.setdefault(spec.name, deque())
+                while calls and now - calls[0] >= 60:
+                    calls.popleft()
+                if len(calls) >= spec.rate_limit_per_minute:
+                    raise ValueError(f"Tool rate limit exceeded: {spec.name}")
+                calls.append(now)
             parsed = spec.input_model.model_validate(request.arguments)
             started = time.perf_counter()
             result = spec.handler(parsed)
@@ -103,6 +121,9 @@ class ToolRegistry:
                 finished_at=finished_at,
                 session=request.session,
                 timeframe=request.timeframe,
+                provider="MarketLens calculator" if spec.name == "calculate" else "MarketLens",
+                source_timestamp=started_at,
+                freshness_seconds=0,
             )
         except (ValueError, TypeError) as exc:
             return ToolResult(
@@ -113,6 +134,8 @@ class ToolRegistry:
                 finished_at=datetime.now(UTC).isoformat(),
                 session=request.session,
                 timeframe=request.timeframe,
+                provider="MarketLens",
+                source_timestamp=started_at,
             )
 
 
@@ -158,6 +181,13 @@ METRIC_CATALOG: Mapping[str, dict[str, str]] = {
     "trend_strength": {"formula": "owning_trend_engine", "unit": "score", "owner": "trend_engine"},
     "confluence": {"formula": "owning_confluence_engine", "unit": "score", "owner": "confluence_engine"},
     "market_regime": {"formula": "owning_regime_engine", "unit": "label", "owner": "regime_engine"},
+    "signal_confidence": {"formula": "owning_signal_engine", "unit": "score", "owner": "signal_engine"},
+    "signal_success_rate": {"formula": "successful_similar_signals / similar_signals", "unit": "percent", "owner": "signal_engine"},
+    "put_call_ratio": {"formula": "put_volume / call_volume", "unit": "ratio", "owner": "options"},
+    "implied_volatility": {"formula": "provider_reported_implied_volatility", "unit": "percent", "owner": "options"},
+    "win_rate": {"formula": "winning_trades / total_trades * 100", "unit": "percent", "owner": "backtest"},
+    "expectancy": {"formula": "average_win * win_rate - average_loss * loss_rate", "unit": "currency", "owner": "backtest"},
+    "sample_size": {"formula": "count_of_observations", "unit": "count", "owner": "backtest"},
     "expected_move": {"formula": "price * implied_volatility * sqrt(days / 365)", "unit": "currency", "owner": "calculator"},
     "volatility": {"formula": "sample_stddev(sequential_returns)", "unit": "percent", "owner": "calculator"},
     "maximum_drawdown": {"formula": "max((running_peak - price) / running_peak * 100)", "unit": "percent", "owner": "calculator"},
