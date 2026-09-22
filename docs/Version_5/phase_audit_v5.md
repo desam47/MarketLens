@@ -127,7 +127,13 @@ payload. Chat can select each tool as a bounded read-only action and includes
 the verified payload provenance in its response. Nine focused market-tool,
 registry, and Chat integration tests pass with `DEBUG=false`.
 
-Remaining work includes explicit provider conflict reconciliation, complete
+The shared registry now includes provider-observation reconciliation: a
+configured primary wins when present, otherwise the newest observation wins,
+and material differences produce an explicit conflict warning without making
+duplicate provider calls. Seven registry/provenance tests pass in this slice.
+
+Remaining work includes wiring reconciliation into provider paths that expose
+multiple observations, complete
 freshness/fallback contracts for every tool, watchlist/risk/journal tools,
 application-help metadata, and safe local import
 handling. Audit must record each tool's source API/service, cache behavior,

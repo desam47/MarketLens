@@ -58,6 +58,60 @@ class ToolResult(BaseModel):
     fallback: bool = False
 
 
+class ProviderObservation(BaseModel):
+    """A value already obtained from one provider, used for reconciliation."""
+
+    provider: str
+    value: float
+    source_timestamp: str
+
+
+class ReconciledValue(BaseModel):
+    value: float
+    provider: str
+    source_timestamp: str
+    conflict: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+def reconcile_observations(
+    observations: list[ProviderObservation],
+    *,
+    primary_provider: str | None = None,
+    relative_tolerance: float = 0.01,
+) -> ReconciledValue:
+    """Select a value from existing observations and flag disagreements.
+
+    No provider calls happen here. Primary wins when it is present; if it is
+    absent, the newest timestamp wins. A conflict is meaningful only when
+    values differ by more than the configured relative tolerance.
+    """
+    if not observations:
+        raise ValueError("at least one provider observation is required")
+    if relative_tolerance < 0:
+        raise ValueError("relative_tolerance must be non-negative")
+    selected = next(
+        (item for item in observations if primary_provider and item.provider == primary_provider),
+        max(observations, key=lambda item: item.source_timestamp),
+    )
+    conflict = any(
+        abs(item.value - selected.value) > max(abs(selected.value), 1.0) * relative_tolerance
+        for item in observations
+        if item.provider != selected.provider
+    )
+    warnings = []
+    if conflict:
+        providers = ", ".join(item.provider for item in observations if item.provider != selected.provider)
+        warnings.append(f"Provider conflict with {providers}; selected {selected.provider}.")
+    return ReconciledValue(
+        value=selected.value,
+        provider=selected.provider,
+        source_timestamp=selected.source_timestamp,
+        conflict=conflict,
+        warnings=warnings,
+    )
+
+
 class ToolSpec(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

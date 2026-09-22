@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from backend.ai.calculator import CalculationRequest, calculate
 from backend.ai.tool_registry import (
     METRIC_CATALOG,
+    ProviderObservation,
     ToolRegistry,
     ToolRequest,
     ToolSpec,
@@ -11,6 +12,7 @@ from backend.ai.tool_registry import (
     normalize_percentage,
     normalize_session,
     normalize_timeframe,
+    reconcile_observations,
 )
 
 
@@ -112,3 +114,31 @@ def test_registry_surfaces_provider_freshness_and_quality_warning() -> None:
     assert result.provider == "webull"
     assert result.freshness_seconds and result.freshness_seconds > 0
     assert any("STALE" in warning for warning in result.warnings)
+
+
+def test_reconciliation_prefers_primary_and_flags_material_conflicts() -> None:
+    result = reconcile_observations(
+        [
+            ProviderObservation(provider="webull", value=100, source_timestamp="2026-09-22T12:00:00Z"),
+            ProviderObservation(provider="yfinance", value=103, source_timestamp="2026-09-22T12:01:00Z"),
+        ],
+        primary_provider="webull",
+    )
+
+    assert result.value == 100
+    assert result.provider == "webull"
+    assert result.conflict is True
+    assert "yfinance" in result.warnings[0]
+
+
+def test_reconciliation_allows_small_differences_and_requires_observations() -> None:
+    result = reconcile_observations(
+        [
+            ProviderObservation(provider="webull", value=100, source_timestamp="2026-09-22T12:00:00Z"),
+            ProviderObservation(provider="yfinance", value=100.005, source_timestamp="2026-09-22T12:01:00Z"),
+        ],
+        primary_provider="webull",
+    )
+    assert result.conflict is False
+    with pytest.raises(ValueError):
+        reconcile_observations([])
