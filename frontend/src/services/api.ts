@@ -226,6 +226,8 @@ export interface SystemPerformance {
       timeframe_sources?: Record<string, { primary: string; fallbacks: string[]; observed: string[] }>;
       status: string;
       verification: string;
+      provider_reported?: boolean;
+      verification_note?: string;
     }>;
   } | null;
 }

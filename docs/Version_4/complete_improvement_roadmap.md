@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, manager-enforced request-level provider attribution, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
+Latest checkpoint (2026-09-21): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, explicit SDK entitlement limitations, manager-enforced request-level provider attribution, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 

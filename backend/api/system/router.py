@@ -299,6 +299,8 @@ def _safe_provider_observability() -> dict | None:
                     "verification": "runtime_observed"
                     if observed(primary, {"get_quote", "get_batch_quotes"})
                     else "configuration_only",
+                    "provider_reported": False,
+                    "verification_note": "Webull entitlement metadata is not exposed by the installed SDK.",
                 },
                 "bars": {
                     "providers": [
@@ -328,6 +330,8 @@ def _safe_provider_observability() -> dict | None:
                     "verification": "runtime_observed"
                     if observed(primary, {"get_latest_bar", "get_historical_bars"})
                     else "configuration_only",
+                    "provider_reported": False,
+                    "verification_note": "Provider subscription entitlement is not exposed by the installed SDK.",
                 },
                 "bbo": {
                     "provider": "webull",
@@ -339,6 +343,8 @@ def _safe_provider_observability() -> dict | None:
                     "verification": "runtime_observed"
                     if stream_connected
                     else "configuration_only",
+                    "provider_reported": False,
+                    "verification_note": "Webull stream connectivity is observable; subscription entitlement is not exposed.",
                 },
                 "time_and_sales": {
                     "provider": "webull",
@@ -350,16 +356,22 @@ def _safe_provider_observability() -> dict | None:
                     "verification": "runtime_observed"
                     if stream_connected
                     else "configuration_only",
+                    "provider_reported": False,
+                    "verification_note": "Webull stream connectivity is observable; subscription entitlement is not exposed.",
                 },
                 "options": {
                     "provider": "yahoo_finance",
                     "status": "delayed_or_estimated",
                     "verification": "provider_limited",
+                    "provider_reported": False,
+                    "verification_note": "Yahoo options data is delayed or estimated where available.",
                 },
                 "fundamentals": {
                     "provider": "configured_fallback_chain",
                     "status": "configured",
                     "verification": "provider_limited",
+                    "provider_reported": False,
+                    "verification_note": "Fundamentals availability is provider-limited.",
                 },
             },
         }
