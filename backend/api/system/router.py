@@ -260,41 +260,81 @@ def _safe_provider_observability() -> dict | None:
         from ...observability.provider_history import provider_history_stats
 
         history = provider_history_stats()
+        events = history["events"]
+        successful_methods = {
+            (event["provider"], event["method"])
+            for event in events
+            if event.get("outcome") in {"success", "fallback"}
+        }
+
+        def observed(provider: str, methods: set[str]) -> bool:
+            return any((provider, method) in successful_methods for method in methods)
+
         webull_ready = bool(
             settings.webull.enabled and settings.webull.app_key and settings.webull.app_secret
         )
         stream_ready = bool(webull_ready and settings.webull.streaming_enabled)
+        stream_connected = False
+        if stream_ready:
+            try:
+                from ...market_data.streaming.webull_stream import get_webull_stream_client
+
+                stream = get_webull_stream_client()
+                stream_connected = bool(stream is not None and getattr(stream, "_connected", False))
+            except Exception:
+                stream_connected = False
+        primary = settings.market_data.primary_provider
         return {
-            "events": history["events"],
+            "events": events,
             "failure_count": history["failure_count"],
             "success_count": history["success_count"],
             "entitlements": {
                 "rest_quotes": {
                     "provider": settings.market_data.primary_provider,
-                    "status": "configured"
-                    if settings.market_data.primary_provider
+                    "status": "verified"
+                    if observed(primary, {"get_quote", "get_batch_quotes"})
+                    else "configured"
+                    if primary
                     else "unavailable",
-                    "verification": "configuration_only",
+                    "verification": "runtime_observed"
+                    if observed(primary, {"get_quote", "get_batch_quotes"})
+                    else "configuration_only",
                 },
                 "bars": {
                     "providers": [
                         settings.market_data.primary_provider,
                         *settings.market_data.fallback_providers,
                     ],
-                    "status": "configured"
-                    if settings.market_data.primary_provider
+                    "status": "verified"
+                    if observed(primary, {"get_latest_bar", "get_historical_bars"})
+                    else "configured"
+                    if primary
                     else "unavailable",
-                    "verification": "configuration_only",
+                    "verification": "runtime_observed"
+                    if observed(primary, {"get_latest_bar", "get_historical_bars"})
+                    else "configuration_only",
                 },
                 "bbo": {
                     "provider": "webull",
-                    "status": "configured" if stream_ready else "disabled",
-                    "verification": "configuration_only",
+                    "status": "verified"
+                    if stream_connected
+                    else "configured"
+                    if stream_ready
+                    else "disabled",
+                    "verification": "runtime_observed"
+                    if stream_connected
+                    else "configuration_only",
                 },
                 "time_and_sales": {
                     "provider": "webull",
-                    "status": "configured" if stream_ready else "disabled",
-                    "verification": "configuration_only",
+                    "status": "verified"
+                    if stream_connected
+                    else "configured"
+                    if stream_ready
+                    else "disabled",
+                    "verification": "runtime_observed"
+                    if stream_connected
+                    else "configuration_only",
                 },
                 "options": {
                     "provider": "yahoo_finance",

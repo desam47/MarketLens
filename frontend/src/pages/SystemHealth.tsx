@@ -485,7 +485,7 @@ const ProviderHealthCard = memo(function ProviderHealthCard({
             {Object.entries(performance.provider_observability.entitlements).map(([feature, entitlement]) => (
               <div className="provider-entitlement" key={feature}>
                 <strong>{feature.replace(/_/g, ' ')}</strong>
-                <span className={`status-badge ${entitlement.status === 'configured' ? 'status-ok' : entitlement.status === 'disabled' ? 'status-error' : 'status-warning'}`}>
+                <span className={`status-badge ${entitlement.status === 'configured' || entitlement.status === 'verified' ? 'status-ok' : entitlement.status === 'disabled' ? 'status-error' : 'status-warning'}`}>
                   {entitlement.status.replace(/_/g, ' ')}
                 </span>
                 <small>{entitlement.provider || entitlement.providers?.join(' → ') || '—'} · {entitlement.verification.replace(/_/g, ' ')}</small>
