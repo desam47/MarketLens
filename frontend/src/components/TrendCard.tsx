@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import { TrendData } from '../services/api';
+import { formatETDateTime } from './chartMath';
 
 interface TrendCardProps {
   trend: TrendData;
@@ -56,6 +57,20 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
   const color = directionColors[trend.direction] || '#9ca3af';
   const strengthColor = strengthColors[trend.strength] || '#9ca3af';
   const confidencePct = (trend.confidence * 100).toFixed(0);
+  const sessionLabel = trend.session === 'after_hours'
+    ? 'After-hours'
+    : trend.session === 'premarket'
+      ? 'Premarket'
+      : trend.session === 'regular'
+        ? 'Regular'
+        : trend.session === 'mixed'
+          ? 'Mixed sessions'
+          : 'Session unknown';
+  const statusLabel = trend.bar_closed === false
+    ? 'Forming'
+    : trend.data_status && trend.data_status !== 'ok'
+      ? trend.data_status.replace(/_/g, ' ')
+      : 'Closed';
 
   return (
     <div className="card trend-card" style={{ borderLeftColor: color }}>
@@ -85,6 +100,12 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
         />
       </div>
       <p className="signal-explanation">{signalExplanation(trend)}</p>
+      <div className="trend-provenance">
+        <span>{statusLabel}</span>
+        <span>{sessionLabel}</span>
+        {trend.provider && <span>{trend.provider}</span>}
+        {trend.timestamp && <span>{formatETDateTime(trend.timestamp)}</span>}
+      </div>
     </div>
   );
 });

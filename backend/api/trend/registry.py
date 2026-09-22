@@ -68,6 +68,13 @@ def _feed_warmup_bars(engine: TrendEngine, symbol: str, tf: Timeframe, bars) -> 
                 volume=int(bar.volume or 0),
                 timestamp=bar.timestamp,
                 only_timeframe=tf,
+                timeframe=tf,
+                open_price=float(bar.open if bar.open is not None else bar.close or 0.0),
+                high=float(bar.high if bar.high is not None else bar.close or 0.0),
+                low=float(bar.low if bar.low is not None else bar.close or 0.0),
+                provider=bar.provider or "unknown",
+                data_status=bar.data_status,
+                session=getattr(bar, "session", None),
             )
             seeded += 1
         except Exception as e:  # noqa: BLE001
@@ -114,6 +121,7 @@ def _seed_from_bar_model(symbol: str, engine: TrendEngine) -> int:
             .filter(
                 BarModel.symbol == symbol.upper(),
                 BarModel.timeframe.in_(_TREND_TIMEFRAMES),
+                BarModel.data_status != "INCOMPLETE",
             )
             .subquery()
         )
@@ -189,6 +197,7 @@ def _batch_seed_engines(symbols: tuple[str, ...]) -> dict[str, int]:
             .filter(
                 BarModel.symbol.in_([s.upper() for s in symbols]),
                 BarModel.timeframe.in_(_TREND_TIMEFRAMES),
+                BarModel.data_status != "INCOMPLETE",
             )
             .subquery()
         )

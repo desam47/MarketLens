@@ -95,6 +95,8 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
                     high=bar.high,
                     low=bar.low,
                     open_price=bar.open,
+                    data_status=getattr(bar, "data_status", None),
+                    session=getattr(bar, "session", None),
                 )
             from backend.api.realtime.ws_router import publish_live_bar
 

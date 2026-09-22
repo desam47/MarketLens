@@ -2960,6 +2960,16 @@ h4 {
   line-height: 1.45;
 }
 
+.trend-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.55rem;
+  margin-top: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  text-transform: capitalize;
+}
+
 .confluence-explanation {
   padding: 0.55rem 0.7rem;
   background: rgba(15, 23, 42, 0.45);

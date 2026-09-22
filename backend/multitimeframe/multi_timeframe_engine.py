@@ -913,28 +913,20 @@ class MultiTimeframeEngine:
         if not timeframe_signals:
             return None
 
-        # Get timeframe engine for freshness/bar status
-        from ..engines.timeframe import multi_symbol_timeframe_engine
-
-        tf_engine = multi_symbol_timeframe_engine.get_engine_for_symbol(self.symbol)
-
         # Per-TF snapshots with quality metrics
         tf_snapshots: dict[Timeframe, TimeframeTrendSnapshot] = {}
         for tf, sig in timeframe_signals.items():
             # Compute quality metrics
             data_age_seconds = (ts - sig.timestamp).total_seconds() if sig.timestamp else 0.0
 
-            # Check bar closed status and warmup from timeframe engine
-            bar_closed = False
-            is_warmed_up = False
-            if tf_engine is not None:
-                latest_closed = tf_engine.get_latest_closed_candle(tf)
-                if latest_closed:
-                    # Bar is closed if latest closed candle matches signal timestamp
-                    bar_closed = latest_closed.close_time >= sig.timestamp
-                    # Consider warmed up if we have at least 50 closed bars (arbitrary threshold)
-                    closed_count = len(tf_engine.get_closed_candles(tf))
-                    is_warmed_up = closed_count >= 50
+            # Production trend ingestion tracks exact per-timeframe bars on
+            # the shared TrendEngine. Reading that metadata avoids deriving
+            # quality from the legacy tick fan-out candle store, where bars
+            # from one timeframe could inflate another timeframe's count.
+            trend_engine = self.trend_engines[tf]
+            metadata = trend_engine.get_timeframe_metadata(tf)
+            bar_closed = bool(metadata.get("bar_closed", False))
+            is_warmed_up = trend_engine.get_bar_count(tf) >= 50
 
             # Valid if: has signal + data_quality ok + warmed up + fresh (< 2x timeframe period)
             tf_seconds = _timeframe_seconds(tf)
@@ -1036,7 +1028,8 @@ class MultiTimeframeEngine:
         )
 
     def get_current_snapshot(self) -> MultiTimeframeSnapshot | None:
-        """Get the current MultiTimeframeSnapshot, or None if no data yet."""
+        """Build from current shared trend state, then return the latest snapshot."""
+        self._generate_confluence_signal(datetime.now(UTC))
         if self.snapshot_history:
             return self.snapshot_history[-1]
         return None

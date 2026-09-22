@@ -177,19 +177,35 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   } | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
   const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
+  const [trendBarVersion, setTrendBarVersion] = useState(0);
+  const lastTrendBarTimestampRef = useRef<string | null>(null);
   useEffect(() => {
+    lastTrendBarTimestampRef.current = null;
     const subscriber = api.createRealtimeSubscriber?.();
     if (!subscriber) return;
     const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
-      if (event.type !== 'quote_update' || event.symbol !== symbol.toUpperCase()) return;
-      setLiveQuote(event.data);
+      if (event.type !== 'quote_update' && event.type !== 'bar_update') return;
+      if (event.symbol !== symbol.toUpperCase()) return;
+      if (event.type === 'quote_update') {
+        setLiveQuote(event.data);
+        return;
+      }
+      if (event.type === 'bar_update' && event.timeframe === '1m') {
+        const timestamp = event.data.timestamp;
+        if (timestamp && timestamp !== lastTrendBarTimestampRef.current) {
+          lastTrendBarTimestampRef.current = timestamp;
+          setTrendBarVersion(version => version + 1);
+        }
+      }
     });
     const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
     subscriber.subscribeQuote(symbol);
+    subscriber.subscribe(symbol, '1m');
     return () => {
       unsubscribe();
       unsubscribeStatus();
       subscriber.unsubscribeQuote(symbol);
+      subscriber.unsubscribe(symbol, '1m');
       subscriber.disconnect();
     };
   }, [symbol]);
@@ -335,6 +351,16 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
       if (symbolRef.current === requestSymbol && presetRef.current === requestPreset) setConfluenceLoading(false);
     }
   }, [symbol, selectedPreset]);
+
+  // A new 1m stream bucket means the backend has just closed and processed
+  // the previous minute. Refresh trend/confluence immediately instead of
+  // waiting for the 30-second REST cycle; repeated trades inside the same
+  // minute share a timestamp and are deliberately ignored here.
+  useEffect(() => {
+    if (trendBarVersion === 0) return;
+    void fetchTrends();
+    void fetchConfluence();
+  }, [trendBarVersion, fetchTrends, fetchConfluence]);
 
   const fetchStrategy = useCallback(async () => {
     const requestSymbol = symbol;

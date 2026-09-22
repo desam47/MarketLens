@@ -257,6 +257,8 @@ class EngineRegistry:
         high: float | None = None,
         low: float | None = None,
         open_price: float | None = None,
+        data_status: object | None = None,
+        session: str | None = None,
     ) -> int:
         """Fan out a fresh bar to engines registered for that timeframe on this symbol.
 
@@ -289,6 +291,8 @@ class EngineRegistry:
                     high=high,
                     low=low,
                     open_price=open_price,
+                    data_status=data_status,
+                    session=session,
                 )
                 notified += 1
                 logger.debug(f"dispatch_bar: notified engine cb={cb} for {symbol}/{timeframe}")

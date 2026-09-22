@@ -156,6 +156,8 @@ class LiveBarPersistence:
                 high=bar.high,
                 low=bar.low,
                 open_price=bar.open,
+                data_status=bar.data_status,
+                session=getattr(bar, "session", None),
             )
         return self.enqueue(completed)
 

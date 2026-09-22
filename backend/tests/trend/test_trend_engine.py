@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 # Add the backend directory to the path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
@@ -114,6 +115,102 @@ class TestTrendEngine(unittest.TestCase):
         for i in range(1, 10):
             self.engine.update(101.0 + i, 1000, base_time + timedelta(minutes=i))
         self.assertEqual(len(ema_fast.values), 1)
+
+    def test_timeframe_bar_uses_exact_ohlcv_without_cross_contamination(self):
+        """A dispatched 5m bar must update only 5m with its real range."""
+        one_minute = MagicMock()
+        one_minute.get_latest.return_value = None
+        five_minute = MagicMock()
+        five_minute.get_latest.return_value = None
+        self.engine.indicators[Timeframe.ONE_MINUTE] = {"probe": one_minute}
+        self.engine.indicators[Timeframe.FIVE_MINUTE] = {"probe": five_minute}
+
+        self.engine.update(
+            price=100,
+            open_price=95,
+            high=110,
+            low=90,
+            volume=1234,
+            timestamp=datetime(2026, 9, 22, 10, 0),
+            timeframe="5m",
+            provider="test",
+            data_status="HISTORICAL",
+            session="regular",
+        )
+
+        five_minute.update.assert_called_once_with(
+            {"open": 95.0, "high": 110.0, "low": 90.0, "close": 100.0, "volume": 1234.0}
+        )
+        one_minute.update.assert_not_called()
+
+    def test_live_one_minute_bars_feed_completed_five_minute_bucket_once(self):
+        """Stateful 5m indicators must not append the forming bar every minute."""
+        five_minute = MagicMock()
+        five_minute.get_latest.return_value = None
+        self.engine.indicators[Timeframe.ONE_MINUTE] = {}
+        self.engine.indicators[Timeframe.FIVE_MINUTE] = {"probe": five_minute}
+        base = datetime(2026, 9, 22, 9, 30)
+
+        for minute in range(6):
+            close = 100 + minute
+            self.engine.update(
+                price=close,
+                open_price=close - 0.5,
+                high=close + 1,
+                low=close - 1,
+                volume=100,
+                timestamp=base + timedelta(minutes=minute),
+                timeframe="1m",
+                provider="test",
+                data_status="HISTORICAL",
+                session="regular",
+            )
+
+        five_minute.update.assert_called_once_with(
+            {"open": 99.5, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 500.0}
+        )
+
+    def test_live_aggregation_does_not_create_partial_bucket_after_restart(self):
+        """Starting mid-bucket must not turn three 1m bars into a fake 5m bar."""
+        five_minute = MagicMock()
+        five_minute.get_latest.return_value = None
+        self.engine.indicators[Timeframe.ONE_MINUTE] = {}
+        self.engine.indicators[Timeframe.FIVE_MINUTE] = {"probe": five_minute}
+        base = datetime(2026, 9, 22, 9, 32)
+
+        for minute in range(4):
+            self.engine.update(
+                price=100 + minute,
+                volume=100,
+                timestamp=base + timedelta(minutes=minute),
+                timeframe="1m",
+                data_status="HISTORICAL",
+            )
+
+        five_minute.update.assert_not_called()
+
+    def test_daily_warmup_does_not_feed_one_minute_indicators(self):
+        one_minute = MagicMock()
+        one_minute.get_latest.return_value = None
+        daily = MagicMock()
+        daily.get_latest.return_value = None
+        self.engine.indicators[Timeframe.ONE_MINUTE] = {"probe": one_minute}
+        self.engine.indicators[Timeframe.ONE_DAY] = {"probe": daily}
+
+        self.engine.update(
+            price=101,
+            open_price=99,
+            high=102,
+            low=98,
+            volume=1000,
+            timestamp=datetime(2026, 9, 21),
+            timeframe=Timeframe.ONE_DAY,
+            only_timeframe=Timeframe.ONE_DAY,
+            data_status="HISTORICAL",
+        )
+
+        daily.update.assert_called_once()
+        one_minute.update.assert_not_called()
 
     def test_trend_signal_creation(self):
         """Test creating a trend signal"""

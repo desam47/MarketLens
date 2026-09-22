@@ -65,6 +65,11 @@ export interface TrendData {
   strength: string;
   confidence: number;
   timestamp: string | null;
+  data_age_seconds?: number | null;
+  data_status?: string | null;
+  provider?: string | null;
+  session?: string | null;
+  bar_closed?: boolean | null;
 }
 
 export interface ConfluenceData {

@@ -453,6 +453,38 @@ class MarketDataIngestionService:
             session=getattr(row, "session", None) or "regular",
         )
 
+    @staticmethod
+    def _dispatch_latest_analysis_bars(bars: list[Bar]) -> None:
+        """Advance trend engines from committed, completed OHLCV bars.
+
+        Resamplers often revisit a rolling history window. Dispatching only
+        the newest completed bar per symbol/timeframe avoids replay storms;
+        a newly-created trend engine seeds the complete history directly from
+        BarModel, while an existing engine only needs the latest advancement.
+        """
+        latest: dict[tuple[str, str], Bar] = {}
+        for bar in bars:
+            raw_status = getattr(bar, "data_status", None)
+            status = str(getattr(raw_status, "value", raw_status))
+            if status.upper() == "INCOMPLETE":
+                continue
+            key = (bar.symbol.upper(), bar.timeframe)
+            if key not in latest or bar.timestamp > latest[key].timestamp:
+                latest[key] = bar
+        for bar in latest.values():
+            engine_registry.dispatch_bar(
+                symbol=bar.symbol,
+                timeframe=bar.timeframe,
+                price=float(bar.close or 0.0),
+                volume=int(bar.volume or 0),
+                timestamp=bar.timestamp,
+                high=bar.high,
+                low=bar.low,
+                open_price=bar.open,
+                data_status=bar.data_status,
+                session=getattr(bar, "session", None),
+            )
+
     # ------------------------------------------------------------------
     # 1m → sub-hour resampling (2m/3m/5m/15m/30m)
     # The resampler requires 1m input bars only.
@@ -499,6 +531,7 @@ class MarketDataIngestionService:
 
         symbols_to_process = [_symbol] if _symbol else self.symbols
         written = 0
+        analysis_bars: list[Bar] = []
         db = SessionLocal()
         try:
             target_mins = _TF_MINUTES.get(target_tf, 60)
@@ -567,9 +600,11 @@ class MarketDataIngestionService:
                     to_write.append(bar)
                 if to_write:
                     written += upsert_bars(db, to_write)
+                    analysis_bars.extend(to_write)
                 # Small delay between symbols to avoid bursts
                 await asyncio.sleep(0.05)
             db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
             if written:
                 from backend.market_data.services.cache import _redis_cache
 
@@ -621,6 +656,7 @@ class MarketDataIngestionService:
 
         symbols_to_process = [_symbol] if _symbol else self.symbols
         written = 0
+        analysis_bars: list[Bar] = []
         db = SessionLocal()
         try:
             for symbol in symbols_to_process:
@@ -697,9 +733,11 @@ class MarketDataIngestionService:
 
                 if to_write:
                     written += upsert_bars(db, to_write)
+                    analysis_bars.extend(to_write)
                 # Small delay between symbols to avoid bursts
                 await asyncio.sleep(0.05)
             db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
             if written:
                 from backend.market_data.services.cache import _redis_cache
 
@@ -737,6 +775,7 @@ class MarketDataIngestionService:
         symbols_to_process = [_symbol] if _symbol else self.symbols
 
         written = 0
+        analysis_bars: list[Bar] = []
         db = SessionLocal()
         try:
             for symbol in symbols_to_process:
@@ -811,9 +850,11 @@ class MarketDataIngestionService:
 
                 if to_write:
                     written += upsert_bars(db, to_write)
+                    analysis_bars.extend(to_write)
                 # Small delay between symbols to avoid bursts
                 await asyncio.sleep(0.05)
             db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
             if written:
                 from backend.market_data.services.cache import _redis_cache
 
@@ -889,6 +930,7 @@ class MarketDataIngestionService:
 
         today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
         written = 0
+        analysis_bars: list[Bar] = []
         db = SessionLocal()
         try:
             for symbol in self.symbols:
@@ -936,7 +978,9 @@ class MarketDataIngestionService:
                     data_status=DataStatus.HISTORICAL if market_closed else DataStatus.INCOMPLETE,
                 )
                 written += upsert_bars(db, [bar])
+                analysis_bars.append(bar)
             db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
             if written:
                 from backend.market_data.services.cache import _redis_cache
 
@@ -1035,6 +1079,7 @@ class MarketDataIngestionService:
 
         symbols_to_process = [_symbol] if _symbol else self.symbols
         written = 0
+        analysis_bars: list[Bar] = []
         db = SessionLocal()
         try:
             for symbol in symbols_to_process:
@@ -1072,7 +1117,9 @@ class MarketDataIngestionService:
                         ),
                     )
                     written += upsert_bars(db, [bar])
+                    analysis_bars.append(bar)
             db.commit()
+            self._dispatch_latest_analysis_bars(analysis_bars)
             if written:
                 from backend.market_data.services.cache import _redis_cache
 
@@ -1237,6 +1284,8 @@ class MarketDataIngestionService:
                     high=getattr(bar, "high", None),
                     low=getattr(bar, "low", None),
                     open_price=getattr(bar, "open", None),
+                    data_status=getattr(bar, "data_status", None),
+                    session=getattr(bar, "session", None),
                 )
                 self._mark_bar_dispatched(sym, ts)
             except Exception as e:
@@ -1640,6 +1689,7 @@ class MarketDataIngestionService:
             if bars_to_upsert:
                 written = upsert_bars(db, bars_to_upsert)
                 db.commit()
+                self._dispatch_latest_analysis_bars(bars_to_upsert)
                 logger.info(f"1d ingest: wrote {written} bars across {len(self.symbols)} symbols")
                 from backend.market_data.services.cache import _redis_cache
 
@@ -1887,6 +1937,8 @@ class MarketDataIngestionService:
                             high=getattr(bar, "high", None),
                             low=getattr(bar, "low", None),
                             open_price=getattr(bar, "open", None),
+                            data_status=getattr(bar, "data_status", None),
+                            session=getattr(bar, "session", None),
                         )
                     except Exception as e:
                         logger.debug(f"gap-fill dispatch_bar failed for {symbol}: {e}")

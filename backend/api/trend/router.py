@@ -8,7 +8,7 @@ engine per symbol — no signal divergence from independent warmup paths.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +36,9 @@ def _to_dashboard_tz(value: datetime | None) -> str | None:
 
 def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
     trend_signal = engine.get_current_trend(tf)
+    metadata = engine.get_timeframe_metadata(tf)
+    if not isinstance(metadata, dict):
+        metadata = {}
     if trend_signal is None:
         return {
             "symbol": sym,
@@ -46,7 +49,16 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
             "score": None,
             "classification": None,
             "timestamp": None,
+            "data_age_seconds": None,
+            "data_status": metadata.get("data_status"),
+            "provider": metadata.get("provider"),
+            "session": metadata.get("session"),
+            "bar_closed": metadata.get("bar_closed"),
         }
+    signal_ts = trend_signal.timestamp
+    if signal_ts.tzinfo is None:
+        signal_ts = signal_ts.replace(tzinfo=UTC)
+    age_seconds = int(max(0.0, (datetime.now(UTC) - signal_ts).total_seconds()))
     return {
         "symbol": trend_signal.symbol,
         "timeframe": trend_signal.timeframe.value,
@@ -58,6 +70,11 @@ def _build_trend_payload(engine, sym: str, timeframe: str, tf) -> dict:
         if hasattr(trend_signal.classification, "value")
         else trend_signal.classification,
         "timestamp": _to_dashboard_tz(trend_signal.timestamp),
+        "data_age_seconds": age_seconds,
+        "data_status": metadata.get("data_status", trend_signal.data_quality),
+        "provider": metadata.get("provider"),
+        "session": metadata.get("session"),
+        "bar_closed": metadata.get("bar_closed"),
     }
 
 
@@ -119,6 +136,11 @@ async def get_trend_batch(symbol: str, timeframes: str):
     requested = [t.strip() for t in timeframes.split(",") if t.strip()]
     if not requested:
         raise HTTPException(status_code=400, detail="timeframes must not be empty")
+    from backend.engines.timeframe import Timeframe
+
+    invalid = [tf for tf in requested if tf not in {candidate.value for candidate in Timeframe}]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid timeframe: {invalid[0]}")
     try:
         engine = get_engine(sym)
         return [_get_cached_trend(sym, tf, engine) for tf in requested]
@@ -206,6 +228,7 @@ async def update_trend(
             price=price,
             volume=volume,
             timestamp=ts,
+            timeframe=timeframe,
         )
 
         # Invalidate TTL cache for this (symbol, timeframe) so the

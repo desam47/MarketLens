@@ -14,7 +14,7 @@ from ..engines.timeframe import (
     multi_symbol_timeframe_engine,
 )
 from ..indicators.base_indicator import BaseIndicator, IndicatorEngine
-from ..utils.timezone import ny_to_utc
+from ..utils.timezone import NY, ny_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,16 @@ class TrendEngine:
         # update once it closes, not once per tick.
         self._last_fed_closed_ts: dict[Timeframe, datetime] = {}
 
+        # Production bar ingestion is timeframe-specific. These maps prevent
+        # a stored 1d bar from warming 1m indicators (and vice versa), retain
+        # provenance for the API, and aggregate completed 1m bars into the
+        # higher intraday timeframes without repeatedly appending the same
+        # still-forming candle to stateful indicators.
+        self._last_processed_bar_ts: dict[Timeframe, datetime] = {}
+        self._bar_counts: dict[Timeframe, int] = {}
+        self._bar_metadata: dict[Timeframe, dict[str, Any]] = {}
+        self._live_aggregates: dict[Timeframe, dict[str, Any]] = {}
+
         # Initialize indicators for each timeframe
         self.indicators: dict[Timeframe, dict[str, Any]] = {}
         self._initialize_indicators()
@@ -379,6 +389,12 @@ class TrendEngine:
         timestamp: datetime,
         provider: str = "",
         only_timeframe: Timeframe | None = None,
+        timeframe: str | Timeframe | None = None,
+        high: float | None = None,
+        low: float | None = None,
+        open_price: float | None = None,
+        data_status: object | None = None,
+        session: str | None = None,
         **_: object,
     ):
         """Update trend engine with new market data.
@@ -395,6 +411,31 @@ class TrendEngine:
         would otherwise mask the real recent 1m signals in the last-100 cap).
         """
         timestamp = _ensure_aware(timestamp)
+
+        # Bar dispatches carry their source timeframe. Feed the exact OHLCV
+        # into only that indicator stack; the legacy tick path below remains
+        # for direct callers/tests that intentionally provide no timeframe.
+        direct_tf = timeframe or only_timeframe
+        if direct_tf is not None:
+            try:
+                tf = direct_tf if isinstance(direct_tf, Timeframe) else Timeframe(direct_tf)
+            except ValueError:
+                logger.warning("Ignoring unsupported trend timeframe %r for %s", direct_tf, self.symbol)
+                return
+            self._update_from_bar(
+                tf,
+                open_price=price if open_price is None else open_price,
+                high=price if high is None else high,
+                low=price if low is None else low,
+                close=price,
+                volume=volume,
+                timestamp=timestamp,
+                provider=provider,
+                data_status=data_status,
+                session=session,
+                aggregate_live_1m=only_timeframe is None,
+            )
+            return
         # Phase 0 Principle 15 — data quality validated before analysis.
         # Before feeding the tick to the timeframe/indicator stack we run
         # three cheap checks: stale (timestamp is older than the configured
@@ -456,6 +497,180 @@ class TrendEngine:
         # Record state for the next update() call.
         self._last_update_time = now
         self._last_price = price
+
+    @staticmethod
+    def _status_value(value: object | None) -> str:
+        if value is None:
+            return "ok"
+        raw = getattr(value, "value", value)
+        normalized = str(raw).strip().lower()
+        return "ok" if normalized in {"historical", "live", "ok"} else normalized
+
+    @staticmethod
+    def _bucket_start(timestamp: datetime, timeframe: Timeframe) -> datetime:
+        """Return an ET-aligned bucket start as aware UTC."""
+        local = timestamp.astimezone(NY)
+        if timeframe == Timeframe.TWO_MINUTE:
+            local = local.replace(minute=local.minute - local.minute % 2, second=0, microsecond=0)
+        elif timeframe == Timeframe.THREE_MINUTE:
+            local = local.replace(minute=local.minute - local.minute % 3, second=0, microsecond=0)
+        elif timeframe == Timeframe.FIVE_MINUTE:
+            local = local.replace(minute=local.minute - local.minute % 5, second=0, microsecond=0)
+        elif timeframe == Timeframe.FIFTEEN_MINUTE:
+            local = local.replace(minute=local.minute - local.minute % 15, second=0, microsecond=0)
+        elif timeframe == Timeframe.THIRTY_MINUTE:
+            local = local.replace(minute=local.minute - local.minute % 30, second=0, microsecond=0)
+        elif timeframe == Timeframe.ONE_HOUR:
+            local = local.replace(minute=0, second=0, microsecond=0)
+        elif timeframe == Timeframe.FOUR_HOUR:
+            local = local.replace(hour=local.hour - local.hour % 4, minute=0, second=0, microsecond=0)
+        return local.astimezone(UTC)
+
+    def _invalidate_output_caches(self, timeframe: Timeframe) -> None:
+        """Invalidate REST snapshots immediately after the engine advances."""
+        try:
+            from backend.api.ttl_cache import _confluence_cache, _strategy_cache, _trend_cache
+
+            _trend_cache.pop(f"{self.symbol.upper()}:{timeframe.value}", None)
+            _strategy_cache.pop(self.symbol.upper(), None)
+            prefix = f"{self.symbol.upper()}:"
+            for key in list(_confluence_cache):
+                if key.startswith(prefix):
+                    _confluence_cache.pop(key, None)
+        except Exception:  # pragma: no cover - cache is optional during isolated engine use
+            pass
+
+    def _update_from_bar(
+        self,
+        timeframe: Timeframe,
+        *,
+        open_price: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float,
+        timestamp: datetime,
+        provider: str,
+        data_status: object | None,
+        session: str | None,
+        aggregate_live_1m: bool,
+    ) -> None:
+        last = self._last_processed_bar_ts.get(timeframe)
+        if last is not None and timestamp <= last:
+            return
+
+        point = {
+            "open": float(open_price),
+            "high": float(high),
+            "low": float(low),
+            "close": float(close),
+            "volume": float(volume),
+        }
+        indicators = self.indicators.get(timeframe, {})
+        for name, indicator in indicators.items():
+            try:
+                indicator.update(point)
+            except Exception as exc:
+                logger.debug("Error updating %s for %s: %s", name, timeframe.value, exc)
+
+        quality = self._status_value(data_status)
+        # Keep signal emission on the engine's established generation path.
+        # Besides avoiding two subtly different scoring implementations, this
+        # preserves replay/backtest instrumentation that intentionally wraps
+        # _generate_trend_signals to detect an unscorable individual bar.
+        self._generate_trend_signals(timestamp, only_timeframe=timeframe)
+        signal = self.get_current_trend(timeframe)
+        if signal is not None and signal.timestamp == timestamp:
+            signal.data_quality = quality
+
+        self._last_processed_bar_ts[timeframe] = timestamp
+        self._bar_counts[timeframe] = self._bar_counts.get(timeframe, 0) + 1
+        self._bar_metadata[timeframe] = {
+            "provider": provider or "unknown",
+            "session": session or "unknown",
+            "data_status": quality,
+            "bar_closed": quality != "incomplete",
+            "timestamp": timestamp,
+        }
+        self._last_update_time = datetime.now(UTC)
+        self._last_price = close
+        self._invalidate_output_caches(timeframe)
+
+        if timeframe == Timeframe.ONE_MINUTE and aggregate_live_1m:
+            self._aggregate_live_bar(point, timestamp, provider, quality, session)
+
+    def _aggregate_live_bar(
+        self,
+        point: dict[str, float],
+        timestamp: datetime,
+        provider: str,
+        data_status: str,
+        session: str | None,
+    ) -> None:
+        """Aggregate exact closed 1m bars and feed each higher TF once at close."""
+        targets = (
+            Timeframe.TWO_MINUTE,
+            Timeframe.THREE_MINUTE,
+            Timeframe.FIVE_MINUTE,
+            Timeframe.FIFTEEN_MINUTE,
+            Timeframe.THIRTY_MINUTE,
+            Timeframe.ONE_HOUR,
+            Timeframe.FOUR_HOUR,
+        )
+        for target in targets:
+            start = self._bucket_start(timestamp, target)
+            current = self._live_aggregates.get(target)
+            if current is not None and start > current["start"]:
+                self._update_from_bar(
+                    target,
+                    open_price=current["open"],
+                    high=current["high"],
+                    low=current["low"],
+                    close=current["close"],
+                    volume=current["volume"],
+                    timestamp=current["start"],
+                    provider=current["provider"],
+                    data_status=current["data_status"],
+                    session=current["session"],
+                    aggregate_live_1m=False,
+                )
+                current = None
+            if current is None:
+                # After a mid-bucket process restart, waiting for the next
+                # aligned boundary is safer than manufacturing a partial
+                # higher-timeframe candle and permanently feeding it to a
+                # stateful indicator. The DB resampler still supplies the
+                # exact completed bucket during this short hand-off window.
+                if timestamp != start:
+                    continue
+                self._live_aggregates[target] = {
+                    "start": start,
+                    "open": point["open"],
+                    "high": point["high"],
+                    "low": point["low"],
+                    "close": point["close"],
+                    "volume": point["volume"],
+                    "provider": provider or "unknown",
+                    "data_status": data_status,
+                    "session": session or "unknown",
+                }
+                continue
+            if start < current["start"]:
+                continue
+            current["high"] = max(current["high"], point["high"])
+            current["low"] = min(current["low"], point["low"])
+            current["close"] = point["close"]
+            current["volume"] += point["volume"]
+            if session and current["session"] != session:
+                current["session"] = "mixed"
+            if current["data_status"] == "ok" and data_status != "ok":
+                current["data_status"] = data_status
+
+    def get_timeframe_metadata(self, timeframe: Timeframe) -> dict[str, Any]:
+        return dict(self._bar_metadata.get(timeframe, {}))
+
+    def get_bar_count(self, timeframe: Timeframe) -> int:
+        return self._bar_counts.get(timeframe, 0)
 
     def _update_indicators_from_candles(self, timestamp: datetime):
         """Feed indicators from the timeframe engine's real OHLCV candles.
@@ -563,7 +778,11 @@ class TrendEngine:
                 logger.error(f"Error generating trend signal for {timeframe}: {e}")
 
     def _analyze_timeframe_trend(
-        self, timeframe: Timeframe, indicators: dict[str, Any], timestamp: datetime
+        self,
+        timeframe: Timeframe,
+        indicators: dict[str, Any],
+        timestamp: datetime,
+        data_quality: str = "ok",
     ) -> TrendSignal | None:
         """Analyze trend for a specific timeframe"""
         # Single pass: collect all indicator latest values AND
@@ -605,6 +824,7 @@ class TrendEngine:
             timestamp=timestamp,
             score=raw_score,
             classification=classification,
+            data_quality=data_quality,
         )
 
     def _calculate_trend(

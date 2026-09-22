@@ -21,6 +21,49 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../"))
 from backend.observability.logging_enhanced import get_correlation_id, set_correlation_id
 
 
+class TestAnalysisBarDispatch(unittest.TestCase):
+    def test_dispatches_only_latest_completed_bar_per_symbol_and_timeframe(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data import Bar, DataStatus
+
+        base = datetime(2026, 9, 21, 10, 0)
+
+        def bar(timeframe, minute, status, close):
+            return Bar(
+                symbol="aapl",
+                timeframe=timeframe,
+                timestamp=base + timedelta(minutes=minute),
+                open=close - 1,
+                high=close + 2,
+                low=close - 2,
+                close=close,
+                volume=123,
+                provider="aggregated_from_1m",
+                data_status=status,
+                session="regular",
+            )
+
+        bars = [
+            bar("5m", 0, DataStatus.HISTORICAL, 100),
+            bar("5m", 5, DataStatus.HISTORICAL, 105),
+            bar("5m", 10, DataStatus.INCOMPLETE, 110),
+            bar("1h", 0, DataStatus.HISTORICAL, 200),
+        ]
+        with patch(
+            "backend.market_data.services.ingestion_service.engine_registry.dispatch_bar"
+        ) as dispatch:
+            MarketDataIngestionService._dispatch_latest_analysis_bars(bars)
+
+        self.assertEqual(dispatch.call_count, 2)
+        by_timeframe = {call.kwargs["timeframe"]: call.kwargs for call in dispatch.call_args_list}
+        self.assertEqual(by_timeframe["5m"]["timestamp"], base + timedelta(minutes=5))
+        self.assertEqual(by_timeframe["5m"]["open_price"], 104)
+        self.assertEqual(by_timeframe["5m"]["high"], 107)
+        self.assertEqual(by_timeframe["5m"]["low"], 103)
+        self.assertEqual(by_timeframe["5m"]["price"], 105)
+        self.assertEqual(by_timeframe["5m"]["session"], "regular")
+
+
 class TestResampleWideningHours(unittest.TestCase):
     """Regression for a live bug (2026-09-16): 15m shared 5m's 60-min
     resample lookback window (base_hours from target_mins alone, no extra
