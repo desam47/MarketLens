@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21, commit `226d8f0`): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, explicit SDK entitlement limitations, manager-enforced request-level provider attribution, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
+Latest checkpoint (2026-09-21, commit `39d285d`): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, explicit SDK entitlement limitations, manager-enforced request-level provider attribution, durable tick replay storage, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 
@@ -88,7 +88,7 @@ Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling RE
 
 ### 9. Tick-level replay — [~] Partial
 
-Local bounded retention, durable SQLite tick storage, BBO/tape playback, and causal 1-minute signal reconstruction from retained ticks are implemented. Longer-history reconstruction across sessions and richer tick-derived trade analytics remain.
+Local bounded retention, durable SQLite tick storage, date-range/session filtering, BBO/tape playback, and causal 1-minute signal reconstruction from retained ticks are implemented. Richer tick-derived trade analytics remain.
 
 - Store ticks locally
 - Replay Time & Sales and BBO changes
@@ -203,7 +203,7 @@ Manual journal entries, screenshots, P&L, review notes, local persistence, signa
 
 ### 18. Historical replay — [~] Partial
 
-Candle replay, signal timing, performance summaries, durable tick replay, simulated entries/exits, stop/target tracking, simulated outcomes, and causal signal reconstruction from retained ticks are implemented. Longer-history reconstruction across sessions remains limited by configured local tick retention.
+Candle replay, signal timing, performance summaries, durable tick replay, date-range/session filtering, simulated entries/exits, stop/target tracking, simulated outcomes, and causal signal reconstruction from retained ticks are implemented. Richer tick-derived trade analytics remain.
 
 - Candle-by-candle replay
 - Tick-level replay and causal 1-minute signal reconstruction

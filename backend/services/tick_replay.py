@@ -37,6 +37,14 @@ class TickReplayStore:
             )
             self._writer.start()
 
+    @property
+    def retention_seconds(self) -> int:
+        return self._retention_seconds
+
+    @property
+    def max_events_per_symbol(self) -> int:
+        return self._max_events
+
     def record(self, symbol: str, payload: dict[str, Any]) -> None:
         event = {
             key: payload.get(key)
@@ -112,7 +120,13 @@ class TickReplayStore:
             with self._lock:
                 self._pending.extendleft(reversed(pending))
 
-    def get(self, symbol: str, limit: int = 2_000) -> list[dict[str, Any]]:
+    def get(
+        self,
+        symbol: str,
+        limit: int = 2_000,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> list[dict[str, Any]]:
         with self._lock:
             events = deepcopy(list(self._events.get(symbol.upper(), ()))[-limit:])
         if self._persist and len(events) < limit:
@@ -141,6 +155,13 @@ class TickReplayStore:
                 pass
         for event in events:
             event.pop("_recorded_at", None)
+        if start or end:
+
+            def in_range(event: dict[str, Any]) -> bool:
+                timestamp = str(event.get("timestamp") or "")
+                return (not start or timestamp >= start) and (not end or timestamp <= end)
+
+            events = [event for event in events if in_range(event)]
         return events
 
 

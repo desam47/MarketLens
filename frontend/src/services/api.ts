@@ -2061,14 +2061,18 @@ class ApiService {
     return this.fetch<TapeResponse>(`/tape/${encodeURIComponent(symbol)}`);
   }
 
-  async getTickReplay(symbol: string, limit = 2000): Promise<TickReplayResponse> {
-    return this.fetch<TickReplayResponse>(`/tape/${encodeURIComponent(symbol)}/replay?limit=${limit}`);
+  async getTickReplay(symbol: string, limit = 2000, start?: string, end?: string): Promise<TickReplayResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    return this.fetch<TickReplayResponse>(`/tape/${encodeURIComponent(symbol)}/replay?${params.toString()}`);
   }
 
-  async getTickSignalReplay(symbol: string, limit = 2000, warmup = 0): Promise<TickSignalReplayResponse> {
-    return this.fetch<TickSignalReplayResponse>(
-      `/tape/${encodeURIComponent(symbol)}/replay/signals?limit=${limit}&warmup=${warmup}`,
-    );
+  async getTickSignalReplay(symbol: string, limit = 2000, warmup = 0, start?: string, end?: string): Promise<TickSignalReplayResponse> {
+    const params = new URLSearchParams({ limit: String(limit), warmup: String(warmup) });
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    return this.fetch<TickSignalReplayResponse>(`/tape/${encodeURIComponent(symbol)}/replay/signals?${params.toString()}`);
   }
 
   // Phase 17: Natural-language search
@@ -2578,7 +2582,7 @@ export interface TickReplayEvent {
   bid_size: number | null; ask_size: number | null; spread_bps: number | null;
   timestamp: string | null; event_type: string;
 }
-export interface TickReplayResponse { symbol: string; events: TickReplayEvent[]; retained: number; }
+export interface TickReplayResponse { symbol: string; events: TickReplayEvent[]; retained: number; start?: string | null; end?: string | null; retention_seconds?: number; max_events_per_symbol?: number; }
 export interface TickSignalReplayCandle {
   timestamp: string;
   open: number;
@@ -2596,6 +2600,8 @@ export interface TickSignalReplayResponse {
   retained_events: number;
   reconstructed_candles: number;
   candles: TickSignalReplayCandle[];
+  start?: string | null;
+  end?: string | null;
 }
 
 export interface ChatSession {
