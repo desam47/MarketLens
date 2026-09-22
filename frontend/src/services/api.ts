@@ -201,7 +201,15 @@ export interface SystemPerformance {
       bar_hit_rate: number;
       quote_hit_rate: number;
     };
-    redis?: Record<string, unknown>;
+    redis?: {
+      enabled: boolean;
+      connected: boolean;
+      status: 'running' | 'disabled' | 'unavailable' | string;
+      error?: string;
+      connected_clients?: number;
+      used_memory_human?: string;
+      hit_rate?: number;
+    };
   } | null;
   ingestion: {
     is_running: boolean;

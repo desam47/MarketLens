@@ -33,6 +33,10 @@ describe('TradeJournalPage', () => {
         created_at: null,
       },
     } as any);
+    // Journal enrichment is best-effort; keep this unit test offline and
+    // deterministic instead of letting jsdom attempt real localhost calls.
+    jest.spyOn(api, 'getScanResult').mockResolvedValue({} as any);
+    jest.spyOn(api, 'getTape').mockResolvedValue({ snapshot: null } as any);
   });
 
   afterEach(() => jest.restoreAllMocks());

@@ -360,7 +360,7 @@ class ScannerDispatcher:
         """
         import time as _time
 
-        symbols = symbols or self._manager.get_subscribed_symbols()
+        symbols = sorted(symbols or self._manager.get_subscribed_symbols())
         now = _time.monotonic()
 
         # Cooldown gate: partition subscribed symbols into those that need
@@ -380,7 +380,7 @@ class ScannerDispatcher:
             # frontend shows "waiting" indefinitely, so let a single
             # still-cooling symbol through as a best-effort push.
             if still_cooling and self._last_broadcast_at is None:
-                to_scan = still_cooling  # will still respect cooldown below
+                to_scan = sorted(still_cooling)  # will still respect cooldown below
             else:
                 return
 

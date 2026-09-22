@@ -134,70 +134,28 @@ export default function App() {
         </div>
         <ul className="nav-links">
           <li>
+            <button className={currentPage === 'dashboard' ? 'active' : ''} onClick={() => navigateTo('dashboard')}><span className="nav-icon">📈</span>Dashboard</button>
+          </li>
+          <li>
+            <button className={currentPage === 'scanner' ? 'active' : ''} onClick={() => navigateTo('scanner')}><span className="nav-icon">🧭</span>Scanner</button>
+          </li>
+          <li>
+            <button className={currentPage === 'symbol' ? 'active' : ''} onClick={() => navigateTo('symbol')}><span className="nav-icon">🔬</span>Symbol</button>
+          </li>
+          <li>
+            <button className={currentPage === 'watchlist' ? 'active' : ''} onClick={() => navigateTo('watchlist')}><span className="nav-icon">📋</span>Watchlist</button>
+          </li>
+          <li>
+            <button className={currentPage === 'hub' ? 'active' : ''} onClick={() => navigateTo('hub')}><span className="nav-icon">🤖</span>AI Hub</button>
+          </li>
+          <li>
             <button className={currentPage === 'calendar' ? 'active' : ''} onClick={() => navigateTo('calendar')}><span className="nav-icon">🗓️</span>Earnings &amp; Events</button>
           </li>
           <li>
-            <button
-              className={currentPage === 'scanner' ? 'active' : ''}
-              onClick={() => navigateTo('scanner')}
-            >
-              <span className="nav-icon">🧭</span>
-              Scanner
-            </button>
+            <button className={currentPage === 'risk' ? 'active' : ''} onClick={() => navigateTo('risk')}><span className="nav-icon">🛡️</span>Risk Dashboard</button>
           </li>
           <li>
-            <button
-              className={currentPage === 'dashboard' ? 'active' : ''}
-              onClick={() => navigateTo('dashboard')}
-            >
-              <span className="nav-icon">📈</span>
-              Dashboard
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'risk' ? 'active' : ''}
-              onClick={() => navigateTo('risk')}
-            >
-              <span className="nav-icon">🛡️</span>
-              Risk Dashboard
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'journal' ? 'active' : ''}
-              onClick={() => navigateTo('journal')}
-            >
-              <span className="nav-icon">📝</span>
-              Trade Journal
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'symbol' ? 'active' : ''}
-              onClick={() => navigateTo('symbol')}
-            >
-              <span className="nav-icon">🔬</span>
-              Symbol
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'hub' ? 'active' : ''}
-              onClick={() => navigateTo('hub')}
-            >
-              <span className="nav-icon">🤖</span>
-              AI Hub
-            </button>
-          </li>
-          <li>
-            <button
-              className={currentPage === 'watchlist' ? 'active' : ''}
-              onClick={() => navigateTo('watchlist')}
-            >
-              <span className="nav-icon">📋</span>
-              Watchlist
-            </button>
+            <button className={currentPage === 'journal' ? 'active' : ''} onClick={() => navigateTo('journal')}><span className="nav-icon">📝</span>Trade Journal</button>
           </li>
           <li>
             <button

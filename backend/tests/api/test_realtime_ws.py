@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 from backend.api.realtime import ws_router
 from backend.api.realtime.ws_router import RealtimeBroadcastManager
-from backend.market_data.streaming.live_quotes import LiveQuoteCache
 
 
 class _FakeSocket:

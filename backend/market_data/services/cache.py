@@ -382,14 +382,19 @@ class RedisCache:
 
     def get_stats(self) -> dict[str, Any]:
         """Get Redis cache statistics."""
+        settings = _shared.get_settings()
+        if not settings.redis.enabled:
+            return {"enabled": False, "connected": False, "status": "disabled"}
         if not self.is_available():
-            return {"enabled": False}
+            return {"enabled": True, "connected": False, "status": "unavailable"}
         try:
             info = self._client.info()
             hits = info.get("keyspace_hits", 0)
             misses = info.get("keyspace_misses", 0)
             return {
                 "enabled": True,
+                "connected": True,
+                "status": "running",
                 "connected_clients": info.get("connected_clients", 0),
                 "used_memory_human": info.get("used_memory_human", "0B"),
                 "total_commands_processed": info.get("total_commands_processed", 0),
@@ -400,7 +405,7 @@ class RedisCache:
             }
         except Exception as e:
             logger.warning(f"Failed to get Redis stats: {e}")
-            return {"enabled": True, "error": str(e)}
+            return {"enabled": True, "connected": False, "status": "unavailable", "error": str(e)}
 
 
 # Module-level singleton — instantiated when this module is first imported.

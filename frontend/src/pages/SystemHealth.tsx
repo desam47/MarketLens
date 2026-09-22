@@ -374,7 +374,15 @@ const RuntimeDataCard = memo(function RuntimeDataCard({
   error: string | null;
 }) {
   const cache = performance?.cache?.cache;
+  const redis = performance?.cache?.redis;
   const freshness = freshnessStatus(performance?.ingestion.tf_update_latency_seconds);
+  const redisStatus = redis?.status === 'running'
+    ? { label: 'Running', className: 'status-ok' }
+    : redis?.status === 'disabled'
+      ? { label: 'Disabled', className: 'status-warning' }
+      : redis?.status === 'unavailable'
+        ? { label: 'Unavailable', className: 'status-error' }
+        : { label: 'Unknown', className: 'status-warning' };
 
   return (
     <div className={`health-card${loading && !performance ? ' card-loading-skeleton' : ''}`}>
@@ -395,6 +403,7 @@ const RuntimeDataCard = memo(function RuntimeDataCard({
           </p>
           <p><strong>Latest Bar:</strong> <span className="health-value">{formatTimestamp(performance.ingestion.last_bar_time)}</span></p>
           <p><strong>Pipeline Delay:</strong> <span className="health-value">{performance.ingestion.tf_update_latency_seconds == null ? 'Not available' : `${Math.round(performance.ingestion.tf_update_latency_seconds)}s`}</span></p>
+          <p><strong>Redis:</strong> <span className={`status-badge ${redisStatus.className}`}>{redisStatus.label}</span>{redis?.error && <small className="health-meta"> — {redis.error}</small>}</p>
           {cache ? (
             <>
               <p><strong>Quote Cache Hit Rate:</strong> <span className="health-value">{cache.quote_hit_rate.toFixed(1)}%</span></p>

@@ -58,11 +58,12 @@ class TestMessageMapping(unittest.TestCase):
     def test_snapshot_maps_and_marks_live(self):
         self.client._on_message(None, "snapshot", _snapshot(price=191.5, volume=1000))
         self.assertEqual(len(self.snaps), 1)
-        sym, price, vol, ts, high, low, open_ = self.snaps[0]
+        sym, price, vol, ts, high, low, open_, bid, ask, bid_size, ask_size = self.snaps[0]
         self.assertEqual(sym, "AAPL")
         self.assertEqual(price, 191.5)
         self.assertEqual(vol, 1000.0)
         self.assertEqual((high, low, open_), (192.0, 190.0, 191.0))
+        self.assertEqual((bid, ask, bid_size, ask_size), (1.0, 1.0, 1.0, 1.0))
         self.assertIn("AAPL", self.client._last_msg_at)
 
     def test_tick_maps_side_buy(self):

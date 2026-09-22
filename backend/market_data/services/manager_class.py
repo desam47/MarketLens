@@ -740,8 +740,9 @@ class MarketDataManager:
                 * 100,
             }
         }
-        if get_settings().redis.enabled:
-            stats["redis"] = get_redis_cache().get_stats()
+        # Always report Redis state so System Health can distinguish disabled,
+        # running, and configured-but-unavailable environments.
+        stats["redis"] = get_redis_cache().get_stats()
         return stats
 
     def reset_cache_stats(self):

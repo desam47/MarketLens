@@ -24,7 +24,10 @@ describe('SystemHealth', () => {
     jest.spyOn(api, 'getSystemPerformance').mockResolvedValue({
       timestamp: '2026-09-21T14:00:00Z',
       ingestion: { is_running: true, total_bars_ingested: 100, last_bar_time: '2026-09-21T13:59:45Z', tf_update_latency_seconds: 15 },
-      cache: { cache: { bar_hits: 9, bar_misses: 1, quote_hits: 4, quote_misses: 1, bar_hit_rate: 90, quote_hit_rate: 80 } },
+      cache: {
+        cache: { bar_hits: 9, bar_misses: 1, quote_hits: 4, quote_misses: 1, bar_hit_rate: 90, quote_hit_rate: 80 },
+        redis: { enabled: true, connected: true, status: 'running' },
+      },
       providers: { yfinance: { is_healthy: true, circuit_breaker_state: 'CLOSED' } },
     });
     jest.spyOn(api, 'getAuxiliaryProviderStatuses').mockResolvedValue({
@@ -44,6 +47,8 @@ describe('SystemHealth', () => {
     expect(screen.getByText('80.0%')).toBeInTheDocument();
     expect(screen.getByText('Pipeline:')).toBeInTheDocument();
     expect(screen.getByText('Fresh')).toBeInTheDocument();
+    expect(screen.getByText('Redis:')).toBeInTheDocument();
+    expect(screen.getAllByText('Running')).toHaveLength(2);
     expect(screen.getByRole('heading', { name: 'Provider Availability' })).toBeInTheDocument();
     expect(screen.getAllByText('yfinance')).toHaveLength(2);
     expect(screen.getByText('finnhub')).toBeInTheDocument();
