@@ -88,7 +88,7 @@ Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling RE
 
 ### 9. Tick-level replay — [~] Partial
 
-Local bounded retention, durable SQLite tick storage, date-range/session filtering, BBO/tape playback, causal 1-minute signal reconstruction, and replay microstructure metrics (buy/sell volume, trade velocity, upticks/downticks, large prints, tape pressure, and BBO imbalance) are implemented. Richer charted analytics remain.
+Local bounded retention, durable SQLite tick storage, date-range/session filtering, BBO/tape playback, causal 1-minute signal reconstruction, replay microstructure metrics, and a charted pressure/imbalance/velocity timeline are implemented.
 
 - Store ticks locally
 - Replay Time & Sales and BBO changes
@@ -203,7 +203,7 @@ Manual journal entries, screenshots, P&L, review notes, local persistence, signa
 
 ### 18. Historical replay — [~] Partial
 
-Candle replay, signal timing, performance summaries, durable tick replay, date-range/session filtering, simulated entries/exits, stop/target tracking, simulated outcomes, causal signal reconstruction, and replay microstructure metrics are implemented. Richer charted analytics remain.
+Candle replay, signal timing, performance summaries, durable tick replay, date-range/session filtering, simulated entries/exits, stop/target tracking, simulated outcomes, causal signal reconstruction, replay microstructure metrics, and charted microstructure overlays are implemented.
 
 - Candle-by-candle replay
 - Tick-level replay and causal 1-minute signal reconstruction

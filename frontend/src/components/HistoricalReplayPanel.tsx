@@ -45,6 +45,33 @@ function latestSignalAt(signals: HistoricalSignal[], timestamp: string): Histori
   return latest;
 }
 
+function ReplayMicrostructureChart({ candles }: { candles: TickSignalReplayResponse['candles'] }) {
+  const points = candles.slice(-120);
+  if (!points.length) return null;
+  const width = 800;
+  const height = 180;
+  const x = (index: number) => (index / Math.max(1, points.length - 1)) * width;
+  const y = (value: number | null, min: number, max: number) => {
+    const normalized = (value == null ? 0 : Math.max(min, Math.min(max, value)) - min) / (max - min);
+    return height - normalized * (height - 24) - 12;
+  };
+  const pressurePath = points.map((point, index) => `${index ? 'L' : 'M'}${x(index)},${y(point.tape_pressure, -1, 1)}`).join(' ');
+  const imbalancePath = points.map((point, index) => `${index ? 'L' : 'M'}${x(index)},${y(point.bbo_imbalance, -1, 1)}`).join(' ');
+  const maxVelocity = Math.max(1, ...points.map(point => point.trade_velocity));
+  return (
+    <div className="replay-microstructure-chart" aria-label="Replay microstructure timeline">
+      <div className="replay-chart-legend"><span className="replay-legend-pressure">● Tape pressure</span><span className="replay-legend-imbalance">● BBO imbalance</span><span>▂ Trade velocity</span></div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" preserveAspectRatio="none">
+        <line x1="0" y1={y(0, -1, 1)} x2={width} y2={y(0, -1, 1)} className="replay-chart-zero" />
+        {points.map((point, index) => <rect key={`bar-${index}`} x={x(index) - 1.5} y={height - (point.trade_velocity / maxVelocity) * (height - 24) - 12} width="3" height={(point.trade_velocity / maxVelocity) * (height - 24)} className="replay-velocity-bar" />)}
+        <path d={pressurePath} className="replay-pressure-line" />
+        <path d={imbalancePath} className="replay-imbalance-line" />
+        {points.map((point, index) => point.large_prints > 0 && <circle key={`print-${index}`} cx={x(index)} cy={y(point.tape_pressure, -1, 1)} r={Math.min(6, 2 + point.large_prints)} className="replay-large-print" />)}
+      </svg>
+    </div>
+  );
+}
+
 export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalReplayPanelProps) {
   const [symbol, setSymbol] = useState(defaultSymbol || 'SPY');
   const [timeframe, setTimeframe] = useState<string>('1d');
@@ -285,6 +312,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             <span>Latest: {tickReplay.candles[tickReplay.candles.length - 1].signal_state || 'warm-up'} · Score {fmt(tickReplay.candles[tickReplay.candles.length - 1].signal_score, 1)} · Pressure {fmtPct(tickReplay.candles[tickReplay.candles.length - 1].tape_pressure * 100)}</span>
           )}
           {tickReplay.candles.length > 0 && (() => { const latest = tickReplay.candles[tickReplay.candles.length - 1]; return <span>Latest microstructure: Buy {latest.buy_volume.toLocaleString()} · Sell {latest.sell_volume.toLocaleString()} · Velocity {latest.trade_velocity}/min · Large prints {latest.large_prints} · BBO imbalance {latest.bbo_imbalance == null ? '—' : fmtPct(latest.bbo_imbalance * 100)}</span>; })()}
+          <ReplayMicrostructureChart candles={tickReplay.candles} />
         </div>
       )}
       {!loading && !error && !validDateRange && (
