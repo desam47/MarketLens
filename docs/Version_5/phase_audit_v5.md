@@ -5,6 +5,11 @@
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
+**Current checkpoint (2026-09-22):** Version 4's implemented scope is
+merged to `main`. The `development` branch is synchronized with its remote
+and is the only branch receiving new Version 5 work. No Phase 5 implementation
+has started; Phase 5.1 is the next delivery gate.
+
 ---
 
 ## Scorecard
