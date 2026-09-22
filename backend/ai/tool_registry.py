@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.ai.calculator import CalculationRequest, calculate
 
 ToolKind = Literal["read_only", "calculation"]
+ToolPermission = Literal["read_only", "calculation", "mutating"]
 MarketSession = Literal["premarket", "regular", "after_hours", "all"]
 
 
@@ -29,6 +30,7 @@ class ToolRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     session: MarketSession = "all"
     timeframe: str | None = None
+    confirmed: bool = False
 
     @field_validator("session", mode="before")
     @classmethod
@@ -121,7 +123,7 @@ class ToolSpec(BaseModel):
     input_model: type[BaseModel]
     handler: Callable[[BaseModel], BaseModel]
     max_duration_ms: int = Field(default=5_000, gt=0, le=30_000)
-    permission: ToolKind = "read_only"
+    permission: ToolPermission = "read_only"
     rate_limit_per_minute: int = Field(default=60, gt=0, le=10_000)
 
 
@@ -149,6 +151,8 @@ class ToolRegistry:
         started_at = datetime.now(UTC).isoformat()
         try:
             spec = self.get(request.tool_name)
+            if spec.permission == "mutating" and not request.confirmed:
+                raise ValueError(f"Tool requires confirmation: {spec.name}")
             now = time.monotonic()
             with self._lock:
                 calls = self._calls.setdefault(spec.name, deque())
@@ -274,6 +278,7 @@ METRIC_CATALOG: Mapping[str, dict[str, str]] = {
     "maximum_drawdown": {"formula": "max((running_peak - price) / running_peak * 100)", "unit": "percent", "owner": "calculator"},
     "options_breakeven": {"formula": "strike +/- premium by option type", "unit": "currency", "owner": "calculator"},
     "options_intrinsic_value": {"formula": "max(in_the_money_amount, 0)", "unit": "currency", "owner": "calculator"},
+    "options_assignment_exposure": {"formula": "strike * contracts * contract_multiplier", "unit": "currency", "owner": "calculator"},
 }
 
 
@@ -289,12 +294,17 @@ def build_default_registry() -> ToolRegistry:
         )
     )
     from backend.ai.market_tools import (
+        ApplicationHelpRequest,
         BarsRequest,
         FundamentalsRequest,
         IndicatorRequest,
         NewsRequest,
         OptionsRequest,
+        RiskDashboardRequest,
         SymbolRequest,
+        TradeJournalRequest,
+        WatchlistRequest,
+        get_application_help_tool,
         get_bars_tool,
         get_fundamentals_tool,
         get_indicator_tool,
@@ -303,7 +313,10 @@ def build_default_registry() -> ToolRegistry:
         get_news_tool,
         get_options_tool,
         get_quote_tool,
+        get_risk_dashboard_tool,
         get_support_resistance_tool,
+        get_trade_journal_tool,
+        get_watchlist_tool,
     )
 
     registry.register(ToolSpec(name="get_quote", kind="read_only", description="Get a verified quote.", input_model=SymbolRequest, handler=get_quote_tool))
@@ -315,6 +328,10 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_news", kind="read_only", description="Get recent provider news.", input_model=NewsRequest, handler=get_news_tool))
     registry.register(ToolSpec(name="get_fundamentals", kind="read_only", description="Get a fundamentals snapshot.", input_model=FundamentalsRequest, handler=get_fundamentals_tool))
     registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))
+    registry.register(ToolSpec(name="get_watchlist", kind="read_only", description="Read an application watchlist and its symbols.", input_model=WatchlistRequest, handler=get_watchlist_tool))
+    registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
+    registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
+    registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))
     return registry
 
 

@@ -1,15 +1,14 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; implementation not started.
+**Status:** Active. Planning complete; Phase 5.1 complete; Phase 5.2 in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
 **Current checkpoint (2026-09-22):** Version 4's implemented scope is
 merged to `main`. The `development` branch is synchronized with its remote
-and is the only branch receiving new Version 5 work. Phase 5.1 is now in
-progress; its remaining tool-protocol and normalization work is the next
-delivery gate.
+and is the only branch receiving new Version 5 work. Phase 5.1 is complete;
+Phase 5.2 is the active delivery gate.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
 slice is now shipped on `development`. The strict calculator foundation in
@@ -48,11 +47,17 @@ returns no action. It constructs the same validated calculator request and
 never guesses when required inputs are missing. The focused Phase 5.1 suite
 now has 18 passing tests.
 
+A closing verification pass (2026-09-22) added the previously missing
+`options_assignment_exposure` calculation and made `ToolSpec.permission`
+an enforced gate (`mutating` tools require `confirmed=True`) instead of an
+unread field. The focused Phase 5.1 suite now has 24 passing tests; the full
+`backend/tests/ai/` suite passes (548 tests) with no regressions.
+
 **Phase 5.1 completion:** The planned tool foundation, safe calculator,
-normalization, registry/permissions, restricted verified formulas, initial
-metric catalog, Chat calculation action, provenance metadata, and focused
-verification are complete. Broader market-data tools and richer structured
-provenance cards belong to Phase 5.2 and later phases.
+normalization, registry/permissions (now enforced), restricted verified
+formulas, initial metric catalog, Chat calculation action, provenance
+metadata, and focused verification are complete. Broader market-data tools
+and richer structured provenance cards belong to Phase 5.2 and later phases.
 
 ---
 
@@ -60,8 +65,8 @@ provenance cards belong to Phase 5.2 and later phases.
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
-| 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator, typed envelope, normalization, registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 17 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS | Quote, bars, indicators, support/resistance, regime, and market-context tools are registered; provider reconciliation and full provenance contracts remain. |
+| 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS | Market, research, watchlist, risk, and journal tools are registered with typed provenance; provider-path reconciliation wiring, app-help metadata, and safe local import handling remain. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -104,12 +109,21 @@ allocation, volatility, drawdown, correlation, and basic options metrics.
 Seven focused tests pass with `DEBUG=false`; the full suite remains subject to
 the repository's existing Alembic test-database initialization prerequisite.
 
-Remaining Phase 5.1 work is focused on completing the canonical metric catalog,
-formalizing tool permissions/rate limits, and adding richer provenance fields
-to Chat responses. Audit this phase with formula-level test results, separate
+The options calculation set now also includes `options_assignment_exposure`
+(assignment shares and cash exposure from strike, contracts, and a
+configurable contract multiplier), closing the gap against the plan's
+breakeven/intrinsic/extrinsic/max-gain-loss/assignment-exposure list.
+
+Tool permission is now enforced, not just declared: `ToolSpec.permission`
+accepts `read_only`, `calculation`, or `mutating`, and `ToolRegistry.execute`
+rejects a `mutating` tool call unless the request carries `confirmed=True`.
+No mutating tool is registered yet — this closes the enforcement gap ahead of
+Phase 5.3/5.6 work that will add write-capable tools.
+
+Audit this phase with formula-level test results, separate
 per-share/total/portfolio-risk outputs, verified-result formula references,
-tool schema coverage, invalid-input behavior, and proof that arbitrary code
-execution is impossible.
+tool schema coverage, invalid-input behavior, mutating-tool confirmation
+gating, and proof that arbitrary code execution is impossible.
 
 ---
 
@@ -118,25 +132,37 @@ execution is impossible.
 The first read-only tool slice is implemented in `backend/ai/market_tools.py`
 and registered through the shared registry: `get_quote`, `get_bars`,
 `get_indicator`, `get_support_resistance`, `get_market_regime`,
-`get_market_context`, `get_news`, `get_fundamentals`, and
-`get_options_snapshot`. Bar and indicator tools reuse the existing manager/cache
+`get_market_context`, `get_news`, `get_fundamentals`, `get_options_snapshot`,
+`get_watchlist`, `get_risk_dashboard`, `get_trade_journal`, and
+`get_application_help`. Bar and
+indicator tools reuse the existing manager/cache
 path, preserve provider/session/timeframe metadata, and never write to the
 database. The shared registry now derives actual provider, source timestamp,
 freshness age, fallback state, and stale/delayed warnings from each tool
 payload. Chat can select each tool as a bounded read-only action and includes
-the verified payload provenance in its response. Nine focused market-tool,
+the verified payload provenance in its response. Fourteen focused market-tool,
 registry, and Chat integration tests pass with `DEBUG=false`.
 
 The shared registry now includes provider-observation reconciliation: a
 configured primary wins when present, otherwise the newest observation wins,
 and material differences produce an explicit conflict warning without making
-duplicate provider calls. Seven registry/provenance tests pass in this slice.
+duplicate provider calls. The quote tool now records the manager's selected
+primary/fallback provider and a no-conflict single-observation reconciliation
+state without issuing a second quote request. Seven registry/provenance tests
+plus the quote contract pass in this slice.
 
-Remaining work includes wiring reconciliation into provider paths that expose
-multiple observations, complete
-freshness/fallback contracts for every tool, watchlist/risk/journal tools,
-application-help metadata, and safe local import
-handling. Audit must record each tool's source API/service, cache behavior,
+Watchlist retrieval is database-backed and read-only. Risk Dashboard and Trade
+Journal currently keep their manual records in browser `localStorage`, so the
+new tools accept explicit snapshots and return a truthful unavailable response
+when the server cannot see browser-local state; they never invent positions or
+journal entries. Focused market-tool, registry, and Chat tests cover these
+contracts and deterministic risk summaries.
+
+Remaining work includes wiring multi-observation reconciliation into provider
+paths that expose multiple observations, complete freshness/fallback contracts
+for every tool, and safe local import handling. The application-help tool now returns verified page
+titles, feature topics, and current hash routes from the navigation catalog.
+Audit must record each tool's source API/service, cache behavior,
 provider-call impact, freshness fields, delayed/fallback handling, and contract
 tests against existing page APIs. The audit must explicitly account for the
 quote, bars, indicator, support/resistance, regime, market-context, sector,

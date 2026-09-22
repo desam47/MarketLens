@@ -77,6 +77,21 @@ def test_option_values_are_explicit_and_json_safe() -> None:
     assert result.values == {"max_gain_per_share": None, "max_loss_per_share": 4}
 
 
+def test_options_assignment_exposure_uses_standard_contract_multiplier() -> None:
+    result = calculate(
+        CalculationRequest(
+            calculation="options_assignment_exposure",
+            option_type="put",
+            strike=50,
+            contracts=2,
+        )
+    )
+
+    assert result.values["assignment_shares"] == 200
+    assert result.values["assignment_cash_exposure"] == 10_000
+    assert result.assumptions
+
+
 def test_unknown_inputs_and_missing_operation_fields_are_rejected() -> None:
     with pytest.raises(ValidationError):
         CalculationRequest(calculation="dollar_change", old_value=1, new_value=2, code="1+1")

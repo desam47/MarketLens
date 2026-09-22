@@ -19,6 +19,7 @@ from backend.ai.tool_registry import (
 def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
         "calculate",
+        "get_application_help",
         "get_bars",
         "get_fundamentals",
         "get_indicator",
@@ -27,7 +28,10 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_news",
         "get_options_snapshot",
         "get_quote",
+        "get_risk_dashboard",
         "get_support_resistance",
+        "get_trade_journal",
+        "get_watchlist",
     )
     result = default_registry.execute(
         ToolRequest(
@@ -88,6 +92,30 @@ def test_registry_enforces_per_tool_rate_limit() -> None:
     limited = registry.execute(request)
     assert limited.ok is False
     assert "rate limit" in (limited.error or "").lower()
+
+
+def test_registry_requires_confirmation_for_mutating_tools() -> None:
+    class EmptyRequest(BaseModel):
+        pass
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="delete_thing",
+            kind="read_only",
+            permission="mutating",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: EmptyRequest(),
+        )
+    )
+
+    unconfirmed = registry.execute(ToolRequest(tool_name="delete_thing"))
+    assert unconfirmed.ok is False
+    assert "confirmation" in (unconfirmed.error or "").lower()
+
+    confirmed = registry.execute(ToolRequest(tool_name="delete_thing", confirmed=True))
+    assert confirmed.ok is True
 
 
 def test_registry_surfaces_provider_freshness_and_quality_warning() -> None:

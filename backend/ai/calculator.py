@@ -30,6 +30,7 @@ CalculationName = Literal[
     "options_intrinsic_value",
     "options_extrinsic_value",
     "options_max_gain_loss",
+    "options_assignment_exposure",
     "expected_move",
 ]
 
@@ -70,6 +71,8 @@ class CalculationRequest(BaseModel):
     weights: list[float] | None = None
     peak_value: float | None = Field(default=None, gt=0)
     trough_value: float | None = Field(default=None, gt=0)
+    contracts: float | None = Field(default=None, gt=0)
+    contract_multiplier: float = Field(default=100, gt=0)
 
     @model_validator(mode="after")
     def _finite_inputs(self) -> CalculationRequest:
@@ -241,6 +244,26 @@ def calculate(request: CalculationRequest) -> CalculationResult:
             values = {"max_gain_per_share": max_gain, "max_loss_per_share": premium}
             formulas = ["unlimited (call) or strike - premium (put)", "premium"]
             assumptions.append("Maximum gain for a long call is theoretically unlimited; values are per share.")
+    elif op == "options_assignment_exposure":
+        strike, contracts = _require(request, "strike", "contracts")
+        option_type = request.option_type
+        if option_type is None:
+            raise ValueError("option_type is required for options_assignment_exposure")
+        multiplier = request.contract_multiplier
+        shares = contracts * multiplier
+        cash_exposure = strike * shares
+        values = {
+            "assignment_shares": shares,
+            "assignment_cash_exposure": cash_exposure,
+        }
+        formulas = [
+            "contracts * contract_multiplier",
+            "strike * assignment_shares",
+        ]
+        assumptions.append(
+            "A short put assigned delivers this cash exposure to buy shares; a short call assigned delivers this "
+            "many shares for sale at strike. Uses a 100-share standard equity option multiplier unless overridden."
+        )
     else:  # expected_move
         price, iv, days = _require(request, "new_value", "implied_volatility", "days_to_expiration")
         if iv > 10:
