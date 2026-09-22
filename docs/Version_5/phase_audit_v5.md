@@ -122,7 +122,9 @@ and registered through the shared registry: `get_quote`, `get_bars`,
 path, preserve provider/session/timeframe metadata, and never write to the
 database. The shared registry now derives actual provider, source timestamp,
 freshness age, fallback state, and stale/delayed warnings from each tool
-payload. Seven focused market-tool/provenance tests pass with `DEBUG=false`.
+payload. Chat can select each tool as a bounded read-only action and includes
+the verified payload provenance in its response. Nine focused market-tool,
+registry, and Chat integration tests pass with `DEBUG=false`.
 
 Remaining work includes explicit provider conflict reconciliation, complete
 freshness/fallback contracts for every tool, news/fundamentals/options and

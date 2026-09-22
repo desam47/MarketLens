@@ -1685,6 +1685,38 @@ def _calculate(db, parsed) -> tuple[str, bool]:
     )
 
 
+_MARKET_TOOL_ACTIONS = {
+    "get_quote",
+    "get_bars",
+    "get_indicator",
+    "get_support_resistance",
+    "get_market_regime",
+    "get_market_context",
+}
+
+
+def _run_market_tool(db, parsed) -> tuple[str, bool]:
+    """Execute one read-only grounded market-data tool selected by Chat."""
+    del db
+    arguments = parsed.action_tool_arguments or {}
+    result = default_registry.execute(
+        ToolRequest(tool_name=parsed.action, arguments=arguments)
+    )
+    if not result.ok:
+        return f"I couldn't retrieve that safely: {result.error}", False
+    freshness = (
+        f"{result.freshness_seconds:.1f}s old"
+        if result.freshness_seconds is not None
+        else "freshness unavailable"
+    )
+    return (
+        f"Verified {parsed.action} result from {result.provider} ({freshness}, "
+        f"session {result.session}, timeframe {result.timeframe or 'not specified'}): "
+        f"{result.data}",
+        True,
+    )
+
+
 _ACTION_HANDLERS = {
     "create_alert": _create_alert,
     "modify_alert": _modify_alert,
@@ -1709,6 +1741,8 @@ def _run_action(db, parsed) -> tuple[str, bool, list[str]]:
     to ``(text, grounded, screened)`` here either way.
     """
     handler = _ACTION_HANDLERS.get(parsed.action)
+    if parsed.action in _MARKET_TOOL_ACTIONS:
+        return _run_market_tool(db, parsed) + ([],)
     if handler is None:  # pragma: no cover — action is a closed Literal
         return "I couldn't do that — please try again.", False, []
     try:

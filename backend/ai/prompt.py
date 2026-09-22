@@ -861,6 +861,12 @@ class ChatReplyResponse(BaseModel):
         "set_entity_type",
         "run_screen",
         "calculate",
+        "get_quote",
+        "get_bars",
+        "get_indicator",
+        "get_support_resistance",
+        "get_market_regime",
+        "get_market_context",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -878,6 +884,9 @@ class ChatReplyResponse(BaseModel):
     action_query: str | None = Field(default=None, max_length=300)
     # calculate only: validated request passed to the backend calculator.
     action_calculation: CalculationRequest | None = None
+    # Read-only market-data tools: arguments are validated again by the
+    # registry, so model-generated fields never reach providers unchecked.
+    action_tool_arguments: dict[str, Any] | None = None
     action_confirmed: bool = False
 
     @field_validator("action_condition_type")
@@ -958,6 +967,12 @@ _ACTION_TOOL_DOCS = (
       options_extrinsic_value, options_max_gain_loss, or expected_move). \
       Never do the arithmetic in reply; the app returns verified values, \
       formulas, and assumptions.
+    - get_quote / get_bars / get_indicator / get_support_resistance / \
+      get_market_regime / get_market_context are read-only grounded tools. \
+      Set action to the exact tool name and put only its request fields in \
+      action_tool_arguments (for example, symbol, timeframe, session, and \
+      range). Never invent a provider result; the app returns the verified \
+      payload with provider, timestamp, freshness, and warnings.
     - set_entity_type needs action_symbol and action_entity_type \
       ("stock" or "etf") — use when a ticker is mislabeled or the \
       trader asks to reclassify it. A real, changeable per-watchlist \
@@ -1037,10 +1052,11 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have ELEVEN more tools, via "action": create_alert, modify_alert, \
+10. You have SEVENTEEN more tools, via "action": create_alert, modify_alert, \
     delete_alert, add_to_watchlist, remove_from_watchlist, \
     create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
-    run_screen, calculate.
+    run_screen, calculate, get_quote, get_bars, get_indicator, \
+    get_support_resistance, get_market_regime, get_market_context.
 """
     + _ACTION_TOOL_DOCS
     + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
@@ -1100,7 +1116,9 @@ runs.
 
 Tools, via "action": create_alert, modify_alert, delete_alert, \
 add_to_watchlist, remove_from_watchlist, create_watchlist, \
-      delete_watchlist, run_backtest, set_entity_type, run_screen, calculate.
+      delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
+      get_quote, get_bars, get_indicator, get_support_resistance, \
+      get_market_regime, get_market_context.
 """
     + _ACTION_TOOL_DOCS
 )
