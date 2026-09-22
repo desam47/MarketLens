@@ -304,19 +304,52 @@ def add_symbol_to_watchlist(
     exists, enabled" case) distinct from one that actually needs
     (re-)starting. Neither step does provider I/O on this request thread,
     so this endpoint returns as soon as the DB row is written.
+
+    Enforces the same two checks ``import_watchlist_symbols`` already does
+    for a bulk import: ticker validation via the market data provider and
+    the ``max_symbols_per_watchlist`` cap. This is the endpoint the
+    frontend's everyday "add a symbol" UI action actually calls — without
+    these checks here, a typo'd/nonexistent ticker was silently accepted
+    (and started live tracking + a backfill job that could never resolve
+    against any provider) and a watchlist could grow past the configured
+    cap through this path even though the bulk-import path enforced it.
+    Only applied when the symbol isn't already present-and-enabled, so a
+    duplicate add to an existing/enabled symbol stays a cheap, provider-
+    I/O-free no-op — matching the import endpoint's own skip logic.
     """
     repo = WatchlistRepository(db)
     # First check if watchlist exists
     watchlist = repo.get_watchlist(watchlist_id)
     if watchlist is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    sym = symbol.symbol.upper().strip()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Symbol cannot be empty")
+
+    existing = repo.get_watchlist_symbol(watchlist_id, sym)
+    if not (existing and existing.is_enabled):
+        max_symbols = _settings.watchlist.max_symbols_per_watchlist
+        current_count = repo.get_watchlist_symbol_count(watchlist_id, enabled_only=True)
+        if current_count >= max_symbols:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Watchlist full (max {max_symbols} symbols)",
+            )
+        result = validate_symbol(sym)
+        if not result.valid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{sym}: {result.error or 'invalid symbol'}",
+            )
+
     watchlist_symbol, is_new_row, did_reenable = repo.add_symbol_to_watchlist(
         watchlist_id=watchlist_id,
-        symbol=symbol.symbol,
+        symbol=sym,
         entity_type=symbol.entity_type or "stock",
     )
     if is_new_row or did_reenable:
-        _start_symbol_tracking_and_backfill(symbol.symbol.upper())
+        _start_symbol_tracking_and_backfill(sym)
     return watchlist_symbol
 
 

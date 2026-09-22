@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.config.settings import settings as _settings
 
 
 def _mock_watchlist(id=1, name="Watchlist", description="A watchlist", is_active=True):
@@ -264,6 +265,62 @@ class TestWatchlistAPI(unittest.TestCase):
 
         self.assertEqual(response.status_code, 201)
         mock_ingestion.register_symbol.assert_not_called()
+
+    def test_add_symbol_rejects_invalid_ticker(self):
+        """A typo'd/nonexistent ticker must be rejected with 400, not
+        silently accepted. This is the endpoint the frontend's "add a
+        symbol" UI actually calls, and it used to skip the provider
+        validation the bulk-import endpoint (POST .../import) already
+        enforced -- a bad ticker got a DB row and started live tracking +
+        a backfill job that could never resolve against any provider."""
+        self.mock_repo.get_watchlist_symbol.return_value = None
+        self.mock_repo.get_watchlist_symbol_count.return_value = 0
+
+        with patch("backend.api.watchlist.router.validate_symbol") as mock_validate:
+            from backend.symbols.validator import ValidationResult
+
+            mock_validate.return_value = ValidationResult(
+                symbol="FAKEX", valid=False, error="no quote data"
+            )
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "FAKEX"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("FAKEX", response.json()["detail"])
+        self.mock_repo.add_symbol_to_watchlist.assert_not_called()
+
+    def test_add_symbol_rejects_when_watchlist_full(self):
+        """The max-symbols cap must be enforced on the single-add path too
+        -- previously only the bulk-import endpoint checked it, so a
+        watchlist could grow past the configured cap one symbol at a
+        time through this endpoint."""
+        self.mock_repo.get_watchlist_symbol.return_value = None
+        self.mock_repo.get_watchlist_symbol_count.return_value = (
+            _settings.watchlist.max_symbols_per_watchlist
+        )
+
+        with patch("backend.api.watchlist.router.validate_symbol") as mock_validate:
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "AAPL"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("full", response.json()["detail"].lower())
+        mock_validate.assert_not_called()
+        self.mock_repo.add_symbol_to_watchlist.assert_not_called()
+
+    def test_add_symbol_skips_validation_for_existing_enabled_symbol(self):
+        """Re-adding a symbol that's already present and enabled in this
+        watchlist is a cheap no-op and must NOT trigger a provider
+        validation call or the max-symbols check -- matching the
+        bulk-import endpoint's own skip-if-already-enabled behavior."""
+        existing = _mock_symbol(id=1, watchlist_id=1, symbol="AAPL", is_enabled=True)
+        self.mock_repo.get_watchlist_symbol.return_value = existing
+        self.mock_repo.add_symbol_to_watchlist.return_value = (existing, False, False)
+
+        with patch("backend.api.watchlist.router.validate_symbol") as mock_validate:
+            response = self.client.post("/api/watchlists/1/symbols", json={"symbol": "AAPL"})
+
+        self.assertEqual(response.status_code, 201)
+        mock_validate.assert_not_called()
+        self.mock_repo.get_watchlist_symbol_count.assert_not_called()
 
     def test_remove_symbol_from_watchlist(self):
         """Test removing a symbol from a watchlist — and that it cancels
