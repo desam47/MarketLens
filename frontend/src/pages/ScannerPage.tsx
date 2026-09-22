@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { CalendarEvent, FilterSpec, ScanResult, Watchlist } from '../services/api';
 import { FilterBuilder } from '../components/FilterBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
-import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
+import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { EarningsBadge } from '../components/EarningsBadge';
 
@@ -278,7 +278,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                     </span>
                     <span className={result.total_score >= 0 ? 'scanner-score-positive' : 'scanner-score-negative'}>{result.total_score >= 0 ? '+' : ''}{result.total_score.toFixed(1)}</span>
                     <span className="scanner-result-reason">{matchReason(result)}</span>
-                    <MarketDataFreshnessBadge
+                    <MarketDataUpdateStatus
                       dataStatus={result.quote?.data_status}
                       freshness={result.explanation?.data_freshness?.status}
                       timestamp={result.quote?.timestamp ?? result.timestamp}

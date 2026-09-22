@@ -11,9 +11,8 @@ import { SymbolInput } from '../components/SymbolInput';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
-import { formatETDateTime } from '../components/chartMath';
 import { SkeletonBlock } from '../components/SkeletonBlock';
-import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
+import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 
 // Per-card skeletons rather than the page-level DashboardSkeleton
 // component (components/skeletons/DashboardSkeleton.tsx): that one
@@ -651,15 +650,9 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                   </span>
                 </>
               )}
-              {effectiveQuote.timestamp && (
-                <span className="last-close-fetched">
-                  {formatETDateTime(effectiveQuote.timestamp)}
-                </span>
-              )}
-              <MarketDataFreshnessBadge
+              <MarketDataUpdateStatus
                 dataStatus={liveQuote ? 'LIVE' : 'STALE'}
                 timestamp={effectiveQuote.timestamp}
-                showAge
                 connectionStatus={quoteConnectionStatus}
                 provider={liveQuote?.provider}
               />

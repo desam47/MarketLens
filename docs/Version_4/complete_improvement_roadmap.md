@@ -4,6 +4,8 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
+Latest checkpoint (2026-09-21): provider observability, bounded failover history, provider attribution for ingestion updates, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented.
+
 ## Phase 1 — Shared real-time data foundation
 
 ### 1. Shared live microstructure cache — [x] Done
@@ -222,11 +224,11 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, configuration-based entitlement details, and a dedicated last-successful-update table in System Health are implemented. Cross-page last-successful-update surfacing and live entitlement verification remain.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, configuration-based entitlement details, the System Health last-successful-update table, and shared update-status indicators across the primary market-data pages are implemented. Live entitlement verification remains.
 
 - Stream reconnect status
 - Provider health
-- Last successful update per symbol (System Health and Watchlist views implemented; other pages remain)
+- Last successful update per symbol (System Health, Watchlist, Dashboard, Scanner, Symbol, and Alerts views implemented)
 - Per-symbol Watchlist data status (provider, age, and connection state) — [x] Done
 - Per-provider failover visibility (bounded event history implemented; long-term persistence remains)
 - Better stale-data warnings
@@ -234,4 +236,4 @@ Reconnect state, provider health, freshness badges, failover labels, per-symbol 
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, configuration-based entitlement visibility, and the System Health last-successful-update table are now in place. Next prioritize surfacing the same update evidence on Dashboard, Scanner, Symbol, and Alerts, followed by long-term failover-event persistence and live entitlement verification where providers expose it.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, configuration-based entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. Next prioritize long-term failover-event persistence and live entitlement verification where providers expose it.

@@ -24,7 +24,7 @@ import { SignalExplanationPanel } from '../components/SignalExplanationPanel';
 import { TapePressureCard } from '../components/TapePressureCard';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
-import { MarketDataFreshnessBadge } from '../components/MarketDataFreshnessBadge';
+import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 
@@ -1167,25 +1167,20 @@ const fetchBars = useCallback(async () => {
                     ({liveChangePct >= 0 ? '+' : ''}{liveChangePct.toFixed(2)}%)
                   </span>
                 )}
-                {quote.timestamp && (
-                  <span style={{ color: 'var(--text-muted)', marginLeft: 8 }}>
-                    {formatETDateTime(quote.timestamp)}
-                  </span>
-                )}
-                <MarketDataFreshnessBadge
+                <MarketDataUpdateStatus
                   dataStatus={quote.data_status}
                   timestamp={quote.timestamp}
-                  showAge
                   connectionStatus={quoteConnectionStatus}
+                  provider={quote.provider}
                 />
               </>
             ) : '—'}
             {quote?.price == null && (
-              <MarketDataFreshnessBadge
+              <MarketDataUpdateStatus
                 dataStatus={quote?.data_status}
                 timestamp={quote?.timestamp}
-                showAge
                 connectionStatus={quoteConnectionStatus}
+                provider={quote?.provider}
               />
             )}
           </p>

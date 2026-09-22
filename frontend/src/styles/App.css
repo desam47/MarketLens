@@ -179,6 +179,8 @@ body {
 .market-data-freshness-stale { color: #fb923c; }
 .market-data-freshness-reconnecting { color: var(--warning); }
 .market-data-freshness-unavailable { color: var(--text-muted); }
+.market-data-update-status { display: inline-flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; }
+.market-data-update-time { color: var(--text-muted); font-size: 0.75rem; }
 
 @media (max-width: 768px) {
   .main-content {
