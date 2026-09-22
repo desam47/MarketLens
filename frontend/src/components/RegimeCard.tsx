@@ -22,7 +22,7 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, 
   if (error) {
     return (
       <div className="card regime-card card-error">
-        <h2>Market Regime</h2>
+        <h2>Symbol Market Regime</h2>
         <p className="empty-state">⚠ Failed to load: {error}</p>
         {onRetry && <button className="btn btn-small data-state-retry" onClick={onRetry}>Retry</button>}
       </div>
@@ -31,7 +31,7 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, 
   if (!regime) {
     return (
       <div className="card regime-card">
-        <h2>Market Regime</h2>
+        <h2>Symbol Market Regime</h2>
         <p className="empty-state">No regime data available</p>
       </div>
     );
@@ -43,7 +43,7 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, 
 
   return (
     <div className="card regime-card">
-      <h2>Market Regime</h2>
+      <h2>Symbol Market Regime</h2>
       <div className="regime-main">
         <span className="regime-badge" style={{ backgroundColor: color }}>
           {regime.regime.replace(/_/g, ' ').toUpperCase()}
@@ -103,7 +103,9 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, 
       )}
       {regime.timestamp && (
         <div className="timestamp">
-          Updated: {formatETDateTime(regime.timestamp)}
+          {regime.freshness.toUpperCase()}
+          {regime.data_age_seconds != null && ` · Signal age: ${Math.round(regime.data_age_seconds)}s`}
+          {' · '}Last completed bar: {formatETDateTime(regime.timestamp)}
         </div>
       )}
     </div>

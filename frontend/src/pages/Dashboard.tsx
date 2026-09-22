@@ -367,9 +367,10 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
   // minute share a timestamp and are deliberately ignored here.
   useEffect(() => {
     if (trendBarVersion === 0) return;
+    void fetchRegime();
     void fetchTrends();
     void fetchConfluence();
-  }, [trendBarVersion, fetchTrends, fetchConfluence]);
+  }, [trendBarVersion, fetchRegime, fetchTrends, fetchConfluence]);
 
   const fetchStrategy = useCallback(async () => {
     const requestSymbol = symbol;

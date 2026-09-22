@@ -109,7 +109,13 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
         engine = MarketRegimeEngine(symbol, trend_engine=shared_trend)
         _engines[symbol] = engine
         # Seed historical data from DB so we return real signals immediately
-        count = seed_engine_from_bars(symbol, "1m", engine.update)
+        # The shared TrendEngine was already seeded by get_shared_trend_engine.
+        # Seed only regime-specific indicators here; replaying these bars
+        # through the shared trend path would duplicate warmup work.
+        def seed_regime_only(**kwargs):
+            engine.update(**kwargs, skip_trend_update=True)
+
+        count = seed_engine_from_bars(symbol, "1m", seed_regime_only)
         if count > 0:
             logger.info(f"Seeded regime engine for {symbol} with {count} historical bars")
         # Register for live-tick updates from the ingestion service. Both
@@ -138,6 +144,7 @@ def get_engine(symbol: str) -> MarketRegimeEngine:
                 high=kwargs.get("high"),
                 low=kwargs.get("low"),
                 open_price=kwargs.get("open_price"),
+                skip_trend_update=True,
             )
             # Invalidate the regime TTL cache so the next API call reflects
             # the freshly-updated regime engine state (not the 30s-TTL stale

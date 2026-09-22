@@ -634,6 +634,18 @@ class MultiTimeframeSettings(BaseSettings):
     )
 
 
+class RegimeSettings(BaseSettings):
+    """Thresholds used by per-symbol market-regime classification."""
+
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="REGIME_", extra="ignore")
+
+    volatility_threshold_high: float = 0.05
+    volatility_threshold_low: float = 0.01
+    adx_trending_threshold: float = 25.0
+    adx_strong_threshold: float = 40.0
+    bb_width_threshold: float = 0.05
+
+
 class MarketContextSettings(BaseSettings):
     """Phase 8: market-context analysis across SPY/QQQ/IWM/VIX.
 
@@ -1001,6 +1013,7 @@ class Settings(BaseSettings):
     trend: TrendSettings = Field(default_factory=TrendSettings)
     data_quality: DataQualitySettings = Field(default_factory=DataQualitySettings)
     multitimeframe: MultiTimeframeSettings = Field(default_factory=MultiTimeframeSettings)
+    regime: RegimeSettings = Field(default_factory=RegimeSettings)
     market_context: MarketContextSettings = Field(default_factory=MarketContextSettings)
     relative_strength: RelativeStrengthSettings = Field(default_factory=RelativeStrengthSettings)
     aux_data: AuxDataSettings = Field(default_factory=AuxDataSettings)

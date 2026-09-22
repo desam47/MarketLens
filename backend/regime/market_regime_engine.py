@@ -9,6 +9,7 @@ from enum import StrEnum
 from itertools import islice
 from typing import Any
 
+from ..config.settings import settings
 from ..engines.timeframe import Timeframe
 from ..indicators.adx import ADXIndicator
 from ..indicators.atr import ATRIndicator
@@ -132,12 +133,13 @@ class MarketRegimeEngine:
         self.max_price_history = 100
         self.price_history: deque[tuple[datetime, float]] = deque(maxlen=self.max_price_history)
 
-        # Regime thresholds (these would ideally be configurable)
-        self.volatility_threshold_high = 0.05  # 5% ATR as % of price
-        self.volatility_threshold_low = 0.01  # 1% ATR as % of price
-        self.adx_trending_threshold = 25  # ADX > 25 indicates trending
-        self.adx_strong_threshold = 40  # ADX > 40 indicates strong trend
-        self.bb_width_threshold = 0.05  # Bollinger Band width threshold for squeeze
+        # Regime thresholds are environment-backed so local tuning does not
+        # require changing classification code.
+        self.volatility_threshold_high = settings.regime.volatility_threshold_high
+        self.volatility_threshold_low = settings.regime.volatility_threshold_low
+        self.adx_trending_threshold = settings.regime.adx_trending_threshold
+        self.adx_strong_threshold = settings.regime.adx_strong_threshold
+        self.bb_width_threshold = settings.regime.bb_width_threshold
 
     def update(
         self,
@@ -148,6 +150,7 @@ class MarketRegimeEngine:
         high: float | None = None,
         low: float | None = None,
         open_price: float | None = None,
+        skip_trend_update: bool = False,
     ) -> None:
         """Update regime detection with new market data"""
         # Use provided OHLC or approximate from price
@@ -156,7 +159,8 @@ class MarketRegimeEngine:
         open_price_val = open_price if open_price is not None else price
 
         # Update component engines
-        self.trend_engine.update(price, volume, timestamp, provider)
+        if not skip_trend_update:
+            self.trend_engine.update(price, volume, timestamp, provider)
         self.multitimeframe_engine.refresh_confluence(timestamp)
 
         # Update indicators
@@ -235,6 +239,20 @@ class MarketRegimeEngine:
             supporting_factors=factors,
             timestamp=timestamp,
         )
+
+        # Polling and repeated bar reconciliation can produce the same
+        # classification repeatedly. Keep the latest timestamp, but avoid
+        # filling history with identical snapshots that add no information.
+        if self.regime_history:
+            previous = self.regime_history[-1]
+            if (
+                previous.regime == signal.regime
+                and previous.confidence == signal.confidence
+                and previous.strength == signal.strength
+                and previous.supporting_factors == signal.supporting_factors
+            ):
+                self.regime_history[-1] = signal
+                return
 
         # Store in history. The deque's maxlen caps it at
         # self.max_regime_history and evicts the oldest on overflow.
