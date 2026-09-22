@@ -852,7 +852,7 @@ class Scanner:
                     if cached is not None and (now - cached[0]) < self._tape_cache_ttl:
                         snap = cached[1]
                     else:
-                        snap = get_tape_engine(result.symbol).get_snapshot()
+                        snap = get_tape_engine(result.symbol, seed=False).get_snapshot()
                         self._tape_cache[result.symbol] = (now, snap)
                     # Persist live metrics on the scan result so the
                     # composable filter endpoint can evaluate the same shared

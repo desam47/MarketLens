@@ -2055,8 +2055,7 @@ class MarketDataIngestionService:
         ``backend/market_data/streaming/bridge.py``'s module docstring).
         Without this, a symbol added directly via the watchlist endpoints
         (as opposed to being present in the one watchlist
-        ``ingestion_service`` loads at startup and subscribes via
-        ``main.py``'s lifespan) got REST-polled quotes/bars but never a
+        ``ingestion_service`` loads at startup) got REST-polled quotes/bars but never a
         live trade tick — its Tape Pressure card would show a one-time
         historical seed that ages out of the rolling window and then stays
         permanently empty. A re-enabled symbol needs this same (re-)wake-up
@@ -2070,15 +2069,11 @@ class MarketDataIngestionService:
         symbol = symbol.upper()
         try:
             from backend.market_data.streaming.webull_stream import get_webull_stream_client
-
-            _stream = get_webull_stream_client()
-            if _stream is not None:
-                _stream.subscribe([symbol])
+            stream = get_webull_stream_client()
+            if stream is not None:
+                stream.subscribe([symbol])
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Webull stream subscription change failed in register_symbol", exc_info=True
-            )
-
+            logger.debug("register_symbol stream activation failed", exc_info=True)
         if symbol in self.symbols:
             return
         self.symbols.append(symbol)
@@ -2120,25 +2115,17 @@ class MarketDataIngestionService:
         old_set = set(self.symbols)
         new_set = set(new_symbols)
         added = new_set - old_set
-        removed = old_set - new_set
         for symbol in added:
             self.register_symbol(symbol)
         self.symbols = new_symbols
-        # Keep the Webull MQTT subscription set in sync with the watchlist.
         try:
             from backend.market_data.streaming.webull_stream import get_webull_stream_client
-
-            _stream = get_webull_stream_client()
-            if _stream is not None:
-                if added:
-                    _stream.subscribe(added)
-                if removed:
-                    _stream.unsubscribe(removed)
+            stream = get_webull_stream_client()
+            removed = old_set - new_set
+            if stream is not None and removed:
+                stream.unsubscribe(removed)
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Webull stream subscription change failed in refresh_symbols_from_watchlist",
-                exc_info=True,
-            )
+            logger.debug("watchlist stream deactivation failed", exc_info=True)
         logger.info(
             f"Refreshed symbols: {len(new_symbols)} total, {len(added)} new ({list(added)})"
         )

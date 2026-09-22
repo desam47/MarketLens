@@ -44,7 +44,7 @@ def on_stream_snapshot(symbol, price, volume, ts, high, low, open_, bid=None, as
     try:
         from backend.api.tape.registry import get_tape_engine
 
-        get_tape_engine(symbol).note_price(price, ts)
+        get_tape_engine(symbol, seed=False).note_price(price, ts)
     except Exception as e:  # noqa: BLE001
         logger.debug("stream snapshot -> tape failed for %s: %s", symbol, e)
     engine_registry.dispatch_microstructure(symbol, payload)

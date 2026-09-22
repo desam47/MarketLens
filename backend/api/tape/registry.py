@@ -3,9 +3,9 @@ Shared TapeEngine registry — one warmed engine per symbol, fed by the
 Webull trade-tick stream via ``engine_registry`` (kind ``"trade"``).
 
 Mirrors ``backend/api/trend/registry.py``: lazy construct on first
-``get_tape_engine(symbol)``, best-effort seed from Webull's historical
-Time & Sales (``market_data.get_tick``), then register for live ticks.
-``warmup_tape_engines()`` pre-warms the watchlist at startup.
+``get_tape_engine(symbol)``, restore local aggregates, then optionally seed
+from Webull's historical Time & Sales and register for live ticks. Startup
+warmup is limited to an explicit, small priority list.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from backend.config.settings import settings
 from backend.market_data.services.engine_seeder import engine_registry
@@ -27,6 +28,9 @@ _engines: dict[str, TapeEngine] = {}
 # so an unguarded check-then-insert can race and construct two engines for
 # the same symbol, each registered independently with engine_registry.
 _engines_lock = threading.Lock()
+_seed_inflight: set[str] = set()
+_seed_lock = threading.Lock()
+_seed_pool: ThreadPoolExecutor | None = None
 
 # Background persistence: drain every engine's closed 1-second bars into
 # ``tape_bars`` on a timer, so the read paths stay pure and memory is
@@ -35,6 +39,109 @@ _flush_thread: threading.Thread | None = None
 _flush_stop = threading.Event()
 _FLUSH_INTERVAL = 5.0
 _RETENTION_EVERY = 300.0  # prune once every ~5 min
+
+
+def _get_seed_pool() -> ThreadPoolExecutor:
+    global _seed_pool
+    if _seed_pool is None:
+        _seed_pool = ThreadPoolExecutor(max_workers=settings.tape.seed_max_concurrency, thread_name_prefix="tape-seed")
+    return _seed_pool
+
+
+def _hydrate_from_persisted_bars(symbol: str, engine: TapeEngine) -> int:
+    """Restore recent local aggregates before the optional provider seed."""
+    try:
+        from datetime import timedelta
+
+        from backend.database import SessionLocal
+        from backend.repositories.tape_repository import get_tape_bars
+        from backend.utils.timezone import now_ny
+        db = SessionLocal()
+        try:
+            rows = get_tape_bars(db, symbol, since=now_ny() - timedelta(seconds=settings.tape.long_window_seconds), limit=settings.tape.long_window_seconds + 5)
+        finally:
+            db.close()
+        prints = []
+        for row in rows:
+            if row.close is None:
+                continue
+            if row.buy_volume:
+                prints.append((row.timestamp, float(row.close), int(row.buy_volume), "buy"))
+            if row.sell_volume:
+                prints.append((row.timestamp, float(row.close), int(row.sell_volume), "sell"))
+        if prints:
+            engine.seed(prints)
+        return len(rows)
+    except Exception:  # noqa: BLE001
+        logger.debug("tape persisted hydration failed for %s", symbol, exc_info=True)
+        return 0
+
+
+def _activate_stream(symbol: str) -> None:
+    try:
+        from backend.market_data.streaming.webull_stream import get_webull_stream_client
+        stream = get_webull_stream_client()
+        if stream is not None:
+            stream.subscribe([symbol])
+    except Exception:  # noqa: BLE001
+        logger.debug("tape stream activation failed for %s", symbol, exc_info=True)
+
+
+def _seed_once(symbol: str, engine: TapeEngine) -> None:
+    try:
+        _seed_from_webull_ticks(symbol, engine)
+    finally:
+        with _seed_lock:
+            _seed_inflight.discard(symbol)
+
+
+def _schedule_seed(symbol: str, engine: TapeEngine) -> None:
+    with _seed_lock:
+        if symbol in _seed_inflight:
+            return
+        _seed_inflight.add(symbol)
+    try:
+        _get_seed_pool().submit(_seed_once, symbol, engine)
+    except Exception:  # noqa: BLE001
+        with _seed_lock:
+            _seed_inflight.discard(symbol)
+        logger.debug("tape seed queue rejected for %s", symbol, exc_info=True)
+
+
+def _priority_watchlist_symbols() -> list[str]:
+    """Resolve the configured active watchlist to enabled symbols."""
+    names = [item.strip() for item in settings.tape.priority_watchlist.split(",") if item.strip()]
+    if not names:
+        return []
+    try:
+        from backend.database import SessionLocal
+        from backend.repositories.watchlist_repository import WatchlistRepository
+
+        db = SessionLocal()
+        try:
+            repo = WatchlistRepository(db)
+            if any(name.lower() in {"*", "all"} for name in names):
+                watchlists = repo.get_watchlists(active_only=True)
+            else:
+                watchlists = []
+                for name in names:
+                    watchlist = repo.get_watchlist_by_name(name)
+                    if watchlist is None:
+                        logger.warning("Tape priority watchlist not found or inactive: %s", name)
+                        continue
+                    watchlists.append(watchlist)
+            symbols = set()
+            for watchlist in watchlists:
+                symbols.update(
+                    row.symbol.upper()
+                    for row in repo.get_watchlist_symbols(watchlist.id, enabled_only=True)
+                )
+            return sorted(symbols)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("tape priority watchlist lookup failed", exc_info=True)
+        return []
 
 
 def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
@@ -102,7 +209,7 @@ def _seed_from_webull_ticks(symbol: str, engine: TapeEngine) -> int:
         return 0
 
 
-def get_tape_engine(symbol: str) -> TapeEngine:
+def get_tape_engine(symbol: str, *, seed: bool = True) -> TapeEngine:
     """Get or create the shared TapeEngine for ``symbol``.
 
     The historical-seed replay (Webull Time & Sales) used to run inline
@@ -117,6 +224,7 @@ def get_tape_engine(symbol: str) -> TapeEngine:
     with _engines_lock:
         engine = _engines.get(symbol)
         is_new = engine is None
+        restored = 0
         if is_new:
             engine = TapeEngine(symbol)
             _engines[symbol] = engine
@@ -126,13 +234,12 @@ def get_tape_engine(symbol: str) -> TapeEngine:
     # decided atomically above.
     if is_new:
         engine_registry.register("trade", symbol, engine.update)
-        threading.Thread(
-            target=_seed_from_webull_ticks,
-            args=(symbol, engine),
-            name=f"tape-seed-{symbol}",
-            daemon=True,
-        ).start()
-        logger.info("Tape engine ready for %s (seeding in background)", symbol)
+        restored = _hydrate_from_persisted_bars(symbol, engine)
+        logger.info("Tape engine ready for %s (%d persisted bars)", symbol, restored)
+    if seed:
+        _activate_stream(symbol)
+        if is_new and restored == 0:
+            _schedule_seed(symbol, engine)
     return engine
 
 
@@ -219,16 +326,18 @@ def warmup_tape_engines() -> list[str]:
     ``settings.tape.enabled``."""
     if not settings.tape.enabled:
         return []
-    try:
-        from backend.market_data.services.ingestion_service import ingestion_service
-
-        symbols = list(ingestion_service.symbols)
-    except Exception:  # noqa: BLE001
-        symbols = []
-    for sym in symbols:
-        try:
-            get_tape_engine(sym)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("tape warmup failed for %s: %s", sym, e)
+    symbols = _priority_watchlist_symbols()
     start_tape_flusher()
+    if settings.tape.priority_warmup_enabled and symbols:
+        def _warm_priority() -> None:
+            for sym in symbols:
+                if _flush_stop.wait(settings.tape.priority_warmup_delay_seconds):
+                    break
+                try:
+                    get_tape_engine(sym, seed=True)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("tape priority warmup failed for %s: %s", sym, e)
+        threading.Thread(target=_warm_priority, name="tape-priority-warmup", daemon=True).start()
+    else:
+        symbols = []
     return symbols

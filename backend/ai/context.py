@@ -656,7 +656,7 @@ def _tape_context(sym: str) -> dict[str, Any]:
         if _settings.tape.enabled:
             from backend.api.tape.registry import get_tape_engine
 
-            s = get_tape_engine(sym).get_snapshot()
+            s = get_tape_engine(sym, seed=False).get_snapshot()
             if s.get("trade_count"):
                 tape = {
                     "pressure": s["pressure"],

@@ -901,6 +901,12 @@ class TapeSettings(BaseSettings):
     # signed-volume z-score above which pressure is "heavy_buy"/"heavy_sell".
     heavy_pressure_z: float = Field(default=2.0, gt=0)
     retention_days: int = Field(default=2, ge=1)
+    # Tape engines are demand-driven.  One optional watchlist can be warmed
+    # gradually after startup; an empty value means no startup seeding.
+    seed_max_concurrency: int = Field(default=2, ge=1, le=16)
+    priority_watchlist: str = Field(default="")
+    priority_warmup_enabled: bool = Field(default=False)
+    priority_warmup_delay_seconds: float = Field(default=2.0, ge=0.0, le=300.0)
 
     @model_validator(mode="after")
     def _check_window_ordering(self) -> "TapeSettings":

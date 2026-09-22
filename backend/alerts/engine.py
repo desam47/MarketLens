@@ -535,7 +535,7 @@ class AlertsEngine:
         snapshot = dict(payload)
         try:
             from backend.api.tape.registry import get_tape_engine
-            tape = get_tape_engine(sym).get_snapshot()
+            tape = get_tape_engine(sym, seed=False).get_snapshot()
             snapshot.update({
                 "block_count": tape["block_count_5m"], "pressure_trend": tape["pressure_trend"],
                 "tape_accel": tape["tape_accel"], "volume_accel": tape["volume_accel"],

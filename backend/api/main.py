@@ -211,10 +211,9 @@ async def lifespan(app: FastAPI):
                 _stream.on_trade = on_stream_trade
                 _stream.on_bbo = on_stream_bbo
                 _stream.on_status = alerts_engine.evaluate_stream_status
-                _stream.subscribe(ingestion_service.symbols)
                 _stream.start()
                 app.state.webull_stream = _stream
-                logger.info("Webull stream started for %d symbols", len(ingestion_service.symbols))
+                logger.info("Webull stream started with demand-driven subscriptions")
     except Exception as e:
         logger.warning(f"Webull stream startup failed: {e}")
 
