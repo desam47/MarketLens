@@ -2593,6 +2593,14 @@ export interface TickSignalReplayCandle {
   tick_count: number;
   signal_score: number | null;
   signal_state: 'bullish' | 'bearish' | 'neutral' | null;
+  buy_volume: number;
+  sell_volume: number;
+  upticks: number;
+  downticks: number;
+  trade_velocity: number;
+  large_prints: number;
+  tape_pressure: number;
+  bbo_imbalance: number | null;
 }
 export interface TickSignalReplayResponse {
   symbol: string;

@@ -177,6 +177,7 @@ def reconstruct_tick_signals(
         raise ValueError("tick reconstruction currently supports only the 1m timeframe")
 
     buckets: dict[datetime, dict[str, Any]] = {}
+    previous_price: float | None = None
     for event in events:
         price = event.get("price")
         timestamp = event.get("timestamp")
@@ -203,16 +204,41 @@ def reconstruct_tick_signals(
                 "close": float(price),
                 "volume": 0,
                 "ticks": 0,
+                "buy_volume": 0,
+                "sell_volume": 0,
+                "upticks": 0,
+                "downticks": 0,
+                "large_prints": 0,
+                "bid_size": 0.0,
+                "ask_size": 0.0,
+                "bbo_samples": 0,
             },
         )
         row["high"] = max(row["high"], float(price))
         row["low"] = min(row["low"], float(price))
         row["close"] = float(price)
         row["ticks"] += 1
+        if previous_price is not None:
+            volume = event.get("volume") if isinstance(event.get("volume"), (int, float)) else 0
+            if float(price) > previous_price:
+                row["buy_volume"] += int(volume)
+                row["upticks"] += 1
+            elif float(price) < previous_price:
+                row["sell_volume"] += int(volume)
+                row["downticks"] += 1
+            if volume >= 10_000:
+                row["large_prints"] += 1
+        if isinstance(event.get("bid_size"), (int, float)) and isinstance(
+            event.get("ask_size"), (int, float)
+        ):
+            row["bid_size"] += float(event["bid_size"])
+            row["ask_size"] += float(event["ask_size"])
+            row["bbo_samples"] += 1
         if str(event.get("event_type", "")).lower() in {"trade", "time_and_sales", "tape"}:
             volume = event.get("volume")
             if isinstance(volume, (int, float)) and volume > 0:
                 row["volume"] += int(volume)
+        previous_price = float(price)
 
     if not buckets:
         return []
@@ -239,6 +265,20 @@ def reconstruct_tick_signals(
                 "signal_score": score,
                 "signal_state": state_from_score(score) if score is not None else None,
                 "signal": label_columns(score),
+                "buy_volume": bar.buy_volume,
+                "sell_volume": bar.sell_volume,
+                "upticks": bar.upticks,
+                "downticks": bar.downticks,
+                "trade_velocity": bar.ticks,
+                "large_prints": bar.large_prints,
+                "tape_pressure": (
+                    (bar.buy_volume - bar.sell_volume) / max(1, bar.buy_volume + bar.sell_volume)
+                ),
+                "bbo_imbalance": (
+                    (bar.bid_size - bar.ask_size) / max(1.0, bar.bid_size + bar.ask_size)
+                    if bar.bbo_samples
+                    else None
+                ),
             }
         )
     return reconstructed

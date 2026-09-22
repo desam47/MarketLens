@@ -282,8 +282,9 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
           <span>{tickReplay.retained_events.toLocaleString()} retained events → {tickReplay.reconstructed_candles} one-minute candles</span>
           <span>{tickReplay.candles.filter((c) => c.signal_score != null).length} causal signal states reconstructed</span>
           {tickReplay.candles.length > 0 && (
-            <span>Latest: {tickReplay.candles[tickReplay.candles.length - 1].signal_state || 'warm-up'} · Score {fmt(tickReplay.candles[tickReplay.candles.length - 1].signal_score, 1)}</span>
+            <span>Latest: {tickReplay.candles[tickReplay.candles.length - 1].signal_state || 'warm-up'} · Score {fmt(tickReplay.candles[tickReplay.candles.length - 1].signal_score, 1)} · Pressure {fmtPct(tickReplay.candles[tickReplay.candles.length - 1].tape_pressure * 100)}</span>
           )}
+          {tickReplay.candles.length > 0 && (() => { const latest = tickReplay.candles[tickReplay.candles.length - 1]; return <span>Latest microstructure: Buy {latest.buy_volume.toLocaleString()} · Sell {latest.sell_volume.toLocaleString()} · Velocity {latest.trade_velocity}/min · Large prints {latest.large_prints} · BBO imbalance {latest.bbo_imbalance == null ? '—' : fmtPct(latest.bbo_imbalance * 100)}</span>; })()}
         </div>
       )}
       {!loading && !error && !validDateRange && (
