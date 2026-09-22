@@ -42,17 +42,19 @@ _database_url: str = _app_settings.database.url
 # then register themselves with ``Base.metadata``.
 from backend.database import Base
 
-# Now import every model so they register with ``Base.metadata``.
-# Whitespace/comma splitting is intentional to keep the list scannable.
-from backend.models.ai_trade_plan_outcome import AITradePlanOutcome                        # noqa: F401
-from backend.models.alert import Alert, AlertTrigger                                       # noqa: F401
-from backend.models.backtest import BacktestRun, BacktestTrade                             # noqa: F401
-from backend.models.experiment import Experiment                                           # noqa: F401
-from backend.models.market_data_sql import (                                               # noqa: F401
-    BarModel, MarketStatusModel, ProviderStatusModel, QuoteModel, TapeBarModel              # noqa: F401
-)
-from backend.models.signal import HistoricalSignal                                         # noqa: F401
-from backend.models.watchlist import Watchlist, WatchlistSymbol                            # noqa: F401
+# Import the whole models package (not a hand-picked subset) so every table
+# registers with ``Base.metadata``, and any model added to
+# ``backend/models/__init__.py`` in the future is automatically included
+# here too. A hand-picked list drifted out of sync with that package once
+# already (see the schema_completeness migration this fixed): a subset here
+# means ``target_metadata`` is missing tables that DO exist in the live DB,
+# and the next `alembic revision --autogenerate` reads that as "these were
+# dropped from the models" and generates `op.drop_table(...)` for each —
+# real data loss if applied without catching it in the diff. ``backend.models``
+# imports only ORM (``Base`` subclass) and plain Pydantic model classes;
+# only the former register into ``Base.metadata``, so this is safe to import
+# wholesale.
+import backend.models  # noqa: F401
 
 # ``target_metadata`` is what autogenerate compares against the live DB.
 target_metadata = Base.metadata
