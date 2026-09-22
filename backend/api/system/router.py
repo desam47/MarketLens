@@ -66,6 +66,7 @@ class PerformanceResponse(BaseModel):
     # Phase 3.3.17: retention fields are nested in the bars dict above
     # (oldest_bar, newest_bar, distinct_symbols, retention_days).
     providers: dict | None = None  # Phase 3.6: per-provider health (incl. Alpaca WS status)
+    provider_observability: dict | None = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -252,6 +253,65 @@ def _safe_provider_stats() -> dict | None:
         return None
 
 
+def _safe_provider_observability() -> dict | None:
+    """Return bounded provider activity history and configured feature coverage."""
+    try:
+        from ...config.settings import settings
+        from ...observability.provider_history import provider_history_stats
+
+        history = provider_history_stats()
+        webull_ready = bool(
+            settings.webull.enabled and settings.webull.app_key and settings.webull.app_secret
+        )
+        stream_ready = bool(webull_ready and settings.webull.streaming_enabled)
+        return {
+            "events": history["events"],
+            "failure_count": history["failure_count"],
+            "success_count": history["success_count"],
+            "entitlements": {
+                "rest_quotes": {
+                    "provider": settings.market_data.primary_provider,
+                    "status": "configured"
+                    if settings.market_data.primary_provider
+                    else "unavailable",
+                    "verification": "configuration_only",
+                },
+                "bars": {
+                    "providers": [
+                        settings.market_data.primary_provider,
+                        *settings.market_data.fallback_providers,
+                    ],
+                    "status": "configured"
+                    if settings.market_data.primary_provider
+                    else "unavailable",
+                    "verification": "configuration_only",
+                },
+                "bbo": {
+                    "provider": "webull",
+                    "status": "configured" if stream_ready else "disabled",
+                    "verification": "configuration_only",
+                },
+                "time_and_sales": {
+                    "provider": "webull",
+                    "status": "configured" if stream_ready else "disabled",
+                    "verification": "configuration_only",
+                },
+                "options": {
+                    "provider": "yahoo_finance",
+                    "status": "delayed_or_estimated",
+                    "verification": "provider_limited",
+                },
+                "fundamentals": {
+                    "provider": "configured_fallback_chain",
+                    "status": "configured",
+                    "verification": "provider_limited",
+                },
+            },
+        }
+    except Exception:
+        return None
+
+
 @router.get("/performance", response_model=PerformanceResponse)
 def get_performance() -> PerformanceResponse:
     """Return live process and service metrics."""
@@ -284,6 +344,7 @@ def get_performance() -> PerformanceResponse:
         websocket=_safe_websocket_stats(),
         bars=_safe_bar_counts(),
         providers=_safe_provider_stats(),
+        provider_observability=_safe_provider_observability(),
     )
 
 

@@ -145,15 +145,29 @@ class MarketDataManager:
         logger.debug(f"Redis cache miss for quote {symbol}")
 
         last_error = None
+        failed_providers: list[str] = []
         for provider_name in self._get_available_providers():
             try:
                 provider = self.providers[provider_name]
                 quote = _call_provider(provider, "get_quote", symbol)
                 logger.debug(f"Got quote for {symbol} from {provider_name}")
+                if failed_providers:
+                    try:
+                        from backend.observability.provider_history import record_provider_event
+
+                        record_provider_event(
+                            provider_name,
+                            "get_quote",
+                            "fallback",
+                            error=f"after {', '.join(failed_providers)}",
+                        )
+                    except Exception:
+                        pass
                 get_redis_cache().set_quote(symbol, quote)
                 return quote
             except Exception as e:
                 last_error = e
+                failed_providers.append(provider_name)
                 logger.warning(f"Failed to get quote for {symbol} from {provider_name}: {e}")
                 continue
 
@@ -193,15 +207,29 @@ class MarketDataManager:
             self._cache_stats["bar_misses"] += 1
 
         last_error = None
+        failed_providers: list[str] = []
         for provider_name in self._get_available_providers():
             try:
                 provider = self.providers[provider_name]
                 bar = _call_provider(provider, "get_latest_bar", symbol, timeframe)
                 logger.debug(f"Got latest bar for {symbol} from {provider_name}")
+                if failed_providers:
+                    try:
+                        from backend.observability.provider_history import record_provider_event
+
+                        record_provider_event(
+                            provider_name,
+                            "get_latest_bar",
+                            "fallback",
+                            error=f"after {', '.join(failed_providers)}",
+                        )
+                    except Exception:
+                        pass
                 get_redis_cache().set_latest_bar(symbol, timeframe, bar)
                 return bar
             except Exception as e:
                 last_error = e
+                failed_providers.append(provider_name)
                 logger.warning(f"Failed to get latest bar for {symbol} from {provider_name}: {e}")
                 continue
         if last_error:

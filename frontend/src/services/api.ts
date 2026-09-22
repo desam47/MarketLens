@@ -211,6 +211,17 @@ export interface SystemPerformance {
     consecutive_failures?: number;
     ws_status?: string;
   }> | null;
+  provider_observability?: {
+    events: Array<{ timestamp: string; provider: string; method: string; outcome: string; error?: string | null }>;
+    failure_count: number;
+    success_count: number;
+    entitlements: Record<string, {
+      provider?: string;
+      providers?: string[];
+      status: string;
+      verification: string;
+    }>;
+  } | null;
 }
 
 export interface AuxiliaryProviderStatus {

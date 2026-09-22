@@ -431,6 +431,34 @@ const ProviderHealthCard = memo(function ProviderHealthCard({
       ) : (
         <p className="info-text">No provider status has been reported yet.</p>
       )}
+      {performance?.provider_observability && (
+        <div className="provider-observability">
+          <h3>Feature Entitlements</h3>
+          <div className="provider-entitlement-grid">
+            {Object.entries(performance.provider_observability.entitlements).map(([feature, entitlement]) => (
+              <div className="provider-entitlement" key={feature}>
+                <strong>{feature.replace(/_/g, ' ')}</strong>
+                <span className={`status-badge ${entitlement.status === 'configured' ? 'status-ok' : entitlement.status === 'disabled' ? 'status-error' : 'status-warning'}`}>
+                  {entitlement.status.replace(/_/g, ' ')}
+                </span>
+                <small>{entitlement.provider || entitlement.providers?.join(' → ') || '—'} · {entitlement.verification.replace(/_/g, ' ')}</small>
+              </div>
+            ))}
+          </div>
+          <h3>Recent Provider Activity</h3>
+          {performance.provider_observability.events.length > 0 ? (
+            <div className="provider-event-list">
+              {performance.provider_observability.events.slice(0, 8).map((event, index) => (
+                <div className="provider-event-row" key={`${event.timestamp}-${index}`}>
+                  <span>{event.provider} · {event.method}</span>
+                  <span className={`status-badge ${event.outcome === 'success' ? 'status-ok' : event.outcome === 'fallback' ? 'status-warning' : 'status-error'}`}>{event.outcome}</span>
+                  <small>{formatTimestamp(event.timestamp)}</small>
+                </div>
+              ))}
+            </div>
+          ) : <p className="info-text">No provider activity recorded yet.</p>}
+        </div>
+      )}
     </div>
   );
 });

@@ -86,7 +86,7 @@ Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling RE
 
 ### 9. Tick-level replay — [~] Partial
 
-Local bounded retention and BBO/tape playback are implemented. Replaying derived signals and simulated trade outcomes directly from ticks remains.
+Local bounded retention, BBO/tape playback, and causal 1-minute signal reconstruction from retained ticks are implemented. Longer-history reconstruction across sessions and richer tick-derived trade analytics remain.
 
 - Store ticks locally
 - Replay Time & Sales and BBO changes
@@ -162,7 +162,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 
 ### 15. Provider and data-quality transparency — [~] Partial
 
-Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. Entitlement status and complete provider attribution for every timeframe still need work.
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes bounded provider activity history plus a configuration-based entitlement matrix; actual exchange entitlement verification and complete provider attribution for every timeframe still need work.
 
 - Actual provider used
 - Provider per timeframe
@@ -222,16 +222,16 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, and the unified per-symbol Watchlist data view are implemented. Complete per-provider failover history, entitlement details, and a dedicated last-successful-update view outside the Watchlist remain.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, and configuration-based entitlement details are implemented. A dedicated last-successful-update view outside the Watchlist and live entitlement verification remain.
 
 - Stream reconnect status
 - Provider health
 - Last successful update per symbol (Watchlist view implemented)
 - Per-symbol Watchlist data status (provider, age, and connection state) — [x] Done
-- Per-provider failover visibility
+- Per-provider failover visibility (bounded event history implemented; long-term persistence remains)
 - Better stale-data warnings
 - Clear API and entitlement error messages
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, and unified Watchlist freshness view are now in place. Next prioritize exact tick-level signal reconstruction for Historical Replay, followed by complete provider failover history and entitlement visibility.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, and configuration-based entitlement visibility are now in place. Next prioritize a dedicated last-successful-update view across all pages, long-term failover-event persistence, and live entitlement verification where providers expose it.

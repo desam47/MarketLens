@@ -514,6 +514,12 @@ def _call_provider(
     try:
         result = _provider_call_with_breaker(provider_name, breaker, method, *args, **kwargs)
     except Exception as exc:
+        try:
+            from backend.observability.provider_history import record_provider_event
+
+            record_provider_event(provider_name, method_name, "failure", error=str(exc))
+        except Exception:
+            pass
         latency_ms = (time.monotonic() - call_started) * 1000.0
         logger.debug(
             "provider_call_fail provider=%s method=%s symbol=%s "
@@ -527,6 +533,12 @@ def _call_provider(
         )
         raise
     latency_ms = (time.monotonic() - call_started) * 1000.0
+    try:
+        from backend.observability.provider_history import record_provider_event
+
+        record_provider_event(provider_name, method_name, "success")
+    except Exception:
+        pass
     logger.debug(
         "provider_call_ok provider=%s method=%s symbol=%s latency_ms=%.2f correlation_id=%s",
         provider_name,
@@ -568,6 +580,12 @@ def _call_provider_direct(
     try:
         result = _provider_call_with_breaker(provider_name, breaker, method, *args, **kwargs)
     except Exception as exc:
+        try:
+            from backend.observability.provider_history import record_provider_event
+
+            record_provider_event(provider_name, method.__name__, "failure", error=str(exc))
+        except Exception:
+            pass
         latency_ms = (time.monotonic() - call_started) * 1000.0
         logger.debug(
             "provider_call_fail provider=%s method=%s "
@@ -580,6 +598,12 @@ def _call_provider_direct(
         )
         raise
     latency_ms = (time.monotonic() - call_started) * 1000.0
+    try:
+        from backend.observability.provider_history import record_provider_event
+
+        record_provider_event(provider_name, method.__name__, "success")
+    except Exception:
+        pass
     logger.debug(
         "provider_call_ok provider=%s method=%s latency_ms=%.2f correlation_id=%s",
         provider_name,
