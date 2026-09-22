@@ -12,6 +12,7 @@ jest.mock('../services/api', () => ({
   __esModule: true,
   default: {
     getWatchlistScan: jest.fn(),
+    getWatchlistSessionPrices: jest.fn(),
     getBatchRelativeStrength: jest.fn(),
     updateWatchlistSymbol: jest.fn(),
     removeSymbolFromWatchlist: jest.fn(),
@@ -20,6 +21,7 @@ jest.mock('../services/api', () => ({
 
 const mockApi = api as unknown as {
   getWatchlistScan: jest.Mock;
+  getWatchlistSessionPrices: jest.Mock;
   getBatchRelativeStrength: jest.Mock;
 };
 
@@ -100,6 +102,42 @@ describe('RS benchmark selector', () => {
     expect(screen.getByText(rsCellLabel(rsSignal('AAPL', 'QQQ', 7.25)))).toBeInTheDocument();
     expect(mockApi.getWatchlistScan).toHaveBeenCalledTimes(1);
     expect(mockApi.getBatchRelativeStrength).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('price session filters', () => {
+  it('uses local session prices without re-running the scanner', async () => {
+    mockApi.getWatchlistSessionPrices.mockResolvedValue({
+      sessions: ['premarket', 'regular'],
+      count: 1,
+      results: [{
+        symbol: 'AAPL',
+        price: 110,
+        change: 10,
+        change_pct: 10,
+        baseline_price: 100,
+        baseline_label: 'previous regular close',
+        timestamp: '2026-01-02T12:00:00-05:00',
+        trading_date: '2026-01-02',
+        session: 'regular',
+        volume: 5000,
+        high: 112,
+        low: 99,
+        provider: 'webull',
+        data_status: 'historical',
+      }],
+    });
+    await renderTable(['AAPL']);
+
+    await userEvent.click(screen.getByLabelText('After-hours'));
+
+    await waitFor(() => expect(mockApi.getWatchlistSessionPrices).toHaveBeenCalledWith(
+      1,
+      ['premarket', 'regular'],
+    ));
+    expect(await screen.findByText('$110')).toBeInTheDocument();
+    expect(screen.getByText('+10%')).toBeInTheDocument();
+    expect(mockApi.getWatchlistScan).toHaveBeenCalledTimes(1);
   });
 });
 

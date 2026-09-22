@@ -524,6 +524,29 @@ export interface WatchlistScanResponse {
   results: WatchlistScanResult[];
 }
 
+export interface WatchlistSessionPrice {
+  symbol: string;
+  price: number;
+  change: number | null;
+  change_pct: number | null;
+  baseline_price: number | null;
+  baseline_label: string | null;
+  timestamp: string;
+  trading_date: string;
+  session: 'premarket' | 'regular' | 'after_hours';
+  volume: number;
+  high: number;
+  low: number;
+  provider: string | null;
+  data_status: string | null;
+}
+
+export interface WatchlistSessionPricesResponse {
+  sessions: string[];
+  count: number;
+  results: WatchlistSessionPrice[];
+}
+
 // Phase 13: historical signal recording
 export interface HistoricalSignal {
   id: number;
@@ -575,6 +598,7 @@ export interface ScanQuote {
   timestamp: string | null;
   provider: string | null;
   data_status?: string | null;
+  session?: 'premarket' | 'regular' | 'after_hours' | string | null;
 }
 
 export interface MarketQuote extends ScanQuote {
@@ -2060,6 +2084,16 @@ class ApiService {
   // Phase 12: scan an entire watchlist (for the watchlist table)
   async getWatchlistScan(watchlistId: number): Promise<WatchlistScanResponse> {
     return this.fetch<WatchlistScanResponse>(`/scanner/watchlist/${watchlistId}`, undefined, 60000);
+  }
+
+  async getWatchlistSessionPrices(
+    watchlistId: number,
+    sessions: string[],
+  ): Promise<WatchlistSessionPricesResponse> {
+    const query = encodeURIComponent(sessions.join(','));
+    return this.fetch<WatchlistSessionPricesResponse>(
+      `/scanner/watchlist/${watchlistId}/session-prices?sessions=${query}`,
+    );
   }
 
   // Phase 12: scan a single symbol (for SymbolPage MTF grid + score panel)

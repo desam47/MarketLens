@@ -5,6 +5,7 @@ import api, {
   RealtimeConnectionStatus,
   RealtimeEvent,
   WatchlistScanResult,
+  WatchlistSessionPrice,
   RelativeStrengthData,
   RelativeStrengthSignal,
 } from '../services/api';
@@ -32,6 +33,35 @@ const TREND_TFS = [
   { key: 'FOUR_HOUR', short: '4h' },
   { key: 'ONE_DAY', short: '1d' },
 ];
+const MARKET_SESSIONS = [
+  { key: 'premarket', label: 'Premarket' },
+  { key: 'regular', label: 'Regular' },
+  { key: 'after_hours', label: 'After-hours' },
+] as const;
+
+function sessionFromTimestamp(timestamp: string | null): string | null {
+  if (!timestamp) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(timestamp));
+  const minutes = Number(parts.find(part => part.type === 'hour')?.value ?? 0) * 60
+    + Number(parts.find(part => part.type === 'minute')?.value ?? 0);
+  if (minutes >= 240 && minutes < 570) return 'premarket';
+  if (minutes >= 570 && minutes < 960) return 'regular';
+  if (minutes >= 960 && minutes < 1200) return 'after_hours';
+  return null;
+}
+
+function tradingDateFromTimestamp(timestamp: string | null): string | null {
+  if (!timestamp) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(timestamp));
+  const year = parts.find(part => part.type === 'year')?.value;
+  const month = parts.find(part => part.type === 'month')?.value;
+  const day = parts.find(part => part.type === 'day')?.value;
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
 
 function trendBadge(direction: string | undefined): { className: string; arrow: string; title: string } {
   const arrow = direction === 'uptrend' ? '▲'
@@ -82,6 +112,7 @@ interface RowData {
   rsSignals: RelativeStrengthSignal[];
   trendSignals: Record<string, any>;
   liveQuote?: LiveQuoteUpdateData;
+  sessionSnapshot?: WatchlistSessionPrice;
   raw: WatchlistScanResult;
 }
 
@@ -194,12 +225,12 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
         </div>
       )}
       {visibleColKeys.has('price') && (
-        <div className="virt-cell td-price">
+        <div className="virt-cell td-price" title={row.sessionSnapshot ? `${row.sessionSnapshot.session.replace('_', ' ')} · ${row.sessionSnapshot.trading_date}` : undefined}>
           {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
         </div>
       )}
       {visibleColKeys.has('change') && (
-        <div className={`virt-cell td-change ${changeCellClass(row.changePct)}`}>
+        <div className={`virt-cell td-change ${changeCellClass(row.changePct)}`} title={row.sessionSnapshot?.baseline_label ?? undefined}>
           {row.changePct != null
             ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
             : '—'}
@@ -253,6 +284,12 @@ export function WatchlistTable({
   const [scanTimestamp, setScanTimestamp] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(
+    () => new Set(MARKET_SESSIONS.map(session => session.key)),
+  );
+  const [sessionPrices, setSessionPrices] = useState<Record<string, WatchlistSessionPrice>>({});
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const sessionRequestIdRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState(sortColumn);
   const [sortDir, setSortDir] = useState(sortDirection);
@@ -283,6 +320,11 @@ export function WatchlistTable({
   );
 
   const colToggleRef = useRef<HTMLDivElement>(null);
+  const sessionSelectionKey = useMemo(
+    () => Array.from(selectedSessions).sort().join(','),
+    [selectedSessions],
+  );
+  const combinedSessionView = selectedSessions.size === 0 || selectedSessions.size === MARKET_SESSIONS.length;
 
   const liveSymbols = useMemo(
     () => Array.from(new Set(rows.map(row => row.symbol.trim().toUpperCase()).filter(Boolean))).sort(),
@@ -380,6 +422,38 @@ export function WatchlistTable({
     fetchData();
   }, [fetchData]);
 
+  const fetchSessionPrices = useCallback(async () => {
+    if (combinedSessionView) {
+      sessionRequestIdRef.current += 1;
+      setSessionPrices({});
+      setSessionError(null);
+      return;
+    }
+    const requestId = ++sessionRequestIdRef.current;
+    try {
+      const response = await api.getWatchlistSessionPrices(
+        watchlistId,
+        sessionSelectionKey.split(',').filter(Boolean),
+      );
+      if (requestId !== sessionRequestIdRef.current) return;
+      setSessionPrices(Object.fromEntries(
+        response.results.map(snapshot => [snapshot.symbol.toUpperCase(), snapshot]),
+      ));
+      setSessionError(null);
+    } catch (error: any) {
+      if (requestId !== sessionRequestIdRef.current) return;
+      setSessionError(error?.message || 'Session prices unavailable');
+    }
+  }, [combinedSessionView, sessionSelectionKey, watchlistId]);
+
+  useEffect(() => {
+    if (!combinedSessionView) setSessionPrices({});
+    void fetchSessionPrices();
+    if (combinedSessionView) return;
+    const interval = window.setInterval(() => void fetchSessionPrices(), 10_000);
+    return () => window.clearInterval(interval);
+  }, [combinedSessionView, fetchSessionPrices]);
+
   // Match Symbol Page's fallback behavior: WebSocket is the primary live
   // source, while a slow REST refresh repairs missed events or a temporarily
   // disconnected browser socket (and refreshes scanner-only fields).
@@ -447,11 +521,52 @@ export function WatchlistTable({
   // fetchData) so switching benchmarks is instant and needs no re-fetch.
   const displayRows = useMemo(
     () => rows.map((r): RowData => {
-      const live = liveQuotes[r.symbol.toUpperCase()];
+      const symbol = r.symbol.toUpperCase();
+      const live = liveQuotes[symbol];
       const withRelativeStrength = {
         ...r,
         rs: r.rsSignals.find(s => s.benchmark === rsBenchmark) ?? r.rsSignals[0] ?? null,
       };
+      if (!combinedSessionView) {
+        const snapshot = sessionPrices[symbol];
+        if (!snapshot) {
+          return { ...withRelativeStrength, price: null, change: null, changePct: null };
+        }
+        const liveSession = sessionFromTimestamp(live?.timestamp ?? null);
+        const liveDate = tradingDateFromTimestamp(live?.timestamp ?? null);
+        const useLive = Boolean(
+          live?.price != null
+          && liveSession
+          && selectedSessions.has(liveSession)
+          && liveDate === snapshot.trading_date,
+        );
+        const price = useLive ? live!.price! : snapshot.price;
+        const change = snapshot.baseline_price != null ? price - snapshot.baseline_price : snapshot.change;
+        return {
+          ...withRelativeStrength,
+          sessionSnapshot: snapshot,
+          liveQuote: useLive ? live : undefined,
+          price,
+          change,
+          changePct: snapshot.baseline_price
+            ? (change! / snapshot.baseline_price) * 100
+            : snapshot.change_pct,
+          raw: {
+            ...r.raw,
+            quote: {
+              symbol,
+              price,
+              bid: useLive ? live!.bid : null,
+              ask: useLive ? live!.ask : null,
+              volume: snapshot.volume,
+              timestamp: useLive ? live!.timestamp : snapshot.timestamp,
+              provider: useLive ? live!.provider : snapshot.provider,
+              data_status: useLive ? 'LIVE' : snapshot.data_status,
+              session: useLive ? liveSession : snapshot.session,
+            },
+          },
+        };
+      }
       // A live quote is useful even when the scanner has not yet produced a
       // valid prior-close baseline for this symbol. Never suppress the live
       // price just because change/change % cannot be recalculated yet.
@@ -474,7 +589,7 @@ export function WatchlistTable({
         changePct: priorClose !== 0 ? (liveChange / priorClose) * 100 : r.changePct,
       };
     }),
-    [rows, rsBenchmark, liveQuotes],
+    [rows, rsBenchmark, liveQuotes, combinedSessionView, selectedSessions, sessionPrices],
   );
 
   const sorted = useMemo(() => {
@@ -545,8 +660,17 @@ export function WatchlistTable({
   }
 
   const useVirtual = sorted.length > VIRT_THRESHOLD;
-  const latestLiveQuote = Object.values(liveQuotes).reduce<LiveQuoteUpdateData | null>(
+  const visibleLiveQuotes = Object.values(liveQuotes).filter(quote => {
+    if (combinedSessionView) return true;
+    const session = sessionFromTimestamp(quote.timestamp);
+    return session != null && selectedSessions.has(session);
+  });
+  const latestLiveQuote = visibleLiveQuotes.reduce<LiveQuoteUpdateData | null>(
     (latest, quote) => !latest || (quote.received_at ?? 0) > (latest.received_at ?? 0) ? quote : latest,
+    null,
+  );
+  const latestSessionSnapshot = Object.values(sessionPrices).reduce<WatchlistSessionPrice | null>(
+    (latest, snapshot) => !latest || snapshot.timestamp > latest.timestamp ? snapshot : latest,
     null,
   );
 
@@ -554,17 +678,36 @@ export function WatchlistTable({
     <div className="watchlist-table-container">
       <div className="watchlist-table-toolbar">
         <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
+        <fieldset className="watchlist-session-filters" aria-label="Watchlist market sessions">
+          <legend>Price session</legend>
+          {MARKET_SESSIONS.map(session => (
+            <label key={session.key}>
+              <input
+                type="checkbox"
+                checked={selectedSessions.has(session.key)}
+                onChange={() => setSelectedSessions(previous => {
+                  const next = new Set(previous);
+                  if (next.has(session.key)) next.delete(session.key);
+                  else next.add(session.key);
+                  return next;
+                })}
+              />
+              {session.label}
+            </label>
+          ))}
+        </fieldset>
+        {sessionError && <span className="watchlist-session-error">{sessionError}</span>}
         {scanTimestamp && (
           <span className="table-timestamp">
             Scanned {formatETTime(scanTimestamp)}
           </span>
         )}
         <MarketDataFreshnessBadge
-          dataStatus={latestLiveQuote ? 'LIVE' : 'STALE'}
-          timestamp={latestLiveQuote?.timestamp}
+          dataStatus={latestLiveQuote ? 'LIVE' : latestSessionSnapshot?.data_status ?? 'STALE'}
+          timestamp={latestLiveQuote?.timestamp ?? latestSessionSnapshot?.timestamp}
           showAge
           connectionStatus={quoteConnectionStatus}
-          provider={latestLiveQuote?.provider}
+          provider={latestLiveQuote?.provider ?? latestSessionSnapshot?.provider}
         />
         <select
           className="rs-benchmark-select"
@@ -755,12 +898,12 @@ const WatchlistRow = React.memo(function WatchlistRow({
         </td>
       )}
       {visibleColKeys.has('price') && (
-        <td className="td-price">
+        <td className="td-price" title={row.sessionSnapshot ? `${row.sessionSnapshot.session.replace('_', ' ')} · ${row.sessionSnapshot.trading_date}` : undefined}>
           {row.price != null ? `$${fmtPrice(row.price)}` : '—'}
         </td>
       )}
       {visibleColKeys.has('change') && (
-        <td className={`td-change ${changeCellClass(row.changePct)}`}>
+        <td className={`td-change ${changeCellClass(row.changePct)}`} title={row.sessionSnapshot?.baseline_label ?? undefined}>
           {row.changePct != null
             ? `${row.changePct > 0 ? '+' : ''}${fmt(row.changePct)}%`
             : '—'}

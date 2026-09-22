@@ -20,7 +20,9 @@ from fastapi.testclient import TestClient
 from backend.api import ttl_cache as _ttl_cache_module
 from backend.api.main import app
 from backend.api.scanner import router as scanner_router
+from backend.database import SessionLocal
 from backend.models.market_data import DataStatus, Quote
+from backend.models.market_data_sql import BarModel
 from backend.scanner.scanner import ScanResult
 
 
@@ -401,6 +403,95 @@ class TestScannerAPI(unittest.TestCase):
         self.client.get("/api/scanner/watchlist/1")
 
         self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(1, include_disabled=True)
+
+    def test_watchlist_session_prices_use_session_close_and_regular_baseline(self):
+        """Session filtering reads local bars and compares against the proper close."""
+        symbol = "SESSIONTEST"
+        self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
+        self.mock_repo.get_all_watchlist_symbols.return_value = [MagicMock(symbol=symbol)]
+        rows = [
+            BarModel(
+                symbol=symbol,
+                timeframe="1d",
+                open=98,
+                high=101,
+                low=97,
+                close=100,
+                volume=1000,
+                timestamp=datetime(2026, 9, 21),
+                provider="test_daily",
+                data_status="historical",
+                session="regular",
+            ),
+            BarModel(
+                symbol=symbol,
+                timeframe="1m",
+                open=99,
+                high=101,
+                low=98,
+                close=99,
+                volume=100,
+                timestamp=datetime(2026, 9, 21, 15, 59),
+                provider="test",
+                data_status="historical",
+                session="regular",
+            ),
+            BarModel(
+                symbol=symbol,
+                timeframe="1m",
+                open=101,
+                high=103,
+                low=100,
+                close=102,
+                volume=10,
+                timestamp=datetime(2026, 9, 22, 4, 0),
+                provider="test",
+                data_status="historical",
+                session="premarket",
+            ),
+            BarModel(
+                symbol=symbol,
+                timeframe="1m",
+                open=102,
+                high=106,
+                low=101,
+                close=105,
+                volume=20,
+                timestamp=datetime(2026, 9, 22, 5, 0),
+                provider="test",
+                data_status="historical",
+                session="premarket",
+            ),
+        ]
+        with SessionLocal() as db:
+            db.query(BarModel).filter(BarModel.symbol == symbol).delete()
+            db.add_all(rows)
+            db.commit()
+
+        try:
+            response = self.client.get(
+                "/api/scanner/watchlist/1/session-prices?sessions=premarket"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["count"], 1)
+            snapshot = data["results"][0]
+            self.assertEqual(snapshot["price"], 105)
+            self.assertEqual(snapshot["baseline_price"], 100)
+            self.assertEqual(snapshot["baseline_label"], "previous regular close")
+            self.assertEqual(snapshot["change"], 5)
+            self.assertEqual(snapshot["change_pct"], 5)
+            self.assertEqual(snapshot["volume"], 30)
+            self.assertEqual(snapshot["high"], 106)
+            self.assertEqual(snapshot["low"], 100)
+            self.mock_scanner.scan_symbols.assert_not_called()
+            self.mock_mdm.get_historical_bars.assert_not_called()
+            self.mock_mdm.get_quote.assert_not_called()
+        finally:
+            with SessionLocal() as db:
+                db.query(BarModel).filter(BarModel.symbol == symbol).delete()
+                db.commit()
 
     # --- /api/scanner/watchlist/{id}/top ----------------------------------
 

@@ -15,16 +15,19 @@ subsequent quick reads.
 
 import asyncio
 import logging
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from backend.api.ttl_cache import _scan_cache, ttl_cached
 from backend.market_data.services.calendar_service import events_for_symbol
+from backend.models.market_data_sql import BarModel
 from backend.repositories.watchlist_repository import WatchlistRepository
 from backend.utils.timezone import now_ny
 
@@ -66,6 +69,7 @@ class _QuoteResponse(BaseModel):
     timestamp: str | None = None
     provider: str | None = None
     data_status: str | None = None
+    session: str | None = None
 
 
 class _ScanResultResponse(BaseModel):
@@ -94,6 +98,29 @@ class _RankedResponse(BaseModel):
     timestamp: str
     count: int
     results: list[_ScanResultResponse]
+
+
+class _SessionPriceResponse(BaseModel):
+    symbol: str
+    price: float
+    change: float | None = None
+    change_pct: float | None = None
+    baseline_price: float | None = None
+    baseline_label: str | None = None
+    timestamp: str
+    trading_date: str
+    session: str
+    volume: int
+    high: float
+    low: float
+    provider: str | None = None
+    data_status: str | None = None
+
+
+class _WatchlistSessionPricesResponse(BaseModel):
+    sessions: list[str]
+    count: int
+    results: list[_SessionPriceResponse]
 
 
 class _RankedEntryResponse(BaseModel):
@@ -730,8 +757,212 @@ async def get_signals_for_symbol(symbol: str):
 # --- Watchlist endpoints ----------------------------------------------
 
 
+@router.get(
+    "/watchlist/{watchlist_id}/session-prices",
+    response_model=_WatchlistSessionPricesResponse,
+)
+def get_watchlist_session_prices(
+    watchlist_id: int,
+    sessions: str = Query(
+        ...,
+        description="Comma-separated sessions: premarket,regular,after_hours.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return local session snapshots without scanning or provider calls."""
+    selected = {
+        value.strip().lower() for value in sessions.split(",") if value.strip()
+    }
+    valid = {"premarket", "regular", "after_hours"}
+    if not selected or not selected <= valid:
+        raise HTTPException(status_code=422, detail="Invalid market session")
+
+    repo = WatchlistRepository(db)
+    watchlist = repo.get_watchlist(watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    symbols = [
+        row.symbol.upper()
+        for row in repo.get_all_watchlist_symbols(watchlist_id, include_disabled=True)
+    ]
+    cutoff = now_ny() - timedelta(days=10)
+    latest_ts = (
+        db.query(
+            BarModel.symbol.label("symbol"),
+            func.max(BarModel.timestamp).label("timestamp"),
+        )
+        .filter(
+            BarModel.symbol.in_(symbols),
+            BarModel.timeframe == "1m",
+            BarModel.session.in_(selected),
+            BarModel.timestamp >= cutoff,
+        )
+        .group_by(BarModel.symbol)
+        .subquery()
+    )
+    latest_rows = (
+        db.query(BarModel)
+        .join(
+            latest_ts,
+            and_(
+                BarModel.symbol == latest_ts.c.symbol,
+                BarModel.timestamp == latest_ts.c.timestamp,
+            ),
+        )
+        .filter(BarModel.timeframe == "1m")
+        .all()
+    )
+    latest_by_symbol = {row.symbol.upper(): row for row in latest_rows}
+
+    session_aggregates = (
+        db.query(
+            BarModel.symbol,
+            BarModel.session,
+            func.date(BarModel.timestamp).label("day"),
+            func.sum(BarModel.volume).label("volume"),
+            func.max(BarModel.high).label("high"),
+            func.min(BarModel.low).label("low"),
+        )
+        .filter(
+            BarModel.symbol.in_(symbols),
+            BarModel.timeframe == "1m",
+            BarModel.session.in_(selected),
+            BarModel.timestamp >= cutoff,
+        )
+        .group_by(BarModel.symbol, BarModel.session, func.date(BarModel.timestamp))
+        .all()
+    )
+    aggregate_by_key = {
+        (row.symbol.upper(), row.session, str(row.day)): row for row in session_aggregates
+    }
+
+    regular_close_ts = (
+        db.query(
+            BarModel.symbol.label("symbol"),
+            func.date(BarModel.timestamp).label("day"),
+            func.max(BarModel.timestamp).label("timestamp"),
+        )
+        .filter(
+            BarModel.symbol.in_(symbols),
+            BarModel.timeframe == "1m",
+            BarModel.session == "regular",
+            BarModel.timestamp >= cutoff,
+        )
+        .group_by(BarModel.symbol, func.date(BarModel.timestamp))
+        .subquery()
+    )
+    regular_closes = (
+        db.query(BarModel, regular_close_ts.c.day)
+        .join(
+            regular_close_ts,
+            and_(
+                BarModel.symbol == regular_close_ts.c.symbol,
+                BarModel.timestamp == regular_close_ts.c.timestamp,
+            ),
+        )
+        .filter(BarModel.timeframe == "1m")
+        .order_by(BarModel.symbol, regular_close_ts.c.day)
+        .all()
+    )
+    closes_by_symbol: dict[str, list[tuple[str, BarModel]]] = defaultdict(list)
+    for row, day in regular_closes:
+        closes_by_symbol[row.symbol.upper()].append((str(day), row))
+
+    # The settled daily bar is the authoritative previous regular close. It can
+    # differ slightly from the final 1-minute bar because providers normalize
+    # trades, corporate actions, and auction prints differently. Keep the 1m
+    # close above as a fallback for symbols without a daily bar.
+    daily_close_ts = (
+        db.query(
+            BarModel.symbol.label("symbol"),
+            func.date(BarModel.timestamp).label("day"),
+            func.max(BarModel.timestamp).label("timestamp"),
+        )
+        .filter(
+            BarModel.symbol.in_(symbols),
+            BarModel.timeframe == "1d",
+            BarModel.session == "regular",
+            BarModel.timestamp >= cutoff,
+        )
+        .group_by(BarModel.symbol, func.date(BarModel.timestamp))
+        .subquery()
+    )
+    daily_closes = (
+        db.query(BarModel, daily_close_ts.c.day)
+        .join(
+            daily_close_ts,
+            and_(
+                BarModel.symbol == daily_close_ts.c.symbol,
+                BarModel.timestamp == daily_close_ts.c.timestamp,
+            ),
+        )
+        .filter(BarModel.timeframe == "1d")
+        .order_by(BarModel.symbol, daily_close_ts.c.day)
+        .all()
+    )
+    daily_closes_by_symbol: dict[str, list[tuple[str, BarModel]]] = defaultdict(list)
+    for row, day in daily_closes:
+        daily_closes_by_symbol[row.symbol.upper()].append((str(day), row))
+
+    snapshots: list[_SessionPriceResponse] = []
+    for symbol in symbols:
+        latest = latest_by_symbol.get(symbol)
+        if latest is None or latest.close is None or latest.timestamp is None:
+            continue
+
+        trading_date = latest.timestamp.date().isoformat()
+        aggregate = aggregate_by_key.get((symbol, latest.session, trading_date))
+        symbol_closes = closes_by_symbol.get(symbol, [])
+        if latest.session == "after_hours":
+            baseline = next(
+                (row for day, row in symbol_closes if day == trading_date),
+                None,
+            )
+            baseline_label = "regular close"
+        else:
+            daily_symbol_closes = daily_closes_by_symbol.get(symbol, [])
+            baseline = next(
+                (row for day, row in reversed(daily_symbol_closes) if day < trading_date),
+                None,
+            )
+            if baseline is None:
+                baseline = next(
+                    (row for day, row in reversed(symbol_closes) if day < trading_date),
+                    None,
+                )
+            baseline_label = "previous regular close"
+        baseline_price = baseline.close if baseline is not None else None
+        change = latest.close - baseline_price if baseline_price is not None else None
+        change_pct = change / baseline_price * 100 if change is not None and baseline_price else None
+
+        snapshots.append(
+            _SessionPriceResponse(
+                symbol=symbol,
+                price=latest.close,
+                change=change,
+                change_pct=change_pct,
+                baseline_price=baseline_price,
+                baseline_label=baseline_label if baseline_price is not None else None,
+                timestamp=_to_dashboard_tz(latest.timestamp),
+                trading_date=trading_date,
+                session=latest.session,
+                volume=int(aggregate.volume or 0) if aggregate is not None else int(latest.volume or 0),
+                high=float(aggregate.high) if aggregate is not None else latest.high,
+                low=float(aggregate.low) if aggregate is not None else latest.low,
+                provider=latest.provider,
+                data_status=str(latest.data_status) if latest.data_status is not None else None,
+            )
+        )
+    return _WatchlistSessionPricesResponse(
+        sessions=sorted(selected), count=len(snapshots), results=snapshots
+    )
+
+
 @router.get("/watchlist/{watchlist_id}", response_model=_RankedResponse)
-async def scan_watchlist(watchlist_id: int, db: Session = Depends(get_db)):
+async def scan_watchlist(
+    watchlist_id: int,
+    db: Session = Depends(get_db),
+):
     """Scan every enabled symbol in ``watchlist_id`` and return them ranked.
 
     Includes disabled rows in the response (with ``is_enabled=False``) so the
