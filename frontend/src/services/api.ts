@@ -181,6 +181,11 @@ export interface IngestionStatus {
   watchlists?: string[];
   timeframes?: string[];
   last_quote_updates?: Record<string, string>;
+  last_bar_updates?: Record<string, Record<string, string>>;
+  last_status_updates?: Record<string, string>;
+  last_quote_providers?: Record<string, string>;
+  last_bar_providers?: Record<string, Record<string, string>>;
+  last_status_providers?: Record<string, string>;
 }
 
 /** Runtime diagnostics shown on the local System Health page.  The API only

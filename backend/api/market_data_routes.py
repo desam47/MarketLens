@@ -43,6 +43,9 @@ class IngestionStatusResponse(BaseModel):
     last_quote_updates: dict[str, str]
     last_bar_updates: dict[str, dict[str, str]]
     last_status_updates: dict[str, str]
+    last_quote_providers: dict[str, str]
+    last_bar_providers: dict[str, dict[str, str]]
+    last_status_providers: dict[str, str]
 
 
 class SymbolRequest(BaseModel):
@@ -116,6 +119,11 @@ async def get_ingestion_status():
     quote_updates = dict(ingestion_service.last_quote_update)
     bar_updates = {sym: dict(tfs) for sym, tfs in list(ingestion_service.last_bar_update.items())}
     status_updates = dict(ingestion_service.last_status_update)
+    quote_providers = dict(ingestion_service.last_quote_provider)
+    bar_providers = {
+        sym: dict(providers) for sym, providers in ingestion_service.last_bar_provider.items()
+    }
+    status_providers = dict(ingestion_service.last_status_provider)
     return IngestionStatusResponse(
         is_running=ingestion_service.is_running,
         symbols=list(ingestion_service.symbols),
@@ -134,6 +142,9 @@ async def get_ingestion_status():
         last_status_updates={
             k: _to_dashboard_tz(v) if v != datetime.min else "" for k, v in status_updates.items()
         },
+        last_quote_providers=quote_providers,
+        last_bar_providers=bar_providers,
+        last_status_providers=status_providers,
     )
 
 
@@ -149,6 +160,7 @@ async def update_symbols(request: SymbolsRequest):
             ingestion_service.last_bar_update[symbol] = {
                 tf: datetime.min for tf in ingestion_service.timeframes
             }
+            ingestion_service.last_bar_provider[symbol] = {}
     return {"message": f"Updated symbols to: {request.symbols}"}
 
 

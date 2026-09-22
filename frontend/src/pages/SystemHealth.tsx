@@ -24,15 +24,7 @@ function formatTimestamp(timestamp: string | null | undefined): string {
   if (!timestamp) return 'Not available';
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZoneName: 'short',
-  }).format(date);
+  return formatVersionStyleTimestamp(timestamp);
 }
 
 /** Match the compact version stamp convention while keeping all UI times ET. */
@@ -220,7 +212,7 @@ const IngestionCard = memo(function IngestionCard({
           {ingestionStatus.last_quote_updates && (() => {
             const lastUpdate = Object.values(ingestionStatus.last_quote_updates)[0];
             return (
-              <p><strong>Last Quote Update:</strong> {formatVersionStyleTimestamp(lastUpdate)}</p>
+              <p><strong>Last Quote Update:</strong> {formatTimestamp(lastUpdate)}</p>
             );
           })()}
           <div className="toggle-row">
@@ -246,6 +238,61 @@ const IngestionCard = memo(function IngestionCard({
         </div>
       ) : (
         <p className="info-text">Ingestion service not available. Start it via API.</p>
+      )}
+    </div>
+  );
+});
+
+type LastUpdateRow = {
+  symbol: string;
+  dataType: string;
+  timestamp: string;
+  provider: string;
+};
+
+function updateAge(timestamp: string): { label: string; className: string } {
+  const age = (Date.now() - new Date(timestamp).getTime()) / 1000;
+  return freshnessStatus(Number.isFinite(age) ? Math.max(0, age) : null);
+}
+
+const LastSuccessfulUpdateCard = memo(function LastSuccessfulUpdateCard({
+  ingestionStatus,
+  loading,
+}: {
+  ingestionStatus: IngestionStatus | null;
+  loading: boolean;
+}) {
+  const rows: LastUpdateRow[] = [];
+  Object.entries(ingestionStatus?.last_quote_updates || {}).forEach(([symbol, timestamp]) => {
+    if (timestamp) rows.push({ symbol, dataType: 'Quote', timestamp, provider: ingestionStatus?.last_quote_providers?.[symbol] || 'Unknown' });
+  });
+  Object.entries(ingestionStatus?.last_bar_updates || {}).forEach(([symbol, timeframes]) => {
+    Object.entries(timeframes).forEach(([timeframe, timestamp]) => {
+      if (timestamp) rows.push({ symbol, dataType: `${timeframe} bar`, timestamp, provider: ingestionStatus?.last_bar_providers?.[symbol]?.[timeframe] || 'Unknown' });
+    });
+  });
+  Object.entries(ingestionStatus?.last_status_updates || {}).forEach(([symbol, timestamp]) => {
+    if (timestamp) rows.push({ symbol, dataType: 'Market status', timestamp, provider: ingestionStatus?.last_status_providers?.[symbol] || 'Unknown' });
+  });
+  rows.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  return (
+    <div className={`health-card last-update-card${loading && !ingestionStatus ? ' card-loading-skeleton' : ''}`}>
+      <h2>Last Successful Update</h2>
+      {loading && !ingestionStatus ? (
+        <><SkeletonBlock width="100%" height="0.8rem" /><SkeletonBlock width="90%" height="0.8rem" /><SkeletonBlock width="80%" height="0.8rem" /></>
+      ) : rows.length === 0 ? (
+        <p className="info-text">No successful market-data updates have been recorded yet.</p>
+      ) : (
+        <div className="last-update-list">
+          <div className="last-update-row last-update-header"><span>Symbol</span><span>Data</span><span>Provider</span><span>Updated</span><span>Status</span></div>
+          {rows.slice(0, 20).map(row => {
+            const status = updateAge(row.timestamp);
+            return <div className="last-update-row" key={`${row.symbol}-${row.dataType}`}>
+              <strong>{row.symbol}</strong><span>{row.dataType}</span><span>{row.provider}</span><span title={formatTimestamp(row.timestamp)}>{formatTimestamp(row.timestamp)}</span><span className={`status-badge ${status.className}`}>{status.label}</span>
+            </div>;
+          })}
+        </div>
       )}
     </div>
   );
@@ -731,6 +778,8 @@ export function SystemHealth() {
           loading={observabilityLoading}
           error={observabilityError}
         />
+
+        <LastSuccessfulUpdateCard ingestionStatus={ingestionStatus} loading={ingestionLoading} />
 
         <ConnectionTestCard
           health={health}

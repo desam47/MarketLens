@@ -2117,6 +2117,27 @@ h4 {
 .provider-event-list { display: grid; gap: 0.25rem; }
 .provider-event-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.73rem; }
 
+.last-update-card { grid-column: 1 / -1; }
+.last-update-list { overflow-x: auto; }
+.last-update-row {
+  display: grid;
+  grid-template-columns: minmax(4.5rem, 0.7fr) minmax(7rem, 1fr) minmax(7rem, 1fr) minmax(12rem, 1.5fr) minmax(5.5rem, 0.6fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 40rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+}
+.last-update-row:last-child { border-bottom: 0; }
+.last-update-header {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .health-provider-row:last-child {
   border-bottom: 0;
 }

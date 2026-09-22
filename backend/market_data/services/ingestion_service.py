@@ -215,6 +215,9 @@ class MarketDataIngestionService:
         self.last_quote_update: dict[str, datetime] = {}
         self.last_bar_update: dict[str, dict[str, datetime]] = {}
         self.last_status_update: dict[str, datetime] = {}
+        self.last_quote_provider: dict[str, str] = {}
+        self.last_bar_provider: dict[str, dict[str, str]] = {}
+        self.last_status_provider: dict[str, str] = {}
         # Newest 1m bar timestamp already dispatched to the engines, per symbol
         # (see _ingest_1m_recent_window).
         self._last_dispatched_bar_ts: dict[str, datetime] = {}
@@ -224,6 +227,7 @@ class MarketDataIngestionService:
             self.last_quote_update[symbol] = datetime.min
             self.last_status_update[symbol] = datetime.min
             self.last_bar_update[symbol] = {tf: datetime.min for tf in self.timeframes}
+            self.last_bar_provider[symbol] = {}
             # Phase 3.1: prune any pre-existing non-1m timeframe entries from
             # the dict. Since we only ingest 1m bars, higher-TF keys are never
             # written and should not linger from a pre-3.1 state.
@@ -329,6 +333,7 @@ class MarketDataIngestionService:
                     # resampled at read time, so we never want to throttle
                     # ingestion based on them.
                     self.last_bar_update[symbol] = {"1m": datetime.min}
+                    self.last_bar_provider[symbol] = {}
 
         self.is_running = True
         set_ingestion_running(True)
@@ -1168,6 +1173,14 @@ class MarketDataIngestionService:
                 logger.info(f"Ingested {written} 1m bars across {len(self.symbols)} symbols")
                 db.commit()
                 upserted_symbols = {b.symbol.upper() for b in bars_to_upsert}
+                now = datetime.now()
+                for symbol in upserted_symbols:
+                    symbol_bars = [b for b in bars_to_upsert if b.symbol.upper() == symbol]
+                    latest = max(symbol_bars, key=lambda b: b.timestamp)
+                    self.last_bar_update.setdefault(symbol, {})["1m"] = now
+                    self.last_bar_provider.setdefault(symbol, {})["1m"] = (
+                        latest.provider or "unknown"
+                    )
                 if upserted_symbols:
                     from backend.market_data.services.cache import _redis_cache
 
@@ -2018,6 +2031,7 @@ class MarketDataIngestionService:
         self.last_quote_update[symbol] = datetime.min
         self.last_status_update[symbol] = datetime.min
         self.last_bar_update[symbol] = {"1m": datetime.min}
+        self.last_bar_provider[symbol] = {}
         logger.info(f"register_symbol: {symbol} now live-tracked ({len(self.symbols)} total)")
 
     def refresh_symbols_from_watchlist(self) -> list[str]:
@@ -2334,6 +2348,7 @@ class MarketDataIngestionService:
                 try:
                     quote_repository.add_quote(db, quote)
                     self.last_quote_update[quote.symbol.upper()] = now
+                    self.last_quote_provider[quote.symbol.upper()] = quote.provider or "unknown"
                     fresh_quotes.append(quote)
                 except Exception as e:
                     logger.warning(
@@ -2361,10 +2376,18 @@ class MarketDataIngestionService:
             # Webull stream is unavailable; expose that state to opted-in
             # symbol-status alerts without touching the live quote cache.
             from backend.alerts.engine import alerts_engine
+
             try:
                 from backend.market_data.streaming.webull_stream import get_webull_stream_client
+
                 stream = get_webull_stream_client()
-                data_status = "live" if stream is not None and stream.is_live(q.symbol) else "stale" if stream is not None else "rest_fallback"
+                data_status = (
+                    "live"
+                    if stream is not None and stream.is_live(q.symbol)
+                    else "stale"
+                    if stream is not None
+                    else "rest_fallback"
+                )
             except Exception:  # noqa: BLE001
                 data_status = "rest_fallback"
             alerts_engine.evaluate_symbol_data_status(q.symbol, data_status, q.price)
@@ -2430,6 +2453,7 @@ class MarketDataIngestionService:
                     db.add(db_status)
 
                     self.last_status_update[symbol] = datetime.now()
+                    self.last_status_provider[symbol] = status.provider or "unknown"
                     logger.debug(
                         f"Ingested market status for {symbol}: {'OPEN' if status.is_open else 'CLOSED'}"
                     )

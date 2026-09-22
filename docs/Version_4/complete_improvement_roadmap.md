@@ -32,7 +32,7 @@ The backend aggregates Webull trades into shared live 1-minute candles, pushes f
 
 ### 4. Reliability and rate-limit controls — [~] Partial
 
-Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling REST gap recovery, stream-status alerts, and per-symbol stale-data status alerts are implemented. Complete fallback observability remains.
+Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling REST gap recovery, stream-status alerts, per-symbol stale-data status alerts, and bounded provider fallback history are implemented. Durable fallback history and a cross-page last-successful-update view remain.
 
 - Shared subscriptions
 - Reconnect backoff
@@ -222,11 +222,11 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, and configuration-based entitlement details are implemented. A dedicated last-successful-update view outside the Watchlist and live entitlement verification remain.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, configuration-based entitlement details, and a dedicated last-successful-update table in System Health are implemented. Cross-page last-successful-update surfacing and live entitlement verification remain.
 
 - Stream reconnect status
 - Provider health
-- Last successful update per symbol (Watchlist view implemented)
+- Last successful update per symbol (System Health and Watchlist views implemented; other pages remain)
 - Per-symbol Watchlist data status (provider, age, and connection state) — [x] Done
 - Per-provider failover visibility (bounded event history implemented; long-term persistence remains)
 - Better stale-data warnings
@@ -234,4 +234,4 @@ Reconnect state, provider health, freshness badges, failover labels, per-symbol 
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, and configuration-based entitlement visibility are now in place. Next prioritize a dedicated last-successful-update view across all pages, long-term failover-event persistence, and live entitlement verification where providers expose it.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, configuration-based entitlement visibility, and the System Health last-successful-update table are now in place. Next prioritize surfacing the same update evidence on Dashboard, Scanner, Symbol, and Alerts, followed by long-term failover-event persistence and live entitlement verification where providers expose it.
