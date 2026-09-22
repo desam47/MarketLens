@@ -7,8 +7,17 @@
 
 **Current checkpoint (2026-09-22):** Version 4's implemented scope is
 merged to `main`. The `development` branch is synchronized with its remote
-and is the only branch receiving new Version 5 work. No Phase 5 implementation
-has started; Phase 5.1 is the next delivery gate.
+and is the only branch receiving new Version 5 work. Phase 5.1 is now in
+progress; its remaining tool-protocol and normalization work is the next
+delivery gate.
+
+**Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
+slice is now shipped on `development`. The strict calculator foundation in
+`backend/ai/calculator.py` is exposed through the read-only
+`POST /api/ai/calculate` endpoint, returns formulas and assumptions, and
+supports the documented change, return, risk, portfolio, volatility,
+drawdown, correlation, and options calculations. Seven focused calculator
+tests pass with `DEBUG=false`; no changes have been merged to `main`.
 
 ---
 
