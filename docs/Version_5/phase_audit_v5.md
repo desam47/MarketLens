@@ -42,6 +42,12 @@ permissions, per-tool rate limits, provider/source timestamps, and freshness
 metadata are now part of the result envelope. Seventeen focused Phase 5.1
 tests pass in total.
 
+A conservative deterministic fallback now handles unambiguous allocation,
+percentage/dollar change, reward/risk, and position-size wording when the AI
+returns no action. It constructs the same validated calculator request and
+never guesses when required inputs are missing. The focused Phase 5.1 suite
+now has 18 passing tests.
+
 **Phase 5.1 completion:** The planned tool foundation, safe calculator,
 normalization, registry/permissions, restricted verified formulas, initial
 metric catalog, Chat calculation action, provenance metadata, and focused

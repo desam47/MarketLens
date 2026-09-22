@@ -66,6 +66,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from backend.ai.analyze import analyze_symbol
+from backend.ai.calculator import CalculationRequest
 from backend.ai.chat_symbols import resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
@@ -169,6 +170,52 @@ _CONFIRM_DELETE_WATCHLIST_RE = re.compile(r'^Delete the watchlist "(?P<name>.+)"
 _CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
     r'^Remove (?P<sym>\S+)(?: from "(?P<wl>[^"]+)")?\? Say yes to confirm\.$'
 )
+
+_CALC_NUMBER_RE = re.compile(r"(?:\$|USD\s*)?([0-9][0-9,]*(?:\.\d+)?)", re.I)
+
+
+def _numbers_from_text(text: str) -> list[float]:
+    return [float(raw.replace(",", "")) for raw in _CALC_NUMBER_RE.findall(text)]
+
+
+def _fallback_calculation(user_content: str) -> CalculationRequest | None:
+    """Build a calculator request for simple, unambiguous user wording.
+
+    This is intentionally conservative: it requires an operation keyword and
+    the exact number of inputs needed, otherwise the model gets a chance to
+    clarify the request normally.
+    """
+    text = user_content.lower()
+    numbers = _numbers_from_text(user_content)
+    if len(numbers) == 2 and "allocation" in text and "portfolio" in text:
+        return CalculationRequest(
+            calculation="allocation",
+            position_value=numbers[0],
+            portfolio_value=numbers[1],
+        )
+    if len(numbers) == 2 and re.search(r"\b(from|change|return)\b", text):
+        operation = "percentage_change" if "percent" in text or "%" in text or "return" in text else "dollar_change"
+        return CalculationRequest(
+            calculation=operation,
+            old_value=numbers[0],
+            new_value=numbers[1],
+        )
+    if len(numbers) == 3 and all(word in text for word in ("entry", "stop", "target")):
+        return CalculationRequest(
+            calculation="risk_reward",
+            entry_price=numbers[0],
+            stop_price=numbers[1],
+            target_price=numbers[2],
+        )
+    if len(numbers) == 4 and "position" in text and "risk" in text:
+        return CalculationRequest(
+            calculation="position_size",
+            entry_price=numbers[0],
+            stop_price=numbers[1],
+            account_value=numbers[2],
+            risk_percent=numbers[3],
+        )
+    return None
 
 # "How many watchlists do I have" / "what are my watchlists" / "what's
 # on my watchlist" — the model is never told the trader's actual
@@ -896,14 +943,19 @@ def _finalize_parsed(
             return "Which ticker should I run the full analysis for?", True, []
         return "Tell me which ticker you'd like me to run the full analysis for.", False, []
     if parsed.action == "none":
-        fallback = _fallback_action(user_content, symbol_blocks)
-        if fallback is not None:
-            parsed.action = fallback
+        calculation = _fallback_calculation(user_content)
+        if calculation is not None:
+            parsed.action = "calculate"
+            parsed.action_calculation = calculation
         else:
-            confirmed = _fallback_confirmation(user_content, transcript or [])
-            if confirmed is not None:
-                parsed.action, parsed.action_symbol, parsed.action_watchlist = confirmed
-                parsed.action_confirmed = True
+            fallback = _fallback_action(user_content, symbol_blocks)
+            if fallback is not None:
+                parsed.action = fallback
+            else:
+                confirmed = _fallback_confirmation(user_content, transcript or [])
+                if confirmed is not None:
+                    parsed.action, parsed.action_symbol, parsed.action_watchlist = confirmed
+                    parsed.action_confirmed = True
     if parsed.action != "none":
         if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
             return _confirm_prompt(db, parsed), True, []
