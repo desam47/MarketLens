@@ -38,8 +38,8 @@ from ...ai import (
     ai_manager,
 )
 from ...ai.analyze import analyze_symbol, analyze_symbol_stream
-from ...ai.calculator import CalculationRequest, CalculationResult, calculate
 from ...ai.prompt import TradePlan
+from ...ai.tool_registry import ToolRequest, ToolResult, default_registry
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
 from ..rate_limit import _ai_limiter, check_rate_limit
@@ -151,8 +151,8 @@ class AnalyzeResponse(BaseModel):
 # --- Endpoints -----------------------------------------------------
 
 
-@router.post("/calculate", response_model=CalculationResult, status_code=status.HTTP_200_OK)
-async def calculate_metric(request: CalculationRequest) -> CalculationResult:
+@router.post("/calculate", response_model=ToolResult, status_code=status.HTTP_200_OK)
+async def calculate_metric(request: ToolRequest) -> ToolResult:
     """Run one deterministic, read-only MarketLens calculation.
 
     This endpoint is intentionally independent of the AI provider: callers
@@ -160,10 +160,10 @@ async def calculate_metric(request: CalculationRequest) -> CalculationResult:
     disabled or unavailable.
     """
 
-    try:
-        return calculate(request)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = default_registry.execute(request)
+    if not result.ok:
+        raise HTTPException(status_code=422, detail=result.error or "Calculation failed")
+    return result
 
 
 def _sync_resolve_template(db: Session, template_id: int | None):

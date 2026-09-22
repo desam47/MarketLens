@@ -26,6 +26,13 @@ and warnings, and includes canonical session, timeframe, percentage, and metric
 metadata helpers. Three registry tests pass in addition to the calculator tests
 (10 focused tests total).
 
+The protocol slice now also routes `/api/ai/calculate` through that registry,
+adds UTC execution timestamps and normalized session/timeframe context to every
+result, and provides `verified_formula.py` for restricted arithmetic over
+verified result fields. Calls, attributes, indexing, imports, and unknown
+values are rejected. Five formula/protocol tests pass, bringing the focused
+Phase 5.1 total to 15.
+
 ---
 
 ## Scorecard

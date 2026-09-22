@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.ai.calculator import CalculationRequest, calculate
 
@@ -24,6 +25,18 @@ class ToolRequest(BaseModel):
 
     tool_name: str = Field(..., min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
     arguments: dict[str, Any] = Field(default_factory=dict)
+    session: MarketSession = "all"
+    timeframe: str | None = None
+
+    @field_validator("session", mode="before")
+    @classmethod
+    def _normalize_session(cls, value: str) -> MarketSession:
+        return normalize_session(value)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _normalize_timeframe(cls, value: str | None) -> str | None:
+        return normalize_timeframe(value) if value else None
 
 
 class ToolResult(BaseModel):
@@ -33,6 +46,10 @@ class ToolResult(BaseModel):
     error: str | None = None
     duration_ms: float = Field(default=0, ge=0)
     warnings: list[str] = Field(default_factory=list)
+    started_at: str | None = None
+    finished_at: str | None = None
+    session: MarketSession = "all"
+    timeframe: str | None = None
 
 
 class ToolSpec(BaseModel):
@@ -65,12 +82,14 @@ class ToolRegistry:
             raise ValueError(f"Unknown tool: {name}") from exc
 
     def execute(self, request: ToolRequest) -> ToolResult:
+        started_at = datetime.now(UTC).isoformat()
         try:
             spec = self.get(request.tool_name)
             parsed = spec.input_model.model_validate(request.arguments)
             started = time.perf_counter()
             result = spec.handler(parsed)
             duration_ms = (time.perf_counter() - started) * 1000
+            finished_at = datetime.now(UTC).isoformat()
             warnings = []
             if duration_ms > spec.max_duration_ms:
                 warnings.append("Tool exceeded its expected duration budget.")
@@ -80,9 +99,21 @@ class ToolRegistry:
                 data=result.model_dump(mode="json"),
                 duration_ms=round(duration_ms, 3),
                 warnings=warnings,
+                started_at=started_at,
+                finished_at=finished_at,
+                session=request.session,
+                timeframe=request.timeframe,
             )
         except (ValueError, TypeError) as exc:
-            return ToolResult(tool_name=request.tool_name, ok=False, error=str(exc))
+            return ToolResult(
+                tool_name=request.tool_name,
+                ok=False,
+                error=str(exc),
+                started_at=started_at,
+                finished_at=datetime.now(UTC).isoformat(),
+                session=request.session,
+                timeframe=request.timeframe,
+            )
 
 
 def normalize_session(value: str | None) -> MarketSession:
