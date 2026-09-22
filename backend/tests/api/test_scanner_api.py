@@ -342,9 +342,9 @@ class TestScannerAPI(unittest.TestCase):
 
     def test_watchlist_scan_ranks_and_returns(self):
         watchlist = MagicMock(id=1)
-        aapl = MagicMock(symbol="AAPL", is_enabled=True)
-        googl = MagicMock(symbol="GOOGL", is_enabled=True)
-        msft = MagicMock(symbol="MSFT", is_enabled=True)
+        aapl = MagicMock(symbol="AAPL", is_enabled=True, entity_type="stock")
+        googl = MagicMock(symbol="GOOGL", is_enabled=True, entity_type="stock")
+        msft = MagicMock(symbol="MSFT", is_enabled=True, entity_type="stock")
 
         self.mock_repo.get_watchlist.return_value = watchlist
         # The new code path queries the unfiltered list so the UI can show

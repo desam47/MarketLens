@@ -17,6 +17,15 @@ import os
 
 import pytest
 
+# Test collection must not start a real Webull MQTT client from the developer's
+# .env. Streaming behavior has dedicated unit tests; API/integration tests
+# should remain offline and deterministic.
+os.environ["WEBULL_STREAMING_ENABLED"] = "false"
+# Keep the application-level AI manager disabled during the suite. Individual
+# AI tests construct explicit enabled managers and mock their providers; the
+# .env-enabled singleton must not open a real Ollama socket in the background.
+os.environ["AI_ENABLED"] = "false"
+
 
 # ── Never call the real Webull API from the test suite ──────────────────────
 #

@@ -47,6 +47,8 @@ dev = [
     "pytest>=8.0",
     "pytest-benchmark",
     "pytest-cov>=5.0",
+    # Starlette 1.6 uses httpx2 for its TestClient implementation.
+    "httpx2>=2.0.0",
     "mypy==1.11.2",
     "types-requests",
     "ruff==0.6.9",

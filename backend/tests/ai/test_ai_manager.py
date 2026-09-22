@@ -1040,6 +1040,12 @@ class TestProviderStreaming(unittest.TestCase):
             health_check_timeout=1.0,
         )
 
+    def tearDown(self):
+        # Streaming providers keep a pooled AsyncClient. Close it even when a
+        # mocked stream exits early so a real client created by another test
+        # cannot leave an asyncio transport behind at interpreter shutdown.
+        asyncio.run(self.p.aclose())
+
     @patch("backend.ai.providers.httpx.AsyncClient")
     def test_openai_stream_concatenates_deltas_and_stops_on_done(self, MockClient):
         lines = [
