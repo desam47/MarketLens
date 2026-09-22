@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import api, { TopMoverResult } from '../services/api';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import api, { LiveQuoteUpdateData, RealtimeConnectionStatus, RealtimeEvent, TopMoverResult } from '../services/api';
 import { ErrorBanner } from './ErrorBanner';
 import { formatETDateTime } from './chartMath';
 
@@ -26,11 +26,15 @@ function MoverPanel({
   movers,
   onSelectSymbol,
   variant,
+  liveQuotes,
+  quoteConnectionStatus,
 }: {
   title: string;
   movers: TopMoverResult[];
   onSelectSymbol?: (symbol: string) => void;
   variant: 'bullish' | 'bearish';
+  liveQuotes: Record<string, LiveQuoteUpdateData>;
+  quoteConnectionStatus: RealtimeConnectionStatus;
 }) {
   if (movers.length === 0) {
     return (
@@ -51,7 +55,18 @@ function MoverPanel({
       </h3>
       <div className="top-movers-scroll">
         {movers.map(m => {
-          const badge = changeBadge(m.change_pct);
+          const live = quoteConnectionStatus === 'open' ? liveQuotes[m.symbol.toUpperCase()] : undefined;
+          const livePrice = live?.price ?? m.quote?.price ?? null;
+          // The scan's change is the captured price minus its prior-close
+          // baseline. Reuse that baseline so a live quote can update the
+          // percentage without another provider request.
+          const baseline = m.quote?.price != null && m.change != null
+            ? m.quote.price - m.change
+            : null;
+          const liveChangePct = livePrice != null && baseline != null && baseline !== 0
+            ? ((livePrice - baseline) / baseline) * 100
+            : m.change_pct;
+          const badge = changeBadge(liveChangePct);
           return (
             <div
               key={m.symbol}
@@ -59,6 +74,7 @@ function MoverPanel({
               onClick={() => onSelectSymbol?.(m.symbol)}
               role={onSelectSymbol ? 'button' : undefined}
               aria-label={onSelectSymbol ? `View ${m.symbol}, ${badge.label} change` : undefined}
+              title={live ? `${m.symbol} live quote · ${live.provider}` : `${m.symbol} scan snapshot`}
               tabIndex={onSelectSymbol ? 0 : undefined}
               onKeyDown={(e) => {
                 if (onSelectSymbol && (e.key === 'Enter' || e.key === ' ')) {
@@ -71,6 +87,7 @@ function MoverPanel({
               <span className="mover-score" style={{ color: badge.color }}>
                 {badge.label}
               </span>
+              {live && <span className="mover-live-indicator">LIVE</span>}
             </div>
           );
         })}
@@ -86,6 +103,34 @@ export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversC
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [liveQuotes, setLiveQuotes] = useState<Record<string, LiveQuoteUpdateData>>({});
+  const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
+
+  const liveSymbols = useMemo(
+    () => Array.from(new Set([...bullish, ...bearish].map(m => m.symbol.toUpperCase()))).sort(),
+    [bullish, bearish],
+  );
+  const liveSymbolsKey = liveSymbols.join(',');
+
+  useEffect(() => {
+    if (!liveSymbols.length) return;
+    const subscriber = api.createRealtimeSubscriber?.();
+    if (!subscriber) return;
+    const unsubscribe = subscriber.onEvent((event: RealtimeEvent) => {
+      if (event.type !== 'quote_update') return;
+      setLiveQuotes(previous => ({ ...previous, [event.symbol.toUpperCase()]: event.data }));
+    });
+    const unsubscribeStatus = subscriber.onStatus(setQuoteConnectionStatus);
+    liveSymbols.forEach(symbol => subscriber.subscribeQuote(symbol));
+    return () => {
+      unsubscribe();
+      unsubscribeStatus();
+      liveSymbols.forEach(symbol => subscriber.unsubscribeQuote(symbol));
+      subscriber.disconnect();
+    };
+  // `liveSymbolsKey` is the stable representation of the ranked symbols.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveSymbolsKey]);
 
   const fetchMovers = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -174,12 +219,16 @@ export function TopMoversCard({ onSelectSymbol, autoRefresh = true }: TopMoversC
             movers={bullish}
             onSelectSymbol={onSelectSymbol}
             variant="bullish"
+            liveQuotes={liveQuotes}
+            quoteConnectionStatus={quoteConnectionStatus}
           />
           <MoverPanel
             title="Top Bearish"
             movers={bearish}
             onSelectSymbol={onSelectSymbol}
             variant="bearish"
+            liveQuotes={liveQuotes}
+            quoteConnectionStatus={quoteConnectionStatus}
           />
         </div>
       )}
