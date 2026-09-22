@@ -117,6 +117,9 @@ class WebullSettings(BaseSettings):
     # Optional MQTT host override; empty = let the SDK's endpoint resolver
     # pick it from the region.
     streaming_mqtt_host: str = Field(default="")
+    # Optional user-declared subscription coverage. This is not provider
+    # confirmation; it is compared with runtime observations in System Health.
+    declared_entitlements: str = Field(default="")
 
 
 class MarketDataSettings(BaseSettings):

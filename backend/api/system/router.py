@@ -284,6 +284,33 @@ def _safe_provider_observability() -> dict | None:
             except Exception:
                 stream_connected = False
         primary = settings.market_data.primary_provider
+        declared = {
+            item.strip().lower()
+            for item in settings.webull.declared_entitlements.split(",")
+            if item.strip()
+        }
+
+        def entitlement_status(
+            key: str, observed_access: bool, configured: bool
+        ) -> tuple[str, str]:
+            if observed_access:
+                return "verified", "runtime_observed"
+            if key in declared:
+                return "declared", "user_declared"
+            if configured:
+                return "configured", "configuration_only"
+            return "unavailable", "configuration_only"
+
+        quote_status, quote_verification = entitlement_status(
+            "rest_quotes", observed(primary, {"get_quote", "get_batch_quotes"}), bool(primary)
+        )
+        bars_status, bars_verification = entitlement_status(
+            "bars", observed(primary, {"get_latest_bar", "get_historical_bars"}), bool(primary)
+        )
+        bbo_status, bbo_verification = entitlement_status("bbo", stream_connected, stream_ready)
+        tape_status, tape_verification = entitlement_status(
+            "time_and_sales", stream_connected, stream_ready
+        )
         return {
             "events": events,
             "failure_count": history["failure_count"],
@@ -291,14 +318,9 @@ def _safe_provider_observability() -> dict | None:
             "entitlements": {
                 "rest_quotes": {
                     "provider": settings.market_data.primary_provider,
-                    "status": "verified"
-                    if observed(primary, {"get_quote", "get_batch_quotes"})
-                    else "configured"
-                    if primary
-                    else "unavailable",
-                    "verification": "runtime_observed"
-                    if observed(primary, {"get_quote", "get_batch_quotes"})
-                    else "configuration_only",
+                    "status": quote_status,
+                    "verification": quote_verification,
+                    "declared": "rest_quotes" in declared,
                     "provider_reported": False,
                     "verification_note": "Webull entitlement metadata is not exposed by the installed SDK.",
                 },
@@ -322,40 +344,25 @@ def _safe_provider_observability() -> dict | None:
                         }
                         for timeframe in ("1m", "1h", "4h", "1d", "1wk")
                     },
-                    "status": "verified"
-                    if observed(primary, {"get_latest_bar", "get_historical_bars"})
-                    else "configured"
-                    if primary
-                    else "unavailable",
-                    "verification": "runtime_observed"
-                    if observed(primary, {"get_latest_bar", "get_historical_bars"})
-                    else "configuration_only",
+                    "status": bars_status,
+                    "verification": bars_verification,
+                    "declared": "bars" in declared,
                     "provider_reported": False,
                     "verification_note": "Provider subscription entitlement is not exposed by the installed SDK.",
                 },
                 "bbo": {
                     "provider": "webull",
-                    "status": "verified"
-                    if stream_connected
-                    else "configured"
-                    if stream_ready
-                    else "disabled",
-                    "verification": "runtime_observed"
-                    if stream_connected
-                    else "configuration_only",
+                    "status": bbo_status,
+                    "verification": bbo_verification,
+                    "declared": "bbo" in declared,
                     "provider_reported": False,
                     "verification_note": "Webull stream connectivity is observable; subscription entitlement is not exposed.",
                 },
                 "time_and_sales": {
                     "provider": "webull",
-                    "status": "verified"
-                    if stream_connected
-                    else "configured"
-                    if stream_ready
-                    else "disabled",
-                    "verification": "runtime_observed"
-                    if stream_connected
-                    else "configuration_only",
+                    "status": tape_status,
+                    "verification": tape_verification,
+                    "declared": "time_and_sales" in declared,
                     "provider_reported": False,
                     "verification_note": "Webull stream connectivity is observable; subscription entitlement is not exposed.",
                 },

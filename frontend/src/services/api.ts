@@ -228,6 +228,7 @@ export interface SystemPerformance {
       verification: string;
       provider_reported?: boolean;
       verification_note?: string;
+      declared?: boolean;
     }>;
   } | null;
 }

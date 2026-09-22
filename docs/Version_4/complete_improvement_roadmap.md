@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21, commit `a37c6c9`): provider observability, durable bounded failover history, runtime-observed entitlement checks for configured REST/bar/stream paths, explicit SDK entitlement limitations, manager-enforced request-level provider attribution, durable tick replay storage with date/session filters, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
+Latest checkpoint (2026-09-21): provider observability, durable bounded failover history, runtime-observed entitlement checks, explicit SDK entitlement limitations, optional user-declared entitlement coverage, manager-enforced request-level provider attribution, durable tick replay with date/session filters and charted microstructure analytics, per-timeframe source mapping, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 
@@ -86,7 +86,7 @@ Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling RE
 - Trade-rate spikes
 - Stream disconnects
 
-### 9. Tick-level replay — [~] Partial
+### 9. Tick-level replay — [x] Done
 
 Local bounded retention, durable SQLite tick storage, date-range/session filtering, BBO/tape playback, causal 1-minute signal reconstruction, replay microstructure metrics, and a charted pressure/imbalance/velocity timeline are implemented.
 
@@ -164,7 +164,7 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 
 ### 15. Provider and data-quality transparency — [~] Partial
 
-Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, configured source mapping for each bar timeframe, and manager-enforced provider attribution on fetched quotes and bars; provider-reported exchange entitlement verification remains.
+Provider labels, freshness, live/stale state, fallback state, and auxiliary-data caveats are visible. A unified per-symbol Data status column now appears in the Watchlist alongside the existing Dashboard, Scanner, and Symbol indicators. System Health now includes durable provider activity history, runtime-observed entitlement checks for REST quotes, bars, BBO, and Time & Sales, optional user-declared coverage, configured source mapping for each bar timeframe, and manager-enforced provider attribution on fetched quotes and bars; provider-reported exchange entitlement verification remains unavailable through the installed SDK.
 
 - Actual provider used
 - Provider per timeframe
@@ -201,9 +201,9 @@ Manual journal entries, screenshots, P&L, review notes, local persistence, signa
 - Mistake/review notes
 - Automatic signal and market-context attachment
 
-### 18. Historical replay — [~] Partial
+### 18. Historical replay — [x] Done
 
-Candle replay, signal timing, performance summaries, durable tick replay, date-range/session filtering, simulated entries/exits, stop/target tracking, simulated outcomes, causal signal reconstruction, replay microstructure metrics, and charted microstructure overlays are implemented.
+Candle replay, signal timing, performance summaries, durable tick replay, date-range/session filtering, simulated entries/exits, stop/target tracking, simulated outcomes, causal signal reconstruction, replay microstructure metrics, and charted microstructure overlays are implemented. Longer replay coverage remains bounded by the configured local retention window.
 
 - Candle-by-candle replay
 - Tick-level replay and causal 1-minute signal reconstruction
@@ -236,4 +236,4 @@ Reconnect state, provider health, freshness badges, failover labels, per-symbol 
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, durable bounded provider failover history, runtime-observed entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. Next prioritize provider-reported entitlement verification and complete per-timeframe attribution.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, complete tick/historical replay workflow, durable bounded provider failover history, runtime-observed entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. The remaining limitation is provider-reported entitlement verification, which the installed Webull SDK does not expose.
