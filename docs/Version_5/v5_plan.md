@@ -1,123 +1,453 @@
-# Version 5 — Charts
+# Version 5 — Intelligent AI Hub Chat
 
-**Date:** 2026-09-09
-**Last updated:** 2026-09-09
+**Date:** 2026-09-22
+**Last updated:** 2026-09-22
 **Status:** Active. Phase 5.1 not started.
-**Scope:** Charts — click-to-place drawing tools, additional chart types (line/area/Heikin Ashi), more indicators, overlay-vs-pane placement, chart settings persistence.
+**Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 
 ---
 
 ## Goals
 
-1. Replace the drawing-tools flow's manual timestamp/price entry with click-to-place on the chart itself.
-2. Add line, area, and Heikin Ashi chart types alongside the existing candlestick-only view.
-3. Round out the indicator set (RSI, VWAP, Ichimoku, ATR, Stochastic, ADX, OBV, Williams %R, CCI) with correct overlay-vs-separate-pane placement.
-4. Persist per-symbol chart settings (timeframe, indicator set, chart type) across sessions.
+1. Make calculations deterministic and backend-verified instead of trusting model arithmetic.
+2. Let Chat retrieve the exact MarketLens data required for each question through explicit read-only tools.
+3. Support bounded multi-step questions, comparisons, scenarios, and follow-ups without creating an unrestricted autonomous agent.
+4. Show provider, timestamp, timeframe, market session, freshness, assumptions, and formulas with every data-backed answer.
+5. Turn Chat into a practical workspace for screening, planning, risk review, alerts, watchlists, options research, and journal review.
+6. Preserve MarketLens safety rules: no invented data, no order execution, explicit confirmation for destructive actions, and graceful uncertainty when evidence is missing.
 
-**Non-goals for this phase:**
-- Renko / Kagi / Point & Figure chart types — gauge real demand after v1 ships before scoping the data-transformation work they'd require.
-- A TradingView Charting Library integration — `lightweight-charts` is the live, working implementation; revisit only if it hits a real ceiling this phase runs into, not preemptively.
-
----
-
-## Background — how this phase got here
-
-Originally scoped as Version 3's Phase 3.4, never started, and carried
-forward as Version 4's intended opening phase (`docs/Version_3/phase_audit_v3.md`,
-`docs/Version_3/v3_plan.md`). When Version 4 began, the user redirected
-it to focus on AI integration instead — Charts was bumped to Phase 4.2
-within v4 ("deferred within this version, not dropped";
-`docs/Version_4/v4_plan.md`). After Phase 4.1 (AI integration) shipped
-and was hardened through several rounds of live-use bugfixes
-(`docs/Version_4/phase_audit_v4.md` items 4.1.1-4.1.16), the user moved
-Charts out of Version 4 entirely to open its own version instead of
-staying a secondary phase. This is that move: the full scope below is
-the same content from Version 4's Phase 4.2 (and, before that,
-Version 3's Phase 3.4), carried forward verbatim and renumbered as
-Phase 5.1 — nothing about the plan itself has changed, only where it
-lives in the roadmap.
+**Non-goals for this version:**
+- Broker order execution, account linking, or automatic trade placement.
+- Unbounded autonomous tool loops or background actions initiated without user intent.
+- Treating model-generated arithmetic, ticker identity, prices, statistics, or action IDs as authoritative.
+- Replacing existing Scanner, Symbol, Alerts, Risk Dashboard, Journal, Replay, or Options pages; Chat orchestrates and explains those capabilities.
+- Real-time data beyond the user's provider entitlements.
 
 ---
 
-## Phase 5.1 — Charts (drawing v1, line/area/HA, indicators)
+## Background — current Chat and why this phase exists
 
-**Why now:** Charts are the most-visited surface. Drawing tools require manual timestamp entry (broken UX). Only one chart type (candlestick). Limited indicator set.
+AI Hub Chat already has a useful grounded base. Each turn resolves tickers,
+builds symbol and market context, includes a clipped transcript, streams a
+structured reply, and can execute a closed set of actions: fresh analysis,
+alert CRUD, watchlist CRUD, entity-type correction, a fixed backtest, and
+natural-language screening. Destructive actions have a backend confirmation
+gate, and several watchlist questions are answered deterministically from the
+database.
 
-**Drawing decisions confirmed (from the original v3 scoping — re-confirm still current before building):**
-- Types v1: **Trend line** (2-point) + **Horizontal line** (1-point, price-level) — scope kept to these two
-- Activation: **Floating toolbar** inside the chart card (top-left strip of buttons)
-- Interaction: **Click → click** to place. **Esc** cancels mid-draw. One click for horizontal line, two for trend line.
-- Storage: **DB-backed** (existing CRUD API, unchanged) — drawing saves to server immediately after second click
-- Lock toggle: small icon button in the toolbar; when locked, chart ignores drawing clicks
+The limiting architecture is that most questions still become one large prompt
+followed by one model-generated JSON object. Context inclusion is selected by
+regular-expression intent gates, calculation is not exposed as a first-class
+verified tool, and the frontend primarily renders prose. This works well for
+known symbol questions but does not scale cleanly to arbitrary comparisons,
+portfolio scenarios, exact calculations, historical lookups, or questions that
+need several dependent data reads.
+
+Version 5 keeps the current safety model and evolves it into a bounded tool
+orchestrator. The backend owns data access, arithmetic, validation, permissions,
+and side effects. The language model selects tools and explains verified
+results; it never becomes the source of market facts or numerical truth.
+
+---
+
+## Phase 5.1 — Tool foundation and safe calculator
+
+**Why first:** Every later capability depends on a stable tool contract and reliable arithmetic.
 
 ### Items
 
-#### 5.1.1 Drawing tools: click-to-place (trend line + horizontal line)
-- **Current state:** `DrawingToolsPanel.tsx` form requires typing start/end timestamps and prices. Clunky.
-- **New behavior (v1):**
-  1. Floating toolbar inside `CandlestickChart` card (top-left): `[T↗] [—] 🔓`
-  2. Click a tool button → enter "draw mode" for that tool (button highlights active)
-  3. Click on the chart → place point 1 (shows a marker dot)
-  4. Click again → place point 2, drawing commits → POST to API → added to the sidebar list
-  5. Press Esc → cancel draw mode, remove marker, no API call
-  6. Drawing lock (🔓→🔒): when locked, clicks are ignored (prevent accidental edits)
-- **Implementation:**
-  - New file: `frontend/src/components/chartInteractions.ts` — pure `pixelToCoord(chart, x, y) -> {time: number, price: number}` using `chart.timeScale().coordinateToTime()` and `chart.priceScale().coordinateToPrice()`
-  - Add `onChartClick(time, price)` callback prop to `CandlestickChart`; when a drawing tool is active and chart is unlocked, emit this
-  - `CandlestickChart` state machine: `idle | placing-start | placing-end | drawing-locked`
-  - On `placing-start` click: show a temporary marker div; transition to `placing-end`
-  - On `placing-end` click: call `api.createDrawingTool(...)`, reset to `idle`
-  - On Esc keydown: if in `placing-*`, remove marker, transition to `idle`
-  - After save: refresh `DrawingToolsPanel` list (existing `fetchDrawings` refetch)
-- Drawing types supported in v1: `trend_line` (needs 2nd click), `horizontal_line` (needs 1 click — price level only, no time)
+#### 5.1.1 Typed Chat tool protocol
+- Define a common request/result envelope with `tool_name`, validated arguments, result data, errors, duration, provider, timestamps, freshness, and warnings.
+- Separate read-only, calculation, and mutating tools.
+- Give every tool a stable schema that can be tested independently of the model.
+- Keep the existing flat `ChatReplyResponse` action path operational during migration.
 
-#### 5.1.2 Chart toolbar: drawing lock toggle + tool activation
-- Add lock state to `CandlestickChart`: `const [drawLock, setDrawLock] = useState(false)`
-- Toolbar buttons: `Trend Line`, `Horizontal`, lock icon
-- Active tool indicator (one at a time, cleared on Esc or on drawing save)
-- Keyboard handler: listen for `Escape` key globally when in draw mode
+#### 5.1.2 Safe calculation engine
+- Add backend-owned calculations for percentage and dollar change, simple and annualized return, CAGR, weighted average, position value, position size, stop risk, reward/risk, allocation, correlation, volatility, and maximum drawdown.
+- Return per-share risk, total dollar risk, portfolio-risk percentage, and reward/risk as distinct outputs whenever the required entry, stop, target, quantity, and portfolio value are available.
+- Add options calculations for breakeven, intrinsic/extrinsic value, expected move, maximum gain/loss where defined, and assignment/expiration exposure.
+- Accept only named operations or a restricted expression grammar; never use `eval` and never execute model-generated code.
+- Allow restricted custom formulas to reference verified values from prior tool results by stable result/field identifiers; never substitute model-invented numbers into a formula.
+- Return inputs, units, formula, raw value, formatted value, assumptions, and validation errors.
 
-#### 5.1.3 Additional chart types
-- **Line chart:** `frontend/src/components/LineChart.tsx` — close-only line, no candles, no wicks. Useful for long timeframes.
-- **Area chart:** `LineChart.tsx` with a filled area under the line.
-- **Heikin Ashi:** variant of `CandlestickChart.tsx` that takes `chartType="heikin_ashi"` and pre-computes HA candles from the raw data.
-- **Renko / Kagi / P&F:** out of scope (see Non-goals) — only if all other items land first and there's demand.
-- Add `chart_type` to the `SymbolPage` toolbar with a dropdown
+#### 5.1.3 Time, session, and unit normalization
+- Resolve relative dates such as “today”, “yesterday”, and “last Friday” in America/New_York.
+- Represent premarket, regular, after-hours, and all-session scope explicitly.
+- Normalize percentages, currency, shares, timestamps, timeframes, and annualization conventions before calculation.
 
-#### 5.1.4 More indicators
-- Currently supported: SMA, EMA, MACD, Bollinger (per `CustomIndicatorsPanel.tsx`).
-- Add: RSI, VWAP, Ichimoku Cloud, ATR, Stochastic, ADX, OBV, Williams %R, CCI
-- File: `frontend/src/components/CustomIndicatorsPanel.tsx` — add the new entries to the dropdown
-- For built-in indicators, add a "Built-in" section in the panel that doesn't require the user to configure anything (just toggle on/off)
-- For VWAP: needs both price and volume; the bars data already has `volume` populated (per `market_data_sql.py`)
+#### 5.1.4 Tool registry and permissions
+- Register tools centrally with input schemas, output schemas, read/write classification, timeout, and rate-limit policy.
+- Require backend confirmation for destructive tools regardless of model output.
+- Keep broker/order tools absent from the registry.
 
-#### 5.1.5 Indicator overlay vs separate pane
-- **Overlay (price chart):** SMA, EMA, Bollinger, VWAP, Ichimoku
-- **Separate pane below price:** RSI, MACD, Stochastic, ADX, ATR, Williams %R, CCI, OBV
-- Add a `pane_height` config to custom indicators; UI shows a small thumbnail of where it renders
-
-#### 5.1.6 Chart settings + drawing persistence
-- Chart settings (timeframe, indicator set, chart type): persist per-user via `localStorage` keyed by symbol
-- Drawings: already persisted to DB via existing `DrawingTool` API
-- Verify the click-to-place flow doesn't break the persistence model — the API should still receive `start_timestamp` / `start_price` from the click handler
-- Drawing lock (introduced in 5.1.2) prevents accidental edits
-
-### Before starting — re-verify against current code
-- `DrawingToolsPanel.tsx`, `CustomIndicatorsPanel.tsx`, `CandlestickChart.tsx` still exist with roughly this shape
-- The `DrawingTool` CRUD API (`backend/api/...`) is unchanged
-- `lightweight-charts` is still the pinned charting library (`frontend/package.json`)
-- A TradingView Charting Library integration was attempted once (commit `9598dae`) but isn't present in the current tree — don't reach for it without a specific reason; `lightweight-charts` is the live implementation this plan builds on.
-- Re-check the AI work landed in Version 4 (`docs/Version_4/`) hasn't touched any chart-adjacent code (it hasn't, as of this move — AI Stock Search and AI Analysis are fully separate surfaces from `CandlestickChart.tsx`).
+#### 5.1.5 Canonical metric and terminology catalog
+- Define the authoritative meaning, formula, units, valid range, required inputs, timeframe/session behavior, and owning service for every Chat-visible MarketLens metric.
+- Include price/change percentage, relative volume, tape pressure, imbalance, confidence, trend strength, confluence, regime, expected move, risk, and performance statistics.
+- Make tools and explanations reference catalog identifiers so the same metric cannot be described or calculated differently across Chat and application pages.
 
 ### Verification
-- Click-to-place: open chart, click two points, see trendline appear at correct (timestamp, price)
-- Switch to line chart via toolbar dropdown — renders without errors, no wicks
-- Toggle RSI on — separate pane appears below price chart
-- All chart tests pass; add a new `frontend/src/components/__tests__/chartInteractions.test.ts`
+- Unit tests cover formulas, zero/negative inputs, missing data, timezone boundaries, session selection, malformed expressions, and rounding.
+- Tool schemas reject unknown fields and invalid symbols/timeframes.
+- No calculator path can import modules, access files, make network calls, or execute arbitrary code.
+
+---
+
+## Phase 5.2 — Grounded market-data tools and provenance
+
+**Why now:** Chat must fetch the exact evidence needed for a question instead of relying on a large preassembled prompt.
+
+### Items
+
+#### 5.2.1 Quote and bar tools
+- `get_quote(symbol, session)` with price, change, change percentage, bid/ask, quote age, provider, and fallback state.
+- `get_bars(symbol, timeframe, range, session)` with bounded row limits and data-availability metadata.
+- Use existing shared caches and subscriptions; Chat must not create per-turn provider polling.
+
+#### 5.2.2 Technical and market-structure tools
+- Expose explicit tools including `get_indicator(symbol, indicator, timeframe)`, `get_support_resistance(symbol)`, `get_market_regime()`, `get_market_context()`, and `get_sector_data(symbol)`.
+- Retrieve trend, multi-timeframe confluence, relative strength, BBO, tape pressure, large prints, and session statistics through the same typed tool contract.
+- Preserve each engine's real timeframe and last successful update.
+
+#### 5.2.3 Research tools
+- Expose explicit tools including `get_news(symbol, range)`, `get_fundamentals(symbol)`, and `get_options_snapshot(symbol, expiration)`.
+- Retrieve catalysts, earnings, insider activity, analyst recommendations, and sector context through the same typed tool contract.
+- Label delayed, approximate, estimated, unavailable, and fallback data clearly.
+
+#### 5.2.4 User-data tools
+- Expose explicit tools including `get_watchlist(name)`, `get_alerts()`, `get_trade_journal()`, and `get_risk_dashboard()`.
+- Read manually tracked positions, saved scans, and recent signal history through the same typed tool contract.
+- Apply bounded result limits and return summaries plus IDs for follow-up retrieval.
+
+#### 5.2.5 Evidence bundle
+- Every tool result includes actual provider, source timestamp, retrieval timestamp, data age, timeframe, session, entitlement/fallback status, and warnings.
+- The final response exposes the evidence used rather than merely claiming it is grounded.
+
+#### 5.2.6 Data-conflict detection and reconciliation
+- Detect disagreements between providers, live and cached observations, sessions, timeframes, and page/tool results.
+- Never silently average incompatible values; show the conflict, select a source through deterministic precedence rules, and explain that selection.
+
+#### 5.2.7 Application-help and navigation metadata
+- Add a verified application-help tool backed by current routes, feature metadata, configuration descriptions, and page capabilities—not free-form model memory.
+- Return deep-link targets and required navigation state for the relevant MarketLens page or setting.
+
+#### 5.2.8 Safe user-provided data tools
+- Import local CSV trade history, positions, and watchlists through explicit schemas and bounded file/row limits.
+- Validate types and columns, keep imported data local, and treat spreadsheet formulas/macros as inert text rather than executable content.
+
+### Verification
+- Contract tests compare tool output with the existing page/API output for the same symbol and scope.
+- Cache tests confirm one Chat question does not multiply provider calls.
+- Stale, missing, delayed, and fallback cases are visible and never silently presented as live.
+
+---
+
+## Phase 5.3 — Bounded orchestration, intent, and memory
+
+**Why now:** Broad questions often need several dependent operations, but the loop must stay predictable and safe.
+
+### Items
+
+#### 5.3.1 Planner/executor loop
+- Add a bounded cycle: understand → select tool → validate → execute → observe → continue or answer.
+- Default maximum: 5 tool calls and 2 model planning calls per turn, configurable through environment settings.
+- Stop on repeated calls, repeated errors, exhausted budget, timeout, or sufficient evidence.
+
+#### 5.3.2 Clarification and ambiguity handling
+- Ask for missing ticker, watchlist, timeframe, session, date range, portfolio scope, stop, target, or risk budget when those materially change the answer.
+- Never silently choose among multiple watchlists, alerts, positions, or expirations.
+
+#### 5.3.3 Structured conversation state
+- Store active symbols, previous ticker, current watchlist, timeframe, session, date range, last calculation inputs, last tool result IDs, pending confirmation, and user preferences separately from prose history.
+- Resolve “it”, “that stock”, “the previous ticker”, “same timeframe”, and “use the previous stop” from structured state.
+- Keep memory local to the user/session and provide a clear reset path.
+
+#### 5.3.4 Intent coverage
+- Support symbol, market, comparison, scanner, watchlist, portfolio, risk, options, historical, journal, calculation, and app-action intents.
+- Replace fragile regex-only routing gradually; deterministic routes remain for exact DB questions and confirmation handling.
+
+#### 5.3.5 Cost, latency, and rate-limit budgets
+- Prefer local database/cache tools before provider calls.
+- Run independent reads concurrently, deduplicate identical calls, and reuse results within a turn.
+- Expose a concise failure when a budget is exhausted rather than producing an ungrounded fallback answer.
+
+#### 5.3.6 Visible question decomposition
+- Split complex requests into ordered, user-visible subtasks with dependencies and completion state.
+- Continue with independent subtasks after a partial failure and state exactly which result could not be produced.
+
+#### 5.3.7 Reusable workflows
+- Save editable workflows such as Morning Review, Evaluate a Breakout, Options Setup Review, and End-of-Day Journal Review.
+- Store tool sequence, user-visible parameters, confirmation requirements, and output layout—not hidden model prose.
+
+#### 5.3.8 Model routing and deterministic fallback
+- Use configurable model routes for tool selection, complex synthesis, and repair while preserving one evidence contract.
+- Fall back to deterministic calculator/database answers when AI is unavailable and show which model, if any, generated the explanation.
+
+### Verification
+- Multi-step tests cover comparisons, follow-up pronouns, ambiguous requests, repeated-tool prevention, and partial failures.
+- The orchestrator cannot exceed configured call, time, or token budgets.
+- Destructive actions still require backend-enforced confirmation.
+
+---
+
+## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
+
+**Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
+
+### Items
+
+#### 5.4.1 “Why did it move?”
+- Combine price/session movement, relative volume, news, earnings, options activity, sector movement, market regime, and tape evidence.
+- Separate confirmed catalysts, correlations, and unknown causes.
+
+#### 5.4.2 “What changed?”
+- Compare now with previous close, previous signal, yesterday, last visit, or a user-selected timestamp.
+- Highlight signal transitions, regime changes, support/resistance breaks, freshness changes, catalysts, and alert events.
+
+#### 5.4.3 Comparisons and rankings
+- Compare symbols or watchlists on returns, trend, confluence, relative strength, volatility, volume, valuation, catalysts, options, and data quality.
+- Backend performs sorting, normalization, and ranking; the model explains the result.
+
+#### 5.4.4 Scenario analysis
+- Answer position and portfolio “what if” questions: price shocks, stop changes, target changes, allocation changes, volatility changes, and broad-market selloffs.
+- Display assumptions and avoid presenting scenario output as a forecast.
+
+#### 5.4.5 Historical similarity
+- Find comparable stored setups and report 1-, 5-, and 20-session outcomes, sample size, distribution, and confidence limits.
+- Prevent look-ahead leakage and label small samples.
+
+#### 5.4.6 Signal explanation
+- Explain triggered indicators, agreeing timeframes, conflicting evidence, BBO/tape confirmation, signal age, previous state, and historical performance.
+
+#### 5.4.7 Counterargument and invalidation review
+- For bullish conclusions, surface material bearish evidence; for bearish conclusions, surface material bullish evidence.
+- State the observations or thresholds that would invalidate the conclusion and avoid manufacturing a balanced argument when no credible counter-evidence exists.
+
+#### 5.4.8 Sensitivity analysis
+- Vary entry, stop, target, position size, allocation, volatility, and expected move across explicit user-selected or bounded scenarios.
+- Identify the assumptions with the greatest effect and label sensitivity output as conditional analysis rather than a forecast.
+
+#### 5.4.9 Unified market-event timeline
+- Order prices, session transitions, signals, alerts, news, earnings, analyst changes, insider activity, and options events on one normalized New York timeline.
+- Support “before”, “after”, and “between” questions without losing source timestamps or event provenance.
+
+#### 5.4.10 Proactive anomaly explanations
+- Detect unusual price, volume, spread, tape, options, correlation, and portfolio-risk changes relative to an explicit historical baseline.
+- Explain the baseline, magnitude, sample window, and available corroborating evidence.
+
+#### 5.4.11 Research assumption tracking
+- Save user-approved assumptions such as expected growth, stop, catalyst date, volatility, and invalidation conditions with source and creation time.
+- Mark assumptions stale or broken when verified evidence changes; never silently rewrite the original assumption.
+
+### Verification
+- Golden tests use fixed fixtures and independently calculated expected values.
+- Answers distinguish causation, correlation, inference, and unavailable evidence.
+- Rankings are stable and reproducible from returned tool data.
+
+---
+
+## Phase 5.5 — Scanner, watchlist, alerts, and briefings
+
+**Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
+
+### Items
+
+#### 5.5.1 Natural-language scanner builder
+- Convert requests into visible, editable Scanner filters.
+- Preview parsed filters before execution when the request is ambiguous.
+- Support technical, session, volume, relative-strength, catalyst, and microstructure criteria already available in MarketLens.
+
+#### 5.5.2 Watchlist intelligence
+- Daily briefing, best/worst movers, new breakouts, deteriorating setups, volume spikes, relative-strength changes, multi-timeframe alignment, earnings, catalysts, and sector rotation.
+- Rank from backend data and preserve the selected session scope.
+
+#### 5.5.3 Alert-to-conversation workflow
+- Open Chat with the fired alert, triggering observation, current quote, chart state, signal explanation, catalyst context, and recent history already attached.
+- Allow safe follow-up creation or modification of related alerts.
+
+#### 5.5.4 Scheduled summaries
+- Optional premarket plan, midday update, post-market recap, and weekly review.
+- The weekly review includes performance, recurring mistakes, plan-versus-execution differences, and the user's strongest/weakest setups when sufficient Journal data exists.
+- Deliver only through existing local MarketLens surfaces unless a future version explicitly adds external messaging.
+
+#### 5.5.5 What-changed inbox
+- Summarize changes since the user's last visit across watchlists, alerts, signals, catalysts, and provider health.
+- Deduplicate repeated events and link each summary item to its source page.
+
+### Verification
+- Natural-language filters match Scanner's displayed and executed filters exactly.
+- Briefings state their cutoff time and do not mix sessions silently.
+- Alert conversations reproduce the actual triggering values and timestamps.
+
+---
+
+## Phase 5.6 — Trade planning, risk, options, and journal coaching
+
+**Why now:** These workflows require the verified calculations and data tools delivered by earlier phases.
+
+### Items
+
+#### 5.6.1 Trade-plan builder
+- Produce entry zone, stop, targets, position size, reward/risk, invalidation, catalysts, risks, timeframe, session, and assumptions.
+- User reviews the plan before saving it or creating alerts.
+
+#### 5.6.2 Portfolio and Risk Dashboard assistant
+- Explain concentration, sector exposure, correlation, volatility, stop risk, drawdown, and scenario results.
+- Recommend no trade size when required inputs or risk limits are missing.
+
+#### 5.6.3 Options research assistant
+- Explain and compare calls, puts, and defined-risk spreads across expirations and strikes; explain IV, IV percentile, expected move, volume, open interest, put/call ratio, unusual activity, breakeven, maximum gain/loss, assignment, and expiration risk.
+- Use existing delayed/approximate labels and never imply executable prices.
+
+#### 5.6.4 Trade Journal coach
+- Attach signals, market conditions, calculations, and plans to journal entries.
+- Compare planned versus actual execution and identify recurring mistakes, setup performance, personal win rate, and expectancy.
+- Keep coaching evidence-based and distinguish observations from advice.
+
+#### 5.6.5 Save/export workflows
+- Save approved plans and reviews to the Journal.
+- Export a response as a local report and provide deep links to Symbol, Scanner, Risk, Replay, Alerts, and Journal pages.
+
+#### 5.6.6 Configurable decision checklist
+- Support pre-plan checks such as trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, and data freshness.
+- Let the user configure required checks; clearly distinguish completed, failed, unavailable, and intentionally skipped items.
+
+### Verification
+- All monetary and percentage values trace to calculator results.
+- Missing stop, target, capital, contract multiplier, or expiration produces clarification rather than invented defaults.
+- Journal analytics can be reproduced from stored entries.
+
+---
+
+## Phase 5.7 — Structured Chat UI and personalization
+
+**Why now:** Typed results should be interactive and readable, not flattened into model-generated prose.
+
+### Items
+
+#### 5.7.1 Typed response blocks
+- Support prose, calculation cards, evidence lists, comparison tables, ranked results, warnings, suggested follow-ups, and action confirmations.
+- Require every data-backed block to carry a confidence/data-quality state derived from evidence completeness and freshness, not model self-confidence.
+- Persist typed blocks with the message so history renders consistently.
+
+#### 5.7.2 Interactive visual components
+- Mini price charts, indicator tables, options-chain cards, risk cards, scenario controls, session statistics, and historical-outcome distributions.
+- Buttons for Add Alert, Add to Watchlist, Open Symbol, Open Scanner, Save to Journal, and Run Again.
+
+#### 5.7.3 Personal preferences
+- Remember the user's explicit operating mode—day trading, swing trading, options, or long-term investing—plus preferred timeframes, default session, risk-per-trade limit, primary watchlist, answer detail level, and preferred units.
+- Tailor terminology, default comparisons, risk framing, and suggested follow-ups to the selected mode without changing underlying calculations or evidence.
+- Make every preference visible, editable, and resettable; do not infer high-impact risk settings silently.
+
+#### 5.7.4 Answer contract
+- Visually separate facts, calculations, assumptions, model interpretation, and uncertainty.
+- Show provider, source time, freshness, session, timeframe, fallback, entitlement, and confidence/data-quality status without cluttering the main answer.
+
+#### 5.7.5 Accessibility and responsive behavior
+- Keyboard navigation, readable tables, accessible status labels, mobile-safe cards, and non-color-only data-quality indicators.
+
+#### 5.7.6 Chart-state awareness
+- Pass the currently visible symbol, timeframe, session, zoom range, selected candle, active indicators, and drawings into Chat as typed state.
+- Support “explain what I’m looking at” without making Chat infer chart state from prose or an unverified screenshot.
+
+#### 5.7.7 App navigation actions
+- Let Chat open Symbol, Scanner, Replay, Risk, Journal, Alerts, Options, or System Health with symbol, timeframe, session, filters, and selected records preserved.
+- Navigation changes UI state only; it never implies a market or account action.
+
+#### 5.7.8 Feedback and correction loop
+- Add Correct, Incorrect, and Not Useful feedback with optional categories: wrong data, wrong calculation, misunderstood intent, stale data, poor explanation, or unsafe action.
+- Turn approved failures into regression fixtures; do not perform uncontrolled online model retraining from user feedback.
+
+#### 5.7.9 Response regeneration controls
+- Regenerate as More Detail, Simpler, Bull Case, Bear Case, Calculations Only, Sources Only, or with a different timeframe/session.
+- Reuse existing tool results when still valid and fetch new data only when the requested scope or freshness requires it.
+
+#### 5.7.10 Saved research notebooks
+- Group conversations, calculations, charts, journal entries, assumptions, and local reports by symbol or research idea.
+- Preserve original evidence timestamps and show when notebook conclusions depend on stale inputs.
+
+#### 5.7.11 Freshness-aware answer refresh
+- Track which evidence records support each response and mark the response stale when those observations expire or materially change.
+- Offer an explicit Refresh with Current Data action while preserving the original answer for comparison.
+
+### Verification
+- Component tests cover every block type, loading/error states, long values, missing data, and mobile widths.
+- Historical messages render without rerunning tools.
+- Screen-reader text conveys freshness and warning states.
+
+---
+
+## Phase 5.8 — Reliability, evaluation, and release hardening
+
+**Why now:** “Answers almost everything” is only useful when correctness and failure behavior are measurable.
+
+### Items
+
+#### 5.8.1 Grounding and hallucination controls
+- Reject unsupported claims, unknown tickers, unavailable data, and claims of live status without freshness evidence.
+- Require references to tool-result IDs for every numerical market claim.
+
+#### 5.8.2 Answer verification pass
+- Before persistence or display, verify every ticker, number, unit, timeframe, session, formula result, and factual market claim against cited tool results.
+- Detect contradictions between prose and evidence, independently recompute critical calculations, and replace an unverifiable answer with explicit uncertainty.
+
+#### 5.8.3 Evaluation suite
+- Build a versioned set of questions covering calculations, market data, sessions, comparisons, follow-ups, scanner filters, portfolio risk, options, actions, uncertainty, and adversarial prompts.
+- Score factual correctness, calculation correctness, tool choice, provenance, clarification quality, latency, and action safety.
+
+#### 5.8.4 Observability and audit trail
+- Record tool name, sanitized arguments, duration, cache/provider usage, result status, and final evidence references.
+- Never log secrets, full private journal text, or sensitive credentials.
+
+#### 5.8.5 Failure and fallback behavior
+- Tool timeout, provider outage, stale data, partial symbol failure, parse failure, and model outage all return useful partial answers or explicit uncertainty.
+- Retrying must be bounded and must not multiply provider requests.
+
+#### 5.8.6 Performance targets
+- Define latency budgets for calculation-only, cached-data, database, and provider-backed turns.
+- Track cache hit rate, tool-call count, model calls, prompt size, and provider request count per turn.
+
+#### 5.8.7 Release gate
+- No order execution path.
+- All destructive actions confirmation-tested.
+- Calculator golden tests pass.
+- Full backend/frontend suites pass.
+- Manual smoke test covers the major question categories and failure modes.
+
+---
+
+## Before starting — re-verify against current code
+
+- `backend/ai/chat.py` remains the shared blocking/streaming Chat orchestration path.
+- `backend/ai/prompt.py::ChatReplyResponse` remains the current flat action contract.
+- `backend/ai/context.py`, `backend/ai/market_baseline.py`, and `backend/ai/chat_symbols.py` remain the current grounding inputs.
+- Existing Chat actions still cover reanalysis, alerts, watchlists, entity type, fixed backtesting, and natural-language screening.
+- Existing shared market-data caches and Webull subscriptions are reused; no Chat-specific provider polling is introduced.
+- Risk Dashboard, Trade Journal, Scanner, Replay, Options Snapshot, Alerts, and System Health APIs are treated as sources of truth rather than reimplemented inside Chat.
+- Configuration belongs in `.env` and `.env.example`; secrets remain only in `.env`.
+
+---
+
+## End-to-end verification matrix
+
+1. **Calculation:** “Buy 200 AAPL at $220, stop $212” returns $1,600 risk with inputs and formula.
+2. **Session:** A premarket-change question uses previous regular close and labels the premarket timestamp.
+3. **Comparison:** AAPL versus MSFT is calculated from aligned timeframes and timestamps.
+4. **Why move:** Answer distinguishes confirmed news from inferred sector/market effects.
+5. **Scenario:** A 5% portfolio shock returns deterministic position and portfolio impacts.
+6. **Scanner:** Natural language produces visible filters identical to executed filters.
+7. **Follow-up:** “Use the same stop but 100 shares” reuses structured state correctly.
+8. **Options:** Breakeven and expected move show delayed/approximate provenance.
+9. **Alert:** A fired alert opens a conversation with exact trigger evidence.
+10. **Journal:** A saved plan and later review preserve original assumptions and calculations.
+11. **Failure:** Provider outage produces a partial/stale answer with an explicit warning, never fabricated live data.
+12. **Safety:** Destructive actions require confirmation; order execution is impossible.
 
 ---
 
 ## Open questions
 
-1. Re-attempt TradingView at some point, now that `lightweight-charts` has more mileage on it? Revisit only if `lightweight-charts` hits a real ceiling — no evidence of that yet.
-2. Renko/Kagi/P&F — gauge demand after v1 ships before scoping the data-transformation work.
+1. Which local/default model will be the minimum supported model for reliable tool selection and structured output?
+2. Should proactive briefings run only on demand initially, or also through the existing local scheduler?
+3. What default per-turn limits should ship for tool calls, model calls, time, and context tokens?
+4. Should structured Chat messages be stored in the existing message table as versioned JSON or in a separate response-block table?
+5. Which personal preferences should sync through the database versus remain browser-local?
