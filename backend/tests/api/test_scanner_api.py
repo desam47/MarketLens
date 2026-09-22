@@ -721,6 +721,24 @@ class TestScannerScopeAndMatchAll(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([r["symbol"] for r in response.json()], ["AAPL"])
 
+    def test_filter_endpoint_accepts_comma_separated_symbol_scope(self):
+        """Legacy comma-separated query values must still scope correctly."""
+        aapl = _make_result("AAPL", indicators={"price": 150.0})
+        msft = _make_result("MSFT", indicators={"price": 90.0})
+        self.mock_scanner.scan_results = {"AAPL": aapl, "MSFT": msft}
+
+        response = self.client.post(
+            "/api/scanner/filter",
+            json={
+                "filters": [{"type": "price_above", "params": {"price": 100}}],
+                "match": "AND",
+            },
+            params={"symbols": "AAPL,MSFT"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r["symbol"] for r in response.json()], ["AAPL"])
+
     def test_rankings_endpoint_empty_filters_eligible_is_full_pool(self):
         """The NamedRankingsPanel call shape: empty filters, no scope."""
         self._three_symbol_cache()

@@ -249,7 +249,9 @@ def _build_filter(filters: list[_FilterRequest], match: str):
     return AndFilter(built)
 
 
-def _split_earnings_exclusion(filters: list[_FilterRequest]) -> tuple[list[_FilterRequest], int | None]:
+def _split_earnings_exclusion(
+    filters: list[_FilterRequest],
+) -> tuple[list[_FilterRequest], int | None]:
     """Extract the scanner's provider-backed earnings exclusion constraint."""
     standard: list[_FilterRequest] = []
     days: int | None = None
@@ -260,9 +262,13 @@ def _split_earnings_exclusion(filters: list[_FilterRequest]) -> tuple[list[_Filt
         try:
             value = int(item.params.get("days", 7))
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Earnings exclusion days must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Earnings exclusion days must be an integer"
+            ) from exc
         if not 0 <= value <= 180:
-            raise HTTPException(status_code=400, detail="Earnings exclusion days must be between 0 and 180")
+            raise HTTPException(
+                status_code=400, detail="Earnings exclusion days must be between 0 and 180"
+            )
         days = value if days is None else min(days, value)
     return standard, days
 
@@ -303,6 +309,21 @@ def _scoped_cache(symbols: list[str] | None) -> list[ScanResult]:
         wanted = {s.upper() for s in symbols}
         cache = [r for r in cache if r.symbol.upper() in wanted]
     return cache
+
+
+def _normalize_symbol_query(symbols: list[str] | None) -> list[str] | None:
+    """Normalize repeated or legacy comma-separated symbol query values.
+
+    The frontend sends repeated ``symbols`` parameters, but older clients
+    sent one comma-separated value. Supporting both keeps the scanner scope
+    from becoming a single invalid symbol when those clients are still open.
+    """
+    if not symbols:
+        return None
+    normalized = [
+        symbol.strip().upper() for value in symbols for symbol in value.split(",") if symbol.strip()
+    ]
+    return normalized or None
 
 
 async def _ensure_symbols_scanned(symbols: list[str]) -> None:
@@ -377,6 +398,7 @@ async def filter_scan_results(
     response reflects the latest data) and the result set is scoped to
     them. Otherwise every cached symbol is eligible.
     """
+    symbols = _normalize_symbol_query(symbols)
     standard_filters, earnings_exclusion_days = _split_earnings_exclusion(filter_body.filters)
     f = _build_filter(standard_filters, filter_body.match)
 
@@ -392,7 +414,9 @@ async def filter_scan_results(
 
     matched = [r for r in cache if f.matches(r)]
     if earnings_exclusion_days is not None:
-        matched = await asyncio.to_thread(_without_upcoming_earnings, matched, earnings_exclusion_days)
+        matched = await asyncio.to_thread(
+            _without_upcoming_earnings, matched, earnings_exclusion_days
+        )
     return [_result_to_dict(r) for r in matched]
 
 
@@ -408,6 +432,7 @@ async def get_named_rankings(
     An optional filter narrows the candidate set before ranking, and an
     optional ``symbols`` scope narrows it to those symbols only.
     """
+    symbols = _normalize_symbol_query(symbols)
     standard_filters, earnings_exclusion_days = _split_earnings_exclusion(filter_body.filters)
     f = _build_filter(standard_filters, filter_body.match)
 

@@ -1994,9 +1994,13 @@ class ApiService {
     body: { filters: FilterSpec[]; match: 'AND' | 'OR' },
     symbols?: string[],
   ): Promise<ScanResult[]> {
-    const qs = symbols && symbols.length
-      ? `?symbols=${symbols.map(s => s.toUpperCase()).join(',')}`
-      : '';
+    const params = new URLSearchParams();
+    for (const symbol of symbols ?? []) {
+      const normalized = symbol.trim().toUpperCase();
+      if (normalized) params.append('symbols', normalized);
+    }
+    const query = params.toString();
+    const qs = query ? `?${query}` : '';
     return this.fetch<ScanResult[]>(`/scanner/filter${qs}`, {
       method: 'POST',
       body: JSON.stringify(body),
