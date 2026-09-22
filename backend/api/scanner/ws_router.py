@@ -2,9 +2,10 @@
 WebSocket scanner push channel.
 
 Clients connect to ``/api/scanner-stream/ws`` and subscribe to symbols they care
-about. When the ingestion service picks up a fresh quote for a
-subscribed symbol, the server re-runs the scanner and pushes the result
-to every client subscribed to that symbol.
+about. When the shared market-data layer receives a fresh quote or
+microstructure event for a subscribed symbol, the server marks only that
+symbol dirty, debounces bursts, re-runs the scanner, and pushes the result to
+every client subscribed to that symbol.
 
 This is the live-update complement to the HTTP
 ``/api/scanner/{symbol}`` endpoint, which always triggers a fresh scan
@@ -195,19 +196,19 @@ broadcast_manager = ScannerBroadcastManager()
 # ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
-# Bridges ``engine_registry`` quote events into the broadcast manager.
-# When ingestion pushes a fresh quote for a symbol, we re-scan and push
-# the result to every WebSocket subscriber. The work runs on the asyncio
-# event loop (captured at app startup); the actual scan runs in a thread
-# so the loop isn't blocked.
+# Bridges ``engine_registry`` quote and microstructure events into the
+# broadcast manager. A single debounced task drains dirty symbols, so a burst
+# of ticks cannot create one asyncio task per event. The work runs on the
+# asyncio event loop (captured at app startup); the actual scan runs in a
+# thread so the loop isn't blocked.
 
 
 class ScannerDispatcher:
-    """Re-scan on every fresh quote and broadcast to subscribers.
+    """Debounced, symbol-specific scanner refresh dispatcher.
 
-    A single instance is registered with ``engine_registry`` for the
-    ``"quote"`` kind. The callback is invoked synchronously from any
-    thread; we hop to the event loop to do the work.
+    A single instance is registered with ``engine_registry`` for quote and
+    microstructure events. Callbacks are invoked synchronously from any
+    thread; we hop to the event loop to coalesce events and do the work.
     """
 
     def __init__(self, manager: ScannerBroadcastManager, loop: asyncio.AbstractEventLoop):
@@ -223,6 +224,11 @@ class ScannerDispatcher:
         # Symbol → monotonic seconds of last successful scan.
         self._last_scan_at: dict[str, float] = {}
         self._last_broadcast_at: str | None = None
+        # A single worker drains this set after a short debounce window so
+        # quote/BBO/tape bursts are coalesced into one symbol-specific scan.
+        self._dirty_symbols: set[str] = set()
+        self._debounce_task: asyncio.Task | None = None
+        self._debounce_seconds: float = 0.25
         # Cooldown in seconds. 30s matches the ingestion quote interval,
         # so a normal flow produces at most one scan per symbol per
         # cycle. Backtests / real-time bursts are still throttled.
@@ -250,6 +256,7 @@ class ScannerDispatcher:
 
             for sym in ingestion_service.symbols:
                 engine_registry.register("quote", sym, self._on_quote)
+                engine_registry.register("microstructure", sym, self._on_microstructure)
         except Exception as e:
             logger.debug(f"Initial symbol registration skipped: {e}")
         self._registered = True
@@ -260,33 +267,89 @@ class ScannerDispatcher:
         symbol is added to the watchlist at runtime)."""
         if not self._registered:
             self.register()
-        engine_registry.register("quote", symbol.upper(), self._on_quote)
+        normalized = symbol.upper()
+        engine_registry.register("quote", normalized, self._on_quote)
+        engine_registry.register("microstructure", normalized, self._on_microstructure)
 
-    def _on_quote(self, **_: Any) -> None:
-        """Sync callback invoked by ``engine_registry.dispatch_quote``.
+    def request_scan(self, symbol: str) -> None:
+        """Request an initial or manually-triggered scan for one symbol."""
+        self._mark_dirty(symbol.upper())
 
-        The actual symbol is passed via the ``symbol`` kwarg by the
-        dispatch machinery, but the registry calls the callback once
-        per registered pair — so we don't know which symbol triggered
-        us. Instead, we listen for *every* quote and re-scan only the
-        symbols that have active subscribers.
-        """
-        if not self._manager.get_subscribed_symbols():
+    def _on_quote(self, symbol: str | None = None, **_: Any) -> None:
+        """Sync callback invoked by ``engine_registry.dispatch_quote``."""
+        self._queue_event(symbol)
+
+    def _on_microstructure(self, symbol: str | None = None, **_: Any) -> None:
+        """Sync callback invoked by live BBO and Time & Sales events."""
+        self._queue_event(symbol)
+
+    def _queue_event(self, symbol: str | None) -> None:
+        """Bridge a provider-thread event onto the scanner's event loop."""
+        if not symbol:
             return
-        # Schedule broadcast of all currently-subscribed symbols on the
-        # event loop. Hopping back to the loop is safe from any thread
-        # because call_soon_threadsafe is exactly that bridge.
+        normalized = symbol.upper()
+        if not self._manager.has_subscribers(normalized):
+            return
         try:
-            self._loop.call_soon_threadsafe(
-                asyncio.ensure_future,
-                self._scan_and_broadcast_all(),
-            )
+            self._loop.call_soon_threadsafe(self._mark_dirty, normalized)
         except RuntimeError as e:
             # Loop is closed (process shutting down). Drop quietly.
             logger.debug(f"ScannerDispatcher could not schedule: {e}")
 
-    async def _scan_and_broadcast_all(self) -> None:
-        """Re-scan every subscribed symbol, respecting the per-symbol cooldown.
+    def _mark_dirty(self, symbol: str) -> None:
+        """Add one symbol to the coalesced refresh set."""
+        normalized = symbol.upper()
+        if not self._manager.has_subscribers(normalized):
+            return
+        self._dirty_symbols.add(normalized)
+        task = self._debounce_task
+        if task is None or task.done():
+            self._debounce_task = self._loop.create_task(self._drain_dirty())
+
+    async def _drain_dirty(self) -> None:
+        """Drain dirty symbols with debounce and per-symbol cooldowns."""
+        try:
+            await asyncio.sleep(self._debounce_seconds)
+            while self._dirty_symbols:
+                import time as _time
+
+                now = _time.monotonic()
+                pending = {
+                    symbol
+                    for symbol in self._dirty_symbols
+                    if self._manager.has_subscribers(symbol)
+                }
+                self._dirty_symbols.intersection_update(pending)
+                if not pending:
+                    return
+
+                to_scan = [
+                    symbol
+                    for symbol in sorted(pending)
+                    if now - self._last_scan_at.get(symbol, 0.0) >= self._cooldown_seconds
+                ]
+                if not to_scan:
+                    next_scan_at = min(
+                        self._last_scan_at.get(symbol, now) + self._cooldown_seconds
+                        for symbol in pending
+                    )
+                    await asyncio.sleep(max(self._debounce_seconds, next_scan_at - now))
+                    continue
+
+                for symbol in to_scan:
+                    self._dirty_symbols.discard(symbol)
+                await self._scan_and_broadcast_all(set(to_scan))
+                if self._dirty_symbols:
+                    await asyncio.sleep(self._debounce_seconds)
+        finally:
+            self._debounce_task = None
+            # A callback may arrive as the worker is exiting. Ensure it gets
+            # a new worker instead of leaving a dirty symbol stranded.
+            if self._dirty_symbols and not self._loop.is_closed():
+                self._debounce_task = self._loop.create_task(self._drain_dirty())
+
+    async def _scan_and_broadcast_all(self, symbols: set[str] | None = None) -> None:
+        """Scan selected subscribed symbols, respecting per-symbol cooldown.
 
         Scans are batched and run concurrently via ``scan_symbols_async``,
         which pre-fetches bars/quotes for all symbols in one batch
@@ -297,7 +360,7 @@ class ScannerDispatcher:
         """
         import time as _time
 
-        symbols = self._manager.get_subscribed_symbols()
+        symbols = symbols or self._manager.get_subscribed_symbols()
         now = _time.monotonic()
 
         # Cooldown gate: partition subscribed symbols into those that need
@@ -391,6 +454,11 @@ def install(loop: asyncio.AbstractEventLoop | None = None) -> ScannerDispatcher:
 def reset_dispatcher() -> None:
     """Test-only: clear the global dispatcher so a fresh one is built."""
     global _dispatcher
+    if _dispatcher is not None:
+        task = _dispatcher._debounce_task
+        if task is not None and not task.done():
+            task.cancel()
+        _dispatcher._dirty_symbols.clear()
     _dispatcher = None
 
 

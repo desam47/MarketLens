@@ -22,7 +22,7 @@ Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
 ### 3. Real-time chart updates — [x] Done
 
-The backend aggregates Webull trades into shared live 1-minute candles, pushes forming candles to chart subscribers, and persists completed candles through a non-blocking batch writer. A timer closes inactive symbols without waiting for the next trade, late prints revise stream-derived rows, and authoritative REST history remains protected. REST history intentionally remains as a fallback.
+The backend aggregates Webull trades into shared live 1-minute candles, pushes forming candles to chart subscribers, and persists completed candles through a non-blocking batch writer. A timer closes inactive symbols without waiting for the next trade, late prints revise stream-derived rows, and authoritative REST history remains protected. The existing ingestion loop also fetches a rolling 15-minute 1m REST window about once per minute, which normally repairs recent stream/restart gaps; exact missed ticks remain unrecoverable from that bar reconciliation.
 
 - Update the active candle from incoming ticks
 - Build 1-minute bars locally
@@ -32,7 +32,7 @@ The backend aggregates Webull trades into shared live 1-minute candles, pushes f
 
 ### 4. Reliability and rate-limit controls — [~] Partial
 
-Shared subscriptions, reconnect backoff, deduplication, cache limits, stream-status alerts, and per-symbol stale-data status alerts are implemented. Complete fallback observability remains.
+Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling REST gap recovery, stream-status alerts, and per-symbol stale-data status alerts are implemented. Complete fallback observability remains.
 
 - Shared subscriptions
 - Reconnect backoff
@@ -40,6 +40,7 @@ Shared subscriptions, reconnect backoff, deduplication, cache limits, stream-sta
 - Subscription deduplication
 - Cached snapshots
 - Local storage limits
+- Rolling REST reconciliation for recent 1m gaps
 - Graceful fallback when Webull disconnects
 
 ## Phase 2 — Microstructure features
@@ -94,9 +95,9 @@ Local bounded retention and BBO/tape playback are implemented. Replaying derived
 
 ## Phase 3 — Intelligence and scanning
 
-### 10. Better live market scanner — [~] Partial
+### 10. Better live market scanner — [x] Done
 
-Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. Event-driven scan refreshes remain.
+Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility, multi-timeframe, and microstructure filters are implemented. The scanner WebSocket now refreshes only symbols affected by quote or microstructure events, coalesces bursts through one debounced worker, and preserves per-symbol cooldowns.
 
 - Breakouts
 - Volume spikes
@@ -105,6 +106,8 @@ Breakouts, volume, VWAP, EMA alignment/crossovers, relative strength, volatility
 - Volatility contraction and expansion
 - Multi-timeframe confirmation
 - Microstructure confirmation
+- Event-driven quote and microstructure refresh
+- Debounced symbol-level scan batching
 
 ### 11. Signal Explanation Center — [x] Done
 
@@ -227,4 +230,4 @@ Reconnect state, provider health, freshness badges, failover labels, and per-sym
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, and durable live 1-minute candle path are now in place. Next prioritize event-driven scanner refreshes, unified per-symbol freshness visibility, and exact tick-level signal reconstruction. These close the remaining gaps in scanner timeliness, operational transparency, and replay fidelity.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, and event-driven scanner refresh path are now in place. Next prioritize unified per-symbol freshness visibility and exact tick-level signal reconstruction. These close the remaining gaps in operational transparency and replay fidelity.

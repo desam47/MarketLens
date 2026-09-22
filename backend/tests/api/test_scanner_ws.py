@@ -334,6 +334,54 @@ class TestScannerDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent["symbol"], "AAPL")
         self.assertIn("data", sent)
 
+    async def test_quote_event_scans_only_the_triggering_symbol(self):
+        manager = ScannerBroadcastManager()
+        ws_aapl = AsyncMock()
+        ws_msft = AsyncMock()
+        await manager.subscribe(ws_aapl, "AAPL")
+        await manager.subscribe(ws_msft, "MSFT")
+
+        with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
+
+            async def scan_one(symbols):
+                return [_make_scan_result(symbols[0])]
+
+            mock_scanner.scan_symbols_async = AsyncMock(side_effect=scan_one)
+            loop = asyncio.get_running_loop()
+            dispatcher = ws_router.ScannerDispatcher(manager, loop)
+            dispatcher._debounce_seconds = 0.0
+            dispatcher._on_quote(symbol="AAPL", price=150.0)
+            await asyncio.sleep(0.02)
+
+        mock_scanner.scan_symbols_async.assert_awaited_once_with(["AAPL"])
+        ws_aapl.send_json.assert_awaited_once()
+        ws_msft.send_json.assert_not_awaited()
+
+    async def test_quote_burst_is_coalesced_into_one_batch(self):
+        manager = ScannerBroadcastManager()
+        ws_aapl = AsyncMock()
+        ws_msft = AsyncMock()
+        await manager.subscribe(ws_aapl, "AAPL")
+        await manager.subscribe(ws_msft, "MSFT")
+
+        with patch("backend.api.scanner.ws_router.market_scanner") as mock_scanner:
+
+            async def scan_batch(symbols):
+                return [_make_scan_result(symbol) for symbol in symbols]
+
+            mock_scanner.scan_symbols_async = AsyncMock(side_effect=scan_batch)
+            loop = asyncio.get_running_loop()
+            dispatcher = ws_router.ScannerDispatcher(manager, loop)
+            dispatcher._debounce_seconds = 0.01
+            dispatcher._on_quote(symbol="AAPL")
+            dispatcher._on_quote(symbol="AAPL")
+            dispatcher._on_microstructure(symbol="MSFT")
+            await asyncio.sleep(0.05)
+
+        mock_scanner.scan_symbols_async.assert_awaited_once_with(["AAPL", "MSFT"])
+        ws_aapl.send_json.assert_awaited_once()
+        ws_msft.send_json.assert_awaited_once()
+
     async def test_dispatcher_sends_scan_error(self):
         manager = ScannerBroadcastManager()
         ws = AsyncMock()
