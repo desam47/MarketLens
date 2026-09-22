@@ -41,6 +41,7 @@ def test_rollover_emits_previous_bar_once_and_accepts_late_print():
     assert late.current.timestamp == datetime(2026, 9, 21, 10, 0, tzinfo=ET)
     assert late.current.low == 99.5
     assert late.completed == ()
+    assert late.revised_closed == (late.current,)
 
     next_rollover = aggregator.update(
         "AAPL", 102.0, 10, datetime(2026, 9, 21, 10, 2, 1, tzinfo=ET)
@@ -56,6 +57,23 @@ def test_duplicate_trade_does_not_inflate_volume():
     timestamp = datetime(2026, 9, 21, 10, 0, 5, tzinfo=ET)
     assert aggregator.update("AAPL", 100.0, 10, timestamp) is not None
     assert aggregator.update("AAPL", 100.0, 10, timestamp) is None
+
+
+def test_timer_finalizes_elapsed_bar_once_and_late_print_revises_it():
+    aggregator = LiveBarAggregator()
+    aggregator.update("AAPL", 100.0, 10, datetime(2026, 9, 21, 10, 0, 5, tzinfo=ET))
+
+    assert aggregator.finalize_elapsed(datetime(2026, 9, 21, 10, 0, 59, tzinfo=ET)) == ()
+    completed = aggregator.finalize_elapsed(datetime(2026, 9, 21, 10, 1, 0, tzinfo=ET))
+    assert len(completed) == 1
+    assert completed[0].timestamp == datetime(2026, 9, 21, 10, 0, tzinfo=ET)
+    assert aggregator.finalize_elapsed(datetime(2026, 9, 21, 10, 1, 10, tzinfo=ET)) == ()
+
+    late = aggregator.update("AAPL", 99.0, 5, datetime(2026, 9, 21, 10, 0, 55, tzinfo=ET))
+    assert late is not None
+    assert late.completed == ()
+    assert late.revised_closed == (late.current,)
+    assert late.current.volume == 15
 
 
 def test_old_late_trade_is_ignored():
@@ -95,5 +113,46 @@ def test_stream_bridge_publishes_the_shared_current_bar():
         assert timeframe == "1m"
         assert bar_payload["open"] == 100.0
         assert bar_payload["volume"] == 10
+    finally:
+        live_bar_aggregator.reset()
+
+
+def test_stream_bridge_queues_completed_and_late_revised_bars():
+    from backend.market_data.streaming.live_bars import live_bar_aggregator
+
+    live_bar_aggregator.reset()
+    payload = {"price": 100.0, "volume": 10, "event_type": "trade"}
+    first_ts = datetime(2026, 9, 21, 10, 0, 5, tzinfo=ET)
+    next_ts = datetime(2026, 9, 21, 10, 1, 2, tzinfo=ET)
+    late_ts = datetime(2026, 9, 21, 10, 0, 55, tzinfo=ET)
+    try:
+        with (
+            patch(
+                "backend.market_data.streaming.live_quotes.live_quote_cache.update",
+                return_value=payload,
+            ),
+            patch("backend.services.tick_replay.tick_replay_store.record"),
+            patch("backend.api.realtime.ws_router.publish_live_quote"),
+            patch("backend.api.realtime.ws_router.publish_live_bar"),
+            patch(
+                "backend.market_data.streaming.live_bar_persistence.live_bar_persistence.enqueue"
+            ) as enqueue,
+            patch.object(engine_registry, "dispatch_trade"),
+            patch.object(engine_registry, "dispatch_bar") as dispatch_bar,
+            patch.object(engine_registry, "dispatch_microstructure"),
+        ):
+            on_stream_trade("AAPL", 100.0, 10, first_ts, "buy")
+            on_stream_trade("AAPL", 101.0, 20, next_ts, "buy")
+            on_stream_trade("AAPL", 99.5, 5, late_ts, "sell")
+
+        assert enqueue.call_count == 2
+        completed = enqueue.call_args_list[0].args[0]
+        revised = enqueue.call_args_list[1].args[0]
+        assert len(completed) == 1
+        assert completed[0].close == 100.0
+        assert len(revised) == 1
+        assert revised[0].low == 99.5
+        assert revised[0].volume == 15
+        dispatch_bar.assert_called_once()
     finally:
         live_bar_aggregator.reset()

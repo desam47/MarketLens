@@ -3,8 +3,9 @@ Wiring between the Webull MQTT stream and the rest of the app.
 
 The stream feeds the tape engine and a bounded local 1-minute bar
 aggregator. The aggregator updates the shared realtime chart channel
-immediately and dispatches completed candles to in-memory analysis engines;
-REST remains the durable historical/fallback source.
+immediately, dispatches completed candles to in-memory analysis engines, and
+queues completed candles for durable storage. REST remains the authoritative
+historical/fallback source.
 
 ``on_stream_snapshot`` / ``on_stream_trade`` are the WebullStreamClient
 callbacks (set in main.py's lifespan). They run on the SDK's thread.
@@ -98,6 +99,13 @@ def on_stream_trade(symbol, price, size, ts, side) -> None:
             from backend.api.realtime.ws_router import publish_live_bar
 
             publish_live_bar(symbol, update.current.as_payload(), "1m")
+            durable_bars = (*update.completed, *update.revised_closed)
+            if durable_bars:
+                from backend.market_data.streaming.live_bar_persistence import (
+                    live_bar_persistence,
+                )
+
+                live_bar_persistence.enqueue(durable_bars)
     except Exception as e:  # noqa: BLE001
         # Aggregation is an enhancement over the REST fallback and must never
         # interrupt the tape or quote path when a malformed trade slips

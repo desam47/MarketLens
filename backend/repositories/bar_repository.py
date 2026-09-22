@@ -213,6 +213,107 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     return written
 
 
+def upsert_stream_bars(db: Session, bars: list[Bar]) -> int:
+    """Persist stream-derived bars without replacing authoritative history.
+
+    Webull's subscribed Time & Sales stream represents the Nasdaq Basic
+    entitlement rather than a consolidated historical feed. A local candle
+    may fill a missing minute, and later prints may revise that same local
+    candle, but it must not overwrite a row already written by a REST
+    historical provider. The conflict update is therefore conditional on the
+    existing row also being stream-derived.
+    """
+    if not bars:
+        return 0
+
+    stream_provider = "webull_stream"
+    if any(bar.provider != stream_provider for bar in bars):
+        raise ValueError("upsert_stream_bars only accepts webull_stream bars")
+
+    for bar in bars:
+        if bar.timeframe == "1m":
+            bar.session = classify_bar_session(bar.timestamp)
+
+    has_unique = _has_unique_constraint(db, "bars", ("symbol", "timeframe", "timestamp"))
+    written = 0
+    if has_unique:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        rows = [
+            {
+                "symbol": bar.symbol.upper(),
+                "timeframe": bar.timeframe,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+                "timestamp": bar.timestamp,
+                "provider": bar.provider,
+                "data_status": (
+                    bar.data_status.value
+                    if isinstance(bar.data_status, DataStatus)
+                    else str(bar.data_status)
+                ),
+                "source": "raw",
+                "session": bar.session,
+            }
+            for bar in bars
+        ]
+        stmt = sqlite_insert(BarModel)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol", "timeframe", "timestamp"],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+                "data_status": stmt.excluded.data_status,
+                "session": stmt.excluded.session,
+            },
+            where=BarModel.provider == stream_provider,
+        )
+        result = db.connection().execute(stmt, rows)
+        written = max(result.rowcount, 0)
+        db.commit()
+    else:
+        for bar in bars:
+            existing = (
+                db.query(BarModel)
+                .filter(
+                    and_(
+                        BarModel.symbol == bar.symbol.upper(),
+                        BarModel.timeframe == bar.timeframe,
+                        BarModel.timestamp == bar.timestamp,
+                    )
+                )
+                .first()
+            )
+            if existing is not None and existing.provider != stream_provider:
+                continue
+            if existing is None:
+                db.add(_bar_to_model(bar))
+            else:
+                existing.open = bar.open
+                existing.high = bar.high
+                existing.low = bar.low
+                existing.close = bar.close
+                existing.volume = bar.volume
+                existing.data_status = (
+                    bar.data_status.value
+                    if isinstance(bar.data_status, DataStatus)
+                    else str(bar.data_status)
+                )
+                existing.session = bar.session
+            written += 1
+        db.commit()
+
+    if written:
+        record_bars(written)
+    return written
+
+
 def get_bars(
     db: Session,
     symbol: str,

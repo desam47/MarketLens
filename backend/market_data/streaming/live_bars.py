@@ -3,8 +3,9 @@
 The Webull stream delivers individual trades, while the chart channel speaks
 in candles.  This module keeps a small, thread-safe rolling window per symbol
 so the current 1-minute candle can be pushed immediately without another
-provider request.  REST-ingested bars remain the durable historical/fallback
-source.
+provider request. Completed candles are handed to the background persistence
+writer; REST history remains the authoritative fallback and can replace a
+stream-derived row later.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ class LiveBarUpdate:
 
     current: LiveBar
     completed: tuple[LiveBar, ...] = ()
+    revised_closed: tuple[LiveBar, ...] = ()
 
 
 @dataclass
@@ -192,7 +194,44 @@ class LiveBarAggregator:
                 oldest_bucket = min(state.bars)
                 state.bars.pop(oldest_bucket, None)
 
-            return LiveBarUpdate(current=bar.freeze(), completed=tuple(completed))
+            frozen = bar.freeze()
+            # A late print may revise a candle that was already emitted and
+            # persisted on rollover. Keep engine dispatch one-shot, but hand
+            # the revised candle back to persistence so durable OHLCV/volume
+            # converges on the stream.
+            revised_closed = (
+                (frozen,)
+                if state.last_completed_bucket is not None and bucket <= state.last_completed_bucket
+                else ()
+            )
+            return LiveBarUpdate(
+                current=frozen,
+                completed=tuple(completed),
+                revised_closed=revised_closed,
+            )
+
+    def finalize_elapsed(self, as_of: datetime) -> tuple[LiveBar, ...]:
+        """Emit candles whose minute has elapsed, even without a later print.
+
+        Thinly traded symbols may not produce a tick in the following minute.
+        Relying only on rollover would leave their last candle in memory until
+        another trade arrives. The persistence timer calls this method, while
+        ``last_completed_bucket`` keeps it idempotent with tick-driven rollover.
+        """
+        cutoff = self._bucket(as_of)
+        completed: list[LiveBar] = []
+        with self._lock:
+            for state in self._states.values():
+                state_completed: list[LiveBar] = []
+                for bucket in sorted(state.bars):
+                    if bucket >= cutoff:
+                        break
+                    if state.last_completed_bucket is None or bucket > state.last_completed_bucket:
+                        state_completed.append(state.bars[bucket].freeze())
+                if state_completed:
+                    state.last_completed_bucket = state_completed[-1].timestamp
+                    completed.extend(state_completed)
+        return tuple(completed)
 
     def reset(self) -> None:
         """Clear all process-local state (used by tests and restart hooks)."""

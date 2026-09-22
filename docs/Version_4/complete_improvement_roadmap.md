@@ -20,9 +20,9 @@ Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 - Stream live price, bid, ask, sizes, and volume to the Symbol Page, Dashboard, Watchlists, Scanner, and Alerts
 - Show `LIVE`, `STALE`, or `REST FALLBACK`
 
-### 3. Real-time chart updates — [~] Partial
+### 3. Real-time chart updates — [x] Done
 
-The backend now aggregates Webull trades into a shared live 1-minute candle and pushes it to chart subscribers; the Symbol Page also keeps a client-side fallback. Persisting completed stream bars and eliminating all REST backfill dependence remain.
+The backend aggregates Webull trades into shared live 1-minute candles, pushes forming candles to chart subscribers, and persists completed candles through a non-blocking batch writer. A timer closes inactive symbols without waiting for the next trade, late prints revise stream-derived rows, and authoritative REST history remains protected. REST history intentionally remains as a fallback.
 
 - Update the active candle from incoming ticks
 - Build 1-minute bars locally
@@ -227,4 +227,4 @@ Reconnect state, provider health, freshness badges, failover labels, and per-sym
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, and live 1-minute candle path are now in place. Next prioritize completed-bar persistence, event-driven scanner refreshes, unified per-symbol freshness visibility, and exact tick-level signal reconstruction. These close the remaining gaps in chart durability, scanner timeliness, operational transparency, and replay fidelity.
+The shared Webull microstructure cache, quote WebSocket, and durable live 1-minute candle path are now in place. Next prioritize event-driven scanner refreshes, unified per-symbol freshness visibility, and exact tick-level signal reconstruction. These close the remaining gaps in scanner timeliness, operational transparency, and replay fidelity.

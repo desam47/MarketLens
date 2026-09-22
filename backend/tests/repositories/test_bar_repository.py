@@ -90,6 +90,31 @@ class TestBarRepository(unittest.TestCase):
         self.assertEqual(len(stored), 1)
         self.assertEqual(stored[0].close, 150.0)
 
+    def test_stream_upsert_revises_its_own_row(self):
+        original = _make_bar("AAPL", datetime(2025, 1, 1, 9, 30), 100.0)
+        original.provider = "webull_stream"
+        revised = _make_bar("AAPL", datetime(2025, 1, 1, 9, 30), 101.5)
+        revised.provider = "webull_stream"
+
+        with self.Session() as db:
+            self.assertEqual(bar_repository.upsert_stream_bars(db, [original]), 1)
+            self.assertEqual(bar_repository.upsert_stream_bars(db, [revised]), 1)
+            row = db.query(BarModel).filter(BarModel.symbol == "AAPL").one()
+            self.assertEqual(row.close, 101.5)
+            self.assertEqual(row.provider, "webull_stream")
+
+    def test_stream_upsert_does_not_replace_authoritative_rest_row(self):
+        rest_bar = _make_bar("AAPL", datetime(2025, 1, 1, 9, 30), 150.0)
+        stream_bar = _make_bar("AAPL", datetime(2025, 1, 1, 9, 30), 99.0)
+        stream_bar.provider = "webull_stream"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [rest_bar])
+            self.assertEqual(bar_repository.upsert_stream_bars(db, [stream_bar]), 0)
+            row = db.query(BarModel).filter(BarModel.symbol == "AAPL").one()
+            self.assertEqual(row.close, 150.0)
+            self.assertEqual(row.provider, "yahoo_finance")
+
     def test_upsert_bars_empty_input_is_noop(self):
         with self.Session() as db:
             written = bar_repository.upsert_bars(db, [])

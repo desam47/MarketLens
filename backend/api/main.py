@@ -201,6 +201,12 @@ async def lifespan(app: FastAPI):
 
             _stream = get_webull_stream_client()
             if _stream is not None:
+                from backend.market_data.streaming.live_bar_persistence import (
+                    live_bar_persistence,
+                )
+
+                live_bar_persistence.start()
+                app.state.live_bar_persistence_started = True
                 _stream.on_snapshot = on_stream_snapshot
                 _stream.on_trade = on_stream_trade
                 _stream.on_bbo = on_stream_bbo
@@ -350,6 +356,15 @@ async def lifespan(app: FastAPI):
             _stream.stop()
         except Exception as e:
             logger.warning(f"Webull stream shutdown failed: {e}")
+    if getattr(app.state, "live_bar_persistence_started", False):
+        try:
+            from backend.market_data.streaming.live_bar_persistence import (
+                live_bar_persistence,
+            )
+
+            await asyncio.to_thread(live_bar_persistence.stop)
+        except Exception as e:
+            logger.warning(f"Live-bar persistence shutdown failed: {e}")
     if settings.startup_mode == "full" and settings.tape.enabled:
         try:
             from backend.api.tape.registry import stop_tape_flusher
