@@ -294,6 +294,7 @@ def build_default_registry() -> ToolRegistry:
         )
     )
     from backend.ai.market_tools import (
+        AlertsRequest,
         ApplicationHelpRequest,
         BarsRequest,
         FundamentalsRequest,
@@ -304,6 +305,7 @@ def build_default_registry() -> ToolRegistry:
         SymbolRequest,
         TradeJournalRequest,
         WatchlistRequest,
+        get_alerts_tool,
         get_application_help_tool,
         get_bars_tool,
         get_fundamentals_tool,
@@ -329,6 +331,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_fundamentals", kind="read_only", description="Get a fundamentals snapshot.", input_model=FundamentalsRequest, handler=get_fundamentals_tool))
     registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))
     registry.register(ToolSpec(name="get_watchlist", kind="read_only", description="Read an application watchlist and its symbols.", input_model=WatchlistRequest, handler=get_watchlist_tool))
+    registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
     registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))

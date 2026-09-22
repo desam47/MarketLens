@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS | Market, research, watchlist, risk, and journal tools are registered with typed provenance; provider-path reconciliation wiring, app-help metadata, and safe local import handling remain. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~50%) | Market, research, watchlist, risk, journal, and alerts tools are registered with typed provenance. Missing: sector data, trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, dynamic app-help, and contract tests against page APIs. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -133,7 +133,7 @@ The first read-only tool slice is implemented in `backend/ai/market_tools.py`
 and registered through the shared registry: `get_quote`, `get_bars`,
 `get_indicator`, `get_support_resistance`, `get_market_regime`,
 `get_market_context`, `get_news`, `get_fundamentals`, `get_options_snapshot`,
-`get_watchlist`, `get_risk_dashboard`, `get_trade_journal`, and
+`get_watchlist`, `get_risk_dashboard`, `get_trade_journal`, `get_alerts`, and
 `get_application_help`. Bar and
 indicator tools reuse the existing manager/cache
 path, preserve provider/session/timeframe metadata, and never write to the
@@ -157,6 +157,27 @@ new tools accept explicit snapshots and return a truthful unavailable response
 when the server cannot see browser-local state; they never invent positions or
 journal entries. Focused market-tool, registry, and Chat tests cover these
 contracts and deterministic risk summaries.
+
+`get_alerts` is database-backed through `AlertRepository`, closing the
+explicitly-named 5.2.4 gap. It supports symbol scoping, enabled-only
+filtering, and optionally attaches each alert's recent triggers (bounded by
+`trigger_limit`). One focused test creates alerts through the repository and
+asserts the tool's exact row shape. The 5.2 focused suite is now 15 tests
+(14 + this addition); the full `backend/tests/ai/` suite passes at 549 tests.
+
+Several items named in the plan remain unimplemented and are not yet
+reflected as done anywhere in this document: `get_sector_data(symbol)`
+(5.2.2); dedicated trend/confluence/relative-strength/BBO/tape-pressure/
+large-prints/session-statistics tools (5.2.2) — only generic sma/ema/rsi
+indicators exist today, not MarketLens's own trend/confluence/microstructure
+engines wrapped as tools; dedicated catalyst/earnings/insider-activity/
+analyst-recommendation tools (5.2.3) — `get_news`/`get_fundamentals` do not
+cover these; and CSV import tools (5.2.8), which have no code at all yet.
+Application-help (5.2.7) is a hardcoded 12-page table, not the
+route/feature-metadata-backed, deep-link-capable tool the plan describes.
+Contract tests comparing tool output against the equivalent existing page/API
+output — the phase's own stated verification bar — do not exist; current
+coverage is unit-level only.
 
 Remaining work includes wiring multi-observation reconciliation into provider
 paths that expose multiple observations, complete freshness/fallback contracts

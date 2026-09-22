@@ -1695,6 +1695,11 @@ _MARKET_TOOL_ACTIONS = {
     "get_news",
     "get_fundamentals",
     "get_options_snapshot",
+    "get_watchlist",
+    "get_risk_dashboard",
+    "get_trade_journal",
+    "get_application_help",
+    "get_alerts",
 }
 
 

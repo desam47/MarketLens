@@ -870,6 +870,10 @@ class ChatReplyResponse(BaseModel):
         "get_news",
         "get_fundamentals",
         "get_options_snapshot",
+        "get_watchlist",
+        "get_risk_dashboard",
+        "get_trade_journal",
+        "get_application_help",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -972,12 +976,18 @@ _ACTION_TOOL_DOCS = (
       formulas, and assumptions.
     - get_quote / get_bars / get_indicator / get_support_resistance / \
       get_market_regime / get_market_context / get_news / get_fundamentals / \
-      get_options_snapshot \
+      get_options_snapshot / get_watchlist / get_risk_dashboard / \
+      get_trade_journal / get_application_help \
       are read-only grounded tools. \
       Set action to the exact tool name and put only its request fields in \
       action_tool_arguments (for example, symbol, timeframe, session, and \
-      range). Never invent a provider result; the app returns the verified \
-      payload with provider, timestamp, freshness, and warnings.
+      range). For get_watchlist, use name or watchlist_id. Risk Dashboard \
+      and Trade Journal are browser-local; pass an explicit positions or \
+      entries snapshot when available, otherwise the tool reports that the \
+      server cannot see localStorage. Use get_application_help for verified \
+      page names, feature topics, and hash routes. Never invent a provider result; the \
+      app returns the verified payload with provider, timestamp, freshness, \
+      and warnings.
     - set_entity_type needs action_symbol and action_entity_type \
       ("stock" or "etf") — use when a ticker is mislabeled or the \
       trader asks to reclassify it. A real, changeable per-watchlist \

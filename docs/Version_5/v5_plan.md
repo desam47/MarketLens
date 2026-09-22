@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1 complete; Phase 5.2 grounded market-data tools is next.
+**Status:** Active. Phase 5.1 complete; Phase 5.2 grounded market-data tools is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -116,7 +116,8 @@ results; it never becomes the source of market facts or numerical truth.
 
 #### 5.2.4 User-data tools
 - Expose explicit tools including `get_watchlist(name)`, `get_alerts()`, `get_trade_journal()`, and `get_risk_dashboard()`.
-- Read manually tracked positions, saved scans, and recent signal history through the same typed tool contract.
+- `get_watchlist` reads the application database without mutating it. Risk Dashboard and Trade Journal are currently browser-local, so their tools accept explicit bounded snapshots and report unavailable when the server cannot access localStorage.
+- Read manually tracked positions, saved scans, and recent signal history through the same typed tool contract when a server-backed or explicitly supplied snapshot exists.
 - Apply bounded result limits and return summaries plus IDs for follow-up retrieval.
 
 #### 5.2.5 Evidence bundle
@@ -128,7 +129,7 @@ results; it never becomes the source of market facts or numerical truth.
 - Never silently average incompatible values; show the conflict, select a source through deterministic precedence rules, and explain that selection.
 
 #### 5.2.7 Application-help and navigation metadata
-- Add a verified application-help tool backed by current routes, feature metadata, configuration descriptions, and page capabilities—not free-form model memory.
+- Add a verified application-help tool backed by current routes, feature metadata, configuration descriptions, and page capabilities—not free-form model memory. The initial tool now returns current page titles, feature topics, and hash routes from the navigation catalog.
 - Return deep-link targets and required navigation state for the relevant MarketLens page or setting.
 
 #### 5.2.8 Safe user-provided data tools
