@@ -4,7 +4,7 @@ This roadmap combines the real-time, microstructure, market intelligence, portfo
 
 Status legend: `[x]` complete, `[~]` partially complete, `[ ]` remaining.
 
-Latest checkpoint (2026-09-21): provider observability, bounded failover history, provider attribution for ingestion updates, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented.
+Latest checkpoint (2026-09-21): provider observability, durable bounded failover history, provider attribution for ingestion updates, the System Health Last Successful Update table, and shared update-status indicators across Dashboard, Scanner, Symbol, and Alerts are implemented. Duplicate timestamp displays were removed so each page presents one canonical update time.
 
 ## Phase 1 — Shared real-time data foundation
 
@@ -34,7 +34,7 @@ The backend aggregates Webull trades into shared live 1-minute candles, pushes f
 
 ### 4. Reliability and rate-limit controls — [~] Partial
 
-Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling REST gap recovery, stream-status alerts, per-symbol stale-data status alerts, and bounded provider fallback history are implemented. Durable fallback history and a cross-page last-successful-update view remain.
+Shared subscriptions, reconnect backoff, deduplication, cache limits, rolling REST gap recovery, stream-status alerts, per-symbol stale-data status alerts, durable bounded provider fallback history, and the cross-page last-successful-update view are implemented.
 
 - Shared subscriptions
 - Reconnect backoff
@@ -224,16 +224,16 @@ Candle replay, signal timing, performance summaries, tick replay, simulated entr
 
 ### 20. Operational reliability UI — [~] Partial
 
-Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, bounded provider activity history, configuration-based entitlement details, the System Health last-successful-update table, and shared update-status indicators across the primary market-data pages are implemented. Live entitlement verification remains.
+Reconnect state, provider health, freshness badges, failover labels, per-symbol stale-data alerts, the unified per-symbol Watchlist data view, durable bounded provider activity history, configuration-based entitlement details, the System Health last-successful-update table, and shared update-status indicators across the primary market-data pages are implemented. Live entitlement verification remains.
 
 - Stream reconnect status
 - Provider health
 - Last successful update per symbol (System Health, Watchlist, Dashboard, Scanner, Symbol, and Alerts views implemented)
 - Per-symbol Watchlist data status (provider, age, and connection state) — [x] Done
-- Per-provider failover visibility (bounded event history implemented; long-term persistence remains)
+- Per-provider failover visibility (durable 30-day/10,000-event history implemented)
 - Better stale-data warnings
 - Clear API and entitlement error messages
 
 ## Recommended implementation order
 
-The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, bounded provider failover history, configuration-based entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. Next prioritize long-term failover-event persistence and live entitlement verification where providers expose it.
+The shared Webull microstructure cache, quote WebSocket, durable live 1-minute candle path, event-driven scanner refresh path, unified Watchlist freshness view, retained-tick signal reconstruction, durable bounded provider failover history, configuration-based entitlement visibility, and shared update-status indicators across the primary market-data pages are now in place. Next prioritize live entitlement verification where providers expose it.

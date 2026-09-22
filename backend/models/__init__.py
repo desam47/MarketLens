@@ -64,6 +64,9 @@ from .market_data_sql import (
     MarketStatusModel as MarketStatusModel,
 )
 from .market_data_sql import (
+    ProviderEventModel as ProviderEventModel,
+)
+from .market_data_sql import (
     ProviderStatusModel as ProviderStatusModel,
 )
 from .market_data_sql import (

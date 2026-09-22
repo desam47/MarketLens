@@ -185,3 +185,21 @@ class ProviderStatusModel(Base):
 
     def __repr__(self):
         return f"<ProviderStatusModel(provider='{self.provider_name}', healthy={self.is_healthy}, timestamp='{self.timestamp}')>"
+
+
+class ProviderEventModel(Base):
+    """Durable provider success/failure/fallback events for diagnostics."""
+
+    __tablename__ = "provider_events"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    provider = Column(String(50), nullable=False)
+    method = Column(String(100), nullable=False)
+    outcome = Column(String(20), nullable=False)
+    error = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_provider_events_provider_timestamp", "provider", "timestamp"),
+        Index("ix_provider_events_outcome_timestamp", "outcome", "timestamp"),
+    )
