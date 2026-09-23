@@ -129,3 +129,37 @@ def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
     assert "why_did_it_move" in text
     assert requests[0].tool_name == "why_did_it_move"
     complete.assert_not_called()
+
+
+def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"changes": [{"type": "price", "percent": 2.0}], "unknowns": []},
+            provider="MarketLens comparison",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "what changed since yesterday for AAPL?",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "what_changed" in text
+    assert requests[0].arguments["reference"] == "yesterday"
+    complete.assert_not_called()

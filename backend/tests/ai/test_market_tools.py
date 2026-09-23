@@ -4,6 +4,7 @@ from backend.ai.market_tools import (
     AlertsRequest,
     ApplicationHelpRequest,
     BarsRequest,
+    ChangeAnalysisRequest,
     ConfluenceRequest,
     CsvImportRequest,
     IndicatorRequest,
@@ -32,6 +33,7 @@ from backend.ai.market_tools import (
     get_trade_journal_tool,
     get_trend_tool,
     import_csv_tool,
+    what_changed_tool,
     why_did_it_move_tool,
 )
 from backend.models.market_data import Bar, DataStatus
@@ -130,6 +132,26 @@ def test_move_analysis_separates_facts_correlations_and_unknowns(monkeypatch) ->
     assert result.facts[1]["ratio"] == 2.5
     assert any(item["type"] == "news" for item in result.unknowns)
     assert result.conclusion["status"] == "evidence_only"
+
+
+def test_what_changed_compares_current_bar_with_previous_close(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol=request.symbol,
+            provider="test",
+            source_timestamp="2026-09-22T16:00:00-04:00",
+            bars=[
+                {"timestamp": "2026-09-21T16:00:00-04:00", "close": 100},
+                {"timestamp": "2026-09-22T16:00:00-04:00", "close": 103},
+            ],
+        ),
+    )
+    result = what_changed_tool(ChangeAnalysisRequest(symbol="AAPL"))
+    assert result.changes[0]["percent"] == 3.0
+    assert result.conclusion["status"] == "verified_comparison"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

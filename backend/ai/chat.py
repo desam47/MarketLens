@@ -226,6 +226,7 @@ _RISK_TOOL_INTENT = re.compile(r"\b(risk dashboard|portfolio risk|position risk|
 _JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
 _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
 _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
+_WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yesterday|since my last visit|changed since)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1037,6 +1038,18 @@ def _generate_reply(
             action="why_did_it_move",
             action_symbol=focus_symbols[0],
             action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    elif _WHAT_CHANGED_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I compare for changes?", False, []
+        lowered = user_content.lower()
+        reference = "last_visit" if "last visit" in lowered else "yesterday" if "yesterday" in lowered else "previous_close"
+        deterministic = ChatReplyResponse(
+            reply="Verified change comparison",
+            grounded=True,
+            action="what_changed",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0], "reference": reference},
         )
     elif _HISTORICAL_TOOL_INTENT.search(user_content):
         if len(focus_symbols) != 1:
@@ -2234,6 +2247,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_session_stats",
     "get_calendar",
     "why_did_it_move",
+    "what_changed",
     "import_csv",
 }
 

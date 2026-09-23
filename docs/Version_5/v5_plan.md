@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1, Phase 5.2, and Phase 5.3 complete; Phase 5.4 is next.
+**Status:** Active. Phase 5.1, Phase 5.2, and Phase 5.3 are complete; Phase 5.4 is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The first `why_did_it_move` evidence tool is implemented; broader analysis work remains.
+**Status:** Active. The `why_did_it_move` and `what_changed` evidence tools are implemented; broader analysis work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -226,6 +226,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.2 “What changed?”
 - Compare now with previous close, previous signal, yesterday, last visit, or a user-selected timestamp.
 - Highlight signal transitions, regime changes, support/resistance breaks, freshness changes, catalysts, and alert events.
+- Implemented as a typed baseline comparison tool with previous-close/yesterday/last-visit/timestamp scopes, explicit unknowns, and source metadata.
 
 #### 5.4.3 Comparisons and rankings
 - Compare symbols or watchlists on returns, trend, confluence, relative strength, volatility, volume, valuation, catalysts, options, and data quality.

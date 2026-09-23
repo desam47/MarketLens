@@ -28,6 +28,13 @@ class MoveAnalysisRequest(SymbolRequest):
     range: str = Field(default="5d", pattern=r"^[0-9]+(d|mo|y)$")
 
 
+class ChangeAnalysisRequest(SymbolRequest):
+    timeframe: str = "1d"
+    range: str = Field(default="1mo", pattern=r"^[0-9]+(d|mo|y)$")
+    reference: Literal["previous_close", "yesterday", "last_visit", "timestamp"] = "previous_close"
+    since: str | None = None
+
+
 class IndicatorRequest(BarsRequest):
     indicator: Literal["sma", "ema", "rsi", "change_percent"]
     period: int = Field(default=14, ge=2, le=200)
@@ -639,6 +646,70 @@ def why_did_it_move_tool(request: MoveAnalysisRequest) -> BaseModel:
             "message": "Evidence can support or correlate with the move; it does not establish causation without a confirmed catalyst.",
         },
         provider="MarketLens composite",
+    )
+
+
+def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
+    """Compare current verified bars with an explicit baseline."""
+    symbol = request.symbol.upper()
+    unknowns: list[dict] = []
+    sources: list[dict] = []
+    changes: list[dict] = []
+    try:
+        payload = get_bars_tool(
+            BarsRequest(symbol=symbol, timeframe=request.timeframe, range=request.range, limit=500, session=request.session)
+        ).model_dump(mode="json")
+        bars = payload.get("bars", [])
+        sources.append({"name": "bars", "provider": payload.get("provider"), "timestamp": payload.get("source_timestamp")})
+        if len(bars) < 2:
+            unknowns.append({"type": "baseline", "reason": "fewer than two bars available"})
+        else:
+            current = bars[-1]
+            baseline = bars[-2]
+            if request.reference == "timestamp":
+                if not request.since:
+                    unknowns.append({"type": "baseline", "reason": "timestamp reference requires since"})
+                else:
+                    candidates = [bar for bar in bars if str(bar.get("timestamp", "")) <= request.since]
+                    if candidates:
+                        baseline = candidates[-1]
+                    else:
+                        unknowns.append({"type": "baseline", "reason": "no bar at or before since timestamp"})
+            elif request.reference == "last_visit" and not request.since:
+                unknowns.append({"type": "baseline", "reason": "last_visit requires a persisted visit timestamp"})
+            if not unknowns or unknowns[-1].get("type") != "baseline":
+                current_close = float(current["close"])
+                baseline_close = float(baseline["close"])
+                changes.append(
+                    {
+                        "type": "price",
+                        "current": current_close,
+                        "baseline": baseline_close,
+                        "delta": current_close - baseline_close,
+                        "percent": (current_close - baseline_close) / abs(baseline_close) * 100 if baseline_close else None,
+                    }
+                )
+                changes.append(
+                    {
+                        "type": "timestamp",
+                        "current": current.get("timestamp"),
+                        "baseline": baseline.get("timestamp"),
+                        "reference": request.reference,
+                    }
+                )
+    except Exception as exc:
+        unknowns.append({"type": "bars", "reason": str(exc)})
+    return _Payload(
+        symbol=symbol,
+        timeframe=request.timeframe,
+        session=request.session,
+        reference=request.reference,
+        since=request.since,
+        changes=changes,
+        unknowns=unknowns,
+        sources=sources,
+        conclusion={"status": "verified_comparison" if changes else "insufficient_baseline"},
+        provider="MarketLens comparison",
     )
 
 
