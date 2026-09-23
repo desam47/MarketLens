@@ -13,6 +13,7 @@ import api, {
 import { formatETTime } from './chartMath';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import { useMarketSession } from '../hooks/useMarketSession';
+import { classifySessionFromTimestamp } from '../utils/marketSession';
 import {
   fmt,
   fmtPrice,
@@ -40,19 +41,6 @@ const MARKET_SESSIONS = [
   { key: 'regular', label: 'Regular' },
   { key: 'after_hours', label: 'After-hours' },
 ] as const;
-
-function sessionFromTimestamp(timestamp: string | null): string | null {
-  if (!timestamp) return null;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(timestamp));
-  const minutes = Number(parts.find(part => part.type === 'hour')?.value ?? 0) * 60
-    + Number(parts.find(part => part.type === 'minute')?.value ?? 0);
-  if (minutes >= 240 && minutes < 570) return 'premarket';
-  if (minutes >= 570 && minutes < 960) return 'regular';
-  if (minutes >= 960 && minutes < 1200) return 'after_hours';
-  return null;
-}
 
 function tradingDateFromTimestamp(timestamp: string | null): string | null {
   if (!timestamp) return null;
@@ -294,6 +282,7 @@ export function WatchlistTable({
     () => new Set(MARKET_SESSIONS.map(session => session.key)),
   );
   const [sessionPrices, setSessionPrices] = useState<Record<string, WatchlistSessionPrice>>({});
+  const [missingSessionSymbols, setMissingSessionSymbols] = useState<string[]>([]);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const sessionRequestIdRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
@@ -330,7 +319,13 @@ export function WatchlistTable({
     () => Array.from(selectedSessions).sort().join(','),
     [selectedSessions],
   );
-  const combinedSessionView = selectedSessions.size === 0 || selectedSessions.size === MARKET_SESSIONS.length;
+  // Only "all 3 checked" is the unfiltered default view. 0 checked must NOT
+  // be treated the same as "show everything" — that reads as a no-op to a
+  // user trying to filter down to nothing. It instead falls through to the
+  // filtered path below with an always-empty session set, which correctly
+  // shows no price for any row (see the `!snapshot` branch in displayRows).
+  const combinedSessionView = selectedSessions.size === MARKET_SESSIONS.length;
+  const noSessionsSelected = selectedSessions.size === 0;
 
   const liveSymbols = useMemo(
     () => Array.from(new Set(rows.map(row => row.symbol.trim().toUpperCase()).filter(Boolean))).sort(),
@@ -429,9 +424,13 @@ export function WatchlistTable({
   }, [fetchData]);
 
   const fetchSessionPrices = useCallback(async () => {
-    if (combinedSessionView) {
+    // Neither "everything" (unfiltered) nor "nothing" (no valid `sessions`
+    // query param to send — the backend 422s on an empty list) should hit
+    // the API.
+    if (combinedSessionView || noSessionsSelected) {
       sessionRequestIdRef.current += 1;
       setSessionPrices({});
+      setMissingSessionSymbols([]);
       setSessionError(null);
       return;
     }
@@ -445,20 +444,21 @@ export function WatchlistTable({
       setSessionPrices(Object.fromEntries(
         response.results.map(snapshot => [snapshot.symbol.toUpperCase(), snapshot]),
       ));
+      setMissingSessionSymbols(response.missing_symbols ?? []);
       setSessionError(null);
     } catch (error: any) {
       if (requestId !== sessionRequestIdRef.current) return;
       setSessionError(error?.message || 'Session prices unavailable');
     }
-  }, [combinedSessionView, sessionSelectionKey, watchlistId]);
+  }, [combinedSessionView, noSessionsSelected, sessionSelectionKey, watchlistId]);
 
   useEffect(() => {
-    if (!combinedSessionView) setSessionPrices({});
+    if (combinedSessionView || noSessionsSelected) setSessionPrices({});
     void fetchSessionPrices();
-    if (combinedSessionView) return;
+    if (combinedSessionView || noSessionsSelected) return;
     const interval = window.setInterval(() => void fetchSessionPrices(), 10_000);
     return () => window.clearInterval(interval);
-  }, [combinedSessionView, fetchSessionPrices]);
+  }, [combinedSessionView, noSessionsSelected, fetchSessionPrices]);
 
   // Match Symbol Page's fallback behavior: WebSocket is the primary live
   // source, while a slow REST refresh repairs missed events or a temporarily
@@ -538,7 +538,7 @@ export function WatchlistTable({
         if (!snapshot) {
           return { ...withRelativeStrength, price: null, change: null, changePct: null };
         }
-        const liveSession = sessionFromTimestamp(live?.timestamp ?? null);
+        const liveSession = classifySessionFromTimestamp(live?.timestamp ?? null);
         const liveDate = tradingDateFromTimestamp(live?.timestamp ?? null);
         const useLive = Boolean(
           live?.price != null
@@ -669,7 +669,7 @@ export function WatchlistTable({
   const useVirtual = sorted.length > VIRT_THRESHOLD;
   const visibleLiveQuotes = Object.values(liveQuotes).filter(quote => {
     if (combinedSessionView) return true;
-    const session = sessionFromTimestamp(quote.timestamp);
+    const session = classifySessionFromTimestamp(quote.timestamp);
     return session != null && selectedSessions.has(session);
   });
   const latestLiveQuote = visibleLiveQuotes.reduce<LiveQuoteUpdateData | null>(
@@ -703,7 +703,15 @@ export function WatchlistTable({
             </label>
           ))}
         </fieldset>
+        {noSessionsSelected && (
+          <span className="watchlist-session-hint">Select at least one session to show prices.</span>
+        )}
         {sessionError && <span className="watchlist-session-error">{sessionError}</span>}
+        {!noSessionsSelected && missingSessionSymbols.length > 0 && (
+          <span className="watchlist-session-hint" title={missingSessionSymbols.join(', ')}>
+            No local data yet for {missingSessionSymbols.length} symbol{missingSessionSymbols.length === 1 ? '' : 's'}.
+          </span>
+        )}
         {scanTimestamp && (
           <span className="table-timestamp">
             Scanned {formatETTime(scanTimestamp)}

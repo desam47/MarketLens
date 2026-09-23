@@ -553,6 +553,10 @@ export interface WatchlistSessionPricesResponse {
   sessions: string[];
   count: number;
   results: WatchlistSessionPrice[];
+  /** Watchlist symbols with no local 1m bar in any selected session (never
+   * backfilled, or the ingestion worker wasn't running) — reported instead
+   * of silently being dropped from `results`. */
+  missing_symbols: string[];
 }
 
 // Phase 13: historical signal recording

@@ -485,12 +485,52 @@ class TestScannerAPI(unittest.TestCase):
             self.assertEqual(snapshot["volume"], 30)
             self.assertEqual(snapshot["high"], 106)
             self.assertEqual(snapshot["low"], 100)
+            self.assertEqual(data["missing_symbols"], [])
             self.mock_scanner.scan_symbols.assert_not_called()
             self.mock_mdm.get_historical_bars.assert_not_called()
             self.mock_mdm.get_quote.assert_not_called()
         finally:
             with SessionLocal() as db:
                 db.query(BarModel).filter(BarModel.symbol == symbol).delete()
+                db.commit()
+
+    def test_watchlist_session_prices_reports_symbols_with_no_local_bars(self):
+        """A symbol with no matching local 1m bar is reported, not silently dropped."""
+        present, missing = "HASBARS", "NOBARS"
+        self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
+        self.mock_repo.get_all_watchlist_symbols.return_value = [
+            MagicMock(symbol=present), MagicMock(symbol=missing),
+        ]
+        row = BarModel(
+            symbol=present,
+            timeframe="1m",
+            open=10,
+            high=11,
+            low=9,
+            close=10,
+            volume=100,
+            timestamp=datetime(2026, 9, 22, 10, 0),
+            provider="test",
+            data_status="historical",
+            session="regular",
+        )
+        with SessionLocal() as db:
+            db.query(BarModel).filter(BarModel.symbol.in_([present, missing])).delete(synchronize_session=False)
+            db.add(row)
+            db.commit()
+
+        try:
+            response = self.client.get(
+                "/api/scanner/watchlist/1/session-prices?sessions=regular"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["missing_symbols"], [missing])
+        finally:
+            with SessionLocal() as db:
+                db.query(BarModel).filter(BarModel.symbol.in_([present, missing])).delete(synchronize_session=False)
                 db.commit()
 
     # --- /api/scanner/watchlist/{id}/top ----------------------------------

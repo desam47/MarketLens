@@ -8019,6 +8019,7 @@ a.news-headline:hover {
 .watchlist-session-filters legend { padding: 0 0.25rem; color: var(--text-muted); font-size: 0.68rem; }
 .watchlist-session-filters label { display: inline-flex; align-items: center; gap: 0.2rem; color: var(--text-secondary); font-size: 0.72rem; white-space: nowrap; }
 .watchlist-session-error { color: var(--danger); font-size: 0.72rem; }
+.watchlist-session-hint { color: var(--text-muted); font-size: 0.72rem; }
 .session-legend { color: var(--text-muted); font-size: 0.75rem; }
 .session-stats { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0.35rem 0 0.75rem; }
 .session-stats span { display: flex; flex-direction: column; gap: 0.15rem; min-width: 5.5rem; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 0.35rem; background: var(--bg-tertiary); }

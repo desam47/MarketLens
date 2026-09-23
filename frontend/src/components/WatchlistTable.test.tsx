@@ -140,6 +140,35 @@ describe('price session filters', () => {
     expect(screen.getByText('+10%')).toBeInTheDocument();
     expect(mockApi.getWatchlistScan).toHaveBeenCalledTimes(1);
   });
+
+  it('shows no prices and skips the API call when every session is unchecked', async () => {
+    await renderTable(['AAPL']);
+    mockApi.getWatchlistSessionPrices.mockClear();
+
+    await userEvent.click(screen.getByLabelText('Premarket'));
+    await userEvent.click(screen.getByLabelText('Regular'));
+    mockApi.getWatchlistSessionPrices.mockClear();
+    await userEvent.click(screen.getByLabelText('After-hours'));
+
+    expect(await screen.findByText('Select at least one session to show prices.')).toBeInTheDocument();
+    expect(mockApi.getWatchlistSessionPrices).not.toHaveBeenCalled();
+    expect(screen.queryByText('$100')).not.toBeInTheDocument();
+  });
+
+  it('reports symbols with no local session data instead of silently dropping them', async () => {
+    mockApi.getWatchlistSessionPrices.mockResolvedValue({
+      sessions: ['regular'],
+      count: 0,
+      results: [],
+      missing_symbols: ['AAPL'],
+    });
+    await renderTable(['AAPL']);
+
+    await userEvent.click(screen.getByLabelText('Premarket'));
+    await userEvent.click(screen.getByLabelText('After-hours'));
+
+    expect(await screen.findByText('No local data yet for 1 symbol.')).toBeInTheDocument();
+  });
 });
 
 describe('row keyboard handling', () => {

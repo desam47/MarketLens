@@ -121,6 +121,11 @@ class _WatchlistSessionPricesResponse(BaseModel):
     sessions: list[str]
     count: int
     results: list[_SessionPriceResponse]
+    # Symbols requested (enabled + disabled watchlist rows) that had no local
+    # 1m bar in any of the selected sessions within the lookback window --
+    # e.g. never backfilled, or the ingestion worker wasn't running. Without
+    # this the UI just silently shows fewer rows with no explanation.
+    missing_symbols: list[str] = []
 
 
 class _RankedEntryResponse(BaseModel):
@@ -996,8 +1001,13 @@ def get_watchlist_session_prices(
                 data_status=str(latest.data_status) if latest.data_status is not None else None,
             )
         )
+    found_symbols = {snapshot.symbol for snapshot in snapshots}
+    missing_symbols = sorted({symbol for symbol in symbols if symbol not in found_symbols})
     return _WatchlistSessionPricesResponse(
-        sessions=sorted(selected), count=len(snapshots), results=snapshots
+        sessions=sorted(selected),
+        count=len(snapshots),
+        results=snapshots,
+        missing_symbols=missing_symbols,
     )
 
 

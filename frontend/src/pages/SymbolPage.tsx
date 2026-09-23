@@ -27,7 +27,7 @@ import { SymbolInput, type SymbolInputHandle } from '../components/SymbolInput';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
-import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
+import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference, classifySessionFromTimestamp } from '../utils/marketSession';
 import { useMarketSession } from '../hooks/useMarketSession';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
@@ -595,17 +595,13 @@ function mergeLiveTradeIntoMinuteBars(bars: Bar[], live: LiveQuoteUpdateData): B
   return [...bars, newBar].sort((a, b) => parseET(b.timestamp).getTime() - parseET(a.timestamp).getTime());
 }
 
+/** Tag a synthetic bar with its session. Bar.session has no 'closed' value
+ * (a real trade bar shouldn't have one) so, mirroring the backend's own
+ * classify_bar_session() defensive convention, 'closed'/missing fall back
+ * to 'regular' rather than inventing a fourth stored value. */
 function sessionFromTimestamp(timestamp: string | null): 'premarket' | 'regular' | 'after_hours' {
-  if (!timestamp) return 'regular';
-  const et = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(timestamp));
-  const hour = Number(et.find(part => part.type === 'hour')?.value ?? 0);
-  const minute = Number(et.find(part => part.type === 'minute')?.value ?? 0);
-  const totalMinutes = hour * 60 + minute;
-  if (totalMinutes >= 240 && totalMinutes < 570) return 'premarket';
-  if (totalMinutes >= 960 && totalMinutes < 1200) return 'after_hours';
-  return 'regular';
+  const session = classifySessionFromTimestamp(timestamp);
+  return session === 'premarket' || session === 'after_hours' ? session : 'regular';
 }
 
 /** Merge the shared backend candle update into the active 1-minute history. */
