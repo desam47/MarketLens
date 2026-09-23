@@ -17,7 +17,7 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { AlertConversationContext, ChatMessage } from '../services/api';
+import api, { AlertConversationContext, ChatMessage, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 
 interface ChatPanelProps {
@@ -339,6 +339,7 @@ export function ChatPanel({
                   : m.role === 'assistant'
                     ? highlightMessage(m.content, m.focus ?? [], m.partial ?? [], m.unavailable ?? [])
                     : m.content}
+                {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} />}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && <ToolTraceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && (
@@ -374,6 +375,91 @@ export function ChatPanel({
           {sending ? '⟳' : 'Send'}
         </button>
       </form>
+    </div>
+  );
+}
+
+/** Render the application-owned typed envelope without parsing model markup. */
+function TypedResponseBlocks({ blocks }: { blocks: ChatResponseBlock[] }) {
+  if (!blocks.length) return null;
+  return (
+    <div className="chat-typed-blocks" aria-label="Structured answer details">
+      {blocks.filter(block => block.type !== 'prose').map(block => {
+        const quality = block.quality;
+        const qualityLabel = quality.state.replace('_', ' ');
+        if (block.type === 'calculation') {
+          const values = block.data.values && typeof block.data.values === 'object'
+            ? Object.entries(block.data.values) : [];
+          return (
+            <section className="chat-typed-card chat-calculation-card" key={block.id} aria-label="Verified calculation">
+              <div className="chat-typed-card-heading">🧮 Calculation <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+              <dl>{values.map(([key, value]) => <div key={key}><dt>{key.replace(/_/g, ' ')}</dt><dd>{String(value)}</dd></div>)}</dl>
+              {Array.isArray(block.data.formulas) && block.data.formulas.length > 0 && (
+                <div className="chat-calculation-formula">Formula: {String(block.data.formulas[0])}</div>
+              )}
+            </section>
+          );
+        }
+        if (block.type === 'evidence') {
+          const symbols = block.data.symbols ?? {};
+          const items = Array.isArray(block.data.items) ? block.data.items : [];
+          return (
+            <section className="chat-typed-card chat-evidence-card" key={block.id} aria-label="Evidence">
+              <div className="chat-typed-card-heading">Evidence <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+              <div className="chat-evidence-symbols">
+                {(symbols.verified ?? []).map((s: string) => <span className="chat-evidence-symbol verified" key={`v-${s}`}>{s} ✓</span>)}
+                {(symbols.partial ?? []).map((s: string) => <span className="chat-evidence-symbol partial" key={`p-${s}`}>{s} ◐</span>)}
+                {(symbols.unavailable ?? []).map((s: string) => <span className="chat-evidence-symbol unavailable" key={`u-${s}`}>{s} ✗</span>)}
+              </div>
+              {items.length > 0 && <ul>{items.slice(0, 8).map((item: any, index: number) => (
+                <li key={`${item.tool ?? 'evidence'}-${index}`}>
+                  {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
+                  {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
+                </li>
+              ))}</ul>}
+            </section>
+          );
+        }
+        if (block.type === 'warning') {
+          const items = Array.isArray(block.data.items) ? block.data.items : [];
+          return <div className="chat-typed-warning" key={block.id} role="status" aria-label="Answer warnings">
+            <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span>
+            <ul>{items.map((item: string, index: number) => <li key={index}>{item}</li>)}</ul>
+          </div>;
+        }
+        if (block.type === 'action_confirmation') {
+          const actions = Array.isArray(block.data.actions) ? block.data.actions : [];
+          return <div className="chat-typed-action" key={block.id} role="status" aria-label="Action status">
+            {actions.map((action: any, index: number) => <span key={`${action.tool ?? 'action'}-${index}`}>
+              {action.status === 'completed' ? '✓' : action.status === 'failed' ? '⚠' : '•'} {action.tool ?? 'action'} · {action.status ?? 'unknown'}
+            </span>)}
+          </div>;
+        }
+        if (block.type === 'comparison_table') {
+          const columns = Array.isArray(block.data.columns) ? block.data.columns : [];
+          const rows = Array.isArray(block.data.rows) ? block.data.rows : [];
+          return <section className="chat-typed-card" key={block.id} aria-label="Comparison table">
+            <div className="chat-typed-card-heading">Comparison <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <div className="chat-typed-table-wrap"><table><thead><tr>{columns.map((column: string) => <th key={column}>{column}</th>)}</tr></thead>
+              <tbody>{rows.map((row: any[], index: number) => <tr key={index}>{(Array.isArray(row) ? row : columns.map(column => row?.[column])).map((cell: any, cellIndex: number) => <td key={cellIndex}>{String(cell ?? '—')}</td>)}</tr>)}</tbody>
+            </table></div>
+          </section>;
+        }
+        if (block.type === 'ranked_results') {
+          const items = Array.isArray(block.data.items) ? block.data.items : [];
+          return <section className="chat-typed-card" key={block.id} aria-label="Ranked results">
+            <div className="chat-typed-card-heading">Ranked results <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <ol>{items.slice(0, 20).map((item: any, index: number) => <li key={index}>{typeof item === 'object' ? `${item.symbol ?? item.name ?? 'Result'}${item.score != null ? ` · ${item.score}` : ''}` : String(item)}</li>)}</ol>
+          </section>;
+        }
+        if (block.type === 'suggested_followups') {
+          const items = Array.isArray(block.data.items) ? block.data.items : [];
+          return <div className="chat-typed-followups" key={block.id} aria-label="Suggested follow-ups">
+            <span>Suggested:</span>{items.map((item: string) => <span className="chat-followup-chip" key={item}>{item}</span>)}
+          </div>;
+        }
+        return null;
+      })}
     </div>
   );
 }

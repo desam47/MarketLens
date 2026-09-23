@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains); Phase 5.7.1 has started.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -17,7 +17,9 @@ be blocked on real architectural gaps rather than left undone). Phase 5.3
 is now complete. Phase 5.5 is also complete: the What-changed Inbox is
 available in AI Hub with a browser-local checkpoint, durable event sources,
 deduplication, source links, and no provider polling. Phase 5.6 remains the
-active delivery gate with 5.6.1–5.6.3 complete.
+active delivery gate with 5.6.1–5.6.4 and 5.6.6 complete; save/export is
+still open. Phase 5.7.1 has started with a backward-compatible typed
+response envelope.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
 slice is now shipped on `development`. The strict calculator foundation in
@@ -80,7 +82,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. `decision_checklist` runs a configurable seven-check pre-plan gate (trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, data freshness), each landing in completed/failed/unavailable/skipped against real evidence from the existing tools, with `required_checks` letting the caller configure which apply. Save/export (5.6.5) remains. |
-| 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response-block foundation is implemented; preferences, visual components, chart state, navigation, feedback, regeneration, notebooks and answer refresh remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -844,7 +846,28 @@ mutating tool (a real Journal write) rather than a read-only one.
 
 ## Phase 5.7 — Structured Chat UI and personalization
 
-Not started. Audit must list every response block, persistence version,
+**5.7.1 foundation in progress — Typed response blocks (2026-09-23).** Chat
+assistant messages now carry an application-owned, Pydantic-validated block
+envelope alongside the legacy prose `content`. The envelope supports prose,
+calculation, evidence, warning, suggested-follow-up, action-confirmation,
+comparison-table, and ranked-result block types. Every block carries
+evidence-derived quality metadata (`verified`, `partial`, `unavailable`,
+`stale`, or `unknown`) with grounding, provider, source timestamp, freshness,
+session, timeframe, and fallback state where available. Calculation blocks are
+populated from the verified calculator result rather than model arithmetic.
+Blocks are persisted in `chat_messages.response_blocks` through migration
+`20260927_chat_response_blocks`, returned by both blocking and streaming Chat
+contracts, and rendered without rerunning tools. Rows created before the
+migration remain valid and continue to render their original prose.
+
+Focused verification: two backend response-block tests, 26 ChatPanel tests,
+and a successful frontend production build. The Alembic upgrade to head was
+also verified on a fresh in-project SQLite database.
+
+Remaining for 5.7.1: emit comparison/ranked blocks from the relevant tool
+results, add component coverage for every block type and mobile/long-value
+states, and add a live Chat API contract test for persisted historical blocks.
+Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration
 behavior for older prose-only messages. Every data-backed block must be checked
 for its evidence-derived confidence/data-quality state. Personalization tests

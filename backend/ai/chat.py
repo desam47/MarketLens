@@ -81,6 +81,7 @@ from backend.ai.prompt import (
     parse_chat_reply,
 )
 from backend.ai.reply_stream import ReplyExtractor
+from backend.ai.response_blocks import build_response_blocks
 
 # Chat runs its sync generator helpers on loop-less worker threads
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
@@ -843,9 +844,6 @@ def answer_chat_message(
         repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
         # _generate_reply delegates action execution to _run_turn_actions;
         # attach its transient trace to the returned ORM object for the API.
-        # It is intentionally not persisted in the prose message row.
-        assistant_message = repo.add_message(session_id, "assistant", reply_text)
-        assistant_message.planner_trace = trace
         grounded = grounded and not turn.unavailable  # deterministic fail-safe
         # `screened` is populated only by the run_screen tool — tickers the
         # turn's own message never named, so turn.focus (derived from the
@@ -853,6 +851,17 @@ def answer_chat_message(
         # per-ticker quick-action buttons (add to watchlist / create alert)
         # key off `focus`/`partial` alone.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        blocks = build_response_blocks(
+            content=reply_text,
+            grounded=grounded,
+            focus=focus,
+            partial=turn.partial,
+            unavailable=turn.unavailable,
+            trace=trace,
+        )
+        assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
+        assistant_message.planner_trace = trace
+        assistant_message.response_blocks_payload = blocks
         return assistant_message, grounded, focus, turn.partial, turn.unavailable
     finally:
         repo.close()
@@ -914,12 +923,22 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
                 "source_timestamp": trace[-1].get("source_timestamp"),
             }
         repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
-        msg = repo.add_message(session_id, "assistant", final_text)
-        msg.planner_trace = trace
+        grounded = grounded and not turn.unavailable
         # See answer_chat_message's matching comment — `screened` (from
         # run_screen) is merged into `focus` so the frontend's quick-action
         # buttons pick up tickers the turn's own message never named.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        blocks = build_response_blocks(
+            content=final_text,
+            grounded=grounded,
+            focus=focus,
+            partial=turn.partial,
+            unavailable=turn.unavailable,
+            trace=trace,
+        )
+        msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
+        msg.planner_trace = trace
+        msg.response_blocks_payload = blocks
         yield ("final", (msg, grounded, focus, turn.partial, turn.unavailable))
     finally:
         repo.close()
@@ -2457,7 +2476,7 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
     )
 
 
-def _calculate(db, parsed) -> tuple[str, bool]:
+def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool]:
     """Run a validated deterministic calculation and explain its result."""
     del db  # The calculator is read-only and does not need a database session.
     request = parsed.action_calculation
@@ -2467,10 +2486,36 @@ def _calculate(db, parsed) -> tuple[str, bool]:
         ToolRequest(tool_name="calculate", arguments=request.model_dump())
     )
     if not result.ok:
+        if trace is not None:
+            trace.append({
+                "tool": "calculate",
+                "kind": "calculation",
+                "ok": False,
+                "provider": result.provider,
+                "error": result.error,
+                "fallback": result.fallback,
+            })
         return f"I couldn't calculate that safely: {result.error}", False
     values = ", ".join(f"{key}={value}" for key, value in result.data["values"].items())
     formula = result.data["formulas"][0]
     source_time = result.source_timestamp or "unknown time"
+    if trace is not None:
+        trace.append({
+            "tool": "calculate",
+            "kind": "calculation",
+            "ok": True,
+            "provider": result.provider,
+            "source_timestamp": result.source_timestamp,
+            "freshness_seconds": result.freshness_seconds,
+            "session": result.session,
+            "timeframe": result.timeframe,
+            "fallback": result.fallback,
+            "data": {
+                "values": result.data.get("values", {}),
+                "formulas": result.data.get("formulas", []),
+                "operation": request.operation,
+            },
+        })
     return (
         f"Verified calculation ({result.provider}, source {source_time}, "
         f"session {result.session}): {values}. Formula: {formula}.",
@@ -2605,7 +2650,11 @@ def _run_action(
     if handler is None:  # pragma: no cover — action is a closed Literal
         return "I couldn't do that — please try again.", False, []
     try:
-        result = handler(db, parsed)
+        result = (
+            _calculate(db, parsed, trace=trace)
+            if parsed.action == "calculate"
+            else handler(db, parsed)
+        )
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
         if trace is not None:
@@ -2616,10 +2665,10 @@ def _run_action(
 
         invalidate_cache()
     if len(result) == 3:
-        if trace is not None:
+        if trace is not None and parsed.action != "calculate":
             trace.append({"tool": parsed.action, "ok": True, "provider": "MarketLens", "fallback": False})
         return result
     text, grounded = result
-    if trace is not None:
+    if trace is not None and parsed.action != "calculate":
         trace.append({"tool": parsed.action, "ok": grounded, "provider": "MarketLens", "fallback": False})
     return text, grounded, []

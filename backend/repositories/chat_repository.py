@@ -5,6 +5,8 @@ Same thin-repository convention as AlertRepository/AIDigestRepository
 — owns its own SessionLocal when a session isn't passed in.
 """
 
+import json
+
 from backend.database import SessionLocal
 from backend.models import ChatMessage, ChatSession
 from backend.models.chat import UNIVERSAL_SYMBOL
@@ -145,8 +147,19 @@ class ChatRepository:
 
     # --- Messages -----------------------------------------------------
 
-    def add_message(self, session_id: int, role: str, content: str) -> ChatMessage:
-        message = ChatMessage(session_id=session_id, role=role, content=content)
+    def add_message(
+        self,
+        session_id: int,
+        role: str,
+        content: str,
+        response_blocks: list[dict] | None = None,
+    ) -> ChatMessage:
+        message = ChatMessage(
+            session_id=session_id,
+            role=role,
+            content=content,
+            response_blocks=(json.dumps(response_blocks, separators=(",", ":")) if response_blocks else None),
+        )
         self.db.add(message)
         session = self.get_session(session_id)
         if session is not None:

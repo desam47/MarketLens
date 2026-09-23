@@ -62,6 +62,23 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByText('ZZZZ ✗ no data')).toBeInTheDocument();
   });
 
+  it('renders persisted typed calculation and warning blocks', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 7, session_id: 1, role: 'assistant', content: 'Allocation is 25%.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          { id: 'calculation-1', type: 'calculation', data: { values: { allocation: 25 }, formulas: ['25000 / 100000'] }, quality: { state: 'verified', grounded: true, confidence: 1 } },
+          { id: 'warning-1', type: 'warning', data: { items: ['Partial source coverage.'] }, quality: { state: 'partial', grounded: false, confidence: 0.5 } },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    expect(await screen.findByRole('region', { name: 'Verified calculation' })).toBeInTheDocument();
+    expect(screen.getByText('allocation')).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Answer warnings' })).toHaveTextContent('Partial source coverage.');
+  });
+
   it('colorizes signed numbers in an assistant reply', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

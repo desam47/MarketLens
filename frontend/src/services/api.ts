@@ -2850,6 +2850,35 @@ export interface ChatSession {
   updated_at: string;
 }
 
+export type ChatBlockType =
+  | 'prose'
+  | 'calculation'
+  | 'evidence'
+  | 'warning'
+  | 'suggested_followups'
+  | 'action_confirmation'
+  | 'comparison_table'
+  | 'ranked_results';
+
+export interface ChatBlockQuality {
+  state: 'verified' | 'partial' | 'unavailable' | 'stale' | 'unknown' | string;
+  grounded: boolean;
+  confidence: number | null;
+  provider?: string | null;
+  source_timestamp?: string | null;
+  freshness_seconds?: number | null;
+  session?: string | null;
+  timeframe?: string | null;
+  fallback?: boolean;
+}
+
+export interface ChatResponseBlock {
+  id: string;
+  type: ChatBlockType | string;
+  data: Record<string, any>;
+  quality: ChatBlockQuality;
+}
+
 export interface ChatMessage {
   id: number;
   session_id: number;
@@ -2882,6 +2911,8 @@ export interface ChatMessage {
     error?: string;
     warnings?: string[];
   }>;
+  /** Persisted typed blocks; empty for legacy messages and user rows. */
+  blocks?: ChatResponseBlock[];
 }
 
 export interface AIJobEnqueueResponse {

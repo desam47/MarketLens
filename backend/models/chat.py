@@ -78,6 +78,10 @@ class ChatMessage(Base):
     session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)
     role = Column(String(10), nullable=False)  # "user" | "assistant"
     content = Column(Text, nullable=False)
+    # Version 5.7 typed response blocks.  JSON is intentionally kept beside
+    # the legacy prose so old rows/clients remain readable without migration
+    # or tool reruns.
+    response_blocks = Column(Text, nullable=True)
     created_at = Column(DateTime, default=now_ny, index=True)
 
     session = relationship("ChatSession", back_populates="messages")

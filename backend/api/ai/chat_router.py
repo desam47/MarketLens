@@ -92,6 +92,9 @@ class MessageResponse(BaseModel):
     # messages do not carry this because it is intentionally not stored in the
     # prose message table.
     tools: list[dict[str, Any]] = []
+    # Version 5.7 typed blocks.  Empty for old/user rows; historical assistant
+    # rows carry the persisted envelope without rerunning tools.
+    blocks: list[dict[str, Any]] = []
 
 
 class SendMessageRequest(BaseModel):
@@ -117,7 +120,17 @@ def _message_to_response(
     partial: list[str] | None = None,
     unavailable: list[str] | None = None,
     tools: list[dict[str, Any]] | None = None,
+    blocks: list[dict[str, Any]] | None = None,
 ) -> MessageResponse:
+    stored_blocks = blocks
+    if stored_blocks is None:
+        raw_blocks = getattr(m, "response_blocks", None)
+        if raw_blocks:
+            try:
+                parsed_blocks = json.loads(raw_blocks)
+                stored_blocks = parsed_blocks if isinstance(parsed_blocks, list) else []
+            except (TypeError, ValueError):
+                stored_blocks = []
     return MessageResponse(
         id=m.id,
         session_id=m.session_id,
@@ -129,6 +142,7 @@ def _message_to_response(
         partial=partial or [],
         unavailable=unavailable or [],
         tools=tools if tools is not None else list(getattr(m, "planner_trace", []) or []),
+        blocks=stored_blocks or [],
     )
 
 
@@ -278,6 +292,7 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         partial=partial,
         unavailable=unavailable,
         tools=getattr(message, "planner_trace", []),
+        blocks=getattr(message, "response_blocks_payload", None),
     )
 
 
@@ -380,6 +395,7 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                             partial=partial,
                             unavailable=unavailable,
                             tools=getattr(message, "planner_trace", []),
+                            blocks=getattr(message, "response_blocks_payload", None),
                         ).model_dump(),
                     )
                 elif kind == "error":

@@ -5975,6 +5975,33 @@ div.td-trend {
   margin-top: 0.4rem;
 }
 .chat-tool-trace { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; color: var(--text-muted); font-size: 0.68rem; }
+
+/* Phase 5.7 typed Chat response blocks.  These remain readable without
+   color: quality state is written as text and carried in aria labels. */
+.chat-typed-blocks { display: grid; gap: 0.45rem; margin-top: 0.55rem; }
+.chat-typed-card { border: 1px solid var(--border); border-radius: 0.45rem; padding: 0.5rem 0.6rem; background: var(--bg-secondary); font-size: 0.78rem; }
+.chat-typed-card-heading { display: flex; align-items: center; gap: 0.45rem; font-weight: 700; margin-bottom: 0.35rem; }
+.chat-quality { display: inline-flex; width: fit-content; border-radius: 999px; padding: 0.08rem 0.35rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.03em; background: var(--bg-tertiary); color: var(--text-muted); }
+.chat-quality.verified { color: var(--success); }
+.chat-quality.partial, .chat-quality.stale { color: var(--warning); }
+.chat-quality.unavailable { color: var(--danger); }
+.chat-calculation-card dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.2rem 0.75rem; margin: 0; }
+.chat-calculation-card dl div { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px dotted var(--border); }
+.chat-calculation-card dt { color: var(--text-muted); text-transform: capitalize; }
+.chat-calculation-card dd { margin: 0; font-variant-numeric: tabular-nums; }
+.chat-calculation-formula { margin-top: 0.35rem; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.7rem; overflow-wrap: anywhere; }
+.chat-typed-table-wrap { overflow-x: auto; }
+.chat-typed-table-wrap table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.chat-typed-table-wrap th, .chat-typed-table-wrap td { padding: 0.25rem 0.4rem; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.chat-evidence-symbols { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.3rem; }
+.chat-evidence-symbol { border-radius: 999px; padding: 0.1rem 0.35rem; border: 1px solid var(--border); }
+.chat-evidence-symbol.partial { color: var(--warning); }
+.chat-evidence-symbol.unavailable { color: var(--danger); }
+.chat-typed-card ul, .chat-typed-warning ul { margin: 0.25rem 0 0 1rem; padding: 0; }
+.chat-typed-warning { display: flex; gap: 0.4rem; align-items: flex-start; border-left: 3px solid var(--warning); padding: 0.35rem 0.5rem; color: var(--text-muted); font-size: 0.76rem; }
+.chat-typed-action { display: flex; flex-wrap: wrap; gap: 0.35rem; color: var(--text-muted); font-size: 0.72rem; }
+.chat-typed-followups { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; color: var(--text-muted); font-size: 0.7rem; }
+.chat-followup-chip { border: 1px solid var(--border); border-radius: 999px; padding: 0.12rem 0.4rem; }
 .chat-tool-pill { border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 999px; padding: 0.12rem 0.4rem; }
 .chat-tool-pill.ok { color: var(--text-secondary); }
 .chat-tool-pill.error { color: var(--danger); }
