@@ -184,6 +184,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "why_did_it_move",
         "what_changed",
         "compare_symbols",
+        "scenario_analysis",
         "run_screen",
     }
 
@@ -230,6 +231,7 @@ _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|not
 _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
 _WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yesterday|since my last visit|changed since)\b", re.I)
 _COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|weakest|best performing|worst performing|which .* (higher|lower|stronger|weaker))\b", re.I)
+_SCENARIO_INTENT = re.compile(r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1082,6 +1084,32 @@ def _generate_reply(
                 "watchlist": watchlist,
                 "metric": metric,
                 "direction": direction,
+            },
+        )
+    elif _SCENARIO_INTENT.search(user_content):
+        lowered = user_content.lower()
+        numbers = _numbers_from_text(user_content)
+        mentioned = [
+            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
+        ]
+        shock = numbers[0] if numbers and "%" in user_content else None
+        if shock is not None and any(word in lowered for word in ("drop", "fall", "down", "selloff", "sell-off")):
+            shock = -abs(shock)
+        elif shock is not None and any(word in lowered for word in ("rise", "up", "gain", "increase")):
+            shock = abs(shock)
+        price_shocks = {mentioned[0]: shock} if len(mentioned) == 1 and shock is not None else {}
+        portfolio_shock = shock if ("portfolio" in lowered or "selloff" in lowered or "sell-off" in lowered) else None
+        stop_overrides = {}
+        if "stop" in lowered and numbers and len(mentioned) == 1:
+            stop_overrides[mentioned[0]] = numbers[0]
+        deterministic = ChatReplyResponse(
+            reply="Verified scenario analysis",
+            grounded=True,
+            action="scenario_analysis",
+            action_tool_arguments={
+                "price_shocks": price_shocks,
+                "portfolio_shock_percent": portfolio_shock,
+                "stop_price_overrides": stop_overrides,
             },
         )
     elif _HISTORICAL_TOOL_INTENT.search(user_content):
@@ -2282,6 +2310,7 @@ _MARKET_TOOL_ACTIONS = {
     "why_did_it_move",
     "what_changed",
     "compare_symbols",
+    "scenario_analysis",
     "import_csv",
 }
 

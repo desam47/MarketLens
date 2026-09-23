@@ -197,3 +197,37 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     assert "compare_symbols" in text
     assert requests[0].arguments["metric"] == "volatility_percent"
     complete.assert_not_called()
+
+
+def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"available": False, "reason": "snapshot required"},
+            provider="MarketLens calculator",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "what if AAPL drops 5%?",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "scenario_analysis" in text
+    assert requests[0].arguments["price_shocks"] == {"AAPL": -5.0}
+    complete.assert_not_called()

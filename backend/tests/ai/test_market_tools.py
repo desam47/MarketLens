@@ -12,6 +12,7 @@ from backend.ai.market_tools import (
     MoveAnalysisRequest,
     PositionInput,
     RiskDashboardRequest,
+    ScenarioRequest,
     SessionStatsRequest,
     SymbolRequest,
     TapeRequest,
@@ -35,6 +36,7 @@ from backend.ai.market_tools import (
     get_trade_journal_tool,
     get_trend_tool,
     import_csv_tool,
+    scenario_analysis_tool,
     what_changed_tool,
     why_did_it_move_tool,
 )
@@ -203,6 +205,40 @@ def test_compare_symbols_reports_missing_symbol_without_failing_all(monkeypatch)
     assert result.evaluated_count == 1
     assert result.rankings[0]["symbol"] == "AAPL"
     assert result.unknowns[0]["symbol"] == "BAD"
+
+
+def test_scenario_analysis_recalculates_price_and_stop_risk() -> None:
+    result = scenario_analysis_tool(
+        ScenarioRequest(
+            positions=[
+                PositionInput(
+                    symbol="AAPL",
+                    quantity=100,
+                    entry_price=200,
+                    current_price=220,
+                    stop_price=190,
+                    sector="Technology",
+                )
+            ],
+            price_shocks={"AAPL": -5},
+            stop_price_overrides={"AAPL": 195},
+            portfolio_value=100_000,
+        )
+    )
+
+    assert result.available is True
+    assert result.positions[0]["scenario_price"] == 209
+    assert result.positions[0]["pnl_delta"] == -1100
+    assert result.base_stop_loss_risk == 1000
+    assert result.scenario_stop_loss_risk == 500
+    assert result.scenario_stop_risk_percent == 0.5
+    assert result.conclusion["status"] == "verified_scenario"
+
+
+def test_scenario_analysis_is_honest_without_browser_positions() -> None:
+    result = scenario_analysis_tool(ScenarioRequest(price_shocks={"AAPL": -5}))
+    assert result.available is False
+    assert "browser-local" in result.reason
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

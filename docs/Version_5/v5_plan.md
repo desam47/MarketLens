@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, and `compare_symbols` evidence tools are implemented; broader analysis work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, and `scenario_analysis` evidence tools are implemented; broader analysis work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -236,6 +236,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.4 Scenario analysis
 - Answer position and portfolio “what if” questions: price shocks, stop changes, target changes, allocation changes, volatility changes, and broad-market selloffs.
 - Display assumptions and avoid presenting scenario output as a forecast.
+- Implemented first slice: deterministic mark-to-market price shocks and stop-price overrides over explicit browser-local position snapshots, with P&L deltas, gross/net exposure, stop risk, sector weights, assumptions, and missing portfolio-value warnings.
 
 #### 5.4.5 Historical similarity
 - Find comparable stored setups and report 1-, 5-, and 20-session outcomes, sample size, distribution, and confidence limits.

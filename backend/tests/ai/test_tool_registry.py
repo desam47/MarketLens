@@ -43,6 +43,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_trend",
         "get_watchlist",
         "import_csv",
+        "scenario_analysis",
         "what_changed",
         "why_did_it_move",
     )

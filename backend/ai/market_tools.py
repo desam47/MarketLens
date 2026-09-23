@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -134,6 +135,18 @@ class RiskDashboardRequest(BaseModel):
     # snapshot explicitly; without it the tool must say that no server-side
     # portfolio is configured instead of pretending to see localStorage.
     positions: list[PositionInput] = Field(default_factory=list, max_length=500)
+
+
+class ScenarioRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Positions are browser-local in the current UI. Callers must pass the
+    # explicit snapshot when they want a quantified scenario.
+    positions: list[PositionInput] = Field(default_factory=list, max_length=500)
+    price_shocks: dict[str, float] = Field(default_factory=dict, max_length=25)
+    portfolio_shock_percent: float | None = None
+    stop_price_overrides: dict[str, float] = Field(default_factory=dict, max_length=25)
+    portfolio_value: float | None = Field(default=None, gt=0)
 
 
 class TradeJournalRequest(BaseModel):
@@ -839,6 +852,112 @@ def compare_symbols_tool(request: ComparisonRequest) -> BaseModel:
             "status": "verified_ranking" if rows else "insufficient_data",
             "message": "Rankings are calculated from returned provider bars; they are not a forecast.",
         },
+    )
+
+
+def scenario_analysis_tool(request: ScenarioRequest) -> BaseModel:
+    """Recalculate a supplied position snapshot under explicit price/stop shocks."""
+    if not request.positions:
+        return _Payload(
+            available=False,
+            reason="No position snapshot was supplied. Risk Dashboard positions are browser-local; pass them to run a quantified scenario.",
+            positions=[],
+            assumptions=["No forecast or execution was performed."],
+            provider="MarketLens calculator",
+            source_timestamp=_database_timestamp(),
+        )
+
+    price_shocks = {symbol.upper(): value for symbol, value in request.price_shocks.items()}
+    stop_price_overrides = {symbol.upper(): value for symbol, value in request.stop_price_overrides.items()}
+    if request.portfolio_shock_percent is not None and not (-100 <= request.portfolio_shock_percent):
+        raise ValueError("portfolio_shock_percent cannot be below -100")
+    for mapping_name, mapping in (("price_shocks", price_shocks), ("stop_price_overrides", stop_price_overrides)):
+        for symbol, value in mapping.items():
+            if not re.fullmatch(r"[A-Za-z0-9.\-]{1,20}", symbol) or not math.isfinite(float(value)):
+                raise ValueError(f"Invalid {mapping_name} entry for {symbol}")
+            if mapping_name == "price_shocks" and value < -100:
+                raise ValueError("price shocks cannot be below -100%")
+            if mapping_name == "stop_price_overrides" and value <= 0:
+                raise ValueError("stop price overrides must be positive")
+
+    rows: list[dict[str, Any]] = []
+    base_gross = scenario_gross = base_net = scenario_net = 0.0
+    base_stop_risk = scenario_stop_risk = 0.0
+    total_pnl_delta = 0.0
+    sectors: dict[str, float] = {}
+    unknowns: list[dict[str, Any]] = []
+    for position in request.positions:
+        symbol = position.symbol.upper()
+        base_price = position.current_price or position.entry_price
+        shock = price_shocks.get(symbol, request.portfolio_shock_percent or 0.0)
+        scenario_price = base_price * (1 + shock / 100)
+        sign = 1 if position.side == "long" else -1
+        base_value = base_price * position.quantity
+        scenario_value = scenario_price * position.quantity
+        entry_pnl = (base_price - position.entry_price) * position.quantity * sign
+        scenario_pnl = (scenario_price - position.entry_price) * position.quantity * sign
+        stop_price = stop_price_overrides.get(symbol, position.stop_price)
+        base_risk = scenario_risk = None
+        if position.stop_price is not None:
+            base_risk = max(0.0, (position.entry_price - position.stop_price) * position.quantity * sign)
+        if stop_price is not None:
+            scenario_risk = max(0.0, (position.entry_price - stop_price) * position.quantity * sign)
+            scenario_stop_risk += scenario_risk
+        if base_risk is not None:
+            base_stop_risk += base_risk
+        base_gross += base_value
+        scenario_gross += scenario_value
+        base_net += base_value * sign
+        scenario_net += scenario_value * sign
+        total_pnl_delta += scenario_pnl - entry_pnl
+        sector = position.sector or "Unknown"
+        sectors[sector] = sectors.get(sector, 0.0) + scenario_value
+        rows.append(
+            {
+                "symbol": symbol,
+                "side": position.side,
+                "quantity": position.quantity,
+                "base_price": base_price,
+                "price_shock_percent": shock,
+                "scenario_price": scenario_price,
+                "market_value_delta": scenario_value - base_value,
+                "base_pnl": entry_pnl,
+                "scenario_pnl": scenario_pnl,
+                "pnl_delta": scenario_pnl - entry_pnl,
+                "stop_price": stop_price,
+                "stop_risk": scenario_risk,
+                "sector": sector,
+            }
+        )
+
+    if request.portfolio_value is None:
+        unknowns.append({"type": "portfolio_risk_percent", "reason": "portfolio_value was not supplied"})
+    delta_percent = total_pnl_delta / base_gross * 100 if base_gross else None
+    return _Payload(
+        available=True,
+        positions=rows,
+        base_gross_exposure=round(base_gross, 8),
+        scenario_gross_exposure=round(scenario_gross, 8),
+        base_net_exposure=round(base_net, 8),
+        scenario_net_exposure=round(scenario_net, 8),
+        total_pnl_delta=round(total_pnl_delta, 8),
+        portfolio_change_percent=round(delta_percent, 8) if delta_percent is not None else None,
+        base_stop_loss_risk=round(base_stop_risk, 8),
+        scenario_stop_loss_risk=round(scenario_stop_risk, 8),
+        scenario_stop_risk_percent=round(scenario_stop_risk / request.portfolio_value * 100, 8) if request.portfolio_value else None,
+        sector_exposure=[
+            {"sector": sector, "market_value": round(value, 8), "weight_percent": round(value / scenario_gross * 100, 8) if scenario_gross else 0.0}
+            for sector, value in sorted(sectors.items(), key=lambda item: item[1], reverse=True)
+        ],
+        unknowns=unknowns,
+        assumptions=[
+            "Scenario prices are deterministic mark-to-market estimates; they are not a forecast.",
+            "Quantities are unchanged and commissions, slippage, taxes, dividends, and execution are excluded.",
+            "Short positions use inverse P&L and exposure signs.",
+        ],
+        provider="MarketLens calculator",
+        source_timestamp=_database_timestamp(),
+        conclusion={"status": "verified_scenario", "message": "Scenario outputs reflect only the supplied assumptions."},
     )
 
 
