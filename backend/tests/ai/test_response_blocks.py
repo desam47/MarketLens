@@ -36,6 +36,39 @@ def test_builds_calculation_evidence_and_followup_blocks() -> None:
     assert blocks[2]["quality"]["entitlement"] == "verified"
 
 
+def test_verification_block_and_evidence_references_are_persisted() -> None:
+    blocks = build_response_blocks(
+        content="AAPL is at $101.",
+        grounded=True,
+        focus=["AAPL"],
+        partial=[],
+        unavailable=[],
+        trace=[{
+            "tool": "get_quote",
+            "ok": True,
+            "provider": "fixture",
+            "evidence_id": "ev-1",
+            "freshness_seconds": 4,
+            "evidence_values": {"price": 101},
+        }],
+        verification={
+            "version": "5.8.1",
+            "status": "verified",
+            "issues": [],
+            "evidence_refs": ["ev-1"],
+            "claim_count": 1,
+            "numeric_claim_count": 1,
+            "unsupported_claim_count": 0,
+        },
+    )
+    verification = next(block for block in blocks if block["type"] == "verification")
+    evidence = next(block for block in blocks if block["type"] == "evidence")
+    assert verification["data"]["status"] == "verified"
+    assert verification["data"]["evidence_refs"] == ["ev-1"]
+    assert evidence["data"]["items"][0]["evidence_id"] == "ev-1"
+    assert evidence["data"]["items"][0]["evidence_values"]["price"] == 101
+
+
 def test_partial_and_unavailable_data_become_explicit_warning() -> None:
     blocks = build_response_blocks(
         content="I only have partial coverage.",

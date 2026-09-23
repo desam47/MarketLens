@@ -32,6 +32,7 @@ BlockType = Literal[
     "historical_outcomes",
     "report",
     "journal_save",
+    "verification",
 ]
 
 _STALE_AFTER_SECONDS = 900.0
@@ -214,6 +215,7 @@ def build_response_blocks(
     chart_state: dict[str, Any] | None = None,
     regeneration: dict[str, Any] | None = None,
     material_change_detected: bool = False,
+    verification: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build and validate the application-owned block envelope.
 
@@ -248,6 +250,23 @@ def build_response_blocks(
             quality=quality,
         )
     ]
+    if verification:
+        blocks.append(
+            ResponseBlock(
+                id="verification-1",
+                type="verification",
+                data={
+                    "version": verification.get("version"),
+                    "status": verification.get("status", "degraded"),
+                    "issues": list(verification.get("issues") or []),
+                    "evidence_refs": list(verification.get("evidence_refs") or []),
+                    "claim_count": verification.get("claim_count", 0),
+                    "numeric_claim_count": verification.get("numeric_claim_count", 0),
+                    "unsupported_claim_count": verification.get("unsupported_claim_count", 0),
+                },
+                quality=quality,
+            )
+        )
 
     evidence = []
     for item in trace:
@@ -257,11 +276,12 @@ def build_response_blocks(
         evidence.append({
             key: item.get(key)
             for key in (
-                "tool", "provider", "source_timestamp", "freshness_seconds", "session",
+                "evidence_id", "tool", "provider", "source_timestamp", "freshness_seconds", "session",
                 "timeframe", "fallback", "entitlement", "warnings", "status",
             )
             if item.get(key) is not None
-        } | ({"freshness_status": freshness_status, "stale_after_seconds": stale_after_seconds} if freshness_status else {}))
+        } | ({"freshness_status": freshness_status, "stale_after_seconds": stale_after_seconds} if freshness_status else {})
+          | ({"evidence_values": item["evidence_values"]} if isinstance(item.get("evidence_values"), dict) else {}))
     if focus or partial or unavailable or evidence or chart_state or regeneration:
         blocks.append(
             ResponseBlock(

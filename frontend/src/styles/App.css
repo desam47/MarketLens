@@ -6082,6 +6082,10 @@ div.td-trend {
 .chat-evidence-symbol.unavailable { color: var(--danger); }
 .chat-typed-card ul, .chat-typed-warning ul { margin: 0.25rem 0 0 1rem; padding: 0; }
 .chat-typed-warning { display: flex; gap: 0.4rem; align-items: flex-start; border-left: 3px solid var(--warning); padding: 0.35rem 0.5rem; color: var(--text-muted); font-size: 0.76rem; }
+.chat-verification-card { border-left: 3px solid var(--success); }
+.chat-verification-card.degraded, .chat-verification-card.blocked { border-left-color: var(--warning); }
+.chat-verification-card p { margin: 0.15rem 0; color: var(--text-muted); }
+.chat-verification-card small { color: var(--text-muted); font-size: 0.68rem; }
 .chat-typed-action { display: flex; flex-wrap: wrap; gap: 0.35rem; color: var(--text-muted); font-size: 0.72rem; }
 .chat-typed-followups { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; color: var(--text-muted); font-size: 0.7rem; }
 .chat-followup-chip { border: 1px solid var(--border); border-radius: 999px; padding: 0.12rem 0.4rem; }

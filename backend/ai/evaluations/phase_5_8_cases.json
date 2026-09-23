@@ -1,0 +1,93 @@
+{
+  "version": "5.8.0",
+  "cases": [
+    {
+      "id": "verified_quote",
+      "content": "AAPL is at $101.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "verified",
+      "expected_issues": []
+    },
+    {
+      "id": "altered_number",
+      "content": "AAPL is at $102.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["unsupported_numeric_claim"]
+    },
+    {
+      "id": "wrong_unit",
+      "content": "AAPL is up 101%.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["unit_mismatch"]
+    },
+    {
+      "id": "contradictory_direction",
+      "content": "AAPL is up 2.5% today.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "freshness_seconds": 4, "evidence_values": {"change_percent": -2.5}}],
+      "expected_status": "blocked",
+      "expected_issues": ["contradictory_evidence"]
+    },
+    {
+      "id": "wrong_timeframe",
+      "content": "AAPL is at $101 on the 5m timeframe.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "timeframe": "1d", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["timeframe_mismatch"]
+    },
+    {
+      "id": "wrong_session",
+      "content": "AAPL is at $101 in after-hours.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "session": "regular", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["session_mismatch"]
+    },
+    {
+      "id": "unknown_ticker",
+      "content": "$ZZZZ is at $101.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "freshness_seconds": 4, "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["unknown_ticker"]
+    },
+    {
+      "id": "live_without_freshness",
+      "content": "The latest AAPL price is $101.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": true, "provider": "fixture", "evidence_values": {"price": 101}}],
+      "expected_status": "blocked",
+      "expected_issues": ["live_claim_without_freshness"]
+    },
+    {
+      "id": "options_with_percent_evidence",
+      "content": "AAPL implied volatility is 32%.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_options_snapshot", "ok": true, "provider": "fixture", "freshness_seconds": 12, "evidence_values": {"iv": 32}}],
+      "expected_status": "verified",
+      "expected_issues": []
+    },
+    {
+      "id": "uncertain_provider_failure",
+      "content": "I couldn't retrieve verified market data for AAPL.",
+      "allowed_symbols": ["AAPL"],
+      "trace": [{"tool": "get_quote", "ok": false, "provider": "fixture", "error": "unavailable"}],
+      "expected_status": "degraded",
+      "expected_issues": []
+    },
+    {
+      "id": "confirmation_is_not_execution",
+      "content": "Delete the watchlist \"Tech\"? This removes all symbols. Say yes to confirm.",
+      "allowed_symbols": [],
+      "trace": [{"kind": "step", "tool": "delete_watchlist", "status": "pending_confirmation"}],
+      "expected_status": "degraded",
+      "expected_issues": []
+    }
+  ]
+}

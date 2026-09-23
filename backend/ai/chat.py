@@ -82,6 +82,7 @@ from backend.ai.prompt import (
 )
 from backend.ai.reply_stream import ReplyExtractor
 from backend.ai.response_blocks import build_response_blocks, evidence_fingerprint
+from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
 
 # Chat runs its sync generator helpers on loop-less worker threads
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
@@ -931,6 +932,17 @@ def answer_chat_message(
         # per-ticker quick-action buttons (add to watchlist / create alert)
         # key off `focus`/`partial` alone.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        assign_evidence_ids(trace)
+        verification = verify_answer(
+            reply_text,
+            trace,
+            allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable],
+            unavailable_symbols=turn.unavailable,
+            user_content=user_content,
+        )
+        if verification.safe_content:
+            reply_text = verification.safe_content
+            grounded = False
         current_fingerprint = evidence_fingerprint(trace)
         material_change = bool(
             turn.previous_evidence_fingerprint
@@ -953,6 +965,7 @@ def answer_chat_message(
             chart_state=turn.chart_state,
             regeneration=regeneration,
             material_change_detected=material_change,
+            verification=verification.model_dump(),
         )
         assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
         assistant_message.planner_trace = trace
@@ -1032,6 +1045,17 @@ def stream_chat_message(
         # run_screen) is merged into `focus` so the frontend's quick-action
         # buttons pick up tickers the turn's own message never named.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        assign_evidence_ids(trace)
+        verification = verify_answer(
+            final_text,
+            trace,
+            allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable],
+            unavailable_symbols=turn.unavailable,
+            user_content=user_content,
+        )
+        if verification.safe_content:
+            final_text = verification.safe_content
+            grounded = False
         current_fingerprint = evidence_fingerprint(trace)
         material_change = bool(
             turn.previous_evidence_fingerprint
@@ -1054,6 +1078,7 @@ def stream_chat_message(
             chart_state=turn.chart_state,
             regeneration=regeneration,
             material_change_detected=material_change,
+            verification=verification.model_dump(),
         )
         msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
         msg.planner_trace = trace
@@ -1222,8 +1247,12 @@ def _generate_reply(
         if m:
             reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
             if reply:
+                if trace is not None:
+                    trace.append({"kind": "server_reply", "trusted": True})
                 return reply, True, []
         if _WATCHLIST_LIST_INTENT.search(user_content):
+            if trace is not None:
+                trace.append({"kind": "server_reply", "trusted": True})
             return _watchlist_list_reply(db), True, []
         remembered = (planner_state or {}).get("current_symbols", [])
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
@@ -1716,7 +1745,16 @@ def _finalize_parsed(
         if not target and len(known) == 1:
             target = known[0]
         if target and target in known:
-            text, grounded = _run_reanalysis(target)
+            text, grounded, reanalysis_evidence = _run_reanalysis(target)
+            if grounded and trace is not None:
+                trace.append({
+                    "tool": "analyze_symbol",
+                    "ok": True,
+                    "provider": "MarketLens analysis",
+                    "freshness_seconds": 0.0,
+                    "source_timestamp": now_ny().isoformat(),
+                    "evidence_values": reanalysis_evidence,
+                })
             return text, grounded, []
         if known:
             return "Which ticker should I run the full analysis for?", True, []
@@ -2190,7 +2228,7 @@ def _format_trade_plan(plan) -> str:
     return "Trade plan: " + ", ".join(parts) + f". {plan.thesis}"
 
 
-def _run_reanalysis(symbol: str) -> tuple[str, bool]:
+def _run_reanalysis(symbol: str) -> tuple[str, bool, dict[str, float]]:
     """Execute the chat's one tool call: a real analyze_symbol() run.
 
     Reuses analyze_symbol() itself — the same function
@@ -2207,22 +2245,32 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
         return (
             "I tried to re-run the analysis but hit an error — please try again.",
             False,
+            {},
         )
 
     if isinstance(result, UncertaintyResponse):
-        return f"I tried to re-run the analysis for {symbol}, but {result.summary}", False
+        return f"I tried to re-run the analysis for {symbol}, but {result.summary}", False, {}
 
     text = (
         f"I re-ran the analysis for {symbol}: trend is now {result.trend} "
         f"({result.confidence:.0%} confidence). {result.summary}"
     )
+    evidence_values = {"confidence_percent": float(result.confidence * 100)}
     # analyze_symbol() runs with advisory=True by default, so a fresh
     # reanalysis normally carries a trade_plan (entry/stop/targets) —
     # the most actionable part of "the full read" the trader asked for.
     # Surface it instead of silently dropping it.
     if result.trade_plan is not None:
         text += " " + _format_trade_plan(result.trade_plan)
-    return text, True
+        plan = result.trade_plan
+        for key in ("entry_zone_low", "entry_zone_high", "stop_loss", "risk_reward"):
+            value = getattr(plan, key, None)
+            if isinstance(value, (int, float)):
+                evidence_values[key] = float(value)
+        for index, value in enumerate(getattr(plan, "targets", []) or []):
+            if isinstance(value, (int, float)):
+                evidence_values[f"target_{index}"] = float(value)
+    return text, True, evidence_values
 
 
 # --- Action tools (2026-09-11): alert / watchlist CRUD from chat -------
@@ -2872,6 +2920,26 @@ def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
     return None
 
 
+def _bounded_numeric_evidence(value, prefix: str = "", *, depth: int = 0) -> dict[str, float]:
+    """Keep only a small, JSON-safe numeric index for answer verification."""
+    if depth > 4 or isinstance(value, bool):
+        return {}
+    if isinstance(value, (int, float)):
+        return {prefix or "value": float(value)}
+    if isinstance(value, dict):
+        output: dict[str, float] = {}
+        for key, child in list(value.items())[:80]:
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            output.update(_bounded_numeric_evidence(child, child_prefix, depth=depth + 1))
+        return output
+    if isinstance(value, list):
+        output = {}
+        for index, child in enumerate(value[:80]):
+            output.update(_bounded_numeric_evidence(child, f"{prefix}[{index}]", depth=depth + 1))
+        return output
+    return {}
+
+
 def _run_market_tool(
     db,
     parsed,
@@ -2911,6 +2979,9 @@ def _run_market_tool(
             "entitlement": result.entitlement,
             "warnings": result.warnings,
         }
+        numeric_evidence = _bounded_numeric_evidence(result.data)
+        if numeric_evidence:
+            trace_item["evidence_values"] = numeric_evidence
         visual = _visual_trace_payload(parsed.action, result.data)
         if visual is not None:
             trace_item["visual_type"], trace_item["visual_data"] = visual

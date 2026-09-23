@@ -81,6 +81,23 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('status', { name: 'Answer warnings' })).toHaveTextContent('Partial source coverage.');
   });
 
+  it('renders the application-owned answer verification state', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 71, session_id: 1, role: 'assistant', content: 'AAPL is at $101.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [{
+          id: 'verification-1', type: 'verification',
+          data: { version: '5.8.1', status: 'verified', issues: [], evidence_refs: ['ev-1'] },
+          quality: { state: 'verified', grounded: true, confidence: 1 },
+        }],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+    expect(await screen.findByRole('status', { name: 'Answer verification' })).toHaveTextContent('Checked against 1 evidence source.');
+    expect(screen.getByText('Verifier 5.8.1')).toBeInTheDocument();
+  });
+
   it('offers visual/action shortcuts for a grounded symbol reply', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

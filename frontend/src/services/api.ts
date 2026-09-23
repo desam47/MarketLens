@@ -3006,7 +3006,8 @@ export type ChatBlockType =
   | 'session_stats'
   | 'historical_outcomes'
   | 'report'
-  | 'journal_save';
+  | 'journal_save'
+  | 'verification';
 
 export interface ChatBlockQuality {
   state: 'verified' | 'partial' | 'unavailable' | 'stale' | 'unknown' | string;

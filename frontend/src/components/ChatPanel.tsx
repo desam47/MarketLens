@@ -666,6 +666,20 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
             </section>
           );
         }
+        if (block.type === 'verification') {
+          const status = String(block.data.status ?? 'degraded');
+          const refs = Array.isArray(block.data.evidence_refs) ? block.data.evidence_refs : [];
+          const issues = Array.isArray(block.data.issues) ? block.data.issues : [];
+          const statusLabel = status === 'verified' ? 'Verified' : status === 'blocked' ? 'Needs review' : 'Limited verification';
+          return (
+            <section className={`chat-typed-card chat-verification-card ${status}`} key={block.id} role="status" aria-label="Answer verification">
+              <div className="chat-typed-card-heading">Answer verification <span className={`chat-quality ${quality.state}`}>{statusLabel}</span></div>
+              <p>{refs.length > 0 ? `Checked against ${refs.length} evidence source${refs.length === 1 ? '' : 's'}.` : 'No source evidence was available for this answer.'}</p>
+              {issues.length > 0 && <ul>{issues.map((issue: string) => <li key={issue}>{issue.replace(/_/g, ' ')}</li>)}</ul>}
+              <small>Verifier {String(block.data.version ?? 'unknown')}</small>
+            </section>
+          );
+        }
         if (block.type === 'evidence') {
           const symbols = block.data.symbols ?? {};
           const items = Array.isArray(block.data.items) ? block.data.items : [];
