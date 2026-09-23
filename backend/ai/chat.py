@@ -55,6 +55,7 @@ inherits the same contract — none of them raise either.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -105,6 +106,40 @@ _TRANSCRIPT_MSG_CHARS = 600  # per-message clip inside the transcript
 _MULTI_STEP_HINT = re.compile(r"\band\b|\bthen\b|\balso\b|;", re.I)
 # First action + up to this many chained follow-ups within one turn.
 _MAX_CHAIN_STEPS = 3
+
+
+def _chain_step_limit() -> int:
+    """Read the bounded continuation budget from settings safely."""
+    configured = min(
+        getattr(settings.ai, "chat_max_chain_steps", _MAX_CHAIN_STEPS),
+        getattr(settings.ai, "chat_max_planning_calls", _MAX_CHAIN_STEPS),
+    )
+    return max(1, min(int(configured), 8))
+
+
+def _action_signature(parsed) -> str:
+    """Return a stable, privacy-safe key for one planned action.
+
+    The key is used only for per-turn duplicate suppression; it never leaves
+    the process and does not include the user's prose or provider payload.
+    """
+    arguments = {
+        key: value
+        for key, value in {
+            "symbol": parsed.action_symbol,
+            "watchlist": parsed.action_watchlist,
+            "target_id": parsed.action_target_id,
+            "condition_type": parsed.action_condition_type,
+            "parameter": parsed.action_parameter,
+            "label": parsed.action_label,
+            "entity_type": parsed.action_entity_type,
+            "query": parsed.action_query,
+            "calculation": parsed.action_calculation.model_dump(mode="json") if parsed.action_calculation else None,
+            "tool_arguments": parsed.action_tool_arguments,
+        }.items()
+        if value is not None
+    }
+    return f"{parsed.action}:{json.dumps(arguments, sort_keys=True, default=str)}"
 
 # Per-turn intent — keeps aux-data HTTP and prompt tokens off turns that
 # don't ask for that material. Each pattern is deliberately generous:
@@ -408,6 +443,17 @@ class _Turn:
     @property
     def partial(self) -> list[str]:
         return [b["symbol"] for b in self.symbol_blocks if not b["availability"]["engine_warm"]]
+
+
+@dataclass
+class _PlannerState:
+    """Per-turn orchestration state; never persisted as user prose."""
+
+    original_request: str
+    executed_signatures: set[str]
+    completed_steps: list[str]
+    errors: list[str]
+    max_steps: int
 
 
 def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _Turn:
@@ -1010,8 +1056,15 @@ def _run_turn_actions(
     texts = [text]
     all_grounded = grounded
     all_screened = list(screened)
+    planner = _PlannerState(
+        original_request=user_content,
+        executed_signatures={_action_signature(parsed)},
+        completed_steps=[text],
+        errors=[],
+        max_steps=_chain_step_limit(),
+    )
 
-    for _ in range(_MAX_CHAIN_STEPS - 1):
+    for _ in range(planner.max_steps - 1):
         continuation = (
             "Original request: " + user_content + "\nAlready executed: " + " ".join(texts)
         )
@@ -1038,6 +1091,14 @@ def _run_turn_actions(
         if next_parsed.wants_reanalysis or next_parsed.action == "none":
             break
 
+        signature = _action_signature(next_parsed)
+        if signature in planner.executed_signatures:
+            texts.append("I stopped the remaining step because it repeated an action already executed in this turn.")
+            all_grounded = False
+            planner.errors.append("duplicate_action")
+            break
+        planner.executed_signatures.add(signature)
+
         step_text, step_grounded, step_screened = _finalize_parsed(
             db,
             next_parsed,
@@ -1046,6 +1107,7 @@ def _run_turn_actions(
             transcript,
         )
         texts.append(step_text)
+        planner.completed_steps.append(step_text)
         all_grounded = all_grounded and step_grounded
         all_screened.extend(step_screened)
         if not _action_was_executed(next_parsed):

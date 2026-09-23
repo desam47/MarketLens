@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1 complete; Phase 5.2 grounded market-data tools is in progress.
+**Status:** Active. Phase 5.1 and Phase 5.2 complete; Phase 5.3 bounded orchestration is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -144,6 +144,13 @@ results; it never becomes the source of market facts or numerical truth.
 ---
 
 ## Phase 5.3 — Bounded orchestration, intent, and memory
+
+The first slice is in progress: Chat supports bounded compound-action chaining
+with configurable planning budgets (default three steps), duplicate-action
+suppression, destructive-action confirmation, per-turn planner state, and safe
+partial-failure handling. The remaining items below
+extend this foundation into a general planner and structured conversational
+state.
 
 **Why now:** Broad questions often need several dependent operations, but the loop must stay predictable and safe.
 

@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phase 5.1 complete; Phase 5.2 complete.
+**Status:** Active. Planning complete; Phase 5.1 and Phase 5.2 complete; Phase 5.3 in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -14,7 +14,7 @@ genuinely generated (not hand-copied) application-help route table (see
 the Phase 5.2 section's "Post-completion review" for the two items —
 multi-provider reconciliation, further contract-test expansion — found to
 be blocked on real architectural gaps rather than left undone). Phase 5.3
-is the next delivery gate.
+is now the active delivery gate.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
 slice is now shipped on `development`. The strict calculator foundation in
@@ -73,7 +73,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
-| 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
+| 5.3 | Bounded orchestration, intent, and memory | 🟡 IN PROGRESS | Bounded compound-action chaining now has a three-step cap, duplicate-action suppression, destructive confirmation gates, and partial-failure-safe replies. Planner state, clarification coverage, structured memory, and reusable workflows remain. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
@@ -483,7 +483,16 @@ and safe local CSV validation with inert formulas/macros.
 
 ## Phase 5.3 — Bounded orchestration, intent, and memory
 
-Not started. Audit must record enforced call/time/token limits, clarification
+The first orchestration slice is implemented in `backend/ai/chat.py`: compound
+requests can chain one-action decisions with configurable, bounded planning
+budgets (default three steps), duplicate action signatures stop safely, and
+continuation failures never discard already completed results. Destructive
+actions remain backend-confirmed. Per-turn planner state tracks the original
+request, completed steps, duplicate signatures, and errors without persisting
+private orchestration data into the conversation transcript. The focused Chat
+action suite passes 111 tests with `DEBUG=false`.
+
+Remaining Phase 5.3 work includes planner state, clarification
 coverage, repeated-call protection, structured memory fields—including the
 previous ticker—and destructive action confirmation tests. Complex-request
 decomposition, partial failure, saved workflows, model routing, and deterministic

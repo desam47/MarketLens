@@ -359,6 +359,26 @@ class TestRunTurnActions(_DBBase):
         )
         self.assertEqual(mock_ai.complete.call_count, _MAX_CHAIN_STEPS - 1)
 
+    def test_stops_duplicate_action_in_chain(self):
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "create_watchlist", '
+            '"action_watchlist": "Tech"}',
+        )
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create a watchlist called Tech and then create a watchlist called Tech",
+            None,
+        )
+        self.assertIn("repeated", text)
+        self.assertFalse(grounded)
+        self.assertEqual(mock_ai.complete.call_count, 1)
+
     def test_continuation_failure_stops_chain_without_raising(self):
         p = patch("backend.ai.chat.ai_manager")
         mock_ai = p.start()

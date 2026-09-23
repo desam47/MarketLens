@@ -423,6 +423,11 @@ class AISettings(BaseSettings):
     # didn't reliably comply on its own. Empty (default) means no
     # override — chat uses the same chain as everything else.
     chat_model: str = Field(default="")
+    # Phase 5.3 bounded orchestration budgets. These cap follow-up planning
+    # calls per chat turn; the first completion is counted separately by the
+    # request itself. Keep the defaults conservative for local providers.
+    chat_max_chain_steps: int = Field(default=3, ge=1, le=8)
+    chat_max_planning_calls: int = Field(default=3, ge=1, le=8)
     # The chat's run_backtest action tool (2026-09-11) — a fresh 6-month
     # backtest of the engine's own signals, on demand. Off by default:
     # a chat-triggered backtest is a real, rate-limited compute cost.
