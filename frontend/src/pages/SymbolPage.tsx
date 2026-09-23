@@ -28,6 +28,7 @@ import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
+import { useMarketSession } from '../hooks/useMarketSession';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
 // Each panel makes its own API calls and isn't needed for the first paint.
@@ -643,6 +644,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
   const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
+  const marketSession = useMarketSession();
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
 
@@ -1294,6 +1296,7 @@ const fetchBars = useCallback(async () => {
                   timestamp={quote.timestamp}
                   connectionStatus={quoteConnectionStatus}
                   provider={quote.provider}
+                  marketSession={marketSession?.session}
                 />
               </>
             ) : '—'}
@@ -1303,6 +1306,7 @@ const fetchBars = useCallback(async () => {
                 timestamp={quote?.timestamp}
                 connectionStatus={quoteConnectionStatus}
                 provider={quote?.provider}
+                marketSession={marketSession?.session}
               />
             )}
           </p>

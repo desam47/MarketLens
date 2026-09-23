@@ -317,6 +317,37 @@ async def get_latest_bars(symbol: str):
     return {tf: bars[tf] for tf in timeframes if tf in bars}
 
 
+class MarketSessionResponse(BaseModel):
+    session: str
+    is_open: bool
+    next_open: str
+    next_close: str
+    timestamp: str
+
+
+@router.get("/session", response_model=MarketSessionResponse)
+async def get_market_session():
+    """Exchange-wide session state (premarket/regular/after_hours/closed).
+
+    Local calendar lookup only (no provider network call) — this is
+    symbol-independent NYSE/NASDAQ schedule state, unlike ``/status/{symbol}``
+    which asks a provider for its own per-symbol view. Weekends and holidays
+    both classify as ``closed`` via ``USMarketCalendar.get_session_type``.
+    """
+    from backend.engines.market_calendar import us_market_calendar
+
+    now = datetime.now(ZoneInfo("UTC"))
+    session_type = us_market_calendar.get_session_type(now)
+    next_open, next_close = us_market_calendar.regular_session_bounds(now)
+    return MarketSessionResponse(
+        session=session_type.value,
+        is_open=session_type.value == "regular",
+        next_open=_to_dashboard_tz(next_open),
+        next_close=_to_dashboard_tz(next_close),
+        timestamp=_to_dashboard_tz(now),
+    )
+
+
 @router.get("/status/{symbol}", response_model=MarketStatus)
 async def get_market_status(symbol: str):
     """Get market status for a symbol"""

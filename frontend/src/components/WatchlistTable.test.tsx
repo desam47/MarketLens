@@ -16,6 +16,7 @@ jest.mock('../services/api', () => ({
     getBatchRelativeStrength: jest.fn(),
     updateWatchlistSymbol: jest.fn(),
     removeSymbolFromWatchlist: jest.fn(),
+    getMarketSession: jest.fn().mockResolvedValue(null),
   },
 }));
 

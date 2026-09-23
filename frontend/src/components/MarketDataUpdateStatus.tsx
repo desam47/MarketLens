@@ -7,6 +7,7 @@ interface MarketDataUpdateStatusProps {
   dataStatus?: string | null;
   freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable' | null;
   connectionStatus?: 'connecting' | 'open' | 'closed' | 'reconnecting';
+  marketSession?: 'premarket' | 'regular' | 'after_hours' | 'closed' | null;
   className?: string;
 }
 
@@ -29,6 +30,7 @@ export function MarketDataUpdateStatus({
   dataStatus,
   freshness,
   connectionStatus,
+  marketSession,
   className = '',
 }: MarketDataUpdateStatusProps) {
   return (
@@ -40,6 +42,7 @@ export function MarketDataUpdateStatus({
         showAge
         connectionStatus={connectionStatus}
         provider={provider}
+        marketSession={marketSession}
       />
       <span className="market-data-update-time">Updated {formatTimestamp(timestamp)}</span>
     </span>

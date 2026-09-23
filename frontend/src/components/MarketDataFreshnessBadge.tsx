@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useStartupMode } from '../contexts/StartupModeContext';
 
 type Freshness = 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable';
-type BadgeState = 'live' | 'delayed' | 'cached' | 'stale' | 'reconnecting' | 'unavailable';
+type BadgeState = 'live' | 'delayed' | 'cached' | 'stale' | 'reconnecting' | 'unavailable' | 'closed';
+type MarketSessionType = 'premarket' | 'regular' | 'after_hours' | 'closed';
 
 interface MarketDataFreshnessBadgeProps {
   dataStatus?: string | null;
@@ -13,6 +14,10 @@ interface MarketDataFreshnessBadgeProps {
   connectionStatus?: 'connecting' | 'open' | 'closed' | 'reconnecting';
   staleAfterSeconds?: number;
   provider?: string | null;
+  /** Exchange session (from useMarketSession()). When 'closed' — evenings, weekends,
+   * holidays — an otherwise age-driven 'delayed'/'stale' reading is relabeled 'Mkt Closed'
+   * instead of counting up an alarming, ever-growing "Xh ago". */
+  marketSession?: MarketSessionType | null;
 }
 
 const labels: Record<BadgeState, string> = {
@@ -22,6 +27,7 @@ const labels: Record<BadgeState, string> = {
   stale: 'Stale',
   reconnecting: 'Reconnecting',
   unavailable: 'Unavailable',
+  closed: 'Mkt Closed',
 };
 
 function stateFromDataStatus(dataStatus?: string | null): BadgeState | null {
@@ -77,6 +83,7 @@ export function MarketDataFreshnessBadge({
   connectionStatus,
   staleAfterSeconds = 15,
   provider,
+  marketSession,
 }: MarketDataFreshnessBadgeProps) {
   const startupMode = useStartupMode();
   const [now, setNow] = useState(() => Date.now());
@@ -98,14 +105,24 @@ export function MarketDataFreshnessBadge({
     && computedAge > staleAfterSeconds;
   // API mode deliberately does not update providers. A status persisted from
   // a previous full run must never be presented as currently live.
-  const state = startupMode === 'api' && sourceState !== 'unavailable'
+  const rawState = startupMode === 'api' && sourceState !== 'unavailable'
     ? (sourceState === 'stale' ? 'stale' : 'cached')
     : staleByAge ? 'stale' : connectionState ?? sourceState;
+  // The market being closed (evening, weekend, holiday) is expected, not a data
+  // problem — don't let an age-driven 'delayed'/'stale'/'cached' reading read as
+  // an incident. Genuine problems (reconnecting/unavailable) still surface as-is,
+  // and API-paused mode keeps its own distinct label.
+  const isClosedOverride = marketSession === 'closed'
+    && startupMode !== 'api'
+    && (rawState === 'delayed' || rawState === 'stale' || rawState === 'cached');
+  const state: BadgeState = isClosedOverride ? 'closed' : rawState;
   const label = startupMode === 'api' ? `Paused · ${labels[state]}` : labels[state];
   const age = showAge ? formatAge(computedAge, timestamp) : null;
   const providerLabel = provider ? provider.toUpperCase() : null;
   const title = startupMode === 'api'
     ? 'STARTUP_MODE=api is active, so live market-data updates are paused.'
+    : isClosedOverride
+    ? 'Market is closed. Price reflects the last available trade/quote.'
     : connectionState
     ? `Realtime connection: ${connectionStatus}`
     : staleByAge

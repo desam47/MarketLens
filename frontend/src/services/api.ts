@@ -614,6 +614,16 @@ export interface MarketQuote extends ScanQuote {
   extended_hours_timestamp?: string | null;
 }
 
+export type MarketSessionType = 'premarket' | 'regular' | 'after_hours' | 'closed';
+
+export interface MarketSession {
+  session: MarketSessionType;
+  is_open: boolean;
+  next_open: string;
+  next_close: string;
+  timestamp: string;
+}
+
 export interface ScanResult {
   symbol: string;
   timestamp: string;
@@ -1919,6 +1929,10 @@ class ApiService {
   // Market Data
   async getQuote(symbol: string): Promise<MarketQuote> {
     return this.fetch<MarketQuote>(`/market-data/quote/${symbol}`);
+  }
+
+  async getMarketSession(): Promise<MarketSession> {
+    return this.fetch<MarketSession>('/market-data/session');
   }
 
   async getLatestBars(symbol: string): Promise<Record<string, any>> {

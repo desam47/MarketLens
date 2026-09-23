@@ -8,9 +8,11 @@ import api, {
   WatchlistSessionPrice,
   RelativeStrengthData,
   RelativeStrengthSignal,
+  MarketSessionType,
 } from '../services/api';
 import { formatETTime } from './chartMath';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
+import { useMarketSession } from '../hooks/useMarketSession';
 import {
   fmt,
   fmtPrice,
@@ -116,7 +118,7 @@ interface RowData {
   raw: WatchlistScanResult;
 }
 
-function RowFreshness({ row, connectionStatus }: { row: RowData; connectionStatus: RealtimeConnectionStatus }) {
+function RowFreshness({ row, connectionStatus, marketSession }: { row: RowData; connectionStatus: RealtimeConnectionStatus; marketSession?: MarketSessionType | null }) {
   const live = row.liveQuote;
   const quote = row.raw.quote;
   return (
@@ -126,6 +128,7 @@ function RowFreshness({ row, connectionStatus }: { row: RowData; connectionStatu
       showAge
       connectionStatus={connectionStatus}
       provider={live?.provider ?? quote?.provider}
+      marketSession={marketSession}
     />
   );
 }
@@ -182,9 +185,10 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
   visibleColKeys: Set<string>;
   gridTemplate: string;
   quoteConnectionStatus: RealtimeConnectionStatus;
+  marketSession: MarketSessionType | null;
 }>) {
   const { rows, onSelectSymbol, onToggleSymbol, onDeleteSymbol,
-    togglingSymbol, pendingSymbol, pendingAction, visibleColKeys, gridTemplate, quoteConnectionStatus } = data;
+    togglingSymbol, pendingSymbol, pendingAction, visibleColKeys, gridTemplate, quoteConnectionStatus, marketSession } = data;
   const row = rows[index];
 
   const isPending = pendingSymbol === row.symbol;
@@ -237,7 +241,7 @@ const VirtualizedRow = React.memo(function VirtualizedRow({
         </div>
       )}
       {visibleColKeys.has('freshness') && (
-        <div className="virt-cell td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} /></div>
+        <div className="virt-cell td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} marketSession={marketSession} /></div>
       )}
       {visibleColKeys.has('trend') && (
         <div className="virt-cell td-trend"><TrendColumn trendSignals={row.trendSignals} /></div>
@@ -284,6 +288,8 @@ export function WatchlistTable({
   const [scanTimestamp, setScanTimestamp] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const marketSessionInfo = useMarketSession();
+  const marketSession = marketSessionInfo?.session ?? null;
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(
     () => new Set(MARKET_SESSIONS.map(session => session.key)),
   );
@@ -622,8 +628,9 @@ export function WatchlistTable({
       visibleColKeys: effectiveColKeys,
       gridTemplate: virtGridTemplate,
       quoteConnectionStatus,
+      marketSession,
     }),
-    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction, effectiveColKeys, virtGridTemplate, quoteConnectionStatus],
+    [sorted, onSelectSymbol, handleToggleSymbol, handleDeleteSymbol, togglingSymbol, pendingSymbol, pendingAction, effectiveColKeys, virtGridTemplate, quoteConnectionStatus, marketSession],
   );
 
   const toggleSort = (col: typeof sortCol) => {
@@ -708,6 +715,7 @@ export function WatchlistTable({
           showAge
           connectionStatus={quoteConnectionStatus}
           provider={latestLiveQuote?.provider ?? latestSessionSnapshot?.provider}
+          marketSession={marketSession}
         />
         <select
           className="rs-benchmark-select"
@@ -827,6 +835,7 @@ export function WatchlistTable({
                   pendingAction={pendingAction}
                   visibleColKeys={effectiveColKeys}
                   quoteConnectionStatus={quoteConnectionStatus}
+                  marketSession={marketSession}
                 />
               ))}
             </tbody>
@@ -850,6 +859,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
   pendingAction,
   visibleColKeys,
   quoteConnectionStatus,
+  marketSession,
 }: {
   row: RowData;
   onSelectSymbol: (symbol: string) => void;
@@ -860,6 +870,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
   pendingAction: 'delete' | null;
   visibleColKeys: Set<string>;
   quoteConnectionStatus: RealtimeConnectionStatus;
+  marketSession?: MarketSessionType | null;
 }) {
   const rowEnabled = isRowEnabled(row.raw);
   const isPending = pendingSymbol === row.symbol;
@@ -910,7 +921,7 @@ const WatchlistRow = React.memo(function WatchlistRow({
         </td>
       )}
       {visibleColKeys.has('freshness') && (
-        <td className="td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} /></td>
+        <td className="td-freshness"><RowFreshness row={row} connectionStatus={quoteConnectionStatus} marketSession={marketSession} /></td>
       )}
       {visibleColKeys.has('trend') && (
         <td className="td-trend"><TrendColumn trendSignals={row.trendSignals} /></td>
