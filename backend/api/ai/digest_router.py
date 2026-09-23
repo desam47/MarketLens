@@ -7,10 +7,8 @@ Version 4, AI feature 2 — daily/session AI digest REST endpoints.
 right now (useful for testing, and a "Regenerate" button in the UI) —
 does not wait for the scheduler's premarket/close time gate.
 
-Digest generation is not user-triggered in normal operation — it's
-schedule-only (``backend.ai.digest_service.DigestService``) — so the
-read endpoints never enqueue anything; they just read the latest
-``AIDigest`` row.
+Sessions are ``premarket``, ``midday``, ``close`` (the post-market recap),
+and ``weekly``.  All delivery remains inside the local MarketLens UI.
 """
 
 from __future__ import annotations
@@ -36,6 +34,9 @@ class DigestResponse(BaseModel):
     payload: dict | None
 
 
+DIGEST_SESSION_PATTERN = r"^(premarket|midday|close|weekly)$"
+
+
 def _to_response(row) -> DigestResponse:
     payload = None
     if row.payload:
@@ -55,9 +56,9 @@ def _to_response(row) -> DigestResponse:
 
 @router.get("/latest", response_model=DigestResponse)
 async def get_latest_digest(
-    session: str = Query(default="close", pattern=r"^(premarket|close)$"),
+    session: str = Query(default="close", pattern=DIGEST_SESSION_PATTERN),
 ):
-    """Most recent digest for ``session`` ("premarket" or "close")."""
+    """Most recent digest for one of the local scheduled summary sessions."""
     repo = AIDigestRepository()
     try:
         row = await asyncio.to_thread(repo.get_latest, session)
@@ -70,7 +71,7 @@ async def get_latest_digest(
 
 @router.get("/history", response_model=list[DigestResponse])
 async def get_digest_history(
-    session: str | None = Query(default=None, pattern=r"^(premarket|close)$"),
+    session: str | None = Query(default=None, pattern=DIGEST_SESSION_PATTERN),
     limit: int = Query(default=10, ge=1, le=50),
 ):
     """Recent digests, newest first. Omit ``session`` for both."""
@@ -84,7 +85,7 @@ async def get_digest_history(
 
 @router.post("/generate", response_model=DigestResponse)
 async def generate_digest_now(
-    session: str = Query(default="close", pattern=r"^(premarket|close)$"),
+    session: str = Query(default="close", pattern=DIGEST_SESSION_PATTERN),
 ):
     """Generate and store a digest immediately, bypassing the
     scheduler's time gate. Same underlying generation code the

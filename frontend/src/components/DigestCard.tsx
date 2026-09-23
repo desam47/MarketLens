@@ -7,15 +7,120 @@
  * error -> empty -> loading -> data.
  *
  * Digest generation itself is schedule-only (backend.ai.digest_service
- * fires it at the configured premarket/close times) — this card only
+ * fires it at the configured premarket, midday, post-market, and weekly
+ * times) — this card only
  * reads the latest one, plus a "Regenerate" button for on-demand
  * testing/refresh via POST /api/ai/digest/generate.
  */
-import React, { useCallback, useEffect, useState } from 'react';
-import api, { AIDigest } from '../services/api';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import api, { AIDigest, DigestSession } from '../services/api';
 import { formatETDateTime } from './chartMath';
 
-type Session = 'premarket' | 'close';
+type Session = DigestSession;
+const JOURNAL_STORAGE_KEY = 'marketlens.trade.journal';
+
+interface LocalJournalEntry {
+  symbol: string;
+  status: 'planned' | 'open' | 'closed';
+  side: 'long' | 'short';
+  entryDate: string;
+  exitDate: string | null;
+  quantity: number;
+  entryPrice: number;
+  exitPrice: number | null;
+  stopPrice: number | null;
+  targetPrice: number | null;
+  reviewNotes: string;
+  signalContext?: { trendState: string | null } | null;
+}
+
+interface JournalReview {
+  entries: number;
+  closed: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  netPnl: number;
+  plannedWithStop: number;
+  plannedWithTarget: number;
+  strongest: Array<{ symbol: string; pnl: number }>;
+  weakest: Array<{ symbol: string; pnl: number }>;
+  recurringMistakes: string[];
+  periodStart: string;
+  periodEnd: string;
+}
+
+function localWeeklyJournalReview(periodStart?: string, periodEnd?: string): JournalReview | null {
+  try {
+    const raw = window.localStorage.getItem(JOURNAL_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return null;
+    const entries = parsed.filter((entry): entry is LocalJournalEntry => (
+      Boolean(entry) && typeof entry === 'object'
+      && typeof (entry as LocalJournalEntry).symbol === 'string'
+      && typeof (entry as LocalJournalEntry).entryDate === 'string'
+      && Number.isFinite((entry as LocalJournalEntry).quantity)
+      && Number.isFinite((entry as LocalJournalEntry).entryPrice)
+    ));
+    // Journal windows follow MarketLens' America/New_York convention even if
+    // the browser itself is running in another timezone.
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date());
+    const year = Number(parts.find(part => part.type === 'year')?.value);
+    const month = Number(parts.find(part => part.type === 'month')?.value);
+    const date = Number(parts.find(part => part.type === 'day')?.value);
+    const today = new Date(Date.UTC(year, month - 1, date));
+    const monday = new Date(today);
+    const day = monday.getUTCDay();
+    monday.setUTCDate(monday.getUTCDate() - (day === 0 ? 6 : day - 1));
+    const start = periodStart?.slice(0, 10) || monday.toISOString().slice(0, 10);
+    const end = periodEnd?.slice(0, 10) || today.toISOString().slice(0, 10);
+    const week = entries.filter(entry => (
+      (entry.entryDate >= start && entry.entryDate <= end)
+      || (entry.exitDate != null && entry.exitDate >= start && entry.exitDate <= end)
+    ));
+    const closed = week.filter(entry => entry.status === 'closed' && entry.exitPrice != null);
+    const pnlFor = (entry: LocalJournalEntry) => (
+      ((entry.exitPrice as number) - entry.entryPrice) * entry.quantity * (entry.side === 'short' ? -1 : 1)
+    );
+    const pnls = closed.map(pnlFor);
+    const wins = pnls.filter(value => value > 0).length;
+    const bySymbol = new Map<string, number>();
+    closed.forEach(entry => bySymbol.set(entry.symbol, (bySymbol.get(entry.symbol) || 0) + pnlFor(entry)));
+    const ranked = Array.from(bySymbol.entries()).map(([symbol, pnl]) => ({ symbol, pnl })).sort((a, b) => b.pnl - a.pnl);
+    const mistakeKeywords = ['chase', 'late', 'oversize', 'over-sized', 'stop', 'revenge', 'fomo', 'early exit', 'sizing'];
+    const mistakeCounts = new Map<string, number>();
+    week.forEach(entry => {
+      const notes = (entry.reviewNotes || '').toLowerCase();
+      mistakeKeywords.forEach(keyword => { if (notes.includes(keyword)) mistakeCounts.set(keyword, (mistakeCounts.get(keyword) || 0) + 1); });
+    });
+    const recurringMistakes = Array.from(mistakeCounts.entries())
+      .filter(([, count]) => count > 1)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([keyword, count]) => `${keyword} (${count})`);
+    return {
+      entries: week.length, closed: closed.length, wins, losses: pnls.length - wins,
+      winRate: closed.length ? (wins / closed.length) * 100 : null,
+      netPnl: pnls.reduce((sum, value) => sum + value, 0),
+      plannedWithStop: week.filter(entry => entry.stopPrice != null).length,
+      plannedWithTarget: week.filter(entry => entry.targetPrice != null).length,
+      strongest: ranked.slice(0, 3), weakest: ranked.slice(-3).reverse(),
+      recurringMistakes, periodStart: start, periodEnd: end,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatMoney(value: number): string {
+  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+}
+
+const sessionLabels: Record<Session, string> = {
+  premarket: 'Premarket', midday: 'Midday', close: 'Post-market', weekly: 'Weekly',
+};
 
 // Same lowercase regime keys/colors as RegimeCard.tsx — kept in sync
 // deliberately rather than importing across files for one small map.
@@ -102,6 +207,11 @@ export function DigestCard() {
   const topBearish = digest?.payload?.movers?.top_bearish ?? [];
   const rsiExtremes = digest?.payload?.rsi_extremes || [];
   const mtf = digest?.payload?.mtf_alignment_counts;
+  const summary = digest?.payload?.summary;
+  const journalReview = useMemo(
+    () => (session === 'weekly' ? localWeeklyJournalReview(summary?.period_start, summary?.period_end) : null),
+    [session, summary?.period_start, summary?.period_end],
+  );
 
   return (
     <div className="card digest-card">
@@ -118,10 +228,24 @@ export function DigestCard() {
             </button>
             <button
               type="button"
+              className={`digest-tab ${session === 'midday' ? 'active' : ''}`}
+              onClick={() => setSession('midday')}
+            >
+              Midday
+            </button>
+            <button
+              type="button"
               className={`digest-tab ${session === 'close' ? 'active' : ''}`}
               onClick={() => setSession('close')}
             >
-              Close
+              Post-market
+            </button>
+            <button
+              type="button"
+              className={`digest-tab ${session === 'weekly' ? 'active' : ''}`}
+              onClick={() => setSession('weekly')}
+            >
+              Weekly
             </button>
           </div>
           <button
@@ -149,7 +273,7 @@ export function DigestCard() {
 
       {!loading && !digest && !error && (
         <p className="empty-state">
-          No {session} digest yet — it generates automatically at the scheduled time,
+          No {sessionLabels[session].toLowerCase()} digest yet — it generates automatically at the scheduled time,
           or click Regenerate to create one now.
         </p>
       )}
@@ -165,6 +289,11 @@ export function DigestCard() {
             <span className="info-text digest-timestamp">
               {formatETDateTime(digest.generated_at)}
             </span>
+            {summary && (
+              <span className="info-text digest-timestamp">
+                Window: {formatETDateTime(summary.period_start)} → {formatETDateTime(summary.period_end)}
+              </span>
+            )}
           </div>
 
           {digest.narrative && (
@@ -221,6 +350,34 @@ export function DigestCard() {
                 </span>
               )}
             </div>
+          )}
+
+          {session === 'weekly' && (
+            <section className="digest-weekly-review" aria-label="Weekly journal review">
+              <h4>📝 Journal review</h4>
+              {!journalReview || journalReview.entries === 0 ? (
+                <p className="info-text">No entries from this week in this browser's local Trade Journal.</p>
+              ) : (
+                <>
+                  <div className="digest-footer-stats">
+                    <span className="signal-chip">{journalReview.entries} entries · {journalReview.closed} closed</span>
+                    <span className="signal-chip">Net P&amp;L {formatMoney(journalReview.netPnl)}</span>
+                    <span className="signal-chip">Win rate {journalReview.winRate == null ? '—' : `${journalReview.winRate.toFixed(1)}%`}</span>
+                    <span className="signal-chip">Plan coverage: {journalReview.plannedWithStop} stops · {journalReview.plannedWithTarget} targets</span>
+                  </div>
+                  {(journalReview.strongest.length > 0 || journalReview.weakest.length > 0) && (
+                    <p className="info-text">
+                      Strongest: {journalReview.strongest.map(item => `${item.symbol} ${formatMoney(item.pnl)}`).join(', ') || '—'} ·
+                      Weakest: {journalReview.weakest.map(item => `${item.symbol} ${formatMoney(item.pnl)}`).join(', ') || '—'}
+                    </p>
+                  )}
+                  {journalReview.recurringMistakes.length > 0 && (
+                    <p className="info-text">Recurring review themes: {journalReview.recurringMistakes.join(', ')}</p>
+                  )}
+                  <p className="info-text">Source: this browser's local Trade Journal · not broker-synced.</p>
+                </>
+              )}
+            </section>
           )}
         </div>
       )}

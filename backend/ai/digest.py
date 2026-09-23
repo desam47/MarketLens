@@ -1,5 +1,5 @@
 """
-AI feature 2 (Version 4): daily/session AI digest.
+AI feature 2 (Version 4): scheduled local AI summaries.
 
 Aggregates already-running engines (market regime, the scanner's
 already-warm cache, the active watchlist) into a single structured
@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from typing import Any
 
 from backend.ai.analyze import analyze_symbol
@@ -31,8 +32,52 @@ from backend.ai.prompt import (
 )
 from backend.ai.sync_bridge import run_sync
 from backend.config.settings import settings
+from backend.utils.timezone import format_edt_iso, now_ny
 
 logger = logging.getLogger(__name__)
+
+SUMMARY_SESSIONS = ("premarket", "midday", "close", "weekly")
+
+
+def summary_metadata(
+    session: str,
+    *,
+    cutoff_at: datetime | None = None,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Return the deterministic time window attached to every digest.
+
+    Digest rows are intentionally kept as one JSON payload so existing databases
+    need no migration when a new scheduled slot is added.  Naive datetimes in
+    this module are always New York wall time, matching the rest of MarketLens.
+    """
+    if session not in SUMMARY_SESSIONS:
+        raise ValueError(f"Unsupported digest session: {session}")
+    cutoff = cutoff_at or now or now_ny()
+    day_start = cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
+    if session == "premarket":
+        period_start = cutoff.replace(hour=4, minute=0, second=0, microsecond=0)
+        kind = "premarket_plan"
+    elif session == "midday":
+        period_start = cutoff.replace(hour=9, minute=30, second=0, microsecond=0)
+        kind = "midday_update"
+    elif session == "close":
+        period_start = cutoff.replace(hour=9, minute=30, second=0, microsecond=0)
+        kind = "post_market_recap"
+    else:
+        # Monday 00:00 through the scheduled Friday cutoff.  The scheduler only
+        # fires this slot on Friday, while a manual run still gets a sensible
+        # Monday-to-now window.
+        period_start = day_start - timedelta(days=cutoff.weekday())
+        kind = "weekly_review"
+    return {
+        "session": session,
+        "kind": kind,
+        "cutoff_at": format_edt_iso(cutoff) or cutoff.isoformat(),
+        "period_start": format_edt_iso(period_start) or period_start.isoformat(),
+        "period_end": format_edt_iso(cutoff) or cutoff.isoformat(),
+        "dedupe_key": f"{session}:{period_start.date().isoformat()}",
+    }
 
 
 def _safe_call(fn, *args, default=None, **kwargs):
@@ -43,7 +88,12 @@ def _safe_call(fn, *args, default=None, **kwargs):
 
 
 def build_digest_payload(
-    watchlist_id: int | None = None, aggregate_all: bool = False, db=None
+    watchlist_id: int | None = None,
+    aggregate_all: bool = False,
+    db=None,
+    *,
+    session: str = "close",
+    cutoff_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Gather a structured digest payload, in-process, no HTTP round-trips.
 
@@ -207,6 +257,7 @@ def build_digest_payload(
         movers = {"top_bullish": [], "top_bearish": []}
 
     return {
+        "summary": summary_metadata(session, cutoff_at=cutoff_at),
         "watchlist_size": len(symbols),
         "market_regime": regime,
         "movers": movers,
@@ -264,7 +315,9 @@ def _fallback_narrative(payload: dict[str, Any]) -> DigestNarrative:
     )
 
 
-def generate_and_store_digest(session: str, watchlist_id: int | None = None) -> dict[str, Any]:
+def generate_and_store_digest(
+    session: str, watchlist_id: int | None = None, *, cutoff_at: datetime | None = None
+) -> dict[str, Any]:
     """Build the payload, narrate it, and persist an AIDigest row.
 
     Returns a plain dict (not the ORM row) so callers — the scheduler
@@ -273,7 +326,12 @@ def generate_and_store_digest(session: str, watchlist_id: int | None = None) -> 
     """
     from backend.repositories.ai_digest_repository import AIDigestRepository
 
-    payload = build_digest_payload(watchlist_id=watchlist_id, aggregate_all=(watchlist_id is None))
+    payload = build_digest_payload(
+        watchlist_id=watchlist_id,
+        aggregate_all=(watchlist_id is None),
+        session=session,
+        cutoff_at=cutoff_at,
+    )
     narrative = narrate_digest(payload)
 
     repo = AIDigestRepository()

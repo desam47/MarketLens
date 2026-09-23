@@ -10,7 +10,7 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.ai.digest import build_digest_payload, narrate_digest
+from backend.ai.digest import build_digest_payload, narrate_digest, summary_metadata
 from backend.ai.prompt import DigestNarrative
 from backend.ai.provider import AIResponse
 from backend.scanner.scanner import ScanResult
@@ -35,6 +35,14 @@ def _fake_result(
 
 
 class TestBuildDigestPayload(unittest.TestCase):
+    def test_summary_metadata_has_explicit_window_and_dedupe_key(self):
+        metadata = summary_metadata("weekly", now=datetime(2026, 9, 25, 16, 30))
+
+        self.assertEqual(metadata["kind"], "weekly_review")
+        self.assertEqual(metadata["period_start"], "2026-09-21T00:00:00-04:00")
+        self.assertEqual(metadata["period_end"], "2026-09-25T16:30:00-04:00")
+        self.assertEqual(metadata["dedupe_key"], "weekly:2026-09-21")
+
     @patch("backend.ai.digest.analyze_symbol")
     @patch("backend.nl_search.executor._resolve_watchlist_symbols")
     @patch("backend.scanner.scanner.market_scanner")

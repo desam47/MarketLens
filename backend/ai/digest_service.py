@@ -1,9 +1,9 @@
 """
-AI feature 2 (Version 4): daily/session digest scheduler.
+AI feature 2 (Version 4): scheduled local summary scheduler.
 
 No general-purpose scheduler exists anywhere in this codebase
 (confirmed absent: APScheduler/celery/croniter/rq-scheduler). Rather
-than add one for a single twice-daily job, this reuses the codebase's
+than add one for a small set of summary slots, this reuses the codebase's
 own established pattern for "run this at a time of day" —
 ingestion_service.py's hand-rolled
 ``while self.is_running: <time gate>: do work; sleep(jittered)``
@@ -19,7 +19,8 @@ any tick cadence, and trivial to unit test (no sleep/timing
 involved — just call ``_maybe_fire()`` with a mocked ``now_ny()``).
 
 Started from ``backend.api.main``'s lifespan hook, same lifecycle
-pattern as ``alerts_engine.startup()``.
+pattern as ``alerts_engine.startup()``. The configured slots are
+premarket, midday, post-market, and the Friday weekly review.
 """
 
 from __future__ import annotations
@@ -35,8 +36,12 @@ logger = logging.getLogger(__name__)
 
 
 class DigestService:
-    """Fires ``generate_and_store_digest()`` once per day per session
-    (premarket / close), on the FastAPI app's own event loop."""
+    """Fires each local scheduled summary once per period.
+
+    The service remains deliberately small and in-process.  Durable repository
+    checks make restarts safe, while the configured slots cover premarket,
+    midday, post-market, and the Friday weekly review.
+    """
 
     def __init__(self) -> None:
         self.is_running = False
@@ -71,10 +76,7 @@ class DigestService:
 
         ny = now_ny()
         today = ny.date()
-        for session, hour, minute in (
-            ("premarket", cfg.premarket_hour, cfg.premarket_minute),
-            ("close", cfg.close_hour, cfg.close_minute),
-        ):
+        for session, hour, minute in self._scheduled_slots(cfg, ny):
             target = ny.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if ny >= target and self._last_fired.get(session) != today:
                 self._last_fired[session] = today
@@ -85,6 +87,57 @@ class DigestService:
                     logger.info("%s digest already generated today; not regenerating", session)
                     continue
                 await self._fire(session)
+
+    @staticmethod
+    def _int_setting(cfg, name: str, default: int) -> int:
+        """Read a config integer without letting unconfigured test mocks leak in."""
+        value = getattr(cfg, name, default)
+        return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+    @staticmethod
+    def _optional_int_setting(cfg, name: str) -> int | None:
+        value = getattr(cfg, name, None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @classmethod
+    def _scheduled_slots(cls, cfg, ny: datetime) -> list[tuple[str, int, int]]:
+        slots = [
+            (
+                "premarket",
+                cls._int_setting(cfg, "premarket_hour", 8),
+                cls._int_setting(cfg, "premarket_minute", 30),
+            ),
+            (
+                "close",
+                cls._int_setting(cfg, "close_hour", 16),
+                cls._int_setting(cfg, "close_minute", 15),
+            ),
+        ]
+        midday_hour = cls._optional_int_setting(cfg, "midday_hour")
+        midday_minute = cls._optional_int_setting(cfg, "midday_minute")
+        if midday_hour is not None and midday_minute is not None:
+            slots.insert(1, ("midday", midday_hour, midday_minute))
+        weekly_enabled = getattr(cfg, "weekly_enabled", True)
+        if not isinstance(weekly_enabled, bool):
+            weekly_enabled = True
+        weekly_day = cls._optional_int_setting(cfg, "weekly_day")
+        weekly_hour = cls._optional_int_setting(cfg, "weekly_hour")
+        weekly_minute = cls._optional_int_setting(cfg, "weekly_minute")
+        if (
+            weekly_enabled
+            and weekly_day is not None
+            and weekly_hour is not None
+            and weekly_minute is not None
+            and ny.weekday() == weekly_day
+        ):
+            slots.append(
+                (
+                    "weekly",
+                    weekly_hour,
+                    weekly_minute,
+                )
+            )
+        return slots
 
     async def _already_generated(self, session: str, target: datetime) -> bool:
         """Has a ``session`` digest been stored since today's slot time?

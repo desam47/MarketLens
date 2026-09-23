@@ -898,12 +898,18 @@ class DigestSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=_ENV_FILE, env_prefix="AI_DIGEST_", extra="ignore")
     enabled: bool = Field(default=True)
-    # Two fixed daily slots (ET), matching the "premarket"/"close" session
-    # names used throughout backend.ai.digest / the /api/ai/digest/* routes.
+    # Scheduled local summary slots (ET).  ``close`` is the stable API session
+    # name for the user-facing post-market recap.
     premarket_hour: int = Field(default=8, ge=0, le=23)
     premarket_minute: int = Field(default=30, ge=0, le=59)
+    midday_hour: int = Field(default=12, ge=0, le=23)
+    midday_minute: int = Field(default=0, ge=0, le=59)
     close_hour: int = Field(default=16, ge=0, le=23)
     close_minute: int = Field(default=15, ge=0, le=59)
+    weekly_enabled: bool = Field(default=True)
+    weekly_day: int = Field(default=4, ge=0, le=6)  # Friday, Python weekday
+    weekly_hour: int = Field(default=16, ge=0, le=23)
+    weekly_minute: int = Field(default=30, ge=0, le=59)
     # How many top bullish/bearish movers get an AI blurb per digest —
     # bounds AI call volume/latency; everything else in the payload
     # (regime, RSI extremes, MTF counts) is pure quant, no AI cost.

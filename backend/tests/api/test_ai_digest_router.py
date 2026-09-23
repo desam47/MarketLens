@@ -52,6 +52,23 @@ class TestGetLatestDigest(unittest.TestCase):
         self.assertEqual(resp.status_code, 422)
 
     @patch("backend.api.ai.digest_router.AIDigestRepository")
+    def test_weekly_session_is_supported(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_latest.return_value = MagicMock(
+            id=3,
+            session="weekly",
+            market_regime="NEUTRAL",
+            narrative="Weekly review.",
+            payload='{"summary": {"kind": "weekly_review"}}',
+            generated_at=datetime(2026, 9, 11, 16, 30, tzinfo=UTC),
+        )
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/digest/latest?session=weekly")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["session"], "weekly")
+
+    @patch("backend.api.ai.digest_router.AIDigestRepository")
     def test_defaults_to_close_session(self, mock_repo_cls):
         mock_repo = MagicMock()
         mock_repo.get_latest.return_value = None

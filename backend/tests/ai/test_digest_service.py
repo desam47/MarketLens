@@ -209,7 +209,11 @@ class TestDigestServiceDurableDedupe(unittest.TestCase):
 
     def test_sessions_are_independent(self):
         self._store("premarket", datetime(2026, 9, 9, 8, 40))
-        self.assertEqual(self._tick(datetime(2026, 9, 9, 17, 0)), ["close"])
+        self.assertEqual(
+            self._tick(datetime(2026, 9, 9, 17, 0)),
+            ["midday", "close"],
+            "A restart after both daily slots should recover each missing slot",
+        )
 
     def test_a_skipped_slot_is_not_rechecked_every_tick(self):
         self._store("premarket", datetime(2026, 9, 9, 8, 40))

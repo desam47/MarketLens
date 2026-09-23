@@ -2514,12 +2514,12 @@ class ApiService {
 
   // ── Version 4 AI feature 2: daily/session digest ────────────────────
 
-  async getLatestDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
+  async getLatestDigest(session: DigestSession = 'close'): Promise<AIDigest> {
     return this.fetch<AIDigest>(`/ai/digest/latest?session=${session}`);
   }
 
   async getDigestHistory(
-    session?: 'premarket' | 'close',
+    session?: DigestSession,
     limit: number = 10,
   ): Promise<AIDigest[]> {
     const params = new URLSearchParams({ limit: String(limit) });
@@ -2527,7 +2527,7 @@ class ApiService {
     return this.fetch<AIDigest[]>(`/ai/digest/history?${params}`);
   }
 
-  async generateDigest(session: 'premarket' | 'close' = 'close'): Promise<AIDigest> {
+  async generateDigest(session: DigestSession = 'close'): Promise<AIDigest> {
     return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' }, AI_TIMEOUT_MS);
   }
 
@@ -2705,6 +2705,7 @@ export interface AIDigestRsiExtreme {
 }
 
 export interface AIDigestPayload {
+  summary?: AIDigestSummary;
   watchlist_size: number;
   market_regime: Record<string, unknown>;
   // Optional/partial: a persisted digest's JSON payload isn't
@@ -2718,9 +2719,20 @@ export interface AIDigestPayload {
   mtf_alignment_counts: { bullish: number; bearish: number };
 }
 
+export type DigestSession = 'premarket' | 'midday' | 'close' | 'weekly';
+
+export interface AIDigestSummary {
+  session: DigestSession;
+  kind: 'premarket_plan' | 'midday_update' | 'post_market_recap' | 'weekly_review';
+  cutoff_at: string;
+  period_start: string;
+  period_end: string;
+  dedupe_key: string;
+}
+
 export interface AIDigest {
   id: number;
-  session: 'premarket' | 'close';
+  session: DigestSession;
   generated_at: string;
   market_regime: string | null;
   narrative: string | null;

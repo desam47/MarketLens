@@ -1,7 +1,7 @@
 # Version 5 — Intelligent AI Hub Chat
 
 **Date:** 2026-09-22
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-23
 **Status:** Active. Phase 5.1, Phase 5.2, Phase 5.3, and Phase 5.4 are complete; Phase 5.5 is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
@@ -282,7 +282,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
-**Status:** 🟡 In progress. Items 5.5.1–5.5.3 are implemented and verified; items 5.5.4–5.5.5 remain.
+**Status:** 🟡 In progress. Items 5.5.1–5.5.4 are implemented and verified; item 5.5.5 remains.
 
 **Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
 
@@ -304,9 +304,10 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - ✅ Keep follow-up alert creation/modification on the existing closed action set. Destructive changes remain server-confirmed; opening the context is read-only and never fires or edits an alert.
 
 #### 5.5.4 Scheduled summaries
-- Optional premarket plan, midday update, post-market recap, and weekly review.
-- The weekly review includes performance, recurring mistakes, plan-versus-execution differences, and the user's strongest/weakest setups when sufficient Journal data exists.
-- Deliver only through existing local MarketLens surfaces unless a future version explicitly adds external messaging.
+- ✅ The local AI Digest now supports scheduled premarket, midday, post-market, and Friday weekly sessions, plus on-demand generation for each session.
+- ✅ Each digest carries a typed summary window, cutoff timestamp, period bounds, and deterministic deduplication key. Restart-safe durable checks prevent duplicate slot generation.
+- ✅ The Weekly tab enriches the server digest with the current browser's local Journal when entries exist: performance, win rate, net P&L, plan coverage, strongest/weakest symbols, and recurring review themes. It clearly labels the browser-local, non-broker-synced source.
+- ✅ Delivery remains inside existing local MarketLens surfaces; no external messaging or order action was added.
 
 #### 5.5.5 What-changed inbox
 - Summarize changes since the user's last visit across watchlists, alerts, signals, catalysts, and provider health.
