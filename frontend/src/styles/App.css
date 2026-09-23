@@ -5782,6 +5782,7 @@ div.td-trend {
 .chat-tool-pill.step-completed { color: var(--success); }
 .chat-tool-pill.step-reused { color: var(--accent-primary); }
 .chat-tool-pill.step-failed, .chat-tool-pill.step-stopped { color: var(--danger); }
+.chat-tool-pill.model-route { color: var(--text-muted); }
 
 .chat-num-pos {
   color: var(--success);

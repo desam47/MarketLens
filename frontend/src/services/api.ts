@@ -2711,8 +2711,10 @@ export interface ChatMessage {
   partial?: string[];
   unavailable?: string[];
   tools?: Array<{
-    tool: string;
-    ok: boolean;
+    tool?: string;
+    ok?: boolean;
+    role?: string;
+    model?: string;
     kind?: 'tool' | 'step' | string;
     step?: number;
     status?: 'running' | 'completed' | 'failed' | 'reused' | 'stopped' | string;

@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1 and Phase 5.2 complete; Phase 5.3 bounded orchestration is in progress.
+**Status:** Active. Phase 5.1, Phase 5.2, and Phase 5.3 complete; Phase 5.4 is next.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -202,6 +202,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.8 Model routing and deterministic fallback
 - Use configurable model routes for tool selection, complex synthesis, and repair while preserving one evidence contract.
 - Fall back to deterministic calculator/database answers when AI is unavailable and show which model, if any, generated the explanation.
+- `AI_CHAT_PLANNING_MODEL`, `AI_CHAT_SYNTHESIS_MODEL`, and `AI_CHAT_REPAIR_MODEL` now provide role-specific overrides; transient Chat metadata exposes the selected route, and AI-off symbol turns return context-only evidence without invented narrative.
 
 ### Verification
 - Multi-step tests cover comparisons, follow-up pronouns, ambiguous requests, repeated-tool prevention, and partial failures.

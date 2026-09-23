@@ -423,6 +423,11 @@ class AISettings(BaseSettings):
     # didn't reliably comply on its own. Empty (default) means no
     # override — chat uses the same chain as everything else.
     chat_model: str = Field(default="")
+    # Optional role-specific model overrides. Empty values inherit
+    # AI_CHAT_MODEL, preserving the existing single-route behavior.
+    chat_planning_model: str = Field(default="")
+    chat_synthesis_model: str = Field(default="")
+    chat_repair_model: str = Field(default="")
     # Phase 5.3 bounded orchestration budgets. These cap follow-up planning
     # calls per chat turn; the first completion is counted separately by the
     # request itself. Keep the defaults conservative for local providers.

@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phase 5.1 and Phase 5.2 complete; Phase 5.3 in progress.
+**Status:** Active. Planning complete; Phase 5.1, Phase 5.2, and Phase 5.3 complete.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -73,7 +73,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
-| 5.3 | Bounded orchestration, intent, and memory | 🟡 IN PROGRESS | Bounded compound-action chaining now has a three-step cap, duplicate-action suppression, destructive confirmation gates, and partial-failure-safe replies. Planner state, clarification coverage, structured memory, and reusable workflows remain. |
+| 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
@@ -503,9 +503,8 @@ The current assistant response also exposes a transient tool trace with tool
 name, success/failure, provider, freshness, fallback, and warnings; it is
 rendered in Chat but intentionally not persisted in the prose message table.
 
-Remaining Phase 5.3 work includes broader planner state, clarification
-coverage and destructive action confirmation tests. Read-only duplicate
-actions now reuse a bounded per-turn result cache and are marked as
+Phase 5.3 is complete. Read-only duplicate actions now reuse a bounded
+per-turn result cache and are marked as
 `turn-cache`; mutating duplicates still stop without re-execution.
 Structured memory now includes the previous ticker, last calculation inputs,
 and a bounded last-tool-result summary; exact calculations and missing
@@ -519,9 +518,10 @@ starting another continuation when it expires. Structured step events now
 surface ordered completion, failure, reuse, and stop states with dependency
 metadata in the Chat UI. Reusable workflows now have persisted typed steps,
 four safe built-in templates, editable parameters, and a confirmation-aware
-run endpoint. Complex-request
-decomposition, partial failure, saved workflows, model routing, and deterministic
-AI-off fallback must be exercised explicitly.
+run endpoint. Role-specific planning, synthesis, and repair routes are
+configurable, selected routes are shown in transient Chat metadata, and AI-off
+turns fall back to evidence-only context snapshots. Phase 5.3 is now complete;
+Phase 5.4 is the next delivery gate.
 
 ---
 

@@ -870,7 +870,24 @@ def _prune_context(ctx: dict, avail: dict, *, keep_stats: bool = False) -> dict:
 _CHAT_PARSE_RETRIES = 1
 
 
-def _complete_and_parse(prompt: str, system: str, max_tokens: int, model: str | None):
+def _chat_route_model(role: str, fallback: str | None = None) -> str | None:
+    """Resolve a role-specific model, falling back to the legacy override."""
+    configured = getattr(ai_manager.settings, f"chat_{role}_model", "")
+    if isinstance(configured, str) and configured.strip():
+        return configured
+    legacy = getattr(ai_manager.settings, "chat_model", "")
+    if isinstance(legacy, str) and legacy.strip():
+        return legacy
+    return fallback
+
+
+def _complete_and_parse(
+    prompt: str,
+    system: str,
+    max_tokens: int,
+    model: str | None,
+    repair_model: str | None = None,
+):
     """One or more attempts at an AI completion + ``ChatReplyResponse``
     parse, retrying ``_CHAT_PARSE_RETRIES`` more time(s) on either a raw
     provider failure or a malformed reply before giving up.
@@ -888,7 +905,7 @@ def _complete_and_parse(prompt: str, system: str, max_tokens: int, model: str | 
                     prompt=prompt,
                     system=system,
                     max_tokens=max_tokens,
-                    model=model,
+                    model=repair_model if attempt else model,
                 )
             )
         except Exception as e:  # noqa: BLE001
@@ -1068,7 +1085,8 @@ def _generate_reply(
         )
 
     if not ai_manager.enabled:
-        return "AI is currently unavailable, so I can't answer that right now.", False, []
+        _trace_model_route(trace, "fallback", "deterministic")
+        return _deterministic_context_reply(symbol_blocks, unavailable)
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     prompt = build_chat_prompt(
@@ -1081,11 +1099,14 @@ def _generate_reply(
         capped_note=_capped_note(capped, symbol_blocks),
         token_budget=budget,
     )
+    synthesis_model = _chat_route_model("synthesis", _chat_route_model("planning"))
+    _trace_model_route(trace, "synthesis", synthesis_model)
     parsed, failure_reason = _complete_and_parse(
         prompt,
         CHAT_SYSTEM_PROMPT,
         500,
-        ai_manager.settings.chat_model or None,
+        synthesis_model,
+        _chat_route_model("repair"),
     )
     if parsed is None:
         if failure_reason == "ai_error":
@@ -1111,6 +1132,46 @@ def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
         return None
     shown = ", ".join(b["symbol"] for b in symbol_blocks) or "the first few"
     return f"(You named more tickers than I can dig into at once — I looked at {shown}.)"
+
+
+def _deterministic_context_reply(
+    symbol_blocks: list[dict], unavailable: list[str]
+) -> tuple[str, bool, list[str]]:
+    """Answer from already-built context when AI is unavailable.
+
+    This intentionally reports only fields present in the verified context;
+    it never invents a trend, catalyst, or recommendation.
+    """
+    if not symbol_blocks:
+        return "AI is unavailable and no verified symbol data is loaded for this question.", False, []
+    rows: list[str] = []
+    focus: list[str] = []
+    for block in symbol_blocks:
+        symbol = block.get("symbol", "?")
+        context = block.get("context") or {}
+        price = context.get("price")
+        change = context.get("change_percent")
+        parts = [symbol]
+        if isinstance(price, (int, float)):
+            parts.append(f"price ${price:,.4f}")
+        if isinstance(change, (int, float)):
+            parts.append(f"change {change:+.2f}%")
+        rows.append(" — ".join(parts))
+        focus.append(symbol)
+    unavailable_note = f" Unavailable: {', '.join(unavailable)}." if unavailable else ""
+    return (
+        "AI is unavailable, so here is a verified context-only snapshot: "
+        + "; ".join(rows)
+        + ". No narrative or recommendation was generated."
+        + unavailable_note,
+        True,
+        focus,
+    )
+
+
+def _trace_model_route(trace: list[dict] | None, role: str, model: str | None) -> None:
+    if trace is not None:
+        trace.append({"kind": "model", "role": role, "model": model or "deterministic"})
 
 
 def _watchlist_list_reply(db) -> str:
@@ -1408,7 +1469,8 @@ def _run_turn_actions(
             prompt,
             CHAT_CONTINUATION_SYSTEM_PROMPT,
             300,
-            ai_manager.settings.chat_model or None,
+            _chat_route_model("planning"),
+            _chat_route_model("repair"),
         )
         if next_parsed is None:
             logger.info("chat multi-step continuation failed: %s", failure_reason)
@@ -1548,14 +1610,8 @@ def _generate_reply_streaming(
             return
 
     if not ai_manager.enabled:
-        yield (
-            "result",
-            (
-                "AI is currently unavailable, so I can't answer that right now.",
-                False,
-                [],
-            ),
-        )
+        _trace_model_route(trace, "fallback", "deterministic")
+        yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable))
         return
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
@@ -1570,7 +1626,9 @@ def _generate_reply_streaming(
         token_budget=budget,
     )
 
-    chat_model = ai_manager.settings.chat_model or None
+    chat_model = _chat_route_model("synthesis", _chat_route_model("planning"))
+    repair_model = _chat_route_model("repair")
+    _trace_model_route(trace, "synthesis", chat_model)
     parsed = None
     failure_message = "I couldn't process that — could you rephrase?"
     # Same retry rationale as _complete_and_parse — a malformed/empty
@@ -1589,7 +1647,7 @@ def _generate_reply_streaming(
                         prompt,
                         system=CHAT_SYSTEM_PROMPT,
                         max_tokens=500,
-                        model=chat_model,
+                        model=repair_model if attempt else chat_model,
                     )
                 ):
                     raw += chunk
@@ -1602,7 +1660,7 @@ def _generate_reply_streaming(
                         prompt,
                         system=CHAT_SYSTEM_PROMPT,
                         max_tokens=500,
-                        model=chat_model,
+                        model=repair_model if attempt else chat_model,
                     )
                 )
                 raw = resp.text or ""

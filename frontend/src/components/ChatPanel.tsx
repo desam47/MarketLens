@@ -423,6 +423,11 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
   return (
     <span className="chat-tool-trace" title="Tools used to ground this answer">
       {tools.map((item, index) => {
+        if (item.kind === 'model') {
+          return <span className="chat-tool-pill model-route" key={`model-${index}`}>
+            ◇ {item.role ?? 'model'} · {item.model ?? 'unknown'}
+          </span>;
+        }
         if (item.kind === 'step') {
           const status = item.status ?? 'completed';
           const icon = status === 'completed' ? '✓' : status === 'reused' ? '↻' : status === 'failed' ? '⚠' : '•';
@@ -432,8 +437,8 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
         }
         const freshness = item.freshness_seconds == null ? '' : ` · ${Math.round(item.freshness_seconds)}s old`;
         const fallback = item.fallback ? ' · fallback' : '';
-        return <span className={`chat-tool-pill ${item.ok ? 'ok' : 'error'}`} key={`${item.tool}-${index}`}>
-          {item.ok ? '✓' : '⚠'} {item.tool}{item.provider ? ` · ${item.provider}` : ''}{freshness}{fallback}
+        return <span className={`chat-tool-pill ${item.ok ? 'ok' : 'error'}`} key={`${item.tool ?? 'tool'}-${index}`}>
+          {item.ok ? '✓' : '⚠'} {item.tool ?? 'tool'}{item.provider ? ` · ${item.provider}` : ''}{freshness}{fallback}
         </span>;
       })}
     </span>
