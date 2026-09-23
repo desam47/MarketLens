@@ -3,7 +3,9 @@
  "retry_budget": {
   "chat_parse_attempts": 2,
   "planning_attempts_per_step": 1,
-  "max_chain_steps": 3,
+  "max_tool_calls": 5,
+  "max_planning_calls": 2,
+  "max_turn_tokens": 60000,
   "max_turn_seconds": 30,
   "tool_timeout_seconds": 20
  },

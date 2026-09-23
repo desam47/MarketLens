@@ -474,8 +474,9 @@ and safe local CSV validation with inert formulas/macros.
 
 The first orchestration slice is implemented in `backend/ai/chat.py`: compound
 requests can chain one-action decisions with configurable, bounded planning
-budgets (default three steps — the plan asked for 5 tool calls and 2
-planning calls; see Known gaps), duplicate action signatures stop safely, and
+budgets (originally three steps; since 2026-09-23 the plan's independent
+5 tool-call / 2 planning-call / token budgets — see "Per-turn budgets"
+below), duplicate action signatures stop safely, and
 continuation failures never discard already completed results. Destructive
 actions remain backend-confirmed. Per-turn planner state tracks the original
 request, completed steps, duplicate signatures, and errors without persisting
@@ -1256,10 +1257,6 @@ clean `tsc --noEmit`.
 These are not fixed. They are recorded so the scorecard is not read as
 covering them.
 
-- **5.3.1 budgets.** The defaults are 3 chain steps and 3 planning calls,
-  not the plan's 5 tool calls and 2 planning calls. `_chain_step_limit()`
-  takes the `min()` of the two settings, so they act as one limit. No
-  per-turn token budget is enforced.
 - **5.3.5 concurrency.** Chained tool reads run sequentially; only per-symbol
   context building is parallel.
 - **5.1.3 relative dates.** Nothing resolves "today", "yesterday", or "last
@@ -1325,3 +1322,24 @@ covering them.
   `ToolSpec.timeout_ms`). An overrun returns `failure_kind: "timeout"`.
   Mutating tools get no deadline. The failure matrix (`5.8.1`) adds
   tool-timeout and model-outage rows linked to their end-to-end cases.
+
+## Per-turn budgets (2026-09-23)
+
+Plan 5.3.1's budgets are now separate limits, and each one reports a
+stopped planning step with its own reason when it is reached:
+
+| Setting | Default | Counts |
+| --- | ---: | --- |
+| `AI_CHAT_MAX_TOOL_CALLS` | 5 | actions executed in the turn, the first included (`tool_budget_exhausted`) |
+| `AI_CHAT_MAX_PLANNING_CALLS` | 2 | follow-up model calls choosing the next step; the first reply and parse retries are not counted (`planning_budget_exhausted`) |
+| `AI_CHAT_MAX_TURN_TOKENS` | 60,000 | estimated tokens (chars / 4 of prompt, system, and reply) across every model call (`token_budget_exhausted`) |
+| `AI_CHAT_MAX_TURN_SECONDS` | 30 | wall-clock time before another continuation starts (`time_budget_exhausted`) |
+
+Every model call now records `estimated_tokens`. A continuation is not
+started when its estimated cost would exceed the remaining token budget. A
+single call's prompt is also sized so the prompt, system text, and reply
+fit inside the turn budget. `AI_CHAT_MAX_CHAIN_STEPS` is deprecated; if it
+is still set, it caps tool calls so an existing `.env` keeps its behavior
+until the line is removed. The end-to-end evaluation pins these defaults
+(so results do not depend on a machine's `.env`) and adds
+`planning_budget_stops_long_chain`.

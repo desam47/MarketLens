@@ -41,7 +41,8 @@ if the trader's own message hinted at more than one request (a cheap
 "and"/"then"/"also"/";" regex gate — never spent on an ordinary
 single-action turn), the model is asked once more, with a note on
 what already ran, whether anything from the original message is
-still undone. Bounded by _MAX_CHAIN_STEPS, and a destructive step
+still undone. Bounded by the per-turn tool-call, planning-call,
+token, and wall-clock budgets, and a destructive step
 still stops the chain for its own confirmation exactly as before —
 this only automates stringing together steps that individually
 already needed no confirmation.
@@ -122,18 +123,63 @@ _MULTI_STEP_HINT = re.compile(
 _AMBIGUOUS_REFERENCE = re.compile(
     r"\b(it|that stock|that ticker|the previous ticker|this one|that one)\b", re.I
 )
-# First action + up to this many chained follow-ups within one turn.
-_MAX_CHAIN_STEPS = 3
+# Per-turn budget defaults (plan 5.3.1); settings override each one.
+_MAX_TOOL_CALLS = 5
+_MAX_PLANNING_CALLS = 2
+_MAX_TURN_TOKENS = 60_000
 _MAX_TURN_SECONDS = 30.0
+_CONTINUATION_MAX_TOKENS = 300
 
 
-def _chain_step_limit() -> int:
-    """Read the bounded continuation budget from settings safely."""
-    configured = min(
-        getattr(settings.ai, "chat_max_chain_steps", _MAX_CHAIN_STEPS),
-        getattr(settings.ai, "chat_max_planning_calls", _MAX_CHAIN_STEPS),
+def _bounded_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        return max(low, min(int(getattr(settings.ai, name, default)), high))
+    except (TypeError, ValueError):
+        return default
+
+
+def _tool_call_limit() -> int:
+    """Actions one turn may execute, the first included."""
+    limit = _bounded_int("chat_max_tool_calls", _MAX_TOOL_CALLS, 1, 10)
+    legacy = getattr(settings.ai, "chat_max_chain_steps", None)
+    if isinstance(legacy, int) and legacy > 0:
+        # Deprecated AI_CHAT_MAX_CHAIN_STEPS still caps an existing setup.
+        limit = min(limit, legacy)
+    return limit
+
+
+def _planning_call_limit() -> int:
+    """Follow-up model calls one turn may spend choosing the next step."""
+    return _bounded_int("chat_max_planning_calls", _MAX_PLANNING_CALLS, 0, 8)
+
+
+def _turn_token_budget() -> int:
+    """Estimated tokens one turn may spend across all model calls."""
+    return _bounded_int("chat_max_turn_tokens", _MAX_TURN_TOKENS, 4_000, 400_000)
+
+
+def _estimate_tokens(*texts: str | None) -> int:
+    """The same chars/4 estimate the prompt builder uses for its size guard."""
+    return sum(len(text or "") for text in texts) // 4 + 1
+
+
+def _turn_tokens_used(trace: list[dict] | None) -> int:
+    return sum(
+        int(item.get("estimated_tokens") or 0)
+        for item in (trace or [])
+        if item.get("kind") == "model_call"
     )
-    return max(1, min(int(configured), 8))
+
+
+def _prompt_token_budget(system: str, max_output_tokens: int) -> int:
+    """Prompt-size budget for one model call.
+
+    Keeps the historical ``max_tokens - 500`` sizing, but never lets a single
+    call's prompt, system text, and reply exceed the whole turn's budget.
+    """
+    historical = max(2000, ai_manager.settings.max_tokens - 500)
+    remaining = _turn_token_budget() - _estimate_tokens(system) - max_output_tokens
+    return max(1000, min(historical, remaining))
 
 
 def _turn_budget_seconds() -> float:
@@ -850,7 +896,9 @@ class _PlannerState:
     executed_signatures: set[str]
     completed_steps: list[str]
     errors: list[str]
-    max_steps: int
+    max_tool_calls: int
+    max_planning_calls: int
+    planning_calls: int = 0
 
 
 def _prepare_turn(
@@ -1490,6 +1538,7 @@ def _complete_and_parse(
                     "failure_kind": "provider_exception",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, system),
                     "requested_model": requested_model,
                     "provider_request_count": 1,
                 })
@@ -1510,6 +1559,7 @@ def _complete_and_parse(
                     "failure_kind": "provider_no_text",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, system, resp.text),
                     "provider": provider,
                     "model": response_model,
                     "requested_model": requested_model,
@@ -1528,6 +1578,7 @@ def _complete_and_parse(
                     "status": "parsed",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, system, resp.text),
                     "provider": provider,
                     "model": response_model,
                     "requested_model": requested_model,
@@ -1547,6 +1598,7 @@ def _complete_and_parse(
                     "failure_kind": "parse_error",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, system, resp.text),
                     "provider": provider,
                     "model": response_model,
                     "requested_model": requested_model,
@@ -1914,7 +1966,7 @@ def _generate_reply(
             trace.append({"kind": "server_reply", "trusted": True})
         return _deterministic_context_reply(symbol_blocks, unavailable, market_baseline)
 
-    budget = max(2000, ai_manager.settings.max_tokens - 500)
+    budget = _prompt_token_budget(CHAT_SYSTEM_PROMPT, 500)
     prompt = build_chat_prompt(
         symbol_blocks,
         unavailable,
@@ -2269,9 +2321,10 @@ def _run_turn_actions(
     """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
     the trader's own message hints at more than one request (see
     ``_MULTI_STEP_HINT``) and that first step was a real, already-
-    executed action — asks the model up to ``_MAX_CHAIN_STEPS - 1`` more
-    times whether anything from the ORIGINAL message is still undone,
-    running each additional step the same way. See the module docstring
+    executed action — asks the model whether anything from the ORIGINAL
+    message is still undone, running each additional step the same way,
+    until the turn's tool-call, planning-call, token, or time budget is
+    spent (each reported as a stopped planning step). See the module docstring
     (2026-09-16) for why this chains single-action completion calls
     instead of widening the JSON schema.
 
@@ -2328,7 +2381,8 @@ def _run_turn_actions(
         executed_signatures={_action_signature(parsed)},
         completed_steps=[text],
         errors=[],
-        max_steps=_chain_step_limit(),
+        max_tool_calls=_tool_call_limit(),
+        max_planning_calls=_planning_call_limit(),
     )
     result_cache: dict[str, tuple[str, bool, list[str]]] = {}
     first_signature = _action_signature(parsed)
@@ -2336,28 +2390,52 @@ def _run_turn_actions(
         result_cache[first_signature] = (text, grounded, list(screened))
     turn_started = time.monotonic() if started_at is None else started_at
     turn_budget = _turn_budget_seconds()
+    token_budget = _turn_token_budget()
+    # Token use is read from model-call records; keep a private record when
+    # the caller did not ask for a trace so the budget still applies.
+    budget_trace = trace if trace is not None else []
 
-    for _ in range(planner.max_steps - 1):
-        if time.monotonic() - turn_started >= turn_budget:
-            texts.append("I stopped the remaining step because this turn reached its time budget.")
-            all_grounded = False
-            planner.errors.append("time_budget_exhausted")
-            if trace is not None:
-                trace.append(
-                    {
-                        "kind": "step",
-                        "step": len(texts),
-                        "status": "stopped",
-                        "tool": "planning",
-                        "depends_on": [len(texts) - 1],
-                        "reason": "time_budget_exhausted",
-                    }
+    def stop_for_budget(reason: str, message: str) -> None:
+        nonlocal all_grounded
+        texts.append(message)
+        all_grounded = False
+        planner.errors.append(reason)
+        if trace is not None:
+            trace.append(
+                {
+                    "kind": "step",
+                    "step": len(texts),
+                    "status": "stopped",
+                    "tool": "planning",
+                    "depends_on": [len(texts) - 1],
+                    "reason": reason,
+                }
+            )
+
+    while True:
+        executed_steps = len(planner.completed_steps)
+        if executed_steps >= planner.max_tool_calls:
+            stop_for_budget(
+                "tool_budget_exhausted",
+                f"That was this turn's limit of {executed_steps} actions; if anything in your request is still undone, ask again.",
+            )
+            break
+        if planner.planning_calls >= planner.max_planning_calls:
+            if planner.max_planning_calls:
+                stop_for_budget(
+                    "planning_budget_exhausted",
+                    "That used this turn's planning budget; if anything in your request is still undone, ask again.",
                 )
+            break
+        if time.monotonic() - turn_started >= turn_budget:
+            stop_for_budget(
+                "time_budget_exhausted",
+                "I stopped the remaining step because this turn reached its time budget.",
+            )
             break
         continuation = (
             "Original request: " + user_content + "\nAlready executed: " + " ".join(texts)
         )
-        budget = max(2000, ai_manager.settings.max_tokens - 500)
         prompt = build_chat_prompt(
             symbol_blocks,
             unavailable,
@@ -2365,17 +2443,25 @@ def _run_turn_actions(
             transcript,
             continuation,
             alert_context,
-            token_budget=budget,
+            token_budget=_prompt_token_budget(CHAT_CONTINUATION_SYSTEM_PROMPT, _CONTINUATION_MAX_TOKENS),
             chart_state=(planner_state or {}).get("chart_state"),
             preferences=preferences,
         )
+        next_cost = _estimate_tokens(prompt, CHAT_CONTINUATION_SYSTEM_PROMPT) + _CONTINUATION_MAX_TOKENS
+        if _turn_tokens_used(budget_trace) + next_cost > token_budget:
+            stop_for_budget(
+                "token_budget_exhausted",
+                "I stopped the remaining step because this turn reached its token budget.",
+            )
+            break
+        planner.planning_calls += 1
         next_parsed, failure_reason = _complete_and_parse(
             prompt,
             CHAT_CONTINUATION_SYSTEM_PROMPT,
-            300,
+            _CONTINUATION_MAX_TOKENS,
             _chat_route_model("planning"),
             _chat_route_model("repair"),
-            trace=trace,
+            trace=budget_trace,
             role="planning",
         )
         if next_parsed is None:
@@ -2572,7 +2658,7 @@ def _generate_reply_streaming(
         yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable, turn.market_baseline))
         return
 
-    budget = max(2000, ai_manager.settings.max_tokens - 500)
+    budget = _prompt_token_budget(CHAT_SYSTEM_PROMPT, 500)
     prompt = build_chat_prompt(
         turn.symbol_blocks,
         turn.unavailable,
@@ -2646,6 +2732,7 @@ def _generate_reply_streaming(
                     "failure_kind": "provider_exception",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT),
                     "requested_model": requested_model,
                     "provider_request_count": 1,
                 })
@@ -2663,6 +2750,7 @@ def _generate_reply_streaming(
                     "failure_kind": "provider_no_text",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
                     "provider": attribution.provider,
                     "model": attribution.model,
                     "requested_model": requested_model,
@@ -2682,6 +2770,7 @@ def _generate_reply_streaming(
                     "status": "parsed",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
                     "provider": attribution.provider,
                     "model": attribution.model,
                     "requested_model": requested_model,
@@ -2701,6 +2790,7 @@ def _generate_reply_streaming(
                     "failure_kind": "parse_error",
                     "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
                     "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
                     "provider": attribution.provider,
                     "model": attribution.model,
                     "requested_model": requested_model,

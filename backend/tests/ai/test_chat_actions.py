@@ -21,7 +21,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.ai.chat import (
-    _MAX_CHAIN_STEPS,
     _WATCHLIST_CONTENTS_INTENT,
     _WATCHLIST_LIST_INTENT,
     _action_step_detail,
@@ -321,8 +320,8 @@ class TestConfirmGate(_DBBase):
 
 
 class TestRunTurnActions(_DBBase):
-    """_run_turn_actions (2026-09-16): chains up to _MAX_CHAIN_STEPS
-    single-action completion calls within one turn, gated on a cheap
+    """_run_turn_actions (2026-09-16): chains single-action completion
+    calls within one turn under the per-turn budgets, gated on a cheap
     "and"/"then"/"also"/";" hint in the trader's OWN message so an
     ordinary single-action turn never pays for an extra completion."""
 
@@ -445,28 +444,77 @@ class TestRunTurnActions(_DBBase):
         # The destructive step only asked — it must not have run.
         self.assertIsNotNone(AlertRepository(self.db).get_by_id(alert.id))
 
-    def test_respects_max_chain_steps(self):
-        # Every continuation keeps returning another real action — the
-        # cap must still stop it rather than looping indefinitely.
-        mock_ai = self._mock_complete(
+    def _budgets(self, **values):
+        for name, value in values.items():
+            previous = getattr(settings.ai, name)
+            self.addCleanup(setattr, settings.ai, name, previous)
+            setattr(settings.ai, name, value)
+
+    def _endless_chain(self):
+        # Every continuation keeps returning another real action — only a
+        # budget can stop it.
+        return self._mock_complete(
             *[
                 '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", '
                 f'"action_symbol": "SYM{i}", "action_watchlist": "Tech"}}'
                 for i in range(10)
             ]
         )
-        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
-        _run_turn_actions(
+
+    def _run_endless(self, trace=None):
+        return _run_turn_actions(
             self.db,
-            parsed,
+            _parsed(action="create_watchlist", action_watchlist="Tech"),
             [],
             [],
             None,
             [],
             "create Tech and add A and B and C and D",
             None,
+            trace=trace,
         )
-        self.assertEqual(mock_ai.complete.call_count, _MAX_CHAIN_STEPS - 1)
+
+    def test_planning_call_budget_stops_the_chain(self):
+        self._budgets(chat_max_tool_calls=5, chat_max_planning_calls=2, chat_max_chain_steps=None)
+        mock_ai = self._endless_chain()
+        trace: list[dict] = []
+        text, grounded, _ = self._run_endless(trace)
+        self.assertEqual(mock_ai.complete.call_count, 2)
+        self.assertIn("planning budget", text)
+        self.assertFalse(grounded)
+        stopped = [item for item in trace if item.get("status") == "stopped"]
+        self.assertEqual(stopped[-1]["reason"], "planning_budget_exhausted")
+
+    def test_tool_call_budget_is_independent_of_planning_budget(self):
+        self._budgets(chat_max_tool_calls=2, chat_max_planning_calls=8, chat_max_chain_steps=None)
+        mock_ai = self._endless_chain()
+        text, _, _ = self._run_endless()
+        self.assertEqual(mock_ai.complete.call_count, 1)  # first action + one planned action
+        self.assertIn("limit of 2 actions", text)
+
+    def test_deprecated_chain_steps_setting_still_caps_tool_calls(self):
+        self._budgets(chat_max_tool_calls=5, chat_max_planning_calls=8, chat_max_chain_steps=3)
+        mock_ai = self._endless_chain()
+        self._run_endless()
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+    def test_token_budget_stops_before_an_unaffordable_continuation(self):
+        self._budgets(chat_max_tool_calls=5, chat_max_planning_calls=8, chat_max_chain_steps=None, chat_max_turn_tokens=4_000)
+        mock_ai = self._endless_chain()
+        trace: list[dict] = [{"kind": "model_call", "estimated_tokens": 3_900}]
+        text, grounded, _ = self._run_endless(trace)
+        mock_ai.complete.assert_not_called()
+        self.assertIn("token budget", text)
+        self.assertFalse(grounded)
+
+    def test_continuation_calls_record_estimated_tokens(self):
+        self._budgets(chat_max_tool_calls=5, chat_max_planning_calls=1, chat_max_chain_steps=None)
+        self._endless_chain()
+        trace: list[dict] = []
+        self._run_endless(trace)
+        calls = [item for item in trace if item.get("kind") == "model_call"]
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(calls[0]["estimated_tokens"], 1000)  # includes the continuation system prompt
 
     def test_stops_duplicate_action_in_chain(self):
         mock_ai = self._mock_complete(

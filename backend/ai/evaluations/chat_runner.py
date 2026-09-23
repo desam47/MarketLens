@@ -40,6 +40,16 @@ CHAT_CASES_PATH = Path(__file__).with_name("phase_5_8_chat_cases.json")
 REGRESSION_DIR = Path(__file__).with_name("regression")
 CATEGORIES = ("correctness", "tool_choice", "provenance", "clarification", "latency", "safety")
 _DEFAULT_MAX_LATENCY_MS = 3000.0
+# Budgets are pinned to the shipped defaults so results never depend on a
+# machine's .env; a case may override them with "budgets".
+_DEFAULT_BUDGETS = {
+    "chat_max_tool_calls": 5,
+    "chat_max_planning_calls": 2,
+    "chat_max_turn_tokens": 60_000,
+    "chat_max_chain_steps": None,
+    "chat_max_turn_seconds": 30.0,
+    "chat_tool_timeout_seconds": 20.0,
+}
 
 
 def load_chat_cases() -> dict[str, Any]:
@@ -147,6 +157,7 @@ class _Harness:
         from backend.ai import chat as chat_module
         from backend.ai.context import InsufficientDataError
         from backend.ai.tool_registry import default_registry
+        from backend.config.settings import settings
         from backend.database import Base
 
         self.engine = create_engine(
@@ -188,6 +199,8 @@ class _Harness:
             ("backend.ai.chat._kickoff_backfill", lambda symbol: None),
         ):
             self.stack.enter_context(patch(target, value))
+        for name, value in {**_DEFAULT_BUDGETS, **(self.case.get("budgets") or {})}.items():
+            self.stack.enter_context(patch.object(settings.ai, name, value))
         self.model.enabled = bool(self.case.get("ai_enabled", True))
         self._seed()
         return self

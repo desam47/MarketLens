@@ -428,11 +428,18 @@ class AISettings(BaseSettings):
     chat_planning_model: str = Field(default="")
     chat_synthesis_model: str = Field(default="")
     chat_repair_model: str = Field(default="")
-    # Phase 5.3 bounded orchestration budgets. These cap follow-up planning
-    # calls per chat turn; the first completion is counted separately by the
-    # request itself. Keep the defaults conservative for local providers.
-    chat_max_chain_steps: int = Field(default=3, ge=1, le=8)
-    chat_max_planning_calls: int = Field(default=3, ge=1, le=8)
+    # Phase 5.3 per-turn budgets (plan 5.3.1), enforced independently:
+    # - tool calls: actions executed in one turn (the first included);
+    # - planning calls: follow-up model calls that choose the next step
+    #   (the turn's first reply is not one; parse retries are not extra);
+    # - turn tokens: estimated prompt + system + reply tokens across every
+    #   model call in the turn (chars / 4).
+    chat_max_tool_calls: int = Field(default=5, ge=1, le=10)
+    chat_max_planning_calls: int = Field(default=2, ge=0, le=8)
+    chat_max_turn_tokens: int = Field(default=60_000, ge=4_000, le=400_000)
+    # Deprecated single chain limit (pre-2026-09-23). When set it still caps
+    # tool calls, so an existing .env keeps its behavior until removed.
+    chat_max_chain_steps: int | None = Field(default=None, ge=1, le=8)
     # Wall-clock budget for chained planning calls in one turn. This does not
     # interrupt an in-flight provider request; it prevents starting another
     # continuation after the turn's budget is exhausted.

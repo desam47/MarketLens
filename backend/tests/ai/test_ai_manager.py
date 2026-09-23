@@ -47,8 +47,10 @@ class TestAISettings(unittest.TestCase):
         self.assertEqual(s.fallback_providers, "")
         self.assertEqual(s.timeout, 30.0)
         self.assertEqual(s.health_check_timeout, 2.0)
-        self.assertEqual(s.chat_max_chain_steps, 3)
-        self.assertEqual(s.chat_max_planning_calls, 3)
+        self.assertEqual(s.chat_max_tool_calls, 5)
+        self.assertEqual(s.chat_max_planning_calls, 2)
+        self.assertEqual(s.chat_max_turn_tokens, 60_000)
+        self.assertIsNone(s.chat_max_chain_steps)
         self.assertFalse(bool(s.api_key))  # None or "" — no real key
 
     def test_fallback_chain_splits_and_strips(self):
