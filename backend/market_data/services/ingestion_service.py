@@ -15,7 +15,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
-from backend.engines.market_calendar import us_market_calendar
+from backend.engines.market_calendar import aggregate_bar_session, us_market_calendar
 from backend.models import (
     Bar,
     BarModel,
@@ -738,6 +738,12 @@ class MarketDataIngestionService:
                         timestamp=bucket_ts,
                         provider="aggregated_from_1h",
                         data_status=DataStatus.HISTORICAL if end < now else DataStatus.INCOMPLETE,
+                        # This bucket can straddle a session boundary (e.g. the
+                        # 08:00 bucket spans premarket + regular) — aggregate
+                        # from the 1h members' own sessions rather than
+                        # classifying from bucket_ts alone. See
+                        # aggregate_bar_session's docstring.
+                        session=aggregate_bar_session(b.session for b in member_bars),
                     )
                     to_write.append(bar)
 
@@ -1125,6 +1131,12 @@ class MarketDataIngestionService:
                         data_status=(
                             DataStatus.INCOMPLETE if hour_end > now_naive else DataStatus.HISTORICAL
                         ),
+                        # This hour can straddle a session boundary (e.g. the
+                        # 09:00 bucket spans premarket + regular) — aggregate
+                        # from the 1m members' own sessions rather than
+                        # classifying from hour_start alone. See
+                        # aggregate_bar_session's docstring.
+                        session=aggregate_bar_session(b.session for b in bars_src),
                     )
                     written += upsert_bars(db, [bar])
                     analysis_bars.append(bar)

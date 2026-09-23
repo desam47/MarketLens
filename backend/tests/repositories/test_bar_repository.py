@@ -863,16 +863,39 @@ class TestUpsertBarsSessionRecompute(unittest.TestCase):
             row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
         self.assertEqual(row.session, "premarket")
 
-    def test_extended_1h_and_4h_are_classified(self):
-        """1h/4h builders now include extended hours and must be classified
-        from their bucket timestamp, while daily/weekly aggregates remain
-        regular-session values."""
-        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="1h")
+    def test_1h_and_4h_session_is_trusted_from_the_caller_not_recomputed(self):
+        """1h/4h buckets are wall-clock windows (1h floors to :00, 4h to
+        00:00/04:00/08:00/...), not aligned to the 9:30 ET open, so a
+        bucket like 08:00-12:00 (4h) or 09:00-10:00 (1h) genuinely spans
+        two sessions. Classifying from the bucket-start timestamp alone
+        mislabeled a whole straddling bar with only its first sub-session
+        (found live 2026-09-23: the 4h Multi-Timeframe Trend card showed
+        "Premarket" during regular hours). Only the resample builders
+        (backend.market_data.services.ingestion_service) have the member
+        bars needed to compute this correctly via aggregate_bar_session(),
+        so upsert_bars must trust whatever session they set for 1h/4h
+        instead of overriding it — unlike 1m/2m/3m/5m/15m/30m above, whose
+        sub-30-min buckets never straddle a session edge."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="4h")
+        bar.session = "mixed"  # what aggregate_bar_session() would compute for 08:00-12:00
         with self.Session() as db:
             bar_repository.upsert_bars(db, [bar])
         with self.Session() as db:
             row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
-        self.assertEqual(row.session, "premarket")
+        self.assertEqual(row.session, "mixed")
+
+    def test_1h_untagged_defaults_to_regular_not_reclassified(self):
+        """An 1h bar with no explicit session (e.g. a provider-fetched
+        historical backfill row, which never sets extended-hours session)
+        keeps the Bar model's 'regular' default — upsert_bars no longer
+        reclassifies 1h/4h from the bucket timestamp."""
+        bar = _make_bar("NVDA", datetime(2026, 9, 9, 8, 0), timeframe="1h")
+        self.assertEqual(bar.session, "regular")
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [bar])
+        with self.Session() as db:
+            row = db.query(BarModel).filter(BarModel.symbol == "NVDA").first()
+        self.assertEqual(row.session, "regular")
 
     def test_fallback_merge_path_also_recomputes_session(self):
         """The no-unique-constraint fallback path (existing.session = ...)

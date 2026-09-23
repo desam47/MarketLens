@@ -725,6 +725,68 @@ class TestResample1hLive(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row.high, 999.0)
         self.assertEqual(row.close, 999.0)
 
+    async def test_straddling_hour_session_is_mixed_not_premarket(self):
+        """Regression test for the live bug (2026-09-23): the 09:00 hour
+        bucket spans premarket (09:00-09:30) and regular (09:30-10:00) —
+        classifying the whole bar from its bucket-start timestamp alone
+        mislabeled it 'premarket' straight through regular hours. Built
+        from real 1m sessions via aggregate_bar_session(), it must report
+        'mixed' instead."""
+        from datetime import timedelta
+
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0, session="premarket")
+        self._insert_1m_bar(
+            self.db, hour_start + timedelta(minutes=35), close=101.0, session="regular"
+        )
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_from_1m_and_upsert()
+        self.assertGreaterEqual(written, 1)
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == hour_start,
+            )
+            .first()
+        )
+        self.assertEqual(row.session, "mixed")
+
+    async def test_uniform_session_hour_is_not_mixed(self):
+        from datetime import timedelta
+
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        hour_start = self._hour_start()
+        self._insert_1m_bar(self.db, hour_start, close=100.0, session="regular")
+        self._insert_1m_bar(
+            self.db, hour_start + timedelta(minutes=1), close=101.0, session="regular"
+        )
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_from_1m_and_upsert()
+        self.assertGreaterEqual(written, 1)
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "1h",
+                BarModel.timestamp == hour_start,
+            )
+            .first()
+        )
+        self.assertEqual(row.session, "regular")
+
     async def test_skips_when_fewer_than_two_bars_this_hour(self):
         from backend.market_data.services.ingestion_service import MarketDataIngestionService
 
@@ -1005,7 +1067,7 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
         self.db.close()
 
-    def _insert_1h_bar(self, db, ts, close):
+    def _insert_1h_bar(self, db, ts, close, session="regular"):
         from backend.models.market_data_sql import BarModel
 
         db.add(
@@ -1021,7 +1083,7 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
                 provider="test",
                 data_status="HISTORICAL",
                 source="raw",
-                session="regular",
+                session=session,
             )
         )
 
@@ -1064,6 +1126,65 @@ class TestResample4hLive(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(closed.data_status, "HISTORICAL")
         self.assertEqual(forming.data_status, "INCOMPLETE")
         self.assertEqual(forming.close, 103.0)
+
+    async def test_08_00_bucket_spanning_premarket_and_regular_is_mixed(self):
+        """Regression test for the live bug (2026-09-23): the 08:00-12:00
+        4h bucket spans premarket (08:00-09:30) and regular (09:30-12:00)
+        — classifying from the bucket-start timestamp alone mislabeled the
+        whole bar 'premarket' well into regular hours (the Multi-Timeframe
+        Trend card showed "Premarket" during regular trading). Built from
+        the real 1h members' own sessions via aggregate_bar_session(), it
+        must report 'mixed' instead."""
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 8, 0), close=100.0, session="premarket")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 9, 0), close=101.0, session="premarket")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 10, 0), close=102.0, session="regular")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 11, 0), close=103.0, session="regular")
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_to_4h_and_upsert()
+        self.assertGreaterEqual(written, 1)
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "4h",
+                BarModel.timestamp == datetime(2026, 9, 9, 8, 0),
+            )
+            .first()
+        )
+        self.assertEqual(row.session, "mixed")
+
+    async def test_uniform_regular_bucket_is_not_mixed(self):
+        from backend.market_data.services.ingestion_service import MarketDataIngestionService
+        from backend.models.market_data_sql import BarModel
+
+        # _resample_1h_to_4h_and_upsert requires >= 4 source 1h rows total
+        # (across all buckets) before it processes any of them.
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 8, 0), close=98.0, session="premarket")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 9, 0), close=99.0, session="premarket")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 12, 0), close=100.0, session="regular")
+        self._insert_1h_bar(self.db, datetime(2026, 9, 9, 13, 0), close=101.0, session="regular")
+        self.db.commit()
+
+        service = MarketDataIngestionService(symbols=[self.SYMBOL], timeframes=["1m"])
+        written = await service._resample_1h_to_4h_and_upsert()
+        self.assertGreaterEqual(written, 1)
+
+        row = (
+            self.db.query(BarModel)
+            .filter(
+                BarModel.symbol == self.SYMBOL,
+                BarModel.timeframe == "4h",
+                BarModel.timestamp == datetime(2026, 9, 9, 12, 0),
+            )
+            .first()
+        )
+        self.assertEqual(row.session, "regular")
 
 
 class TestResample1wkLive(unittest.IsolatedAsyncioTestCase):

@@ -102,10 +102,20 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
     # session. Safe to reclassify unconditionally: sub-hour bucket
     # boundaries all divide evenly into the 09:30/16:00/04:00/20:00
     # session edges, so a bucket never straddles two sessions.
-    # 1h/4h are also built from extended-hours 1m data by the live
-    # resamplers, so classify them here as well. Daily/weekly bars remain
-    # regular-session aggregates.
-    _SESSION_TAGGED_TFS = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h")
+    #
+    # 1h/4h are NOT reclassified here, unlike the comment above used to
+    # claim: their wall-clock buckets (1h floors to :00, 4h floors to
+    # 00:00/04:00/08:00/...) are not aligned to the 9:30 ET open, so a
+    # bucket like 08:00-12:00 genuinely straddles premarket and regular.
+    # Classifying from the bucket-start timestamp alone mislabeled the
+    # whole bar "premarket" hours after the open (found live 2026-09-23:
+    # the 4h Multi-Timeframe Trend card showed "Premarket" during regular
+    # hours). Their builders (_resample_1h_from_1m_and_upsert,
+    # _resample_1h_to_4h_and_upsert) now compute a spanning-aware session
+    # via aggregate_bar_session() from their own members' real sessions —
+    # trust that instead of reclassifying from one timestamp. Daily/weekly
+    # bars remain regular-session aggregates.
+    _SESSION_TAGGED_TFS = ("1m", "2m", "3m", "5m", "15m", "30m")
     for b in bars:
         if b.timeframe in _SESSION_TAGGED_TFS:
             b.session = classify_bar_session(b.timestamp)

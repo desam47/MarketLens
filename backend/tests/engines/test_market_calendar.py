@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 from backend.engines.market_calendar import (
     SessionType,
     USMarketCalendar,
+    aggregate_bar_session,
     us_market_calendar,
 )
 
@@ -205,6 +206,35 @@ class TestUSMarketCalendar(unittest.TestCase):
     def test_singleton_is_us_calendar(self):
         """The module-level ``us_market_calendar`` is a USMarketCalendar instance."""
         self.assertIsInstance(us_market_calendar, USMarketCalendar)
+
+
+class TestAggregateBarSession(unittest.TestCase):
+    """Regression coverage for the 4h "shows Premarket during regular hours"
+    bug (found live 2026-09-23): a 1h/4h bucket's wall-clock boundaries
+    (1h floors to :00, 4h to 00:00/04:00/08:00/...) are not aligned to the
+    9:30 ET open, so a bucket can genuinely span two sessions. Aggregating
+    from real per-member sessions (instead of classifying the whole bar
+    from its bucket-start timestamp alone) must report that honestly."""
+
+    def test_uniform_sessions_pass_through(self):
+        self.assertEqual(aggregate_bar_session(["premarket", "premarket"]), "premarket")
+        self.assertEqual(aggregate_bar_session(["regular"] * 4), "regular")
+        self.assertEqual(aggregate_bar_session(["after_hours", "after_hours"]), "after_hours")
+
+    def test_straddling_members_report_mixed(self):
+        """The 4h 08:00-12:00 bucket: premarket 08:00-09:30, regular
+        09:30-12:00 — must be 'mixed', never silently 'premarket'."""
+        self.assertEqual(
+            aggregate_bar_session(["premarket", "premarket", "regular", "regular"]),
+            "mixed",
+        )
+
+    def test_single_member_uses_its_own_session(self):
+        self.assertEqual(aggregate_bar_session(["after_hours"]), "after_hours")
+
+    def test_empty_defaults_to_regular(self):
+        self.assertEqual(aggregate_bar_session([]), "regular")
+        self.assertEqual(aggregate_bar_session([None, ""]), "regular")
 
 
 if __name__ == "__main__":

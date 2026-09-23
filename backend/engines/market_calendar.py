@@ -15,6 +15,7 @@ and fully covered here.
 """
 
 import logging
+from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -259,3 +260,25 @@ def classify_bar_session(ts: datetime) -> str:
     if session_type == SessionType.AFTER_HOURS:
         return "after_hours"
     return "regular"
+
+
+def aggregate_bar_session(member_sessions: Iterable[str | None]) -> str:
+    """Roll up the sessions of a bar's underlying members into one label.
+
+    A 1h or 4h bucket is a fixed wall-clock window (e.g. 4h buckets floor
+    to 00:00/04:00/08:00/...), not one aligned to the 9:30 ET open — so a
+    bucket like 08:00-12:00 ET genuinely spans premarket (08:00-09:30) and
+    regular (09:30-12:00). Classifying the whole bar from its bucket-start
+    timestamp alone (``classify_bar_session``) mislabels every straddling
+    bucket with only its first sub-session, e.g. tagging a 4h bar
+    "premarket" hours after the market has opened. Callers that resample
+    from members with their own already-correct sessions (1m → 1h, 1h →
+    4h) should aggregate here instead: uniform members keep that session,
+    mixed members get "mixed".
+    """
+    distinct = {s for s in member_sessions if s}
+    if len(distinct) == 1:
+        return next(iter(distinct))
+    if not distinct:
+        return "regular"
+    return "mixed"

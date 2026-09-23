@@ -66,11 +66,13 @@ export const TrendCard = memo(function TrendCard({ trend }: TrendCardProps) {
         : trend.session === 'mixed'
           ? 'Mixed sessions'
           : 'Session unknown';
+  // "Closed" alone would be read as market-closed (the app-wide freshness badge
+  // meaning); this is bar completion, an unrelated concept, so it needs its own wording.
   const statusLabel = trend.bar_closed === false
     ? 'Forming'
     : trend.data_status && trend.data_status !== 'ok'
       ? trend.data_status.replace(/_/g, ' ')
-      : 'Closed';
+      : 'Bar closed';
 
   return (
     <div className="card trend-card" style={{ borderLeftColor: color }}>
