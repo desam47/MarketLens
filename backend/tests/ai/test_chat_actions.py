@@ -132,6 +132,24 @@ class TestConfirmGate(_DBBase):
         self.assertTrue(grounded)
         self.assertIsNotNone(AlertRepository(self.db).get_by_id(alert.id))  # still there
 
+    def test_pending_confirmation_survives_without_transcript(self):
+        alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
+        state = {}
+        pending = _parsed(action="delete_alert", action_target_id=alert.id, action_confirmed=False)
+
+        text, grounded, _ = _finalize_parsed(self.db, pending, [], planner_state=state)
+
+        self.assertIn("confirm", text.lower())
+        self.assertEqual(state["pending_confirmation"]["target_id"], alert.id)
+        confirmed = _parsed(action="none", reply="yes")
+        text, grounded, _ = _finalize_parsed(
+            self.db, confirmed, [], user_content="yes", planner_state=state
+        )
+        self.assertIn("deleted", text.lower())
+        self.assertTrue(grounded)
+        self.assertIsNone(AlertRepository(self.db).get_by_id(alert.id))
+        self.assertIsNone(state["pending_confirmation"])
+
     def test_delete_alert_with_confirmation_deletes(self):
         alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
         parsed = _parsed(action="delete_alert", action_target_id=alert.id, action_confirmed=True)

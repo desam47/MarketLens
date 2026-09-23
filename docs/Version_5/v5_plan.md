@@ -176,6 +176,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - Resolve “it”, “that stock”, “the previous ticker”, “same timeframe”, and “use the previous stop” from structured state.
 - Keep memory local to the user/session and provide a clear reset path.
 - Current state now persists `previous_ticker`, `last_calculation_inputs`, and a bounded `last_tool_result`; exact calculations and missing calculation inputs are handled deterministically before an AI call.
+- Destructive confirmation intent is also persisted as a bounded `pending_confirmation` record and resolved against that exact action on an affirmative follow-up.
 
 #### 5.3.4 Intent coverage
 - Support symbol, market, comparison, scanner, watchlist, portfolio, risk, options, historical, journal, calculation, and app-action intents.

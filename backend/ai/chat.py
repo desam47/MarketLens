@@ -608,6 +608,7 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
             else planner_state.get("last_calculation_inputs")
         ),
         "last_tool_result": planner_state.get("last_tool_result"),
+        "pending_confirmation": planner_state.get("pending_confirmation"),
         "updated_at": now_ny().isoformat(),
     }
     if next_state["timeframe"] is None:
@@ -684,9 +685,7 @@ def answer_chat_message(
                 "provider": trace[-1].get("provider"),
                 "source_timestamp": trace[-1].get("source_timestamp"),
             }
-            repo.set_planner_state(
-                session_id, json.dumps(turn.planner_state, sort_keys=True)
-            )
+        repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
         # _generate_reply delegates action execution to _run_turn_actions;
         # attach its transient trace to the returned ORM object for the API.
         # It is intentionally not persisted in the prose message row.
@@ -759,9 +758,7 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
                 "provider": trace[-1].get("provider"),
                 "source_timestamp": trace[-1].get("source_timestamp"),
             }
-            repo.set_planner_state(
-                session_id, json.dumps(turn.planner_state, sort_keys=True)
-            )
+        repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
         msg = repo.add_message(session_id, "assistant", final_text)
         msg.planner_trace = trace
         # See answer_chat_message's matching comment — `screened` (from
@@ -1158,12 +1155,28 @@ def _finalize_parsed(
                 parsed.action = fallback
             else:
                 confirmed = _fallback_confirmation(user_content, transcript or [])
-                if confirmed is not None:
+                pending = (planner_state or {}).get("pending_confirmation")
+                if confirmed is None and pending and _AFFIRM_INTENT.match(user_content):
+                    parsed.action = pending.get("action", "none")
+                    parsed.action_symbol = pending.get("symbol")
+                    parsed.action_watchlist = pending.get("watchlist")
+                    parsed.action_target_id = pending.get("target_id")
+                    parsed.action_confirmed = True
+                elif confirmed is not None:
                     parsed.action, parsed.action_symbol, parsed.action_watchlist = confirmed
                     parsed.action_confirmed = True
     if parsed.action != "none":
         if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
+            if planner_state is not None:
+                planner_state["pending_confirmation"] = {
+                    "action": parsed.action,
+                    "symbol": parsed.action_symbol,
+                    "watchlist": parsed.action_watchlist,
+                    "target_id": parsed.action_target_id,
+                }
             return _confirm_prompt(db, parsed), True, []
+        if planner_state is not None and parsed.action_confirmed:
+            planner_state["pending_confirmation"] = None
         return _run_action(db, parsed, trace=trace)
     return parsed.reply, parsed.grounded, []
 
