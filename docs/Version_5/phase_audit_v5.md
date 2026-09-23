@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 is complete; the 5.7.2 visual/action slice is in progress.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 and the 5.7.2 visual/action slice are complete. The rest of Phase 5.7 (preferences, feedback, regeneration, notebooks, answer refresh) and Phase 5.8 remain.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks are complete, including comparison/ranked blocks from tool results, full per-block-type component coverage, and a persisted-block API contract test. 5.7.2 visual cards and navigation/action shortcuts are in progress (missing/long-value robustness done; interactive controls remain); preferences, feedback, regeneration, notebooks and answer refresh remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks and 5.7.2 visual/action cards are both complete — comparison/ranked blocks from tool results, full per-block-type component coverage, a persisted-block API contract test, missing/long-value robustness, and interactive controls (scenario sliders, chart/table expanders, action-specific confirmation detail) are all implemented and tested. Preferences, feedback, regeneration, notebooks and answer refresh remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -918,9 +918,42 @@ Focused verification: 3 backend response-block tests, 29 Chat/Journal
 component tests, and a successful production build. Missing/long-value
 robustness for the visual blocks (chart, indicator table, comparison table,
 report, ranked results) was added 2026-09-23 alongside the 5.7.1 gap
-closure above. Remaining 5.7.2 work is deeper interactive controls
-(scenario sliders, chart/table expanders, and action-specific
-confirmation/results).
+closure above.
+
+**5.7.2 complete — Interactive controls (2026-09-23).** The three items
+listed as remaining are done. **Scenario sliders:** the scenario block now
+carries a price-shock slider; dragging it recomputes gross exposure and
+total P&L delta client-side using the exact linear formula
+`scenario_analysis_tool` itself uses (`scenario_price = base_price * (1 +
+shock / 100)`) against the position rows the verified block already
+exposes — the delta is provably independent of `entry_price` (it cancels
+out algebraically), so no new field or backend call was needed. Recomputed
+numbers are visually and textually marked "not verified" and never
+overwrite the original verified numbers, which a one-click "Reset to
+verified" restores; stop-loss risk is intentionally never recomputed (the
+backend model makes it a function of `stop_price`/`entry_price` only,
+neither of which moves with a price shock), so it always shows its
+original verified value regardless of slider position. **Chart/table
+expanders:** evidence (capped at 8), the options chain (capped at 14
+contracts), and the mini chart (compact by default) now have a "Show
+all"/"Expand" toggle that reveals more of the *same already-delivered*
+bounded payload — no new tool call, no new evidence-integrity surface. The
+expanded chart also adds high/low labels that weren't shown before.
+**Action-specific confirmation:** `action_confirmation` blocks now carry a
+`detail` field, sourced from `ChatReplyResponse`'s own typed `action_*`
+fields (never the model's prose) via a new `_action_step_detail` helper,
+so a confirmation reads e.g. "create_alert: AAPL price above 200" instead
+of a bare "create_alert · completed"; actions with nothing tool-specific
+to add (market-data reads, `save_to_journal`/`export_report`, which
+already have their own richer blocks) fall back to the original generic
+line.
+
+Focused verification: 9 new backend tests (`_action_step_detail` plus its
+`build_response_blocks` passthrough) and 6 new ChatPanel tests (action
+detail, scenario-slider preview/reset math, evidence/options-chain
+expand/collapse, chart expand/collapse), plus the full suite and a
+production build (2998 backend / 172 frontend tests passing).
+
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration
 behavior for older prose-only messages. Every data-backed block must be checked

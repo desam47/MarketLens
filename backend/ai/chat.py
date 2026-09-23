@@ -1747,6 +1747,7 @@ def _run_turn_actions(
                 ),
                 "tool": parsed.action,
                 "depends_on": [],
+                "detail": _action_step_detail(parsed),
             }
         )
     # A single assumption-tracking payload may contain several fields joined
@@ -1884,6 +1885,7 @@ def _run_turn_actions(
                     "status": "completed" if step_grounded else "failed",
                     "tool": next_parsed.action,
                     "depends_on": [len(texts) - 1],
+                    "detail": _action_step_detail(next_parsed),
                 }
             )
         planner.completed_steps.append(step_text)
@@ -2129,6 +2131,37 @@ _BASELINE_MUTATING_ACTIONS = {
     "create_watchlist",
     "delete_watchlist",
 }
+
+
+def _action_step_detail(parsed) -> dict[str, object] | None:
+    """The action_confirmation block's tool-specific content.
+
+    Pulled from ChatReplyResponse's own typed action_* fields — never the
+    model's free-form prose — so a confirmation card can say what an alert
+    or watchlist action actually targeted (e.g. "AAPL price_above 200")
+    instead of a bare "create_alert · completed" line. Returns None for
+    actions with nothing tool-specific to add (market-data reads already
+    get their own visual block; save_to_journal/export_report already get
+    their own richer journal_save/report block).
+    """
+    action = parsed.action
+    if action in {"create_alert", "modify_alert"}:
+        return {
+            "symbol": parsed.action_symbol,
+            "condition_type": parsed.action_condition_type,
+            "parameter": parsed.action_parameter,
+            "label": parsed.action_label,
+            "target_id": parsed.action_target_id,
+        }
+    if action == "delete_alert":
+        return {"target_id": parsed.action_target_id}
+    if action in {"add_to_watchlist", "remove_from_watchlist"}:
+        return {"symbol": parsed.action_symbol, "watchlist": parsed.action_watchlist}
+    if action == "create_watchlist":
+        return {"watchlist": parsed.action_watchlist}
+    if action == "delete_watchlist":
+        return {"watchlist": parsed.action_watchlist, "target_id": parsed.action_target_id}
+    return None
 
 
 def _confirm_prompt(db, parsed) -> str:

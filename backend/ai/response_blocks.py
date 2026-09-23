@@ -250,6 +250,7 @@ def build_response_blocks(
                             "tool": item.get("tool"),
                             "status": item.get("status", "completed"),
                             "reason": item.get("reason"),
+                            "detail": item.get("detail"),
                         }
                         for item in action_steps
                     ]

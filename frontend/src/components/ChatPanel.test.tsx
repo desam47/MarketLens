@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { ChatPanel } from './ChatPanel';
 import api from '../services/api';
 
@@ -212,6 +212,141 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('region', { name: 'Session statistics' })).toHaveTextContent('228.1');
     expect(screen.getByRole('region', { name: 'Historical outcomes' })).toHaveTextContent('58.4%');
     expect(screen.getByLabelText('Suggested follow-ups')).toHaveTextContent('Recheck with current data');
+  });
+
+  it('shows action-specific detail in action_confirmation blocks (5.7.2)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 22, session_id: 1, role: 'assistant', content: 'Done.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'action-1', type: 'action_confirmation',
+            data: {
+              actions: [
+                { tool: 'create_alert', status: 'completed', detail: { symbol: 'AAPL', condition_type: 'price_above', parameter: '200' } },
+                { tool: 'add_to_watchlist', status: 'completed', detail: { symbol: 'TSLA', watchlist: 'Swing' } },
+                { tool: 'delete_watchlist', status: 'completed', detail: { watchlist: 'Old', target_id: 5 } },
+                { tool: 'save_to_journal', status: 'completed', detail: null },
+              ],
+            },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    const region = await screen.findByRole('status', { name: 'Action status' });
+    expect(region).toHaveTextContent('create_alert: AAPL price above 200');
+    expect(region).toHaveTextContent('add_to_watchlist: TSLA → Swing');
+    expect(region).toHaveTextContent('delete_watchlist: "Old"');
+    // No detail (null) falls back to the plain tool · status line, not a crash.
+    expect(region).toHaveTextContent('save_to_journal · completed');
+  });
+
+  it('scenario slider recomputes a labeled local preview, never the verified numbers in place (5.7.2)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 23, session_id: 1, role: 'assistant', content: 'Scenario ready.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'scenario-1', type: 'scenario',
+            data: {
+              shock_percent: -10,
+              base_gross_exposure: 1000,
+              scenario_gross_exposure: 900,
+              total_pnl_delta: -100,
+              base_stop_loss_risk: 50,
+              scenario_stop_loss_risk: 50,
+              positions: [{ symbol: 'AAPL', side: 'long', quantity: 10, base_price: 100, stop_price: 90 }],
+              unknowns: [],
+            },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    const region = await screen.findByRole('region', { name: 'Scenario analysis' });
+    expect(region).toHaveTextContent('-100.00'); // original verified pnl delta
+    expect(region.querySelector('.chat-scenario-preview-note')).toBeNull();
+
+    const slider = screen.getByLabelText(/Price shock/i);
+    fireEvent.change(slider, { target: { value: '10' } });
+
+    // (100 * 1.10 - 100) * 10 qty * 1 (long) = 100; gross = 100*1.10*10 = 1100
+    expect(region).toHaveTextContent('100.00');
+    expect(region).toHaveTextContent('1100.00');
+    expect(region).toHaveTextContent('not verified');
+    // stop-loss risk is not shock-dependent — must stay at its original verified value.
+    expect(region).toHaveTextContent('50.00');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to verified' }));
+    expect(region).toHaveTextContent('-100.00');
+    expect(region.querySelector('.chat-scenario-preview-note')).toBeNull();
+  });
+
+  it('expands evidence and options-chain tables beyond their default cap, and back (5.7.2)', async () => {
+    const items = Array.from({ length: 10 }, (_, index) => ({ tool: `tool_${index}`, provider: 'webull' }));
+    const calls = Array.from({ length: 10 }, (_, index) => ({ strike: 100 + index, option_type: 'call', last_price: 1 }));
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 24, session_id: 1, role: 'assistant', content: 'Lots of evidence.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'evidence-1', type: 'evidence',
+            data: { symbols: { verified: ['AAPL'], partial: [], unavailable: [] }, items },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'options-1', type: 'options_chain',
+            data: { symbol: 'AAPL', chains: [{ calls, puts: [] }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    const evidenceRegion = await screen.findByRole('region', { name: 'Evidence' });
+    expect(evidenceRegion.querySelectorAll('li')).toHaveLength(8);
+    fireEvent.click(within(evidenceRegion).getByRole('button', { name: 'Show all 10' }));
+    expect(evidenceRegion.querySelectorAll('li')).toHaveLength(10);
+    fireEvent.click(within(evidenceRegion).getByRole('button', { name: 'Show less' }));
+    expect(evidenceRegion.querySelectorAll('li')).toHaveLength(8);
+
+    const optionsRegion = screen.getByRole('region', { name: 'Options chain card' });
+    expect(optionsRegion.querySelectorAll('tbody tr')).toHaveLength(10); // only 10 calls supplied, under the 14 cap
+  });
+
+  it('toggles the mini chart between compact and expanded (5.7.2)', async () => {
+    const bars = Array.from({ length: 5 }, (_, index) => ({ close: 100 + index }));
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 25, session_id: 1, role: 'assistant', content: 'Chart ready.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'chart-1', type: 'chart',
+            data: { symbol: 'AAPL', timeframe: '1d', bars },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    const chartRegion = await screen.findByRole('region', { name: 'Mini price chart' });
+    expect(within(chartRegion).queryByText(/High/)).toBeNull();
+    fireEvent.click(within(chartRegion).getByRole('button', { name: 'Expand' }));
+    expect(within(chartRegion).getByText('High 104.00')).toBeInTheDocument();
+    expect(within(chartRegion).getByText('Low 100.00')).toBeInTheDocument();
+    fireEvent.click(within(chartRegion).getByRole('button', { name: 'Collapse' }));
+    expect(within(chartRegion).queryByText(/High/)).toBeNull();
   });
 
   it('handles missing/long values without crashing (5.7.1 mobile/long-value coverage)', async () => {

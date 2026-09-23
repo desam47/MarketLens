@@ -433,9 +433,77 @@ export function ChatPanel({
   );
 }
 
+/**
+ * Human-readable summary of an action_confirmation block's `detail` —
+ * built from the request's own typed action_* fields (see chat.py's
+ * _action_step_detail), never from parsing prose. Returns null for a
+ * tool with nothing tool-specific to add.
+ */
+function describeActionDetail(tool: string, detail: any): string | null {
+  if (!detail || typeof detail !== 'object') return null;
+  switch (tool) {
+    case 'create_alert':
+    case 'modify_alert': {
+      const parts = [detail.symbol, detail.condition_type ? String(detail.condition_type).replace(/_/g, ' ') : null, detail.parameter].filter(Boolean);
+      return parts.length ? parts.join(' ') : null;
+    }
+    case 'delete_alert':
+      return detail.target_id != null ? `alert #${detail.target_id}` : null;
+    case 'add_to_watchlist':
+      return detail.symbol ? `${detail.symbol} → ${detail.watchlist ?? 'watchlist'}` : null;
+    case 'remove_from_watchlist':
+      return detail.symbol ? `${detail.symbol} from ${detail.watchlist ?? 'watchlist'}` : null;
+    case 'create_watchlist':
+      return detail.watchlist ? `"${detail.watchlist}"` : null;
+    case 'delete_watchlist':
+      return detail.watchlist ? `"${detail.watchlist}"` : detail.target_id != null ? `#${detail.target_id}` : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Client-side scenario-slider preview. Mirrors scenario_analysis_tool's
+ * linear price-shock formula exactly (backend/ai/market_tools.py):
+ * scenario_price = base_price * (1 + shock / 100). total_pnl_delta only
+ * depends on the PRICE CHANGE — entry_price cancels out of the delta
+ * algebraically (pnl_delta = (scenario_price - base_price) * quantity *
+ * sign) — so this needs nothing beyond what the verified block already
+ * exposes per position (base_price, quantity, side). stop-loss risk is
+ * NOT shock-dependent in the backend model (a function of stop_price and
+ * entry_price only, neither of which moves with a price shock), so it is
+ * intentionally never recomputed here — always shown at its original
+ * verified value regardless of slider position.
+ */
+function recomputeScenario(positions: any[], shockPercent: number): { grossExposure: number; totalPnlDelta: number } {
+  let grossExposure = 0;
+  let totalPnlDelta = 0;
+  for (const position of positions) {
+    const basePrice = Number(position?.base_price);
+    const quantity = Number(position?.quantity);
+    if (!Number.isFinite(basePrice) || !Number.isFinite(quantity)) continue;
+    const sign = position.side === 'short' ? -1 : 1;
+    const scenarioPrice = basePrice * (1 + shockPercent / 100);
+    grossExposure += scenarioPrice * quantity;
+    totalPnlDelta += (scenarioPrice - basePrice) * quantity * sign;
+  }
+  return { grossExposure, totalPnlDelta };
+}
+
 /** Render the application-owned typed envelope without parsing model markup. */
 function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock[]; onNavigate?: (page: AppPage, symbol?: string) => void }) {
   const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
+  // Per-block "show all" toggles (evidence/options tables, mini chart)
+  // keyed by block.id — expand the SAME bounded data already delivered,
+  // never fetch more, so there's no new evidence-integrity surface here.
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) => setExpandedBlocks(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  // Per-block scenario-slider shock percent, keyed by block.id.
+  const [scenarioShock, setScenarioShock] = useState<Record<string, number>>({});
   if (!blocks.length) return null;
   return (
     <div className="chat-typed-blocks" aria-label="Structured answer details">
@@ -458,6 +526,8 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
         if (block.type === 'evidence') {
           const symbols = block.data.symbols ?? {};
           const items = Array.isArray(block.data.items) ? block.data.items : [];
+          const expanded = expandedBlocks.has(block.id);
+          const visibleItems = expanded ? items : items.slice(0, 8);
           return (
             <section className="chat-typed-card chat-evidence-card" key={block.id} aria-label="Evidence">
               <div className="chat-typed-card-heading">Evidence <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
@@ -466,12 +536,17 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                 {(symbols.partial ?? []).map((s: string) => <span className="chat-evidence-symbol partial" key={`p-${s}`}>{s} ◐</span>)}
                 {(symbols.unavailable ?? []).map((s: string) => <span className="chat-evidence-symbol unavailable" key={`u-${s}`}>{s} ✗</span>)}
               </div>
-              {items.length > 0 && <ul>{items.slice(0, 8).map((item: any, index: number) => (
+              {items.length > 0 && <ul>{visibleItems.map((item: any, index: number) => (
                 <li key={`${item.tool ?? 'evidence'}-${index}`}>
                   {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
                   {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
                 </li>
               ))}</ul>}
+              {items.length > 8 && (
+                <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
+                  {expanded ? 'Show less' : `Show all ${items.length}`}
+                </button>
+              )}
             </section>
           );
         }
@@ -485,9 +560,12 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
         if (block.type === 'action_confirmation') {
           const actions = Array.isArray(block.data.actions) ? block.data.actions : [];
           return <div className="chat-typed-action" key={block.id} role="status" aria-label="Action status">
-            {actions.map((action: any, index: number) => <span key={`${action.tool ?? 'action'}-${index}`}>
-              {action.status === 'completed' ? '✓' : action.status === 'failed' ? '⚠' : '•'} {action.tool ?? 'action'} · {action.status ?? 'unknown'}
-            </span>)}
+            {actions.map((action: any, index: number) => {
+              const detailText = describeActionDetail(action.tool, action.detail);
+              return <span key={`${action.tool ?? 'action'}-${index}`}>
+                {action.status === 'completed' ? '✓' : action.status === 'failed' ? '⚠' : '•'} {action.tool ?? 'action'}{detailText ? `: ${detailText}` : ''} · {action.status ?? 'unknown'}
+              </span>;
+            })}
           </div>;
         }
         if (block.type === 'comparison_table') {
@@ -513,11 +591,25 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
           const min = Math.min(...closes);
           const max = Math.max(...closes);
           const spread = max - min || 1;
-          const points = closes.map((close: number, index: number) => `${(index / Math.max(closes.length - 1, 1)) * 100},${36 - ((close - min) / spread) * 32}`).join(' ');
+          const expanded = expandedBlocks.has(block.id);
+          const chartHeight = expanded ? 70 : 40;
+          const plotBottom = chartHeight - 4;
+          const plotHeight = chartHeight - 8;
+          const points = closes.map((close: number, index: number) => `${(index / Math.max(closes.length - 1, 1)) * 100},${plotBottom - ((close - min) / spread) * plotHeight}`).join(' ');
           return <section className="chat-typed-card chat-mini-chart" key={block.id} aria-label="Mini price chart">
             <div className="chat-typed-card-heading">Price chart <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
-            {closes.length > 1 ? <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label={`${block.data.symbol ?? 'Symbol'} price trend`}><polyline points={points} /></svg> : <p className="info-text">Chart data is unavailable.</p>}
+            {closes.length > 1 ? (
+              <div className={expanded ? 'chat-chart-expanded' : undefined}>
+                <svg viewBox={`0 0 100 ${chartHeight}`} preserveAspectRatio="none" role="img" aria-label={`${block.data.symbol ?? 'Symbol'} price trend`}><polyline points={points} /></svg>
+                {expanded && <div className="chat-chart-range"><span>High {max.toFixed(2)}</span><span>Low {min.toFixed(2)}</span></div>}
+              </div>
+            ) : <p className="info-text">Chart data is unavailable.</p>}
             <small>{block.data.symbol ?? 'Symbol'} · {block.data.timeframe ?? 'timeframe unavailable'} · {closes.length} bars</small>
+            {closes.length > 1 && (
+              <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
+                {expanded ? 'Collapse' : 'Expand'}
+              </button>
+            )}
           </section>;
         }
         if (block.type === 'indicator_table') {
@@ -529,16 +621,64 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
         }
         if (block.type === 'options_chain') {
           const chain = Array.isArray(block.data.chains) ? block.data.chains[0] : null;
-          const contracts = [...(chain?.calls ?? []), ...(chain?.puts ?? [])].slice(0, 14);
+          const allContracts = [...(chain?.calls ?? []), ...(chain?.puts ?? [])];
+          const expanded = expandedBlocks.has(block.id);
+          const contracts = expanded ? allContracts : allContracts.slice(0, 14);
           return <section className="chat-typed-card" key={block.id} aria-label="Options chain card">
             <div className="chat-typed-card-heading">Options snapshot <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
             <div className="chat-options-summary">IV {block.data.iv ?? '—'} · IV rank {block.data.iv_rank ?? '—'}</div>
             {contracts.length > 0 ? <div className="chat-typed-table-wrap"><table><thead><tr><th>Type</th><th>Strike</th><th>Last</th><th>Volume</th><th>OI</th></tr></thead><tbody>{contracts.map((contract: any, index: number) => <tr key={`${contract.strike}-${contract.option_type}-${index}`}><td>{contract.option_type ?? (chain?.calls?.includes(contract) ? 'call' : 'put')}</td><td>{contract.strike ?? '—'}</td><td>{contract.last_price ?? contract.lastPrice ?? '—'}</td><td>{contract.volume ?? '—'}</td><td>{contract.open_interest ?? '—'}</td></tr>)}</tbody></table></div> : <p className="info-text">Options chain unavailable.</p>}
+            {allContracts.length > 14 && (
+              <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
+                {expanded ? 'Show less' : `Show all ${allContracts.length}`}
+              </button>
+            )}
           </section>;
         }
-        if (block.type === 'risk_card' || block.type === 'scenario' || block.type === 'session_stats') {
+        if (block.type === 'scenario') {
+          const positions = Array.isArray(block.data.positions) ? block.data.positions : [];
+          const originalShock = Number(block.data.shock_percent ?? 0);
+          const currentShock = scenarioShock[block.id] ?? originalShock;
+          const isPreview = positions.length > 0 && currentShock !== originalShock;
+          const preview = isPreview ? recomputeScenario(positions, currentShock) : null;
+          const grossExposure = preview ? preview.grossExposure : Number(block.data.scenario_gross_exposure ?? 0);
+          const totalPnlDelta = preview ? preview.totalPnlDelta : Number(block.data.total_pnl_delta ?? 0);
+          const staticEntries = Object.entries(block.data).filter(([key, value]) =>
+            !['unknowns', 'positions', 'conclusion', 'available', 'shock_percent', 'scenario_gross_exposure', 'total_pnl_delta'].includes(key)
+            && value != null && typeof value !== 'object');
+          return <section className="chat-typed-card" key={block.id} aria-label="Scenario analysis">
+            <div className="chat-typed-card-heading">Scenario analysis <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            {positions.length > 0 && (
+              <div className="chat-scenario-slider">
+                <label htmlFor={`scenario-shock-${block.id}`}>Price shock: {currentShock.toFixed(1)}%</label>
+                <input
+                  id={`scenario-shock-${block.id}`}
+                  type="range"
+                  min={-50}
+                  max={50}
+                  step={0.5}
+                  value={currentShock}
+                  onChange={event => setScenarioShock(current => ({ ...current, [block.id]: Number(event.target.value) }))}
+                />
+              </div>
+            )}
+            <dl className="chat-indicator-grid">
+              <div><dt>shock percent</dt><dd>{currentShock.toFixed(2)}</dd></div>
+              <div><dt>gross exposure</dt><dd>{grossExposure.toFixed(2)}</dd></div>
+              <div><dt>total pnl delta</dt><dd>{totalPnlDelta.toFixed(2)}</dd></div>
+              {staticEntries.map(([name, value]) => <div key={name}><dt>{name.replace(/_/g, ' ')}</dt><dd>{typeof value === 'number' ? value.toFixed(2) : String(value)}</dd></div>)}
+            </dl>
+            {isPreview && (
+              <p className="chat-scenario-preview-note">
+                Local preview at {currentShock.toFixed(1)}% — not verified.{' '}
+                <button type="button" className="chat-quick-action-btn" onClick={() => setScenarioShock(current => ({ ...current, [block.id]: originalShock }))}>Reset to verified</button>
+              </p>
+            )}
+          </section>;
+        }
+        if (block.type === 'risk_card' || block.type === 'session_stats') {
           const entries = Object.entries(block.data).filter(([key, value]) => !['unknowns', 'positions', 'conclusion', 'available'].includes(key) && value != null && typeof value !== 'object');
-          const title = block.type === 'risk_card' ? 'Risk snapshot' : block.type === 'scenario' ? 'Scenario analysis' : 'Session statistics';
+          const title = block.type === 'risk_card' ? 'Risk snapshot' : 'Session statistics';
           return <section className="chat-typed-card" key={block.id} aria-label={title}>
             <div className="chat-typed-card-heading">{title} <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
             <dl className="chat-indicator-grid">{entries.map(([name, value]) => <div key={name}><dt>{name.replace(/_/g, ' ')}</dt><dd>{typeof value === 'number' ? value.toFixed(2) : String(value)}</dd></div>)}</dl>

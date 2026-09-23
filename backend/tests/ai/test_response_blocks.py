@@ -101,3 +101,45 @@ def test_report_and_journal_save_payloads_are_typed_blocks() -> None:
 
     assert next(block for block in blocks if block["type"] == "report")["data"]["deep_links"]["symbol"] == "#symbol"
     assert next(block for block in blocks if block["type"] == "journal_save")["data"]["saved_entry"]["id"] == "entry-1"
+
+
+def test_action_confirmation_block_carries_tool_specific_detail() -> None:
+    """5.7.2: action_confirmation must carry the action's own detail
+    (chat.py's _action_step_detail), not just tool/status, so the UI can
+    show what an alert/watchlist action actually targeted."""
+    blocks = build_response_blocks(
+        content="Done — alert set.",
+        grounded=True,
+        focus=["AAPL"],
+        partial=[],
+        unavailable=[],
+        trace=[
+            {
+                "kind": "step",
+                "tool": "create_alert",
+                "status": "completed",
+                "detail": {"symbol": "AAPL", "condition_type": "price_above", "parameter": "200", "label": None, "target_id": None},
+            },
+        ],
+    )
+    action_block = next(block for block in blocks if block["type"] == "action_confirmation")
+    action = action_block["data"]["actions"][0]
+    assert action["tool"] == "create_alert"
+    assert action["status"] == "completed"
+    assert action["detail"]["symbol"] == "AAPL"
+    assert action["detail"]["condition_type"] == "price_above"
+
+
+def test_action_confirmation_block_handles_missing_detail() -> None:
+    """An action step with no detail (e.g. a non-CRUD action, or an older
+    trace shape) must still produce a valid block, not raise."""
+    blocks = build_response_blocks(
+        content="Saved.",
+        grounded=True,
+        focus=["AAPL"],
+        partial=[],
+        unavailable=[],
+        trace=[{"kind": "step", "tool": "save_to_journal", "status": "completed"}],
+    )
+    action_block = next(block for block in blocks if block["type"] == "action_confirmation")
+    assert action_block["data"]["actions"][0]["detail"] is None

@@ -23,6 +23,7 @@ from backend.ai.chat import (
     _MAX_CHAIN_STEPS,
     _WATCHLIST_CONTENTS_INTENT,
     _WATCHLIST_LIST_INTENT,
+    _action_step_detail,
     _add_to_watchlist,
     _confirm_prompt,
     _create_alert,
@@ -115,6 +116,62 @@ class TestConditionTypeValidation(unittest.TestCase):
             action_parameter="200",
         )
         self.assertEqual(r.action_condition_type, "price_above")
+
+
+class TestActionStepDetail(unittest.TestCase):
+    """_action_step_detail — the action_confirmation block's tool-specific
+    content (5.7.2: action-specific confirmation/results). Must read only
+    the request's own typed action_* fields, never the model's prose."""
+
+    def test_create_alert_detail(self):
+        parsed = ChatReplyResponse(
+            reply="ok", action="create_alert", action_symbol="AAPL",
+            action_condition_type="price_above", action_parameter="200",
+        )
+        detail = _action_step_detail(parsed)
+        self.assertEqual(
+            detail,
+            {"symbol": "AAPL", "condition_type": "price_above", "parameter": "200", "label": None, "target_id": None},
+        )
+
+    def test_modify_alert_detail(self):
+        parsed = ChatReplyResponse(
+            reply="ok", action="modify_alert", action_target_id=7, action_parameter="230",
+        )
+        detail = _action_step_detail(parsed)
+        self.assertEqual(detail["target_id"], 7)
+        self.assertEqual(detail["parameter"], "230")
+
+    def test_delete_alert_detail(self):
+        parsed = ChatReplyResponse(reply="ok", action="delete_alert", action_target_id=3)
+        self.assertEqual(_action_step_detail(parsed), {"target_id": 3})
+
+    def test_add_to_watchlist_detail(self):
+        parsed = ChatReplyResponse(
+            reply="ok", action="add_to_watchlist", action_symbol="TSLA", action_watchlist="Swing",
+        )
+        self.assertEqual(_action_step_detail(parsed), {"symbol": "TSLA", "watchlist": "Swing"})
+
+    def test_remove_from_watchlist_detail(self):
+        parsed = ChatReplyResponse(
+            reply="ok", action="remove_from_watchlist", action_symbol="TSLA", action_watchlist=None,
+        )
+        self.assertEqual(_action_step_detail(parsed), {"symbol": "TSLA", "watchlist": None})
+
+    def test_create_watchlist_detail(self):
+        parsed = ChatReplyResponse(reply="ok", action="create_watchlist", action_watchlist="Core")
+        self.assertEqual(_action_step_detail(parsed), {"watchlist": "Core"})
+
+    def test_delete_watchlist_detail(self):
+        parsed = ChatReplyResponse(reply="ok", action="delete_watchlist", action_watchlist="Old", action_target_id=5)
+        self.assertEqual(_action_step_detail(parsed), {"watchlist": "Old", "target_id": 5})
+
+    def test_non_crud_action_returns_none(self):
+        parsed = ChatReplyResponse(reply="ok", action="get_quote", action_tool_arguments={"symbol": "AAPL"})
+        self.assertIsNone(_action_step_detail(parsed))
+
+    def test_none_action_returns_none(self):
+        self.assertIsNone(_action_step_detail(ChatReplyResponse(reply="ok", action="none")))
 
 
 class TestConfirmGate(_DBBase):

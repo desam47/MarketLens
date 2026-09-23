@@ -5996,6 +5996,13 @@ div.td-trend {
 .chat-mini-chart svg { display: block; width: 100%; height: 5rem; margin: 0.2rem 0; background: var(--bg-primary); border-radius: 0.25rem; }
 .chat-mini-chart polyline { fill: none; stroke: var(--accent-primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .chat-mini-chart small, .chat-options-summary { color: var(--text-muted); }
+.chat-chart-expanded svg { height: 9rem; }
+.chat-chart-range { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted); margin-top: 0.15rem; }
+.chat-expand-btn { margin-top: 0.4rem; font-size: 0.7rem; padding: 0.15rem 0.5rem; }
+.chat-scenario-slider { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.45rem; }
+.chat-scenario-slider label { font-size: 0.72rem; color: var(--text-muted); }
+.chat-scenario-slider input[type="range"] { width: 100%; }
+.chat-scenario-preview-note { margin: 0.4rem 0 0; font-size: 0.7rem; color: var(--warning); display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .chat-indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.2rem 0.75rem; margin: 0; }
 .chat-indicator-grid div { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px dotted var(--border); }
 .chat-indicator-grid dt { color: var(--text-muted); text-transform: capitalize; }
