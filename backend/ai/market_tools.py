@@ -137,6 +137,33 @@ class RiskDashboardRequest(BaseModel):
     positions: list[PositionInput] = Field(default_factory=list, max_length=500)
 
 
+class TradePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    direction: Literal["long", "short"]
+    entry_price: float | None = Field(default=None, gt=0)
+    entry_zone_low: float | None = Field(default=None, gt=0)
+    entry_zone_high: float | None = Field(default=None, gt=0)
+    # Every trade plan needs a stop and at least one target by definition —
+    # these are required (missing either raises, asking the caller to supply
+    # it) rather than defaulted, per the phase's own verification rule.
+    stop_price: float | None = Field(default=None, gt=0)
+    targets: list[float] = Field(default_factory=list, max_length=5)
+    # Position sizing is optional: without both, the plan is still complete
+    # (entry/stop/target/reward-risk), it just can't be sized.
+    account_value: float | None = Field(default=None, gt=0)
+    risk_percent: float | None = Field(default=None, gt=0, le=100)
+    timeframe: str | None = Field(default=None, max_length=20)
+    session: Literal["premarket", "regular", "after_hours", "all"] | None = None
+    # Free-text context the caller (the model, from evidence it already
+    # gathered) supplies for structuring — this tool verifies/bounds them,
+    # it does not invent catalysts or risks from nothing.
+    catalysts: list[str] = Field(default_factory=list, max_length=10)
+    risks: list[str] = Field(default_factory=list, max_length=10)
+    invalidation: str | None = Field(default=None, max_length=500)
+
+
 class ScenarioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1937,6 +1964,119 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
         net_exposure=round(net, 8),
         stop_loss_risk=round(stop_risk, 8),
         sector_exposure=[{"sector": key, "market_value": round(value, 8), "weight_percent": round(value / gross * 100, 6) if gross else 0.0} for key, value in sorted(sectors.items(), key=lambda item: item[1], reverse=True)],
+        provider="MarketLens calculator",
+        source_timestamp=_database_timestamp(),
+    )
+
+
+def build_trade_plan_tool(request: TradePlanRequest) -> BaseModel:
+    """Build a verified trade plan: entry zone, stop, targets, reward/risk,
+    position size, invalidation, catalysts, risks, timeframe, and session.
+
+    Every number traces to backend.ai.calculator.calculate() — this
+    function never does its own arithmetic. Missing stop/target/sizing
+    inputs raise (asking the caller to supply them) rather than being
+    defaulted; the plan is for the user to review, not to save or act on
+    by itself (saving to the Journal and creating alerts are separate,
+    explicitly-confirmed actions in a later phase).
+    """
+    from backend.ai.calculator import CalculationRequest, calculate
+
+    symbol = request.symbol.upper()
+
+    if request.entry_price is None and (request.entry_zone_low is None or request.entry_zone_high is None):
+        raise ValueError("Provide entry_price, or both entry_zone_low and entry_zone_high.")
+    if request.entry_zone_low is not None and request.entry_zone_high is not None and request.entry_zone_low > request.entry_zone_high:
+        raise ValueError("entry_zone_low must not exceed entry_zone_high.")
+    if request.stop_price is None:
+        raise ValueError("stop_price is required to build a trade plan.")
+    if not request.targets:
+        raise ValueError("At least one target price is required to build a trade plan.")
+    for label, items in (("catalysts", request.catalysts), ("risks", request.risks)):
+        for item in items:
+            if len(item) > 300:
+                raise ValueError(f"Each {label} entry must be 300 characters or fewer.")
+
+    zone_low, zone_high = request.entry_zone_low, request.entry_zone_high
+    entry_zone = {"low": zone_low, "high": zone_high} if zone_low is not None and zone_high is not None else None
+    entry_reference = request.entry_price if request.entry_price is not None else (zone_low + zone_high) / 2 if zone_low is not None and zone_high is not None else None
+    if entry_reference is None:
+        raise ValueError("Provide entry_price, or both entry_zone_low and entry_zone_high.")
+    stop_price = request.stop_price
+    if stop_price is None:
+        raise ValueError("stop_price is required to build a trade plan.")
+
+    if request.direction == "long":
+        if stop_price >= entry_reference:
+            raise ValueError("For a long plan, stop_price must be below the entry price.")
+        if any(target <= entry_reference for target in request.targets):
+            raise ValueError("For a long plan, every target must be above the entry price.")
+    else:
+        if stop_price <= entry_reference:
+            raise ValueError("For a short plan, stop_price must be above the entry price.")
+        if any(target >= entry_reference for target in request.targets):
+            raise ValueError("For a short plan, every target must be below the entry price.")
+
+    assumptions: list[str] = []
+    formulas: list[str] = []
+    target_details = []
+    for target in request.targets:
+        result = calculate(CalculationRequest(
+            calculation="risk_reward",
+            entry_price=entry_reference,
+            stop_price=stop_price,
+            target_price=target,
+        ))
+        target_details.append({"price": target, **result.values})
+        for formula in result.formulas:
+            if formula not in formulas:
+                formulas.append(formula)
+
+    position_size = None
+    position_size_reason = None
+    if request.account_value is not None and request.risk_percent is not None:
+        sizing = calculate(CalculationRequest(
+            calculation="position_size",
+            entry_price=entry_reference,
+            stop_price=stop_price,
+            account_value=request.account_value,
+            risk_percent=request.risk_percent,
+        ))
+        position_size = sizing.values
+        for formula in sizing.formulas:
+            if formula not in formulas:
+                formulas.append(formula)
+        assumptions.extend(assumption for assumption in sizing.assumptions if assumption not in assumptions)
+    else:
+        position_size_reason = "Provide account_value and risk_percent to size the position; no default was assumed."
+
+    invalidation = request.invalidation or (
+        f"Plan invalidated if {symbol} closes "
+        f"{'below' if request.direction == 'long' else 'above'} the stop ({stop_price})."
+    )
+    if not request.catalysts:
+        assumptions.append("No catalysts were supplied.")
+    if not request.risks:
+        assumptions.append("No risks were supplied beyond the stop-based invalidation.")
+
+    return _Payload(
+        available=True,
+        symbol=symbol,
+        direction=request.direction,
+        entry_price=request.entry_price,
+        entry_zone=entry_zone,
+        entry_reference=entry_reference,
+        stop_price=stop_price,
+        targets=target_details,
+        position_size=position_size,
+        position_size_reason=position_size_reason,
+        invalidation=invalidation,
+        catalysts=list(request.catalysts),
+        risks=list(request.risks),
+        timeframe=request.timeframe,
+        session=request.session,
+        formulas=formulas,
+        assumptions=assumptions,
         provider="MarketLens calculator",
         source_timestamp=_database_timestamp(),
     )

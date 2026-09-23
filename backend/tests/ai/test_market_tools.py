@@ -24,9 +24,11 @@ from backend.ai.market_tools import (
     SymbolRequest,
     TapeRequest,
     TradeJournalRequest,
+    TradePlanRequest,
     TrendRequest,
     anomaly_analysis_tool,
     assumption_tracking_tool,
+    build_trade_plan_tool,
     compare_symbols_tool,
     counterargument_review_tool,
     get_alerts_tool,
@@ -511,6 +513,105 @@ def test_local_tools_are_honest_without_browser_snapshots() -> None:
     assert "browser" in risk.reason
     assert journal.available is False
     assert "browser" in journal.reason
+
+
+def test_build_trade_plan_computes_reward_risk_and_position_size_via_calculator() -> None:
+    result = build_trade_plan_tool(
+        TradePlanRequest(
+            symbol="aapl",
+            direction="long",
+            entry_price=200,
+            stop_price=190,
+            targets=[220, 230],
+            account_value=100_000,
+            risk_percent=1,
+            timeframe="1d",
+            session="regular",
+            catalysts=["Earnings next week"],
+            risks=["Broad market pullback"],
+        )
+    ).model_dump()
+
+    assert result["symbol"] == "AAPL"
+    assert result["entry_reference"] == 200
+    assert result["stop_price"] == 190
+    # risk = 10, reward = 20 -> risk_reward = 2; second target risk_reward = 3
+    assert result["targets"][0]["price"] == 220
+    assert result["targets"][0]["risk"] == 10
+    assert result["targets"][0]["reward"] == 20
+    assert result["targets"][0]["risk_reward"] == 2
+    assert result["targets"][1]["risk_reward"] == 3
+    # position size: risk_dollars = 100000 * 1% = 1000; shares = 1000 / 10 = 100
+    assert result["position_size"]["shares"] == 100
+    assert result["position_size_reason"] is None
+    assert "abs(entry_price - stop_price)" in result["formulas"]
+    assert result["catalysts"] == ["Earnings next week"]
+    assert result["risks"] == ["Broad market pullback"]
+    assert "190" in result["invalidation"] or "closes below" in result["invalidation"]
+
+
+def test_build_trade_plan_supports_entry_zone_and_short_direction() -> None:
+    result = build_trade_plan_tool(
+        TradePlanRequest(
+            symbol="TSLA",
+            direction="short",
+            entry_zone_low=200,
+            entry_zone_high=210,
+            stop_price=220,
+            targets=[180],
+        )
+    ).model_dump()
+
+    assert result["entry_reference"] == 205
+    assert result["entry_zone"] == {"low": 200, "high": 210}
+    assert result["targets"][0]["risk"] == 15
+    assert result["targets"][0]["reward"] == 25
+
+
+def test_build_trade_plan_reports_reason_when_sizing_inputs_missing() -> None:
+    result = build_trade_plan_tool(
+        TradePlanRequest(symbol="MSFT", direction="long", entry_price=100, stop_price=95, targets=[110])
+    ).model_dump()
+
+    assert result["position_size"] is None
+    assert "account_value" in result["position_size_reason"]
+    assert "No catalysts were supplied." in result["assumptions"]
+
+
+def test_build_trade_plan_generates_default_invalidation_when_not_supplied() -> None:
+    result = build_trade_plan_tool(
+        TradePlanRequest(symbol="MSFT", direction="short", entry_price=100, stop_price=105, targets=[90])
+    ).model_dump()
+
+    assert "MSFT" in result["invalidation"]
+    assert "above" in result["invalidation"]
+    assert "105" in result["invalidation"]
+
+
+def test_build_trade_plan_requires_stop_and_target() -> None:
+    try:
+        build_trade_plan_tool(TradePlanRequest(symbol="AAPL", direction="long", entry_price=200, targets=[210]))
+        raise AssertionError("expected ValueError for missing stop_price")
+    except ValueError as exc:
+        assert "stop_price" in str(exc)
+
+    try:
+        build_trade_plan_tool(TradePlanRequest(symbol="AAPL", direction="long", entry_price=200, stop_price=190))
+        raise AssertionError("expected ValueError for missing targets")
+    except ValueError as exc:
+        assert "target" in str(exc)
+
+
+def test_build_trade_plan_rejects_inconsistent_direction() -> None:
+    # A long plan with the stop above entry is nonsensical -- must raise,
+    # not silently build a backwards plan.
+    try:
+        build_trade_plan_tool(
+            TradePlanRequest(symbol="AAPL", direction="long", entry_price=200, stop_price=210, targets=[220])
+        )
+        raise AssertionError("expected ValueError for stop above entry on a long plan")
+    except ValueError as exc:
+        assert "long" in str(exc)
 
 
 def test_alerts_tool_reads_database_backed_rules_and_triggers() -> None:

@@ -2512,6 +2512,7 @@ _MARKET_TOOL_ACTIONS = {
     "anomaly_analysis",
     "assumption_tracking",
     "import_csv",
+    "build_trade_plan",
 }
 
 

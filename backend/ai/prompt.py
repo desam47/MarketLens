@@ -885,6 +885,16 @@ class ChatReplyResponse(BaseModel):
         "get_risk_dashboard",
         "get_trade_journal",
         "get_application_help",
+        "get_alerts",
+        "get_sector_data",
+        "get_trend",
+        "get_confluence",
+        "get_relative_strength",
+        "get_tape_state",
+        "get_session_stats",
+        "get_calendar",
+        "import_csv",
+        "build_trade_plan",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -988,7 +998,9 @@ _ACTION_TOOL_DOCS = (
     - get_quote / get_bars / get_indicator / get_support_resistance / \
       get_market_regime / get_market_context / get_news / get_fundamentals / \
       get_options_snapshot / get_watchlist / get_risk_dashboard / \
-      get_trade_journal / get_application_help \
+      get_trade_journal / get_application_help / get_alerts / \
+      get_sector_data / get_trend / get_confluence / get_relative_strength / \
+      get_tape_state / get_session_stats / get_calendar / import_csv \
       are read-only grounded tools. \
       Set action to the exact tool name and put only its request fields in \
       action_tool_arguments (for example, symbol, timeframe, session, and \
@@ -996,9 +1008,32 @@ _ACTION_TOOL_DOCS = (
       and Trade Journal are browser-local; pass an explicit positions or \
       entries snapshot when available, otherwise the tool reports that the \
       server cannot see localStorage. Use get_application_help for verified \
-      page names, feature topics, and hash routes. Never invent a provider result; the \
+      page names, feature topics, and hash routes. get_alerts reads the \
+      trader's own alert rules (optionally scoped to a symbol). \
+      get_sector_data / get_trend / get_confluence / get_relative_strength \
+      need action_symbol; get_relative_strength compares against a \
+      benchmark (default SPY). get_tape_state and get_session_stats need \
+      action_symbol and reflect current-session order flow / OHLCV — use \
+      for "what's happening right now" questions, not history. \
+      get_calendar returns upcoming earnings/catalyst dates for a symbol. \
+      import_csv parses trader-pasted CSV text (positions, watchlist \
+      symbols, or journal rows) via action_tool_arguments.csv_text and \
+      import_type — it only validates and returns rows, it never saves \
+      them itself. Never invent a provider result; the \
       app returns the verified payload with provider, timestamp, freshness, \
       and warnings.
+    - build_trade_plan builds a verified trade plan for the trader to \
+      review — never do this arithmetic yourself. Set action_tool_arguments \
+      with symbol, direction ("long"/"short"), entry_price (or \
+      entry_zone_low + entry_zone_high), stop_price, targets (a list of \
+      one or more prices), and optionally account_value + risk_percent \
+      to size the position, plus timeframe, session, catalysts (list of \
+      short strings), risks (list of short strings), and invalidation \
+      (a sentence — auto-generated from the stop if omitted). Every \
+      reward/risk and position-size number in the result traces to the \
+      calculator. If the trader hasn't given you a stop or at least one \
+      target, ask for it instead of guessing one — the tool refuses to \
+      build a plan without them.
     - assumption_tracking saves or reviews research assumptions. For a save, \
       set operation="save", include one or more typed assumptions (category, \
       statement, optional expected_value, source), and set action_confirmed=true \
@@ -1086,12 +1121,15 @@ Rules you must follow:
    <context> block, don't explain what data you're missing — just ask \
    which ticker they mean, e.g. "Which ticker do you want support and \
    resistance for?", and set "grounded" to false.
-10. You have TWENTY more tools, via "action": create_alert, modify_alert, \
-    delete_alert, add_to_watchlist, remove_from_watchlist, \
-    create_watchlist, delete_watchlist, run_backtest, set_entity_type, \
-    run_screen, calculate, get_quote, get_bars, get_indicator, \
-    get_support_resistance, get_market_regime, get_market_context, get_news, \
-    get_fundamentals, get_options_snapshot.
+10. You have many more tools, via "action" — watchlist/alert management, \
+    a verified calculator, read-only grounded market-data lookups \
+    (quote, bars, indicators, regime, sector, trend, tape, calendar, and \
+    more), analysis tools (why it moved, scenarios, historical \
+    similarity, counterarguments, anomalies), and build_trade_plan for a \
+    verified entry/stop/target/position-size plan. Full list and \
+    per-tool field requirements below — use the exact tool name in \
+    "action" and only that tool's fields in action_tool_arguments (or \
+    its own dedicated action_* fields where noted).
 """
     + _ACTION_TOOL_DOCS
     + """    - Asking about a watchlist's CONTENTS or asking to ANALYZE one \
@@ -1154,7 +1192,10 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
       get_quote, get_bars, get_indicator, get_support_resistance, \
       get_market_regime, get_market_context, get_news, get_fundamentals, \
-      get_options_snapshot, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
+      get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
+      get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
+      import_csv, build_trade_plan, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

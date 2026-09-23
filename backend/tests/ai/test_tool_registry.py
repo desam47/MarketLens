@@ -21,6 +21,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
         "anomaly_analysis",
         "assumption_tracking",
+        "build_trade_plan",
         "calculate",
         "compare_symbols",
         "counterargument_review",
@@ -65,6 +66,37 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert result.duration_ms >= 0
     assert result.provider == "MarketLens calculator"
     assert result.source_timestamp
+
+
+def test_default_registry_executes_build_trade_plan() -> None:
+    result = default_registry.execute(
+        ToolRequest(
+            tool_name="build_trade_plan",
+            arguments={
+                "symbol": "AAPL",
+                "direction": "long",
+                "entry_price": 200,
+                "stop_price": 190,
+                "targets": [220],
+                "account_value": 50_000,
+                "risk_percent": 2,
+            },
+        )
+    )
+    assert result.ok is True
+    assert result.data["symbol"] == "AAPL"
+    assert result.data["targets"][0]["risk_reward"] == 2
+    assert result.data["position_size"]["shares"] == 100
+    assert result.provider == "MarketLens calculator"
+
+    missing_stop = default_registry.execute(
+        ToolRequest(
+            tool_name="build_trade_plan",
+            arguments={"symbol": "AAPL", "direction": "long", "entry_price": 200, "targets": [220]},
+        )
+    )
+    assert missing_stop.ok is False
+    assert "stop_price" in (missing_stop.error or "")
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:
