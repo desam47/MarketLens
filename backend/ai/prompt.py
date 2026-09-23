@@ -843,9 +843,9 @@ class ChatReplyResponse(BaseModel):
     # flat deliberately; a weak local model mangles nested JSON far more
     # often than it mangles an extra top-level key (see the null-list
     # and dict-repr fixes this session). "none" (the default) means no
-    # action this turn. The *_delete_* / remove_* / delete_* actions are
+    # action this turn. The *_delete_* / remove_* / delete_* / save_to_journal actions are
     # destructive: backend.ai.chat._finalize_parsed refuses to execute
-    # them without action_confirmed=True regardless of what the prompt
+    # them without a server-authored confirmation regardless of what the prompt
     # says — see CHAT_SYSTEM_PROMPT rule 10 for when the model may set
     # them.
     action: Literal[
@@ -899,6 +899,8 @@ class ChatReplyResponse(BaseModel):
         "options_research",
         "trade_journal_coach",
         "decision_checklist",
+        "save_to_journal",
+        "export_report",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -1098,6 +1100,34 @@ _ACTION_TOOL_DOCS = (
       unavailable/skipped, never invented; the response's "ready" field is \
       true only when zero required checks failed. Report unavailable and \
       skipped checks too — don't imply they passed.
+    - save_to_journal appends ONE typed entry to the trader's Journal — a \
+      REAL state change from their perspective (the Journal has no \
+      server-side table; this returns the updated snapshot for the \
+      browser to persist, matching how Risk Dashboard/Journal reads \
+      already work). It is destructive-adjacent: the tool itself refuses \
+      to run without confirmation, so only set action_confirmed=true when \
+      the trader has actually approved saving this specific entry — \
+      propose the entry in "reply" first and wait for their yes, the same \
+      pattern as assumption_tracking's save operation below. Set \
+      action_tool_arguments.entry (symbol, side, status, quantity, \
+      entry_price/stop_price/target_price, planned_entry/planned_stop/ \
+      planned_target, entry_date/exit_date, setup, notes/thesis/ \
+      review_notes, and any of signals/market_conditions/calculations/plan \
+      — normally the verified output of another tool you already called, \
+      e.g. build_trade_plan's result as .plan) and \
+      .existing_entries (the trader's current local snapshot, if you have \
+      it) so nothing already saved is lost.
+    - export_report formats an already-verified result into a markdown \
+      report plus real page links, for the trader to save/copy locally — \
+      it never uploads or emails anything. Set \
+      action_tool_arguments.report_type to one of trade_plan/ \
+      portfolio_risk/options_research/journal_coach/custom, plus the \
+      matching nested field (.trade_plan/.portfolio_risk/ \
+      .options_research/.journal_coach, each shaped exactly like that \
+      tool's own arguments — it re-runs the real tool rather than trusting \
+      you to transcribe numbers) or, for report_type="custom", .title and \
+      .content set to text you already gave the trader verbatim (never \
+      new analysis invented just for the export).
     - assumption_tracking saves or reviews research assumptions. For a save, \
       set operation="save", include one or more typed assumptions (category, \
       statement, optional expected_value, source), and set action_confirmed=true \
@@ -1259,7 +1289,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
       get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
-      import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, save_to_journal, export_report, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

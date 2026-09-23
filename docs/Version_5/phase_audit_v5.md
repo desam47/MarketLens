@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains); Phase 5.7.1 and the 5.7.2 visual/action slice are in progress.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 and the 5.7.2 visual/action slice are in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -16,9 +16,10 @@ multi-provider reconciliation, further contract-test expansion — found to
 be blocked on real architectural gaps rather than left undone). Phase 5.3
 is now complete. Phase 5.5 is also complete: the What-changed Inbox is
 available in AI Hub with a browser-local checkpoint, durable event sources,
-deduplication, source links, and no provider polling. Phase 5.6 remains the
-active delivery gate with 5.6.1–5.6.4 and 5.6.6 complete; save/export is
-still open. Phase 5.7.1 has started with a backward-compatible typed
+deduplication, source links, and no provider polling. Phase 5.6 is complete:
+its save/export workflow has server-enforced approval, local Journal
+persistence, downloadable reports, and actionable page links. Phase 5.7.1
+has started with a backward-compatible typed
 response envelope.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
@@ -81,7 +82,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
-| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. `decision_checklist` runs a configurable seven-check pre-plan gate (trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, data freshness), each landing in completed/failed/unavailable/skipped against real evidence from the existing tools, with `required_checks` letting the caller configure which apply. Save/export (5.6.5) remains. |
+| 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
 | 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response-block foundation is implemented; 5.7.2 visual cards and navigation/action shortcuts are in progress; preferences, feedback, regeneration, notebooks and answer refresh remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
@@ -128,8 +129,9 @@ breakeven/intrinsic/extrinsic/max-gain-loss/assignment-exposure list.
 Tool permission is now enforced, not just declared: `ToolSpec.permission`
 accepts `read_only`, `calculation`, or `mutating`, and `ToolRegistry.execute`
 rejects a `mutating` tool call unless the request carries `confirmed=True`.
-No mutating tool is registered yet — this closes the enforcement gap ahead of
-Phase 5.3/5.6 work that will add write-capable tools.
+The Phase 5.6.5 `save_to_journal` tool is registered as mutating and adds a
+server-authored Chat confirmation gate before the browser-local Journal state
+changes.
 
 Audit this phase with formula-level test results, separate
 per-share/total/portfolio-risk outputs, verified-result formula references,
@@ -644,7 +646,7 @@ risk_percent the tool still returns the verified entry/stop/target/
 reward-risk plan, with an honest `position_size_reason` instead of a guessed
 share count. The tool only builds and returns the plan for the user to
 review — saving it to the Journal or creating alerts from it are separate,
-explicitly-confirmed actions (5.6.5, not yet built). 8 focused tests cover
+explicitly-confirmed actions (5.6.5 `save_to_journal`, implemented below). 8 focused tests cover
 the happy path (incl. an entry-zone/short-direction variant), the
 missing-sizing-inputs honest-unavailable path, default and caller-supplied
 invalidation text, and both required-field and direction-consistency
@@ -837,10 +839,19 @@ narrowing `required_checks` to one check with the rest correctly reported
 Registered as `decision_checklist` (read-only) and wired into Chat's
 action set/schema via the same path the 5.6.1 fix put in place.
 
-Remaining: save/export workflows (5.6.5) — save an approved plan/review to
-the Journal, export a response as a local report, and deep links to
-Symbol/Scanner/Risk/Replay/Alerts/Journal. This is Phase 5.6's first
-mutating tool (a real Journal write) rather than a read-only one.
+**5.6.5 complete — Save/export workflows.** `save_to_journal` validates a
+typed plan/review entry, requires a server-authored confirmation prompt (the
+model cannot self-authorize the mutation), and returns the saved entry for
+the browser-local Journal to merge without overwriting existing entries.
+`export_report` re-runs the selected verified plan/risk/options/journal tool
+or wraps already-rendered custom text, formats a bounded Markdown report,
+and returns local-only provenance plus deep links for Symbol, Scanner, Risk,
+Replay, Alerts, and Journal. Chat persists the typed save result, renders
+the report with Download Markdown and Copy controls, and turns each deep
+link into an in-app navigation action. Focused verification covers the
+confirmation/replay path, typed report/save blocks, five market-tool tests,
+20 registry tests, 131 chat-action/intent tests, 28 ChatPanel tests, and a
+successful production build.
 
 ---
 

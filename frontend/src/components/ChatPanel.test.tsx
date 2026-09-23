@@ -94,6 +94,38 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('button', { name: 'Open Scanner' })).toBeInTheDocument();
   });
 
+  it('renders local reports with download and page navigation actions', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 10, session_id: 1, role: 'assistant', content: 'Report ready.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'report-1', type: 'report',
+            data: {
+              title: 'Trade Plan — AAPL', content: '# Trade Plan — AAPL', symbol: 'AAPL',
+              deep_links: { symbol: '#symbol', replay: '#signals', journal: '#journal' },
+            },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'journal-1', type: 'journal_save',
+            data: { saved_entry: { id: 'entry-1', symbol: 'AAPL', status: 'planned' } },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    const onNavigate = jest.fn();
+    render(<ChatPanel onNavigate={onNavigate} />);
+
+    expect(await screen.findByRole('region', { name: 'Local report' })).toHaveTextContent('# Trade Plan — AAPL');
+    expect(screen.getByRole('button', { name: 'Download Markdown' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Replay' }));
+    expect(onNavigate).toHaveBeenCalledWith('signals', undefined);
+    expect(screen.getByRole('region', { name: 'Journal save' })).toHaveTextContent('AAPL');
+  });
+
   it('colorizes signed numbers in an assistant reply', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

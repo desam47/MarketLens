@@ -6000,6 +6000,8 @@ div.td-trend {
 .chat-indicator-grid div { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px dotted var(--border); }
 .chat-indicator-grid dt { color: var(--text-muted); text-transform: capitalize; }
 .chat-indicator-grid dd { margin: 0; font-variant-numeric: tabular-nums; }
+.chat-report-card pre { max-height: 18rem; overflow: auto; margin: 0; padding: 0.75rem; white-space: pre-wrap; font: inherit; background: var(--bg-primary); border-radius: 0.4rem; }
+.chat-report-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.75rem; }
 .chat-evidence-symbols { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.3rem; }
 .chat-evidence-symbol { border-radius: 999px; padding: 0.1rem 0.35rem; border: 1px solid var(--border); }
 .chat-evidence-symbol.partial { color: var(--warning); }

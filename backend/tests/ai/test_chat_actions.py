@@ -214,6 +214,38 @@ class TestConfirmGate(_DBBase):
         self.assertIn("deleted", text.lower())
         self.assertIsNone(WatchlistRepository(self.db).get_watchlist(wl.id))
 
+    def test_save_to_journal_requires_server_confirmation_and_replays_typed_entry(self):
+        state = {}
+        proposed = _parsed(
+            action="save_to_journal",
+            action_confirmed=True,  # model claims approval; server must ignore it
+            action_tool_arguments={
+                "entry": {
+                    "symbol": "AAPL",
+                    "status": "planned",
+                    "entry_price": 200,
+                    "stop_price": 190,
+                    "target_price": 220,
+                    "notes": "breakout plan",
+                },
+            },
+        )
+
+        text, grounded, _ = _finalize_parsed(self.db, proposed, [], planner_state=state)
+
+        self.assertIn("confirm", text.lower())
+        self.assertTrue(grounded)
+        self.assertFalse(proposed.action_confirmed)
+        self.assertEqual(state["pending_confirmation"]["tool_arguments"]["entry"]["symbol"], "AAPL")
+
+        confirmed = _parsed(action="none", reply="yes")
+        text, grounded, _ = _finalize_parsed(
+            self.db, confirmed, [], user_content="yes", planner_state=state
+        )
+        self.assertIn("AAPL", text)
+        self.assertTrue(grounded)
+        self.assertIsNone(state["pending_confirmation"])
+
     def test_additive_actions_ignore_action_confirmed(self):
         # create_alert / add_to_watchlist / create_watchlist fire
         # regardless of action_confirmed — it's only meaningful for the
@@ -1599,6 +1631,34 @@ class TestEndToEnd(unittest.TestCase):
             self.assertIsNone(AlertRepository(db).get_by_id(alert_id))
         finally:
             db.close()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_save_to_journal_end_to_end_confirm_then_execute(self, mock_ai):
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "I can save that plan.", "grounded": true, '
+                '"action": "save_to_journal", "action_confirmed": true, '
+                '"action_tool_arguments": {"entry": {"symbol": "AAPL", '
+                '"status": "planned", "entry_price": 200, "stop_price": 190, '
+                '"target_price": 220, "notes": "breakout plan"}}}'
+            )
+        )
+
+        msg1, grounded1, *_ = answer_chat_message(self.session_id, "save this AAPL plan")
+        self.assertTrue(grounded1)
+        self.assertIn("confirm", msg1.content.lower())
+        self.assertIn("AAPL", msg1.content)
+
+        # The confirmation turn may omit the action or fail to set the model
+        # flag; the server-owned pending state is what authorizes the save.
+        mock_ai.complete.return_value = _reply(
+            '{"reply": "Yes.", "grounded": true, "action": "none"}'
+        )
+        msg2, grounded2, *_ = answer_chat_message(self.session_id, "yes")
+        self.assertTrue(grounded2)
+        self.assertIn("AAPL", msg2.content)
 
     @patch("backend.ai.chat.ai_manager")
     def test_run_screen_end_to_end_populates_focus(self, mock_ai):

@@ -28,6 +28,8 @@ BlockType = Literal[
     "scenario",
     "session_stats",
     "historical_outcomes",
+    "report",
+    "journal_save",
 ]
 
 
@@ -115,6 +117,7 @@ def _visual_blocks(trace: list[dict[str, Any]], quality: BlockQuality) -> list[R
         if visual_type not in {
             "chart", "indicator_table", "options_chain", "risk_card", "scenario",
             "session_stats", "historical_outcomes", "comparison_table", "ranked_results",
+            "report", "journal_save",
         } or not isinstance(visual_data, dict):
             continue
         blocks.append(
@@ -232,6 +235,8 @@ def build_response_blocks(
             "remove_from_watchlist",
             "create_watchlist",
             "delete_watchlist",
+            "save_to_journal",
+            "export_report",
         }
     ]
     if action_steps:

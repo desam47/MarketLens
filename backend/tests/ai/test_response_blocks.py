@@ -68,3 +68,36 @@ def test_visual_payload_is_persistable_and_keeps_quality_metadata() -> None:
     chart = next(block for block in blocks if block["type"] == "chart")
     assert chart["data"]["symbol"] == "AAPL"
     assert chart["quality"]["provider"] == "webull"
+
+
+def test_report_and_journal_save_payloads_are_typed_blocks() -> None:
+    blocks = build_response_blocks(
+        content="Saved locally.",
+        grounded=True,
+        focus=["AAPL"],
+        partial=[],
+        unavailable=[],
+        trace=[
+            {
+                "tool": "export_report",
+                "ok": True,
+                "provider": "MarketLens report export",
+                "visual_type": "report",
+                "visual_data": {
+                    "title": "Trade Plan — AAPL",
+                    "content": "# Trade Plan — AAPL",
+                    "deep_links": {"symbol": "#symbol", "journal": "#journal"},
+                },
+            },
+            {
+                "tool": "save_to_journal",
+                "ok": True,
+                "provider": "MarketLens local journal",
+                "visual_type": "journal_save",
+                "visual_data": {"saved_entry": {"id": "entry-1", "symbol": "AAPL"}},
+            },
+        ],
+    )
+
+    assert next(block for block in blocks if block["type"] == "report")["data"]["deep_links"]["symbol"] == "#symbol"
+    assert next(block for block in blocks if block["type"] == "journal_save")["data"]["saved_entry"]["id"] == "entry-1"

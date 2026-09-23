@@ -22,8 +22,8 @@ function-calling loop: exactly
 one action, decided in the same completion call that would otherwise
 produce a normal reply, executed synchronously before the turn's
 assistant message is persisted. Destructive actions (delete_alert,
-remove_from_watchlist, delete_watchlist) get a hard, backend-enforced
-confirm gate in _finalize_parsed — a destructive action never runs
+remove_from_watchlist, delete_watchlist, save_to_journal) get a hard,
+backend-enforced confirm gate in _finalize_parsed — a destructive action never runs
 unless action_confirmed is set, regardless of what the model's prompt
 compliance does; the confirmation question itself is server-authored
 text, not trusted AI prose (same "never trust the AI for the actual
@@ -1629,20 +1629,51 @@ def _finalize_parsed(
                     parsed.action_symbol = pending.get("symbol")
                     parsed.action_watchlist = pending.get("watchlist")
                     parsed.action_target_id = pending.get("target_id")
+                    parsed.action_tool_arguments = pending.get("tool_arguments")
                     parsed.action_confirmed = True
                 elif confirmed is not None:
                     parsed.action, parsed.action_symbol, parsed.action_watchlist = confirmed
                     parsed.action_confirmed = True
     if parsed.action != "none":
-        if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
+        if parsed.action in _DESTRUCTIVE_ACTIONS:
+            # A model-produced ``action_confirmed`` is not sufficient for a
+            # live Chat turn.  Confirmation must follow a server-authored
+            # prompt that is represented in planner state.  Direct callers
+            # without planner state retain the existing explicit-confirmed
+            # contract used by the lower-level action tests.
+            pending = (planner_state or {}).get("pending_confirmation")
+            server_confirmed = planner_state is None and parsed.action_confirmed
             if planner_state is not None:
-                planner_state["pending_confirmation"] = {
-                    "action": parsed.action,
-                    "symbol": parsed.action_symbol,
-                    "watchlist": parsed.action_watchlist,
-                    "target_id": parsed.action_target_id,
-                }
-            return _confirm_prompt(db, parsed), True, []
+                server_confirmed = bool(
+                    pending
+                    and pending.get("action") == parsed.action
+                    and _AFFIRM_INTENT.match(user_content)
+                )
+                if server_confirmed and pending is not None:
+                    # Replay exactly what the trader approved, not a new
+                    # model-supplied payload from the confirmation turn.
+                    parsed.action_symbol = pending.get("symbol")
+                    parsed.action_watchlist = pending.get("watchlist")
+                    parsed.action_target_id = pending.get("target_id")
+                    parsed.action_tool_arguments = pending.get("tool_arguments")
+                    parsed.action_confirmed = True
+            if not server_confirmed:
+                parsed.action_confirmed = False
+                if planner_state is not None:
+                    tool_arguments = dict(parsed.action_tool_arguments or {})
+                    # Existing browser-local entries are not needed to append
+                    # one entry and should never be persisted in planner
+                    # state.  Keep only the typed entry awaiting approval.
+                    if parsed.action == "save_to_journal":
+                        tool_arguments = {"entry": tool_arguments.get("entry")}
+                    planner_state["pending_confirmation"] = {
+                        "action": parsed.action,
+                        "symbol": parsed.action_symbol,
+                        "watchlist": parsed.action_watchlist,
+                        "target_id": parsed.action_target_id,
+                        "tool_arguments": tool_arguments,
+                    }
+                return _confirm_prompt(db, parsed), True, []
         if planner_state is not None and parsed.action_confirmed:
             planner_state["pending_confirmation"] = None
         return _run_action(db, parsed, planner_state=planner_state, trace=trace)
@@ -1702,11 +1733,18 @@ def _run_turn_actions(
         planner_state=planner_state,
     )
     if trace is not None and parsed.action != "none":
+        executed = _action_was_executed(parsed)
         trace.append(
             {
                 "kind": "step",
                 "step": 1,
-                "status": "completed" if grounded else "failed",
+                "status": (
+                    "completed"
+                    if executed and grounded
+                    else "needs_confirmation"
+                    if parsed.action in _DESTRUCTIVE_ACTIONS and not executed
+                    else "failed"
+                ),
                 "tool": parsed.action,
                 "depends_on": [],
             }
@@ -2067,7 +2105,12 @@ def _run_reanalysis(symbol: str) -> tuple[str, bool]:
 # down from answer_chat_message / stream_chat_message) — these handlers
 # do not own or close it.
 
-_DESTRUCTIVE_ACTIONS = {"delete_alert", "remove_from_watchlist", "delete_watchlist"}
+_DESTRUCTIVE_ACTIONS = {
+    "delete_alert",
+    "remove_from_watchlist",
+    "delete_watchlist",
+    "save_to_journal",
+}
 
 # Actions that change something build_market_baseline() reports on
 # (active_alerts / watchlists) — _run_action drops the baseline's cache
@@ -2118,6 +2161,11 @@ def _confirm_prompt(db, parsed) -> str:
         return (
             f'Delete the watchlist "{name}"? This removes every ticker in it — say yes to confirm.'
         )
+    if parsed.action == "save_to_journal":
+        entry = (parsed.action_tool_arguments or {}).get("entry") or {}
+        symbol = str(entry.get("symbol") or parsed.action_symbol or "that trade").upper()
+        status = str(entry.get("status") or "planned")
+        return f'Save the {symbol} {status} trade plan to your Journal? Say yes to confirm.'
     return "That's a destructive action — please confirm first."  # pragma: no cover — defensive
 
 
@@ -2562,6 +2610,8 @@ _MARKET_TOOL_ACTIONS = {
     "options_research",
     "trade_journal_coach",
     "decision_checklist",
+    "save_to_journal",
+    "export_report",
 }
 
 
@@ -2600,6 +2650,24 @@ def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
         return "historical_outcomes", {key: data.get(key) for key in ("symbol", "timeframe", "session", "summaries", "sample_size", "look_ahead_safe", "historical_note", "unknowns") if key in data}
     if action == "compare_symbols" and isinstance(data.get("rankings"), list):
         return "comparison_table", {"columns": ["Rank", "Symbol", "Value", "Metric"], "rows": [[row.get("rank"), row.get("symbol"), row.get("value"), row.get("metric")] for row in data["rankings"][:25]]}
+    if action == "export_report":
+        content = data.get("content")
+        if isinstance(content, str):
+            return "report", {
+                "report_type": data.get("report_type"),
+                "title": data.get("title") or "MarketLens report",
+                "content": content[:20_000],
+                "deep_links": dict(data.get("deep_links") or {}),
+                "generated_at": data.get("generated_at"),
+                "symbol": data.get("symbol"),
+            }
+    if action == "save_to_journal" and isinstance(data.get("saved_entry"), dict):
+        return "journal_save", {
+            "saved_entry": data["saved_entry"],
+            "total_entries": data.get("total_entries"),
+            "provider": data.get("provider"),
+            "source_timestamp": data.get("source_timestamp"),
+        }
     return None
 
 

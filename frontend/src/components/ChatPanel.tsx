@@ -52,6 +52,54 @@ interface WatchlistIndex {
   memberOf: Record<string, number>;  // ticker -> the watchlist id already holding it
 }
 
+const JOURNAL_STORAGE_KEY = 'marketlens.trade.journal';
+const REPORT_PAGE_TARGETS: Record<string, AppPage> = {
+  symbol: 'symbol',
+  scanner: 'scanner',
+  risk: 'risk',
+  replay: 'signals',
+  alerts: 'alerts',
+  journal: 'journal',
+};
+
+function mergeSavedJournalEntry(entry: any): void {
+  if (!entry || typeof entry !== 'object' || typeof window === 'undefined') return;
+  try {
+    const existing = JSON.parse(window.localStorage.getItem(JOURNAL_STORAGE_KEY) || '[]');
+    const rows = Array.isArray(existing) ? existing : [];
+    const normalized = {
+      id: String(entry.id || `trade-${Date.now()}`),
+      symbol: String(entry.symbol || '').toUpperCase(),
+      side: entry.side === 'short' ? 'short' : 'long',
+      status: entry.status === 'closed' || entry.status === 'open' ? entry.status : 'planned',
+      entryDate: String(entry.entry_date || entry.entryDate || new Date().toISOString().slice(0, 10)),
+      exitDate: entry.exit_date || entry.exitDate || null,
+      quantity: Number(entry.quantity || 0),
+      entryPrice: Number(entry.entry_price ?? entry.entryPrice ?? 0),
+      exitPrice: entry.exit_price ?? entry.exitPrice ?? null,
+      stopPrice: entry.stop_price ?? entry.stopPrice ?? null,
+      targetPrice: entry.target_price ?? entry.targetPrice ?? null,
+      thesis: String(entry.notes || entry.thesis || ''),
+      screenshotDataUrl: entry.screenshot_data_url || entry.screenshotDataUrl || null,
+      reviewNotes: String(entry.review_notes || entry.reviewNotes || ''),
+      signalContext: entry.signal_context || entry.signalContext || null,
+      marketContext: entry.market_context || entry.marketContext || null,
+      createdAt: String(entry.created_at || entry.createdAt || new Date().toISOString()),
+      updatedAt: new Date().toISOString(),
+    };
+    const withoutDuplicate = rows.filter((row: any) => row?.id !== normalized.id);
+    window.localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify([...withoutDuplicate, normalized]));
+  } catch {
+    // The Journal page will still show the save confirmation from Chat.
+  }
+}
+
+function persistJournalBlocks(blocks: ChatResponseBlock[] | undefined): void {
+  for (const block of blocks || []) {
+    if (block.type === 'journal_save') mergeSavedJournalEntry(block.data.saved_entry);
+  }
+}
+
 const EXAMPLES = [
   "How's NVDA looking?",
   "What's the market doing today?",
@@ -255,6 +303,7 @@ export function ChatPanel({
           );
         },
       });
+      persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
       adoptSymbol(finalMsg.focus, finalMsg.partial);
     } catch (e: any) {
@@ -262,6 +311,7 @@ export function ChatPanel({
         // Stream never started — fall back to the plain blocking endpoint.
         try {
           const finalMsg = await api.sendChatMessage(sessionId, content);
+          persistJournalBlocks(finalMsg.blocks);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
           adoptSymbol(finalMsg.focus, finalMsg.partial);
           return;
@@ -342,7 +392,7 @@ export function ChatPanel({
                   : m.role === 'assistant'
                     ? highlightMessage(m.content, m.focus ?? [], m.partial ?? [], m.unavailable ?? [])
                     : m.content}
-                {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} />}
+                {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} onNavigate={onNavigate} />}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && <ToolTraceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && (
@@ -384,7 +434,8 @@ export function ChatPanel({
 }
 
 /** Render the application-owned typed envelope without parsing model markup. */
-function TypedResponseBlocks({ blocks }: { blocks: ChatResponseBlock[] }) {
+function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock[]; onNavigate?: (page: AppPage, symbol?: string) => void }) {
+  const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
   if (!blocks.length) return null;
   return (
     <div className="chat-typed-blocks" aria-label="Structured answer details">
@@ -498,6 +549,47 @@ function TypedResponseBlocks({ blocks }: { blocks: ChatResponseBlock[] }) {
           return <section className="chat-typed-card" key={block.id} aria-label="Historical outcomes">
             <div className="chat-typed-card-heading">Historical outcomes <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
             <div className="chat-typed-table-wrap"><table><thead><tr><th>Horizon</th><th>Sample</th><th>Mean return</th><th>Win rate</th></tr></thead><tbody>{summaries.map((summary: any) => <tr key={summary.horizon}><td>{summary.horizon} bars</td><td>{summary.sample_size ?? '—'}</td><td>{summary.mean_return_percent == null ? '—' : `${summary.mean_return_percent.toFixed(2)}%`}</td><td>{summary.win_rate_percent == null ? '—' : `${summary.win_rate_percent.toFixed(1)}%`}</td></tr>)}</tbody></table></div>
+          </section>;
+        }
+        if (block.type === 'journal_save') {
+          const entry = block.data.saved_entry ?? {};
+          return <section className="chat-typed-card" key={block.id} aria-label="Journal save">
+            <div className="chat-typed-card-heading">Journal saved <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <p>{String(entry.symbol ?? 'Trade')} · {String(entry.status ?? 'planned')} · {entry.id ? 'local Journal updated' : 'entry recorded'}</p>
+            {onNavigate && <button type="button" className="chat-quick-action-btn" onClick={() => onNavigate('journal', entry.symbol)}>Open Journal</button>}
+          </section>;
+        }
+        if (block.type === 'report') {
+          const title = String(block.data.title ?? 'MarketLens report');
+          const content = String(block.data.content ?? '');
+          const symbol = typeof block.data.symbol === 'string' ? block.data.symbol : undefined;
+          const links = block.data.deep_links && typeof block.data.deep_links === 'object' ? block.data.deep_links : {};
+          const download = () => {
+            const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'marketlens-report'}.md`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            URL.revokeObjectURL(url);
+          };
+          const copy = () => {
+            const result = navigator.clipboard?.writeText(content);
+            if (result) void result.then(() => setCopiedReportId(block.id));
+          };
+          return <section className="chat-typed-card chat-report-card" key={block.id} aria-label="Local report">
+            <div className="chat-typed-card-heading">{title} <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <pre>{content}</pre>
+            <div className="chat-report-actions">
+              <button type="button" className="chat-quick-action-btn" onClick={download}>Download Markdown</button>
+              <button type="button" className="chat-quick-action-btn" onClick={copy}>{copiedReportId === block.id ? 'Copied' : 'Copy report'}</button>
+              {Object.entries(links).map(([key, route]) => {
+                const target = REPORT_PAGE_TARGETS[key];
+                if (!target || typeof route !== 'string') return null;
+                return <button type="button" className="chat-quick-action-btn" key={key} onClick={() => onNavigate?.(target, key === 'symbol' ? symbol : undefined)}>{key === 'replay' ? 'Open Replay' : `Open ${key[0].toUpperCase()}${key.slice(1)}`}</button>;
+              })}
+            </div>
           </section>;
         }
         if (block.type === 'suggested_followups') {

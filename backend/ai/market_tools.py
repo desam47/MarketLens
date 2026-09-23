@@ -9,7 +9,7 @@ from pathlib import Path
 from statistics import median, stdev
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class SymbolRequest(BaseModel):
@@ -423,6 +423,85 @@ class JournalCoachRequest(BaseModel):
     entries: list[dict[str, Any]] = Field(default_factory=list, max_length=1_000)
     symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
     setup: str | None = Field(default=None, max_length=100)
+
+
+class JournalEntryInput(BaseModel):
+    """A typed Journal entry to save -- unlike the loose read-side dicts
+    (JournalCoachRequest/TradeJournalRequest), the write side is validated,
+    same spirit as CsvImportRequest validating into PositionInput."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    side: Literal["long", "short"] = "long"
+    status: Literal["planned", "open", "closed"] = "planned"
+    quantity: float | None = Field(default=None, gt=0)
+    entry_price: float | None = Field(default=None, gt=0)
+    exit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    planned_entry: float | None = Field(default=None, gt=0)
+    planned_stop: float | None = Field(default=None, gt=0)
+    planned_target: float | None = Field(default=None, gt=0)
+    entry_date: str | None = Field(default=None, max_length=40)
+    exit_date: str | None = Field(default=None, max_length=40)
+    setup: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=2_000)
+    thesis: str | None = Field(default=None, max_length=2_000)
+    review_notes: str | None = Field(default=None, max_length=2_000)
+    screenshot_data_url: str | None = Field(default=None, max_length=2_000_000)
+    # Evidence attachments -- normally the verified output of another tool
+    # (build_trade_plan, assess_portfolio_risk, signal_explanation, ...),
+    # embedded as-is so the entry carries real provenance rather than
+    # free-form invented text. Loosely typed because each is itself a
+    # dumped tool payload with its own shape.
+    signals: list[dict[str, Any]] | None = None
+    market_conditions: dict[str, Any] | None = None
+    calculations: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+
+
+class SaveToJournalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    existing_entries: list[dict[str, Any]] = Field(default_factory=list, max_length=1_000)
+    entry: JournalEntryInput
+
+
+class ExportReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_type: Literal["trade_plan", "portfolio_risk", "options_research", "journal_coach", "custom"]
+    # Exactly the field matching report_type must be set -- the tool
+    # re-runs that underlying, already-verified tool internally and
+    # formats its real output; it never asks the model to assemble the
+    # numbers itself.
+    trade_plan: TradePlanRequest | None = None
+    portfolio_risk: PortfolioRiskRequest | None = None
+    options_research: OptionsResearchRequest | None = None
+    journal_coach: JournalCoachRequest | None = None
+    # "custom": wraps an already-produced chat reply verbatim -- exporting
+    # text the user already saw, not generating new analysis.
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=20_000)
+
+    @model_validator(mode="after")
+    def _matching_payload(self) -> ExportReportRequest:
+        supplied = {
+            "trade_plan": self.trade_plan,
+            "portfolio_risk": self.portfolio_risk,
+            "options_research": self.options_research,
+            "journal_coach": self.journal_coach,
+        }
+        if self.report_type == "custom":
+            if any(value is not None for value in supplied.values()):
+                raise ValueError("custom reports cannot include a typed report payload")
+            return self
+        if supplied[self.report_type] is None:
+            raise ValueError(f"{self.report_type} is required for this report type")
+        if any(value is not None for key, value in supplied.items() if key != self.report_type):
+            raise ValueError("only the payload matching report_type may be supplied")
+        return self
 
 
 class CsvImportRequest(BaseModel):
@@ -2269,7 +2348,7 @@ def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
     )
 
 
-def _find_option_contract(chains: list[dict], leg: "OptionLegRef") -> dict | None:
+def _find_option_contract(chains: list[dict], leg: OptionLegRef) -> dict | None:
     for chain in chains:
         if chain.get("expiration") != leg.expiration:
             continue
@@ -2691,6 +2770,184 @@ def _event_date_in_range(event: dict[str, Any], start, end) -> bool:
     return start <= event_date <= end
 
 
+def _deep_links(*pages: str) -> dict[str, str]:
+    """Real frontend hash routes for the given page keys, reusing
+    get_application_help_tool's own frontend-parsed table rather than a
+    second hardcoded copy. Pages the frontend no longer has are silently
+    omitted (matching _application_pages' own behavior), not fabricated.
+
+    The Symbol page's hash carries no ticker (the frontend keeps the
+    selected symbol as React state, not a URL parameter -- see
+    _APPLICATION_PAGE_METADATA's "symbol" entry / the Phase 5.2 audit note
+    on this), so a "symbol" deep link here is the generic page only.
+    """
+    route_by_page = {page["page"]: page["route"] for page in _application_pages()}
+    aliases = {"replay": "signals"}
+    links: dict[str, str] = {}
+    for page in pages:
+        route_key = aliases.get(page, page)
+        if route_key in route_by_page:
+            links[page] = route_by_page[route_key]
+    return links
+
+
+def _report_deep_links() -> dict[str, str]:
+    """Return the stable page destinations exposed by every local report."""
+    return _deep_links("symbol", "scanner", "risk", "replay", "alerts", "journal")
+
+
+def _format_trade_plan_report(symbol: str, plan: dict[str, Any]) -> str:
+    lines = [f"# Trade Plan — {symbol}", "", f"**Direction:** {plan['direction'].upper()}"]
+    if plan.get("entry_zone"):
+        lines.append(f"**Entry zone:** {plan['entry_zone']['low']}–{plan['entry_zone']['high']} (reference {plan['entry_reference']})")
+    else:
+        lines.append(f"**Entry:** {plan['entry_reference']}")
+    lines.append(f"**Stop:** {plan['stop_price']}")
+    lines.append("")
+    lines.append("## Targets")
+    for target in plan["targets"]:
+        lines.append(f"- {target['price']} — risk {target['risk']}, reward {target['reward']}, R:R {target['risk_reward']}")
+    lines.append("")
+    if plan.get("position_size"):
+        size = plan["position_size"]
+        lines.append(f"## Position size\n{size['shares']} shares (risking ${size['risk_dollars']}, position value ${size['position_value']})")
+    else:
+        lines.append(f"## Position size\nNot sized — {plan.get('position_size_reason')}")
+    lines.append("")
+    lines.append(f"## Invalidation\n{plan['invalidation']}")
+    if plan.get("catalysts"):
+        lines.append("\n## Catalysts\n" + "\n".join(f"- {c}" for c in plan["catalysts"]))
+    if plan.get("risks"):
+        lines.append("\n## Risks\n" + "\n".join(f"- {r}" for r in plan["risks"]))
+    return "\n".join(lines)
+
+
+def _format_portfolio_risk_report(assessment: dict[str, Any]) -> str:
+    lines = ["# Portfolio Risk Assessment", ""]
+    if not assessment.get("available"):
+        return "\n".join([*lines, assessment.get("reason", "No position snapshot was supplied.")])
+    lines.append(f"**Gross exposure:** ${assessment['gross_exposure']}  **Net exposure:** ${assessment['net_exposure']}  **Stop-loss risk:** ${assessment['stop_loss_risk']}")
+    concentration = assessment.get("concentration") or {}
+    if concentration.get("top_position"):
+        lines.append(f"**Top position:** {concentration['top_position']['symbol']} ({concentration['top_position']['weight_percent']:.1f}%) — top 3: {concentration['top_3_weight_percent']:.1f}%")
+    if assessment.get("sector_exposure"):
+        lines.append("\n## Sector exposure")
+        lines.extend(f"- {s['sector']}: {s['weight_percent']:.1f}%" for s in assessment["sector_exposure"])
+    if assessment.get("volatility"):
+        lines.append("\n## Volatility (period)")
+        lines.extend(f"- {symbol}: {value:.2f}%" for symbol, value in assessment["volatility"].items() if value is not None)
+    if assessment.get("portfolio_drawdown"):
+        lines.append(f"\n## Portfolio drawdown\nMax drawdown over the sampled period: {assessment['portfolio_drawdown']['maximum_drawdown_percent']:.2f}%")
+    proposed = assessment.get("proposed_trade")
+    if proposed:
+        lines.append("\n## Proposed trade")
+        lines.append(f"Recommended size: {proposed.get('recommended_size')}" if proposed.get("recommended_size") is not None else f"Not sized — {proposed.get('reason')}")
+    return "\n".join(lines)
+
+
+def _format_options_research_report(symbol: str, research: dict[str, Any]) -> str:
+    lines = [f"# Options Research — {symbol}", ""]
+    if not research.get("available"):
+        return "\n".join([*lines, research.get("reason", "No options chain was available.")])
+    summary = research["chain_summary"]
+    lines.append(f"**Expiration:** {summary['expiration']} ({summary['days_to_expiration']} days out{', near-expiration' if summary['near_expiration_risk'] else ''})")
+    lines.append(f"**IV rank:** {summary.get('iv_rank')}  **Near-term IV:** {summary.get('near_term_iv')}  **Put/call ratio:** {summary.get('put_call_ratio')}")
+    if summary.get("expected_move"):
+        move = summary["expected_move"]
+        lines.append(f"**Expected move:** ±{move['expected_move']:.2f} ({move['lower_bound']:.2f}–{move['upper_bound']:.2f})")
+    if research.get("legs"):
+        lines.append("\n## Legs")
+        for leg in research["legs"]:
+            lines.append(f"- {leg['option_type'].upper()} {leg['strike']} exp {leg['expiration']}: premium {leg.get('premium')} ({leg.get('premium_source')}), breakeven {leg.get('breakeven')}")
+    if research.get("spreads"):
+        lines.append("\n## Spreads")
+        for spread in research["spreads"]:
+            lines.append(f"- {spread['long']['option_type'].upper()} {spread['long']['strike']}/{spread['short']['strike']}: net debit {spread['net_debit']}, max gain {spread['max_gain_per_share']}, max loss {spread['max_loss_per_share']}, breakeven {spread['breakeven']}")
+    return "\n".join(lines)
+
+
+def _format_journal_coach_report(coach: dict[str, Any]) -> str:
+    lines = ["# Trade Journal Review", ""]
+    if not coach.get("available"):
+        return "\n".join([*lines, coach.get("reason", "No journal entries were supplied.")])
+    lines.append(f"**Closed trades priced:** {coach['priced_closed_entries']} of {coach['closed_entries']}")
+    lines.append(f"**Win rate:** {coach.get('win_rate_percent')}%  **Expectancy/trade:** {coach.get('expectancy_per_trade')}  **Avg R-multiple:** {coach.get('average_r_multiple')}")
+    if coach.get("setup_performance"):
+        lines.append("\n## By setup")
+        for row in coach["setup_performance"]:
+            lines.append(f"- {row['setup']}: {row['trade_count']} trades, {row['win_rate_percent']:.1f}% win rate, expectancy {row['expectancy_per_trade']:.2f}")
+    observations = coach.get("observations") or {}
+    flagged = {name: data for name, data in observations.items() if data["count"] > 0}
+    if flagged:
+        lines.append("\n## Observations")
+        for name, data in flagged.items():
+            symbols = ", ".join(str(e.get("symbol")) for e in data["entries"])
+            lines.append(f"- {name.replace('_', ' ')}: {data['count']} ({symbols})")
+    return "\n".join(lines)
+
+
+def export_report_tool(request: ExportReportRequest) -> BaseModel:
+    """Format an already-verified tool result (or an already-produced chat
+    reply, for report_type="custom") into a markdown report, plus real
+    frontend deep links for the relevant pages.
+
+    Re-runs the underlying tool itself (build_trade_plan/
+    assess_portfolio_risk/options_research/trade_journal_coach) rather
+    than accepting pre-assembled numbers from the caller, so the report
+    always reflects freshly-verified data -- the model is never asked to
+    transcribe or assemble the figures itself.
+    """
+    report_type = request.report_type
+    if report_type == "trade_plan":
+        if request.trade_plan is None:
+            raise ValueError("trade_plan is required when report_type is 'trade_plan'.")
+        plan = build_trade_plan_tool(request.trade_plan).model_dump(mode="json")
+        content = _format_trade_plan_report(plan["symbol"], plan)
+        links = _report_deep_links()
+        title = f"Trade Plan — {plan['symbol']}"
+    elif report_type == "portfolio_risk":
+        if request.portfolio_risk is None:
+            raise ValueError("portfolio_risk is required when report_type is 'portfolio_risk'.")
+        assessment = assess_portfolio_risk_tool(request.portfolio_risk).model_dump(mode="json")
+        content = _format_portfolio_risk_report(assessment)
+        links = _report_deep_links()
+        title = "Portfolio Risk Assessment"
+    elif report_type == "options_research":
+        if request.options_research is None:
+            raise ValueError("options_research is required when report_type is 'options_research'.")
+        research = options_research_tool(request.options_research).model_dump(mode="json")
+        content = _format_options_research_report(research.get("symbol", request.options_research.symbol.upper()), research)
+        links = _report_deep_links()
+        title = f"Options Research — {request.options_research.symbol.upper()}"
+    elif report_type == "journal_coach":
+        if request.journal_coach is None:
+            raise ValueError("journal_coach is required when report_type is 'journal_coach'.")
+        coach = trade_journal_coach_tool(request.journal_coach).model_dump(mode="json")
+        content = _format_journal_coach_report(coach)
+        links = _report_deep_links()
+        title = "Trade Journal Review"
+    else:  # custom
+        if not request.title or not request.content:
+            raise ValueError("title and content are required when report_type is 'custom'.")
+        content = f"# {request.title}\n\n{request.content}"
+        links = _report_deep_links()
+        title = request.title
+
+    return _Payload(
+        report_type=report_type,
+        symbol=(plan.get("symbol") if report_type == "trade_plan" else request.options_research.symbol.upper() if report_type == "options_research" and request.options_research else None),
+        title=title,
+        content=content,
+        deep_links=links,
+        generated_at=_database_timestamp(),
+        provider="MarketLens report export",
+        source_timestamp=_database_timestamp(),
+        assumptions=[
+            "This report is generated locally for the user to save/copy; nothing is uploaded or emailed.",
+        ],
+    )
+
+
 def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
     """Summarize an explicitly supplied browser-local journal snapshot."""
     entries = request.entries
@@ -2707,6 +2964,40 @@ def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
         closed_entries=len(closed),
         provider="MarketLens local journal",
         source_timestamp=_database_timestamp(),
+    )
+
+
+def save_to_journal_tool(request: SaveToJournalRequest) -> BaseModel:
+    """Validate and append one typed entry to a browser-local Journal
+    snapshot.
+
+    The Journal has no server-side table -- everything lives in the
+    browser (see get_trade_journal_tool's own docstring). "Saving" here
+    means returning the updated entries list for the frontend to persist
+    to its local storage, the same explicit-snapshot pattern import_csv
+    already uses; nothing is written to a database. It is still a
+    "mutating" tool (ToolSpec.permission) and requires confirmation --
+    the state change is real from the user's perspective even though the
+    persistence is client-side, and the registry's confirmation gate
+    exists precisely to stop the model from doing that unilaterally.
+    """
+    import uuid
+
+    new_entry = request.entry.model_dump(exclude_none=True)
+    new_entry["symbol"] = new_entry["symbol"].upper()
+    new_entry["id"] = str(uuid.uuid4())
+    new_entry["created_at"] = _database_timestamp()
+    entries = [*request.existing_entries, new_entry]
+    return _Payload(
+        saved_entry=new_entry,
+        entries=entries,
+        total_entries=len(entries),
+        provider="MarketLens local journal",
+        source_timestamp=_database_timestamp(),
+        assumptions=[
+            "The Journal has no server-side table; this returns the updated snapshot for the browser "
+            "to persist locally, not a database write.",
+        ],
     )
 
 

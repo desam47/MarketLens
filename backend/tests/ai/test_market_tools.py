@@ -12,9 +12,11 @@ from backend.ai.market_tools import (
     CounterargumentRequest,
     CsvImportRequest,
     DecisionChecklistRequest,
+    ExportReportRequest,
     HistoricalSimilarityRequest,
     IndicatorRequest,
     JournalCoachRequest,
+    JournalEntryInput,
     MarketEventTimelineRequest,
     MoveAnalysisRequest,
     OptionLegRef,
@@ -25,6 +27,7 @@ from backend.ai.market_tools import (
     PositionInput,
     ProposedTrade,
     RiskDashboardRequest,
+    SaveToJournalRequest,
     ScenarioRequest,
     SensitivityRequest,
     SessionStatsRequest,
@@ -41,6 +44,7 @@ from backend.ai.market_tools import (
     compare_symbols_tool,
     counterargument_review_tool,
     decision_checklist_tool,
+    export_report_tool,
     get_alerts_tool,
     get_application_help_tool,
     get_bars_tool,
@@ -61,6 +65,7 @@ from backend.ai.market_tools import (
     import_csv_tool,
     market_event_timeline_tool,
     options_research_tool,
+    save_to_journal_tool,
     scenario_analysis_tool,
     sensitivity_analysis_tool,
     signal_explanation_tool,
@@ -1532,3 +1537,67 @@ def test_decision_checklist_flags_thin_options_liquidity(monkeypatch) -> None:
     checks = {c["check"]: c for c in result["checks"]}
     assert checks["options_liquidity"]["status"] == "failed"
     assert checks["options_liquidity"]["evidence"]["open_interest"] == 5
+
+
+def test_save_to_journal_validates_and_appends_a_typed_entry() -> None:
+    existing = [{"id": "old-1", "symbol": "MSFT", "status": "closed"}]
+    result = save_to_journal_tool(SaveToJournalRequest(
+        existing_entries=existing,
+        entry=JournalEntryInput(
+            symbol="aapl", side="long", status="planned", entry_price=200, stop_price=190,
+            target_price=220, setup="breakout", plan={"invalidation": "close below 190"},
+        ),
+    )).model_dump()
+
+    assert result["total_entries"] == 2
+    assert result["entries"][0] == existing[0]
+    saved = result["saved_entry"]
+    assert saved["symbol"] == "AAPL"
+    assert saved["stop_price"] == 190
+    assert saved["plan"] == {"invalidation": "close below 190"}
+    assert saved["id"]
+    assert saved["created_at"]
+    assert result["entries"][1] == saved
+
+
+def test_save_to_journal_does_not_touch_a_database() -> None:
+    result = save_to_journal_tool(SaveToJournalRequest(entry=JournalEntryInput(symbol="AAPL"))).model_dump()
+    assert any("does not write to a database" in a or "not a database write" in a for a in result["assumptions"])
+
+
+def test_export_report_formats_a_verified_trade_plan(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.ai.market_tools._parse_frontend_hash_by_page",
+        lambda: {"symbol": "#symbol", "journal": "#journal"},
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools._parse_frontend_page_titles",
+        lambda: {"symbol": "Symbol", "journal": "Journal"},
+    )
+    result = export_report_tool(ExportReportRequest(
+        report_type="trade_plan",
+        trade_plan=TradePlanRequest(symbol="AAPL", direction="long", entry_price=200, stop_price=190, targets=[220]),
+    )).model_dump()
+
+    assert result["report_type"] == "trade_plan"
+    assert "AAPL" in result["title"]
+    assert "Trade Plan" in result["content"]
+    assert "220" in result["content"]
+    assert result["deep_links"] == {"symbol": "#symbol", "journal": "#journal"}
+
+
+def test_export_report_custom_wraps_existing_text_verbatim() -> None:
+    result = export_report_tool(ExportReportRequest(
+        report_type="custom", title="Weekly Review", content="Some analysis already shown to the trader.",
+    )).model_dump()
+
+    assert result["title"] == "Weekly Review"
+    assert "Some analysis already shown to the trader." in result["content"]
+
+
+def test_export_report_requires_the_matching_nested_field() -> None:
+    try:
+        export_report_tool(ExportReportRequest(report_type="trade_plan"))
+        raise AssertionError("expected ValueError when trade_plan is missing")
+    except ValueError as exc:
+        assert "trade_plan" in str(exc)

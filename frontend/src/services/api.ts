@@ -2865,7 +2865,9 @@ export type ChatBlockType =
   | 'risk_card'
   | 'scenario'
   | 'session_stats'
-  | 'historical_outcomes';
+  | 'historical_outcomes'
+  | 'report'
+  | 'journal_save';
 
 export interface ChatBlockQuality {
   state: 'verified' | 'partial' | 'unavailable' | 'stale' | 'unknown' | string;
