@@ -398,6 +398,35 @@ class TestRunTurnActions(_DBBase):
         self.assertFalse(grounded)
         self.assertEqual(mock_ai.complete.call_count, 1)
 
+    def test_reuses_duplicate_read_result_without_second_tool_call(self):
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "get_quote", '
+            '"action_tool_arguments": {"symbol": "AAPL"}}',
+        )
+        parsed = _parsed(
+            action="get_quote",
+            action_tool_arguments={"symbol": "AAPL"},
+        )
+        trace = []
+        with patch("backend.ai.chat._run_action", return_value=("AAPL quote", True, [])) as run:
+            text, grounded, _ = _run_turn_actions(
+                self.db,
+                parsed,
+                [],
+                [],
+                None,
+                [],
+                "get AAPL quote and then get AAPL quote again",
+                None,
+                trace=trace,
+            )
+        self.assertIn("reused", text)
+        self.assertFalse(grounded)
+        run.assert_called_once()
+        self.assertEqual(mock_ai.complete.call_count, 1)
+        self.assertEqual(trace[-1]["provider"], "turn-cache")
+        self.assertTrue(trace[-1]["reused"])
+
     def test_stops_before_continuation_when_turn_time_budget_is_exhausted(self):
         mock_ai = self._mock_complete(
             '{"reply": "should not be called", "grounded": true}'

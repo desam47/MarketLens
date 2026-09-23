@@ -155,6 +155,35 @@ def _action_signature(parsed) -> str:
     }
     return f"{parsed.action}:{json.dumps(arguments, sort_keys=True, default=str)}"
 
+
+def _cacheable_chat_action(action: str) -> bool:
+    """Return whether an action is safe to reuse within one turn."""
+    return action in {
+        "calculate",
+        "get_quote",
+        "get_bars",
+        "get_indicator",
+        "get_support_resistance",
+        "get_market_regime",
+        "get_market_context",
+        "get_news",
+        "get_fundamentals",
+        "get_options_snapshot",
+        "get_watchlist",
+        "get_risk_dashboard",
+        "get_trade_journal",
+        "get_application_help",
+        "get_alerts",
+        "get_sector_data",
+        "get_trend",
+        "get_confluence",
+        "get_relative_strength",
+        "get_tape_state",
+        "get_session_stats",
+        "get_calendar",
+        "run_screen",
+    }
+
 # Per-turn intent — keeps aux-data HTTP and prompt tokens off turns that
 # don't ask for that material. Each pattern is deliberately generous:
 # a false positive just adds a section, a false negative omits one the
@@ -1246,6 +1275,10 @@ def _run_turn_actions(
         errors=[],
         max_steps=_chain_step_limit(),
     )
+    result_cache: dict[str, tuple[str, bool, list[str]]] = {}
+    first_signature = _action_signature(parsed)
+    if _cacheable_chat_action(parsed.action):
+        result_cache[first_signature] = (text, grounded, list(screened))
     turn_started = time.monotonic() if started_at is None else started_at
     turn_budget = _turn_budget_seconds()
 
@@ -1285,9 +1318,28 @@ def _run_turn_actions(
 
         signature = _action_signature(next_parsed)
         if signature in planner.executed_signatures:
-            texts.append("I stopped the remaining step because it repeated an action already executed in this turn.")
+            cached = result_cache.get(signature)
+            if cached is not None:
+                cached_text, cached_grounded, cached_screened = cached
+                texts.append(
+                    f"Step {len(texts) + 1} (reused): {cached_text} "
+                    "I stopped the remaining step after reusing this result."
+                )
+                all_grounded = all_grounded and cached_grounded
+                all_screened.extend(cached_screened)
+                if trace is not None:
+                    trace.append(
+                        {
+                            "tool": next_parsed.action,
+                            "ok": cached_grounded,
+                            "provider": "turn-cache",
+                            "reused": True,
+                        }
+                    )
+            else:
+                texts.append("I stopped the remaining step because it repeated an action already executed in this turn.")
             all_grounded = False
-            planner.errors.append("duplicate_action")
+            planner.errors.append("reused_action" if cached is not None else "duplicate_action")
             break
         planner.executed_signatures.add(signature)
 
@@ -1304,6 +1356,8 @@ def _run_turn_actions(
         planner.completed_steps.append(step_text)
         all_grounded = all_grounded and step_grounded
         all_screened.extend(step_screened)
+        if _cacheable_chat_action(next_parsed.action):
+            result_cache[signature] = (step_text, step_grounded, list(step_screened))
         if not _action_was_executed(next_parsed):
             break  # a pending confirmation — stop the chain here
 

@@ -186,6 +186,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - Prefer local database/cache tools before provider calls.
 - Run independent reads concurrently, deduplicate identical calls, and reuse results within a turn.
 - Expose a concise failure when a budget is exhausted rather than producing an ungrounded fallback answer.
+- Read-only duplicate actions are now reused from a per-turn cache and surfaced as `turn-cache` in the transient tool trace; mutating duplicates still stop without re-execution.
 
 #### 5.3.6 Visible question decomposition
 - Split complex requests into ordered, user-visible subtasks with dependencies and completion state.

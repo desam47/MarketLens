@@ -504,7 +504,9 @@ name, success/failure, provider, freshness, fallback, and warnings; it is
 rendered in Chat but intentionally not persisted in the prose message table.
 
 Remaining Phase 5.3 work includes broader planner state, clarification
-coverage, repeated-call protection, and destructive action confirmation tests.
+coverage and destructive action confirmation tests. Read-only duplicate
+actions now reuse a bounded per-turn result cache and are marked as
+`turn-cache`; mutating duplicates still stop without re-execution.
 Structured memory now includes the previous ticker, last calculation inputs,
 and a bounded last-tool-result summary; exact calculations and missing
 calculation inputs are handled deterministically before an AI call. Pending
