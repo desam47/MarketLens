@@ -17,7 +17,7 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { AlertConversationContext, ChatChartState, ChatMessage, ChatPreferences as ChatPreferencesType, ChatResponseBlock } from '../services/api';
+import api, { AlertConversationContext, ChatChartState, ChatMessage, ChatPreferences as ChatPreferencesType, ChatRegenerationMode, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 import type { AppPage, NavigationState } from '../utils/appNavigation';
 import { loadChartState } from '../utils/chartState';
@@ -273,11 +273,12 @@ export function ChatPanel({
     return () => clearInterval(interval);
   }, [sessionId, alertTriggerId, sending]);
 
-  const submit = useCallback(async (content: string) => {
+  const submit = useCallback(async (content: string, regenerationMode?: RegenerationMode) => {
     if (!content || !sessionId || sending) return;
     setSending(true);
     setError(null);
     const currentChartState = loadChartState();
+    const apiRegenerationMode = regenerationMode === 'again' ? undefined : regenerationMode;
     setChartState(currentChartState);
     const now = Date.now();
     const optimisticUser: LocalMessage = {
@@ -331,6 +332,7 @@ export function ChatPanel({
         },
         preferences: isDefaultChatPreferences(preferences) ? null : preferences,
         chartState: currentChartState,
+        regenerationMode: apiRegenerationMode,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
@@ -339,9 +341,11 @@ export function ChatPanel({
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
-          const finalMsg = currentChartState
-            ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState)
-            : await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
+          const finalMsg = apiRegenerationMode
+            ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState, apiRegenerationMode)
+            : currentChartState
+              ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState)
+              : await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
           persistJournalBlocks(finalMsg.blocks);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
           adoptSymbol(finalMsg.focus, finalMsg.partial);
@@ -497,7 +501,7 @@ export function ChatPanel({
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && previousUser && (
                   <ChatRegenerationRow
                     stale={messageNeedsRefresh(m)}
-                    onRegenerate={mode => submit(regenerationPrompt(previousUser.content, mode))}
+                    onRegenerate={mode => submit(regenerationPrompt(previousUser.content, mode), mode)}
                   />
                 )}
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && (
@@ -643,6 +647,7 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                 <li key={`${item.tool ?? 'evidence'}-${index}`}>
                   {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
                   {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
+                  {item.freshness_status && item.freshness_status !== 'fresh' ? ` · ${item.freshness_status}` : ''}
                   {item.entitlement && item.entitlement !== 'not_applicable' ? ` · entitlement: ${item.entitlement}` : ''}
                 </li>
               ))}</ul>}
@@ -655,6 +660,11 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                 <small className="chat-chart-state-note">
                   Chart context: {block.data.chart_state.symbol ?? 'symbol'} · {block.data.chart_state.timeframe ?? 'timeframe'} · {block.data.chart_state.session ?? 'session'}
                   {block.data.chart_state.selected_candle ? ' · selected candle included' : ''}
+                </small>
+              )}
+              {block.data.regeneration && (
+                <small className="chat-chart-state-note" role="status">
+                  Regenerated: {String(block.data.regeneration.mode).replace(/_/g, ' ')} · {block.data.regeneration.reused_context ? 'eligible recent context reused' : 'fresh context requested'}
                 </small>
               )}
             </section>
@@ -971,7 +981,7 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
   );
 }
 
-type RegenerationMode = 'again' | 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh';
+type RegenerationMode = 'again' | ChatRegenerationMode;
 
 function regenerationPrompt(question: string, mode: RegenerationMode): string {
   const instruction: Record<RegenerationMode, string> = {
@@ -989,7 +999,7 @@ function regenerationPrompt(question: string, mode: RegenerationMode): string {
 
 function messageNeedsRefresh(message: ChatMessage): boolean {
   return (message.blocks ?? []).some(block => {
-    if (block.quality?.state === 'stale') return true;
+    if (block.quality?.state === 'stale' || block.quality?.freshness_status === 'stale') return true;
     const source = block.quality?.source_timestamp;
     if (!source) return false;
     const ageSeconds = (Date.now() - new Date(source).getTime()) / 1000;
@@ -1051,7 +1061,13 @@ function ChatNotebookPanel({
             <article key={item.id} className="chat-notebook-item">
               <strong>{item.question || 'Saved answer'}</strong>
               <span>{item.answer.slice(0, 220)}{item.answer.length > 220 ? '…' : ''}</span>
-              <small>Saved {formatAlertTime(item.saved_at)}{item.evidence_timestamps.length ? ` · evidence ${formatAlertTime(item.evidence_timestamps[0])}` : ''}</small>
+              <small>
+                Saved {formatAlertTime(item.saved_at)}
+                {item.symbols?.length ? ` · ${item.symbols.join(', ')}` : ''}
+                {item.content_types?.length ? ` · ${item.content_types.join(', ')}` : ''}
+                {item.evidence_timestamps.length ? ` · evidence ${formatAlertTime(item.evidence_timestamps[0])}` : ''}
+                {item.stale ? ' · stale inputs' : ''}
+              </small>
             </article>
           ))}
         </div>

@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { BacktestRun, BacktestTrade } from '../services/api';
 import { formatETDateTime } from './chartMath';
+import type { NavigationState } from '../utils/appNavigation';
 
 interface BacktestCardProps {
   /** Optional symbol to prefill the form with. */
   defaultSymbol?: string;
+  defaultNavigation?: NavigationState;
 }
 
 interface SignalOption {
@@ -47,12 +49,24 @@ function fmtPrice(p: number | null): string {
   return p == null ? '—' : p.toFixed(2);
 }
 
-export function BacktestCard({ defaultSymbol = '' }: BacktestCardProps) {
+function backtestFilters(navigation?: NavigationState): { startDate?: string; endDate?: string; signals?: string[] } {
+  const value = navigation?.filters?.backtest;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const filters = value as Record<string, unknown>;
+  return {
+    startDate: typeof filters.startDate === 'string' ? filters.startDate : undefined,
+    endDate: typeof filters.endDate === 'string' ? filters.endDate : undefined,
+    signals: Array.isArray(filters.signals) ? filters.signals.filter((signal): signal is string => typeof signal === 'string') : undefined,
+  };
+}
+
+export function BacktestCard({ defaultSymbol = '', defaultNavigation }: BacktestCardProps) {
+  const initialFilters = backtestFilters(defaultNavigation);
   // Form state
-  const [symbol, setSymbol] = useState(defaultSymbol);
-  const [startDate, setStartDate] = useState(oneYearAgoISO());
-  const [endDate, setEndDate] = useState(todayISO());
-  const [selectedSignals, setSelectedSignals] = useState<string[]>(DEFAULT_SIGNALS);
+  const [symbol, setSymbol] = useState(defaultNavigation?.symbol || defaultSymbol);
+  const [startDate, setStartDate] = useState(initialFilters.startDate || oneYearAgoISO());
+  const [endDate, setEndDate] = useState(initialFilters.endDate || todayISO());
+  const [selectedSignals, setSelectedSignals] = useState<string[]>(initialFilters.signals?.length ? initialFilters.signals : DEFAULT_SIGNALS);
 
   // Run / display state
   const [currentRun, setCurrentRun] = useState<BacktestRun | null>(null);
@@ -62,8 +76,12 @@ export function BacktestCard({ defaultSymbol = '' }: BacktestCardProps) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (defaultSymbol) setSymbol(defaultSymbol);
-  }, [defaultSymbol]);
+    if (defaultNavigation?.symbol || defaultSymbol) setSymbol(defaultNavigation?.symbol || defaultSymbol);
+    const filters = backtestFilters(defaultNavigation);
+    if (filters.startDate) setStartDate(filters.startDate);
+    if (filters.endDate) setEndDate(filters.endDate);
+    if (filters.signals?.length) setSelectedSignals(filters.signals);
+  }, [defaultNavigation, defaultSymbol]);
 
   const refreshRecent = useCallback(async () => {
     try {

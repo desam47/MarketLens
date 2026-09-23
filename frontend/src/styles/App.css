@@ -2145,6 +2145,9 @@ h4 {
 .provider-entitlement strong { font-size: 0.75rem; text-transform: capitalize; }
 .provider-entitlement small, .provider-event-row small { color: var(--text-muted); font-size: 0.68rem; }
 .provider-entitlement .status-badge { align-self: flex-start; }
+.risk-position-focused { outline: 2px solid var(--accent); outline-offset: -2px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.journal-entry-focused { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .provider-event-list { display: grid; gap: 0.25rem; }
 .provider-event-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.73rem; }
 
@@ -6305,6 +6308,23 @@ div.td-trend {
 .chat-notebook-create input {
   min-width: 0;
   flex: 1;
+}
+
+.chat-regeneration-row button:focus-visible,
+.chat-notebook-panel button:focus-visible,
+.chat-notebook-panel input:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .chat-regeneration-row,
+  .chat-regeneration-options,
+  .chat-notebook-options { width: 100%; }
+  .chat-regeneration-row .chat-quick-action-btn,
+  .chat-regeneration-options .chat-quick-action-btn,
+  .chat-notebook-options .chat-quick-action-btn { flex: 1 1 auto; min-height: 2.2rem; }
+  .chat-notebook-create { align-items: stretch; flex-direction: column; }
 }
 
 .chat-notebook-list {

@@ -1,6 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api, { Bar } from '../services/api';
 import { earningsDaysAway } from '../components/EarningsBadge';
+import type { NavigationState } from '../utils/appNavigation';
 
 const STORAGE_KEY = 'marketlens.risk.positions';
 const EARNINGS_WINDOW_KEY = 'marketlens.risk.earnings-warning-days';
@@ -192,19 +193,25 @@ function calculatePortfolioStats(snapshots: PositionSnapshot[]): PortfolioStats 
   };
 }
 
-export function RiskDashboardPage() {
+export function RiskDashboardPage({ navigation }: { navigation?: NavigationState }) {
   const [positions, setPositions] = useState<ManualPosition[]>(readPositions);
   const [snapshots, setSnapshots] = useState<PositionSnapshot[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [symbol, setSymbol] = useState('');
+  const [symbol, setSymbol] = useState(navigation?.symbol || '');
   const [side, setSide] = useState<'long' | 'short'>('long');
   const [quantity, setQuantity] = useState('');
   const [entryPrice, setEntryPrice] = useState('');
   const [stopPrice, setStopPrice] = useState('');
   const [sector, setSector] = useState('');
   const [earningsWarningDays, setEarningsWarningDays] = useState(readEarningsWarningDays);
+  const [focusedPositionIds, setFocusedPositionIds] = useState<string[]>(navigation?.selectedRecords || []);
+
+  useEffect(() => {
+    if (navigation?.symbol) setSymbol(navigation.symbol);
+    setFocusedPositionIds(navigation?.selectedRecords || []);
+  }, [navigation]);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(positions));
@@ -351,7 +358,7 @@ export function RiskDashboardPage() {
           </section>
 
           <div className="risk-layout-grid">
-            <section className="card risk-positions-card"><div className="risk-card-heading"><h2>Positions</h2><span>{snapshots.length} tracked</span></div><div className="risk-table-wrap"><table className="risk-table"><thead><tr><th>Symbol</th><th>Quantity</th><th>Price</th><th>Exposure</th><th>Weight</th><th>P&amp;L</th><th>Stop risk</th><th>Volatility</th><th>Earnings</th><th /></tr></thead><tbody>{snapshots.map(item => <tr key={item.id}><td><strong>{item.symbol}</strong><small className={`risk-side-${item.side}`}>{item.side}</small>{item.dataError && <small className="risk-data-warning">Data unavailable</small>}</td><td>{item.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td><td>{fmtMoney(item.currentPrice, 2)}</td><td>{fmtMoney(item.marketValue)}</td><td>{item.weight.toFixed(1)}%</td><td className={item.pnl != null && item.pnl >= 0 ? 'risk-positive' : 'risk-negative'}>{fmtMoney(item.pnl)}</td><td>{fmtMoney(item.stopRisk)}</td><td>{item.volatility == null ? '—' : `${item.volatility.toFixed(1)}%`}</td><td className={item.earningsDays != null && item.earningsDays >= 0 && item.earningsDays <= earningsWarningDays ? 'risk-earnings-cell-warning' : ''}>{item.earningsDays == null ? '—' : item.earningsDays < 0 ? 'Reported' : item.earningsDays === 0 ? 'Today' : `In ${item.earningsDays}d`}</td><td><button className="risk-remove" onClick={() => removePosition(item.id)} aria-label={`Remove ${item.symbol}`}>×</button></td></tr>)}</tbody></table></div></section>
+            <section className="card risk-positions-card"><div className="risk-card-heading"><h2>Positions</h2><span>{snapshots.length} tracked</span></div>{focusedPositionIds.length > 0 && <p className="info-text" role="status">Focused positions are highlighted from the originating Chat action.</p>}<div className="risk-table-wrap"><table className="risk-table"><thead><tr><th scope="col">Symbol</th><th scope="col">Quantity</th><th scope="col">Price</th><th scope="col">Exposure</th><th scope="col">Weight</th><th scope="col">P&amp;L</th><th scope="col">Stop risk</th><th scope="col">Volatility</th><th scope="col">Earnings</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{snapshots.map(item => <tr key={item.id} className={focusedPositionIds.includes(item.id) ? 'risk-position-focused' : undefined} aria-label={focusedPositionIds.includes(item.id) ? `${item.symbol} focused position` : undefined}><td><strong>{item.symbol}</strong><small className={`risk-side-${item.side}`}>{item.side}</small>{item.dataError && <small className="risk-data-warning">Data unavailable</small>}</td><td>{item.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td><td>{fmtMoney(item.currentPrice, 2)}</td><td>{fmtMoney(item.marketValue)}</td><td>{item.weight.toFixed(1)}%</td><td className={item.pnl != null && item.pnl >= 0 ? 'risk-positive' : 'risk-negative'}>{fmtMoney(item.pnl)}</td><td>{fmtMoney(item.stopRisk)}</td><td>{item.volatility == null ? '—' : `${item.volatility.toFixed(1)}%`}</td><td className={item.earningsDays != null && item.earningsDays >= 0 && item.earningsDays <= earningsWarningDays ? 'risk-earnings-cell-warning' : ''}>{item.earningsDays == null ? '—' : item.earningsDays < 0 ? 'Reported' : item.earningsDays === 0 ? 'Today' : `In ${item.earningsDays}d`}</td><td><button className="risk-remove" onClick={() => removePosition(item.id)} aria-label={`Remove ${item.symbol}`}>×</button></td></tr>)}</tbody></table></div></section>
             <section className="card risk-sector-card"><div className="risk-card-heading"><h2>Sector exposure</h2><span>by market value</span></div>{stats.sectorExposure.map(item => <div className="risk-bar-row" key={item.sector}><div><span>{item.sector}</span><strong>{item.weight.toFixed(1)}%</strong></div><div className="risk-bar"><span style={{ width: `${Math.min(100, item.weight)}%` }} /></div><small>{fmtMoney(item.value)}</small></div>)}</section>
           </div>
 

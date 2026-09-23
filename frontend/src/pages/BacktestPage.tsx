@@ -1,7 +1,8 @@
 import React from 'react';
 import { BacktestCard } from '../components/BacktestCard';
+import type { NavigationState } from '../utils/appNavigation';
 
-export function BacktestPage() {
+export function BacktestPage({ navigation }: { navigation?: NavigationState }) {
   return (
     <div className="page">
       <div className="dashboard-header">
@@ -14,7 +15,7 @@ export function BacktestPage() {
           </p>
         </div>
       </div>
-      <BacktestCard />
+      <BacktestCard defaultNavigation={navigation} />
     </div>
   );
 }

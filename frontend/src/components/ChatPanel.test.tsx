@@ -144,6 +144,8 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText('Old answer.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '↻ Refresh current data' }));
     await waitFor(() => expect(mockApi.streamChatMessage).toHaveBeenCalledWith(1, expect.stringContaining('Refresh the evidence'), expect.anything()));
+    expect(mockApi.streamChatMessage.mock.calls[0][1]).toContain('Response regeneration mode');
+    expect(mockApi.streamChatMessage.mock.calls[0][2]).toEqual(expect.objectContaining({ regenerationMode: 'refresh' }));
   });
 
   it('creates a local notebook and saves an answer with the notebook action', async () => {

@@ -139,10 +139,17 @@ class ChatChartState(BaseModel):
     updated_at: str = Field(..., max_length=80)
 
 
+ChatRegenerationMode = Literal[
+    "more_detail", "simpler", "bull_case", "bear_case",
+    "calculations_only", "sources_only", "refresh",
+]
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     preferences: ChatPreferences | None = None
     chart_state: ChatChartState | None = None
+    regeneration_mode: ChatRegenerationMode | None = None
 
 
 class SetFeedbackRequest(BaseModel):
@@ -384,8 +391,10 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         repo.close()
 
     args = [session_id, payload.content, payload.preferences.model_dump() if payload.preferences else None]
-    if payload.chart_state is not None:
-        args.append(payload.chart_state.model_dump())
+    if payload.chart_state is not None or payload.regeneration_mode is not None:
+        args.append(payload.chart_state.model_dump() if payload.chart_state else None)
+    if payload.regeneration_mode is not None:
+        args.append(payload.regeneration_mode)
     message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args)
     return _message_to_response(
         message,
@@ -452,10 +461,13 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
         def drain():
             try:
                 preferences = payload.preferences.model_dump() if payload.preferences else None
-                if payload.chart_state is None:
+                if payload.chart_state is None and payload.regeneration_mode is None:
                     events = stream_chat_message(session_id, payload.content, preferences)
                 else:
-                    events = stream_chat_message(session_id, payload.content, preferences, payload.chart_state.model_dump())
+                    stream_args = [session_id, payload.content, preferences, payload.chart_state.model_dump() if payload.chart_state else None]
+                    if payload.regeneration_mode is not None:
+                        stream_args.append(payload.regeneration_mode)
+                    events = stream_chat_message(*stream_args)
                 for ev in events:
                     if stop.is_set():
                         break

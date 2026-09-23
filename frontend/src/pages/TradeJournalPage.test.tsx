@@ -68,4 +68,11 @@ describe('TradeJournalPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save trade' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Closed trades need an exit date and exit price.');
   });
+
+  it('restores symbol and journal filters from Chat navigation context', () => {
+    render(<TradeJournalPage navigation={{ symbol: 'AAPL', filters: { journal: { status: 'closed' } } }} />);
+    expect(screen.getByRole('textbox', { name: 'Trade symbol' })).toHaveValue('AAPL');
+    expect(screen.getByRole('textbox', { name: 'Filter journal' })).toHaveValue('AAPL');
+    expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveValue('closed');
+  });
 });

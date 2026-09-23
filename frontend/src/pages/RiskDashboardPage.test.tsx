@@ -31,6 +31,11 @@ describe('RiskDashboardPage', () => {
     expect(screen.getByText('No positions yet')).toBeInTheDocument();
   });
 
+  it('consumes Chat navigation context for the focused symbol', () => {
+    render(<RiskDashboardPage navigation={{ symbol: 'AAPL', selectedRecords: ['AAPL-long-1'] }} />);
+    expect(screen.getByLabelText('Symbol')).toHaveValue('AAPL');
+  });
+
   it('adds a position and calculates exposure, stop risk, and sector', async () => {
     render(<RiskDashboardPage />);
     fireEvent.change(screen.getByLabelText('Symbol'), { target: { value: 'AAPL' } });

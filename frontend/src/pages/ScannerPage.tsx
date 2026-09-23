@@ -7,9 +7,11 @@ import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { useMarketSession } from '../hooks/useMarketSession';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { EarningsBadge } from '../components/EarningsBadge';
+import type { NavigationState } from '../utils/appNavigation';
 
 interface ScannerPageProps {
   onSelectSymbol: (symbol: string) => void;
+  navigation?: NavigationState;
 }
 
 interface SavedPreset {
@@ -60,6 +62,18 @@ const QUICK_PRESETS: SavedPreset[] = [
 
 const PRESETS_KEY = 'marketlens.scanner.presets';
 
+function scannerNavigation(navigation?: NavigationState): { watchlistId?: number; filters?: FilterSpec[]; match?: 'AND' | 'OR'; open?: boolean } {
+  const value = navigation?.filters?.scanner;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const filters = value as Record<string, unknown>;
+  return {
+    watchlistId: typeof filters.watchlistId === 'number' ? filters.watchlistId : undefined,
+    filters: Array.isArray(filters.filters) ? filters.filters as FilterSpec[] : undefined,
+    match: filters.match === 'OR' ? 'OR' : filters.match === 'AND' ? 'AND' : undefined,
+    open: filters.open === true ? true : undefined,
+  };
+}
+
 function signalLabel(signal: string): string {
   return signal.replace(/_/g, ' ').toLowerCase().replace(/(^| )\S/g, c => c.toUpperCase());
 }
@@ -83,20 +97,21 @@ function matchReason(result: ScanResult): string {
   return 'Matched the selected filters';
 }
 
-export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
+export function ScannerPage({ onSelectSymbol, navigation }: ScannerPageProps) {
+  const initialNavigation = scannerNavigation(navigation);
   const marketSession = useMarketSession();
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
-  const [selectedWatchlist, setSelectedWatchlist] = useState<number | null>(null);
+  const [selectedWatchlist, setSelectedWatchlist] = useState<number | null>(initialNavigation.watchlistId ?? null);
   const [symbols, setSymbols] = useState<string[]>([]);
   const [results, setResults] = useState<ScanResult[]>([]);
   const [presets, setPresets] = useState<SavedPreset[]>(() => {
     try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '[]'); } catch { return []; }
   });
-  const [currentFilters, setCurrentFilters] = useState<FilterSpec[]>([]);
-  const [currentMatch, setCurrentMatch] = useState<'AND' | 'OR'>('AND');
+  const [currentFilters, setCurrentFilters] = useState<FilterSpec[]>(initialNavigation.filters || []);
+  const [currentMatch, setCurrentMatch] = useState<'AND' | 'OR'>(initialNavigation.match || 'AND');
   const [presetName, setPresetName] = useState('');
   const [presetVersion, setPresetVersion] = useState(0);
-  const [openBuilderForPreview, setOpenBuilderForPreview] = useState(false);
+  const [openBuilderForPreview, setOpenBuilderForPreview] = useState(initialNavigation.open === true);
   const [loading, setLoading] = useState(true);
   const [symbolsLoading, setSymbolsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +124,8 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     try {
       const data = await api.getWatchlists();
       setWatchlists(data);
-      if (data.length > 0) setSelectedWatchlist(data[0].id);
+      const requested = scannerNavigation(navigation).watchlistId;
+      if (data.length > 0) setSelectedWatchlist(requested && data.some(item => item.id === requested) ? requested : data[0].id);
       else setSelectedWatchlist(null);
     } catch (err: any) {
       setWatchlists([]);
@@ -118,11 +134,20 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [navigation]);
 
   useEffect(() => {
     void fetchWatchlists();
   }, [fetchWatchlists]);
+
+  useEffect(() => {
+    const next = scannerNavigation(navigation);
+    if (next.watchlistId != null) setSelectedWatchlist(next.watchlistId);
+    if (next.filters) setCurrentFilters(next.filters);
+    if (next.match) setCurrentMatch(next.match);
+    if (next.open != null) setOpenBuilderForPreview(next.open);
+    if (next.filters || next.match) setPresetVersion(version => version + 1);
+  }, [navigation]);
 
   const fetchSymbols = useCallback(async () => {
     if (selectedWatchlist == null) {

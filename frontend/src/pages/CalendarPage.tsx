@@ -1,15 +1,25 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api, { CalendarEvent, Watchlist, WatchlistCalendar } from '../services/api';
 import { ErrorBanner } from '../components/ErrorBanner';
+import type { NavigationState } from '../utils/appNavigation';
 
 const EVENT_LABELS: Record<string, string> = { earnings: 'Earnings', ex_dividend: 'Ex-dividend', dividend: 'Dividend' };
 
-export function CalendarPage() {
+export function CalendarPage({ navigation }: { navigation?: NavigationState }) {
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
-  const [watchlistId, setWatchlistId] = useState<number | null>(null);
+  const initialWatchlistId = typeof navigation?.filters?.calendar === 'object' && !Array.isArray(navigation?.filters?.calendar)
+    ? Number((navigation?.filters?.calendar as Record<string, unknown>).watchlistId)
+    : NaN;
+  const [watchlistId, setWatchlistId] = useState<number | null>(Number.isFinite(initialWatchlistId) ? initialWatchlistId : null);
   const [calendar, setCalendar] = useState<WatchlistCalendar | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!navigation?.filters?.calendar || typeof navigation.filters.calendar !== 'object' || Array.isArray(navigation.filters.calendar)) return;
+    const requested = Number((navigation.filters.calendar as Record<string, unknown>).watchlistId);
+    if (Number.isFinite(requested)) setWatchlistId(requested);
+  }, [navigation]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -33,7 +43,8 @@ export function CalendarPage() {
     finally { setLoading(false); }
   };
 
-  const groups = (calendar?.events || []).reduce<Record<string, CalendarEvent[]>>((result, event) => {
+  const selectedSymbols = new Set((navigation?.selectedRecords || []).map(symbol => symbol.toUpperCase()));
+  const groups = (calendar?.events || []).filter(event => selectedSymbols.size === 0 || selectedSymbols.has(event.symbol.toUpperCase())).reduce<Record<string, CalendarEvent[]>>((result, event) => {
     (result[event.date] ||= []).push(event); return result;
   }, {});
 

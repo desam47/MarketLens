@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete. Phase 5.7.1, 5.7.2, 5.7.3 (personal preferences), 5.7.4 (answer contract), and 5.7.8 (feedback and correction loop) are complete. Initial slices of 5.7.6 (chart state), 5.7.7 (symbol/timeframe/session navigation), 5.7.9 (regeneration), 5.7.10 (browser-local notebooks), and 5.7.11 (stale-answer refresh) are implemented; full cross-page state preservation, accessibility sign-off, and richer notebook workflows remain. Phase 5.8 remains.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete. Phase 5.7.1, 5.7.2, 5.7.3 (personal preferences), 5.7.4 (answer contract), and 5.7.8 (feedback and correction loop) are complete. Expanded bounded slices of 5.7.6 (chart state), 5.7.7 (cross-page state-preserving navigation), 5.7.9 (typed regeneration), 5.7.10 (grouped browser-local notebooks), and 5.7.11 (server-derived stale status) are implemented; manual accessibility sign-off, server-backed notebooks, material-change detection, and a few unrouted page controls remain. Phase 5.8 remains.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, 5.7.3 personal preferences, 5.7.4 answer-contract metadata, and 5.7.8 feedback/correction loop are complete. Initial 5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 slices now cover explicit chart state, symbol/timeframe/session navigation, regeneration/refresh controls, and browser-local notebooks. Full cross-page state preservation, accessibility sign-off, richer notebook workflows, model-prompt terminology/risk framing, and regression-fixture export remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, 5.7.3 personal preferences, 5.7.4 answer-contract metadata, and 5.7.8 feedback/correction loop are complete. Expanded 5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 slices now cover explicit chart state, routed page context, typed regeneration with refresh invalidation, grouped local notebooks, and server-derived stale status. Manual accessibility sign-off, server-backed notebooks, material-change detection, and regression-fixture export remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -956,14 +956,12 @@ dedicated test (`test_preferences_never_touch_calculation_or_evidence_blocks`)
 asserts the calculation block is byte-identical with and without
 preferences set — the only block that may differ is the follow-up list.
 
-Deliberately deferred, and not claimed here: the plan's fuller
-"tailor terminology, default comparisons, and risk framing" via the model
-prompt itself. Wiring that would mean threading `preferences` deep into
-`_generate_reply`/`_generate_reply_streaming` (each already carrying
-10+ parameters, with several early-return paths that bypass the model
-entirely), which is real, separate work with its own risk of shading a
-verified answer's tone in ways that are hard to test deterministically —
-scoped out of this slice rather than shipped thin and called complete.
+The prompt-personalization closure now adds a bounded, sanitized
+`<preferences>` section to model prompts. It may tailor terminology,
+timeframe emphasis, comparison defaults, and risk framing, but the prompt
+explicitly forbids changing verified values, tool arguments, or evidence
+status. Preferences remain browser-local; only the current validated turn
+uses them.
 
 Focused verification: 13 new backend tests (`_tailored_followups`,
 `ChatPreferences` request validation, and end-to-end forwarding through
@@ -1017,29 +1015,46 @@ messages), plus the full suite, a production build, and the migration
 verified against the live dev SQLite database (3024 backend / 187
 frontend tests passing).
 
-**5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 initial slices (2026-09-23).** The Symbol
+**5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 expanded slices (2026-09-23).** The Symbol
 chart now publishes an explicit bounded chart-state snapshot (symbol,
 timeframe, selected session, chart type, active indicators, visible range,
 selected candle, drawings, and update time) to browser-local storage. Chat
 validates and forwards that state to the backend prompt and persisted evidence
 block, so “explain what I’m looking at” can use explicit chart context rather
-than infer it from prose or a screenshot. Chat navigation can carry the
-current symbol/timeframe/session into Symbol, and the response UI offers
-bounded regeneration modes plus a freshness-triggered “Refresh current data”
-action. Browser-local research notebooks can be named and can save assistant
-answers with their original evidence timestamps and typed blocks.
+than infer it from prose or a screenshot. Chat navigation now retains the
+relevant incoming context for routed Scanner, Backtest, Risk, Journal, Alerts,
+Calendar, Historical Signals, and Symbol pages: filters, symbols, watchlist
+selection, selected records, and the originating chart timeframe/session are
+consumed where each page has an equivalent control. The response UI sends a
+typed regeneration mode; non-refresh modes remain eligible for recent context
+reuse, while Refresh explicitly clears the short-lived Chat context and market
+baseline caches before rebuilding evidence. Browser-local research notebooks
+now also retain grouped symbols, block/content types, and a stale-input flag
+alongside original evidence timestamps and typed blocks.
 
-These are deliberately bounded first slices: navigation currently consumes
-symbol/timeframe/session state (not every page-specific filter or selected
-record), notebooks are local answer collections rather than a server-backed
-multi-page research graph, and the accessibility/responsive review still
-needs an explicit manual pass.
+The answer contract now computes freshness status server-side (`fresh`,
+`recent`, `stale`, or `unknown`) from the evidence age and marks old typed
+blocks stale at the same 15-minute threshold used by the refresh control.
+Evidence cards expose the status, entitlement, and regeneration/reuse context
+to assistive technology through live status text. Added responsive controls,
+focus-visible outlines, table header scopes, and route-level navigation tests
+improve automated accessibility/mobile coverage; a real-device/viewport manual
+pass is still outstanding.
+
+These remain deliberately bounded: Options and System Health do not currently
+have independent routed filter/record controls in the app shell, notebooks are
+still local answer collections rather than a server-backed multi-page research
+graph, and material-change detection beyond evidence-age expiration is not
+implemented.
 
 Focused verification includes chart-state and notebook storage tests, chart
 state prompt coverage, the existing Chat API suite, the full ChatPanel suite,
-and a successful production build. Current checkout verification: 3,021
-backend tests passed with 4 environment-dependent skips, 192 frontend tests
-passed, and the frontend production build completed successfully.
+and a successful production build. Current checkout verification: 3,026
+backend tests passed with 4 environment-dependent skips, 194 frontend tests
+passed, and the frontend production build completed successfully. The focused
+gap-closure coverage includes typed regeneration forwarding/cache invalidation,
+server-derived stale evidence, routed navigation context, grouped notebook
+metadata, and mobile/focus-visible UI behavior.
 
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration

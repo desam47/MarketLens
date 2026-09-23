@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import api, { HistoricalSignal, ScanResult, TapeSnapshot } from '../services/api';
+import type { NavigationState } from '../utils/appNavigation';
 
 const STORAGE_KEY = 'marketlens.trade.journal';
 const PENDING_DRAFT_KEY = 'marketlens.trade.journal.pending';
@@ -134,10 +135,22 @@ function todayInputValue(): string {
   return `${today.getFullYear()}-${month}-${day}`;
 }
 
-export function TradeJournalPage() {
+function journalNavigation(navigation?: NavigationState): { status?: TradeStatus; search?: string } {
+  const value = navigation?.filters?.journal;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const filters = value as Record<string, unknown>;
+  return {
+    status: filters.status === 'planned' || filters.status === 'open' || filters.status === 'closed' ? filters.status : undefined,
+    search: typeof filters.search === 'string' ? filters.search : undefined,
+  };
+}
+
+export function TradeJournalPage({ navigation }: { navigation?: NavigationState }) {
+  const initialNavigation = journalNavigation(navigation);
   const [entries, setEntries] = useState<JournalEntry[]>(readEntries);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [symbol, setSymbol] = useState(() => {
+    if (navigation?.symbol) return navigation.symbol;
     try { return (JSON.parse(window.localStorage.getItem(PENDING_DRAFT_KEY) || '{}')?.symbol || ''); } catch { return ''; }
   });
   const [side, setSide] = useState<TradeSide>('long');
@@ -154,11 +167,20 @@ export function TradeJournalPage() {
   });
   const [reviewNotes, setReviewNotes] = useState('');
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | TradeStatus>('all');
-  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | TradeStatus>(initialNavigation.status || 'all');
+  const [search, setSearch] = useState(initialNavigation.search || navigation?.symbol || '');
+  const [focusedEntryIds, setFocusedEntryIds] = useState<string[]>(navigation?.selectedRecords || []);
   const [formError, setFormError] = useState<string | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const next = journalNavigation(navigation);
+    if (navigation?.symbol) setSearch(navigation.symbol);
+    if (next.search != null) setSearch(next.search);
+    if (next.status) setFilter(next.status);
+    setFocusedEntryIds(navigation?.selectedRecords || []);
+  }, [navigation]);
 
   useEffect(() => {
     try { window.localStorage.removeItem(PENDING_DRAFT_KEY); } catch { /* best effort */ }
@@ -312,7 +334,8 @@ export function TradeJournalPage() {
             const pnl = entryPnl(entry);
             const risk = entryRisk(entry);
             const rMultiple = pnl != null && risk ? pnl / risk : null;
-            return <article className="card journal-entry-card" key={entry.id}>
+            const focused = focusedEntryIds.includes(entry.id);
+            return <article className={`card journal-entry-card${focused ? ' journal-entry-focused' : ''}`} key={entry.id} aria-label={focused ? `${entry.symbol} focused journal entry` : undefined}>
               <div className="journal-entry-header"><div><strong className="journal-symbol">{entry.symbol}</strong><span className={`journal-badge journal-${entry.side}`}>{entry.side}</span><span className={`journal-badge journal-status-${entry.status}`}>{entry.status}</span></div><div className="journal-entry-actions"><button className="btn btn-secondary btn-small" onClick={() => editEntry(entry)}>Edit</button><button className="btn btn-danger btn-small" onClick={() => removeEntry(entry.id)}>Delete</button></div></div>
               <div className="journal-entry-metrics"><span><small>Entry</small>{formatDate(entry.entryDate)} · {fmtMoney(entry.entryPrice)}</span><span><small>Exit</small>{entry.exitPrice == null ? '—' : `${formatDate(entry.exitDate)} · ${fmtMoney(entry.exitPrice)}`}</span><span><small>Size</small>{entry.quantity.toLocaleString()}</span><span><small>P&amp;L</small><strong className={pnl == null ? '' : pnl >= 0 ? 'journal-positive' : 'journal-negative'}>{fmtMoney(pnl)}</strong>{rMultiple != null && <em>{rMultiple >= 0 ? '+' : ''}{rMultiple.toFixed(2)}R</em>}</span></div>
               <div className="journal-entry-copy"><div><h3>Thesis</h3><p>{entry.thesis || 'No thesis recorded.'}</p></div><div><h3>Review</h3><p>{entry.reviewNotes || 'No review notes yet.'}</p></div></div>

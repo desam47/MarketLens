@@ -2598,6 +2598,7 @@ class ApiService {
     content: string,
     preferences?: ChatPreferences | null,
     chartState?: ChatChartState | null,
+    regenerationMode?: ChatRegenerationMode | null,
   ): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -2606,6 +2607,7 @@ class ApiService {
         content,
         ...(preferences ? { preferences } : {}),
         ...(chartState ? { chart_state: chartState } : {}),
+        ...(regenerationMode ? { regeneration_mode: regenerationMode } : {}),
       }),
     }, AI_TIMEOUT_MS);
   }
@@ -2629,6 +2631,7 @@ class ApiService {
       signal?: AbortSignal;
       preferences?: ChatPreferences | null;
       chartState?: ChatChartState | null;
+      regenerationMode?: ChatRegenerationMode | null;
     } = {},
   ): Promise<ChatMessage> {
     const response = await fetch(
@@ -2640,6 +2643,7 @@ class ApiService {
           content,
           ...(opts.preferences ? { preferences: opts.preferences } : {}),
           ...(opts.chartState ? { chart_state: opts.chartState } : {}),
+          ...(opts.regenerationMode ? { regeneration_mode: opts.regenerationMode } : {}),
         }),
         signal: opts.signal,
       },
@@ -2901,6 +2905,8 @@ export interface ChatPreferences {
   preferred_units: 'percent' | 'dollars' | null;
 }
 
+export type ChatRegenerationMode = 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh';
+
 export interface ChatChartState {
   symbol: string;
   timeframe: string;
@@ -2943,6 +2949,8 @@ export interface ChatBlockQuality {
   timeframe?: string | null;
   fallback?: boolean;
   entitlement?: string | null;
+  freshness_status?: 'fresh' | 'recent' | 'stale' | 'unknown' | string | null;
+  stale_after_seconds?: number | null;
 }
 
 export interface ChatResponseBlock {

@@ -16,7 +16,7 @@ export interface NavigationState {
   symbol?: string;
   timeframe?: string;
   session?: string;
-  filters?: Record<string, string | number | boolean | string[]>;
+  filters?: Record<string, unknown>;
   selectedRecords?: string[];
 }
 

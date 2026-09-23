@@ -4,8 +4,9 @@ import { HistoricalSignalCard } from '../components/HistoricalSignalCard';
 import { SignalResearchDashboard } from '../components/SignalResearchDashboard';
 import { SignalAlertCenter } from '../components/SignalAlertCenter';
 import { TickReplayPanel } from '../components/TickReplayPanel';
+import type { NavigationState } from '../utils/appNavigation';
 
-export function HistoricalSignalsPage() {
+export function HistoricalSignalsPage({ navigation }: { navigation?: NavigationState }) {
   useEffect(() => {
     if (window.location.hash !== '#historical-replay') return;
 
@@ -15,6 +16,15 @@ export function HistoricalSignalsPage() {
 
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  useEffect(() => {
+    const target = navigation?.selectedRecords?.[0];
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(target)?.scrollIntoView({ block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [navigation]);
 
   return (
     <div className="page">

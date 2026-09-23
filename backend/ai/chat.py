@@ -502,6 +502,21 @@ _ctx_lock = threading.Lock()
 _ctx_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 
 
+def _clear_context_cache() -> None:
+    with _ctx_lock:
+        _ctx_cache.clear()
+
+
+def _has_fresh_context_cache(symbols: list[str], *, news: bool, funda: bool, diverg: bool) -> bool:
+    now = time.monotonic()
+    with _ctx_lock:
+        return any(
+            (hit := _ctx_cache.get((symbol, news, funda, diverg))) is not None
+            and now - hit[0] < _CTX_TTL
+            for symbol in symbols
+        )
+
+
 def _clip(text: str) -> str:
     text = text or ""
     if len(text) <= _TRANSCRIPT_MSG_CHARS:
@@ -609,6 +624,9 @@ class _Turn:
     base: list[str]
     planner_state: dict
     chart_state: dict | None = None
+    regeneration_mode: str | None = None
+    reused_context: bool = False
+    preferences: dict | None = None
 
     @property
     def focus(self) -> list[str]:
@@ -635,6 +653,8 @@ def _prepare_turn(
     session_id: int,
     user_content: str,
     chart_state: dict | None = None,
+    regeneration_mode: str | None = None,
+    preferences: dict | None = None,
 ) -> _Turn:
     """Persist the user message and assemble the turn's quant context.
 
@@ -645,6 +665,11 @@ def _prepare_turn(
     session = repo.get_session(session_id)
     if session is None:
         raise ValueError(f"chat session {session_id} not found")
+
+    if regeneration_mode == "refresh":
+        _clear_context_cache()
+        from backend.ai.market_baseline import invalidate_cache
+        invalidate_cache()
 
     repo.add_message(session_id, "user", user_content)
 
@@ -706,6 +731,9 @@ def _prepare_turn(
         (not symbols and not _CALCULATION_HINT.search(user_content))
         or bool(_MARKET_INTENT.search(user_content))
         or bool(_ACTION_INTENT.search(user_content))
+    )
+    reused_context = regeneration_mode != "refresh" and _has_fresh_context_cache(
+        symbols, news=want_news, funda=want_funda, diverg=single
     )
 
     def _ctx(sym: str) -> dict:
@@ -791,6 +819,9 @@ def _prepare_turn(
         base=base,
         planner_state=next_state,
         chart_state=next_state.get("chart_state"),
+        regeneration_mode=regeneration_mode,
+        reused_context=reused_context,
+        preferences=preferences,
     )
 
 
@@ -807,6 +838,7 @@ def answer_chat_message(
     user_content: str,
     preferences: dict | None = None,
     chart_state: dict | None = None,
+    regeneration_mode: str | None = None,
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
     ChatMessage, and return
@@ -824,10 +856,9 @@ def answer_chat_message(
     — they're per-turn hints for the router's response.
 
     ``preferences`` (5.7.3) is the trader's browser-local operating
-    preferences, forwarded only to ``build_response_blocks`` to tailor
-    the deterministic suggested_followups block — never threaded into
-    the model prompt or any tool argument, so it cannot change a
-    verified calculation or evidence-derived conclusion.
+    preferences. They may tailor prompt terminology, emphasis, and
+    suggested follow-ups, but never change a verified calculation, tool
+    argument, or evidence-derived conclusion.
 
     Never raises for an expected failure mode — AI-off, a per-symbol
     context failure, or a malformed AI reply all produce a stored
@@ -836,8 +867,10 @@ def answer_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content, chart_state)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences)
         trace: list[dict] = []
+        if turn.regeneration_mode:
+            trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
         reply_text, grounded, screened = _generate_reply(
             repo.db,
             turn.symbol_blocks,
@@ -850,6 +883,7 @@ def answer_chat_message(
             turn.base,
             turn.planner_state,
             trace,
+            preferences,
         )
         if trace:
             turn.planner_state["last_tool_result"] = {
@@ -877,6 +911,7 @@ def answer_chat_message(
             trace=trace,
             preferences=preferences,
             chart_state=turn.chart_state,
+            regeneration={"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None,
         )
         assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
         assistant_message.planner_trace = trace
@@ -891,6 +926,7 @@ def stream_chat_message(
     user_content: str,
     preferences: dict | None = None,
     chart_state: dict | None = None,
+    regeneration_mode: str | None = None,
 ) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
@@ -906,7 +942,7 @@ def stream_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content, chart_state)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences)
         yield (
             "meta",
             {
@@ -920,6 +956,8 @@ def stream_chat_message(
         grounded = False
         screened: list[str] = []
         trace: list[dict] = []
+        if turn.regeneration_mode:
+            trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
         try:
             for kind, payload in _generate_reply_streaming(repo.db, turn, trace):
                 if kind == "delta":
@@ -961,6 +999,7 @@ def stream_chat_message(
             trace=trace,
             preferences=preferences,
             chart_state=turn.chart_state,
+            regeneration={"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None,
         )
         msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
         msg.planner_trace = trace
@@ -1101,6 +1140,7 @@ def _generate_reply(
     base_symbols: list[str],
     planner_state: dict | None = None,
     trace: list[dict] | None = None,
+    preferences: dict | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Call the AI and parse its reply. Never raises — degrades to a
     plain reply with grounded=False.
@@ -1175,6 +1215,7 @@ def _generate_reply(
             trace=trace,
             started_at=time.monotonic(),
             planner_state=planner_state,
+            preferences=preferences,
         )
 
     # Route high-confidence, read-only intents to their typed tools before
@@ -1421,6 +1462,7 @@ def _generate_reply(
         capped_note=_capped_note(capped, symbol_blocks),
         token_budget=budget,
         chart_state=(planner_state or {}).get("chart_state"),
+        preferences=preferences,
     )
     synthesis_model = _chat_route_model("synthesis", _chat_route_model("planning"))
     _trace_model_route(trace, "synthesis", synthesis_model)
@@ -1447,6 +1489,7 @@ def _generate_reply(
         alert_context,
         trace=trace,
         planner_state=planner_state,
+        preferences=preferences,
     )
 
 
@@ -1732,6 +1775,7 @@ def _run_turn_actions(
     trace: list[dict] | None = None,
     started_at: float | None = None,
     planner_state: dict | None = None,
+    preferences: dict | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
     the trader's own message hints at more than one request (see
@@ -1829,6 +1873,7 @@ def _run_turn_actions(
             alert_context,
             token_budget=budget,
             chart_state=(planner_state or {}).get("chart_state"),
+            preferences=preferences,
         )
         next_parsed, failure_reason = _complete_and_parse(
             prompt,
@@ -1991,6 +2036,7 @@ def _generate_reply_streaming(
         capped_note=_capped_note(turn.capped, turn.symbol_blocks),
         token_budget=budget,
         chart_state=turn.chart_state,
+        preferences=turn.preferences,
     )
 
     chat_model = _chat_route_model("synthesis", _chat_route_model("planning"))
@@ -2063,10 +2109,11 @@ def _generate_reply_streaming(
             turn.unavailable,
             turn.market_baseline,
             turn.transcript,
-            turn.user_content,
-            turn.alert_context,
-            trace=trace,
-            planner_state=turn.planner_state,
+        turn.user_content,
+        turn.alert_context,
+        trace=trace,
+        planner_state=turn.planner_state,
+        preferences=turn.preferences,
         ),
     )
 

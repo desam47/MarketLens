@@ -50,6 +50,29 @@ def test_partial_and_unavailable_data_become_explicit_warning() -> None:
     assert any("ZZZZ" in item for item in warning["data"]["items"])
 
 
+def test_regeneration_metadata_is_persisted_in_evidence() -> None:
+    blocks = build_response_blocks(
+        content="Refreshed answer.", grounded=True, focus=["AAPL"], partial=[], unavailable=[],
+        regeneration={"mode": "refresh", "reused_context": False},
+    )
+    evidence = next(block for block in blocks if block["type"] == "evidence")
+    assert evidence["data"]["regeneration"] == {"mode": "refresh", "reused_context": False}
+
+
+def test_old_evidence_is_marked_stale_by_the_backend_contract() -> None:
+    blocks = build_response_blocks(
+        content="Old answer.", grounded=True, focus=["AAPL"], partial=[], unavailable=[],
+        trace=[{
+            "tool": "get_quote", "ok": True, "provider": "test",
+            "source_timestamp": "2020-01-01T00:00:00Z", "freshness_seconds": 99999,
+        }],
+    )
+    assert blocks[0]["quality"]["state"] == "stale"
+    assert blocks[0]["quality"]["freshness_status"] == "stale"
+    evidence = next(block for block in blocks if block["type"] == "evidence")
+    assert evidence["data"]["items"][0]["freshness_status"] == "stale"
+
+
 def test_visual_payload_is_persistable_and_keeps_quality_metadata() -> None:
     blocks = build_response_blocks(
         content="Here is the latest chart.",

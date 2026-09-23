@@ -6,6 +6,9 @@ export interface NotebookItem {
   question: string;
   answer: string;
   blocks: ChatMessage['blocks'];
+  symbols: string[];
+  content_types: string[];
+  stale: boolean;
   evidence_timestamps: string[];
   saved_at: string;
 }
@@ -55,12 +58,26 @@ export function saveMessageToChatNotebook(notebookId: string, message: ChatMessa
   const sourceTimestamps = (message.blocks ?? [])
     .map(block => block.quality?.source_timestamp)
     .filter((value): value is string => Boolean(value));
+  const symbols = new Set<string>([...(message.focus || []), ...(message.partial || [])]);
+  const contentTypes = new Set<string>();
+  let stale = false;
+  for (const block of message.blocks ?? []) {
+    contentTypes.add(block.type);
+    const blockSymbol = block.data?.symbol || block.data?.chart_state?.symbol;
+    if (typeof blockSymbol === 'string' && blockSymbol.trim()) symbols.add(blockSymbol.trim().toUpperCase());
+    if (block.quality?.state === 'stale') stale = true;
+    const timestamp = block.quality?.source_timestamp;
+    if (timestamp && Date.now() - Date.parse(timestamp) > 900_000) stale = true;
+  }
   const item: NotebookItem = {
     id: `notebook-item-${message.id}-${Date.now()}`,
     message_id: message.id,
     question: question.slice(0, 2000),
     answer: message.content,
     blocks: message.blocks ?? [],
+    symbols: Array.from(symbols).slice(0, 20),
+    content_types: Array.from(contentTypes).slice(0, 20),
+    stale,
     evidence_timestamps: Array.from(new Set(sourceTimestamps)),
     saved_at: now,
   };

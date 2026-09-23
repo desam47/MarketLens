@@ -86,6 +86,18 @@ class TestBuildChatPrompt(unittest.TestCase):
         self.assertIn("selected_candle", p)
         self.assertIn("not a market-data source", p)
 
+    def test_preferences_tailor_presentation_without_becoming_market_evidence(self):
+        p = build_chat_prompt(
+            [_WARM_BLOCK], [], None, [], "how should I frame this?",
+            preferences={
+                "mode": "swing_trading", "preferred_timeframes": ["1d", "4h"],
+                "default_session": "regular", "risk_per_trade_percent": 1.0,
+            },
+        )
+        self.assertIn("<preferences>", p)
+        self.assertIn("swing_trading", p)
+        self.assertIn("never change verified numbers", p)
+
 
 if __name__ == "__main__":
     unittest.main()

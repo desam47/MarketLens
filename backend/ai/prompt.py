@@ -1387,6 +1387,7 @@ def build_chat_prompt(
     capped_note: str | None = None,
     token_budget: int | None = None,
     chart_state: dict[str, Any] | None = None,
+    preferences: dict[str, Any] | None = None,
 ) -> str:
     """Render one universal-chat turn into a single user message.
 
@@ -1431,6 +1432,25 @@ def build_chat_prompt(
         )
         if fits(chunk):
             parts.append(chunk)
+
+    if preferences:
+        allowed = {
+            key: preferences.get(key)
+            for key in (
+                "mode", "preferred_timeframes", "default_session", "risk_per_trade_percent",
+                "primary_watchlist", "answer_detail_level", "preferred_units",
+            )
+            if preferences.get(key) is not None
+        }
+        if allowed:
+            chunk = (
+                "Trader operating preferences — use only to tailor terminology, emphasis, "
+                "comparison defaults, and risk framing; never change verified numbers, "
+                "tool arguments, or evidence status:\n"
+                f"<preferences>\n{json.dumps(allowed, separators=(',', ':'), default=str)}\n</preferences>"
+            )
+            if fits(chunk):
+                parts.append(chunk)
 
     if market_baseline:
         mb = json.dumps(market_baseline, separators=(",", ":"), default=str)

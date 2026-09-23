@@ -32,6 +32,8 @@ BlockType = Literal[
     "journal_save",
 ]
 
+_STALE_AFTER_SECONDS = 900.0
+
 
 class BlockQuality(BaseModel):
     """Evidence-derived quality metadata shared by every block."""
@@ -48,6 +50,8 @@ class BlockQuality(BaseModel):
     timeframe: str | None = None
     fallback: bool = False
     entitlement: str | None = None
+    freshness_status: Literal["fresh", "recent", "stale", "unknown"] | None = None
+    stale_after_seconds: float | None = None
 
 
 class ResponseBlock(BaseModel):
@@ -83,17 +87,31 @@ def _quality(
         state = "unknown"
 
     confidence = 1.0 if state == "verified" else 0.5 if state == "partial" else 0.0
+    freshness_seconds = successful.get("freshness_seconds") if successful else None
+    if not isinstance(freshness_seconds, (int, float)):
+        freshness_status = "unknown" if successful else None
+    elif freshness_seconds <= 60:
+        freshness_status = "fresh"
+    elif freshness_seconds <= _STALE_AFTER_SECONDS:
+        freshness_status = "recent"
+    else:
+        freshness_status = "stale"
+    if successful and (successful.get("fallback") or freshness_status == "stale") and state not in {"unavailable", "partial"}:
+        state = "stale"
+        confidence = 0.5
     return BlockQuality(
         state=state,
         grounded=bool(grounded),
         confidence=confidence,
         provider=successful.get("provider") if successful else None,
         source_timestamp=successful.get("source_timestamp") if successful else None,
-        freshness_seconds=successful.get("freshness_seconds") if successful else None,
+        freshness_seconds=freshness_seconds,
         session=successful.get("session") if successful else None,
         timeframe=successful.get("timeframe") if successful else None,
         fallback=bool(successful.get("fallback")) if successful else False,
         entitlement=successful.get("entitlement") if successful else None,
+        freshness_status=freshness_status,
+        stale_after_seconds=_STALE_AFTER_SECONDS if successful else None,
     )
 
 
@@ -133,6 +151,17 @@ def _visual_blocks(trace: list[dict[str, Any]], quality: BlockQuality) -> list[R
     return blocks
 
 
+def _trace_freshness(item: dict[str, Any]) -> tuple[str | None, float | None]:
+    age = item.get("freshness_seconds")
+    if not isinstance(age, (int, float)):
+        return item.get("freshness_status"), _STALE_AFTER_SECONDS if item.get("freshness_status") else None
+    if age <= 60:
+        return "fresh", _STALE_AFTER_SECONDS
+    if age <= _STALE_AFTER_SECONDS:
+        return "recent", _STALE_AFTER_SECONDS
+    return "stale", _STALE_AFTER_SECONDS
+
+
 def build_response_blocks(
     *,
     content: str,
@@ -143,6 +172,7 @@ def build_response_blocks(
     trace: list[dict[str, Any]] | None = None,
     preferences: dict[str, Any] | None = None,
     chart_state: dict[str, Any] | None = None,
+    regeneration: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build and validate the application-owned block envelope.
 
@@ -175,27 +205,20 @@ def build_response_blocks(
         )
     ]
 
-    evidence = [
-        {
+    evidence = []
+    for item in trace:
+        if not (item.get("tool") or item.get("provider")):
+            continue
+        freshness_status, stale_after_seconds = _trace_freshness(item)
+        evidence.append({
             key: item.get(key)
             for key in (
-                "tool",
-                "provider",
-                "source_timestamp",
-                "freshness_seconds",
-                "session",
-                "timeframe",
-                "fallback",
-                "entitlement",
-                "warnings",
-                "status",
+                "tool", "provider", "source_timestamp", "freshness_seconds", "session",
+                "timeframe", "fallback", "entitlement", "warnings", "status",
             )
             if item.get(key) is not None
-        }
-        for item in trace
-        if item.get("tool") or item.get("provider")
-    ]
-    if focus or partial or unavailable or evidence or chart_state:
+        } | ({"freshness_status": freshness_status, "stale_after_seconds": stale_after_seconds} if freshness_status else {}))
+    if focus or partial or unavailable or evidence or chart_state or regeneration:
         blocks.append(
             ResponseBlock(
                 id="evidence-1",
@@ -208,6 +231,7 @@ def build_response_blocks(
                     },
                     "items": evidence,
                     **({"chart_state": chart_state} if chart_state else {}),
+                    **({"regeneration": regeneration} if regeneration else {}),
                 },
                 quality=quality,
             )

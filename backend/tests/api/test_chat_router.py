@@ -422,6 +422,32 @@ class TestSendMessage(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 422)
 
+    @patch("backend.ai.chat.answer_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_forwards_regeneration_mode_with_explicit_scope(self, mock_repo_cls, mock_answer):
+        """5.7.9: regeneration is a typed request field, so refresh can
+        invalidate context caches instead of relying only on a prose marker."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_answer.return_value = (_mock_message(id=2, role="assistant", content="fresh"), True, ["AAPL"], [], [])
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "regeneration_mode": "refresh"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mock_answer.call_args.args[3], None)
+        self.assertEqual(mock_answer.call_args.args[4], "refresh")
+
+    def test_rejects_unknown_regeneration_mode(self):
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "regeneration_mode": "live_magic"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_404_when_session_missing(self, mock_repo_cls):
         mock_repo = MagicMock()

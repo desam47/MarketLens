@@ -40,6 +40,7 @@ export default function App() {
   // Lifted to App (not page-local) so it survives nav-tab switches.
   const [hubSymbol, setHubSymbol] = useState<string>('SPY');
   const [symbolNavigation, setSymbolNavigation] = useState<NavigationState>({});
+  const [pageNavigation, setPageNavigation] = useState<Partial<Record<AppPage, NavigationState>>>({});
   const [startupMode, setStartupMode] = useState<StartupMode>(null);
 
   useEffect(() => {
@@ -76,6 +77,7 @@ export default function App() {
   const navigateTo = useCallback((page: AppPage, navigation: NavigationState = {}) => {
     const nextHash = hashForPage(page);
     setCurrentPage(page);
+    setPageNavigation(current => ({ ...current, [page]: navigation }));
     if (page === 'symbol') setSymbolNavigation(navigation);
 
     if (window.location.hash !== nextHash) {
@@ -107,21 +109,21 @@ export default function App() {
       case 'hub':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} onNavigate={(page, targetSymbol, navigation) => { if (targetSymbol) { setSymbol(targetSymbol); setHubSymbol(targetSymbol); } navigateTo(page, { ...navigation, ...(targetSymbol ? { symbol: targetSymbol } : {}) }); }} /></PageErrorBoundary></Suspense>;
       case 'alerts':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Alerts"><AlertsPage navigation={pageNavigation.alerts} /></PageErrorBoundary></Suspense>;
       case 'backtest':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Backtest"><BacktestPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Backtest"><BacktestPage navigation={pageNavigation.backtest} /></PageErrorBoundary></Suspense>;
       case 'health':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
       case 'signals':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage navigation={pageNavigation.signals} /></PageErrorBoundary></Suspense>;
       case 'scanner':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Scanner"><ScannerPage navigation={pageNavigation.scanner} onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'risk':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Risk Dashboard"><RiskDashboardPage navigation={pageNavigation.risk} /></PageErrorBoundary></Suspense>;
       case 'journal':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Journal"><TradeJournalPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Trade Journal"><TradeJournalPage navigation={pageNavigation.journal} /></PageErrorBoundary></Suspense>;
       case 'calendar':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Earnings & Events"><CalendarPage /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Earnings & Events"><CalendarPage navigation={pageNavigation.calendar} /></PageErrorBoundary></Suspense>;
       default:
         return <PageErrorBoundary key="dashboard" pageName="Dashboard"><Dashboard symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary>;
     }

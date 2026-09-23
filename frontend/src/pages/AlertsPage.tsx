@@ -3,8 +3,9 @@ import api, { SystemPerformance } from '../services/api';
 import { AlertsCard } from '../components/AlertsCard';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { useMarketSession } from '../hooks/useMarketSession';
+import type { NavigationState } from '../utils/appNavigation';
 
-export function AlertsPage() {
+export function AlertsPage({ navigation }: { navigation?: NavigationState }) {
   const [performance, setPerformance] = useState<SystemPerformance | null>(null);
   const marketSession = useMarketSession();
 
@@ -35,7 +36,7 @@ export function AlertsPage() {
           />
         </div>
       </div>
-      <AlertsCard />
+      <AlertsCard defaultSymbol={navigation?.symbol || ''} />
     </div>
   );
 }
