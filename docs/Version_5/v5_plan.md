@@ -181,6 +181,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.4 Intent coverage
 - Support symbol, market, comparison, scanner, watchlist, portfolio, risk, options, historical, journal, calculation, and app-action intents.
 - Replace fragile regex-only routing gradually; deterministic routes remain for exact DB questions and confirmation handling.
+- High-confidence options, historical bars, scanner, risk dashboard, journal, and alerts requests now route to typed tools before model action selection; comparison synthesis remains model-assisted.
 
 #### 5.3.5 Cost, latency, and rate-limit budgets
 - Prefer local database/cache tools before provider calls.

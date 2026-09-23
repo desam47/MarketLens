@@ -218,6 +218,12 @@ _STATS_INTENT = re.compile(
 # focused single-ticker question that would otherwise skip the market
 # baseline — force it on regardless of the market-wide gate below.
 _ACTION_INTENT = re.compile(r"\b(alert\w*|notify|remind\w*|watch ?list\w*|track\w*)\b", re.I)
+_OPTIONS_TOOL_INTENT = re.compile(r"\b(options?|calls?|puts?|option chain|implied volatility|open interest|put[/-]?call)\b", re.I)
+_HISTORICAL_TOOL_INTENT = re.compile(r"\b(historical|history|past bars?|candles?|price history|ohlc|replay)\b", re.I)
+_SCANNER_TOOL_INTENT = re.compile(r"\b(screen|scanner|scan|find stocks?|find tickers?|filter my watchlist)\b", re.I)
+_RISK_TOOL_INTENT = re.compile(r"\b(risk dashboard|portfolio risk|position risk|my positions|exposure|drawdown)\b", re.I)
+_JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
+_ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -971,6 +977,82 @@ def _generate_reply(
             action="calculate",
             action_calculation=calculation,
         )
+        return _run_turn_actions(
+            db,
+            deterministic,
+            symbol_blocks,
+            unavailable,
+            market_baseline,
+            transcript,
+            user_content,
+            alert_context,
+            trace=trace,
+            started_at=time.monotonic(),
+            planner_state=planner_state,
+        )
+
+    # Route high-confidence, read-only intents to their typed tools before
+    # asking the model to choose an action. This keeps common requests
+    # deterministic and makes missing symbol scope explicit.
+    focus_symbols = [b["symbol"] for b in symbol_blocks]
+    if _OPTIONS_TOOL_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return (
+                "Which ticker should I use for the options lookup?",
+                False,
+                [],
+            )
+        deterministic = ChatReplyResponse(
+            reply="Verified options lookup",
+            grounded=True,
+            action="get_options_snapshot",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    elif _HISTORICAL_TOOL_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker and timeframe should I use for the historical data?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified historical data lookup",
+            grounded=True,
+            action="get_bars",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={
+                "symbol": focus_symbols[0],
+                "timeframe": (planner_state or {}).get("timeframe") or "1d",
+            },
+        )
+    elif _SCANNER_TOOL_INTENT.search(user_content):
+        deterministic = ChatReplyResponse(
+            reply="Verified scanner request",
+            grounded=True,
+            action="run_screen",
+            action_query=user_content[:300],
+        )
+    elif _RISK_TOOL_INTENT.search(user_content):
+        deterministic = ChatReplyResponse(
+            reply="Verified risk dashboard lookup",
+            grounded=True,
+            action="get_risk_dashboard",
+            action_tool_arguments={},
+        )
+    elif _JOURNAL_TOOL_INTENT.search(user_content):
+        deterministic = ChatReplyResponse(
+            reply="Verified trade journal lookup",
+            grounded=True,
+            action="get_trade_journal",
+            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
+        )
+    elif _ALERTS_TOOL_INTENT.search(user_content):
+        deterministic = ChatReplyResponse(
+            reply="Verified alerts lookup",
+            grounded=True,
+            action="get_alerts",
+            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
+        )
+    else:
+        deterministic = None
+    if deterministic is not None:
         return _run_turn_actions(
             db,
             deterministic,

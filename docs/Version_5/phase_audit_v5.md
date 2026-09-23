@@ -511,7 +511,9 @@ Structured memory now includes the previous ticker, last calculation inputs,
 and a bounded last-tool-result summary; exact calculations and missing
 calculation inputs are handled deterministically before an AI call. Pending
 destructive confirmations are persisted with their target and resolved only
-against that exact action. Chained planning
+against that exact action. High-confidence options, historical, scanner, risk,
+journal, and alert requests now route to typed tools before model action
+selection. Chained planning
 now also observes a configurable wall-clock budget and stops safely before
 starting another continuation when it expires. Complex-request
 decomposition, partial failure, saved workflows, model routing, and deterministic
