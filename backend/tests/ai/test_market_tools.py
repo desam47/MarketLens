@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from backend.ai.market_tools import (
     AlertsRequest,
+    AnomalyAnalysisRequest,
     ApplicationHelpRequest,
     BarsRequest,
     ChangeAnalysisRequest,
@@ -23,6 +24,7 @@ from backend.ai.market_tools import (
     TapeRequest,
     TradeJournalRequest,
     TrendRequest,
+    anomaly_analysis_tool,
     compare_symbols_tool,
     counterargument_review_tool,
     get_alerts_tool,
@@ -394,6 +396,33 @@ def test_market_event_timeline_normalizes_and_orders_events(monkeypatch) -> None
     assert any(event["type"] == "signal" for event in result.events)
     assert any(event["type"] == "alert" for event in result.events)
     assert any(event["type"] == "news" for event in result.events)
+
+
+def test_anomaly_analysis_reports_baseline_deviations_and_corroboration(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    closes = [100 + index for index in range(24)] + [160]
+    bars = [{"close": close, "volume": 100 + index * 5} for index, close in enumerate(closes)]
+    monkeypatch.setattr("backend.ai.market_tools.get_bars_tool", lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="2026-09-22T16:00:00-04:00", bars=bars))
+    monkeypatch.setattr("backend.ai.market_tools.get_quote_tool", lambda request: _Payload(symbol=request.symbol, provider="webull", timestamp="2026-09-22T16:00:00-04:00", bid=100, ask=101, price=100))
+    monkeypatch.setattr("backend.ai.market_tools.get_tape_state_tool", lambda request: _Payload(symbol=request.symbol, provider="webull", source_timestamp="now", snapshot={"large_prints": [{"size": 10}], "pressure": "buy"}))
+    monkeypatch.setattr("backend.ai.market_tools.get_options_tool", lambda request: _Payload(symbol=request.symbol, provider="yahoo_finance", source_timestamp="now", chains=[{"unusual_activity": "unusual"}]))
+
+    result = anomaly_analysis_tool(
+        AnomalyAnalysisRequest(
+            symbol="AAPL",
+            baseline_bars=20,
+            positions=[PositionInput(symbol="AAPL", quantity=100, entry_price=100, current_price=100)],
+        )
+    )
+
+    types = {anomaly["type"] for anomaly in result.anomalies}
+    assert "price_return" in types
+    assert "spread" in types
+    assert "large_prints" in types
+    assert "options_activity" in types
+    assert "portfolio_concentration" in types
+    assert result.conclusion["status"] == "verified_anomalies"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

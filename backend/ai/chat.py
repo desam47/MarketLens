@@ -190,6 +190,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "counterargument_review",
         "sensitivity_analysis",
         "market_event_timeline",
+        "anomaly_analysis",
         "run_screen",
     }
 
@@ -242,6 +243,7 @@ _SIGNAL_EXPLANATION_INTENT = re.compile(r"\b(explain (?:the )?(?:signal|setup)|w
 _COUNTERARGUMENT_INTENT = re.compile(r"\b(what invalidates|what would invalidate|invalidation|counterargument|counter-argument|opposing evidence|what could prove .* wrong|what would break)\b", re.I)
 _SENSITIVITY_INTENT = re.compile(r"\b(sensitivity|how sensitive|vary (?:the )?(?:entry|stop|target|position size)|assumption impact)\b", re.I)
 _TIMELINE_INTENT = re.compile(r"\b(event timeline|timeline|what happened (?:before|after|around)|before the breakout|after earnings|between .* and)\b", re.I)
+_ANOMALY_INTENT = re.compile(r"\b(anomal(?:y|ies)|unusual|abnormal|outlier|z[- ]?score|spike|surge|spread widening|unusual activity)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1030,7 +1032,16 @@ def _generate_reply(
     # asking the model to choose an action. This keeps common requests
     # deterministic and makes missing symbol scope explicit.
     focus_symbols = [b["symbol"] for b in symbol_blocks]
-    if _TIMELINE_INTENT.search(user_content):
+    if _ANOMALY_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I check for anomalies?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified anomaly analysis",
+            grounded=True,
+            action="anomaly_analysis",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    elif _TIMELINE_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return "Which ticker should I build the event timeline for?", False, []
         deterministic = ChatReplyResponse(
@@ -2372,6 +2383,7 @@ _MARKET_TOOL_ACTIONS = {
     "counterargument_review",
     "sensitivity_analysis",
     "market_event_timeline",
+    "anomaly_analysis",
     "import_csv",
 }
 

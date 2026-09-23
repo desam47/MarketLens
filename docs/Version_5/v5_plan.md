@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, `sensitivity_analysis`, and `market_event_timeline` evidence tools are implemented; anomaly and assumption tracking work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, `sensitivity_analysis`, `market_event_timeline`, and `anomaly_analysis` evidence tools are implemented; assumption tracking work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -265,6 +265,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.10 Proactive anomaly explanations
 - Detect unusual price, volume, spread, tape, options, correlation, and portfolio-risk changes relative to an explicit historical baseline.
 - Explain the baseline, magnitude, sample window, and available corroborating evidence.
+- Implemented first slice: typed z-score price/volume baselines, quote-spread thresholds, tape large-print/imbalance checks, options unusual-activity checks, benchmark correlation breaks, portfolio concentration checks, provenance, and explicit unknowns.
 
 #### 5.4.11 Research assumption tracking
 - Save user-approved assumptions such as expected growth, stop, catalyst date, volatility, and invalidation conditions with source and creation time.

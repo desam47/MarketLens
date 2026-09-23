@@ -371,3 +371,31 @@ def test_event_timeline_routes_to_typed_tool(monkeypatch) -> None:
     assert "market_event_timeline" in text
     assert requests[0].tool_name == "market_event_timeline"
     complete.assert_not_called()
+
+
+def test_anomaly_question_routes_to_typed_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: (requests.append(request) or ToolResult(tool_name=request.tool_name, ok=True, data={"anomalies": []}, provider="MarketLens anomaly analysis")),
+    )
+
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "are there unusual volume anomalies in AAPL?",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "anomaly_analysis" in text
+    assert requests[0].tool_name == "anomaly_analysis"
+    complete.assert_not_called()

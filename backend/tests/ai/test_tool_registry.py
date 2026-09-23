@@ -19,6 +19,7 @@ from backend.ai.tool_registry import (
 
 def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
+        "anomaly_analysis",
         "calculate",
         "compare_symbols",
         "counterargument_review",

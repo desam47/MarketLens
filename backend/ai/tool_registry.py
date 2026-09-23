@@ -350,6 +350,7 @@ def build_default_registry() -> ToolRegistry:
     )
     from backend.ai.market_tools import (
         AlertsRequest,
+        AnomalyAnalysisRequest,
         ApplicationHelpRequest,
         BarsRequest,
         CalendarRequest,
@@ -375,6 +376,7 @@ def build_default_registry() -> ToolRegistry:
         TradeJournalRequest,
         TrendRequest,
         WatchlistRequest,
+        anomaly_analysis_tool,
         compare_symbols_tool,
         counterargument_review_tool,
         get_alerts_tool,
@@ -434,6 +436,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="counterargument_review", kind="read_only", description="Review opposing evidence and evidence-backed invalidation thresholds.", input_model=CounterargumentRequest, handler=counterargument_review_tool))
     registry.register(ToolSpec(name="sensitivity_analysis", kind="read_only", description="Run bounded one-factor sensitivity calculations.", input_model=SensitivityRequest, handler=sensitivity_analysis_tool))
     registry.register(ToolSpec(name="market_event_timeline", kind="read_only", description="Combine normalized price, session, signal, alert, and auxiliary events.", input_model=MarketEventTimelineRequest, handler=market_event_timeline_tool))
+    registry.register(ToolSpec(name="anomaly_analysis", kind="read_only", description="Detect unusual price, volume, spread, tape, options, correlation, and concentration observations.", input_model=AnomalyAnalysisRequest, handler=anomaly_analysis_tool))
     registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))

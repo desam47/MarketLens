@@ -205,6 +205,22 @@ class MarketEventTimelineRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
+class AnomalyAnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    timeframe: str = "1d"
+    range: str = Field(default="3mo", pattern=r"^[0-9]+(d|mo|y)$")
+    baseline_bars: int = Field(default=20, ge=5, le=200)
+    z_threshold: float = Field(default=2.0, gt=0, le=10)
+    spread_threshold_bps: float = Field(default=50.0, gt=0, le=10_000)
+    benchmark_symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    include_tape: bool = True
+    include_options: bool = True
+    positions: list[PositionInput] = Field(default_factory=list, max_length=500)
+    portfolio_concentration_threshold: float = Field(default=40.0, gt=0, le=100)
+
+
 class TradeJournalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1492,6 +1508,118 @@ def market_event_timeline_tool(request: MarketEventTimelineRequest) -> BaseModel
         filtered.append(event)
     filtered.sort(key=lambda event: event.get("timestamp") or "")
     return _Payload(symbol=symbol, timeframe=request.timeframe, session=request.session, start=request.start, end=request.end, events=filtered[-request.limit :], event_count=len(filtered[-request.limit :]), total_event_count=len(filtered), unknowns=unknowns, sources=sources, provider="MarketLens timeline", conclusion={"status": "verified_timeline" if filtered else "insufficient_events", "message": "Events retain source/provider metadata and are normalized to America/New_York."})
+
+
+def anomaly_analysis_tool(request: AnomalyAnalysisRequest) -> BaseModel:
+    """Detect unusual observations against explicit local baselines."""
+    symbol = request.symbol.upper()
+    anomalies: list[dict[str, Any]] = []
+    corroborating: list[dict[str, Any]] = []
+    unknowns: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    baseline: dict[str, Any] = {"window_bars": request.baseline_bars, "z_threshold": request.z_threshold}
+    closes: list[float] = []
+    try:
+        bars_payload = get_bars_tool(BarsRequest(symbol=symbol, timeframe=request.timeframe, range=request.range, limit=2_000)).model_dump(mode="json")
+        bars = bars_payload.get("bars", [])
+        closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
+        volumes = [float(bar.get("volume", 0) or 0) for bar in bars]
+        if len(closes) < request.baseline_bars + 2:
+            unknowns.append({"type": "price_volume", "reason": "insufficient bars for requested baseline"})
+        else:
+            returns = [(closes[index] - closes[index - 1]) / abs(closes[index - 1]) * 100 for index in range(1, len(closes)) if closes[index - 1]]
+            baseline_returns = returns[-request.baseline_bars - 1 : -1]
+            latest_return = returns[-1]
+            mean_return = sum(baseline_returns) / len(baseline_returns)
+            return_std = stdev(baseline_returns) if len(baseline_returns) > 1 else 0.0
+            return_z = (latest_return - mean_return) / return_std if return_std else 0.0
+            baseline["return_percent"] = {"mean": mean_return, "stddev": return_std, "latest": latest_return, "z_score": return_z}
+            if abs(return_z) >= request.z_threshold:
+                anomalies.append({"type": "price_return", "severity": "high" if abs(return_z) >= request.z_threshold * 1.5 else "elevated", "value": latest_return, "z_score": return_z, "baseline": {"mean": mean_return, "stddev": return_std}, "direction": "up" if latest_return > 0 else "down"})
+            baseline_volumes = volumes[-request.baseline_bars - 1 : -1]
+            mean_volume = sum(baseline_volumes) / len(baseline_volumes)
+            volume_std = stdev(baseline_volumes) if len(baseline_volumes) > 1 else 0.0
+            latest_volume = volumes[-1]
+            volume_z = (latest_volume - mean_volume) / volume_std if volume_std else 0.0
+            baseline["volume"] = {"mean": mean_volume, "stddev": volume_std, "latest": latest_volume, "z_score": volume_z}
+            if abs(volume_z) >= request.z_threshold:
+                anomalies.append({"type": "volume", "severity": "high" if volume_z >= request.z_threshold * 1.5 else "elevated", "value": latest_volume, "z_score": volume_z, "baseline": {"mean": mean_volume, "stddev": volume_std}})
+        sources.append({"name": "bars", "provider": bars_payload.get("provider"), "timestamp": bars_payload.get("source_timestamp")})
+    except Exception as exc:
+        unknowns.append({"type": "price_volume", "reason": str(exc)})
+
+    try:
+        quote = get_quote_tool(SymbolRequest(symbol=symbol)).model_dump(mode="json")
+        bid, ask, price = quote.get("bid"), quote.get("ask"), quote.get("price")
+        spread_bps = (float(ask) - float(bid)) / ((float(ask) + float(bid)) / 2) * 10_000 if bid is not None and ask is not None and float(bid) > 0 and float(ask) >= float(bid) else None
+        baseline["spread_bps"] = spread_bps
+        if spread_bps is not None and spread_bps >= request.spread_threshold_bps:
+            anomalies.append({"type": "spread", "severity": "elevated", "value_bps": spread_bps, "threshold_bps": request.spread_threshold_bps, "price": price})
+        sources.append({"name": "quote", "provider": quote.get("provider"), "timestamp": quote.get("timestamp")})
+    except Exception as exc:
+        unknowns.append({"type": "spread", "reason": str(exc)})
+
+    if request.include_tape:
+        try:
+            tape = get_tape_state_tool(TapeRequest(symbol=symbol)).model_dump(mode="json")
+            snapshot = tape.get("snapshot") or {}
+            large_prints = snapshot.get("large_prints") or snapshot.get("large_trades")
+            if large_prints:
+                anomalies.append({"type": "large_prints", "severity": "elevated", "value": large_prints, "source": "tape"})
+            imbalance = snapshot.get("imbalance") or snapshot.get("bid_ask_imbalance")
+            if isinstance(imbalance, (int, float)) and abs(imbalance) >= 0.7:
+                anomalies.append({"type": "tape_imbalance", "severity": "elevated", "value": imbalance, "source": "tape"})
+            pressure = snapshot.get("pressure") or snapshot.get("tape_pressure")
+            if pressure:
+                corroborating.append({"type": "tape_pressure", "value": pressure})
+            sources.append({"name": "tape", "provider": tape.get("provider"), "timestamp": tape.get("source_timestamp")})
+        except Exception as exc:
+            unknowns.append({"type": "tape", "reason": str(exc)})
+
+    if request.include_options:
+        try:
+            options = get_options_tool(OptionsRequest(symbol=symbol)).model_dump(mode="json")
+            unusual = [chain for chain in options.get("chains", []) if str(chain.get("unusual_activity", "normal")).lower() not in {"normal", "none"}]
+            if unusual:
+                anomalies.append({"type": "options_activity", "severity": "elevated", "value": unusual, "source": "options"})
+            sources.append({"name": "options", "provider": options.get("provider"), "timestamp": options.get("source_timestamp")})
+        except Exception as exc:
+            unknowns.append({"type": "options", "reason": str(exc)})
+
+    if request.benchmark_symbol:
+        benchmark = request.benchmark_symbol.upper()
+        try:
+            benchmark_payload = get_bars_tool(BarsRequest(symbol=benchmark, timeframe=request.timeframe, range=request.range, limit=2_000)).model_dump(mode="json")
+            benchmark_closes = [float(bar["close"]) for bar in benchmark_payload.get("bars", []) if bar.get("close") is not None]
+            symbol_returns = [(closes[index] / closes[index - 1]) - 1 for index in range(1, len(closes))]
+            benchmark_returns = [(benchmark_closes[index] / benchmark_closes[index - 1]) - 1 for index in range(1, len(benchmark_closes))]
+            length = min(len(symbol_returns), len(benchmark_returns), request.baseline_bars)
+            left, right = symbol_returns[-length:], benchmark_returns[-length:]
+            if length >= 3:
+                left_mean, right_mean = sum(left) / length, sum(right) / length
+                covariance = sum((a - left_mean) * (b - right_mean) for a, b in zip(left, right, strict=True))
+                left_dev = math.sqrt(sum((a - left_mean) ** 2 for a in left))
+                right_dev = math.sqrt(sum((b - right_mean) ** 2 for b in right))
+                correlation = covariance / (left_dev * right_dev) if left_dev and right_dev else None
+                baseline["correlation"] = {"benchmark": benchmark, "value": correlation, "sample_size": length}
+                if correlation is not None and abs(correlation) < 0.2:
+                    anomalies.append({"type": "correlation_break", "severity": "elevated", "value": correlation, "benchmark": benchmark, "reason": "recent returns have weak correlation to the selected benchmark"})
+            sources.append({"name": "benchmark", "symbol": benchmark, "provider": benchmark_payload.get("provider"), "timestamp": benchmark_payload.get("source_timestamp")})
+        except Exception as exc:
+            unknowns.append({"type": "correlation", "reason": str(exc)})
+
+    if request.positions:
+        gross = sum((position.current_price or position.entry_price) * position.quantity for position in request.positions)
+        for position in request.positions:
+            value = (position.current_price or position.entry_price) * position.quantity
+            weight = value / gross * 100 if gross else 0.0
+            if weight >= request.portfolio_concentration_threshold:
+                anomalies.append({"type": "portfolio_concentration", "severity": "elevated", "symbol": position.symbol.upper(), "weight_percent": weight, "threshold_percent": request.portfolio_concentration_threshold})
+        baseline["portfolio_gross_exposure"] = gross
+    else:
+        unknowns.append({"type": "portfolio_risk", "reason": "no position snapshot supplied"})
+
+    return _Payload(symbol=symbol, anomalies=anomalies, anomaly_count=len(anomalies), baseline=baseline, corroborating_evidence=corroborating, unknowns=unknowns, sources=sources, provider="MarketLens anomaly analysis", conclusion={"status": "verified_anomalies" if anomalies else "no_anomaly_detected", "message": "Anomalies are deviations from the supplied baseline, not predictions."})
 
 
 def _database_timestamp() -> str:
