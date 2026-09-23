@@ -17,9 +17,16 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { AlertConversationContext, ChatMessage, ChatResponseBlock } from '../services/api';
+import api, { AlertConversationContext, ChatMessage, ChatPreferences as ChatPreferencesType, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 import type { AppPage } from '../utils/appNavigation';
+import { ChatPreferencesPanel } from './ChatPreferencesPanel';
+import {
+  isDefaultChatPreferences,
+  loadChatPreferences,
+  resetChatPreferences,
+  saveChatPreferences,
+} from '../utils/chatPreferences';
 
 interface ChatPanelProps {
   alertTriggerId?: number | null;
@@ -124,6 +131,8 @@ export function ChatPanel({
   const [error, setError] = useState<string | null>(null);
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
+  const [preferences, setPreferences] = useState<ChatPreferencesType>(() => loadChatPreferences());
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -302,6 +311,7 @@ export function ChatPanel({
             prev.map(m => (m.id === placeholderId ? { ...m, content: m.content + t } : m)),
           );
         },
+        preferences: isDefaultChatPreferences(preferences) ? null : preferences,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
@@ -310,7 +320,7 @@ export function ChatPanel({
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
-          const finalMsg = await api.sendChatMessage(sessionId, content);
+          const finalMsg = await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
           persistJournalBlocks(finalMsg.blocks);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
           adoptSymbol(finalMsg.focus, finalMsg.partial);
@@ -326,7 +336,7 @@ export function ChatPanel({
     } finally {
       setSending(false);
     }
-  }, [sessionId, sending, onSymbolResolved]);
+  }, [sessionId, sending, onSymbolResolved, preferences]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -343,16 +353,38 @@ export function ChatPanel({
       <div className="chat-panel-header">
         <div className="chat-panel-header-top">
           <h2>💬 Chat</h2>
-          <button
-            type="button"
-            className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
-            onClick={handleClear}
-            disabled={loading || clearing || messages.length === 0}
-            title="Permanently delete this chat's history and start fresh"
-          >
-            {clearing ? '⟳' : '🗑 Clear'}
-          </button>
+          <div className="chat-panel-header-actions">
+            <button
+              type="button"
+              className={`btn btn-secondary ${!isDefaultChatPreferences(preferences) ? 'chat-pref-set' : ''}`}
+              onClick={() => setPreferencesOpen(open => !open)}
+              title="Personal preferences — mode, timeframes, risk, detail level"
+              aria-expanded={preferencesOpen}
+            >
+              ⚙ Preferences{!isDefaultChatPreferences(preferences) ? ' •' : ''}
+            </button>
+            <button
+              type="button"
+              className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
+              onClick={handleClear}
+              disabled={loading || clearing || messages.length === 0}
+              title="Permanently delete this chat's history and start fresh"
+            >
+              {clearing ? '⟳' : '🗑 Clear'}
+            </button>
+          </div>
         </div>
+        {preferencesOpen && (
+          <ChatPreferencesPanel
+            preferences={preferences}
+            onChange={next => {
+              setPreferences(next);
+              saveChatPreferences(next);
+            }}
+            onReset={() => setPreferences(resetChatPreferences())}
+            onClose={() => setPreferencesOpen(false)}
+          />
+        )}
         <p className="info-text">
           Uses live quant data where available — full coverage for your watchlist,
           price&nbsp;+&nbsp;indicators only for other tickers. Research to inform your

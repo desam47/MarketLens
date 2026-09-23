@@ -22,6 +22,7 @@ const mockApi = api as jest.Mocked<typeof api>;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.localStorage.clear();
   mockApi.createChatSession.mockResolvedValue({
     id: 1, symbol: null, scope: 'universal', alert_trigger_id: null,
     created_at: '', updated_at: '',
@@ -347,6 +348,54 @@ describe('ChatPanel (universal)', () => {
     expect(within(chartRegion).getByText('Low 100.00')).toBeInTheDocument();
     fireEvent.click(within(chartRegion).getByRole('button', { name: 'Collapse' }));
     expect(within(chartRegion).queryByText(/High/)).toBeNull();
+  });
+
+  it('preferences panel: set, persist across remount, and reset (5.7.3)', async () => {
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+
+    const toggle = screen.getByRole('button', { name: /Preferences/i });
+    expect(toggle).not.toHaveClass('chat-pref-set');
+    fireEvent.click(toggle);
+
+    fireEvent.change(screen.getByLabelText('Trading mode'), { target: { value: 'swing_trading' } });
+    fireEvent.change(screen.getByLabelText('Risk per trade percent'), { target: { value: '1.5' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '4h' }));
+
+    // Persisted to localStorage immediately, not only on some later save action.
+    const stored = JSON.parse(window.localStorage.getItem('marketlens.chat.preferences') || '{}');
+    expect(stored.mode).toBe('swing_trading');
+    expect(stored.risk_per_trade_percent).toBe(1.5);
+    expect(stored.preferred_timeframes).toEqual(['4h']);
+    expect(screen.getByRole('button', { name: /Preferences/i })).toHaveClass('chat-pref-set');
+
+    // A remount (e.g. navigating away and back) must pick the saved value back up.
+    const { unmount } = render(<ChatPanel />);
+    unmount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+    expect(JSON.parse(window.localStorage.getItem('marketlens.chat.preferences') || '{}').mode).toBeUndefined();
+    expect(screen.getByLabelText('Trading mode')).toHaveValue('');
+  });
+
+  it('sends non-default preferences with the message, and null when everything is unset (5.7.3)', async () => {
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.click(screen.getByRole('button', { name: /Preferences/i }));
+    fireEvent.change(screen.getByLabelText('Trading mode'), { target: { value: 'day_trading' } });
+    fireEvent.click(screen.getByRole('button', { name: '✕' })); // close the panel, doesn't clear the preference
+
+    mockApi.streamChatMessage.mockRejectedValueOnce(Object.assign(new Error('stream failed'), { beforeFirstDelta: true }));
+    mockApi.sendChatMessage.mockResolvedValueOnce({
+      id: 9, session_id: 1, role: 'assistant', content: 'ok', created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+    } as any);
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'how is the market' } });
+    fireEvent.submit(screen.getByRole('textbox').closest('form')!);
+
+    await waitFor(() => expect(mockApi.sendChatMessage).toHaveBeenCalled());
+    const sentPrefs = mockApi.sendChatMessage.mock.calls[0][2];
+    expect(sentPrefs.mode).toBe('day_trading');
   });
 
   it('handles missing/long values without crashing (5.7.1 mobile/long-value coverage)', async () => {
@@ -790,6 +839,6 @@ describe('ChatPanel (universal)', () => {
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(await screen.findByText('Fallback reply.')).toBeInTheDocument();
-    expect(mockApi.sendChatMessage).toHaveBeenCalledWith(1, 'how is the market');
+    expect(mockApi.sendChatMessage).toHaveBeenCalledWith(1, 'how is the market', null);
   });
 });

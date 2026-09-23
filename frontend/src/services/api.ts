@@ -2574,11 +2574,11 @@ class ApiService {
     return this.fetch(`/ai/chat/sessions${qs}`, { method: 'DELETE' });
   }
 
-  async sendChatMessage(sessionId: number, content: string): Promise<ChatMessage> {
+  async sendChatMessage(sessionId: number, content: string, preferences?: ChatPreferences | null): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(preferences ? { content, preferences } : { content }),
     }, AI_TIMEOUT_MS);
   }
 
@@ -2599,6 +2599,7 @@ class ApiService {
       onDelta?: (text: string) => void;
       onMeta?: (m: { focus: string[]; partial: string[]; unavailable: string[] }) => void;
       signal?: AbortSignal;
+      preferences?: ChatPreferences | null;
     } = {},
   ): Promise<ChatMessage> {
     const response = await fetch(
@@ -2606,7 +2607,7 @@ class ApiService {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(opts.preferences ? { content, preferences: opts.preferences } : { content }),
         signal: opts.signal,
       },
     );
@@ -2848,6 +2849,23 @@ export interface ChatSession {
   alert_trigger_id: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * The trader's personal operating preferences (5.7.3) — stored
+ * browser-local (see utils/chatPreferences.ts), sent with each turn.
+ * Mirrors backend.api.ai.chat_router.ChatPreferences field-for-field;
+ * the backend rejects an unknown field (extra="forbid"), so keep these
+ * two in sync.
+ */
+export interface ChatPreferences {
+  mode: 'day_trading' | 'swing_trading' | 'options' | 'long_term_investing' | null;
+  preferred_timeframes: string[];
+  default_session: 'premarket' | 'regular' | 'after_hours' | 'auto' | null;
+  risk_per_trade_percent: number | null;
+  primary_watchlist: string | null;
+  answer_detail_level: 'concise' | 'standard' | 'detailed' | null;
+  preferred_units: 'percent' | 'dollars' | null;
 }
 
 export type ChatBlockType =

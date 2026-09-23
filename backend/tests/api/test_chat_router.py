@@ -275,7 +275,56 @@ class TestSendMessage(unittest.TestCase):
         self.assertEqual(data["content"], "AAPL looks bullish.")
         self.assertTrue(data["grounded"])
         self.assertEqual(data["focus"], ["AAPL"])
-        mock_answer.assert_called_once_with(1, "How's AAPL?")
+        mock_answer.assert_called_once_with(1, "How's AAPL?", None)
+
+    @patch("backend.ai.chat.answer_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_forwards_preferences_as_a_plain_dict(self, mock_repo_cls, mock_answer):
+        """5.7.3: preferences sent with the turn must reach
+        answer_chat_message as a plain dict (model_dump()), not the
+        Pydantic model itself — chat.py's build_response_blocks does a
+        plain .get('mode') on it."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_answer.return_value = (
+            _mock_message(id=2, role="assistant", content="AAPL looks bullish."),
+            True, ["AAPL"], [], [],
+        )
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "preferences": {"mode": "day_trading", "risk_per_trade_percent": 1.5}},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        sent_preferences = mock_answer.call_args.args[2]
+        self.assertIsInstance(sent_preferences, dict)
+        self.assertEqual(sent_preferences["mode"], "day_trading")
+        self.assertEqual(sent_preferences["risk_per_trade_percent"], 1.5)
+
+    def test_rejects_invalid_mode(self):
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "preferences": {"mode": "not_a_real_mode"}},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_rejects_risk_per_trade_percent_out_of_range(self):
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "preferences": {"risk_per_trade_percent": 500}},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_rejects_unknown_preference_field(self):
+        """extra='forbid' — a typo'd or stale field must be rejected, not
+        silently ignored, so a frontend/backend contract drift is loud."""
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={"content": "How's AAPL?", "preferences": {"moode": "day_trading"}},
+        )
+        self.assertEqual(resp.status_code, 422)
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_404_when_session_missing(self, mock_repo_cls):
@@ -408,7 +457,28 @@ class TestSendMessageStream(unittest.TestCase):
         self.assertEqual(final["content"], "AAPL looks bullish.")
         self.assertTrue(final["grounded"])
         self.assertEqual(final["focus"], ["AAPL"])
-        mock_stream.assert_called_once_with(1, "How's AAPL?")
+        mock_stream.assert_called_once_with(1, "How's AAPL?", None)
+
+    @patch("backend.ai.chat.stream_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_forwards_preferences_as_a_plain_dict(self, mock_repo_cls, mock_stream):
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_stream.return_value = iter(
+            [
+                ("meta", {"focus": ["AAPL"], "partial": [], "unavailable": []}),
+                ("final", (_mock_message(id=2, role="assistant", content="ok"), True, ["AAPL"], [], [])),
+            ]
+        )
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages/stream",
+            json={"content": "How's AAPL?", "preferences": {"mode": "swing_trading"}},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        mock_stream.assert_called_once_with(1, "How's AAPL?", {"mode": "swing_trading", "preferred_timeframes": [], "default_session": None, "risk_per_trade_percent": None, "primary_watchlist": None, "answer_detail_level": None, "preferred_units": None})
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_stream_404_when_session_missing(self, mock_repo_cls):

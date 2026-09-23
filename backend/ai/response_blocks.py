@@ -139,11 +139,20 @@ def build_response_blocks(
     partial: list[str],
     unavailable: list[str],
     trace: list[dict[str, Any]] | None = None,
+    preferences: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build and validate the application-owned block envelope.
 
     The returned dictionaries are JSON-safe and suitable for persistence.
     ``content`` remains authoritative prose for old clients and exports.
+
+    ``preferences`` (5.7.3) is the trader's browser-local operating
+    preferences (mode, timeframes, risk-per-trade, etc.) — used ONLY to
+    pick which extra line ``_tailored_followups`` adds to the
+    suggested_followups block. It never reaches a calculator input, a
+    tool argument, or the evidence/quality metadata above, so a trader's
+    preference can change which follow-up is *suggested*, never what a
+    verified number *is*.
     """
 
     trace = list(trace or [])
@@ -263,16 +272,35 @@ def build_response_blocks(
         ResponseBlock(
             id="followups-1",
             type="suggested_followups",
-            data={
-                "items": [
-                    "Show the source data",
-                    "Recheck with current data",
-                ]
-            },
+            data={"items": _tailored_followups(preferences)},
             quality=quality,
         )
     )
     return [block.model_dump(mode="json") for block in blocks]
+
+
+# Mode -> one extra suggestion appended after the two baseline ones. Each
+# points at data the mode's own trader would check next — never a claim
+# about what the verified answer says, so it's safe with no model or
+# tool-evidence involvement.
+_MODE_FOLLOWUP: dict[str, str] = {
+    "day_trading": "Check the 1m/5m trend",
+    "swing_trading": "Check the daily/4h trend",
+    "options": "Check the options chain",
+    "long_term_investing": "Check fundamentals",
+}
+
+
+def _tailored_followups(preferences: dict[str, Any] | None) -> list[str]:
+    """The suggested_followups block's items — the baseline two, plus one
+    extra keyed off the trader's stored mode (5.7.3) if set. Pure lookup,
+    no model call, so a given mode always adds the same suggestion."""
+    items = ["Show the source data", "Recheck with current data"]
+    mode = (preferences or {}).get("mode")
+    extra = _MODE_FOLLOWUP.get(mode) if isinstance(mode, str) else None
+    if extra:
+        items.append(extra)
+    return items
 
 
 __all__ = ["BlockQuality", "ResponseBlock", "build_response_blocks"]

@@ -143,3 +143,89 @@ def test_action_confirmation_block_handles_missing_detail() -> None:
     )
     action_block = next(block for block in blocks if block["type"] == "action_confirmation")
     assert action_block["data"]["actions"][0]["detail"] is None
+
+
+def _followups(blocks: list[dict]) -> list[str]:
+    return next(block for block in blocks if block["type"] == "suggested_followups")["data"]["items"]
+
+
+def test_followups_are_the_baseline_two_with_no_preferences() -> None:
+    blocks = build_response_blocks(content="ok", grounded=True, focus=[], partial=[], unavailable=[])
+    assert _followups(blocks) == ["Show the source data", "Recheck with current data"]
+
+
+def test_followups_are_unchanged_when_preferences_has_no_mode() -> None:
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"risk_per_trade_percent": 1.0},
+    )
+    assert _followups(blocks) == ["Show the source data", "Recheck with current data"]
+
+
+def test_day_trading_mode_adds_short_timeframe_followup() -> None:
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"mode": "day_trading"},
+    )
+    assert _followups(blocks) == ["Show the source data", "Recheck with current data", "Check the 1m/5m trend"]
+
+
+def test_swing_trading_mode_adds_daily_4h_followup() -> None:
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"mode": "swing_trading"},
+    )
+    assert _followups(blocks)[-1] == "Check the daily/4h trend"
+
+
+def test_options_mode_adds_options_chain_followup() -> None:
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"mode": "options"},
+    )
+    assert _followups(blocks)[-1] == "Check the options chain"
+
+
+def test_long_term_investing_mode_adds_fundamentals_followup() -> None:
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"mode": "long_term_investing"},
+    )
+    assert _followups(blocks)[-1] == "Check fundamentals"
+
+
+def test_unknown_mode_value_does_not_crash_and_adds_nothing() -> None:
+    """Defensive: a malformed/unrecognized mode must degrade quietly, not
+    raise or add a bogus suggestion — this is deterministic lookup code
+    that runs on every single Chat turn."""
+    blocks = build_response_blocks(
+        content="ok", grounded=True, focus=[], partial=[], unavailable=[],
+        preferences={"mode": "not_a_real_mode"},
+    )
+    assert _followups(blocks) == ["Show the source data", "Recheck with current data"]
+
+
+def test_preferences_never_touch_calculation_or_evidence_blocks() -> None:
+    """The core safety invariant (5.7.3): preferences may only change
+    which follow-up is suggested — never a verified number."""
+    trace = [
+        {
+            "kind": "calculation",
+            "tool": "calculate",
+            "ok": True,
+            "provider": "MarketLens",
+            "data": {"values": {"allocation": 25}, "formulas": ["25000 / 100000"]},
+        },
+    ]
+    no_prefs = build_response_blocks(
+        content="Verified calculation: allocation=25.", grounded=True, focus=["AAPL"], partial=[], unavailable=[], trace=trace,
+    )
+    with_prefs = build_response_blocks(
+        content="Verified calculation: allocation=25.", grounded=True, focus=["AAPL"], partial=[], unavailable=[], trace=trace,
+        preferences={"mode": "day_trading", "risk_per_trade_percent": 2.5},
+    )
+    calc_no_prefs = next(b for b in no_prefs if b["type"] == "calculation")
+    calc_with_prefs = next(b for b in with_prefs if b["type"] == "calculation")
+    assert calc_no_prefs == calc_with_prefs
+    # Only the trailing suggested_followups block may differ.
+    assert _followups(no_prefs) != _followups(with_prefs)

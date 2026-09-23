@@ -795,7 +795,7 @@ def _extract_memory_value(text: str, pattern: str) -> str | None:
 
 
 def answer_chat_message(
-    session_id: int, user_content: str
+    session_id: int, user_content: str, preferences: dict | None = None
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
     ChatMessage, and return
@@ -811,6 +811,12 @@ def answer_chat_message(
 
     ``grounded`` / ``focus`` / ``unavailable`` aren't persisted columns
     — they're per-turn hints for the router's response.
+
+    ``preferences`` (5.7.3) is the trader's browser-local operating
+    preferences, forwarded only to ``build_response_blocks`` to tailor
+    the deterministic suggested_followups block — never threaded into
+    the model prompt or any tool argument, so it cannot change a
+    verified calculation or evidence-derived conclusion.
 
     Never raises for an expected failure mode — AI-off, a per-symbol
     context failure, or a malformed AI reply all produce a stored
@@ -858,6 +864,7 @@ def answer_chat_message(
             partial=turn.partial,
             unavailable=turn.unavailable,
             trace=trace,
+            preferences=preferences,
         )
         assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
         assistant_message.planner_trace = trace
@@ -867,7 +874,9 @@ def answer_chat_message(
         repo.close()
 
 
-def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
+def stream_chat_message(
+    session_id: int, user_content: str, preferences: dict | None = None
+) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
     Yields, in order:
@@ -935,6 +944,7 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
             partial=turn.partial,
             unavailable=turn.unavailable,
             trace=trace,
+            preferences=preferences,
         )
         msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
         msg.planner_trace = trace

@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 and the 5.7.2 visual/action slice are complete. The rest of Phase 5.7 (preferences, feedback, regeneration, notebooks, answer refresh) and Phase 5.8 remain.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1, 5.7.2, and 5.7.3 (personal preferences) are complete. The rest of Phase 5.7 (chart-state awareness, state-preserving navigation, feedback classification, regeneration, notebooks, stale-answer refresh) and Phase 5.8 remain.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks and 5.7.2 visual/action cards are both complete — comparison/ranked blocks from tool results, full per-block-type component coverage, a persisted-block API contract test, missing/long-value robustness, and interactive controls (scenario sliders, chart/table expanders, action-specific confirmation detail) are all implemented and tested. Preferences, feedback, regeneration, notebooks and answer refresh remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, and 5.7.3 personal preferences are complete — comparison/ranked blocks, full block-type coverage, a persisted-block contract test, missing/long-value robustness, interactive controls (scenario sliders, expanders, action-specific confirmation), and a browser-local preferences panel that tailors suggested follow-ups without touching verified calculations. Model-prompt-level terminology/risk-framing tailoring is deliberately deferred. Chart-state awareness, state-preserving navigation, feedback classification, regeneration, and notebooks remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -953,6 +953,38 @@ Focused verification: 9 new backend tests (`_action_step_detail` plus its
 detail, scenario-slider preview/reset math, evidence/options-chain
 expand/collapse, chart expand/collapse), plus the full suite and a
 production build (2998 backend / 172 frontend tests passing).
+
+**5.7.3 complete — Personal preferences (2026-09-23).** The trader's mode
+(day trading / swing trading / options / long-term investing), preferred
+timeframes, default session, risk-per-trade limit, primary watchlist,
+answer detail level, and preferred units are all stored browser-local
+(`marketlens.chat.preferences`, same no-server-table convention as
+Journal and Risk Dashboard) via `utils/chatPreferences.ts`, and editable
+through a new `⚙ Preferences` panel in the Chat header — every field
+visible, editable, and one-click resettable; nothing is inferred
+silently. Preferences are sent with each turn and used, on the backend,
+for exactly one thing: `_tailored_followups` in `response_blocks.py`
+appends one extra mode-specific suggestion (e.g. day trading → "Check the
+1m/5m trend") to the deterministic `suggested_followups` block. A
+dedicated test (`test_preferences_never_touch_calculation_or_evidence_blocks`)
+asserts the calculation block is byte-identical with and without
+preferences set — the only block that may differ is the follow-up list.
+
+Deliberately deferred, and not claimed here: the plan's fuller
+"tailor terminology, default comparisons, and risk framing" via the model
+prompt itself. Wiring that would mean threading `preferences` deep into
+`_generate_reply`/`_generate_reply_streaming` (each already carrying
+10+ parameters, with several early-return paths that bypass the model
+entirely), which is real, separate work with its own risk of shading a
+verified answer's tone in ways that are hard to test deterministically —
+scoped out of this slice rather than shipped thin and called complete.
+
+Focused verification: 13 new backend tests (`_tailored_followups`,
+`ChatPreferences` request validation, and end-to-end forwarding through
+both the blocking and streaming endpoints) and 11 new frontend tests
+(storage round-trip/corruption-handling, panel edit/persist/reset, and
+turn-level forwarding), plus the full suite and a production build (3011
+backend / 183 frontend tests passing).
 
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration

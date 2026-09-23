@@ -97,8 +97,31 @@ class MessageResponse(BaseModel):
     blocks: list[dict[str, Any]] = []
 
 
+class ChatPreferences(BaseModel):
+    """The trader's personal operating preferences (5.7.3).
+
+    Stored browser-local (no server table — same convention as Journal
+    and Risk Dashboard) and sent with each turn so the deterministic
+    suggested_followups block can be tailored to it. Informational only:
+    never alters a verified calculation, tool argument, or
+    evidence-derived conclusion — see build_response_blocks's
+    preferences docstring.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    mode: Literal["day_trading", "swing_trading", "options", "long_term_investing"] | None = None
+    preferred_timeframes: list[str] = Field(default_factory=list, max_length=10)
+    default_session: Literal["premarket", "regular", "after_hours", "auto"] | None = None
+    risk_per_trade_percent: float | None = Field(default=None, ge=0, le=100)
+    primary_watchlist: str | None = Field(default=None, max_length=120)
+    answer_detail_level: Literal["concise", "standard", "detailed"] | None = None
+    preferred_units: Literal["percent", "dollars"] | None = None
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
+    preferences: ChatPreferences | None = None
 
 
 def _session_to_response(s) -> SessionResponse:
@@ -284,6 +307,7 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         answer_chat_message,
         session_id,
         payload.content,
+        payload.preferences.model_dump() if payload.preferences else None,
     )
     return _message_to_response(
         message,
@@ -349,7 +373,8 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
 
         def drain():
             try:
-                for ev in stream_chat_message(session_id, payload.content):
+                preferences = payload.preferences.model_dump() if payload.preferences else None
+                for ev in stream_chat_message(session_id, payload.content, preferences):
                     if stop.is_set():
                         break
                     if not _put_sse_item(loop, queue, ev):
