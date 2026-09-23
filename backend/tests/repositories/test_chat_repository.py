@@ -11,7 +11,7 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.models import ChatMessage, ChatSession
+from backend.models import ChatFeedback, ChatMessage, ChatSession
 from backend.repositories.chat_repository import ChatRepository
 
 
@@ -21,7 +21,7 @@ class TestChatRepository(unittest.TestCase):
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
         )
-        for model in (ChatSession, ChatMessage):
+        for model in (ChatSession, ChatMessage, ChatFeedback):
             model.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
@@ -182,6 +182,72 @@ class TestChatRepository(unittest.TestCase):
         sessions, messages = repo.delete_sessions(alert_trigger_id=7)
         self.assertEqual((sessions, messages), (1, 1))
         self.assertEqual(repo.db.query(ChatSession).count(), 1)
+
+
+class TestChatFeedback(unittest.TestCase):
+    """5.7.8 feedback and correction loop."""
+
+    def setUp(self):
+        self.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+        )
+        for model in (ChatSession, ChatMessage, ChatFeedback):
+            model.__table__.create(self.engine, checkfirst=True)
+        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+
+    def tearDown(self):
+        self.engine.dispose()
+
+    def _repo(self):
+        return ChatRepository(self.Session())
+
+    def test_set_feedback_creates_a_row(self):
+        repo = self._repo()
+        session = repo.create_session("AAPL")
+        message = repo.add_message(session.id, "assistant", "AAPL is bullish.")
+
+        feedback = repo.set_feedback(message.id, "incorrect", "wrong_data", "The price is stale.")
+        self.assertEqual(feedback.rating, "incorrect")
+        self.assertEqual(feedback.category, "wrong_data")
+        self.assertEqual(feedback.comment, "The price is stale.")
+
+    def test_set_feedback_twice_upserts_not_duplicates(self):
+        """A later call for the same message replaces the earlier one —
+        the trader changing their mind, not a growing reaction list."""
+        repo = self._repo()
+        session = repo.create_session("AAPL")
+        message = repo.add_message(session.id, "assistant", "AAPL is bullish.")
+
+        repo.set_feedback(message.id, "incorrect", "wrong_data")
+        repo.set_feedback(message.id, "correct")
+
+        self.assertEqual(repo.db.query(ChatFeedback).filter(ChatFeedback.message_id == message.id).count(), 1)
+        latest = repo.db.query(ChatFeedback).filter(ChatFeedback.message_id == message.id).first()
+        self.assertEqual(latest.rating, "correct")
+        self.assertIsNone(latest.category)
+
+    def test_get_feedback_for_messages_batches_and_keys_by_message_id(self):
+        repo = self._repo()
+        session = repo.create_session("AAPL")
+        m1 = repo.add_message(session.id, "assistant", "first")
+        m2 = repo.add_message(session.id, "assistant", "second")
+        m3 = repo.add_message(session.id, "assistant", "third")  # no feedback
+        repo.set_feedback(m1.id, "correct")
+        repo.set_feedback(m2.id, "not_useful", "poor_explanation")
+
+        result = repo.get_feedback_for_messages([m1.id, m2.id, m3.id])
+        self.assertEqual(set(result.keys()), {m1.id, m2.id})
+        self.assertEqual(result[m1.id].rating, "correct")
+        self.assertEqual(result[m2.id].category, "poor_explanation")
+
+    def test_get_feedback_for_messages_empty_list_returns_empty_dict(self):
+        repo = self._repo()
+        self.assertEqual(repo.get_feedback_for_messages([]), {})
+
+    def test_get_message_returns_none_for_missing_id(self):
+        repo = self._repo()
+        self.assertIsNone(repo.get_message(999))
 
 
 if __name__ == "__main__":

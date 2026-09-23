@@ -26,6 +26,7 @@ from .backtest import BacktestRun as BacktestRun
 from .backtest import BacktestTrade as BacktestTrade
 
 # Import chat models (Version 4, AI feature 4: conversational chat panel)
+from .chat import ChatFeedback as ChatFeedback
 from .chat import ChatMessage as ChatMessage
 from .chat import ChatSession as ChatSession
 

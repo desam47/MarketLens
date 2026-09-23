@@ -2561,6 +2561,25 @@ class ApiService {
   }
 
   /**
+   * Record Correct / Incorrect / Not Useful feedback on one assistant
+   * message (5.7.8). Upserts — calling this again for the same message
+   * replaces the earlier rating. Returns the full message (with the new
+   * `feedback` field set) so the caller can just splice it into state.
+   */
+  async setChatFeedback(
+    messageId: number,
+    rating: ChatFeedbackRating,
+    category?: ChatFeedbackCategory | null,
+    comment?: string | null,
+  ): Promise<ChatMessage> {
+    return this.fetch<ChatMessage>(`/ai/chat/messages/${messageId}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating, category: category ?? null, comment: comment ?? null }),
+    });
+  }
+
+  /**
    * Delete chat history. With an `alertTriggerId` it clears that
    * alert-opened thread; otherwise it clears the universal AI Hub chat
    * (all its sessions + messages). Backs the "Clear" button.
@@ -2940,6 +2959,25 @@ export interface ChatMessage {
   }>;
   /** Persisted typed blocks; empty for legacy messages and user rows. */
   blocks?: ChatResponseBlock[];
+  /** 5.7.8 feedback and correction loop — set once the trader has rated
+   * this (assistant-only) message, else null. */
+  feedback?: ChatMessageFeedback | null;
+}
+
+export type ChatFeedbackRating = 'correct' | 'incorrect' | 'not_useful';
+export type ChatFeedbackCategory =
+  | 'wrong_data'
+  | 'wrong_calculation'
+  | 'misunderstood_intent'
+  | 'stale_data'
+  | 'poor_explanation'
+  | 'unsafe_action';
+
+export interface ChatMessageFeedback {
+  rating: ChatFeedbackRating;
+  category: ChatFeedbackCategory | null;
+  comment: string | null;
+  updated_at: string | null;
 }
 
 export interface AIJobEnqueueResponse {

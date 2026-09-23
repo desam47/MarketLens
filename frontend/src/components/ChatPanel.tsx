@@ -437,6 +437,14 @@ export function ChatPanel({
                     onNavigate={onNavigate}
                   />
                 )}
+                {m.role === 'assistant' && !m.streaming && m.id > 0 && (
+                  <ChatFeedbackRow
+                    message={m}
+                    onSaved={(messageId, feedback) =>
+                      setMessages(prev => prev.map(msg => (msg.id === messageId ? { ...msg, feedback } : msg)))
+                    }
+                  />
+                )}
               </div>
             </div>
           );
@@ -813,6 +821,83 @@ function formatAlertTime(value: string): string {
 }
 
 /** Per-message row showing which tickers the answer was grounded in. */
+const FEEDBACK_CATEGORIES: { value: NonNullable<ChatMessage['feedback']>['category']; label: string }[] = [
+  { value: 'wrong_data', label: 'Wrong data' },
+  { value: 'wrong_calculation', label: 'Wrong calculation' },
+  { value: 'misunderstood_intent', label: 'Misunderstood intent' },
+  { value: 'stale_data', label: 'Stale data' },
+  { value: 'poor_explanation', label: 'Poor explanation' },
+  { value: 'unsafe_action', label: 'Unsafe action' },
+];
+
+/** Correct / Incorrect / Not Useful feedback on one assistant message
+ * (5.7.8). Correct submits immediately; Incorrect/Not Useful open an
+ * optional category + comment before submitting — storage only, this
+ * never triggers automatic model retraining. */
+function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: (messageId: number, feedback: NonNullable<ChatMessage['feedback']>) => void }) {
+  const [expandedRating, setExpandedRating] = useState<'incorrect' | 'not_useful' | null>(null);
+  const [category, setCategory] = useState<string>('');
+  const [comment, setComment] = useState('');
+  const [saving, setSaving] = useState(false);
+  const existing = message.feedback ?? null;
+
+  const submit = async (rating: 'correct' | 'incorrect' | 'not_useful', withDetail: boolean) => {
+    setSaving(true);
+    try {
+      const updated = await api.setChatFeedback(
+        message.id,
+        rating,
+        withDetail && category ? (category as any) : null,
+        withDetail && comment.trim() ? comment.trim() : null,
+      );
+      if (updated.feedback) onSaved(message.id, updated.feedback);
+      setExpandedRating(null);
+    } catch {
+      /* leave the row as-is; the trader can retry */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (existing) {
+    const label = existing.rating === 'correct' ? '✓ Marked correct' : existing.rating === 'incorrect' ? '✗ Marked incorrect' : '⊘ Marked not useful';
+    return <div className="chat-feedback-row chat-feedback-done" role="status">{label}{existing.category ? ` · ${existing.category.replace(/_/g, ' ')}` : ''}</div>;
+  }
+
+  return (
+    <div className="chat-feedback-row" aria-label="Rate this answer">
+      <button type="button" className="chat-quick-action-btn" disabled={saving} onClick={() => submit('correct', false)}>
+        👍 Correct
+      </button>
+      <button type="button" className="chat-quick-action-btn" disabled={saving} onClick={() => setExpandedRating(expandedRating === 'incorrect' ? null : 'incorrect')}>
+        👎 Incorrect
+      </button>
+      <button type="button" className="chat-quick-action-btn" disabled={saving} onClick={() => setExpandedRating(expandedRating === 'not_useful' ? null : 'not_useful')}>
+        🚫 Not useful
+      </button>
+      {expandedRating && (
+        <form className="chat-feedback-detail" onSubmit={e => { e.preventDefault(); submit(expandedRating, true); }}>
+          <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Feedback category">
+            <option value="">No category</option>
+            {FEEDBACK_CATEGORIES.map(c => <option key={c.value} value={c.value!}>{c.label}</option>)}
+          </select>
+          <input
+            type="text"
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            placeholder="Optional comment"
+            maxLength={1000}
+            aria-label="Feedback comment"
+          />
+          <button type="submit" className="chat-quick-action-btn" disabled={saving}>
+            {saving ? '⟳' : 'Submit'}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function ProvenanceRow({ message }: { message: ChatMessage }) {
   const focus = message.focus ?? [];
   const partial = message.partial ?? [];

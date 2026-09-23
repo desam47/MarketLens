@@ -146,6 +146,7 @@ class TestGetMessages(unittest.TestCase):
             _mock_message(id=1, role="user", content="hi"),
             _mock_message(id=2, role="assistant", content="hello"),
         ]
+        mock_repo.get_feedback_for_messages.return_value = {}
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.get("/api/ai/chat/sessions/1/messages")
@@ -157,6 +158,26 @@ class TestGetMessages(unittest.TestCase):
         self.assertEqual(data[1]["role"], "assistant")
         # Historical rows don't carry a grounded hint.
         self.assertIsNone(data[0]["grounded"])
+        self.assertIsNone(data[1]["feedback"])
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_attaches_feedback_to_its_message_only(self, mock_repo_cls):
+        """5.7.8: GET /messages must batch-fetch feedback and attach each
+        record to its own message, not leak onto neighboring messages."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        m1 = _mock_message(id=1, role="assistant", content="first")
+        m2 = _mock_message(id=2, role="assistant", content="second")
+        mock_repo.get_messages.return_value = [m1, m2]
+        feedback_row = MagicMock(rating="incorrect", category="wrong_data", comment="stale", updated_at=None)
+        mock_repo.get_feedback_for_messages.return_value = {1: feedback_row}
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions/1/messages")
+
+        data = resp.json()
+        self.assertEqual(data[0]["feedback"], {"rating": "incorrect", "category": "wrong_data", "comment": "stale", "updated_at": None})
+        self.assertIsNone(data[1]["feedback"])
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_404_when_session_missing(self, mock_repo_cls):
@@ -204,6 +225,7 @@ class TestGetMessages(unittest.TestCase):
                 response_blocks=json.dumps(stored_blocks),
             ),
         ]
+        mock_repo.get_feedback_for_messages.return_value = {}
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.get("/api/ai/chat/sessions/1/messages")
@@ -222,6 +244,7 @@ class TestGetMessages(unittest.TestCase):
         mock_repo.get_messages.return_value = [
             _mock_message(id=1, role="assistant", content="Old reply.", response_blocks=None),
         ]
+        mock_repo.get_feedback_for_messages.return_value = {}
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.get("/api/ai/chat/sessions/1/messages")
@@ -238,12 +261,85 @@ class TestGetMessages(unittest.TestCase):
         mock_repo.get_messages.return_value = [
             _mock_message(id=1, role="assistant", content="Reply.", response_blocks="{not valid json"),
         ]
+        mock_repo.get_feedback_for_messages.return_value = {}
         mock_repo_cls.return_value = mock_repo
 
         resp = self.client.get("/api/ai/chat/sessions/1/messages")
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()[0]["blocks"], [])
+
+
+class TestSetFeedback(unittest.TestCase):
+    """5.7.8 feedback and correction loop: POST /messages/{id}/feedback."""
+
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_records_feedback_on_an_assistant_message(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = _mock_message(id=2, role="assistant", content="AAPL looks bullish.")
+        mock_repo.set_feedback.return_value = MagicMock(
+            rating="incorrect", category="wrong_data", comment="Price is stale.", updated_at=None,
+        )
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post(
+            "/api/ai/chat/messages/2/feedback",
+            json={"rating": "incorrect", "category": "wrong_data", "comment": "Price is stale."},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["feedback"], {"rating": "incorrect", "category": "wrong_data", "comment": "Price is stale.", "updated_at": None})
+        mock_repo.set_feedback.assert_called_once_with(2, "incorrect", "wrong_data", "Price is stale.")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_category_and_comment_are_optional(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = _mock_message(id=2, role="assistant", content="ok")
+        mock_repo.set_feedback.return_value = MagicMock(rating="correct", category=None, comment=None, updated_at=None)
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/2/feedback", json={"rating": "correct"})
+
+        self.assertEqual(resp.status_code, 200)
+        mock_repo.set_feedback.assert_called_once_with(2, "correct", None, None)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_404_when_message_missing(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = None
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/999/feedback", json={"rating": "correct"})
+        self.assertEqual(resp.status_code, 404)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_rejects_feedback_on_a_user_message(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_message.return_value = _mock_message(id=1, role="user", content="how's AAPL?")
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/api/ai/chat/messages/1/feedback", json={"rating": "correct"})
+
+        self.assertEqual(resp.status_code, 400)
+        mock_repo.set_feedback.assert_not_called()
+
+    def test_rejects_invalid_rating(self):
+        resp = self.client.post("/api/ai/chat/messages/1/feedback", json={"rating": "meh"})
+        self.assertEqual(resp.status_code, 422)
+
+    def test_rejects_invalid_category(self):
+        resp = self.client.post(
+            "/api/ai/chat/messages/1/feedback", json={"rating": "incorrect", "category": "not_a_real_category"},
+        )
+        self.assertEqual(resp.status_code, 422)
+
+    def test_rejects_unknown_field(self):
+        resp = self.client.post("/api/ai/chat/messages/1/feedback", json={"rating": "correct", "typo_field": 1})
+        self.assertEqual(resp.status_code, 422)
 
 
 class TestSendMessage(unittest.TestCase):

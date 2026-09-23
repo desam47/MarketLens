@@ -8,7 +8,7 @@ Same thin-repository convention as AlertRepository/AIDigestRepository
 import json
 
 from backend.database import SessionLocal
-from backend.models import ChatMessage, ChatSession
+from backend.models import ChatFeedback, ChatMessage, ChatSession
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.utils.timezone import now_ny
 
@@ -178,3 +178,41 @@ class ChatRepository:
             .all()
         )
         return list(reversed(rows))
+
+    def get_message(self, message_id: int) -> ChatMessage | None:
+        return self.db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+
+    # --- Feedback (5.7.8) --------------------------------------------
+
+    def set_feedback(
+        self,
+        message_id: int,
+        rating: str,
+        category: str | None = None,
+        comment: str | None = None,
+    ) -> ChatFeedback:
+        """Upsert feedback for one message. A later call for the same
+        message_id REPLACES the earlier row (see ChatFeedback's
+        docstring) — a simple vote UI where the trader can change their
+        mind, not a growing reaction history."""
+        existing = self.db.query(ChatFeedback).filter(ChatFeedback.message_id == message_id).first()
+        if existing is not None:
+            existing.rating = rating
+            existing.category = category
+            existing.comment = comment
+            existing.updated_at = now_ny()
+            feedback = existing
+        else:
+            feedback = ChatFeedback(message_id=message_id, rating=rating, category=category, comment=comment)
+            self.db.add(feedback)
+        self.db.commit()
+        self.db.refresh(feedback)
+        return feedback
+
+    def get_feedback_for_messages(self, message_ids: list[int]) -> dict[int, ChatFeedback]:
+        """Batch-fetch feedback for several messages, keyed by
+        message_id — one query for a whole transcript instead of N+1."""
+        if not message_ids:
+            return {}
+        rows = self.db.query(ChatFeedback).filter(ChatFeedback.message_id.in_(message_ids)).all()
+        return {row.message_id: row for row in rows}

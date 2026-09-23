@@ -6232,6 +6232,42 @@ div.td-trend {
   color: var(--text-primary);
 }
 
+.chat-feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.chat-feedback-done {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.chat-feedback-detail {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 0.2rem;
+}
+
+.chat-feedback-detail select, .chat-feedback-detail input {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.chat-feedback-detail input {
+  flex: 1;
+  min-width: 8rem;
+}
+
 .chat-quick-alert-input {
   width: 4.5rem;
   font-size: 0.7rem;

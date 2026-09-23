@@ -95,6 +95,10 @@ class MessageResponse(BaseModel):
     # Version 5.7 typed blocks.  Empty for old/user rows; historical assistant
     # rows carry the persisted envelope without rerunning tools.
     blocks: list[dict[str, Any]] = []
+    # 5.7.8 feedback and correction loop — {"rating", "category", "comment",
+    # "updated_at"} when the trader has rated this message, else None.
+    # Only ever set on assistant messages.
+    feedback: dict[str, Any] | None = None
 
 
 class ChatPreferences(BaseModel):
@@ -124,6 +128,26 @@ class SendMessageRequest(BaseModel):
     preferences: ChatPreferences | None = None
 
 
+class SetFeedbackRequest(BaseModel):
+    """5.7.8 feedback and correction loop. ``category`` is most
+    meaningful for incorrect/not_useful but not restricted to them — a
+    "correct" rating with a category is harmless and simpler than
+    conditionally validating it server-side."""
+
+    model_config = {"extra": "forbid"}
+
+    rating: Literal["correct", "incorrect", "not_useful"]
+    category: Literal[
+        "wrong_data",
+        "wrong_calculation",
+        "misunderstood_intent",
+        "stale_data",
+        "poor_explanation",
+        "unsafe_action",
+    ] | None = None
+    comment: str | None = Field(default=None, max_length=1000)
+
+
 def _session_to_response(s) -> SessionResponse:
     scope = getattr(s, "scope", None) or "symbol"
     return SessionResponse(
@@ -136,6 +160,17 @@ def _session_to_response(s) -> SessionResponse:
     )
 
 
+def _feedback_to_dict(row) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "rating": row.rating,
+        "category": row.category,
+        "comment": row.comment,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
 def _message_to_response(
     m,
     grounded: bool | None = None,
@@ -144,6 +179,7 @@ def _message_to_response(
     unavailable: list[str] | None = None,
     tools: list[dict[str, Any]] | None = None,
     blocks: list[dict[str, Any]] | None = None,
+    feedback=None,
 ) -> MessageResponse:
     stored_blocks = blocks
     if stored_blocks is None:
@@ -166,6 +202,7 @@ def _message_to_response(
         unavailable=unavailable or [],
         tools=tools if tools is not None else list(getattr(m, "planner_trace", []) or []),
         blocks=stored_blocks or [],
+        feedback=_feedback_to_dict(feedback),
     )
 
 
@@ -280,7 +317,33 @@ async def get_messages(session_id: int, limit: int = Query(default=50, ge=1, le=
         if session is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         messages = await asyncio.to_thread(repo.get_messages, session_id, limit)
-        return [_message_to_response(m) for m in messages]
+        feedback_by_message = await asyncio.to_thread(
+            repo.get_feedback_for_messages, [m.id for m in messages]
+        )
+        return [_message_to_response(m, feedback=feedback_by_message.get(m.id)) for m in messages]
+    finally:
+        repo.close()
+
+
+@router.post("/messages/{message_id}/feedback", response_model=MessageResponse)
+async def set_message_feedback(message_id: int, payload: SetFeedbackRequest):
+    """Record Correct / Incorrect / Not Useful feedback on one assistant
+    message (5.7.8). Upserts — a later call for the same message
+    replaces the earlier rating rather than accumulating a history.
+    Storage only: no automatic online model retraining happens from
+    this. ``message_id`` is a global primary key, so this is not nested
+    under a session id."""
+    repo = ChatRepository()
+    try:
+        message = await asyncio.to_thread(repo.get_message, message_id)
+        if message is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if message.role != "assistant":
+            raise HTTPException(status_code=400, detail="Feedback can only be recorded on an assistant message")
+        feedback = await asyncio.to_thread(
+            repo.set_feedback, message_id, payload.rating, payload.category, payload.comment
+        )
+        return _message_to_response(message, feedback=feedback)
     finally:
         repo.close()
 

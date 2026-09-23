@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1, 5.7.2, and 5.7.3 (personal preferences) are complete. The rest of Phase 5.7 (chart-state awareness, state-preserving navigation, feedback classification, regeneration, notebooks, stale-answer refresh) and Phase 5.8 remain.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1, 5.7.2, 5.7.3 (personal preferences), and 5.7.8 (feedback and correction loop) are complete. The rest of Phase 5.7 (chart-state awareness, state-preserving navigation, regeneration, notebooks, stale-answer refresh) and Phase 5.8 remain.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, and 5.7.3 personal preferences are complete — comparison/ranked blocks, full block-type coverage, a persisted-block contract test, missing/long-value robustness, interactive controls (scenario sliders, expanders, action-specific confirmation), and a browser-local preferences panel that tailors suggested follow-ups without touching verified calculations. Model-prompt-level terminology/risk-framing tailoring is deliberately deferred. Chart-state awareness, state-preserving navigation, feedback classification, regeneration, and notebooks remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, 5.7.3 personal preferences, and 5.7.8 feedback/correction loop are complete — comparison/ranked blocks, full block-type coverage, a persisted-block contract test, missing/long-value robustness, interactive controls, a browser-local preferences panel, and Correct/Incorrect/Not Useful feedback with categories stored in a new `chat_feedback` table. Model-prompt-level terminology/risk-framing tailoring and regression-fixture export tooling are deliberately deferred. Chart-state awareness, state-preserving navigation, regeneration, and notebooks remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -985,6 +985,38 @@ both the blocking and streaming endpoints) and 11 new frontend tests
 (storage round-trip/corruption-handling, panel edit/persist/reset, and
 turn-level forwarding), plus the full suite and a production build (3011
 backend / 183 frontend tests passing).
+
+**5.7.8 complete — Feedback and correction loop (2026-09-23).** Correct /
+Incorrect / Not Useful buttons appear under every assistant message, with
+an optional category (wrong data, wrong calculation, misunderstood
+intent, stale data, poor explanation, unsafe action) and free-text
+comment for Incorrect/Not Useful. Unlike preferences, this is a real
+server table — feedback is durable, cross-session, and meant to be
+reviewed later, not per-browser scratch state — a new `chat_feedback`
+table (migration `20260928_chat_feedback`, one row per message, upserted
+so a trader changing their mind replaces rather than accumulates) with a
+`POST /api/ai/chat/messages/{id}/feedback` endpoint (404 on a missing
+message, 400 on a user message — feedback only applies to assistant
+replies) and a batch fetch wired into `GET .../messages` so history shows
+previously-given ratings without re-offering the buttons. Storage only:
+no automatic online model retraining happens from a rating.
+
+Deliberately not built here: the plan's "turn approved failures into
+regression fixtures." That's a maintainer/dev-tooling workflow (reviewing
+incorrect-rated feedback and hand-turning it into a test fixture) — the
+data needed for it (rating, category, comment, and via `message_id` the
+full question/answer/blocks) is all captured and queryable, but no
+export/triage tooling was built, since automating *which* failures get
+promoted to fixtures is a separate, judgment-heavy piece of work.
+
+Focused verification: 14 new backend tests (repository upsert/batch-fetch,
+endpoint validation, 404/400 paths, feedback correctly attached to only
+its own message in a multi-message transcript) and 4 new frontend tests
+(immediate Correct submission, Incorrect with category+comment, historical
+feedback rendering without re-offering buttons, no feedback UI on user
+messages), plus the full suite, a production build, and the migration
+verified against the live dev SQLite database (3024 backend / 187
+frontend tests passing).
 
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration

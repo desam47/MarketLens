@@ -88,3 +88,36 @@ class ChatMessage(Base):
 
     def __repr__(self):
         return f"<ChatMessage(id={self.id}, session_id={self.session_id}, role={self.role})>"
+
+
+class ChatFeedback(Base):
+    """Trader feedback on one assistant ChatMessage (Version 5, 5.7.8).
+
+    One row per message — ``message_id`` is unique, so a later feedback
+    call for the same message REPLACES the earlier one (upsert), matching
+    a simple vote UI where the trader can change their mind rather than
+    piling up a history of reactions. Never triggers automatic
+    online model retraining; ``category``/``comment`` exist so a
+    maintainer can manually turn an approved failure into a regression
+    fixture (that export workflow is not built here — see
+    ChatFeedbackRepository's docstring).
+    """
+
+    __tablename__ = "chat_feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=False, unique=True, index=True)
+    # "correct" | "incorrect" | "not_useful"
+    rating = Column(String(16), nullable=False)
+    # Optional, most meaningful for incorrect/not_useful: "wrong_data" |
+    # "wrong_calculation" | "misunderstood_intent" | "stale_data" |
+    # "poor_explanation" | "unsafe_action".
+    category = Column(String(32), nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=now_ny)
+    updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
+
+    message = relationship("ChatMessage")
+
+    def __repr__(self):
+        return f"<ChatFeedback(id={self.id}, message_id={self.message_id}, rating={self.rating})>"

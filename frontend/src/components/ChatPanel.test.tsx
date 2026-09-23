@@ -15,6 +15,7 @@ jest.mock('../services/api', () => ({
     createWatchlist: jest.fn(),
     addSymbolToWatchlist: jest.fn(),
     createAlert: jest.fn(),
+    setChatFeedback: jest.fn(),
   },
 }));
 
@@ -396,6 +397,67 @@ describe('ChatPanel (universal)', () => {
     await waitFor(() => expect(mockApi.sendChatMessage).toHaveBeenCalled());
     const sentPrefs = mockApi.sendChatMessage.mock.calls[0][2];
     expect(sentPrefs.mode).toBe('day_trading');
+  });
+
+  it('records Correct feedback immediately, with no category picker (5.7.8)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 30, session_id: 1, role: 'assistant', content: 'AAPL is bullish.', created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [] } as any,
+    ]);
+    mockApi.setChatFeedback.mockResolvedValueOnce({
+      id: 30, session_id: 1, role: 'assistant', content: 'AAPL is bullish.', created_at: '', grounded: true,
+      feedback: { rating: 'correct', category: null, comment: null, updated_at: '2026-09-23T12:00:00' },
+    } as any);
+    render(<ChatPanel />);
+
+    const row = await screen.findByLabelText('Rate this answer');
+    fireEvent.click(within(row).getByRole('button', { name: '👍 Correct' }));
+
+    await waitFor(() => expect(mockApi.setChatFeedback).toHaveBeenCalledWith(30, 'correct', null, null));
+    expect(await screen.findByText('✓ Marked correct')).toBeInTheDocument();
+    // Once rated, the row collapses to the confirmation — no more buttons for this message.
+    expect(screen.queryByLabelText('Rate this answer')).toBeNull();
+  });
+
+  it('records Incorrect feedback with an optional category and comment (5.7.8)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 31, session_id: 1, role: 'assistant', content: 'AAPL is bullish.', created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [] } as any,
+    ]);
+    mockApi.setChatFeedback.mockResolvedValueOnce({
+      id: 31, session_id: 1, role: 'assistant', content: 'AAPL is bullish.', created_at: '', grounded: true,
+      feedback: { rating: 'incorrect', category: 'wrong_data', comment: 'Price is stale.', updated_at: '2026-09-23T12:00:00' },
+    } as any);
+    render(<ChatPanel />);
+
+    const row = await screen.findByLabelText('Rate this answer');
+    fireEvent.click(within(row).getByRole('button', { name: '👎 Incorrect' }));
+    fireEvent.change(screen.getByLabelText('Feedback category'), { target: { value: 'wrong_data' } });
+    fireEvent.change(screen.getByLabelText('Feedback comment'), { target: { value: 'Price is stale.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() => expect(mockApi.setChatFeedback).toHaveBeenCalledWith(31, 'incorrect', 'wrong_data', 'Price is stale.'));
+    expect(await screen.findByText('✗ Marked incorrect · wrong data')).toBeInTheDocument();
+  });
+
+  it('shows previously-saved feedback from history without re-offering the buttons (5.7.8)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 32, session_id: 1, role: 'assistant', content: 'AAPL is bullish.', created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+        feedback: { rating: 'not_useful', category: 'poor_explanation', comment: null, updated_at: '2026-09-23T12:00:00' },
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    expect(await screen.findByText('⊘ Marked not useful · poor explanation')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '👍 Correct' })).toBeNull();
+  });
+
+  it('does not offer feedback on a user message', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 33, session_id: 1, role: 'user', content: 'how is AAPL?', created_at: '', grounded: null } as any,
+    ]);
+    render(<ChatPanel />);
+    await screen.findByText('how is AAPL?');
+    expect(screen.queryByLabelText('Rate this answer')).toBeNull();
   });
 
   it('handles missing/long values without crashing (5.7.1 mobile/long-value coverage)', async () => {
