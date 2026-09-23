@@ -517,7 +517,9 @@ selection. Chained planning
 now also observes a configurable wall-clock budget and stops safely before
 starting another continuation when it expires. Structured step events now
 surface ordered completion, failure, reuse, and stop states with dependency
-metadata in the Chat UI. Complex-request
+metadata in the Chat UI. Reusable workflows now have persisted typed steps,
+four safe built-in templates, editable parameters, and a confirmation-aware
+run endpoint. Complex-request
 decomposition, partial failure, saved workflows, model routing, and deterministic
 AI-off fallback must be exercised explicitly.
 

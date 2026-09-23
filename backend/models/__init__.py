@@ -85,3 +85,4 @@ from .signal import HistoricalSignal as HistoricalSignal
 # Import watchlist models
 from .watchlist import Watchlist as Watchlist
 from .watchlist import WatchlistSymbol as WatchlistSymbol
+from .workflow import ChatWorkflow as ChatWorkflow

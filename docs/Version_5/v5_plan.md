@@ -197,6 +197,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.7 Reusable workflows
 - Save editable workflows such as Morning Review, Evaluate a Breakout, Options Setup Review, and End-of-Day Journal Review.
 - Store tool sequence, user-visible parameters, confirmation requirements, and output layout—not hidden model prose.
+- A persisted workflow foundation now provides those four safe built-ins plus CRUD and typed preview/run endpoints; steps are validated tool names with explicit arguments and confirmation flags.
 
 #### 5.3.8 Model routing and deterministic fallback
 - Use configurable model routes for tool selection, complex synthesis, and repair while preserving one evidence contract.

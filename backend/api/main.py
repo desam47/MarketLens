@@ -19,6 +19,7 @@ from backend.ai.digest_service import digest_service
 from backend.alerts.engine import alerts_engine
 from backend.api import analysis, market_context, multitimeframe, regime, strategy, trend
 from backend.api.ai.chat_router import router as ai_chat_router
+from backend.api.ai.workflow_router import router as ai_workflow_router
 from backend.api.ai.digest_router import router as ai_digest_router
 from backend.api.ai.jobs import router as ai_jobs_router
 from backend.api.ai.router import router as ai_router
@@ -543,6 +544,7 @@ app.include_router(ai_templates_router)
 app.include_router(ai_jobs_router)
 app.include_router(ai_digest_router)
 app.include_router(ai_chat_router)
+app.include_router(ai_workflow_router)
 app.include_router(system_router)
 
 
