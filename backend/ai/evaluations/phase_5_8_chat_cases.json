@@ -1,5 +1,5 @@
 {
-  "version": "5.8.5",
+  "version": "5.8.6",
   "description": "Provider-free end-to-end Chat cases. Each turn runs through answer_chat_message (or stream_chat_message) with scripted model replies, scripted tool results, and a private in-memory database.",
   "cases": [
     {
@@ -1659,6 +1659,135 @@
             "max_model_calls": 0,
             "reply_contains": [
               "browser"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "opted_in_positions_reach_risk_tool_only",
+      "category": "browser_data",
+      "tools": {
+        "get_risk_dashboard": {
+          "provider": "MarketLens local dashboard",
+          "source_timestamp": null,
+          "data": {
+            "available": true,
+            "positions": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "what's my portfolio risk right now?",
+          "browser_data": {
+            "positions": [
+              {
+                "symbol": "ZZPRIV",
+                "side": "long",
+                "quantity": 100,
+                "entry_price": 50,
+                "stop_price": 45
+              }
+            ]
+          },
+          "expect": {
+            "tools": [
+              "get_risk_dashboard"
+            ],
+            "tool_arguments": {
+              "get_risk_dashboard": {
+                "positions": [
+                  {
+                    "symbol": "ZZPRIV",
+                    "quantity": 100,
+                    "entry_price": 50
+                  }
+                ]
+              }
+            },
+            "max_model_calls": 0,
+            "private_not_stored": [
+              "ZZPRIV"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "no_browser_data_without_opt_in",
+      "category": "browser_data",
+      "tools": {
+        "get_risk_dashboard": {
+          "provider": "MarketLens local dashboard",
+          "source_timestamp": null,
+          "data": {
+            "available": false,
+            "reason": "browser-local"
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "what's my portfolio risk right now?",
+          "expect": {
+            "tools": [
+              "get_risk_dashboard"
+            ],
+            "tool_arguments": {
+              "get_risk_dashboard": {}
+            },
+            "reply_contains": [
+              "browser-local"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "opted_in_journal_reaches_journal_tool",
+      "category": "browser_data",
+      "tools": {
+        "get_trade_journal": {
+          "provider": "MarketLens local journal",
+          "source_timestamp": null,
+          "data": {
+            "available": true,
+            "entries": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "review my trade journal",
+          "browser_data": {
+            "journal_entries": [
+              {
+                "symbol": "ZZJRNL",
+                "side": "long",
+                "status": "closed",
+                "quantity": 10,
+                "entry_price": 20,
+                "exit_price": 22
+              }
+            ]
+          },
+          "expect": {
+            "tools": [
+              "get_trade_journal"
+            ],
+            "tool_arguments": {
+              "get_trade_journal": {
+                "entries": [
+                  {
+                    "symbol": "ZZJRNL",
+                    "exit_price": 22
+                  }
+                ]
+              }
+            },
+            "private_not_stored": [
+              "ZZJRNL"
             ]
           }
         }

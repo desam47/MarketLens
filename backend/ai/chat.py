@@ -56,6 +56,7 @@ inherits the same contract — none of them raise either.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import re
@@ -1242,6 +1243,90 @@ def _apply_date_scope(action: str, arguments: dict, planner_state: dict | None) 
     return scoped
 
 
+# Browser-local data the trader opted in to sharing (Risk Dashboard
+# positions, structured Journal fields, Scanner presets). Held only for the
+# current turn: never written to planner state, the database, or the prompt
+# as raw data. Tools that accept an explicit snapshot receive it.
+_TURN_BROWSER_DATA: contextvars.ContextVar[dict | None] = contextvars.ContextVar("chat_browser_data", default=None)
+
+_BROWSER_SNAPSHOT_ARGUMENTS = {
+    "get_risk_dashboard": ("positions", "positions"),
+    "assess_portfolio_risk": ("positions", "positions"),
+    "scenario_analysis": ("positions", "positions"),
+    "get_trade_journal": ("entries", "journal_entries"),
+    "trade_journal_coach": ("entries", "journal_entries"),
+    "get_saved_scans": ("presets", "scan_presets"),
+}
+
+
+def _apply_browser_data(action: str, arguments: dict) -> tuple[dict, dict[str, str]]:
+    """Fill a tool's snapshot argument from opted-in browser data.
+
+    Returns ``(arguments, trace_markers)``. A snapshot the caller already
+    passed is never replaced. The markers stand in for the snapshot in the
+    tool trace, so private rows are summarized there rather than copied.
+    """
+    mapping = _BROWSER_SNAPSHOT_ARGUMENTS.get(action)
+    data = _TURN_BROWSER_DATA.get()
+    if not mapping or not data:
+        return arguments, {}
+    argument, source = mapping
+    rows = data.get(source)
+    if arguments.get(argument) or not rows:
+        return arguments, {}
+    return {**arguments, argument: list(rows)}, {argument: f"<browser snapshot: {len(rows)} {source.replace('_', ' ')}>"}
+
+
+_BROWSER_LOCAL_ACTIONS = {
+    "get_risk_dashboard",
+    "assess_portfolio_risk",
+    "scenario_analysis",
+    "get_trade_journal",
+    "trade_journal_coach",
+    "get_saved_scans",
+}
+
+
+def _browser_safe_reply_data(action: str, data: dict) -> dict:
+    """Keep browser-local rows out of persisted assistant message text.
+
+    The full snapshot may be used by the current tool call, but the Chat
+    transcript is durable. Return only aggregate, non-row data there.
+    """
+    if action in {"get_risk_dashboard", "assess_portfolio_risk", "scenario_analysis"}:
+        positions = data.get("positions")
+        return {
+            "available": data.get("available"),
+            "position_count": len(positions) if isinstance(positions, list) else None,
+            "reason": data.get("reason"),
+            "gross_exposure": data.get("gross_exposure"),
+            "net_exposure": data.get("net_exposure"),
+            "stop_loss_risk": data.get("stop_loss_risk"),
+            "price_basis": data.get("price_basis"),
+            "unknown_count": len(data.get("unknowns") or []) if isinstance(data.get("unknowns"), list) else None,
+        }
+    if action in {"get_trade_journal", "trade_journal_coach"}:
+        return {
+            "available": data.get("available"),
+            "total_entries": data.get("total_entries"),
+            "closed_entries": data.get("closed_entries"),
+            "priced_closed_entries": data.get("priced_closed_entries"),
+            "win_rate_percent": data.get("win_rate_percent"),
+            "expectancy_per_trade": data.get("expectancy_per_trade"),
+            "average_r_multiple": data.get("average_r_multiple"),
+            "setup_count": len(data.get("setup_performance") or []) if isinstance(data.get("setup_performance"), list) else None,
+            "reason": data.get("reason"),
+        }
+    if action == "get_saved_scans":
+        presets = data.get("presets")
+        return {
+            "available": data.get("available"),
+            "preset_count": len(presets) if isinstance(presets, list) else None,
+            "reason": "No browser-local saved Scanner preset is available." if data.get("available") is False else None,
+        }
+    return {}
+
+
 def _expire_carried_confirmation(turn: _Turn) -> None:
     """Drop a confirmation request this turn did not answer.
 
@@ -1279,6 +1364,8 @@ def answer_chat_message(
     chart_state: dict | None = None,
     regeneration_mode: str | None = None,
     regeneration_scope: dict | None = None,
+    *,
+    browser_data: dict | None = None,
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
     ChatMessage, and return
@@ -1307,6 +1394,7 @@ def answer_chat_message(
     """
     started_at = time.perf_counter()
     repo = ChatRepository()
+    browser_token = _TURN_BROWSER_DATA.set(browser_data or None)
     try:
         turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
         trace: list[dict] = []
@@ -1382,6 +1470,7 @@ def answer_chat_message(
         assistant_message.response_blocks_payload = blocks
         return assistant_message, grounded, focus, turn.partial, turn.unavailable
     finally:
+        _TURN_BROWSER_DATA.reset(browser_token)
         repo.close()
 
 
@@ -1392,6 +1481,8 @@ def stream_chat_message(
     chart_state: dict | None = None,
     regeneration_mode: str | None = None,
     regeneration_scope: dict | None = None,
+    *,
+    browser_data: dict | None = None,
 ) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
@@ -1407,6 +1498,8 @@ def stream_chat_message(
     """
     started_at = time.perf_counter()
     repo = ChatRepository()
+    # Set in the consumer's context; the stream is drained by one thread.
+    browser_token = _TURN_BROWSER_DATA.set(browser_data or None)
     try:
         turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
         yield (
@@ -1510,6 +1603,10 @@ def stream_chat_message(
             msg.response_blocks_payload = []
         yield ("final", (msg, grounded, focus, turn.partial, turn.unavailable))
     finally:
+        try:
+            _TURN_BROWSER_DATA.reset(browser_token)
+        except ValueError:  # generator finalized from another context
+            _TURN_BROWSER_DATA.set(None)
         repo.close()
 
 
@@ -3428,6 +3525,10 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
     if not query:
         return "What should I screen your watchlist for?", False, []
 
+    preset = _browser_preset_for_query(query)
+    if preset is not None:
+        return _run_saved_browser_preset(db, parsed, preset)
+
     watchlist_id = None
     if parsed.action_watchlist:
         wl = WatchlistRepository(db).get_watchlist_by_name(parsed.action_watchlist)
@@ -3464,6 +3565,85 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
         True,
         [r.symbol for r in shown],
     )
+
+
+def _browser_preset_for_query(query: str) -> dict | None:
+    """Resolve an explicitly requested shared Scanner preset by name."""
+    data = _TURN_BROWSER_DATA.get() or {}
+    presets = data.get("scan_presets")
+    if not isinstance(presets, list):
+        return None
+    lowered = query.lower()
+    candidates = [
+        preset for preset in presets
+        if isinstance(preset, dict) and isinstance(preset.get("name"), str)
+        and preset["name"].strip()
+        and preset["name"].lower() in lowered
+    ]
+    if candidates:
+        return candidates[0]
+    if len(presets) == 1 and re.search(r"\b(?:my|the|saved)\s+(?:scanner\s+)?(?:preset|scan)\b", lowered):
+        return presets[0] if isinstance(presets[0], dict) else None
+    return None
+
+
+def _run_saved_browser_preset(db, parsed, preset: dict) -> tuple[str, bool, list[str]]:
+    """Execute a validated browser preset through the Scanner filter engine."""
+    from backend.api.scanner.router import _FilterRequest, _build_filter, _scoped_cache, _split_earnings_exclusion, _without_upcoming_earnings
+    from backend.scanner.ranking import default_ranking_engine
+    from backend.scanner.scanner import market_scanner
+
+    raw_filters = preset.get("filters")
+    if not isinstance(raw_filters, list):
+        return "That saved Scanner preset has no usable filters.", False, []
+    try:
+        requested = [_FilterRequest.model_validate(item) for item in raw_filters if isinstance(item, dict)]
+        standard, earnings_days = _split_earnings_exclusion(requested)
+        scanner_filter = _build_filter(standard, str(preset.get("match") or "AND"))
+    except (TypeError, ValueError) as exc:
+        logger.info("invalid shared Scanner preset: %s", exc)
+        return "I couldn't run that saved Scanner preset because one of its filters is no longer supported.", False, []
+
+    watchlist_id = None
+    if parsed.action_watchlist:
+        from backend.repositories.watchlist_repository import WatchlistRepository
+
+        watchlist = WatchlistRepository(db).get_watchlist_by_name(parsed.action_watchlist)
+        if watchlist is None:
+            return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".', False, []
+        watchlist_id = watchlist.id
+
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    repository = WatchlistRepository(db)
+    watchlists = [repository.get_watchlist(watchlist_id)] if watchlist_id is not None else repository.get_watchlists(active_only=True)
+    symbols: list[str] = []
+    for watchlist in watchlists:
+        if watchlist is not None:
+            symbols.extend(row.symbol for row in repository.get_watchlist_symbols(watchlist.id, enabled_only=True))
+    symbols = list(dict.fromkeys(symbols))
+    if not symbols:
+        return "Your watchlist is empty, so there's nothing to screen.", False, []
+    try:
+        run_sync(market_scanner.scan_symbols_async(symbols))
+    except Exception as exc:  # noqa: BLE001 — match the normal screen degrade path
+        logger.warning("saved Scanner preset failed: %s", exc)
+        return "Something went wrong running that saved Scanner preset — please try again.", False, []
+
+    cache = _scoped_cache(symbols)
+    matched = [result for result in cache if scanner_filter.matches(result)]
+    if earnings_days is not None:
+        matched = _without_upcoming_earnings(matched, earnings_days)
+    if not matched:
+        return f"No matches for the saved preset across your {len(symbols)} watched symbols.", True, []
+
+    ranked = default_ranking_engine.rank_one("strongest_bullish", matched, top_n=10, filter=None)
+    shown_symbols = [entry.symbol for entry in (ranked.entries if ranked else [])[:5]]
+    if not shown_symbols:
+        shown_symbols = [result.symbol for result in matched[:5]]
+    items = ", ".join(shown_symbols)
+    more = f", +{len(matched) - len(shown_symbols)} more" if len(matched) > len(shown_symbols) else ""
+    return f"{len(matched)} match{'es' if len(matched) != 1 else ''} for the saved preset: {items}{more}.", True, shown_symbols
 
 
 def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool]:
@@ -3808,6 +3988,8 @@ def _run_market_tool(
         arguments["existing_assumptions"] = list((planner_state or {}).get("research_assumptions", []))
     arguments = _apply_regeneration_scope(parsed.action, arguments, planner_state)
     arguments = _apply_date_scope(parsed.action, arguments, planner_state)
+    trace_argument_source = arguments
+    arguments, browser_markers = _apply_browser_data(parsed.action, arguments)
     request_scope: dict[str, object] = {}
     if isinstance(arguments.get("session"), str):
         try:
@@ -3857,7 +4039,7 @@ def _run_market_tool(
                 "error": result.error,
                 "failure_kind": result.failure_kind or "tool_error",
                 "duration_ms": result.duration_ms,
-                "arguments": sanitize_arguments(arguments),
+                "arguments": {**sanitize_arguments(trace_argument_source), **browser_markers},
                 "provider_request_count": 0,
                 "fallback": result.fallback,
             })
@@ -3880,7 +4062,7 @@ def _run_market_tool(
             "entitlement": result.entitlement,
             "warnings": result.warnings,
             "duration_ms": result.duration_ms,
-            "arguments": sanitize_arguments(arguments),
+            "arguments": {**sanitize_arguments(trace_argument_source), **browser_markers},
             "cache_hit": bool(result.data.get("cache_hit", False)),
             "provider_request_count": int(
                 result.data.get("provider_request_count", 0)
@@ -3959,7 +4141,12 @@ def _run_market_tool(
             rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
         if rows:
             return f"Verified compare_symbols comparison by {label}: " + "; ".join(rows) + ".", True
-    payload = json.dumps(result.data, sort_keys=True, default=str, separators=(",", ":"))
+    reply_data = (
+        _browser_safe_reply_data(parsed.action, result.data)
+        if parsed.action in _BROWSER_LOCAL_ACTIONS
+        else result.data
+    )
+    payload = json.dumps(reply_data, sort_keys=True, default=str, separators=(",", ":"))
     if len(payload) > 1200:
         payload = payload[:1200].rstrip() + "…"
     return (

@@ -1,6 +1,6 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
+**Last updated:** 2026-09-23 (Chat browser-data/privacy hardening)
 **Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
@@ -1084,7 +1084,7 @@ Reliability foundation implemented (5.8.1–5.8.6):
   evidence block. The frontend renders verified, limited, and blocked states
   as accessible status text.
 - `backend/ai/evaluations/phase_5_8_cases.json` is the versioned provider-free
-  harness (`5.8.0`) with nineteen cases covering calculations/quotes,
+  verifier harness (`5.8.0`) with nineteen cases covering calculations/quotes,
   calculation mismatches, altered numbers, units, prose/evidence
   contradictions, sessions, timeframes, unknown tickers, freshness, options,
   comparisons, scanner results, portfolio risk, clarification, adversarial
@@ -1102,10 +1102,11 @@ Reliability foundation implemented (5.8.1–5.8.6):
   targets are defined for calculation-only (500 ms), cached-data (1.5 s),
   database (3 s), and provider-backed (15 s) turns, with per-turn target
   compliance persisted in the observability event.
-- Checkout validation after this slice: full backend suite `3,056 passed,
-  4 skipped, 30 subtests passed`; full frontend suite `196 passed` across 42
-  suites; and `npm run build` completed successfully. The four backend skips
-  are environment-dependent Redis/loopback checks, not product failures.
+- Checkout validation after the current Chat hardening: full backend suite
+  `3,212 passed, 4 skipped, 30 subtests passed`; full frontend suite `212
+  passed` across 43 suites; and `npm run build` completed successfully. The
+  four backend skips are environment-dependent Redis/loopback checks, not
+  product failures.
 
 Security/privacy review and manual smoke evidence (2026-09-23):
 
@@ -1149,12 +1150,13 @@ Phase 5.8 completion and final release gate (2026-09-23):
 
 - No order-execution tool or route is present; destructive tools remain
   backend-confirmation-gated.
-- Backend validation: `3,080 passed, 4 skipped, 30 subtests passed`.
+- Backend validation: `3,212 passed, 4 skipped, 30 subtests passed`.
   The four skips are environment-dependent Redis/loopback checks.
-- Frontend validation: `42` suites and `198` tests passed; `npm run build`
+- Frontend validation: `43` suites and `212` tests passed; `npm run build`
   compiled successfully.
-- Provider-free Phase 5.8 evaluation: `19/19` cases passed in every scored
-  category. The sanctioned synthetic private-flow smoke and the recorded
+- Provider-free Phase 5.8 evaluation: `40/40` end-to-end cases passed in every
+  scored category, including opt-in browser positions/Journal privacy cases.
+  The sanctioned synthetic private-flow smoke and the recorded
   public/failure-mode live smoke also passed.
 - The hot calculation target decision and its cold/warm startup exception are
   documented above. No target relaxation or correctness change was made.
@@ -1173,7 +1175,7 @@ active watchlists when scope is omitted, preserves exact scope for explicitly
 named lists, warms missing symbols on demand, and formats evidence-backed
 results for both blocking and streaming Chat. Common symbol research variants also reuse the canonical
 typed-tool path. Exact/paraphrase, tool-contract, ambiguity, and formatting
-coverage was added; the full backend suite now passes with `3,080` tests,
+coverage was added; the full backend suite now passes with `3,212` tests,
 `4` environment skips, and `30` subtests.
 
 ### Chat gap closure (2026-09-23)
@@ -1261,12 +1263,14 @@ covering them.
   risk now run in parallel, but chained steps still run one after another:
   each continuation is a model decision that depends on what already ran.
 - **5.2.4 saved scans.** Scanner presets are browser-local and Chat does not
-  send them, so `get_saved_scans` honestly reports them unavailable from
-  Chat. Manually tracked positions remain the Risk Dashboard snapshot path.
+  send them by default. With the saved-presets opt-in enabled,
+  `get_saved_scans` receives a bounded snapshot and a named preset can be
+  explicitly reused by the scanner route. Without opt-in it honestly reports
+  them unavailable.
 - **5.7.8 fixtures.** Promoted fixtures now export into
   end-to-end cases, but each draft needs a maintainer to script its
   evidence and expectations before it runs; nothing is automatic.
-- **5.8.3 evaluation coverage.** The end-to-end suite has 32 cases. Deterministic
+- **5.8.3 evaluation coverage.** The end-to-end suite has 40 cases. Deterministic
   tool routes are covered well; open-ended model-planned answers are covered
   only through scripted model replies, so real model tool-choice quality is
   not measured. The verifier suite's tool-choice and clarification columns
@@ -1284,7 +1288,9 @@ covering them.
   - 5.2 per-tool source, cache, freshness, fallback, and tests;
   - 5.4 test counts;
   - 5.7 per-block persistence, quality, and accessibility;
-  - the plan's 12-scenario matrix (11 covered, 1 partial: #5 from Chat).
+  - the plan's 12-scenario matrix (11 covered, 1 partial: #5 from Chat; the
+    opt-in/privacy path is covered, but live UI smoke and a full Chat shock
+    calculation remain open).
 
   Freshness findings from the tables are fixed:
   - composite tools report their oldest source;
@@ -1299,8 +1305,9 @@ covering them.
   - options results lacked a delayed label.
 
   Still open:
-  - portfolio scenarios from Chat need browser positions, which Chat
-    doesn't send (a privacy decision);
+  - live UI smoke for opt-in private flows and a full Chat portfolio-shock
+    calculation remain open; the sanctioned provider-free harness covers the
+    routing and privacy boundary;
   - three analysis tools have only one or two behavioral cases.
 - **Plan open questions.** Q4 (blocks stored as versioned JSON in
   `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
@@ -1308,11 +1315,13 @@ covering them.
 
 ## End-to-end Chat evaluation and tool timeouts (2026-09-23)
 
-- **Evaluation suite.** `backend/ai/evaluations/chat_runner.py` runs 23
+- **Evaluation suite.** `backend/ai/evaluations/chat_runner.py` runs 40
   versioned conversations (`phase_5_8_chat_cases.json`) through the real
   blocking/streaming Chat path, with only the model, tools, context, and
-  database scripted. All 23 pass; categories are counted only where a case
-  sets an expectation. See `phase_5_8_evaluation.md`.
+  database scripted. All 40 pass; categories are counted only where a case
+  sets an expectation. The suite includes opt-in browser positions/Journal
+  routing and checks that private markers do not persist. See
+  `phase_5_8_evaluation.md`.
 - **Regression fixtures** export via
   `python -m backend.ai.evaluations.export_fixtures` into reviewable case
   drafts that run with the suite after review (closes the 5.7.8
@@ -1400,10 +1409,14 @@ until the line is removed. The end-to-end evaluation pins these defaults
 - **User-data tools (5.2.4):**
   - `get_signal_history` reads recorded engine signals, trend-state
     transitions, and forward outcomes from the database.
-  - `get_saved_scans` summarizes an explicit Scanner-preset snapshot and
-    otherwise reports that presets are browser-local.
-  - Both have deterministic Chat routes.
+  - `get_risk_dashboard`, `get_trade_journal`, and `get_saved_scans` accept
+    bounded, relevant-question browser snapshots only when their category is
+    opted in; otherwise they report browser-local data as unavailable.
+  - Saved Scanner presets can be explicitly reused by name, and persisted
+    Chat answers keep aggregate/sanitized data rather than raw browser rows.
+  - All have deterministic Chat routes.
 - **Parallel reads (5.3.5).** `compare_symbols` and `assess_portfolio_risk`
   fetch their per-symbol bars concurrently (at most 4 at a time), still once
   per symbol.
-- **Evaluation.** The end-to-end suite (`5.8.5`) has 37 cases, all passing.
+- **Evaluation.** The end-to-end suite (`5.8.6`) has 40 cases, all passing,
+  including opt-in browser-data routing and persisted-message privacy checks.

@@ -11,15 +11,18 @@
 import React from 'react';
 import { ChatPreferences } from '../services/api';
 import { PREFERENCE_TIMEFRAMES, TRADING_MODES, isDefaultChatPreferences } from '../utils/chatPreferences';
+import { ChatSharingSettings, SHARING_FIELDS } from '../utils/chatBrowserData';
 
 interface ChatPreferencesPanelProps {
   preferences: ChatPreferences;
   onChange: (next: ChatPreferences) => void;
   onReset: () => void;
   onClose: () => void;
+  sharing: ChatSharingSettings;
+  onSharingChange: (next: ChatSharingSettings) => void;
 }
 
-export function ChatPreferencesPanel({ preferences, onChange, onReset, onClose }: ChatPreferencesPanelProps) {
+export function ChatPreferencesPanel({ preferences, onChange, onReset, onClose, sharing, onSharingChange }: ChatPreferencesPanelProps) {
   const toggleTimeframe = (tf: string) => {
     const next = preferences.preferred_timeframes.includes(tf)
       ? preferences.preferred_timeframes.filter(t => t !== tf)
@@ -134,6 +137,31 @@ export function ChatPreferencesPanel({ preferences, onChange, onReset, onClose }
           <option value="dollars">Dollars</option>
         </select>
       </label>
+
+      <fieldset className="chat-pref-field chat-pref-sharing">
+        <legend>Share browser-only data with Chat</legend>
+        <p className="info-text">
+          Risk Dashboard positions, Journal entries, and Scanner presets are stored only in
+          this browser, so Chat cannot see them. Switching one on sends a structured
+          snapshot with each relevant question — to the MarketLens backend and, as tool
+          evidence in the prompt, to your configured AI provider. Everything is off until
+          you turn it on.
+        </p>
+        {SHARING_FIELDS.map(field => (
+          <label key={field.key} className="chat-pref-sharing-row">
+            <input
+              type="checkbox"
+              checked={sharing[field.key]}
+              onChange={event => onSharingChange({ ...sharing, [field.key]: event.target.checked })}
+              aria-label={`Share ${field.label} with Chat`}
+            />
+            <span>
+              <strong>{field.label}</strong>
+              <span className="info-text">{field.description}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
 
       <button
         type="button"

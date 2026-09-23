@@ -19,7 +19,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.ai.chat import _generate_reply, _prune_context, answer_chat_message
+from backend.ai.chat import (
+    _browser_preset_for_query,
+    _browser_safe_reply_data,
+    _generate_reply,
+    _prune_context,
+    _TURN_BROWSER_DATA,
+    answer_chat_message,
+)
 from backend.ai.context import InsufficientDataError
 from backend.ai.prompt import AnalysisResponse, TradePlan, UncertaintyResponse
 from backend.ai.provider import AIResponse
@@ -831,6 +838,33 @@ class TestTranscriptClip(_Base):
         prompt = mock_ai.complete.call_args.kwargs["prompt"]
         self.assertIn("…[truncated]", prompt)
         self.assertNotIn("X" * 1000, prompt)
+
+
+class TestBrowserLocalChatData(unittest.TestCase):
+    def test_persisted_reply_uses_aggregate_browser_data_only(self):
+        payload = _browser_safe_reply_data(
+            "get_risk_dashboard",
+            {
+                "available": True,
+                "positions": [{"symbol": "PRIVATE1"}],
+                "gross_exposure": 1000,
+                "price_basis": "entry_price fallback",
+            },
+        )
+        serialized = json.dumps(payload)
+        self.assertNotIn("PRIVATE1", serialized)
+        self.assertEqual(payload["position_count"], 1)
+        self.assertEqual(payload["gross_exposure"], 1000)
+
+    def test_shared_preset_is_selected_only_by_explicit_name_or_scope(self):
+        token = _TURN_BROWSER_DATA.set({
+            "scan_presets": [{"name": "Breakout", "filters": [], "match": "AND"}],
+        })
+        try:
+            self.assertEqual(_browser_preset_for_query("run my Breakout preset")["name"], "Breakout")
+            self.assertIsNone(_browser_preset_for_query("what is the market doing today?"))
+        finally:
+            _TURN_BROWSER_DATA.reset(token)
 
 
 class TestPruneContextStatsGating(unittest.TestCase):

@@ -53,7 +53,9 @@ The AI Hub includes:
 - high-confidence semantic routing shared by blocking and streaming Chat, mapping common natural-language variants to typed tools, preserving user-owned scope safely, and asking for clarification when scope is ambiguous
 - server-owned context evidence and provider provenance carried into answer verification, including symbol-scoped numeric claims and honest freshness when a source timestamp is unavailable
 - scanner, watchlist intelligence, alerts, market digest, and local “What changed” inbox workflows
-- trade planning, portfolio-risk, options research, journal coaching, browser-local journal snapshots, and downloadable reports
+- trade planning, portfolio-risk, options research, journal coaching, and downloadable reports, with explicit opt-in sharing of browser-local positions, structured Journal fields, and saved Scanner presets when a question needs them
+- browser-local Chat data is sent only for relevant questions when the trader enables that category; journal thesis/review prose and screenshots are never shared, and raw browser rows are not retained in the durable Chat transcript
+- saved Scanner presets can be inspected and explicitly reused by name; portfolio-risk answers identify whether current prices were supplied or entry prices were used as a fallback
 - browser-local chat preferences, feedback, notebooks, and checkpoint state without adding server-side user identity assumptions
 - confirmation-gated journal writes and other destructive actions; no order execution tool or route
 
@@ -497,6 +499,13 @@ All endpoints are under `/api/`. Base URL: `http://localhost:5001/api`.
 | GET | `/ai/jobs/{id}` | Get background job status + result |
 
 ### AI Hub Chat and Workflows
+
+Chat can use browser-local positions, structured Journal fields, and saved Scanner
+presets only through explicit per-category opt-in sharing. Relevant questions
+receive a bounded structured snapshot; unrelated questions do not. The server
+persists aggregate/sanitized answer data rather than raw browser rows, and
+free-text journal thesis/review notes and screenshots remain local to the
+browser.
 
 | Method | Path | Description |
 |--------|------|-------------|

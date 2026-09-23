@@ -1,6 +1,6 @@
 # Phase 5.8 Evaluation Report
 
-**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.5`
+**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.6`
 **Verifier version:** `5.8.1`
 **Scope:** provider-free verifier, end-to-end Chat, and fallback-contract evaluation
 
@@ -31,14 +31,14 @@ counted only for cases that set an expectation in it:
 
 | Category | Passed | Applicable cases |
 | --- | ---: | ---: |
-| Correctness | 20 | 20 |
-| Tool choice | 30 | 30 |
+| Correctness | 21 | 21 |
+| Tool choice | 33 | 33 |
 | Provenance | 5 | 5 |
 | Clarification | 3 | 3 |
-| Latency | 37 | 37 |
-| Safety | 7 | 7 |
+| Latency | 40 | 40 |
+| Safety | 9 | 9 |
 
-The 37 cases cover:
+The 40 cases cover:
 
 - **Calculations:** position risk from "Buy 200 AAPL at $220, stop $212"
   (plan matrix #1), a missing-input clarification, and the "use the same
@@ -71,8 +71,12 @@ The 37 cases cover:
   - "yesterday" bounds the event timeline;
   - a named watchlist is remembered for a later "compare my watchlist".
   These cases run against a frozen New York clock.
-- **User data:** signal-history routing, and saved scans honestly reported as
-  browser-local.
+- **User data:** signal-history routing, opt-in browser-local positions and
+  Journal snapshots, no-browser-data behavior without opt-in, and saved scans
+  honestly reported as browser-local unless explicitly shared.
+- **Privacy:** browser-local rows are available to the relevant tool only;
+  private markers are asserted absent from persisted messages and sanitized
+  traces. Journal prose and screenshots are not part of the shared snapshot.
 
 When the harness was first run, it found two real gaps. There was no
 deterministic path for plan matrix #1, and the calculator had no
@@ -152,7 +156,9 @@ target; the cold and first-warm values are accepted startup outliers.
 The Phase 5.8 release gate passed on 2026-09-23: no order-execution route is
 registered, destructive actions remain confirmation-gated, the full backend
 and frontend validation suites are green, the production frontend build
-compiles, and all 19 provider-free evaluation cases pass in every category.
+compiles, and all 40 end-to-end provider-free Chat cases pass in every scored
+category. Browser-local sharing is opt-in and relevant-question scoped; raw
+browser rows are not retained in durable Chat messages.
 The four backend skips are environment-dependent Redis/loopback checks.
 
 ## Failure matrix

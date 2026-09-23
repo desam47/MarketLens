@@ -146,9 +146,72 @@ ChatRegenerationMode = Literal[
 ]
 
 
+class BrowserPosition(BaseModel):
+    """One Risk Dashboard position, as stored in the browser."""
+
+    model_config = {"extra": "ignore"}
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    side: Literal["long", "short"] = "long"
+    quantity: float = Field(..., gt=0)
+    entry_price: float = Field(..., gt=0)
+    current_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    sector: str | None = Field(default=None, max_length=100)
+
+
+class BrowserJournalEntry(BaseModel):
+    """Structured Journal fields only. Free text (thesis, notes, review) and
+    screenshots are dropped here even if a client sends them."""
+
+    model_config = {"extra": "ignore"}
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    side: Literal["long", "short"] = "long"
+    status: Literal["planned", "open", "closed"] = "planned"
+    quantity: float | None = Field(default=None, gt=0)
+    entry_price: float | None = Field(default=None, gt=0)
+    exit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    entry_date: str | None = Field(default=None, max_length=40)
+    exit_date: str | None = Field(default=None, max_length=40)
+    setup: str | None = Field(default=None, max_length=100)
+
+
+class BrowserScanPreset(BaseModel):
+    model_config = {"extra": "ignore"}
+
+    name: str = Field(..., min_length=1, max_length=80)
+    filters: list["BrowserScanFilter"] = Field(default_factory=list, max_length=40)
+    match: Literal["AND", "OR"] = "AND"
+
+
+class BrowserScanFilter(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    type: str = Field(..., min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_\-]+$")
+    params: dict[str, str | int | float | bool | None] = Field(default_factory=dict, max_length=20)
+
+
+class ChatBrowserData(BaseModel):
+    """Browser-local data the trader opted in to sharing for this turn.
+
+    Used only as explicit tool snapshots (never stored, never added to the
+    prompt as raw data); see backend.ai.chat._apply_browser_data.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    positions: list[BrowserPosition] | None = Field(default=None, max_length=500)
+    journal_entries: list[BrowserJournalEntry] | None = Field(default=None, max_length=1_000)
+    scan_presets: list[BrowserScanPreset] | None = Field(default=None, max_length=50)
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     preferences: ChatPreferences | None = None
+    browser_data: ChatBrowserData | None = None
     chart_state: ChatChartState | None = None
     regeneration_mode: ChatRegenerationMode | None = None
     regeneration_timeframe: str | None = Field(default=None, min_length=1, max_length=20)
@@ -652,7 +715,8 @@ async def send_message(session_id: int, payload: SendMessageRequest):
             "timeframe": payload.regeneration_timeframe,
             "session": payload.regeneration_session,
         })
-    message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args)
+    kwargs = _browser_data_kwargs(payload)
+    message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args, **kwargs)
     return _message_to_response(
         message,
         grounded=grounded,
@@ -662,6 +726,14 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         tools=getattr(message, "planner_trace", []),
         blocks=getattr(message, "response_blocks_payload", None),
     )
+
+
+def _browser_data_kwargs(payload: SendMessageRequest) -> dict[str, Any]:
+    """Opted-in browser data, only when the client sent any."""
+    if payload.browser_data is None:
+        return {}
+    data = payload.browser_data.model_dump(exclude_none=True)
+    return {"browser_data": data} if data else {}
 
 
 def _sse(event: str, data: dict) -> str:
@@ -722,13 +794,14 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
         def drain():
             try:
                 preferences = payload.preferences.model_dump() if payload.preferences else None
+                browser_kwargs = _browser_data_kwargs(payload)
                 if (
                     payload.chart_state is None
                     and payload.regeneration_mode is None
                     and payload.regeneration_timeframe is None
                     and payload.regeneration_session is None
                 ):
-                    events = stream_chat_message(session_id, payload.content, preferences)
+                    events = stream_chat_message(session_id, payload.content, preferences, **browser_kwargs)
                 else:
                     stream_args = [session_id, payload.content, preferences, payload.chart_state.model_dump() if payload.chart_state else None]
                     if payload.regeneration_mode is not None:
@@ -738,7 +811,7 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                             "timeframe": payload.regeneration_timeframe,
                             "session": payload.regeneration_session,
                         })
-                    events = stream_chat_message(*stream_args)
+                    events = stream_chat_message(*stream_args, **browser_kwargs)
                 for ev in events:
                     if stop.is_set():
                         break

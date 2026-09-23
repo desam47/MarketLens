@@ -2452,7 +2452,10 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
     stop_risk = 0.0
     rows = []
     sectors: dict[str, float] = {}
+    used_entry_price_fallback = False
     for position in request.positions:
+        if position.current_price is None:
+            used_entry_price_fallback = True
         price = position.current_price or position.entry_price
         value = price * position.quantity
         signed = value if position.side == "long" else -value
@@ -2476,6 +2479,11 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
         gross_exposure=round(gross, 8),
         net_exposure=round(net, 8),
         stop_loss_risk=round(stop_risk, 8),
+        price_basis=(
+            "current_price supplied for every position"
+            if not used_entry_price_fallback
+            else "entry_price fallback used where current_price was not supplied"
+        ),
         sector_exposure=[{"sector": key, "market_value": round(value, 8), "weight_percent": round(value / gross * 100, 6) if gross else 0.0} for key, value in sorted(sectors.items(), key=lambda item: item[1], reverse=True)],
         provider="MarketLens calculator",
         source_timestamp=None,

@@ -1,6 +1,6 @@
 # Version 5 Audit Tables
 
-**Written:** 2026-09-23 · **Covers:** `development` at `9b95e77` plus the audit-table commit
+**Written:** 2026-09-23 · **Covers:** `development` after `11e4527` plus the current Chat browser-data/privacy hardening
 **Companion to:** [phase_audit_v5.md](phase_audit_v5.md), which requires these tables in its 5.1, 5.2, 5.4, and 5.7 sections.
 
 Every row was taken from the code and test files, not from earlier audit
@@ -86,14 +86,14 @@ and schema checks. "E2E eval" means an end-to-end Chat case routes to it.
 | `get_options_snapshot` | `AuxDataManager.get_options` | `AuxDataManager` fallback chain with per-category rate throttle; no manager-level response cache (1 call per use) | Provider response timestamp | `fallback` vs options primary; delayed/approximate labels from provider | — | aux_market_tools, chat_intents, market_tools, response_blocks, semantic_router | ✅ |
 | `get_quote` | `MarketDataManager.get_quote` | Redis quote cache, then `MarketDataManager` fallback chain; ≤1 provider call on a miss | Provider quote timestamp | `fallback` when provider ≠ configured primary; single-observation reconciliation record | — | answer_verifier, chat_actions, chat_calculation, market_tools, phase_5_8_chat_evaluation, phase_5_8_observability, response_blocks, workflows | — |
 | `get_relative_strength` | RS engine via `_get_rs_engine` | Reads a warmed in-process engine; no provider call | Oldest benchmark signal timestamp (derived) | Composite label `MarketLens engine` | ✅ | market_tools, visual_trace_payload | — |
-| `get_risk_dashboard` | Browser-local positions | Caller-supplied browser snapshot; no provider or DB call | None — snapshot age unknown | Honest unavailable without a snapshot | — | market_tools, phase_5_8_private_smoke, semantic_router, visual_trace_payload | ✅ |
-| `get_saved_scans` | Browser-local Scanner presets | Caller-supplied browser snapshot; no provider or DB call | None | Honest unavailable without a snapshot (Chat never sends one) | — | market_tools | ✅ |
+| `get_risk_dashboard` | Browser-local positions | Caller-supplied opt-in browser snapshot; no provider or DB call | None — snapshot age unknown | Honest unavailable without opt-in; risk answers label current-price vs entry-price basis | — | market_tools, phase_5_8_private_smoke, semantic_router, visual_trace_payload | ✅ |
+| `get_saved_scans` | Browser-local Scanner presets | Caller-supplied opt-in browser snapshot; no provider or DB call | None | Honest unavailable without opt-in; explicit named preset reuse routes through the scanner filter contract | — | market_tools | ✅ |
 | `get_sector_data` | `SectorEngine` via regime router's shared cache | Reads a warmed in-process engine; no provider call | Sector signal timestamp | Trend-engine provider vs primary | ✅ | market_tools | — |
 | `get_session_stats` | `get_bars` (1m) scoped by each bar's own `session` | Redis bar cache, then `MarketDataManager`; stale cache tagged; ≤1 fetch per symbol (shared) | Newest bar timestamp | Inherited; honest `available: false` when the session has no bars | — | market_tools, visual_trace_payload | ✅ |
 | `get_signal_history` | `SignalRepository.get_history` | SQLite read; no provider call | Newest recorded signal | Outcome fields marked unavailable until backfilled | — | market_tools | ✅ |
 | `get_support_resistance` | `get_bars` + S/R engine math | Redis bar cache, then `MarketDataManager`; stale cache tagged; ≤1 fetch per symbol (shared) | Inherited from bars | Inherited from bars | — | market_tools | — |
 | `get_tape_state` | `get_tape_engine(...).get_snapshot()` | In-process tape engine; `seed=True` can schedule a background Webull seed | Engine's last trade time; none before any trade | `TAPE_ENABLED=false` returned as a tool error | ✅ | market_tools | — |
-| `get_trade_journal` | Browser-local Journal | Caller-supplied browser snapshot; no provider or DB call | None — snapshot age unknown | Honest unavailable without a snapshot | — | market_tools | ✅ |
+| `get_trade_journal` | Browser-local Journal | Caller-supplied opt-in structured snapshot; no provider or DB call | None — snapshot age unknown | Honest unavailable without opt-in; persisted Chat data is aggregate/sanitized | — | market_tools | ✅ |
 | `get_trend` | `_build_trend_payload` (same as `GET /api/trend/...`) | Reads a warmed in-process engine; no provider call | Engine signal timestamp (null when cold) | Provider left exactly as the endpoint reports; `fallback` computed locally | ✅ | answer_verifier, chat_intents, market_tools, semantic_router | ✅ |
 | `get_watchlist` | `WatchlistRepository` | SQLite read; no provider call | Call time (live read, current as of the call) | n/a | ✅ | chat_actions, watchlist_intelligence_tool | — |
 | `get_watchlist_intelligence` | Scanner cache + watchlist DB | Reads the scanner cache; warms missing symbols on demand (provider calls only for those) | Briefing `generated_at` | Coverage/warming warnings | — | chat_intents, semantic_router, visual_trace_payload, watchlist_intelligence_tool | — |
@@ -188,7 +188,7 @@ pass in `phase_5_7_manual_qa.md` has not been run.
 | 2 | Premarket change uses previous regular close, labels premarket time | ✅ Tool | `test_premarket_change_uses_previous_regular_close` (fixed: the baseline was the previous bar) |
 | 3 | AAPL vs MSFT from aligned timeframes and timestamps | ✅ Tool | one timeframe per request; misaligned latest bars now flagged (`test_compare_symbols_flags_misaligned_latest_bars`) |
 | 4 | Why move separates confirmed news from inferred effects | ✅ Tool + routing | `test_move_analysis_separates_facts_correlations_and_unknowns`; E2E `why_did_it_move_routes` |
-| 5 | 5% portfolio shock gives deterministic impacts | ⚠️ Tool only | `test_portfolio_shock_is_deterministic_across_positions`; from Chat, positions are browser-local and not sent, so the tool reports them unavailable |
+| 5 | 5% portfolio shock gives deterministic impacts | ⚠️ Tool + privacy harness | `test_portfolio_shock_is_deterministic_across_positions`; the opt-in Chat path is covered by `opted_in_positions_reach_risk_tool_only` and privacy assertions, while live UI smoke and a full Chat shock calculation remain release follow-up |
 | 6 | NL scanner filters identical to executed filters | ✅ Scanner page | `nl_search/test_scanner_builder`, `api/test_nl_search_router` (preview payload = executed payload) |
 | 7 | "Use the same stop but 100 shares" reuses state | ✅ Automated | E2E `followup_reuses_previous_stop` |
 | 8 | Breakeven and expected move show delayed/approximate provenance | ✅ Tool | options results now carry `data_status: DELAYED` → a visible "Provider data status: DELAYED." warning (`test_options_snapshot_is_labelled_delayed_in_the_tool_result`) |
@@ -252,11 +252,13 @@ Found and fixed while adding coverage:
 
 Still open:
 
-9. **Scenario #5 from Chat.** Risk Dashboard positions (like Scanner presets
-   and Journal entries) are browser-local, and Chat does not send them, so
-   portfolio questions from Chat report "unavailable". Sending them would
-   pass private positions to the backend and, through the prompt, to the
-   configured AI provider. That is a product/privacy decision.
+9. **Scenario #5 from Chat.** Risk Dashboard positions, structured Journal
+   fields, and saved Scanner presets now have an explicit per-category opt-in
+   browser snapshot path. Relevant Chat turns receive only the needed
+   structured data; raw browser rows, journal prose, and screenshots are not
+   retained in persisted Chat messages. Without opt-in, the tools remain
+   honestly unavailable. Live UI smoke and a full Chat portfolio-shock
+   calculation remain follow-up coverage.
 10. `signal_explanation`, `sensitivity_analysis`, and `anomaly_analysis`
    still have one or two behavioral cases each.
 

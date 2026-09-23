@@ -241,7 +241,7 @@ class _Harness:
             db.close()
 
     def db_state(self) -> dict[str, Any]:
-        from backend.models import Alert, ChatSession
+        from backend.models import Alert, ChatMessage, ChatSession
         from backend.repositories.watchlist_repository import WatchlistRepository
 
         db = self.Session()
@@ -256,8 +256,9 @@ class _Harness:
             return {
                 "alerts": db.query(Alert).count(),
                 "watchlists": watchlists,
-                "pending_confirmation": (planner_state or {}).get("pending_confirmation"),
-                "memory": planner_state or {},
+            "pending_confirmation": (planner_state or {}).get("pending_confirmation"),
+            "memory": planner_state or {},
+            "messages": [message.content for message in db.query(ChatMessage).filter(ChatMessage.session_id == self.session_id).all()],
             }
         finally:
             db.close()
@@ -269,13 +270,14 @@ class _Harness:
         model_calls_before = self.model.calls
         prompts_before = len(self.model.prompts)
         regeneration = [turn.get("regeneration_mode"), turn.get("regeneration_scope")]
+        browser = {"browser_data": turn["browser_data"]} if turn.get("browser_data") else {}
         tool_calls_before = len(self.tools.calls)
         screens_before = len(self.screen_calls)
         started = time.perf_counter()
         deltas: list[str] = []
         if turn.get("transport", self.case.get("transport", "blocking")) == "stream":
             final = None
-            for kind, payload in stream_chat_message(self.session_id, turn["user"], None, None, *regeneration):
+            for kind, payload in stream_chat_message(self.session_id, turn["user"], None, None, *regeneration, **browser):
                 if kind == "delta":
                     deltas.append(payload)
                 elif kind == "final":
@@ -283,7 +285,7 @@ class _Harness:
             assert final is not None, "stream ended without a final event"
             message, grounded, focus, *_ = final
         else:
-            message, grounded, focus, *_ = answer_chat_message(self.session_id, turn["user"], None, None, *regeneration)
+            message, grounded, focus, *_ = answer_chat_message(self.session_id, turn["user"], None, None, *regeneration, **browser)
         elapsed_ms = (time.perf_counter() - started) * 1000
         trace = list(getattr(message, "planner_trace", []) or [])
         blocks = list(getattr(message, "response_blocks_payload", []) or [])
@@ -300,6 +302,7 @@ class _Harness:
             "unscripted_model_calls": self.model.unscripted_calls,
             "verification": verification,
             "evidence_refs": list(verification.get("evidence_refs") or []),
+            "trace": trace,
             "failed_tools": [
                 item for item in trace
                 if item.get("ok") is False and item.get("tool") and item.get("kind") != "step"
@@ -313,6 +316,12 @@ class _Harness:
 def _subset(expected: Any, actual: Any) -> bool:
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(k in actual and _subset(v, actual[k]) for k, v in expected.items())
+    if isinstance(expected, list) and expected and isinstance(expected[0], dict):
+        return (
+            isinstance(actual, list)
+            and len(actual) == len(expected)
+            and all(_subset(item, other) for item, other in zip(expected, actual, strict=True))
+        )
     if isinstance(expected, str) and isinstance(actual, str):
         return expected.lower() == actual.lower()
     return expected == actual
@@ -367,6 +376,15 @@ def _score_turn(expect: dict[str, Any], observed: dict[str, Any]) -> tuple[dict[
     for needle in expect.get("prompt_not_contains", []):
         found = any(needle.lower() in prompt.lower() for prompt in observed["prompts"])
         checks["correctness"].append((not found, f"a model prompt contains {needle!r}"))
+    memory_text = json.dumps(observed["db"]["memory"], default=str)
+    message_text = json.dumps(observed["db"].get("messages", []), default=str)
+    trace_arguments = json.dumps([item.get("arguments") for item in observed["trace"]], default=str)
+    for needle in expect.get("private_not_stored", []):
+        # Opted-in browser data may reach a tool, but never session memory
+        # or the recorded tool-trace arguments.
+        checks["safety"].append((needle not in memory_text, f"{needle!r} stored in session memory"))
+        checks["safety"].append((needle not in message_text, f"{needle!r} stored in Chat messages"))
+        checks["safety"].append((needle not in trace_arguments, f"{needle!r} copied into trace arguments"))
     if "failure_kind" in expect:
         kinds = [item.get("failure_kind") for item in observed["failed_tools"]]
         checks["correctness"].append((expect["failure_kind"] in kinds, f"failure kinds {kinds}"))

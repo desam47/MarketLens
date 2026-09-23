@@ -5906,6 +5906,24 @@ div.td-trend {
   color: inherit;
 }
 
+.chat-pref-sharing-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.chat-pref-sharing-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.chat-pref-sharing-row input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex: 0 0 auto;
+}
+
 .chat-pref-timeframes {
   display: flex;
   flex-wrap: wrap;

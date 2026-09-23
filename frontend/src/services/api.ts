@@ -2635,6 +2635,7 @@ class ApiService {
     chartState?: ChatChartState | null,
     regenerationMode?: ChatRegenerationMode | null,
     regenerationScope?: ChatRegenerationScope | null,
+    browserData?: ChatBrowserData | null,
   ): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -2645,6 +2646,7 @@ class ApiService {
         ...(chartState ? { chart_state: chartState } : {}),
         ...(regenerationMode ? { regeneration_mode: regenerationMode } : {}),
         ...(regenerationScope ? { regeneration_timeframe: regenerationScope.timeframe, regeneration_session: regenerationScope.session } : {}),
+        ...(browserData ? { browser_data: browserData } : {}),
       }),
     }, AI_TIMEOUT_MS);
   }
@@ -2671,6 +2673,7 @@ class ApiService {
       chartState?: ChatChartState | null;
       regenerationMode?: ChatRegenerationMode | null;
       regenerationScope?: ChatRegenerationScope | null;
+      browserData?: ChatBrowserData | null;
     } = {},
   ): Promise<ChatMessage> {
     const response = await fetch(
@@ -2684,6 +2687,7 @@ class ApiService {
           ...(opts.chartState ? { chart_state: opts.chartState } : {}),
           ...(opts.regenerationMode ? { regeneration_mode: opts.regenerationMode } : {}),
           ...(opts.regenerationScope ? { regeneration_timeframe: opts.regenerationScope.timeframe, regeneration_session: opts.regenerationScope.session } : {}),
+          ...(opts.browserData ? { browser_data: opts.browserData } : {}),
         }),
         signal: opts.signal,
       },
@@ -2952,6 +2956,34 @@ export interface ChatPreferences {
   primary_watchlist: string | null;
   answer_detail_level: 'concise' | 'standard' | 'detailed' | null;
   preferred_units: 'percent' | 'dollars' | null;
+}
+
+/** Browser-local data shared with one Chat turn (opt-in per category).
+ * Free text (journal thesis/notes/screenshots) is never included. */
+export interface ChatBrowserData {
+  positions?: Array<{
+    symbol: string;
+    side: 'long' | 'short';
+    quantity: number;
+    entry_price: number;
+    current_price?: number;
+    stop_price?: number;
+    sector?: string;
+  }>;
+  journal_entries?: Array<{
+    symbol: string;
+    side: 'long' | 'short';
+    status: 'planned' | 'open' | 'closed';
+    quantity?: number;
+    entry_price?: number;
+    exit_price?: number;
+    stop_price?: number;
+    target_price?: number;
+    entry_date?: string;
+    exit_date?: string;
+    setup?: string;
+  }>;
+  scan_presets?: Array<{ name: string; filters: Array<Record<string, unknown>>; match: 'AND' | 'OR' }>;
 }
 
 export type ChatRegenerationMode = 'again' | 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh' | 'rescope';

@@ -22,6 +22,7 @@ import { highlightMessage } from '../utils/textHighlight';
 import type { AppPage, NavigationState } from '../utils/appNavigation';
 import { loadChartState } from '../utils/chartState';
 import { ChatPreferencesPanel } from './ChatPreferencesPanel';
+import { ChatSharingSettings, collectChatBrowserData, isChatBrowserDataRelevant, isSharingAnything, loadChatSharing, saveChatSharing } from '../utils/chatBrowserData';
 import { createChatNotebook, getChatNotebookClientKey, loadChatNotebooks, mergeServerChatNotebooks, saveMessageToChatNotebook, type ChatNotebook } from '../utils/chatNotebooks';
 import {
   isDefaultChatPreferences,
@@ -137,6 +138,7 @@ export function ChatPanel({
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
   const [preferences, setPreferences] = useState<ChatPreferencesType>(() => loadChatPreferences());
+  const [sharing, setSharing] = useState<ChatSharingSettings>(() => loadChatSharing());
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [chartState, setChartState] = useState<ChatChartState | null>(() => loadChartState());
   const [notebooks, setNotebooks] = useState<ChatNotebook[]>(() => loadChatNotebooks());
@@ -304,6 +306,12 @@ export function ChatPanel({
     setSending(true);
     setError(null);
     const currentChartState = loadChartState();
+    // Read the opted-in snapshot at send time so it reflects the current
+    // Risk Dashboard / Journal / preset state, not whatever was stored when
+    // the panel mounted.
+    const browserData = isChatBrowserDataRelevant(content, sharing)
+      ? collectChatBrowserData(sharing, content)
+      : null;
     const apiRegenerationMode = regenerationMode;
     setChartState(currentChartState);
     const now = Date.now();
@@ -362,6 +370,7 @@ export function ChatPanel({
         chartState: currentChartState,
         regenerationMode: apiRegenerationMode,
         regenerationScope,
+        browserData,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
@@ -383,8 +392,8 @@ export function ChatPanel({
         // Stream never started — fall back to the plain blocking endpoint.
         try {
           const sentPreferences = isDefaultChatPreferences(preferences) ? null : preferences;
-          const finalMsg = (apiRegenerationMode || regenerationScope)
-            ? await api.sendChatMessage(sessionId, content, sentPreferences, currentChartState, apiRegenerationMode, regenerationScope)
+          const finalMsg = (apiRegenerationMode || regenerationScope || browserData)
+            ? await api.sendChatMessage(sessionId, content, sentPreferences, currentChartState, apiRegenerationMode, regenerationScope, browserData)
             : currentChartState
               ? await api.sendChatMessage(sessionId, content, sentPreferences, currentChartState)
               : await api.sendChatMessage(sessionId, content, sentPreferences);
@@ -411,7 +420,7 @@ export function ChatPanel({
     } finally {
       setSending(false);
     }
-  }, [sessionId, sending, onSymbolResolved, preferences]);
+  }, [sessionId, sending, onSymbolResolved, preferences, sharing]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -436,7 +445,7 @@ export function ChatPanel({
               title="Personal preferences — mode, timeframes, risk, detail level"
               aria-expanded={preferencesOpen}
             >
-              ⚙ Preferences{!isDefaultChatPreferences(preferences) ? ' •' : ''}
+              ⚙ Preferences{!isDefaultChatPreferences(preferences) || isSharingAnything(sharing) ? ' •' : ''}
             </button>
             <button
               type="button"
@@ -477,6 +486,11 @@ export function ChatPanel({
             }}
             onReset={() => setPreferences(resetChatPreferences())}
             onClose={() => setPreferencesOpen(false)}
+            sharing={sharing}
+            onSharingChange={next => {
+              setSharing(next);
+              saveChatSharing(next);
+            }}
           />
         )}
         {notebooksOpen && (
