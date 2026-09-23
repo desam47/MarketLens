@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.ai.chat import (
     _browser_preset_for_query,
     _browser_safe_reply_data,
+    _format_browser_local_reply,
     _generate_reply,
     _prune_context,
     _TURN_BROWSER_DATA,
@@ -855,6 +856,49 @@ class TestBrowserLocalChatData(unittest.TestCase):
         self.assertNotIn("PRIVATE1", serialized)
         self.assertEqual(payload["position_count"], 1)
         self.assertEqual(payload["gross_exposure"], 1000)
+
+    def test_browser_local_replies_are_human_readable_and_row_free(self):
+        risk = _format_browser_local_reply(
+            "get_risk_dashboard",
+            _browser_safe_reply_data(
+                "get_risk_dashboard",
+                {
+                    "available": True,
+                    "positions": [{"symbol": "PRIVATE1"}],
+                    "gross_exposure": 1000,
+                    "net_exposure": 900,
+                    "stop_loss_risk": 100,
+                    "price_basis": "entry_price fallback used where current_price was not supplied",
+                },
+            ),
+            "MarketLens calculator",
+        )
+        journal = _format_browser_local_reply(
+            "get_trade_journal",
+            _browser_safe_reply_data(
+                "get_trade_journal",
+                {"available": True, "total_entries": 1, "closed_entries": 1},
+            ),
+            "MarketLens local journal",
+        )
+        scans = _format_browser_local_reply(
+            "get_saved_scans",
+            _browser_safe_reply_data(
+                "get_saved_scans",
+                {"available": True, "presets": [{"name": "PRIVATE"}]},
+            ),
+            "MarketLens local scanner presets",
+        )
+
+        self.assertIn("Portfolio risk is verified", risk)
+        self.assertIn("1 position", risk)
+        self.assertIn("$1,000.00", risk)
+        self.assertNotIn("PRIVATE1", risk)
+        self.assertNotIn("{", risk)
+        self.assertIn("Trade journal review is verified", journal)
+        self.assertIn("1 total entry", journal)
+        self.assertIn("Saved scans are verified", scans)
+        self.assertIn("1 saved preset", scans)
 
     def test_shared_preset_is_selected_only_by_explicit_name_or_scope(self):
         token = _TURN_BROWSER_DATA.set({

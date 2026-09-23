@@ -1327,6 +1327,75 @@ def _browser_safe_reply_data(action: str, data: dict) -> dict:
     return {}
 
 
+def _format_browser_local_reply(action: str, data: dict, provider: str) -> str:
+    """Turn aggregate browser-local tool data into user-facing prose.
+
+    Browser-local rows are intentionally excluded from the durable transcript.
+    This formatter keeps that privacy boundary while avoiding a raw JSON
+    payload in the Chat panel.
+    """
+    source = provider or "MarketLens"
+    if action in {"get_risk_dashboard", "assess_portfolio_risk", "scenario_analysis"}:
+        if data.get("available") is False:
+            reason = str(data.get("reason") or "No browser-local positions were shared for this turn.")
+            return f"Portfolio risk is unavailable from {source}: {reason}"
+        position_count = data.get("position_count")
+        if not isinstance(position_count, int):
+            positions = data.get("positions")
+            position_count = len(positions) if isinstance(positions, list) else None
+        count_text = f"{position_count} position{'s' if position_count != 1 else ''}" if isinstance(position_count, int) else "the shared positions"
+        details = [f"{count_text}"]
+        labels = (
+            ("gross exposure", data.get("gross_exposure")),
+            ("net exposure", data.get("net_exposure")),
+            ("stop-loss risk", data.get("stop_loss_risk")),
+        )
+        for label, value in labels:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                details.append(f"{label} ${float(value):,.2f}")
+        price_basis = data.get("price_basis")
+        if price_basis:
+            details.append(str(price_basis).rstrip("."))
+        return f"Portfolio risk is verified from {source}: " + "; ".join(details) + "."
+
+    if action in {"get_trade_journal", "trade_journal_coach"}:
+        if data.get("available") is False:
+            reason = str(data.get("reason") or "No browser-local journal entries were shared for this turn.")
+            return f"Trade journal data is unavailable from {source}: {reason}"
+        total = data.get("total_entries")
+        closed = data.get("closed_entries")
+        details = []
+        if isinstance(total, int):
+            details.append(f"{total} total entr{'y' if total == 1 else 'ies'}")
+        if isinstance(closed, int):
+            details.append(f"{closed} closed entr{'y' if closed == 1 else 'ies'}")
+        win_rate = data.get("win_rate_percent")
+        if isinstance(win_rate, (int, float)) and not isinstance(win_rate, bool):
+            details.append(f"{float(win_rate):.1f}% win rate")
+        expectancy = data.get("expectancy_per_trade")
+        if isinstance(expectancy, (int, float)) and not isinstance(expectancy, bool):
+            details.append(f"${float(expectancy):,.2f} expectancy per trade")
+        if not details:
+            details.append("no aggregate statistics available")
+        return f"Trade journal review is verified from {source}: " + "; ".join(details) + "."
+
+    if action == "get_saved_scans":
+        if data.get("available") is False:
+            reason = str(data.get("reason") or "No browser-local saved Scanner presets were shared for this turn.")
+            return f"Saved scans are unavailable from {source}: {reason}"
+        preset_count = data.get("preset_count")
+        if not isinstance(preset_count, int):
+            presets = data.get("presets")
+            preset_count = len(presets) if isinstance(presets, list) else None
+        if isinstance(preset_count, int):
+            label = f"{preset_count} saved preset{'s' if preset_count != 1 else ''}"
+        else:
+            label = "saved Scanner presets"
+        return f"Saved scans are verified from {source}: {label} available."
+
+    return f"Verified {action} result from {source}."
+
+
 def _expire_carried_confirmation(turn: _Turn) -> None:
     """Drop a confirmation request this turn did not answer.
 
@@ -4141,6 +4210,12 @@ def _run_market_tool(
             rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
         if rows:
             return f"Verified compare_symbols comparison by {label}: " + "; ".join(rows) + ".", True
+    if parsed.action in _BROWSER_LOCAL_ACTIONS - {"scenario_analysis"}:
+        return _format_browser_local_reply(
+            parsed.action,
+            _browser_safe_reply_data(parsed.action, result.data),
+            result.provider,
+        ), True
     reply_data = (
         _browser_safe_reply_data(parsed.action, result.data)
         if parsed.action in _BROWSER_LOCAL_ACTIONS
