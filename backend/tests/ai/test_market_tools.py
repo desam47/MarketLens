@@ -7,6 +7,7 @@ from backend.ai.market_tools import (
     ConfluenceRequest,
     CsvImportRequest,
     IndicatorRequest,
+    MoveAnalysisRequest,
     PositionInput,
     RiskDashboardRequest,
     SessionStatsRequest,
@@ -31,6 +32,7 @@ from backend.ai.market_tools import (
     get_trade_journal_tool,
     get_trend_tool,
     import_csv_tool,
+    why_did_it_move_tool,
 )
 from backend.models.market_data import Bar, DataStatus
 from backend.repositories.alert_repository import AlertRepository
@@ -83,6 +85,51 @@ def test_market_tools_compute_from_provider_bars(monkeypatch) -> None:
     quote = get_quote_tool(SymbolRequest(symbol="AAPL"))
     assert quote.selected_provider == "webull"
     assert quote.reconciliation["conflict"] is False
+
+
+def test_move_analysis_separates_facts_correlations_and_unknowns(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol=request.symbol,
+            provider="test",
+            source_timestamp="2026-09-22T16:00:00-04:00",
+            bars=[
+                {"close": 100, "volume": 1000},
+                {"close": 105, "volume": 2500},
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_news_tool",
+        lambda request: _Payload(symbol=request.symbol, items=[], provider="news", source_timestamp="now"),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_options_tool",
+        lambda request: _Payload(symbol=request.symbol, chains=[], provider="options", source_timestamp="now"),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_sector_data_tool",
+        lambda request: _Payload(symbol=request.symbol, signal="bullish", provider="engine"),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_market_regime_tool",
+        lambda request: _Payload(symbol=request.symbol, regime="risk_on", provider="engine"),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_tape_state_tool",
+        lambda request: _Payload(symbol=request.symbol, pressure="buy", provider="webull"),
+    )
+
+    result = why_did_it_move_tool(MoveAnalysisRequest(symbol="AAPL"))
+
+    assert result.facts[0]["type"] == "price_move"
+    assert result.facts[0]["change_percent"] == 5.0
+    assert result.facts[1]["ratio"] == 2.5
+    assert any(item["type"] == "news" for item in result.unknowns)
+    assert result.conclusion["status"] == "evidence_only"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

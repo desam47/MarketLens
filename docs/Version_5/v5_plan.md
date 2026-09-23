@@ -213,6 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
+**Status:** Active. The first `why_did_it_move` evidence tool is implemented; broader analysis work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -220,6 +221,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.1 “Why did it move?”
 - Combine price/session movement, relative volume, news, earnings, options activity, sector movement, market regime, and tape evidence.
 - Separate confirmed catalysts, correlations, and unknown causes.
+- Implemented as a typed composite tool with evidence-only facts, non-causal correlations, explicit unknowns, source metadata, and a deterministic Chat route.
 
 #### 5.4.2 “What changed?”
 - Compare now with previous close, previous signal, yesterday, last visit, or a user-selected timestamp.

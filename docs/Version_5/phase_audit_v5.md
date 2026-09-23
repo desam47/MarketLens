@@ -74,7 +74,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
-| 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
+| 5.4 | Analysis, comparisons, scenarios, and explanations | 🟡 IN PROGRESS | The typed `why_did_it_move` evidence tool now combines movement, volume, news, options, sector, regime, and tape sources while separating facts, correlations, and unknowns. Comparisons, scenarios, similarity, and sensitivity remain. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
@@ -527,7 +527,7 @@ Phase 5.4 is the next delivery gate.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-Not started. Audit must include golden numerical fixtures, aligned-timeframe
+The first `why_did_it_move` slice is implemented and tested. Audit must include golden numerical fixtures, aligned-timeframe
 comparison tests, historical leakage checks, and examples that distinguish
 facts, correlation, inference, and uncertainty. Counterarguments, invalidation,
 sensitivity, event ordering, anomaly baselines, and assumption-staleness tests

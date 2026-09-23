@@ -181,6 +181,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "get_tape_state",
         "get_session_stats",
         "get_calendar",
+        "why_did_it_move",
         "run_screen",
     }
 
@@ -224,6 +225,7 @@ _SCANNER_TOOL_INTENT = re.compile(r"\b(screen|scanner|scan|find stocks?|find tic
 _RISK_TOOL_INTENT = re.compile(r"\b(risk dashboard|portfolio risk|position risk|my positions|exposure|drawdown)\b", re.I)
 _JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
 _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
+_WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1023,6 +1025,16 @@ def _generate_reply(
             reply="Verified options lookup",
             grounded=True,
             action="get_options_snapshot",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    elif _WHY_MOVE_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I analyze for the move?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified move-evidence lookup",
+            grounded=True,
+            action="why_did_it_move",
             action_symbol=focus_symbols[0],
             action_tool_arguments={"symbol": focus_symbols[0]},
         )
@@ -2221,6 +2233,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_tape_state",
     "get_session_stats",
     "get_calendar",
+    "why_did_it_move",
     "import_csv",
 }
 

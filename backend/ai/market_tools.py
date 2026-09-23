@@ -23,6 +23,11 @@ class BarsRequest(SymbolRequest):
     limit: int = Field(default=200, ge=1, le=2_000)
 
 
+class MoveAnalysisRequest(SymbolRequest):
+    timeframe: str = "1d"
+    range: str = Field(default="5d", pattern=r"^[0-9]+(d|mo|y)$")
+
+
 class IndicatorRequest(BarsRequest):
     indicator: Literal["sma", "ema", "rsi", "change_percent"]
     period: int = Field(default=14, ge=2, le=200)
@@ -331,7 +336,12 @@ def get_session_stats_tool(request: SessionStatsRequest) -> BaseModel:
 
 
 def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
-    from backend.api.regime.router import _data_age_seconds, _freshness, _to_dashboard_tz, get_engine
+    from backend.api.regime.router import (
+        _data_age_seconds,
+        _freshness,
+        _to_dashboard_tz,
+        get_engine,
+    )
     from backend.config.settings import settings
 
     symbol = request.symbol.upper()
@@ -560,6 +570,75 @@ def get_options_tool(request: OptionsRequest) -> BaseModel:
         provider=response.provider,
         source_timestamp=response.timestamp,
         fallback=response.provider != settings.aux_data.options.primary_provider,
+    )
+
+
+def why_did_it_move_tool(request: MoveAnalysisRequest) -> BaseModel:
+    """Assemble evidence for a move without claiming an unverified cause."""
+    symbol = request.symbol.upper()
+    facts: list[dict] = []
+    correlations: list[dict] = []
+    unknowns: list[dict] = []
+    sources: list[dict] = []
+
+    try:
+        bars_payload = get_bars_tool(
+            BarsRequest(symbol=symbol, timeframe=request.timeframe, range=request.range, limit=200, session=request.session)
+        ).model_dump(mode="json")
+        bars = bars_payload.get("bars", [])
+        if len(bars) >= 2:
+            previous = float(bars[-2]["close"])
+            latest = float(bars[-1]["close"])
+            change_percent = (latest - previous) / abs(previous) * 100 if previous else None
+            volumes = [float(bar.get("volume", 0) or 0) for bar in bars]
+            baseline = sum(volumes[:-1]) / max(len(volumes) - 1, 1)
+            volume_ratio = volumes[-1] / baseline if baseline else None
+            facts.append({"type": "price_move", "latest": latest, "previous": previous, "change_percent": change_percent})
+            facts.append({"type": "volume", "latest": volumes[-1], "baseline": baseline, "ratio": volume_ratio})
+        else:
+            unknowns.append({"type": "price_move", "reason": "fewer than two bars"})
+        sources.append({"name": "bars", "provider": bars_payload.get("provider"), "timestamp": bars_payload.get("source_timestamp")})
+    except Exception as exc:  # optional evidence must not hide other sources
+        unknowns.append({"type": "price_move", "reason": str(exc)})
+
+    optional_sources = (
+        ("news", lambda: get_news_tool(NewsRequest(symbol=symbol, limit=10))),
+        ("options", lambda: get_options_tool(OptionsRequest(symbol=symbol))),
+        ("sector", lambda: get_sector_data_tool(SymbolRequest(symbol=symbol))),
+        ("regime", lambda: get_market_regime_tool(SymbolRequest(symbol=symbol))),
+        ("tape", lambda: get_tape_state_tool(TapeRequest(symbol=symbol))),
+    )
+    for name, loader in optional_sources:
+        try:
+            payload = loader().model_dump(mode="json")
+            source = {"name": name, "provider": payload.get("provider"), "timestamp": payload.get("source_timestamp") or payload.get("timestamp")}
+            sources.append(source)
+            if name == "news":
+                items = payload.get("items") or []
+                if items:
+                    correlations.append({"type": "news_present", "items": items[:5], "causal": False})
+                else:
+                    unknowns.append({"type": "news", "reason": "no recent provider headlines"})
+            elif name == "options":
+                correlations.append({"type": "options_activity", "data": payload, "causal": False})
+            else:
+                correlations.append({"type": name, "data": payload, "causal": False})
+        except Exception as exc:
+            unknowns.append({"type": name, "reason": str(exc)})
+
+    return _Payload(
+        symbol=symbol,
+        timeframe=request.timeframe,
+        session=request.session,
+        facts=facts,
+        correlations=correlations,
+        unknowns=unknowns,
+        sources=sources,
+        conclusion={
+            "status": "evidence_only",
+            "message": "Evidence can support or correlate with the move; it does not establish causation without a confirmed catalyst.",
+        },
+        provider="MarketLens composite",
     )
 
 

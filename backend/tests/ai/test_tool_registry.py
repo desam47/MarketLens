@@ -42,6 +42,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_trend",
         "get_watchlist",
         "import_csv",
+        "why_did_it_move",
     )
     result = default_registry.execute(
         ToolRequest(
