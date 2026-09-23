@@ -45,6 +45,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "historical_similarity",
         "import_csv",
         "scenario_analysis",
+        "signal_explanation",
         "what_changed",
         "why_did_it_move",
     )

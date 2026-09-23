@@ -186,6 +186,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "compare_symbols",
         "scenario_analysis",
         "historical_similarity",
+        "signal_explanation",
         "run_screen",
     }
 
@@ -234,6 +235,7 @@ _WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yeste
 _COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|weakest|best performing|worst performing|which .* (higher|lower|stronger|weaker))\b", re.I)
 _SCENARIO_INTENT = re.compile(r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock)\b", re.I)
 _SIMILARITY_INTENT = re.compile(r"\b(similar (?:setup|pattern|situation)|prior situations?|historical pattern|historical similarity|lookalike)\b", re.I)
+_SIGNAL_EXPLANATION_INTENT = re.compile(r"\b(explain (?:the )?(?:signal|setup)|why (?:is|was) .* signal|signal explanation|which indicators triggered|what confirms .* signal)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1087,6 +1089,15 @@ def _generate_reply(
                 "metric": metric,
                 "direction": direction,
             },
+        )
+    elif _SIGNAL_EXPLANATION_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I explain the signal for?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified signal explanation",
+            grounded=True,
+            action="signal_explanation",
+            action_tool_arguments={"symbol": focus_symbols[0], "include_historical": "historical" in user_content.lower()},
         )
     elif _SIMILARITY_INTENT.search(user_content):
         if len(focus_symbols) != 1:
@@ -2326,6 +2337,7 @@ _MARKET_TOOL_ACTIONS = {
     "compare_symbols",
     "scenario_analysis",
     "historical_similarity",
+    "signal_explanation",
     "import_csv",
 }
 

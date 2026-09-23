@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, and `historical_similarity` evidence tools are implemented; broader analysis work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, and `signal_explanation` evidence tools are implemented; broader analysis work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -245,6 +245,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 #### 5.4.6 Signal explanation
 - Explain triggered indicators, agreeing timeframes, conflicting evidence, BBO/tape confirmation, signal age, previous state, and historical performance.
+- Implemented first slice: typed indicator triggers, timeframe agreement/conflicts, tape confirmation or contradiction, freshness, prior trend-state changes, and optional historical-similarity summaries with explicit unknowns.
 
 #### 5.4.7 Counterargument and invalidation review
 - For bullish conclusions, surface material bearish evidence; for bearish conclusions, surface material bullish evidence.

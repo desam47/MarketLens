@@ -162,6 +162,15 @@ class HistoricalSimilarityRequest(BaseModel):
     tolerance: float = Field(default=2.0, gt=0, le=20)
 
 
+class SignalExplanationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    preset: Literal["scalper", "day_trading", "swing", "all"] = "day_trading"
+    timeframes: list[str] = Field(default_factory=lambda: ["5m", "15m", "1h", "1d"], max_length=10)
+    include_historical: bool = False
+
+
 class TradeJournalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1088,6 +1097,164 @@ def historical_similarity_tool(request: HistoricalSimilarityRequest) -> BaseMode
             "status": "verified_similarity" if matches else "insufficient_similarity",
             "message": "Historical outcomes are descriptive samples, not forecasts; small samples should not be generalized.",
         },
+    )
+
+
+def signal_explanation_tool(request: SignalExplanationRequest) -> BaseModel:
+    """Assemble indicator, timeframe, tape, freshness, and state evidence."""
+    symbol = request.symbol.upper()
+    unknowns: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    trends: dict[str, dict[str, Any]] = {}
+    for timeframe in request.timeframes:
+        try:
+            payload = get_trend_tool(TrendRequest(symbol=symbol, timeframe=timeframe)).model_dump(mode="json")
+            trends[timeframe] = payload
+            sources.append({"name": "trend", "timeframe": timeframe, "provider": payload.get("provider"), "timestamp": payload.get("timestamp")})
+        except Exception as exc:
+            unknowns.append({"type": "trend", "timeframe": timeframe, "reason": str(exc)})
+
+    try:
+        confluence = get_confluence_tool(ConfluenceRequest(symbol=symbol, preset=request.preset)).model_dump(mode="json")
+        sources.append({"name": "confluence", "provider": confluence.get("provider"), "timestamp": confluence.get("timestamp")})
+    except Exception as exc:
+        confluence = {}
+        unknowns.append({"type": "confluence", "reason": str(exc)})
+
+    indicators: dict[str, Any] = {}
+    triggers: list[dict[str, Any]] = []
+    try:
+        bars_payload = get_bars_tool(BarsRequest(symbol=symbol, timeframe="1d", range="3mo", limit=200)).model_dump(mode="json")
+        bars = bars_payload.get("bars", [])
+        closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
+        volumes = [float(bar.get("volume", 0) or 0) for bar in bars]
+        if len(closes) >= 2:
+            latest = closes[-1]
+            indicators["price"] = latest
+            indicators["change_percent"] = (latest - closes[-2]) / abs(closes[-2]) * 100 if closes[-2] else None
+            if len(closes) >= 20:
+                sma20 = sum(closes[-20:]) / 20
+                ema20 = closes[0]
+                alpha = 2 / 21
+                for close in closes[1:]:
+                    ema20 = alpha * close + (1 - alpha) * ema20
+                indicators["sma_20"] = sma20
+                indicators["ema_20"] = ema20
+                if latest > sma20:
+                    triggers.append({"indicator": "sma_20", "direction": "bullish", "value": round(sma20, 8), "reason": "price is above SMA 20"})
+                elif latest < sma20:
+                    triggers.append({"indicator": "sma_20", "direction": "bearish", "value": round(sma20, 8), "reason": "price is below SMA 20"})
+            changes = [closes[index] - closes[index - 1] for index in range(1, len(closes))]
+            window = changes[-14:]
+            gains = sum(max(change, 0) for change in window) / len(window)
+            losses = sum(max(-change, 0) for change in window) / len(window)
+            rsi = 100 if losses == 0 else 100 - (100 / (1 + gains / losses))
+            indicators["rsi_14"] = rsi
+            if rsi < 30:
+                triggers.append({"indicator": "rsi_14", "direction": "bullish", "value": round(rsi, 8), "reason": "RSI is oversold"})
+            elif rsi > 70:
+                triggers.append({"indicator": "rsi_14", "direction": "bearish", "value": round(rsi, 8), "reason": "RSI is overbought"})
+            if len(volumes) >= 21:
+                average_volume = sum(volumes[-21:-1]) / 20
+                volume_ratio = volumes[-1] / average_volume if average_volume else None
+                indicators["volume_ratio"] = volume_ratio
+                if volume_ratio is not None and volume_ratio >= 1.5:
+                    triggers.append({"indicator": "volume_ratio", "direction": "context", "value": round(volume_ratio, 8), "reason": "volume is elevated versus its 20-bar average"})
+        sources.append({"name": "bars", "provider": bars_payload.get("provider"), "timestamp": bars_payload.get("source_timestamp")})
+    except Exception as exc:
+        unknowns.append({"type": "indicators", "reason": str(exc)})
+
+    try:
+        tape = get_tape_state_tool(TapeRequest(symbol=symbol)).model_dump(mode="json")
+        sources.append({"name": "tape", "provider": tape.get("provider"), "timestamp": tape.get("source_timestamp")})
+        snapshot = tape.get("snapshot") or {}
+        pressure = snapshot.get("pressure") or snapshot.get("tape_pressure") or snapshot.get("direction")
+        tape_direction = "bullish" if str(pressure).lower() in {"buy", "buying", "bullish", "positive"} else "bearish" if str(pressure).lower() in {"sell", "selling", "bearish", "negative"} else "neutral"
+        tape_evidence = {"available": True, "pressure": pressure, "direction": tape_direction, "snapshot": snapshot}
+    except Exception as exc:
+        tape_evidence = {"available": False, "direction": "unknown"}
+        unknowns.append({"type": "tape", "reason": str(exc)})
+
+    timeframe_rows: list[dict[str, Any]] = []
+    counts = {"bullish": 0, "bearish": 0, "neutral": 0, "unknown": 0}
+    for timeframe, payload in trends.items():
+        raw_direction = str(payload.get("direction") or "unknown").lower()
+        direction = "bullish" if raw_direction in {"bullish", "uptrend", "strong_uptrend"} or "up" in raw_direction else "bearish" if raw_direction in {"bearish", "downtrend", "strong_downtrend"} or "down" in raw_direction else "neutral" if raw_direction not in {"unknown", "none"} else "unknown"
+        counts[direction] += 1
+        timeframe_rows.append({"timeframe": timeframe, "direction": direction, "raw_direction": raw_direction, "confidence": payload.get("confidence"), "age_seconds": payload.get("data_age_seconds")})
+    known_count = counts["bullish"] + counts["bearish"] + counts["neutral"]
+    dominant = max(("bullish", counts["bullish"]), ("bearish", counts["bearish"]), ("neutral", counts["neutral"]), key=lambda item: item[1])[0] if known_count else "unknown"
+    agreement = {
+        "dominant": dominant,
+        "bullish": counts["bullish"],
+        "bearish": counts["bearish"],
+        "neutral": counts["neutral"],
+        "unknown": counts["unknown"],
+        "total": len(timeframe_rows),
+        "alignment_percent": round(max(counts["bullish"], counts["bearish"], counts["neutral"]) / known_count * 100, 8) if known_count else 0.0,
+        "timeframes": timeframe_rows,
+    }
+
+    signal_timestamp = confluence.get("timestamp") or next((row.get("timestamp") for row in trends.values() if row.get("timestamp")), None)
+    age_seconds = None
+    if signal_timestamp:
+        try:
+            parsed_timestamp = datetime.fromisoformat(str(signal_timestamp).replace("Z", "+00:00"))
+            if parsed_timestamp.tzinfo is None:
+                parsed_timestamp = parsed_timestamp.replace(tzinfo=UTC)
+            age_seconds = max(0.0, (datetime.now(UTC) - parsed_timestamp.astimezone(UTC)).total_seconds())
+        except ValueError:
+            unknowns.append({"type": "freshness", "reason": "signal timestamp could not be parsed"})
+    freshness = {"status": "fresh" if age_seconds is not None and age_seconds <= 60 else "recent" if age_seconds is not None and age_seconds <= 900 else "stale" if age_seconds is not None else "unknown", "age_seconds": round(age_seconds, 8) if age_seconds is not None else None, "timestamp": signal_timestamp}
+
+    previous_changes: list[dict[str, Any]] = []
+    try:
+        from backend.api.trend.registry import get_engine
+        from backend.engines.timeframe import Timeframe
+
+        engine = get_engine(symbol)
+        for timeframe in request.timeframes:
+            history = engine.get_trend_history(Timeframe(timeframe), limit=2)
+            if len(history) >= 2:
+                previous = history[-2]
+                current = history[-1]
+                previous_changes.append({"timeframe": timeframe, "changed": previous.direction != current.direction or previous.classification != current.classification, "previous_direction": previous.direction.value, "current_direction": current.direction.value, "previous_timestamp": previous.timestamp.isoformat(), "current_timestamp": current.timestamp.isoformat()})
+    except Exception as exc:
+        unknowns.append({"type": "previous_signal", "reason": str(exc)})
+    if not previous_changes:
+        unknowns.append({"type": "previous_signal", "reason": "no prior signal state is available"})
+
+    historical_performance = None
+    historical_note = "Historical setup outcomes were not requested."
+    if request.include_historical:
+        historical = historical_similarity_tool(
+            HistoricalSimilarityRequest(symbol=symbol, lookback=5, horizons=[1, 5, 20], max_matches=10)
+        ).model_dump(mode="json")
+        historical_performance = historical.get("summaries")
+        historical_note = "Historical outcomes are descriptive samples, not forecasts; review sample size before generalizing."
+        if historical.get("available") is False:
+            unknowns.append({"type": "historical_performance", "reason": historical.get("reason", "unavailable")})
+
+    tape_confirmed = tape_evidence.get("direction") in {"bullish", "bearish"} and tape_evidence.get("direction") == dominant
+    tape_contradicts = tape_evidence.get("direction") in {"bullish", "bearish"} and dominant in {"bullish", "bearish"} and tape_evidence.get("direction") != dominant
+    return _Payload(
+        symbol=symbol,
+        preset=request.preset,
+        direction=confluence.get("direction", dominant),
+        confidence=confluence.get("strength") or confluence.get("alignment_score"),
+        indicators=indicators,
+        triggers=triggers,
+        timeframe_agreement=agreement,
+        tape=tape_evidence,
+        tape_relation={"confirms": tape_confirmed, "contradicts": tape_contradicts},
+        freshness=freshness,
+        previous_signal_changes=previous_changes,
+        historical_performance=historical_performance,
+        historical_performance_note=historical_note,
+        unknowns=unknowns,
+        sources=sources,
+        provider="MarketLens signal explanation",
+        conclusion={"status": "verified_explanation" if trends or triggers else "insufficient_data", "message": "Evidence describes the current signal; it does not guarantee a future outcome."},
     )
 
 

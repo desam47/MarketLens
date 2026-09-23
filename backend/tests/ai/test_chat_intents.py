@@ -265,3 +265,37 @@ def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
     assert "historical_similarity" in text
     assert requests[0].arguments["symbol"] == "AAPL"
     complete.assert_not_called()
+
+
+def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"direction": "bullish", "triggers": [], "unknowns": []},
+            provider="MarketLens signal explanation",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "which indicators triggered the AAPL signal?",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "signal_explanation" in text
+    assert requests[0].arguments["symbol"] == "AAPL"
+    complete.assert_not_called()

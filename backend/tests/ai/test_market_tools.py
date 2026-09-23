@@ -15,6 +15,7 @@ from backend.ai.market_tools import (
     RiskDashboardRequest,
     ScenarioRequest,
     SessionStatsRequest,
+    SignalExplanationRequest,
     SymbolRequest,
     TapeRequest,
     TradeJournalRequest,
@@ -39,6 +40,7 @@ from backend.ai.market_tools import (
     historical_similarity_tool,
     import_csv_tool,
     scenario_analysis_tool,
+    signal_explanation_tool,
     what_changed_tool,
     why_did_it_move_tool,
 )
@@ -271,6 +273,38 @@ def test_historical_similarity_excludes_current_setup_from_matches(monkeypatch) 
     assert all(match["end_index"] <= 26 for match in result.matches)
     assert result.summaries[0]["sample_size"] == 3
     assert result.conclusion["status"] == "verified_similarity"
+
+
+def test_signal_explanation_reports_triggers_agreement_and_tape(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    now = datetime.now().astimezone().isoformat()
+
+    def fake_trend(request):
+        direction = "bearish" if request.timeframe == "1h" else "bullish"
+        return _Payload(symbol=request.symbol, timeframe=request.timeframe, direction=direction, confidence=0.8, data_age_seconds=5, provider="test", timestamp=now)
+
+    monkeypatch.setattr("backend.ai.market_tools.get_trend_tool", fake_trend)
+    monkeypatch.setattr("backend.ai.market_tools.get_confluence_tool", lambda request: _Payload(symbol=request.symbol, direction="bullish", strength=0.8, alignment_score=0.67, provider="test", timestamp=now))
+    monkeypatch.setattr("backend.ai.market_tools.get_tape_state_tool", lambda request: _Payload(symbol=request.symbol, provider="webull", source_timestamp=now, snapshot={"pressure": "buy"}))
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol=request.symbol,
+            provider="test",
+            source_timestamp=now,
+            bars=[{"close": 100 + index, "volume": 1_000 if index < 20 else 2_000} for index in range(25)],
+        ),
+    )
+
+    result = signal_explanation_tool(SignalExplanationRequest(symbol="AAPL", timeframes=["5m", "15m", "1h"]))
+
+    assert result.direction == "bullish"
+    assert result.timeframe_agreement["bullish"] == 2
+    assert result.timeframe_agreement["bearish"] == 1
+    assert result.tape_relation["confirms"] is True
+    assert any(trigger["indicator"] == "rsi_14" for trigger in result.triggers)
+    assert result.conclusion["status"] == "verified_explanation"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:
