@@ -896,6 +896,7 @@ class ChatReplyResponse(BaseModel):
         "import_csv",
         "build_trade_plan",
         "assess_portfolio_risk",
+        "options_research",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -1048,6 +1049,23 @@ _ACTION_TOOL_DOCS = (
       account_value/risk_percent, or the sized position would breach a \
       given risk_limits threshold, the tool returns recommended_size=null \
       with the reason — never invent a size or silently shrink it to fit.
+    - options_research explains and compares calls, puts, and defined-risk \
+      vertical spreads from a real fetched chain — IV, IV rank, expected \
+      move, volume, open interest, put/call ratio, unusual activity, \
+      breakeven, max gain/loss, assignment exposure, and near-expiration \
+      risk. Set action_tool_arguments.symbol and optionally .expiration \
+      to pick which chain's summary is returned (YYYY-MM-DD; nearest \
+      expiration by default). To explain specific contracts, set \
+      action_tool_arguments.legs (each: expiration, strike, option_type). \
+      To compare a defined-risk vertical spread, set \
+      action_tool_arguments.spreads (each: long and short, both \
+      {expiration, strike, option_type} referring to the SAME option type \
+      and expiration, plus optional contracts). Every leg/spread must \
+      match a real contract in the fetched chain — an unmatched one comes \
+      back in "unknowns", never guessed. Prices used for the math are \
+      always labeled by source (last trade or bid/ask midpoint) and are \
+      never executable — never state or imply a price the trader could \
+      actually transact at.
     - assumption_tracking saves or reviews research assumptions. For a save, \
       set operation="save", include one or more typed assumptions (category, \
       statement, optional expected_value, source), and set action_confirmed=true \
@@ -1209,7 +1227,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
       get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
-      import_csv, build_trade_plan, assess_portfolio_risk, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      import_csv, build_trade_plan, assess_portfolio_risk, options_research, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

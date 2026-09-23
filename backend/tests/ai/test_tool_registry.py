@@ -50,6 +50,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "historical_similarity",
         "import_csv",
         "market_event_timeline",
+        "options_research",
         "scenario_analysis",
         "sensitivity_analysis",
         "signal_explanation",
@@ -129,6 +130,21 @@ def test_default_registry_executes_assess_portfolio_risk(monkeypatch) -> None:
     assert result.data["available"] is True
     assert result.data["concentration"]["top_position"]["symbol"] == "AAPL"
     assert result.provider == "MarketLens calculator"
+
+
+def test_default_registry_executes_options_research(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_options_tool",
+        lambda request: _Payload(symbol="AAPL", chains=[], provider="yahoo_finance", source_timestamp="now"),
+    )
+
+    result = default_registry.execute(ToolRequest(tool_name="options_research", arguments={"symbol": "AAPL"}))
+
+    assert result.ok is True
+    assert result.data["available"] is False
+    assert result.provider == "yahoo_finance"
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:

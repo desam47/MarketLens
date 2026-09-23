@@ -15,6 +15,9 @@ from backend.ai.market_tools import (
     IndicatorRequest,
     MarketEventTimelineRequest,
     MoveAnalysisRequest,
+    OptionLegRef,
+    OptionsResearchRequest,
+    OptionsSpreadRef,
     PortfolioRiskLimits,
     PortfolioRiskRequest,
     PositionInput,
@@ -54,6 +57,7 @@ from backend.ai.market_tools import (
     historical_similarity_tool,
     import_csv_tool,
     market_event_timeline_tool,
+    options_research_tool,
     scenario_analysis_tool,
     sensitivity_analysis_tool,
     signal_explanation_tool,
@@ -1190,3 +1194,152 @@ def test_portfolio_risk_refuses_size_that_breaches_max_position_limit(monkeypatc
     assert result["proposed_trade"]["recommended_size"] is None
     assert "max-position limit" in result["proposed_trade"]["reason"]
     assert result["proposed_trade"]["computed_shares"] == 100
+
+
+def _fake_options_chain(expiration: str = "2099-12-31") -> dict:
+    return {
+        "symbol": "AAPL",
+        "expiration": expiration,
+        "calls": [
+            {"strike": 200, "expiration": expiration, "option_type": "call", "bid": 5.0, "ask": 5.4, "last": 5.2, "volume": 100, "open_interest": 500, "implied_volatility": 0.3, "delta": 0.55, "in_the_money": True},
+            {"strike": 210, "expiration": expiration, "option_type": "call", "bid": 2.0, "ask": 2.4, "last": 2.2, "volume": 80, "open_interest": 300, "implied_volatility": 0.28, "delta": 0.35, "in_the_money": False},
+        ],
+        "puts": [
+            {"strike": 190, "expiration": expiration, "option_type": "put", "bid": 3.0, "ask": 3.4, "last": None, "volume": 60, "open_interest": 200, "implied_volatility": 0.32, "delta": -0.3, "in_the_money": False},
+        ],
+        "put_call_ratio": 0.5,
+        "total_call_volume": 180,
+        "total_put_volume": 60,
+        "avg_iv_call": 0.29,
+        "avg_iv_put": 0.32,
+        "unusual_activity": "normal",
+    }
+
+
+def _patch_options_tools(monkeypatch, chains=None, quote_price=205.0):
+    from backend.ai.market_tools import _Payload
+
+    chains = chains if chains is not None else [_fake_options_chain()]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_options_tool",
+        lambda request: _Payload(
+            symbol="AAPL", chains=chains, expirations=[c["expiration"] for c in chains],
+            near_term_iv=0.3, iv_rank=45, provider="yahoo_finance",
+            source_timestamp="2026-09-22T16:00:00-04:00", fallback=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_quote_tool",
+        lambda request: _Payload(symbol="AAPL", price=quote_price, provider="webull", timestamp="2026-09-22T16:00:00-04:00"),
+    )
+
+
+def test_options_research_reports_unavailable_without_a_chain(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch, chains=[])
+    result = options_research_tool(OptionsResearchRequest(symbol="AAPL"))
+    assert result.available is False
+    assert "AAPL" in result.reason
+
+
+def test_options_research_chain_summary_and_expected_move(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch)
+    result = options_research_tool(OptionsResearchRequest(symbol="AAPL")).model_dump()
+
+    assert result["available"] is True
+    summary = result["chain_summary"]
+    assert summary["expiration"] == "2099-12-31"
+    assert summary["put_call_ratio"] == 0.5
+    assert summary["iv_rank"] == 45
+    assert summary["near_expiration_risk"] is False
+    assert summary["expected_move"] is not None
+    assert summary["expected_move"]["expected_move"] > 0
+
+
+def test_options_research_explains_a_leg_with_mid_price_and_greeks(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch)
+    result = options_research_tool(OptionsResearchRequest(
+        symbol="AAPL",
+        legs=[OptionLegRef(expiration="2099-12-31", strike=200, option_type="call")],
+    )).model_dump()
+
+    leg = result["legs"][0]
+    assert leg["premium"] == 5.2  # mid(5.0, 5.4)
+    assert leg["premium_source"] == "mid_bid_ask"
+    assert leg["delta"] == 0.55
+    assert leg["breakeven"] == 205.2  # strike + premium for a call
+    # underlying=205: intrinsic = max(205-200,0) = 5; extrinsic = premium-intrinsic = 0.2
+    assert leg["intrinsic_value"] == 5
+    assert round(leg["extrinsic_value"], 4) == 0.2
+
+
+def test_options_research_falls_back_to_last_price_when_no_bid_ask(monkeypatch) -> None:
+    # The fake put has bid/ask but last=None -- flip it to prove the "last"
+    # fallback path, not just mid-bid-ask.
+    chain = _fake_options_chain()
+    chain["puts"][0]["bid"] = None
+    chain["puts"][0]["ask"] = None
+    chain["puts"][0]["last"] = 3.1
+    _patch_options_tools(monkeypatch, chains=[chain])
+
+    result = options_research_tool(OptionsResearchRequest(
+        symbol="AAPL",
+        legs=[OptionLegRef(expiration="2099-12-31", strike=190, option_type="put")],
+    )).model_dump()
+
+    assert result["legs"][0]["premium"] == 3.1
+    assert result["legs"][0]["premium_source"] == "last"
+
+
+def test_options_research_reports_unmatched_leg_as_unknown_not_guessed(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch)
+    result = options_research_tool(OptionsResearchRequest(
+        symbol="AAPL",
+        legs=[OptionLegRef(expiration="2099-12-31", strike=999, option_type="call")],
+    )).model_dump()
+
+    assert result["legs"] == []
+    assert any(item["type"] == "leg" for item in result["unknowns"])
+
+
+def test_options_research_computes_a_bull_call_debit_spread(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch)
+    result = options_research_tool(OptionsResearchRequest(
+        symbol="AAPL",
+        spreads=[OptionsSpreadRef(
+            long=OptionLegRef(expiration="2099-12-31", strike=200, option_type="call"),
+            short=OptionLegRef(expiration="2099-12-31", strike=210, option_type="call"),
+        )],
+    )).model_dump()
+
+    spread = result["spreads"][0]
+    # long premium mid=5.2, short premium mid=2.2 -> net_debit=3.0, width=10
+    assert spread["net_debit"] == 3.0
+    assert spread["max_gain_per_share"] == 7.0
+    assert spread["max_loss_per_share"] == 3.0
+    assert spread["breakeven"] == 203.0
+    assert spread["short_leg_assignment_exposure"]["assignment_shares"] == 100
+
+
+def test_options_research_rejects_mismatched_spread_option_types(monkeypatch) -> None:
+    _patch_options_tools(monkeypatch)
+    result = options_research_tool(OptionsResearchRequest(
+        symbol="AAPL",
+        spreads=[OptionsSpreadRef(
+            long=OptionLegRef(expiration="2099-12-31", strike=200, option_type="call"),
+            short=OptionLegRef(expiration="2099-12-31", strike=190, option_type="put"),
+        )],
+    )).model_dump()
+
+    assert result["spreads"] == []
+    assert any(item["type"] == "spread" for item in result["unknowns"])
+
+
+def test_options_research_flags_near_expiration_risk(monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    soon = (datetime.now(UTC) + timedelta(days=3)).date().isoformat()
+    _patch_options_tools(monkeypatch, chains=[_fake_options_chain(expiration=soon)])
+
+    result = options_research_tool(OptionsResearchRequest(symbol="AAPL")).model_dump()
+
+    assert result["chain_summary"]["near_expiration_risk"] is True

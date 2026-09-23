@@ -2514,6 +2514,7 @@ _MARKET_TOOL_ACTIONS = {
     "import_csv",
     "build_trade_plan",
     "assess_portfolio_risk",
+    "options_research",
 }
 
 

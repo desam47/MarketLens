@@ -108,6 +108,36 @@ class OptionsRequest(BaseModel):
     expiration: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
+class OptionLegRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expiration: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    strike: float = Field(..., gt=0)
+    option_type: Literal["call", "put"]
+
+
+class OptionsSpreadRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    long: OptionLegRef
+    short: OptionLegRef
+    contracts: float = Field(default=1, gt=0)
+
+
+class OptionsResearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    # Which chain to summarize (near_term_iv/iv_rank/put_call_ratio/etc.).
+    # Without it, the nearest available expiration is used.
+    expiration: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    # Explicit single legs and/or defined-risk vertical spreads to explain --
+    # never invented; each must resolve to a real contract in the fetched
+    # chain or it is reported as unknown, not guessed.
+    legs: list[OptionLegRef] = Field(default_factory=list, max_length=10)
+    spreads: list[OptionsSpreadRef] = Field(default_factory=list, max_length=5)
+
+
 class WatchlistRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2181,6 +2211,186 @@ def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
         unknowns=unknowns,
         provider="MarketLens calculator",
         source_timestamp=_database_timestamp(),
+    )
+
+
+def _find_option_contract(chains: list[dict], leg: "OptionLegRef") -> dict | None:
+    for chain in chains:
+        if chain.get("expiration") != leg.expiration:
+            continue
+        side = "calls" if leg.option_type == "call" else "puts"
+        for contract in chain.get(side, []):
+            if contract.get("strike") == leg.strike:
+                return contract
+    return None
+
+
+def _contract_premium(contract: dict) -> tuple[float | None, str | None]:
+    """Best available price for a contract, labeled by source -- never
+    presented as an executable quote (see options_research_tool's own
+    assumption note)."""
+    bid, ask, last = contract.get("bid"), contract.get("ask"), contract.get("last")
+    if bid is not None and ask is not None and ask >= bid:
+        return (bid + ask) / 2, "mid_bid_ask"
+    if last is not None:
+        return last, "last"
+    return None, None
+
+
+def _days_to_expiration(expiration: str, as_of: datetime) -> float | None:
+    try:
+        expiry_date = datetime.fromisoformat(expiration).date()
+    except ValueError:
+        return None
+    return max(0.0, (expiry_date - as_of.date()).days)
+
+
+def options_research_tool(request: OptionsResearchRequest) -> BaseModel:
+    """Explain and compare calls, puts, and defined-risk vertical spreads
+    from a real fetched options chain -- IV, IV rank, expected move,
+    volume, open interest, put/call ratio, unusual activity, breakeven,
+    max gain/loss, assignment exposure, and near-expiration risk.
+
+    Every leg/spread must resolve to a real contract in the fetched chain;
+    unresolved references are reported as unknowns, never guessed. Prices
+    used for the math are explicitly labeled by source (last trade or the
+    bid/ask midpoint) and are never presented as executable -- this tool
+    only informs research, consistent with the rest of the app's existing
+    delayed/approximate labeling.
+    """
+    from backend.ai.calculator import CalculationRequest, calculate
+
+    symbol = request.symbol.upper()
+    options = get_options_tool(OptionsRequest(symbol=symbol, expiration=request.expiration)).model_dump(mode="json")
+    chains = options.get("chains", [])
+    if not chains:
+        return _Payload(
+            available=False,
+            reason=f"No options chain is available for {symbol}.",
+            provider=options.get("provider"),
+            source_timestamp=options.get("source_timestamp"),
+        )
+
+    now = datetime.now(UTC)
+    summary_chain = next((c for c in chains if c.get("expiration") == request.expiration), chains[0])
+    days_to_expiration = _days_to_expiration(summary_chain["expiration"], now)
+
+    underlying_price = None
+    unknowns: list[dict[str, Any]] = []
+    try:
+        quote = get_quote_tool(SymbolRequest(symbol=symbol)).model_dump(mode="json")
+        underlying_price = quote.get("price")
+    except Exception as exc:
+        unknowns.append({"type": "underlying_price", "reason": str(exc)})
+
+    expected_move = None
+    iv_for_move = summary_chain.get("avg_iv_call") or summary_chain.get("avg_iv_put") or options.get("near_term_iv")
+    if underlying_price and iv_for_move and days_to_expiration is not None and days_to_expiration > 0:
+        move = calculate(CalculationRequest(
+            calculation="expected_move", new_value=underlying_price,
+            implied_volatility=iv_for_move, days_to_expiration=days_to_expiration,
+        ))
+        expected_move = move.values
+    else:
+        unknowns.append({"type": "expected_move", "reason": "missing underlying price, IV, or days to expiration"})
+
+    chain_summary = {
+        "expiration": summary_chain["expiration"],
+        "days_to_expiration": days_to_expiration,
+        "near_expiration_risk": days_to_expiration is not None and days_to_expiration <= 7,
+        "iv_rank": options.get("iv_rank"),
+        "near_term_iv": options.get("near_term_iv"),
+        "avg_iv_call": summary_chain.get("avg_iv_call"),
+        "avg_iv_put": summary_chain.get("avg_iv_put"),
+        "put_call_ratio": summary_chain.get("put_call_ratio"),
+        "total_call_volume": summary_chain.get("total_call_volume"),
+        "total_put_volume": summary_chain.get("total_put_volume"),
+        "unusual_activity": summary_chain.get("unusual_activity"),
+        "expected_move": expected_move,
+    }
+
+    legs_result: list[dict[str, Any]] = []
+    for leg in request.legs:
+        contract = _find_option_contract(chains, leg)
+        if contract is None:
+            unknowns.append({"type": "leg", "leg": leg.model_dump(), "reason": "no matching contract in the fetched chain"})
+            continue
+        premium, premium_source = _contract_premium(contract)
+        entry: dict[str, Any] = {
+            "expiration": leg.expiration, "strike": leg.strike, "option_type": leg.option_type,
+            "premium": premium, "premium_source": premium_source,
+            "volume": contract.get("volume"), "open_interest": contract.get("open_interest"),
+            "implied_volatility": contract.get("implied_volatility"), "delta": contract.get("delta"),
+            "in_the_money": contract.get("in_the_money"),
+            "days_to_expiration": _days_to_expiration(leg.expiration, now),
+        }
+        if premium is not None:
+            breakeven = calculate(CalculationRequest(calculation="options_breakeven", option_type=leg.option_type, strike=leg.strike, premium=premium))
+            entry["breakeven"] = breakeven.values["breakeven"]
+            # options_max_gain_loss/intrinsic/extrinsic all require underlying_price
+            # (shared _require call in the calculator, even though max_gain_loss's
+            # own output doesn't depend on it) -- skip all three, rather than pass
+            # a fabricated underlying_price, when a real one isn't available.
+            if underlying_price:
+                max_gain_loss = calculate(CalculationRequest(calculation="options_max_gain_loss", option_type=leg.option_type, strike=leg.strike, premium=premium, underlying_price=underlying_price))
+                entry["max_gain_per_share"] = max_gain_loss.values["max_gain_per_share"]
+                entry["max_loss_per_share"] = max_gain_loss.values["max_loss_per_share"]
+                intrinsic = calculate(CalculationRequest(calculation="options_intrinsic_value", option_type=leg.option_type, strike=leg.strike, premium=premium, underlying_price=underlying_price))
+                extrinsic = calculate(CalculationRequest(calculation="options_extrinsic_value", option_type=leg.option_type, strike=leg.strike, premium=premium, underlying_price=underlying_price))
+                entry["intrinsic_value"] = intrinsic.values["intrinsic_value"]
+                entry["extrinsic_value"] = extrinsic.values["extrinsic_value"]
+        legs_result.append(entry)
+
+    spreads_result: list[dict[str, Any]] = []
+    for spread in request.spreads:
+        long_contract = _find_option_contract(chains, spread.long)
+        short_contract = _find_option_contract(chains, spread.short)
+        if long_contract is None or short_contract is None:
+            unknowns.append({"type": "spread", "spread": spread.model_dump(), "reason": "one or both legs have no matching contract in the fetched chain"})
+            continue
+        if spread.long.option_type != spread.short.option_type:
+            unknowns.append({"type": "spread", "spread": spread.model_dump(), "reason": "a vertical spread's legs must be the same option type"})
+            continue
+        long_premium, long_source = _contract_premium(long_contract)
+        short_premium, short_source = _contract_premium(short_contract)
+        if long_premium is None or short_premium is None:
+            unknowns.append({"type": "spread", "spread": spread.model_dump(), "reason": "no usable price (last or bid/ask) for one or both legs"})
+            continue
+        result = calculate(CalculationRequest(
+            calculation="options_vertical_spread", option_type=spread.long.option_type,
+            strike=spread.long.strike, premium=long_premium,
+            short_strike=spread.short.strike, short_premium=short_premium,
+            contracts=spread.contracts,
+        ))
+        assignment = calculate(CalculationRequest(
+            calculation="options_assignment_exposure", option_type=spread.short.option_type,
+            strike=spread.short.strike, contracts=spread.contracts,
+        ))
+        spreads_result.append({
+            "long": {**spread.long.model_dump(), "premium": long_premium, "premium_source": long_source},
+            "short": {**spread.short.model_dump(), "premium": short_premium, "premium_source": short_source},
+            "contracts": spread.contracts,
+            **result.values,
+            "short_leg_assignment_exposure": assignment.values,
+        })
+
+    return _Payload(
+        available=True,
+        symbol=symbol,
+        underlying_price=underlying_price,
+        chain_summary=chain_summary,
+        legs=legs_result,
+        spreads=spreads_result,
+        expirations=options.get("expirations", []),
+        unknowns=unknowns,
+        provider=options.get("provider"),
+        source_timestamp=options.get("source_timestamp"),
+        fallback=options.get("fallback"),
+        assumptions=[
+            "Prices are delayed/approximate market data (see provider/fallback), not executable quotes -- "
+            "premium_source records whether the last trade or the bid/ask midpoint was used for the math.",
+            "Vertical spread and assignment-exposure math excludes commissions, fees, and early-assignment risk.",
+        ],
     )
 
 

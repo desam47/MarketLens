@@ -367,6 +367,7 @@ def build_default_registry() -> ToolRegistry:
         MoveAnalysisRequest,
         NewsRequest,
         OptionsRequest,
+        OptionsResearchRequest,
         PortfolioRiskRequest,
         RiskDashboardRequest,
         ScenarioRequest,
@@ -409,6 +410,7 @@ def build_default_registry() -> ToolRegistry:
         historical_similarity_tool,
         import_csv_tool,
         market_event_timeline_tool,
+        options_research_tool,
         scenario_analysis_tool,
         sensitivity_analysis_tool,
         signal_explanation_tool,
@@ -432,6 +434,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_news", kind="read_only", description="Get recent provider news.", input_model=NewsRequest, handler=get_news_tool))
     registry.register(ToolSpec(name="get_fundamentals", kind="read_only", description="Get a fundamentals snapshot.", input_model=FundamentalsRequest, handler=get_fundamentals_tool))
     registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))
+    registry.register(ToolSpec(name="options_research", kind="read_only", description="Explain and compare calls, puts, and defined-risk vertical spreads: IV, IV rank, expected move, volume, open interest, put/call ratio, unusual activity, breakeven, max gain/loss, and assignment exposure.", input_model=OptionsResearchRequest, handler=options_research_tool))
     registry.register(ToolSpec(name="get_watchlist", kind="read_only", description="Read an application watchlist and its symbols.", input_model=WatchlistRequest, handler=get_watchlist_tool))
     registry.register(ToolSpec(name="why_did_it_move", kind="read_only", description="Assemble evidence for a symbol's move without claiming causation.", input_model=MoveAnalysisRequest, handler=why_did_it_move_tool))
     registry.register(ToolSpec(name="what_changed", kind="read_only", description="Compare current verified data with a selected baseline.", input_model=ChangeAnalysisRequest, handler=what_changed_tool))

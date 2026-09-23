@@ -31,6 +31,7 @@ CalculationName = Literal[
     "options_extrinsic_value",
     "options_max_gain_loss",
     "options_assignment_exposure",
+    "options_vertical_spread",
     "expected_move",
 ]
 
@@ -63,6 +64,12 @@ class CalculationRequest(BaseModel):
     premium: float | None = Field(default=None, ge=0)
     strike: float | None = Field(default=None, gt=0)
     option_type: Literal["call", "put"] | None = None
+    # options_vertical_spread only: the short leg. strike/premium above are
+    # the long leg -- two-leg fields stay named for their role (long/short),
+    # not their price order, since which strike is higher depends on the
+    # spread direction.
+    short_strike: float | None = Field(default=None, gt=0)
+    short_premium: float | None = Field(default=None, ge=0)
     underlying_price: float | None = Field(default=None, gt=0)
     implied_volatility: float | None = Field(default=None, ge=0)
     days_to_expiration: float | None = Field(default=None, gt=0)
@@ -263,6 +270,54 @@ def calculate(request: CalculationRequest) -> CalculationResult:
         assumptions.append(
             "A short put assigned delivers this cash exposure to buy shares; a short call assigned delivers this "
             "many shares for sale at strike. Uses a 100-share standard equity option multiplier unless overridden."
+        )
+    elif op == "options_vertical_spread":
+        long_strike, long_premium, short_strike, short_premium = _require(
+            request, "strike", "premium", "short_strike", "short_premium"
+        )
+        option_type = request.option_type
+        if option_type is None:
+            raise ValueError("option_type is required for options_vertical_spread")
+        if long_strike == short_strike:
+            raise ValueError("strike and short_strike must differ for a vertical spread")
+        width = abs(long_strike - short_strike)
+        net_debit = long_premium - short_premium
+        # Derived from each structure's expiration payoff (max(S-K,0) minus
+        # the short leg's, or the put mirror). Calls: long the lower strike
+        # is the debit structure (bull call spread); puts: long the HIGHER
+        # strike is the debit structure (bear put spread) -- calls and puts
+        # are not symmetric in strike order, so each gets its own branch.
+        if option_type == "call":
+            if long_strike < short_strike:
+                max_gain, max_loss, breakeven = width - net_debit, net_debit, long_strike + net_debit
+            else:
+                max_gain, max_loss, breakeven = -net_debit, width + net_debit, short_strike - net_debit
+        else:
+            if long_strike > short_strike:
+                max_gain, max_loss, breakeven = width - net_debit, net_debit, long_strike - net_debit
+            else:
+                max_gain, max_loss, breakeven = -net_debit, width + net_debit, short_strike + net_debit
+        multiplier = request.contract_multiplier
+        contracts = request.contracts or 1
+        values = {
+            "net_debit": net_debit,
+            "max_gain_per_share": max_gain,
+            "max_loss_per_share": max_loss,
+            "breakeven": breakeven,
+            "max_gain_total": max_gain * multiplier * contracts,
+            "max_loss_total": max_loss * multiplier * contracts,
+        }
+        formulas = [
+            "net_debit = long_premium - short_premium",
+            "width = abs(long_strike - short_strike)",
+            "call, long_strike < short_strike: max_gain = width - net_debit, max_loss = net_debit, breakeven = long_strike + net_debit",
+            "call, long_strike > short_strike: max_gain = -net_debit, max_loss = width + net_debit, breakeven = short_strike - net_debit",
+            "put, long_strike > short_strike: max_gain = width - net_debit, max_loss = net_debit, breakeven = long_strike - net_debit",
+            "put, long_strike < short_strike: max_gain = -net_debit, max_loss = width + net_debit, breakeven = short_strike + net_debit",
+        ]
+        assumptions.append(
+            "Assumes both legs share the same expiration and underlying and are opened/closed together; "
+            "excludes commissions, fees, and early assignment risk on the short leg."
         )
     else:  # expected_move
         price, iv, days = _require(request, "new_value", "implied_volatility", "days_to_expiration")

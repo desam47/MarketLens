@@ -92,6 +92,65 @@ def test_options_assignment_exposure_uses_standard_contract_multiplier() -> None
     assert result.assumptions
 
 
+def test_options_vertical_spread_bull_call_debit() -> None:
+    # Long 100c @ 5, short 110c @ 2.
+    result = calculate(CalculationRequest(
+        calculation="options_vertical_spread", option_type="call",
+        strike=100, premium=5, short_strike=110, short_premium=2,
+    ))
+    assert result.values["net_debit"] == 3
+    assert result.values["max_gain_per_share"] == 7
+    assert result.values["max_loss_per_share"] == 3
+    assert result.values["breakeven"] == 103
+
+
+def test_options_vertical_spread_bear_call_credit() -> None:
+    # Long 110c @ 2, short 100c @ 5.
+    result = calculate(CalculationRequest(
+        calculation="options_vertical_spread", option_type="call",
+        strike=110, premium=2, short_strike=100, short_premium=5,
+    ))
+    assert result.values["net_debit"] == -3
+    assert result.values["max_gain_per_share"] == 3
+    assert result.values["max_loss_per_share"] == 7
+    assert result.values["breakeven"] == 103
+
+
+def test_options_vertical_spread_bear_put_debit() -> None:
+    # Long 110p @ 6, short 100p @ 2.
+    result = calculate(CalculationRequest(
+        calculation="options_vertical_spread", option_type="put",
+        strike=110, premium=6, short_strike=100, short_premium=2,
+    ))
+    assert result.values["net_debit"] == 4
+    assert result.values["max_gain_per_share"] == 6
+    assert result.values["max_loss_per_share"] == 4
+    assert result.values["breakeven"] == 106
+
+
+def test_options_vertical_spread_bull_put_credit() -> None:
+    # Long 100p @ 2, short 110p @ 6.
+    result = calculate(CalculationRequest(
+        calculation="options_vertical_spread", option_type="put",
+        strike=100, premium=2, short_strike=110, short_premium=6,
+    ))
+    assert result.values["net_debit"] == -4
+    assert result.values["max_gain_per_share"] == 4
+    assert result.values["max_loss_per_share"] == 6
+    assert result.values["breakeven"] == 106
+    # Scaled totals use contract_multiplier (default 100) * contracts (default 1).
+    assert result.values["max_gain_total"] == 400
+    assert result.values["max_loss_total"] == 600
+
+
+def test_options_vertical_spread_rejects_identical_strikes() -> None:
+    with pytest.raises(ValueError, match="differ"):
+        calculate(CalculationRequest(
+            calculation="options_vertical_spread", option_type="call",
+            strike=100, premium=5, short_strike=100, short_premium=2,
+        ))
+
+
 def test_unknown_inputs_and_missing_operation_fields_are_rejected() -> None:
     with pytest.raises(ValidationError):
         CalculationRequest(calculation="dollar_change", old_value=1, new_value=2, code="1+1")
