@@ -1,16 +1,19 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phase 5.1 complete; Phase 5.2 substantially complete.
+**Status:** Active. Planning complete; Phase 5.1 complete; Phase 5.2 complete.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
 **Current checkpoint (2026-09-22):** Version 4's implemented scope is
 merged to `main`. The `development` branch is synchronized with its remote
 and is the only branch receiving new Version 5 work. Phase 5.1 is complete.
-Phase 5.2 is substantially complete: every tool explicitly named in the
-plan's 5.2.1–5.2.8 items is implemented, with one residual judgment call
-on application-help's route table (see the Phase 5.2 section). Phase 5.3
+Phase 5.2 is complete: every tool explicitly named in the plan's
+5.2.1–5.2.8 items is implemented, with consistent provenance fields and a
+genuinely generated (not hand-copied) application-help route table (see
+the Phase 5.2 section's "Post-completion review" for the two items —
+multi-provider reconciliation, further contract-test expansion — found to
+be blocked on real architectural gaps rather than left undone). Phase 5.3
 is the next delivery gate.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
@@ -69,7 +72,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟢 SUBSTANTIALLY COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented; 8 of 23 have live contract tests against page/API equivalents. Residual judgment call: application-help's route table is tested/drift-guarded but still hand-maintained, not generated from the frontend's TypeScript route table. |
+| 5.2 | Grounded market-data tools and provenance | 🟢 COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -286,14 +289,123 @@ that field. Fixed to match. 1 unit test plus 1 contract test (both
 patching the same underlying function, since real yfinance calls aren't
 safe in the sandboxed test environment) cover it.
 
-Every tool explicitly named across 5.2.1–5.2.8 is now implemented. The one
-remaining nuance is application-help's route table (5.2.7): it is backed by
-real, tested, drift-guarded data rather than free-form model memory — which
-is what the plan's own wording actually requires — but it is still
-hand-maintained Python, not generated from the frontend's TypeScript route
-table at build/test time. Whether that counts as "done" or as a residual
-gap is a judgment call; it is called out explicitly rather than silently
-rounded up to 100%.
+Every tool explicitly named across 5.2.1–5.2.8 is now implemented.
+
+## Post-completion review (2026-09-22) — the remaining four polish items
+
+A follow-up review produced a four-item punch list: (1) complete
+freshness/fallback/entitlement fields consistently across every tool, (2)
+wire multi-provider reconciliation into real paths that expose multiple
+observations, (3) expand contract tests beyond 8 of 23 tools, (4) replace
+the hand-maintained application-help route table with a generated
+manifest. Investigating each against the actual code before touching
+anything found that two of the four rest on an assumption the codebase
+doesn't support — documented here so the assumption doesn't get
+re-proposed without new evidence, per this file's own stated audit
+convention (see the relative-strength composite-index note above).
+
+**(1) Freshness/fallback/entitlement — done.** Added `ToolResult.entitlement`
+(`verified`/`declared`/`configured`/`not_applicable`), derived centrally in
+`ToolRegistry.execute()` by a new `_entitlement_status()` classifier that
+reuses System Health's entitlement vocabulary in simplified form (no
+runtime observation-history cross-reference — a single tool call only has
+the provider name to go on). `not_applicable` covers every internal
+`"MarketLens ..."` label; there is no subscription to lack for a local
+calculator, database read, or composite engine signal.
+
+Re-auditing all 22 tool handlers for `provider`/`fallback` (not just
+trusting the earlier pass) found 7 tools silently defaulting to the
+generic `"MarketLens"` label with no way to tell "explicitly composite"
+from "nobody set this": `get_market_regime` and `get_sector_data` now pull
+the real provider from their underlying `TrendEngine`'s warmed metadata
+(the same data `get_trend` already surfaced); `get_confluence`'s provider
+is now part of `build_confluence_payload` itself, so the real endpoint
+gains it too, not just the tool; `get_relative_strength` and
+`get_market_context` explicitly report the composite-engine label
+`"MarketLens engine"` (multiple benchmark/index symbols — no single
+provider name would be honest); `get_tape_state` reports `"webull"` (the
+only source tape data can come from); `import_csv` reports `"MarketLens
+local parser"`. `fallback` was previously only ever set by `get_quote`;
+now `get_bars` (and `get_indicator`/`get_support_resistance`/
+`get_session_stats`, which inherit its payload), `get_trend`,
+`get_confluence`, `get_market_regime`, `get_sector_data`, `get_news`,
+`get_fundamentals`, and `get_options_snapshot` all compute it against
+their category's configured primary provider.
+
+A contract-test regression caught a real bug introduced while fixing
+`get_trend`: substituting `"MarketLens engine"` for a cold engine's
+`None` provider broke parity with `GET /api/trend/.../current/...`,
+which returns a literal `null` in that case — exactly the kind of
+tool-vs-endpoint divergence contract tests exist to catch. Fixed by
+leaving the payload's provider exactly as the shared builder set it and
+computing `fallback` locally instead. 8 new/extended tests cover the
+entitlement classifier's three real states plus not-applicable, registry
+propagation, and the new fields on regime/context/sector/tape/news.
+
+**(2) Multi-provider reconciliation wiring — genuinely blocked, not
+neglected.** Traced every provider-facing path (`MarketDataManager.get_quote`,
+the bars/backfill paths, System Health's `/providers` endpoint). **No path
+in this codebase currently produces multiple simultaneous data-value
+observations from different providers for the same symbol.** The
+architecture is fallback-chain-then-return-one by design —
+`get_quote()` iterates providers in priority order and returns on the
+first success; it never queries two providers concurrently to compare
+them. System Health's `/providers` endpoint reports per-provider health
+(latency, error state), not data values, so it isn't reconcilable in the
+`reconcile_observations()` sense either. Wiring this in for real would
+mean adding a genuinely new capability — querying 2+ providers
+concurrently just to compare them, at real extra cost/rate-limit
+pressure — which is a deliberate architecture change, not a drive-by
+fix. Decision (2026-09-22): leave `reconcile_observations()` as
+unit-tested infrastructure for whenever a real multi-provider path
+exists; do not fabricate one to have something to wire it into.
+
+**(3) Contract-test expansion — hit the same kind of wall, also
+documented rather than padded.** Checked every one of the remaining 15
+tools for a genuine live endpoint to compare against, including one
+almost-mistake: `get_quote_tool` looks like it should have one
+(`GET /api/market-data/quote/{symbol}`), but that endpoint reads
+`ingestion_service.get_latest_quote()` — a DB-backed ingestion cache —
+while the tool calls `market_data_manager.get_quote()` directly, a live
+provider call with its own fallback chain. Different code paths sharing
+the word "quote"; a test comparing them would validate nothing real.
+Systematically for the rest: `get_bars`/`get_indicator`/
+`get_support_resistance` have no dedicated range-bars listing endpoint;
+the only news/fundamentals endpoints that exist
+(`backend/api/finnhub/router.py`) call `FinnhubService` directly,
+bypassing the `AuxDataManager` fallback chain the tools use — different
+code path, different response shape; `get_risk_dashboard`/
+`get_trade_journal` have no server-side equivalent by design
+(browser-local data); `get_session_stats`/`import_csv`/
+`get_application_help` have no dedicated page endpoint; `get_tape_state`'s
+live path carries real background-thread network risk, already
+deliberately left to a mocked unit test. The 8 tools already covered
+(sector, context, watchlist, alerts, trend, confluence,
+relative-strength, calendar) appear to be close to the practical ceiling
+for this kind of test in the current codebase — decision (2026-09-22):
+document this rather than write comparisons that would create false
+confidence.
+
+**(4) Application-help's route table — done, and no longer a judgment
+call.** Replaced the hand-maintained Python route/title table with
+`_parse_frontend_hash_by_page()` and `_parse_frontend_page_titles()`,
+which read `frontend/src/utils/appNavigation.ts` and `frontend/src/App.tsx`
+directly and regex-parse `HASH_BY_PAGE` and each `case 'X': return
+...pageName="Y"...` pair — the two places those values actually live in
+the frontend, not a Python copy of them. `topics` (keyword-matching) and
+`required_state` stay hand-maintained by design: they're this tool's own
+domain, with no frontend counterpart to generate from or drift against.
+Falls back to a small embedded snapshot (explicitly labeled
+`"fallback_snapshot"`, surfaced as a response warning) if the frontend
+source files are unreadable, e.g. a backend-only deployment — never a
+silent empty result. Parsing genuinely caught a second real drift bug
+while building this, independent of the earlier route-hash one: the
+hand-maintained table's title for the "signals" page was `"Historical
+Replay"`; App.tsx's actual `pageName` prop is `"Historical Signals"`. 4
+new tests cover the parsers reading the real files directly, the title
+fix, and the fallback path when the frontend source is unavailable.
+
+Full backend suite after all four: 2843 passed.
 
 Application-help (5.2.7) now carries a `required_state` field per page (e.g.
 the Symbol page declares `["symbol"]`, since the frontend carries the

@@ -187,12 +187,13 @@ def test_application_help_returns_verified_routes() -> None:
 
 
 def test_application_help_routes_match_frontend_canonical_hashes() -> None:
-    """Drift trip-wire: frontend/src/utils/appNavigation.ts's HASH_BY_PAGE is
-    the actual routing source of truth (Python can't import it), so this
-    hardcodes its 12 canonical page->hash pairs and fails loudly if either
-    side adds/renames/removes a page without updating the other. This is
-    exactly the mismatch that let "signals" silently point at the legacy
-    "#historical-replay" alias instead of the canonical "#signals" hash.
+    """Regression snapshot for the now-genuinely-parsed route table: routes
+    come from _parse_frontend_hash_by_page() reading
+    frontend/src/utils/appNavigation.ts directly (see
+    test_parse_frontend_hash_by_page_reads_real_file below for that in
+    isolation), not a hand-copied Python dict any more — this just pins
+    the currently-expected values so an unexpected frontend change (or a
+    parser regression silently falling back) is still visible here.
     """
     frontend_hash_by_page = {
         "dashboard": "#dashboard",
@@ -213,6 +214,52 @@ def test_application_help_routes_match_frontend_canonical_hashes() -> None:
     tool_hash_by_page = {match["page"]: match["route"] for match in result.matches}
 
     assert tool_hash_by_page == frontend_hash_by_page
+
+
+def test_application_help_titles_are_parsed_from_app_tsx() -> None:
+    """App.tsx's actual title for the signals page is "Historical
+    Signals" (from its pageName="..." prop), not "Historical Replay" — a
+    previously hand-maintained table had this wrong; genuine parsing
+    can't drift from the file it reads.
+    """
+    result = get_application_help_tool(ApplicationHelpRequest(limit=20))
+    titles = {match["page"]: match["title"] for match in result.matches}
+
+    assert titles["signals"] == "Historical Signals"
+    assert titles["dashboard"] == "Dashboard"
+    assert titles["hub"] == "AI Hub"
+
+
+def test_parse_frontend_hash_by_page_reads_real_file() -> None:
+    from backend.ai.market_tools import _parse_frontend_hash_by_page
+
+    parsed = _parse_frontend_hash_by_page()
+
+    assert parsed is not None
+    assert parsed["signals"] == "#signals"
+    assert parsed["hub"] == "#ai-hub"
+    assert len(parsed) >= 12
+
+
+def test_parse_frontend_page_titles_reads_real_file() -> None:
+    from backend.ai.market_tools import _parse_frontend_page_titles
+
+    parsed = _parse_frontend_page_titles()
+
+    assert parsed is not None
+    assert parsed["signals"] == "Historical Signals"
+    assert parsed["calendar"] == "Earnings & Events"
+
+
+def test_application_help_falls_back_when_frontend_source_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.market_tools._parse_frontend_hash_by_page", lambda: None)
+    monkeypatch.setattr("backend.ai.market_tools._parse_frontend_page_titles", lambda: None)
+
+    result = get_application_help_tool(ApplicationHelpRequest(query="where are my alerts"))
+
+    assert result.matches[0]["title"] == "Alerts"
+    assert result.matches[0]["route"] == "#alerts"
+    assert any("fallback" in warning.lower() for warning in result.warnings)
 
 
 def test_application_help_declares_required_state_for_symbol_scoped_pages() -> None:

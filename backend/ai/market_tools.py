@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -853,50 +855,128 @@ def import_csv_tool(request: CsvImportRequest) -> BaseModel:
     )
 
 
-# Kept in sync by hand with frontend/src/utils/appNavigation.ts's AppPage
-# union and HASH_BY_PAGE map — that file is the actual routing source of
-# truth (window.location.hash), and Python can't import TypeScript. "route"
-# here must always be the value hashForPage(page) would produce there, not
-# any legacy/alias hash the frontend's PAGE_BY_HASH also still accepts for
-# incoming links (e.g. "signals" accepts both #signals and
-# #historical-replay on the way in, but only ever navigates *to* #signals —
-# that alias drift is exactly the kind of bug this table can silently grow
-# without the ai/tests/ai/test_market_tools.py cross-check).
-#
-# "required_state" documents what the caller must additionally supply
-# beyond the bare route — e.g. the Symbol page needs a symbol, since the
-# frontend carries it as React state, not a URL query param. No app
-# navigation action consumes this yet (that's Phase 5.7.7); today it is
-# purely so a grounded Chat answer states requirements honestly instead of
-# implying the bare hash alone is enough.
-_APPLICATION_PAGES = (
-    {"page": "dashboard", "title": "Dashboard", "route": "#dashboard", "required_state": (), "topics": ("overview", "market", "movers", "latest prices")},
-    {"page": "scanner", "title": "Scanner", "route": "#scanner", "required_state": (), "topics": ("scan", "filters", "breakout", "oversold", "volume")},
-    {"page": "symbol", "title": "Symbol", "route": "#symbol", "required_state": ("symbol",), "topics": ("chart", "quote", "options", "catalyst", "signal", "support resistance")},
-    {"page": "watchlist", "title": "Watchlist", "route": "#watchlist", "required_state": (), "topics": ("watchlist", "symbols", "session prices")},
-    {"page": "hub", "title": "AI Hub", "route": "#ai-hub", "required_state": (), "topics": ("chat", "assistant", "ai", "questions")},
-    {"page": "calendar", "title": "Earnings & Events", "route": "#calendar", "required_state": (), "topics": ("earnings", "calendar", "events", "dividend")},
-    {"page": "risk", "title": "Risk Dashboard", "route": "#risk", "required_state": (), "topics": ("risk", "positions", "exposure", "drawdown", "correlation", "stop")},
-    {"page": "journal", "title": "Trade Journal", "route": "#journal", "required_state": (), "topics": ("journal", "thesis", "trade", "review", "screenshot")},
-    {"page": "alerts", "title": "Alerts", "route": "#alerts", "required_state": (), "topics": ("alert", "notifications", "price", "volume", "news")},
-    {"page": "backtest", "title": "Backtest", "route": "#backtest", "required_state": (), "topics": ("backtest", "historical", "performance", "replay")},
-    {"page": "signals", "title": "Historical Replay", "route": "#signals", "required_state": ("symbol",), "topics": ("replay", "historical", "signals", "candles")},
-    {"page": "health", "title": "System Health", "route": "#system-health", "required_state": (), "topics": ("health", "redis", "provider", "database", "status")},
-)
+# Search topics and required-navigation-state have no frontend counterpart
+# to generate from — they're this tool's own domain (keyword matching,
+# what Chat needs to pass along), not duplicated routing data, so there's
+# no drift risk in keeping them hand-maintained here.
+_APPLICATION_PAGE_METADATA: dict[str, dict] = {
+    "dashboard": {"required_state": (), "topics": ("overview", "market", "movers", "latest prices")},
+    "scanner": {"required_state": (), "topics": ("scan", "filters", "breakout", "oversold", "volume")},
+    "symbol": {"required_state": ("symbol",), "topics": ("chart", "quote", "options", "catalyst", "signal", "support resistance")},
+    "watchlist": {"required_state": (), "topics": ("watchlist", "symbols", "session prices")},
+    "hub": {"required_state": (), "topics": ("chat", "assistant", "ai", "questions")},
+    "calendar": {"required_state": (), "topics": ("earnings", "calendar", "events", "dividend")},
+    "risk": {"required_state": (), "topics": ("risk", "positions", "exposure", "drawdown", "correlation", "stop")},
+    "journal": {"required_state": (), "topics": ("journal", "thesis", "trade", "review", "screenshot")},
+    "alerts": {"required_state": (), "topics": ("alert", "notifications", "price", "volume", "news")},
+    "backtest": {"required_state": (), "topics": ("backtest", "historical", "performance", "replay")},
+    "signals": {"required_state": ("symbol",), "topics": ("replay", "historical", "signals", "candles")},
+    "health": {"required_state": (), "topics": ("health", "redis", "provider", "database", "status")},
+}
+
+# Safety net only — used when the frontend source files can't be read or
+# parsed (e.g. a backend-only deployment without frontend/ checked out).
+# This is exactly the pair of route/title mistakes a hand-maintained table
+# already produced in practice: "signals" pointed at the legacy
+# #historical-replay alias instead of the canonical #signals hash, and
+# "Historical Replay" instead of App.tsx's actual title, "Historical
+# Signals". Kept here as a last resort, not the source of truth.
+_FALLBACK_ROUTES: dict[str, str] = {
+    "dashboard": "#dashboard", "scanner": "#scanner", "symbol": "#symbol",
+    "watchlist": "#watchlist", "hub": "#ai-hub", "calendar": "#calendar",
+    "risk": "#risk", "journal": "#journal", "alerts": "#alerts",
+    "backtest": "#backtest", "signals": "#signals", "health": "#system-health",
+}
+_FALLBACK_TITLES: dict[str, str] = {
+    "dashboard": "Dashboard", "scanner": "Scanner", "symbol": "Symbol",
+    "watchlist": "Watchlist", "hub": "AI Hub", "calendar": "Earnings & Events",
+    "risk": "Risk Dashboard", "journal": "Trade Journal", "alerts": "Alerts",
+    "backtest": "Backtest", "signals": "Historical Signals", "health": "System Health",
+}
+
+
+def _frontend_src_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "frontend" / "src"
+
+
+def _parse_frontend_hash_by_page() -> dict[str, str] | None:
+    """Parse HASH_BY_PAGE straight out of appNavigation.ts — the frontend's
+    actual routing source of truth (what hashForPage(page) returns, i.e.
+    what window.location.hash is set to on navigation). Python can't
+    import TypeScript, so this reads the file as text; returns None (never
+    a partial/empty result) if the file is missing or the shape changed
+    enough that the regex no longer matches, so callers can fall back
+    instead of silently using an empty route table.
+    """
+    try:
+        text = (_frontend_src_root() / "utils" / "appNavigation.ts").read_text()
+    except OSError:
+        return None
+    block = re.search(r"const HASH_BY_PAGE:.*?=\s*\{(.*?)\};", text, re.DOTALL)
+    if not block:
+        return None
+    pairs = re.findall(r"(\w+):\s*'([^']+)'", block.group(1))
+    return dict(pairs) if pairs else None
+
+
+def _parse_frontend_page_titles() -> dict[str, str] | None:
+    """Parse each page's display title straight out of App.tsx's render
+    switch — the `case 'X': return ...pageName="Y"...` pairs are the
+    frontend's own canonical title per page (used for error-boundary
+    labeling), not a value this tool invents independently.
+    """
+    try:
+        text = (_frontend_src_root() / "App.tsx").read_text()
+    except OSError:
+        return None
+    pairs = re.findall(r"case '(\w+)':\s*\n\s*return.*?pageName=\"([^\"]+)\"", text)
+    return dict(pairs) if pairs else None
+
+
+def _application_pages() -> tuple[dict, ...]:
+    hash_by_page = _parse_frontend_hash_by_page()
+    titles = _parse_frontend_page_titles()
+    used_fallback_routes = hash_by_page is None
+    used_fallback_titles = titles is None
+    hash_by_page = hash_by_page or _FALLBACK_ROUTES
+    titles = titles or _FALLBACK_TITLES
+
+    pages = []
+    for page_key, meta in _APPLICATION_PAGE_METADATA.items():
+        route = hash_by_page.get(page_key)
+        title = titles.get(page_key)
+        if route is None or title is None:
+            # The frontend no longer has this page (or renamed its key) —
+            # don't fabricate a route/title for something that may not
+            # exist any more.
+            continue
+        pages.append({
+            "page": page_key,
+            "title": title,
+            "route": route,
+            "required_state": meta["required_state"],
+            "topics": meta["topics"],
+            "source": "fallback_snapshot" if (used_fallback_routes or used_fallback_titles) else "frontend_parsed",
+        })
+    return tuple(pages)
 
 
 def get_application_help_tool(request: ApplicationHelpRequest) -> BaseModel:
+    application_pages = _application_pages()
     query = (request.query or "").strip().lower()
     if query:
         terms = {term for term in query.replace("?", " ").split() if len(term) > 1}
         ranked = sorted(
-            _APPLICATION_PAGES,
+            application_pages,
             key=lambda page: sum(term in page["title"].lower() or any(term in topic for topic in page["topics"]) for term in terms),
             reverse=True,
         )
         matches = [page for page in ranked if any(term in page["title"].lower() or any(term in topic for topic in page["topics"]) for term in terms)]
     else:
-        matches = list(_APPLICATION_PAGES)
+        matches = list(application_pages)
+    warnings = []
+    if matches and matches[0]["source"] == "fallback_snapshot":
+        warnings.append("Frontend route source unavailable; using a fallback route/title snapshot that may be stale.")
     return _Payload(
         query=request.query,
         matches=[
@@ -911,4 +991,5 @@ def get_application_help_tool(request: ApplicationHelpRequest) -> BaseModel:
         ],
         provider="MarketLens application metadata",
         source_timestamp=_database_timestamp(),
+        warnings=warnings,
     )
