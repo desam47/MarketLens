@@ -355,6 +355,18 @@ export function ChatPanel({
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
       adoptSymbol(finalMsg.focus, finalMsg.partial);
     } catch (e: any) {
+      if (e?.turnStarted && !sawDelta) {
+        // The server already persisted this turn; show what it stored
+        // instead of resending (which would repeat any actions).
+        setError(e?.message || 'The chat turn failed after it started.');
+        try {
+          const fresh = await api.getChatMessages(sessionId);
+          setMessages(fresh);
+        } catch {
+          setMessages(prev => prev.filter(m => m.id !== placeholderId));
+        }
+        return;
+      }
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
@@ -505,15 +517,20 @@ export function ChatPanel({
         )}
         {messages.map((m, messageIndex) => {
           const pending = m.streaming && !m.content;
+          // Streamed text arrives before server-side answer verification; it
+          // is shown as a labeled draft until the authoritative final message
+          // (possibly replaced with explicit uncertainty) arrives.
+          const draft = m.role === 'assistant' && m.streaming && Boolean(m.content);
           const previousUser = messages.slice(0, messageIndex).reverse().find(item => item.role === 'user');
           return (
             <div key={m.id} className={`chat-bubble-row ${m.role}`}>
-              <div className={`chat-bubble ${m.role}${pending ? ' chat-bubble-pending' : ''}`}>
+              <div className={`chat-bubble ${m.role}${pending ? ' chat-bubble-pending' : ''}${draft ? ' chat-bubble-draft' : ''}`}>
                 {pending
                   ? (slow ? 'Still working — pulling data for the tickers you mentioned…' : '…')
                   : m.role === 'assistant'
                     ? highlightMessage(m.content, m.focus ?? [], m.partial ?? [], m.unavailable ?? [])
                     : m.content}
+                {draft && <span className="chat-draft-status" role="status">Unverified draft — numbers are checked before this answer is final.</span>}
                 {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} onNavigate={navigateFromChat} />}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && <ToolTraceRow message={m} />}

@@ -696,6 +696,30 @@ class TestStreamChatMessage(_Base):
             repo.close()
         self.assertEqual([r.content for r in rows][-1], "The market looks calm.")
 
+    @patch("backend.ai.chat.verify_answer", side_effect=RuntimeError("verifier crashed"))
+    @patch("backend.ai.chat.ai_manager")
+    def test_finalization_failure_still_persists_one_final_message(self, mock_ai, _verify):
+        self.mock_resolve.return_value = ([], False)
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.settings.chat_streaming = False
+        mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "one shot", "grounded": true}'))
+
+        events = self._drain(self.session.id, "what should I know?")
+
+        self.assertEqual(events[-1][0], "final")
+        msg, grounded, *_ = events[-1][1]
+        self.assertFalse(grounded)
+        self.assertIn("couldn't finish verifying", msg.content)
+        from backend.repositories.chat_repository import ChatRepository
+
+        repo = ChatRepository()
+        try:
+            rows = repo.get_messages(self.session.id, 50)
+        finally:
+            repo.close()
+        self.assertEqual([r.role for r in rows], ["user", "assistant"])
+
     @patch("backend.ai.chat.ai_manager")
     def test_non_streaming_mode_emits_one_delta(self, mock_ai):
         self.mock_resolve.return_value = ([], False)

@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-23
-**Status:** Active. Phases 5.1–5.8 are complete; Version 5 release handoff to the protected stable branch remains outside this plan.
+**Status:** Active. Phases 5.1–5.8 are implemented; open gaps and deviations from this plan are tracked in `phase_audit_v5.md` under "Known gaps and plan deviations". Version 5 release handoff to the protected stable branch remains outside this plan.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 

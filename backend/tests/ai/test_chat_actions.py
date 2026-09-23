@@ -13,6 +13,7 @@ Two layers:
     _finalize_parsed -> the repos) actually wires up.
 """
 
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1260,6 +1261,16 @@ class TestRunActionNeverRaises(_DBBase):
         self.assertFalse(grounded)
         self.assertIn("went wrong", text.lower())
 
+    @patch("backend.ai.chat.default_registry.execute", side_effect=RuntimeError("provider down"))
+    def test_market_tool_exception_degrades_gracefully(self, _execute):
+        trace: list[dict] = []
+        text, grounded, _ = _run_action(
+            self.db, _parsed(action="get_quote", action_tool_arguments={"symbol": "AAPL"}), trace=trace
+        )
+        self.assertFalse(grounded)
+        self.assertIn("went wrong", text.lower())
+        self.assertEqual(trace[-1]["failure_kind"], "action_exception")
+
 
 class TestRunActionInvalidatesBaseline(_DBBase):
     """2026-09-16: a chat action that changes alerts/watchlists must
@@ -1690,6 +1701,37 @@ class TestEndToEnd(unittest.TestCase):
             db.close()
 
     @patch("backend.ai.chat.ai_manager")
+    def test_unanswered_confirmation_expires_after_one_turn(self, mock_ai):
+        """A later, unrelated "ok" must not execute an old destructive request."""
+        db = self.Session()
+        alert = AlertRepository(db).create("A", "NVDA", "price_above", "220")
+        alert_id = alert.id
+        db.close()
+
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock(
+            return_value=_reply(
+                '{"reply": "Delete the NVDA alert?", "grounded": true, '
+                '"action": "delete_alert", "action_target_id": ' + str(alert_id) + "}"
+            )
+        )
+        msg1, *_ = answer_chat_message(self.session_id, "delete my nvda alert")
+        self.assertIn("confirm", msg1.content.lower())
+
+        mock_ai.complete.return_value = _reply('{"reply": "Sure, anything else?", "grounded": false}')
+        answer_chat_message(self.session_id, "never mind, what can you do?")
+        answer_chat_message(self.session_id, "ok thanks")
+
+        db = self.Session()
+        try:
+            self.assertIsNotNone(AlertRepository(db).get_by_id(alert_id))
+            state = json.loads(db.get(ChatSession, self.session_id).planner_state)
+            self.assertIsNone(state["pending_confirmation"])
+        finally:
+            db.close()
+
+    @patch("backend.ai.chat.ai_manager")
     def test_save_to_journal_end_to_end_confirm_then_execute(self, mock_ai):
         mock_ai.is_available = AsyncMock(return_value=True)
         mock_ai.settings.max_tokens = 20000
@@ -1895,3 +1937,25 @@ class TestEndToEnd(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMaterialChange(unittest.TestCase):
+    def _turn(self, mode):
+        from backend.ai.chat import _Turn
+
+        return _Turn(
+            symbol_blocks=[], unavailable=[], market_baseline=None, transcript=[], user_content="q",
+            alert_context=None, capped=False, base=[], planner_state={},
+            regeneration_mode=mode, previous_evidence_fingerprint="old",
+        )
+
+    def test_new_question_with_different_evidence_is_not_a_material_change(self):
+        from backend.ai.chat import _material_change
+
+        self.assertFalse(_material_change(self._turn(None), "new"))
+
+    def test_regeneration_with_different_evidence_is_a_material_change(self):
+        from backend.ai.chat import _material_change
+
+        self.assertTrue(_material_change(self._turn("refresh"), "new"))
+        self.assertFalse(_material_change(self._turn("refresh"), "old"))

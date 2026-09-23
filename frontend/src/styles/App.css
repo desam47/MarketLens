@@ -6005,6 +6005,18 @@ div.td-trend {
   opacity: 0.6;
 }
 
+.chat-bubble-draft {
+  border-style: dashed;
+}
+
+.chat-draft-status {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.68rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 .chat-ungrounded-tag {
   display: block;
   margin-top: 0.3rem;

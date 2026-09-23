@@ -747,6 +747,9 @@ class _Turn:
     reused_context: bool = False
     preferences: dict | None = None
     previous_evidence_fingerprint: str | None = None
+    # The confirmation request carried in from the previous turn. It may be
+    # answered by this turn only; see _expire_carried_confirmation.
+    carried_confirmation: dict | None = None
 
     @property
     def focus(self) -> list[str]:
@@ -968,7 +971,61 @@ def _prepare_turn(
         reused_context=reused_context,
         preferences=preferences,
         previous_evidence_fingerprint=previous_fingerprint,
+        carried_confirmation=next_state.get("pending_confirmation"),
     )
+
+
+def _baseline_symbols(value: object, *, depth: int = 0) -> list[str]:
+    """Symbols named in the server-built market baseline (bounded walk).
+
+    The baseline is prompt context the model may legitimately cite, so its
+    symbols (index ETFs, scored watchlist names, alerts) are turn symbols
+    for answer verification.
+    """
+    if depth > 4:
+        return []
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, child in list(value.items())[:200]:
+            if key in ("symbol", "ticker") and isinstance(child, str) and child:
+                found.append(child.upper())
+            else:
+                found.extend(_baseline_symbols(child, depth=depth + 1))
+    elif isinstance(value, list):
+        for child in value[:200]:
+            if isinstance(child, str) and child.isupper() and len(child) <= 6:
+                found.append(child)
+            else:
+                found.extend(_baseline_symbols(child, depth=depth + 1))
+    return found
+
+
+def _material_change(turn: _Turn, current_fingerprint: str | None) -> bool:
+    """Whether a regenerated answer's evidence differs from the original.
+
+    Only a regeneration re-asks the same question; comparing an unrelated
+    follow-up's evidence with the previous answer would flag every new topic.
+    """
+    return bool(
+        turn.regeneration_mode
+        and turn.previous_evidence_fingerprint
+        and current_fingerprint
+        and turn.previous_evidence_fingerprint != current_fingerprint
+    )
+
+
+def _expire_carried_confirmation(turn: _Turn) -> None:
+    """Drop a confirmation request this turn did not answer.
+
+    A server-authored confirmation prompt is valid for the very next user
+    turn only. If that turn declined, changed the subject, or asked
+    something else, a later unrelated "ok"/"yes" must not execute the old
+    destructive action. A prompt created during this turn is a new dict,
+    so identity distinguishes it from the carried-over one.
+    """
+    carried = turn.carried_confirmation
+    if carried is not None and turn.planner_state.get("pending_confirmation") is carried:
+        turn.planner_state["pending_confirmation"] = None
 
 
 def _extract_memory_value(text: str, pattern: str) -> str | None:
@@ -1049,6 +1106,7 @@ def answer_chat_message(
                 "provider": trace[-1].get("provider"),
                 "source_timestamp": trace[-1].get("source_timestamp"),
             }
+        _expire_carried_confirmation(turn)
         repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
         # _generate_reply delegates action execution to _run_turn_actions;
         # attach its transient trace to the returned ORM object for the API.
@@ -1063,7 +1121,7 @@ def answer_chat_message(
         verification = verify_answer(
             reply_text,
             trace,
-            allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable],
+            allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable, *_baseline_symbols(turn.market_baseline)],
             unavailable_symbols=turn.unavailable,
             user_content=user_content,
         )
@@ -1072,11 +1130,7 @@ def answer_chat_message(
             grounded = False
         _append_turn_observability(trace, started_at, user_content)
         current_fingerprint = evidence_fingerprint(trace)
-        material_change = bool(
-            turn.previous_evidence_fingerprint
-            and current_fingerprint
-            and turn.previous_evidence_fingerprint != current_fingerprint
-        )
+        material_change = _material_change(turn, current_fingerprint)
         regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
         if regeneration is not None and turn.regeneration_scope:
             regeneration["scope"] = turn.regeneration_scope
@@ -1156,64 +1210,76 @@ def stream_chat_message(
                 False,
             )
 
-        if final_text is None:
-            final_text, grounded = (
-                "AI is currently unavailable, so I can't answer that right now.",
-                False,
+        # The user message is already persisted and actions may have run, so
+        # a failure while finishing must still end in one persisted assistant
+        # row; otherwise the client would retry and re-run the whole turn.
+        try:
+            if final_text is None:
+                final_text, grounded = (
+                    "AI is currently unavailable, so I can't answer that right now.",
+                    False,
+                )
+            grounded = grounded and not turn.unavailable
+            if trace:
+                turn.planner_state["last_tool_result"] = {
+                    "tool": trace[-1].get("tool"),
+                    "ok": trace[-1].get("ok"),
+                    "provider": trace[-1].get("provider"),
+                    "source_timestamp": trace[-1].get("source_timestamp"),
+                }
+            _expire_carried_confirmation(turn)
+            repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
+            grounded = grounded and not turn.unavailable
+            # See answer_chat_message's matching comment — `screened` (from
+            # run_screen) is merged into `focus` so the frontend's quick-action
+            # buttons pick up tickers the turn's own message never named.
+            focus = list(dict.fromkeys([*turn.focus, *screened]))
+            assign_evidence_ids(trace)
+            verification = verify_answer(
+                final_text,
+                trace,
+                allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable, *_baseline_symbols(turn.market_baseline)],
+                unavailable_symbols=turn.unavailable,
+                user_content=user_content,
             )
-        grounded = grounded and not turn.unavailable
-        if trace:
-            turn.planner_state["last_tool_result"] = {
-                "tool": trace[-1].get("tool"),
-                "ok": trace[-1].get("ok"),
-                "provider": trace[-1].get("provider"),
-                "source_timestamp": trace[-1].get("source_timestamp"),
-            }
-        repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
-        grounded = grounded and not turn.unavailable
-        # See answer_chat_message's matching comment — `screened` (from
-        # run_screen) is merged into `focus` so the frontend's quick-action
-        # buttons pick up tickers the turn's own message never named.
-        focus = list(dict.fromkeys([*turn.focus, *screened]))
-        assign_evidence_ids(trace)
-        verification = verify_answer(
-            final_text,
-            trace,
-            allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable],
-            unavailable_symbols=turn.unavailable,
-            user_content=user_content,
-        )
-        if verification.safe_content:
-            final_text = verification.safe_content
+            if verification.safe_content:
+                final_text = verification.safe_content
+                grounded = False
+            _append_turn_observability(trace, started_at, user_content)
+            current_fingerprint = evidence_fingerprint(trace)
+            material_change = _material_change(turn, current_fingerprint)
+            regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
+            if regeneration is not None and turn.regeneration_scope:
+                regeneration["scope"] = turn.regeneration_scope
+            if regeneration is not None and material_change:
+                regeneration["material_change_detected"] = True
+            blocks = build_response_blocks(
+                content=final_text,
+                grounded=grounded,
+                focus=focus,
+                partial=turn.partial,
+                unavailable=turn.unavailable,
+                trace=trace,
+                preferences=preferences,
+                chart_state=turn.chart_state,
+                regeneration=regeneration,
+                material_change_detected=material_change,
+                verification=verification.model_dump(),
+            )
+            msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
+            msg.planner_trace = trace
+            msg.response_blocks_payload = blocks
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Chat stream finalization failed: %s", e)
+            focus = list(dict.fromkeys(turn.focus))
             grounded = False
-        _append_turn_observability(trace, started_at, user_content)
-        current_fingerprint = evidence_fingerprint(trace)
-        material_change = bool(
-            turn.previous_evidence_fingerprint
-            and current_fingerprint
-            and turn.previous_evidence_fingerprint != current_fingerprint
-        )
-        regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
-        if regeneration is not None and turn.regeneration_scope:
-            regeneration["scope"] = turn.regeneration_scope
-        if regeneration is not None and material_change:
-            regeneration["material_change_detected"] = True
-        blocks = build_response_blocks(
-            content=final_text,
-            grounded=grounded,
-            focus=focus,
-            partial=turn.partial,
-            unavailable=turn.unavailable,
-            trace=trace,
-            preferences=preferences,
-            chart_state=turn.chart_state,
-            regeneration=regeneration,
-            material_change_detected=material_change,
-            verification=verification.model_dump(),
-        )
-        msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
-        msg.planner_trace = trace
-        msg.response_blocks_payload = blocks
+            msg = repo.add_message(
+                session_id,
+                "assistant",
+                "I couldn't finish verifying that answer. Nothing was retried; please ask again if you still need it.",
+            )
+            msg.planner_trace = []
+            msg.response_blocks_payload = []
         yield ("final", (msg, grounded, focus, turn.partial, turn.unavailable))
     finally:
         repo.close()
@@ -3622,11 +3688,14 @@ def _run_action(
     to ``(text, grounded, screened)`` here either way.
     """
     handler = _ACTION_HANDLERS.get(parsed.action)
-    if parsed.action in _MARKET_TOOL_ACTIONS:
-        return _run_market_tool(db, parsed, planner_state=planner_state, trace=trace) + ([],)
-    if handler is None:  # pragma: no cover — action is a closed Literal
+    if parsed.action not in _MARKET_TOOL_ACTIONS and handler is None:  # pragma: no cover — action is a closed Literal
         return "I couldn't do that — please try again.", False, []
     try:
+        if parsed.action in _MARKET_TOOL_ACTIONS:
+            # The registry converts validation errors into ok=False results,
+            # but a provider/engine exception (e.g. InsufficientDataError)
+            # still propagates from the handler.
+            return _run_market_tool(db, parsed, planner_state=planner_state, trace=trace) + ([],)
         result = (
             _calculate(db, parsed, trace=trace)
             if parsed.action == "calculate"

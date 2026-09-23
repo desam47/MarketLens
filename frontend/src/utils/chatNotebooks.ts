@@ -68,8 +68,21 @@ export function mergeServerChatNotebooks(serverNotebooks: ChatNotebookResponse[]
       saved_at: item.created_at,
     })),
   }));
-  write(mapped);
-  return mapped;
+  // Keep what exists only in this browser: notebooks created while the
+  // server was unreachable, and items whose server save failed. The server
+  // copy wins for anything it already has.
+  const local = read();
+  const merged = mapped.map(notebook => {
+    const localCopy = local.find(candidate => candidate.id === notebook.id);
+    if (!localCopy) return notebook;
+    const serverMessageIds = new Set(notebook.items.map(item => item.message_id));
+    const localOnlyItems = localCopy.items.filter(item => !serverMessageIds.has(item.message_id));
+    return localOnlyItems.length ? { ...notebook, items: [...localOnlyItems, ...notebook.items].slice(0, 200) } : notebook;
+  });
+  const localOnlyNotebooks = local.filter(notebook => !notebook.id.startsWith('server-'));
+  const result = [...merged, ...localOnlyNotebooks];
+  write(result);
+  return result;
 }
 
 export function createChatNotebook(name: string): ChatNotebook {

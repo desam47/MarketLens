@@ -35,6 +35,17 @@ _SESSION_RE = re.compile(r"\b(premarket|pre-market|regular|regular session|after
 _LIVE_RE = re.compile(r"\b(current(?:ly)?|live|latest|today|now|real[- ]?time)\b", re.I)
 _POSITIVE_DIRECTION_RE = re.compile(r"\b(up|higher|gain(?:s|ed)?|positive|bullish|rising|increase(?:d)?)\b", re.I)
 _NEGATIVE_DIRECTION_RE = re.compile(r"\b(down|lower|loss(?:es|ed)?|negative|bearish|fall(?:s|en)?|decrease(?:d)?)\b", re.I)
+# Wording that attributes a number to the trader's own plan/inputs rather
+# than to observed market data.
+_USER_INPUT_CONTEXT_RE = re.compile(r"\b(you|your|you're|you've|planned|stop|target|entry|limit|budget)\b", re.I)
+# "follow up", "set up", "up to", "break down", ... are not price-direction
+# claims; they are removed before direction checks.
+_PHRASAL_DIRECTION_RE = re.compile(
+    r"\b(?:follow|set|sign|look|pick|back|show|build|line|pull|bring|come|open|clean|call|speed|keep|catch|"
+    r"break|narrow|drill|write|scale|slow|shut|track|wind|boil|cut|step|tone|settle)[- ]?(?:up|down)\b"
+    r"|\b(?:up|down)\s+to\b|\bups and downs\b|\bstop[- ]loss(?:es)?\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -254,6 +265,25 @@ def _calculation_issues(trace: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
+def _default_known_symbols() -> set[str]:
+    """The tradable-symbol universe Chat itself resolves tickers against."""
+    try:
+        from backend.ai.chat_symbols import _known_symbols
+
+        return {str(symbol).upper() for symbol in _known_symbols()}
+    except Exception:  # noqa: BLE001 — verification must not depend on it
+        return set()
+
+
+def _evidence_symbols(successful: list[dict[str, Any]]) -> set[str]:
+    symbols: set[str] = set()
+    for item in successful:
+        for value in (item.get("symbol"), (item.get("arguments") or {}).get("symbol") if isinstance(item.get("arguments"), dict) else None):
+            if isinstance(value, str) and value:
+                symbols.add(value.upper())
+    return symbols
+
+
 def verify_answer(
     content: str,
     trace: list[dict[str, Any]],
@@ -261,8 +291,16 @@ def verify_answer(
     allowed_symbols: list[str] | None = None,
     unavailable_symbols: list[str] | None = None,
     user_content: str = "",
+    known_symbols: set[str] | None = None,
 ) -> AnswerVerification:
-    """Validate claims in ``content`` against application-owned evidence."""
+    """Validate claims in ``content`` against application-owned evidence.
+
+    Explicit ticker forms (``$XYZ``, "ticker XYZ", "XYZ stock") must be a
+    turn symbol. A bare all-caps word is only treated as a ticker when it is
+    a real symbol from ``known_symbols`` (default: Chat's own resolver
+    universe), so acronyms such as EPS, NYSE, or CEO are never ticker
+    claims.
+    """
 
     assign_evidence_ids(trace)
     successful = _successful_evidence(trace)
@@ -296,7 +334,7 @@ def verify_answer(
             numeric_claim_count=0,
             unsupported_claim_count=0,
         )
-    allowed = {str(symbol).upper() for symbol in (allowed_symbols or [])}
+    allowed = {str(symbol).upper() for symbol in (allowed_symbols or [])} | _evidence_symbols(successful)
     unavailable = {str(symbol).upper() for symbol in (unavailable_symbols or [])}
     issues: list[str] = []
     numeric_claims = _numbers_from_text(content)
@@ -308,14 +346,12 @@ def verify_answer(
         if symbol and symbol not in allowed and symbol not in unavailable:
             issues.append("unknown_ticker")
             unsupported += 1
+    universe = _default_known_symbols() if known_symbols is None else {str(symbol).upper() for symbol in known_symbols}
     for match in _BARE_TICKER_RE.finditer(content):
         symbol = match.group(0).upper()
         if symbol in _NON_TICKER_CAPS or symbol in allowed or symbol in unavailable:
             continue
-        # Only treat a bare all-caps token as a ticker when it is adjacent to
-        # ordinary market prose; this avoids turning headings like "P/L" or
-        # provider labels into unsupported-symbol failures.
-        if symbol not in {"THE", "THIS", "THAT", "WITH", "FROM", "ONLY", "DATA", "MARKET"}:
+        if symbol in universe:
             issues.append("unknown_ticker")
             unsupported += 1
 
@@ -326,17 +362,19 @@ def verify_answer(
         evidence_numbers.update(item_numbers)
         evidence_families.update(_evidence_unit_families(item_numbers))
     evidence_by_symbol = _evidence_by_symbol(successful)
+    unscoped_numbers: dict[str, float] = {}
+    for item in successful:
+        if not str(item.get("symbol") or ""):
+            unscoped_numbers.update(_evidence_numbers(item))
     evidence_labels = _evidence_labels(successful)
     user_numbers = {number for number, _, _ in _numbers_from_text(user_content)}
-    directional_claim = bool(_POSITIVE_DIRECTION_RE.search(content) or _NEGATIVE_DIRECTION_RE.search(content))
+    direction_text = _PHRASAL_DIRECTION_RE.sub(" ", content)
+    directional_claim = bool(_POSITIVE_DIRECTION_RE.search(direction_text) or _NEGATIVE_DIRECTION_RE.search(direction_text))
 
     for value, unit, context in numeric_claims:
         claim_symbol = _claim_symbol(context, allowed)
-        scoped_numbers = (
-            evidence_by_symbol.get(claim_symbol, evidence_numbers)
-            if claim_symbol
-            else evidence_numbers
-        )
+        symbol_numbers = evidence_by_symbol.get(claim_symbol) if claim_symbol else None
+        scoped_numbers = {**unscoped_numbers, **symbol_numbers} if symbol_numbers else evidence_numbers
         matched_evidence = any(
             abs(value - candidate) <= max(0.02 if abs(candidate) < 10 else 0.01, abs(candidate) * 0.0005)
             for candidate in scoped_numbers.values()
@@ -346,7 +384,10 @@ def verify_answer(
                 abs(abs(value) - abs(candidate)) <= max(0.02 if abs(candidate) < 10 else 0.01, abs(candidate) * 0.0005)
                 for candidate in scoped_numbers.values()
             )
-        if value in user_numbers:
+        # Echoing the user's own inputs is fine, but a user-supplied number
+        # never overrides server evidence for the symbol it is attributed
+        # to ("is AAPL at 300?" must not verify "AAPL is at $300").
+        if value in user_numbers and (not symbol_numbers or _USER_INPUT_CONTEXT_RE.search(context or "")):
             matched_evidence = True
         if not matched_evidence and successful:
             issues.append("unsupported_numeric_claim")
@@ -406,12 +447,12 @@ def verify_answer(
         and value != 0
     ]
     if directional_values:
-        if _POSITIVE_DIRECTION_RE.search(content) and all(value < 0 for value in directional_values):
+        if _POSITIVE_DIRECTION_RE.search(direction_text) and all(value < 0 for value in directional_values):
             issues.append("contradictory_evidence")
             unsupported += 1
 
-    positive_claim = bool(_POSITIVE_DIRECTION_RE.search(content))
-    negative_claim = bool(_NEGATIVE_DIRECTION_RE.search(content))
+    positive_claim = bool(_POSITIVE_DIRECTION_RE.search(direction_text))
+    negative_claim = bool(_NEGATIVE_DIRECTION_RE.search(direction_text))
     sideways_claim = bool(re.search(r"\b(sideways|flat|range[- ]bound|mixed)\b", content, re.I))
     label_sets = list(evidence_labels.values())
     if label_sets:
@@ -428,7 +469,7 @@ def verify_answer(
         elif sideways_claim and known_labels.intersection(positive_labels | negative_labels) and not known_labels.intersection(sideways_labels):
             issues.append("contradictory_evidence")
             unsupported += 1
-        elif _NEGATIVE_DIRECTION_RE.search(content) and all(value > 0 for value in directional_values):
+        elif negative_claim and directional_values and all(value > 0 for value in directional_values):
             issues.append("contradictory_evidence")
             unsupported += 1
 

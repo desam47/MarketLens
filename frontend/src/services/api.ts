@@ -2647,8 +2647,9 @@ class ApiService {
    * shape ``sendChatMessage`` returns — authoritative; overwrite any
    * accumulated delta text with ``.content``).
    *
-   * Rejects with ``{ beforeFirstDelta }`` context so the caller can fall
-   * back to the plain endpoint when the stream never started.
+   * Rejects with ``{ beforeFirstDelta, turnStarted }`` context. The caller
+   * may fall back to the plain endpoint only when ``turnStarted`` is false;
+   * after ``meta`` the server has already persisted the turn.
    */
   async streamChatMessage(
     sessionId: number,
@@ -2688,6 +2689,10 @@ class ApiService {
     const decoder = new TextDecoder();
     let buffer = '';
     let sawDelta = false;
+    // Once `meta` arrives the server has persisted the user message (and may
+    // have run actions); resending through the blocking endpoint would
+    // duplicate the turn.
+    let turnStarted = false;
     let final: ChatMessage | null = null;
     let streamError: string | null = null;
 
@@ -2701,10 +2706,13 @@ class ApiService {
       if (!dataStr) return;
       let data: any;
       try { data = JSON.parse(dataStr); } catch { return; }
-      if (event === 'meta') opts.onMeta?.(data);
+      if (event === 'meta') { turnStarted = true; opts.onMeta?.(data); }
       else if (event === 'delta') { sawDelta = true; opts.onDelta?.(data.text ?? ''); }
       else if (event === 'final') final = data as ChatMessage;
-      else if (event === 'error') streamError = data.message || 'Stream error';
+      else if (event === 'error') {
+        streamError = data.message || 'Stream error';
+        if (data.started) turnStarted = true;
+      }
     };
 
     for (;;) {
@@ -2722,11 +2730,13 @@ class ApiService {
     if (streamError && !final) {
       const err: any = new Error(streamError);
       err.beforeFirstDelta = !sawDelta;
+      err.turnStarted = turnStarted;
       throw err;
     }
     if (!final) {
       const err: any = new Error('Chat stream ended without a final message');
       err.beforeFirstDelta = !sawDelta;
+      err.turnStarted = turnStarted;
       throw err;
     }
     return final;

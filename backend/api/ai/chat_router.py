@@ -669,7 +669,9 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
       ``event: delta`` — ``{text}``, the reply as it's generated
       ``event: final`` — the full ``MessageResponse`` (identical shape to
                          ``POST /messages``), once, after persistence
-      ``event: error`` — ``{message}`` if the turn couldn't even start
+      ``event: error`` — ``{message, started}``; ``started`` is true when the
+                         user message was already persisted, so the client
+                         must not resend the turn
 
     The reply row is still persisted exactly once (at the end); the
     ``final`` frame is authoritative — for the reanalysis-tool path it
@@ -690,6 +692,8 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
         queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=_SSE_QUEUE_MAXSIZE)
         stop = threading.Event()
         _DONE = object()
+
+        started = threading.Event()
 
         def drain():
             try:
@@ -714,12 +718,20 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                 for ev in events:
                     if stop.is_set():
                         break
+                    if ev[0] == "meta":
+                        # The user message is persisted from here on.
+                        started.set()
                     if not _put_sse_item(loop, queue, ev):
                         break
             except Exception as exc:  # noqa: BLE001
                 logger.warning("chat stream drain failed: %s", exc)
                 if not stop.is_set():
-                    _put_sse_item(loop, queue, ("error", "The chat turn could not be started."))
+                    message = (
+                        "The chat turn failed after it started; reload the conversation instead of resending."
+                        if started.is_set()
+                        else "The chat turn could not be started."
+                    )
+                    _put_sse_item(loop, queue, ("error", {"message": message, "started": started.is_set()}))
             finally:
                 if not stop.is_set():
                     _put_sse_item(loop, queue, _DONE)
@@ -761,7 +773,7 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                         ).model_dump(),
                     )
                 elif kind == "error":
-                    yield _sse("error", {"message": payload_})
+                    yield _sse("error", payload_)
         except asyncio.CancelledError:
             stop.set()
             try:

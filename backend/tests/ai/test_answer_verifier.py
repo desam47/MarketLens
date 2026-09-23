@@ -108,3 +108,53 @@ def test_source_timestamp_alone_does_not_prove_live_freshness() -> None:
     )
     assert result.status == "blocked"
     assert result.issues == ["live_claim_without_freshness"]
+
+
+_AAPL_QUOTE = {"tool": "get_quote", "ok": True, "symbol": "AAPL", "freshness_seconds": 5, "data": {"price": 230.5, "change_percent": -1.2}}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "AAPL trades at $230.5 ahead of its EPS report.",
+        "AAPL is listed on NASDAQ, not NYSE.",
+        "Consider the CEO commentary on AAPL.",
+    ],
+)
+def test_acronyms_outside_the_symbol_universe_are_not_tickers(content: str) -> None:
+    result = verify_answer(content, [dict(_AAPL_QUOTE)], allowed_symbols=["AAPL"], known_symbols={"AAPL", "NVDA"})
+    assert result.issues == []
+
+
+def test_known_symbol_without_evidence_is_still_an_unknown_ticker() -> None:
+    result = verify_answer("NVDA looks strong.", [dict(_AAPL_QUOTE)], allowed_symbols=["AAPL"], known_symbols={"AAPL", "NVDA"})
+    assert result.issues == ["unknown_ticker"]
+
+
+def test_user_number_does_not_override_symbol_evidence() -> None:
+    result = verify_answer(
+        "AAPL is at $300.", [dict(_AAPL_QUOTE)], allowed_symbols=["AAPL"], user_content="is AAPL at 300?", known_symbols=set()
+    )
+    assert result.status == "blocked"
+    assert result.issues == ["unsupported_numeric_claim"]
+
+
+def test_user_plan_inputs_may_be_echoed() -> None:
+    result = verify_answer(
+        "With your AAPL stop at $212, the plan has a defined exit.",
+        [dict(_AAPL_QUOTE)],
+        allowed_symbols=["AAPL"],
+        user_content="AAPL stop 212",
+        known_symbols=set(),
+    )
+    assert result.issues == []
+
+
+def test_phrasal_up_down_is_not_a_direction_claim() -> None:
+    result = verify_answer(
+        "AAPL trades at $230.5. You can follow up with a trend check or break down the volume.",
+        [dict(_AAPL_QUOTE)],
+        allowed_symbols=["AAPL"],
+        known_symbols=set(),
+    )
+    assert result.issues == []

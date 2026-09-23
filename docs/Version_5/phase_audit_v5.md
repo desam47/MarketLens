@@ -6,24 +6,22 @@
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
 **Current checkpoint (2026-09-23):** Version 4's implemented scope is
-merged to `main`. The `development` branch is synchronized with its remote
-and is the only branch receiving new Version 5 work. Phase 5.1 is complete.
-Phase 5.2 is complete: every tool explicitly named in the plan's
-5.2.1–5.2.8 items is implemented, with consistent provenance fields and a
-genuinely generated (not hand-copied) application-help route table (see
-the Phase 5.2 section's "Post-completion review" for the two items —
-multi-provider reconciliation, further contract-test expansion — found to
-be blocked on real architectural gaps rather than left undone). Phase 5.3
-is now complete. Phase 5.5 is also complete: the What-changed Inbox is
-available in AI Hub with a browser-local checkpoint, durable event sources,
-deduplication, source links, and no provider polling. Phase 5.6 is complete:
-its save/export workflow has server-enforced approval, local Journal
-persistence, downloadable reports, and actionable page links. Phase 5.7.1
-and the 5.7.2/5.7.3/5.7.4/5.7.8 slices are complete; bounded initial slices
-of 5.7.6, 5.7.7, 5.7.9, 5.7.10, and 5.7.11 are implemented.
+merged to `main`. The `development` branch is the only branch receiving
+Version 5 work. Phases 5.1–5.8 are implemented, with the plan deviations
+and open gaps listed in [Known gaps and plan deviations](#known-gaps-and-plan-deviations-2026-09-23-review).
+The 2026-09-23 Chat review found and fixed safety/verification bugs; see
+[Chat review fixes](#chat-review-fixes-2026-09-23). For Phase 5.2, the
+Post-completion review explains the two items (multi-provider
+reconciliation, further contract-test expansion) that are blocked on real
+architectural gaps rather than left undone.
 
-**Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
-slice is now shipped on `development`. The strict calculator foundation in
+The registry now has 42 tools and `ChatReplyResponse.action` accepts 53
+actions (registry tools plus the pre-Version-5 alert/watchlist/backtest/
+screen/reanalysis actions). Tool counts quoted in the historical slice notes
+below (14, 20, 22, 23) were correct when written.
+
+**Phase 5.1 delivery history (commit `9ceedec`):** Phase 5.1's first implementation
+slice shipped on `development`. The strict calculator foundation in
 `backend/ai/calculator.py` is exposed through the read-only
 `POST /api/ai/calculate` endpoint, returns formulas and assumptions, and
 supports the documented change, return, risk, portfolio, volatility,
@@ -83,8 +81,8 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | ✅ COMPLETE | Typed blocks, visual/action cards, preferences, answer-contract metadata, feedback classification, chart state, context-preserving navigation (including Options/System Health), typed regeneration with timeframe/session scope, server-backed notebooks with local fallback, approved regression-fixture promotion, age and material-change freshness, and accessibility/responsive verification are complete. |
-| 5.8 | Reliability, evaluation, and release hardening | ✅ COMPLETE | Verification, scored evaluation, sanitized observability, bounded fallback matrix, performance decision, security/privacy review, sanctioned private-flow smoke, manual smoke evidence, and final release gate are complete. |
+| 5.7 | Structured Chat UI and personalization | ✅ COMPLETE (with gaps) | Typed blocks, visual/action cards, preferences, answer-contract metadata, feedback classification, chart state, context-preserving navigation (including Options/System Health), regeneration with timeframe/session scope, server-backed notebooks with local fallback, regression-fixture promotion, and age/material-change freshness are implemented. Accessibility/responsive coverage is automated only; the manual device pass has not been run. Regeneration modes and per-block quality are partial — see Known gaps. |
+| 5.8 | Reliability, evaluation, and release hardening | ✅ COMPLETE (with gaps) | Verification, sanitized observability, bounded fallback matrix, performance decision, security/privacy review, sanctioned private-flow smoke, public live smoke, and the release gate are complete. The scored evaluation exercises the answer verifier only, not routing/planning; destructive and portfolio flows were not smoke-tested live. See Known gaps. |
 
 ---
 
@@ -104,9 +102,7 @@ capabilities are already present and must be preserved throughout the migration:
 - Deterministic handling for several watchlist queries and confirmations.
 - Grounded/partial/unavailable symbol provenance in the frontend.
 
-These are baseline behavior, not completed Version 5 items. Version 5 work is
-now active: the typed tool foundation and calculator are implemented on
-`development`, while the remaining phases are still pending.
+These are baseline behavior, not completed Version 5 items.
 
 ---
 
@@ -478,7 +474,8 @@ and safe local CSV validation with inert formulas/macros.
 
 The first orchestration slice is implemented in `backend/ai/chat.py`: compound
 requests can chain one-action decisions with configurable, bounded planning
-budgets (default three steps), duplicate action signatures stop safely, and
+budgets (default three steps — the plan asked for 5 tool calls and 2
+planning calls; see Known gaps), duplicate action signatures stop safely, and
 continuation failures never discard already completed results. Destructive
 actions remain backend-confirmed. Per-turn planner state tracks the original
 request, completed steps, duplicate signatures, and errors without persisting
@@ -868,7 +865,7 @@ values sorted last rather than dropped) and `anomaly_analysis` (ranked by
 `|z_score|`, threshold-triggered anomalies with no z-score sorted after the
 scored ones), alongside the existing `compare_symbols` `comparison_table`.
 `ChatPanel` now has direct render coverage for every one of the 17 block
-types (previously 4 of 17 — `calculation`, `warning`, `report`,
+types that existed at the time (18 now, with the 5.8 `verification` block) (previously 4 of 17 — `calculation`, `warning`, `report`,
 `journal_save`), plus an edge-case test covering an empty chart, null
 indicator values, ragged comparison-table rows, a 5,000-character report
 body, and an empty ranked list. A new Chat API contract test exercises the
@@ -889,7 +886,7 @@ Focused verification: 9 new `_visual_trace_payload` tests, 3 new Chat API
 contract tests, and 2 new ChatPanel tests (2987 backend / 168 frontend
 tests passing overall).
 
-**5.7.2 visual/action slice in progress (2026-09-23).** Bounded visual
+**5.7.2 visual/action slice (2026-09-23).** Bounded visual
 payloads from bars, indicators, options, risk, scenarios, session statistics,
 historical outcomes, and symbol comparisons can now become typed blocks
 without persisting full tool responses. Chat renders mini price charts,
@@ -998,13 +995,11 @@ replies) and a batch fetch wired into `GET .../messages` so history shows
 previously-given ratings without re-offering the buttons. Storage only:
 no automatic online model retraining happens from a rating.
 
-Deliberately not built here: the plan's "turn approved failures into
-regression fixtures." That's a maintainer/dev-tooling workflow (reviewing
-incorrect-rated feedback and hand-turning it into a test fixture) — the
-data needed for it (rating, category, comment, and via `message_id` the
-full question/answer/blocks) is all captured and queryable, but no
-export/triage tooling was built, since automating *which* failures get
-promoted to fixtures is a separate, judgment-heavy piece of work.
+The initial slice did not build the plan's "turn approved failures into
+regression fixtures"; explicit promotion was added later (see the
+5.7.6–5.7.11 completion note below). Promoted fixtures are stored in the
+database only — no test or evaluation run consumes them yet (see Known
+gaps).
 
 Focused verification: 14 new backend tests (repository upsert/batch-fetch,
 endpoint validation, 404/400 paths, feedback correctly attached to only
@@ -1207,3 +1202,104 @@ This is hardening of the completed release gate, not a claim that every
 possible natural-language expression is deterministic. Unsupported or
 open-ended questions still use the bounded model planner, and any new intent
 must add a canonical route, a verified tool contract, and evidence tests.
+
+---
+
+## Chat review fixes (2026-09-23)
+
+A code review of the Chat path against this audit found bugs behind
+several "complete" claims. Fixed, each with a regression test:
+
+1. **Unanswered destructive confirmations expired after one turn.**
+   `pending_confirmation` used to live until it was confirmed. So after
+   "delete my Tech watchlist" → "never mind", any later message starting
+   with "ok", "yes" or "sure" that the model answered with `action="none"`
+   executed the old deletion (reproduced with "ok thanks"). A carried-over
+   confirmation is now cleared at the end of any turn that did not answer
+   it (`_expire_carried_confirmation`).
+2. **Verifier false blocks.** A bare all-caps word is now treated as a ticker
+   only when it is in Chat's own resolver universe (`_known_symbols`), so
+   EPS, NYSE, NASDAQ, and CEO no longer block answers. Symbols present in
+   successful evidence and in the market baseline are allowed. Phrasal
+   "follow up", "set up", "up to", "break down", and "stop loss" are no
+   longer read as price-direction claims. The label check no longer reports
+   a contradiction when there are no directional values.
+3. **Verifier false pass.** A number the user typed no longer verifies a
+   claim that server evidence contradicts ("is AAPL at 300?" → "AAPL is at
+   $300" is now blocked when the AAPL quote says otherwise). Echoing the
+   user's own plan inputs ("your stop at $212") is still allowed.
+4. **Material-change false positives.** The evidence fingerprint is compared
+   only on regeneration turns; a new question about a different symbol no
+   longer marks every block (and the notebook item) as materially changed.
+5. **Stream double execution.** Any failure after the `meta` frame now still
+   persists one assistant message. The SSE `error` frame carries `started`,
+   and the client reloads the conversation instead of resending through the
+   blocking endpoint (which used to duplicate the user message and re-run
+   non-confirmed actions such as `create_alert`).
+6. **Unverified streamed text is labelled.** Deltas arrive before server-side
+   verification; the bubble is now marked "Unverified draft" until the
+   authoritative final message replaces it.
+7. **Market-tool exceptions.** Provider/engine exceptions that are not
+   `ValueError`/`TypeError` (for example `InsufficientDataError`,
+   `ProviderDataError`) now degrade to a failed tool result instead of
+   escaping `_run_action`.
+8. **Local notebooks kept on server merge.** Notebooks created while the
+   server was unreachable, and items whose server save failed, used to be
+   overwritten by the next server load. They are now kept.
+
+Verification: `backend/tests/ai` plus `backend/tests/api/test_chat_router.py`
+(821 passed) and the frontend ChatPanel/utils suites (72 passed) with a
+clean `tsc --noEmit`.
+
+## Known gaps and plan deviations (2026-09-23 review)
+
+These are not fixed. They are recorded so the scorecard is not read as
+covering them.
+
+- **5.3.1 budgets.** The defaults are 3 chain steps and 3 planning calls,
+  not the plan's 5 tool calls and 2 planning calls. `_chain_step_limit()`
+  takes the `min()` of the two settings, so they act as one limit. No
+  per-turn token budget is enforced.
+- **5.3.5 concurrency.** Chained tool reads run sequentially; only per-symbol
+  context building is parallel.
+- **5.1.4 / 5.8.5 timeouts.** `ToolSpec.max_duration_ms` only adds a warning
+  after the handler returns; there is no enforced tool timeout. The failure
+  matrix has no tool-timeout or model-outage case.
+- **5.1.3 relative dates.** Nothing resolves "today", "yesterday", or "last
+  Friday" to America/New_York dates.
+- **5.3.3 memory.** The `watchlist` memory field is never written, there is
+  no date-range field, and the only reset path is deleting the session.
+- **5.2.4 user data.** There are no tools for saved scans, recent signal
+  history, or manually tracked positions.
+- **5.7.9 regeneration.** Modes are prompt text the frontend appends to the
+  user message (persisted in the transcript and seen by intent routing); the
+  backend ignores the mode except `refresh`. "Apply timeframe/session" sends
+  `more_detail` and only changes chart state; it does not refetch data for
+  that timeframe.
+- **5.7.1 / 5.7.4 block quality.** One quality object, derived from the last
+  successful trace item, is copied onto every block rather than computed
+  per block from that block's own evidence.
+- **5.7.8 fixtures.** Promoted regression fixtures are stored in
+  `chat_regression_fixtures`; neither the test suite nor the evaluation
+  runner reads them.
+- **5.8.3 evaluation.** `backend/ai/evaluations/runner.py` runs
+  `verify_answer` over canned answer+trace pairs. Its `tool_choice` score
+  checks that the expected tool appears in the canned trace, so it cannot
+  fail. Routing, planning, clarification, and follow-up behavior are not
+  evaluated; "19/19 in every category" measures the verifier only.
+- **5.8.1 citations.** Numeric claims are matched against any evidence value
+  in scope; the model is not required to cite `ev-N` references. Turns with
+  an action step or a trusted server reply skip prose verification (their
+  text is server-formatted).
+- **5.7.5 / 5.8.7 manual checks.** The device/screen-reader pass in
+  `phase_5_7_manual_qa.md` has not been run. The destructive-action and
+  portfolio flows were covered by automated and synthetic tests, not live
+  smoke.
+- **Audit obligations not yet written.** The per-tool source/cache/
+  provider-impact table (5.2), the per-block persistence/accessibility list
+  (5.7), and 5.1's formula-level audit evidence are described in their
+  sections but not produced. 5.4 has no recorded test counts. The plan's
+  12-scenario end-to-end matrix has no recorded run.
+- **Plan open questions.** Q4 (blocks stored as versioned JSON in
+  `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
+  are decided by the implementation; Q1–Q3 remain open.

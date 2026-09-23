@@ -623,6 +623,41 @@ class TestSendMessageStream(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         mock_stream.assert_called_once_with(1, "How's AAPL?", {"mode": "swing_trading", "preferred_timeframes": [], "default_session": None, "risk_per_trade_percent": None, "primary_watchlist": None, "answer_detail_level": None, "preferred_units": None})
 
+    @patch("backend.ai.chat.stream_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_error_after_meta_reports_the_turn_as_started(self, mock_repo_cls, mock_stream):
+        import json as _json
+
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+
+        def events():
+            yield ("meta", {"focus": [], "partial": [], "unavailable": []})
+            raise RuntimeError("db write failed")
+
+        mock_stream.return_value = events()
+        resp = self.client.post("/api/ai/chat/sessions/1/messages/stream", json={"content": "hi"})
+
+        frames = self._frames(resp.text)
+        self.assertEqual([e for e, _ in frames], ["meta", "error"])
+        self.assertTrue(_json.loads(frames[1][1])["started"])
+
+    @patch("backend.ai.chat.stream_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_error_before_meta_reports_the_turn_as_not_started(self, mock_repo_cls, mock_stream):
+        import json as _json
+
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_stream.side_effect = RuntimeError("prep failed")
+        resp = self.client.post("/api/ai/chat/sessions/1/messages/stream", json={"content": "hi"})
+
+        frames = self._frames(resp.text)
+        self.assertEqual([e for e, _ in frames], ["error"])
+        self.assertFalse(_json.loads(frames[0][1])["started"])
+
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_stream_404_when_session_missing(self, mock_repo_cls):
         mock_repo = MagicMock()

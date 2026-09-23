@@ -969,4 +969,42 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByText(/Stream interrupted before verification completed/)).toBeInTheDocument();
     expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
   });
+
+  it('does not resend a turn the server already started', async () => {
+    mockApi.streamChatMessage.mockRejectedValue(
+      Object.assign(new Error('The chat turn failed after it started'), { beforeFirstDelta: true, turnStarted: true }),
+    );
+    mockApi.getChatMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { id: 1, session_id: 1, role: 'user', content: 'delete my alert', created_at: '', grounded: null } as any,
+        { id: 2, session_id: 1, role: 'assistant', content: 'Stored server reply.', created_at: '', grounded: false } as any,
+      ]);
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'delete my alert' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Stored server reply.')).toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('labels streamed text as an unverified draft until the final message arrives', async () => {
+    let finish: (value: any) => void = () => undefined;
+    mockApi.streamChatMessage.mockImplementation((_id: number, _content: string, opts: any) => {
+      opts.onDelta?.('AAPL is at $300');
+      return new Promise(resolve => { finish = resolve; });
+    });
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'is AAPL at 300?' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText(/Unverified draft/)).toBeInTheDocument();
+    await act(async () => finish({
+      id: 3, session_id: 1, role: 'assistant', content: "I couldn't verify one or more numbers.", created_at: '', grounded: false, focus: [], partial: [], unavailable: [],
+    }));
+    expect(await screen.findByText(/couldn't verify one or more numbers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unverified draft/)).not.toBeInTheDocument();
+  });
 });
