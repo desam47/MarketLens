@@ -4,6 +4,7 @@ from backend.ai.market_tools import (
     AlertsRequest,
     AnomalyAnalysisRequest,
     ApplicationHelpRequest,
+    AssumptionTrackingRequest,
     BarsRequest,
     ChangeAnalysisRequest,
     ComparisonRequest,
@@ -25,6 +26,7 @@ from backend.ai.market_tools import (
     TradeJournalRequest,
     TrendRequest,
     anomaly_analysis_tool,
+    assumption_tracking_tool,
     compare_symbols_tool,
     counterargument_review_tool,
     get_alerts_tool,
@@ -423,6 +425,71 @@ def test_anomaly_analysis_reports_baseline_deviations_and_corroboration(monkeypa
     assert "options_activity" in types
     assert "portfolio_concentration" in types
     assert result.conclusion["status"] == "verified_anomalies"
+
+
+def test_assumption_tracking_preserves_originals_and_marks_contradiction() -> None:
+    saved = assumption_tracking_tool(
+        AssumptionTrackingRequest(
+            operation="save",
+            symbol="AAPL",
+            assumptions=[
+                {
+                    "category": "growth",
+                    "statement": "Expected growth is 10%",
+                    "expected_value": 10,
+                    "unit": "%",
+                    "source": "user thesis",
+                }
+            ],
+        )
+    ).model_dump()
+    record = saved["assumptions"][0]
+    assert record["status"] == "active"
+    assert record["original_value"] == 10
+    assert record["original_created_at"] == record["created_at"]
+
+    reviewed = assumption_tracking_tool(
+        AssumptionTrackingRequest(
+            operation="review",
+            existing_assumptions=saved["assumptions"],
+            evidence=[
+                {
+                    "assumption_id": record["id"],
+                    "observed_value": 25,
+                    "source": "verified earnings",
+                    "contradicts": True,
+                }
+            ],
+        )
+    ).model_dump()
+    updated = reviewed["assumptions"][0]
+    assert updated["status"] == "broken"
+    assert updated["original_statement"] == record["original_statement"]
+    assert updated["original_value"] == 10
+    assert updated["original_source"] == "user thesis"
+    assert reviewed["changed"][0]["to"] == "broken"
+
+
+def test_assumption_tracking_marks_old_unverified_record_stale() -> None:
+    old = {
+        "id": "a-old",
+        "symbol": "MSFT",
+        "category": "stop",
+        "statement": "Stop is 400",
+        "expected_value": 400,
+        "source": "user",
+        "created_at": "2020-01-01T00:00:00+00:00",
+        "status": "active",
+        "original_statement": "Stop is 400",
+        "original_value": 400,
+        "original_source": "user",
+        "original_created_at": "2020-01-01T00:00:00+00:00",
+        "stale_after_hours": 24,
+    }
+    result = assumption_tracking_tool(
+        AssumptionTrackingRequest(operation="review", existing_assumptions=[old])
+    ).model_dump()
+    assert result["assumptions"][0]["status"] == "stale"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

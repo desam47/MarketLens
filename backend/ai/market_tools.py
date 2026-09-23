@@ -221,6 +221,50 @@ class AnomalyAnalysisRequest(BaseModel):
     portfolio_concentration_threshold: float = Field(default=40.0, gt=0, le=100)
 
 
+class AssumptionInput(BaseModel):
+    """One user-owned research assumption.
+
+    ``original_*`` fields are deliberately not accepted from callers.  They
+    are stamped by the ledger when a record is first saved and are never
+    overwritten by later verification.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
+    symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    category: Literal["growth", "stop", "catalyst_date", "volatility", "invalidation", "custom"] = "custom"
+    statement: str = Field(..., min_length=1, max_length=500)
+    expected_value: float | str | None = None
+    unit: str | None = Field(default=None, max_length=30)
+    source: str = Field(default="user", min_length=1, max_length=200)
+    stale_after_hours: float = Field(default=24.0, gt=0, le=8_760)
+
+
+class AssumptionEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    assumption_id: str = Field(..., min_length=1, max_length=80)
+    observed_value: float | str | None = None
+    source: str = Field(..., min_length=1, max_length=200)
+    observed_at: str | None = None
+    contradicts: bool = False
+    note: str | None = Field(default=None, max_length=500)
+
+
+class AssumptionTrackingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["save", "review"] = "review"
+    symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    assumptions: list[AssumptionInput] = Field(default_factory=list, max_length=100)
+    # Chat sessions keep this list in their structured planner state.  It is
+    # also accepted by the standalone registry so the tool remains pure and
+    # deterministic for API callers and tests.
+    existing_assumptions: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    evidence: list[AssumptionEvidence] = Field(default_factory=list, max_length=200)
+
+
 class TradeJournalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1620,6 +1664,139 @@ def anomaly_analysis_tool(request: AnomalyAnalysisRequest) -> BaseModel:
         unknowns.append({"type": "portfolio_risk", "reason": "no position snapshot supplied"})
 
     return _Payload(symbol=symbol, anomalies=anomalies, anomaly_count=len(anomalies), baseline=baseline, corroborating_evidence=corroborating, unknowns=unknowns, sources=sources, provider="MarketLens anomaly analysis", conclusion={"status": "verified_anomalies" if anomalies else "no_anomaly_detected", "message": "Anomalies are deviations from the supplied baseline, not predictions."})
+
+
+def _assumption_values_differ(expected: Any, observed: Any) -> bool:
+    if expected is None or observed is None:
+        return False
+    if isinstance(expected, (int, float)) and isinstance(observed, (int, float)):
+        return not math.isclose(float(expected), float(observed), rel_tol=0.05, abs_tol=1e-9)
+    return str(expected).strip().casefold() != str(observed).strip().casefold()
+
+
+def _assumption_age_hours(created_at: str, now: datetime) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return max(0.0, (now - parsed.astimezone(UTC)).total_seconds() / 3_600)
+    except (TypeError, ValueError):
+        return None
+
+
+def assumption_tracking_tool(request: AssumptionTrackingRequest) -> BaseModel:
+    """Save and verify user-owned research assumptions without rewriting history.
+
+    Persistence is intentionally delegated to the chat session's structured
+    planner state.  The tool itself accepts an explicit snapshot, making it
+    safe to call through the registry, easy to test, and independent of a
+    second database table.  A later review can only change status metadata
+    (active/stale/broken); ``original_*`` fields remain immutable.
+    """
+    now = datetime.now(UTC)
+    records = [dict(item) for item in request.existing_assumptions]
+    by_id = {str(item.get("id")): item for item in records if item.get("id")}
+    saved_ids: list[str] = []
+
+    if request.operation == "save":
+        if not request.assumptions:
+            raise ValueError("At least one assumption is required when operation is save")
+        for item in request.assumptions:
+            symbol = (item.symbol or request.symbol or "").upper() or None
+            duplicate = next(
+                (
+                    existing
+                    for existing in records
+                    if str(existing.get("symbol") or "").upper() == (symbol or "")
+                    and existing.get("category") == item.category
+                    and str(existing.get("statement", "")).strip().casefold() == item.statement.strip().casefold()
+                    and existing.get("status") not in {"broken"}
+                ),
+                None,
+            )
+            if duplicate is not None:
+                saved_ids.append(str(duplicate.get("id")))
+                continue
+            record_id = item.id or f"assumption-{len(records) + 1:04d}"
+            # Avoid an accidental collision with a caller-supplied id while
+            # retaining deterministic ids for reproducible API responses.
+            while record_id in by_id:
+                record_id = f"{record_id}-copy"
+            created = now.isoformat()
+            record = {
+                "id": record_id,
+                "symbol": symbol,
+                "category": item.category,
+                "statement": item.statement,
+                "expected_value": item.expected_value,
+                "unit": item.unit,
+                "source": item.source,
+                "created_at": created,
+                "status": "active",
+                "status_reason": "User-approved assumption has not been contradicted.",
+                "stale_after_hours": item.stale_after_hours,
+                "original_statement": item.statement,
+                "original_value": item.expected_value,
+                "original_source": item.source,
+                "original_created_at": created,
+                "last_verified_at": None,
+                "last_evidence": None,
+            }
+            records.append(record)
+            by_id[record_id] = record
+            saved_ids.append(record_id)
+
+    changed: list[dict[str, Any]] = []
+    evidence_by_id = {item.assumption_id: item for item in request.evidence}
+    for record in records:
+        record_id = str(record.get("id") or "")
+        evidence = evidence_by_id.get(record_id)
+        previous_status = str(record.get("status") or "active")
+        if evidence is not None:
+            observed_at = evidence.observed_at or now.isoformat()
+            record["last_verified_at"] = observed_at
+            record["last_evidence"] = {
+                "observed_value": evidence.observed_value,
+                "source": evidence.source,
+                "observed_at": observed_at,
+                "note": evidence.note,
+            }
+            contradicted = evidence.contradicts or _assumption_values_differ(
+                record.get("original_value"), evidence.observed_value
+            )
+            record["status"] = "broken" if contradicted else "active"
+            record["status_reason"] = (
+                evidence.note or f"Verified evidence from {evidence.source} changed the assumption."
+                if contradicted
+                else f"Verified against {evidence.source}; no contradiction found."
+            )
+        elif previous_status == "active":
+            age_hours = _assumption_age_hours(str(record.get("created_at") or ""), now)
+            stale_after = float(record.get("stale_after_hours") or 24.0)
+            if age_hours is not None and age_hours >= stale_after:
+                record["status"] = "stale"
+                record["status_reason"] = "No newer verified evidence is attached to this assumption."
+        if record.get("status") != previous_status:
+            changed.append({"id": record_id, "from": previous_status, "to": record.get("status"), "reason": record.get("status_reason")})
+
+    stale_count = sum(1 for item in records if item.get("status") == "stale")
+    broken_count = sum(1 for item in records if item.get("status") == "broken")
+    return _Payload(
+        operation=request.operation,
+        symbol=(request.symbol or "").upper() or None,
+        assumptions=records,
+        saved_ids=saved_ids,
+        changed=changed,
+        active_count=sum(1 for item in records if item.get("status") == "active"),
+        stale_count=stale_count,
+        broken_count=broken_count,
+        provider="MarketLens assumption ledger",
+        source_timestamp=now.isoformat(),
+        conclusion={
+            "status": "assumptions_saved" if request.operation == "save" else "assumptions_reviewed",
+            "message": "Original assumptions are preserved; only verification status and evidence metadata may change.",
+        },
+    )
 
 
 def _database_timestamp() -> str:

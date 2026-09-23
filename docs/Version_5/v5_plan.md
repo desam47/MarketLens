@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1, Phase 5.2, and Phase 5.3 are complete; Phase 5.4 is in progress.
+**Status:** Active. Phase 5.1, Phase 5.2, Phase 5.3, and Phase 5.4 are complete; Phase 5.5 is next.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, `sensitivity_analysis`, `market_event_timeline`, and `anomaly_analysis` evidence tools are implemented; assumption tracking work remains.
+**Status:** ✅ Complete. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, `sensitivity_analysis`, `market_event_timeline`, `anomaly_analysis`, and `assumption_tracking` evidence tools are implemented with bounded, provenance-first outputs.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -270,11 +270,13 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.11 Research assumption tracking
 - Save user-approved assumptions such as expected growth, stop, catalyst date, volatility, and invalidation conditions with source and creation time.
 - Mark assumptions stale or broken when verified evidence changes; never silently rewrite the original assumption.
+- Implemented: the typed assumption ledger stores active records in the chat session's structured planner state, preserves immutable original statement/value/source/creation metadata, and deterministically marks records stale or broken during review. Chat supports explicit save/review routes and requires an explicit save request before state is written.
 
 ### Verification
 - Golden tests use fixed fixtures and independently calculated expected values.
 - Answers distinguish causation, correlation, inference, and unavailable evidence.
 - Rankings are stable and reproducible from returned tool data.
+- Assumption tests cover immutable originals, contradiction-to-broken transitions, stale unverified records, deterministic Chat routing, and session-state persistence.
 
 ---
 

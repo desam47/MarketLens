@@ -244,6 +244,66 @@ _COUNTERARGUMENT_INTENT = re.compile(r"\b(what invalidates|what would invalidate
 _SENSITIVITY_INTENT = re.compile(r"\b(sensitivity|how sensitive|vary (?:the )?(?:entry|stop|target|position size)|assumption impact)\b", re.I)
 _TIMELINE_INTENT = re.compile(r"\b(event timeline|timeline|what happened (?:before|after|around)|before the breakout|after earnings|between .* and)\b", re.I)
 _ANOMALY_INTENT = re.compile(r"\b(anomal(?:y|ies)|unusual|abnormal|outlier|z[- ]?score|spike|surge|spread widening|unusual activity)\b", re.I)
+_ASSUMPTION_INTENT = re.compile(
+    r"\b(assumption\w*|thesis|invalidation condition\w*|research premise\w*|"
+    r"(?:save|remember|record|store|track|keep)\b[^.!?]{0,80}\b(?:stop|growth|catalyst|volatility|invalidation))\b",
+    re.I,
+)
+_ASSUMPTION_SAVE_INTENT = re.compile(
+    r"\b(save|remember|record|store|track|keep)\b[^.!?]{0,80}\b(assumption\w*|thesis|premise|stop|growth|catalyst|volatility|invalidation)\b",
+    re.I,
+)
+
+
+def _parse_assumption_records(user_content: str, symbol: str | None) -> list[dict]:
+    """Parse the common compact save form without asking the model to do math.
+
+    The model remains available for richer prose, but these typed patterns make
+    the normal ``save ... growth 10%, stop $210`` workflow deterministic and
+    auditable before any state is written.
+    """
+    text = user_content.strip()
+    records: list[dict] = []
+    patterns = (
+        ("growth", r"\b(?:expected\s+)?growth(?:\s+assumption)?\s*(?:of|is|at|=|:)??\s*(-?\d+(?:\.\d+)?)\s*%", "%"),
+        ("stop", r"\bstop(?:\s+price)?\s*(?:at|is|=|:)??\s*\$?(-?\d+(?:\.\d+)?)", "price"),
+        ("volatility", r"\bvolatility\s*(?:of|is|at|=|:)??\s*(-?\d+(?:\.\d+)?)\s*%", "%"),
+        ("catalyst_date", r"\bcatalyst(?:\s+date)?\s*(?:on|is|=|:)??\s*(\d{4}-\d{2}-\d{2})", "date"),
+    )
+    for category, pattern, unit in patterns:
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        value = match.group(1)
+        numeric = float(value) if category != "catalyst_date" else value
+        records.append({
+            "symbol": symbol,
+            "category": category,
+            "statement": f"{category.replace('_', ' ')} assumption: {value}{'%' if unit == '%' else ''}",
+            "expected_value": numeric,
+            "unit": unit,
+            "source": "user",
+        })
+    invalidation = re.search(r"\binvalidation(?:\s+condition)?\s*(?:is|when|if|=|:)??\s*(.+?)(?:[.;]|$)", text, re.I)
+    if invalidation:
+        statement = invalidation.group(1).strip()
+        if statement:
+            records.append({
+                "symbol": symbol,
+                "category": "invalidation",
+                "statement": statement,
+                "source": "user",
+            })
+    if not records:
+        generic = re.search(r"\b(?:assumption|thesis|premise)\s*(?:is|:)?\s*(.+)$", text, re.I)
+        if generic and generic.group(1).strip():
+            records.append({
+                "symbol": symbol,
+                "category": "custom",
+                "statement": generic.group(1).strip().rstrip("."),
+                "source": "user",
+            })
+    return records
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -650,6 +710,9 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
     elif previous_ticker:
         previous_ticker = str(previous_ticker).upper()
     current_calculation = _fallback_calculation(user_content)
+    saved_assumptions = planner_state.get("research_assumptions", [])
+    if not isinstance(saved_assumptions, list):
+        saved_assumptions = []
     next_state = {
         "current_symbols": current_symbols,
         "previous_ticker": previous_ticker,
@@ -664,6 +727,7 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         ),
         "last_tool_result": planner_state.get("last_tool_result"),
         "pending_confirmation": planner_state.get("pending_confirmation"),
+        "research_assumptions": saved_assumptions[:200],
         "updated_at": now_ny().isoformat(),
     }
     if next_state["timeframe"] is None:
@@ -993,7 +1057,11 @@ def _generate_reply(
     # Exact arithmetic is deterministic and must not spend an AI/provider
     # call. Missing inputs get a precise clarification instead of a generic
     # model failure; a follow-up may explicitly reuse the prior inputs.
-    if _CALCULATION_HINT.search(user_content) and not _COMPARISON_INTENT.search(user_content):
+    if (
+        _CALCULATION_HINT.search(user_content)
+        and not _COMPARISON_INTENT.search(user_content)
+        and not _ASSUMPTION_INTENT.search(user_content)
+    ):
         calculation = _fallback_calculation(user_content)
         prior = (planner_state or {}).get("last_calculation_inputs")
         if calculation is None and prior and _REUSE_MEMORY_HINT.search(user_content):
@@ -1032,7 +1100,27 @@ def _generate_reply(
     # asking the model to choose an action. This keeps common requests
     # deterministic and makes missing symbol scope explicit.
     focus_symbols = [b["symbol"] for b in symbol_blocks]
-    if _ANOMALY_INTENT.search(user_content):
+    if _ASSUMPTION_INTENT.search(user_content):
+        operation = "save" if _ASSUMPTION_SAVE_INTENT.search(user_content) else "review"
+        symbol = focus_symbols[0] if len(focus_symbols) == 1 else None
+        arguments = {"operation": operation, "symbol": symbol}
+        if operation == "save":
+            records = _parse_assumption_records(user_content, symbol)
+            if not records:
+                return (
+                    "What assumption should I save? Include a thesis, growth rate, stop, catalyst date, volatility, or invalidation condition.",
+                    False,
+                    [],
+                )
+            arguments["assumptions"] = records
+        deterministic = ChatReplyResponse(
+            reply="Verified research-assumption review" if operation == "review" else "Save verified research assumption",
+            grounded=True,
+            action="assumption_tracking",
+            action_tool_arguments=arguments,
+            action_confirmed=operation == "save",
+        )
+    elif _ANOMALY_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return "Which ticker should I check for anomalies?", False, []
         deterministic = ChatReplyResponse(
@@ -1502,7 +1590,7 @@ def _finalize_parsed(
             return _confirm_prompt(db, parsed), True, []
         if planner_state is not None and parsed.action_confirmed:
             planner_state["pending_confirmation"] = None
-        return _run_action(db, parsed, trace=trace)
+        return _run_action(db, parsed, planner_state=planner_state, trace=trace)
     return parsed.reply, parsed.grounded, []
 
 
@@ -1568,7 +1656,9 @@ def _run_turn_actions(
                 "depends_on": [],
             }
         )
-    if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
+    # A single assumption-tracking payload may contain several fields joined
+    # by "and"; it is already one complete action, not a multi-step request.
+    if parsed.action == "assumption_tracking" or not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
         return text, grounded, screened
 
     texts = [f"Step 1: {text}"]
@@ -2384,16 +2474,27 @@ _MARKET_TOOL_ACTIONS = {
     "sensitivity_analysis",
     "market_event_timeline",
     "anomaly_analysis",
+    "assumption_tracking",
     "import_csv",
 }
 
 
-def _run_market_tool(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool]:
+def _run_market_tool(
+    db,
+    parsed,
+    *,
+    planner_state: dict | None = None,
+    trace: list[dict] | None = None,
+) -> tuple[str, bool]:
     """Execute one read-only grounded market-data tool selected by Chat."""
     del db
-    arguments = parsed.action_tool_arguments or {}
+    arguments = dict(parsed.action_tool_arguments or {})
+    if parsed.action == "assumption_tracking":
+        # The session owns the ledger.  Never trust the model to carry the
+        # previous records forward or to rewrite their original fields.
+        arguments["existing_assumptions"] = list((planner_state or {}).get("research_assumptions", []))
     result = default_registry.execute(
-        ToolRequest(tool_name=parsed.action, arguments=arguments)
+        ToolRequest(tool_name=parsed.action, arguments=arguments, confirmed=bool(parsed.action_confirmed))
     )
     if not result.ok:
         if trace is not None:
@@ -2416,6 +2517,10 @@ def _run_market_tool(db, parsed, *, trace: list[dict] | None = None) -> tuple[st
             "fallback": result.fallback,
             "warnings": result.warnings,
         })
+    if parsed.action == "assumption_tracking" and planner_state is not None:
+        records = result.data.get("assumptions")
+        if isinstance(records, list):
+            planner_state["research_assumptions"] = records[:200]
     return (
         f"Verified {parsed.action} result from {result.provider} ({freshness}, "
         f"session {result.session}, timeframe {result.timeframe or 'not specified'}): "
@@ -2439,7 +2544,13 @@ _ACTION_HANDLERS = {
 }
 
 
-def _run_action(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool, list[str]]:
+def _run_action(
+    db,
+    parsed,
+    *,
+    planner_state: dict | None = None,
+    trace: list[dict] | None = None,
+) -> tuple[str, bool, list[str]]:
     """Execute one action tool. Never raises — a failure degrades to a
     plain reply with grounded=False, same contract as _run_reanalysis.
 
@@ -2449,7 +2560,7 @@ def _run_action(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bo
     """
     handler = _ACTION_HANDLERS.get(parsed.action)
     if parsed.action in _MARKET_TOOL_ACTIONS:
-        return _run_market_tool(db, parsed, trace=trace) + ([],)
+        return _run_market_tool(db, parsed, planner_state=planner_state, trace=trace) + ([],)
     if handler is None:  # pragma: no cover — action is a closed Literal
         return "I couldn't do that — please try again.", False, []
     try:

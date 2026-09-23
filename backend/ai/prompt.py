@@ -880,6 +880,7 @@ class ChatReplyResponse(BaseModel):
         "sensitivity_analysis",
         "market_event_timeline",
         "anomaly_analysis",
+        "assumption_tracking",
         "get_watchlist",
         "get_risk_dashboard",
         "get_trade_journal",
@@ -998,6 +999,14 @@ _ACTION_TOOL_DOCS = (
       page names, feature topics, and hash routes. Never invent a provider result; the \
       app returns the verified payload with provider, timestamp, freshness, \
       and warnings.
+    - assumption_tracking saves or reviews research assumptions. For a save, \
+      set operation="save", include one or more typed assumptions (category, \
+      statement, optional expected_value, source), and set action_confirmed=true \
+      because this persists user-approved research state. For a review, set \
+      operation="review" and include evidence only when the app has verified \
+      it. The app preserves original_statement/original_value/original_source/\
+      original_created_at and only changes status to active, stale, or broken; \
+      never claim an assumption was rewritten.
     - set_entity_type needs action_symbol and action_entity_type \
       ("stock" or "etf") — use when a ticker is mislabeled or the \
       trader asks to reclassify it. A real, changeable per-watchlist \
@@ -1145,7 +1154,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
       get_quote, get_bars, get_indicator, get_support_resistance, \
       get_market_regime, get_market_context, get_news, get_fundamentals, \
-      get_options_snapshot, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis.
+      get_options_snapshot, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

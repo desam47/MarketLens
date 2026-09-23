@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
-from backend.ai.chat import _generate_reply
+from backend.ai.chat import _generate_reply, _run_market_tool
+from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
 
@@ -399,3 +400,97 @@ def test_anomaly_question_routes_to_typed_tool(monkeypatch) -> None:
     assert "anomaly_analysis" in text
     assert requests[0].tool_name == "anomaly_analysis"
     complete.assert_not_called()
+
+
+def test_assumption_save_routes_to_typed_tool_and_requires_explicit_save(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: (requests.append(request) or ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"assumptions": [{"id": "assumption-0001", "status": "active"}]},
+            provider="MarketLens assumption ledger",
+        )),
+    )
+
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "remember my AAPL growth assumption is 10% and stop at $210",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "assumption_tracking" in text
+    assert requests[0].tool_name == "assumption_tracking"
+    assert requests[0].confirmed is True
+    assert requests[0].arguments["operation"] == "save"
+    assert len(requests[0].arguments["assumptions"]) == 2
+    complete.assert_not_called()
+
+
+def test_assumption_review_routes_without_writing(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+    monkeypatch.setattr(
+        "backend.ai.chat.default_registry.execute",
+        lambda request: (requests.append(request) or ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"assumptions": [], "changed": []},
+            provider="MarketLens assumption ledger",
+        )),
+    )
+
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("MSFT")],
+        [],
+        None,
+        [],
+        "review my MSFT research assumptions",
+        None,
+        False,
+        ["MSFT"],
+        {},
+    )
+
+    assert grounded is True
+    assert requests[0].tool_name == "assumption_tracking"
+    assert requests[0].confirmed is False
+    assert requests[0].arguments["operation"] == "review"
+    complete.assert_not_called()
+
+
+def test_assumption_tool_updates_structured_planner_state() -> None:
+    planner_state = {}
+    parsed = ChatReplyResponse(
+        reply="save",
+        action="assumption_tracking",
+        action_confirmed=True,
+        action_tool_arguments={
+            "operation": "save",
+            "symbol": "AAPL",
+            "assumptions": [
+                {
+                    "category": "invalidation",
+                    "statement": "Break below support invalidates the thesis",
+                    "source": "user",
+                }
+            ],
+        },
+    )
+    text, grounded = _run_market_tool(None, parsed, planner_state=planner_state)
+    assert grounded is True
+    assert "assumption_tracking" in text
+    assert planner_state["research_assumptions"][0]["original_statement"].startswith("Break below")
