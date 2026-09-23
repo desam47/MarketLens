@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~80%) | 20 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape); 7 of 20 have live contract tests against page/API equivalents. Missing: session-statistics tooling, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~90%) | 21 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape, CSV import); 7 of 21 have live contract tests against page/API equivalents. Missing: session-statistics tooling, catalyst/earnings/analyst tools, and true dynamic (non-hardcoded) app-help generation. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,9 +170,8 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 563 tests (559 prior + 4 new contract
-tests for trend/confluence/relative-strength/tape), and the full backend
-suite passes at 2817 tests.
+`backend/tests/ai/` suite passes at 571 tests (563 prior + 8 for
+import_csv), and the full backend suite passes at 2825 tests.
 
 `get_trend`, `get_confluence`, `get_relative_strength`, and `get_tape_state`
 are now implemented, closing most of 5.2.2's named engine list (trend,
@@ -224,11 +223,35 @@ need a live/mocked provider), `get_indicator`/`get_support_resistance`
 server-side equivalent by design), and `get_application_help` (no
 equivalent API endpoint).
 
+`import_csv` (5.2.8) is now implemented, closing that item. It parses
+local CSV text (never a file path — the same explicit-snapshot pattern
+`get_risk_dashboard`/`get_trade_journal` already use, since Chat has no
+file-upload path) via the stdlib `csv` module only, for three import
+types: positions (validated into the same `PositionInput` shape
+`get_risk_dashboard` accepts), watchlist symbols (deduplicated, uppercased),
+and trade-journal rows (loose dict rows, matching `get_trade_journal`'s
+own loose schema). Bounded to 500 rows / 40 columns / 500 characters per
+cell; required columns are checked per import type before parsing rows
+(missing `symbol`/`quantity`/`entry_price` for `positions` fails the whole
+import rather than silently dropping rows); per-row numeric/type errors are
+collected and returned alongside successfully parsed rows rather than
+aborting the whole import. Formula-injection-style cells (`=cmd|...`,
+`+SUM(...)`, etc.) are proven inert by test — the parser never opens the
+content in a spreadsheet engine, only `csv.reader`, so such a cell is just
+a string starting with `=`. The tool only parses and validates; nothing is
+persisted — a caller wanting the parsed rows actually saved passes them to
+the existing tool/UI that does that (e.g. `get_risk_dashboard`'s own
+explicit-snapshot argument), the same separation `get_risk_dashboard`/
+`get_trade_journal` already use. 8 new focused tests cover valid parsing
+per type, deduplication, missing-required-column and invalid-numeric-value
+error reporting, the row-count cap, headerless mode's honest failure (a
+`symbol` column name is still required, `column_1`/`column_2`/... will
+never satisfy it), and the formula-injection-is-inert guarantee.
+
 Still unimplemented and not yet reflected as done anywhere in this
 document: session-statistics tooling (5.2.2); dedicated
 catalyst/earnings/insider-activity/analyst-recommendation tools (5.2.3) —
-`get_news`/`get_fundamentals` do not cover these; and CSV import tools
-(5.2.8), which have no code at all yet.
+`get_news`/`get_fundamentals` do not cover these.
 
 Application-help (5.2.7) now carries a `required_state` field per page (e.g.
 the Symbol page declares `["symbol"]`, since the frontend carries the

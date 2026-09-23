@@ -5,6 +5,7 @@ from backend.ai.market_tools import (
     ApplicationHelpRequest,
     BarsRequest,
     ConfluenceRequest,
+    CsvImportRequest,
     IndicatorRequest,
     PositionInput,
     RiskDashboardRequest,
@@ -25,6 +26,7 @@ from backend.ai.market_tools import (
     get_tape_state_tool,
     get_trade_journal_tool,
     get_trend_tool,
+    import_csv_tool,
 )
 from backend.models.market_data import Bar, DataStatus
 from backend.repositories.alert_repository import AlertRepository
@@ -303,3 +305,89 @@ def test_tape_state_tool_reports_snapshot_when_enabled(monkeypatch) -> None:
     assert result.symbol == "AAPL"
     assert result.snapshot == {"buy_volume": 100, "sell_volume": 40}
     assert result.source_timestamp
+
+
+def test_import_csv_parses_positions() -> None:
+    csv_content = "symbol,side,quantity,entry_price,stop_price\nAAPL,long,100,220,212\nMSFT,short,50,300,\n"
+    result = import_csv_tool(CsvImportRequest(import_type="positions", csv_content=csv_content))
+
+    assert result.row_count == 2
+    assert result.errors == []
+    assert result.rows[0] == {
+        "symbol": "AAPL",
+        "side": "long",
+        "quantity": 100.0,
+        "entry_price": 220.0,
+        "stop_price": 212.0,
+        "current_price": None,
+        "sector": None,
+    }
+    assert result.rows[1]["side"] == "short"
+    assert result.rows[1]["stop_price"] is None
+
+
+def test_import_csv_parses_watchlist_and_dedupes() -> None:
+    csv_content = "symbol\naapl\nMSFT\nAAPL\n"
+    result = import_csv_tool(CsvImportRequest(import_type="watchlist", csv_content=csv_content))
+
+    assert result.row_count == 2
+    assert result.rows == [{"symbol": "AAPL"}, {"symbol": "MSFT"}]
+
+
+def test_import_csv_parses_trade_journal_as_loose_rows() -> None:
+    csv_content = "symbol,status,notes\nAAPL,closed,Great breakout\n"
+    result = import_csv_tool(CsvImportRequest(import_type="trade_journal", csv_content=csv_content))
+
+    assert result.rows == [{"symbol": "AAPL", "status": "closed", "notes": "Great breakout"}]
+
+
+def test_import_csv_reports_missing_required_columns() -> None:
+    csv_content = "name,quantity\nAAPL,100\n"
+    result = import_csv_tool(CsvImportRequest(import_type="positions", csv_content=csv_content))
+
+    assert result.row_count == 0
+    assert "symbol" in result.errors[0]
+    assert "entry_price" in result.errors[0]
+
+
+def test_import_csv_reports_invalid_numeric_values_per_row() -> None:
+    csv_content = "symbol,quantity,entry_price\nAAPL,not_a_number,220\nMSFT,50,300\n"
+    result = import_csv_tool(CsvImportRequest(import_type="positions", csv_content=csv_content))
+
+    assert result.row_count == 1
+    assert result.rows[0]["symbol"] == "MSFT"
+    assert any("Row 1" in error for error in result.errors)
+
+
+def test_import_csv_never_evaluates_formula_looking_cells() -> None:
+    """Cells starting with =/+/-/@ (classic spreadsheet-formula-injection
+    triggers) must survive as inert literal text — this module never opens
+    the content in a spreadsheet engine, only stdlib csv.reader.
+    """
+    csv_content = 'symbol,status,notes\nAAPL,closed,"=cmd|\'/c calc\'!A1"\n'
+    result = import_csv_tool(CsvImportRequest(import_type="trade_journal", csv_content=csv_content))
+
+    assert result.rows[0]["notes"] == "=cmd|'/c calc'!A1"
+
+
+def test_import_csv_rejects_too_many_rows() -> None:
+    lines = ["symbol"] + ["AAPL"] * 501
+    csv_content = "\n".join(lines)
+
+    try:
+        import_csv_tool(CsvImportRequest(import_type="watchlist", csv_content=csv_content))
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "500" in str(exc)
+
+
+def test_import_csv_supports_headerless_mode() -> None:
+    csv_content = "AAPL,long,100,220\n"
+    result = import_csv_tool(
+        CsvImportRequest(import_type="watchlist", csv_content=csv_content, has_header=False)
+    )
+    # headerless watchlist import needs a "symbol" column name to match —
+    # column_1/column_2/... won't satisfy the required-columns check, so
+    # this documents the honest failure mode rather than a silent guess.
+    assert result.row_count == 0
+    assert "symbol" in result.errors[0]

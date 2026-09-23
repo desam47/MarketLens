@@ -103,6 +103,14 @@ class TradeJournalRequest(BaseModel):
     entries: list[dict[str, Any]] = Field(default_factory=list, max_length=1_000)
 
 
+class CsvImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    import_type: Literal["positions", "watchlist", "trade_journal"]
+    csv_content: str = Field(..., min_length=1, max_length=200_000)
+    has_header: bool = True
+
+
 class AlertsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -537,6 +545,133 @@ def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
         closed_entries=len(closed),
         provider="MarketLens local journal",
         source_timestamp=_database_timestamp(),
+    )
+
+
+_CSV_MAX_ROWS = 500
+_CSV_MAX_COLUMNS = 40
+_CSV_MAX_CELL_LENGTH = 500
+
+_CSV_REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "positions": ("symbol", "quantity", "entry_price"),
+    "watchlist": ("symbol",),
+    "trade_journal": ("symbol",),
+}
+
+
+def _parse_csv_rows(csv_content: str, *, has_header: bool) -> tuple[list[str], list[dict[str, str]], list[str]]:
+    """Parse CSV text into header + row dicts, all values as plain strings.
+
+    Uses the stdlib ``csv`` module only — every cell is returned as inert
+    text, never evaluated. There is no code path here (or anywhere else in
+    this function) that opens the content in a spreadsheet engine, so a
+    leading ``=``/``+``/``-``/``@`` (the classic CSV-formula-injection
+    trigger for tools like Excel) is just a string prefix, not something
+    this parser or any caller can execute.
+    """
+    import csv
+    import io
+
+    reader = csv.reader(io.StringIO(csv_content))
+    raw_rows = list(reader)
+    errors: list[str] = []
+
+    if not raw_rows:
+        return [], [], ["CSV content is empty"]
+
+    if has_header:
+        header = [cell.strip() for cell in raw_rows[0]]
+        data_rows = raw_rows[1:]
+    else:
+        header = [f"column_{i + 1}" for i in range(len(raw_rows[0]))]
+        data_rows = raw_rows
+
+    if len(header) > _CSV_MAX_COLUMNS:
+        raise ValueError(f"CSV has {len(header)} columns; at most {_CSV_MAX_COLUMNS} are allowed")
+    if len(data_rows) > _CSV_MAX_ROWS:
+        raise ValueError(f"CSV has {len(data_rows)} data rows; at most {_CSV_MAX_ROWS} are allowed")
+
+    rows: list[dict[str, str]] = []
+    for line_number, raw_row in enumerate(data_rows, start=2 if has_header else 1):
+        if len(raw_row) != len(header):
+            errors.append(f"Row {line_number}: expected {len(header)} columns, found {len(raw_row)} — skipped")
+            continue
+        row = {}
+        for key, value in zip(header, raw_row, strict=True):
+            value = value.strip()
+            if len(value) > _CSV_MAX_CELL_LENGTH:
+                errors.append(f"Row {line_number}, column '{key}': value exceeds {_CSV_MAX_CELL_LENGTH} characters — truncated")
+                value = value[:_CSV_MAX_CELL_LENGTH]
+            row[key] = value
+        rows.append(row)
+    return header, rows, errors
+
+
+def import_csv_tool(request: CsvImportRequest) -> BaseModel:
+    """Parse and validate local CSV text into the same structured shape
+    get_risk_dashboard/get_watchlist-add/get_trade_journal already accept.
+
+    Nothing is persisted here — this only parses and validates. The plan's
+    "keep imported data local" requirement means MarketLens never uploads
+    this content anywhere; it does not mean this tool silently writes to
+    the database or a watchlist. A caller that wants the parsed positions
+    on the Risk Dashboard, or the parsed symbols on a real watchlist, takes
+    the validated rows this returns and passes them to the tool (or the
+    existing app UI) that actually does that, the same explicit-snapshot
+    pattern get_risk_dashboard_tool already uses.
+    """
+    header, rows, errors = _parse_csv_rows(request.csv_content, has_header=request.has_header)
+    if not rows and not errors:
+        return _Payload(import_type=request.import_type, header=header, rows=[], row_count=0, errors=["No data rows found"])
+
+    required = _CSV_REQUIRED_COLUMNS[request.import_type]
+    missing = [column for column in required if header and column not in header]
+    if missing:
+        return _Payload(
+            import_type=request.import_type,
+            header=header,
+            rows=[],
+            row_count=0,
+            errors=[f"Missing required column(s): {', '.join(missing)}"] + errors,
+        )
+
+    if request.import_type == "positions":
+        parsed: list[dict[str, Any]] = []
+        for index, row in enumerate(rows, start=1):
+            try:
+                position = PositionInput(
+                    symbol=row["symbol"],
+                    side=(row.get("side") or "long").strip().lower(),
+                    quantity=float(row["quantity"]),
+                    entry_price=float(row["entry_price"]),
+                    stop_price=float(row["stop_price"]) if row.get("stop_price") else None,
+                    current_price=float(row["current_price"]) if row.get("current_price") else None,
+                    sector=row.get("sector") or None,
+                )
+                parsed.append(position.model_dump())
+            except (ValueError, KeyError) as exc:
+                errors.append(f"Row {index}: {exc}")
+    elif request.import_type == "watchlist":
+        parsed = []
+        seen: set[str] = set()
+        for index, row in enumerate(rows, start=1):
+            symbol = row.get("symbol", "").upper()
+            if not symbol:
+                errors.append(f"Row {index}: empty symbol")
+                continue
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            parsed.append({"symbol": symbol})
+    else:  # trade_journal
+        parsed = [dict(row) for row in rows]
+
+    return _Payload(
+        import_type=request.import_type,
+        header=header,
+        rows=parsed,
+        row_count=len(parsed),
+        errors=errors,
     )
 
 

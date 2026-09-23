@@ -298,6 +298,7 @@ def build_default_registry() -> ToolRegistry:
         ApplicationHelpRequest,
         BarsRequest,
         ConfluenceRequest,
+        CsvImportRequest,
         FundamentalsRequest,
         IndicatorRequest,
         NewsRequest,
@@ -327,6 +328,7 @@ def build_default_registry() -> ToolRegistry:
         get_trade_journal_tool,
         get_trend_tool,
         get_watchlist_tool,
+        import_csv_tool,
     )
 
     registry.register(ToolSpec(name="get_quote", kind="read_only", description="Get a verified quote.", input_model=SymbolRequest, handler=get_quote_tool))
@@ -348,6 +350,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
     registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))
+    registry.register(ToolSpec(name="import_csv", kind="read_only", description="Parse and validate local CSV text into positions, watchlist symbols, or trade-journal rows.", input_model=CsvImportRequest, handler=import_csv_tool))
     return registry
 
 
