@@ -2945,7 +2945,7 @@ export interface ChatPreferences {
   preferred_units: 'percent' | 'dollars' | null;
 }
 
-export type ChatRegenerationMode = 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh';
+export type ChatRegenerationMode = 'again' | 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh' | 'rescope';
 
 export interface ChatRegenerationScope {
   timeframe?: string | null;

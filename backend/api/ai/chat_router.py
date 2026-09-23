@@ -141,8 +141,8 @@ class ChatChartState(BaseModel):
 
 
 ChatRegenerationMode = Literal[
-    "more_detail", "simpler", "bull_case", "bear_case",
-    "calculations_only", "sources_only", "refresh",
+    "again", "more_detail", "simpler", "bull_case", "bear_case",
+    "calculations_only", "sources_only", "refresh", "rescope",
 ]
 
 

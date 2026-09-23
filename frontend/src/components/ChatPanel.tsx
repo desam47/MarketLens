@@ -292,7 +292,7 @@ export function ChatPanel({
     setSending(true);
     setError(null);
     const currentChartState = loadChartState();
-    const apiRegenerationMode = regenerationMode === 'again' ? undefined : regenerationMode;
+    const apiRegenerationMode = regenerationMode;
     setChartState(currentChartState);
     const now = Date.now();
     const optimisticUser: LocalMessage = {
@@ -557,7 +557,9 @@ export function ChatPanel({
                     stale={messageNeedsRefresh(m)}
                     currentChartState={chartState}
                     preferredTimeframes={preferences.preferred_timeframes}
-                    onRegenerate={(mode, scope) => submit(regenerationPrompt(previousUser.content, mode, scope), mode, scope)}
+                    // The question is resent unchanged; the backend applies the
+                    // typed mode/scope, so no instruction text enters the transcript.
+                    onRegenerate={(mode, scope) => submit(previousUser.content, mode, scope)}
                   />
                 )}
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && (
@@ -1086,24 +1088,7 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
   );
 }
 
-type RegenerationMode = 'again' | ChatRegenerationMode;
-
-function regenerationPrompt(question: string, mode: RegenerationMode, scope?: ChatRegenerationScope): string {
-  const instruction: Record<RegenerationMode, string> = {
-    again: 'Answer again using the same question and current evidence.',
-    more_detail: 'Answer again with more detail and clearly separated evidence, assumptions, and interpretation.',
-    simpler: 'Answer again in simpler, more concise language while preserving verified numbers and uncertainty.',
-    bull_case: 'Answer again with the strongest evidence-supported bullish case and its invalidation conditions.',
-    bear_case: 'Answer again with the strongest evidence-supported bearish case and its invalidation conditions.',
-    calculations_only: 'Answer again with calculations and formulas only; omit narrative speculation.',
-    sources_only: 'Answer again focusing on sources, timestamps, freshness, provider, and data-quality warnings.',
-    refresh: 'Refresh the evidence for this question and answer using the newest available data. Preserve the original question.',
-  };
-  const scopeText = scope && (scope.timeframe || scope.session)
-    ? ` Use timeframe ${scope.timeframe || 'the existing timeframe'} and session ${scope.session || 'the existing session'}.`
-    : '';
-  return `${question}\n\n[Response regeneration mode: ${instruction[mode]}.${scopeText}]`;
-}
+type RegenerationMode = ChatRegenerationMode;
 
 function messageNeedsRefresh(message: ChatMessage): boolean {
   return (message.blocks ?? []).some(block => {
@@ -1153,7 +1138,7 @@ function ChatRegenerationRow({
         <label>Session <select value={session} onChange={event => setSession(event.target.value as NonNullable<ChatRegenerationScope['session']>)} aria-label="Regeneration session">
           {(['all', 'premarket', 'regular', 'after_hours', 'auto'] as const).map(value => <option key={value} value={value}>{value.replace('_', ' ')}</option>)}
         </select></label>
-        <button type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate('more_detail', { timeframe, session }); }}>Apply timeframe/session</button>
+        <button type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate('rescope', { timeframe, session }); }}>Apply timeframe/session</button>
       </span>}
       {open && <span className="chat-regeneration-options">{options.slice(1).map(([mode, label]) => (
         <button key={mode} type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate(mode); }}>{label}</button>

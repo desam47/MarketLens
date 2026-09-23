@@ -76,6 +76,7 @@ class _ScriptedModel:
 
     def __init__(self) -> None:
         self.queue: list[Any] = []
+        self.prompts: list[str] = []
         self.calls = 0
         self.unscripted_calls = 0
         self.enabled = True
@@ -92,6 +93,7 @@ class _ScriptedModel:
         from backend.ai.provider import AIResponse
 
         self.calls += 1
+        self.prompts.append(str(kwargs.get("prompt") or (args[0] if args else "")))
         if not self.queue:
             self.unscripted_calls += 1
             reply: Any = {"reply": "(unscripted model call)", "grounded": False}
@@ -259,13 +261,15 @@ class _Harness:
 
         self.model.queue = list(turn.get("model", []))
         model_calls_before = self.model.calls
+        prompts_before = len(self.model.prompts)
+        regeneration = [turn.get("regeneration_mode"), turn.get("regeneration_scope")]
         tool_calls_before = len(self.tools.calls)
         screens_before = len(self.screen_calls)
         started = time.perf_counter()
         deltas: list[str] = []
         if turn.get("transport", self.case.get("transport", "blocking")) == "stream":
             final = None
-            for kind, payload in stream_chat_message(self.session_id, turn["user"]):
+            for kind, payload in stream_chat_message(self.session_id, turn["user"], None, None, *regeneration):
                 if kind == "delta":
                     deltas.append(payload)
                 elif kind == "final":
@@ -273,7 +277,7 @@ class _Harness:
             assert final is not None, "stream ended without a final event"
             message, grounded, focus, *_ = final
         else:
-            message, grounded, focus, *_ = answer_chat_message(self.session_id, turn["user"])
+            message, grounded, focus, *_ = answer_chat_message(self.session_id, turn["user"], None, None, *regeneration)
         elapsed_ms = (time.perf_counter() - started) * 1000
         trace = list(getattr(message, "planner_trace", []) or [])
         blocks = list(getattr(message, "response_blocks_payload", []) or [])
@@ -286,6 +290,7 @@ class _Harness:
             "tool_calls": self.tools.calls[tool_calls_before:],
             "screens": self.screen_calls[screens_before:],
             "model_calls": self.model.calls - model_calls_before,
+            "prompts": self.model.prompts[prompts_before:],
             "unscripted_model_calls": self.model.unscripted_calls,
             "verification": verification,
             "evidence_refs": list(verification.get("evidence_refs") or []),
@@ -350,6 +355,12 @@ def _score_turn(expect: dict[str, Any], observed: dict[str, Any]) -> tuple[dict[
     for key, value in (expect.get("memory") or {}).items():
         actual = observed["db"]["memory"].get(key)
         checks["correctness"].append((_subset(value, actual), f"memory {key}={actual!r} != {value!r}"))
+    for needle in expect.get("prompt_contains", []):
+        found = any(needle.lower() in prompt.lower() for prompt in observed["prompts"])
+        checks["correctness"].append((found, f"no model prompt contains {needle!r}"))
+    for needle in expect.get("prompt_not_contains", []):
+        found = any(needle.lower() in prompt.lower() for prompt in observed["prompts"])
+        checks["correctness"].append((not found, f"a model prompt contains {needle!r}"))
     if "failure_kind" in expect:
         kinds = [item.get("failure_kind") for item in observed["failed_tools"]]
         checks["correctness"].append((expect["failure_kind"] in kinds, f"failure kinds {kinds}"))
@@ -362,6 +373,9 @@ def _score_turn(expect: dict[str, Any], observed: dict[str, Any]) -> tuple[dict[
     for tool, status in (expect.get("step_status") or {}).items():
         statuses = [s.get("status") for s in observed["steps"] if s.get("tool") == tool]
         checks["safety"].append((status in statuses, f"{tool} step statuses {statuses} lack {status}"))
+    for tool in expect.get("not_called", []):
+        called = [name for name, _ in observed["tool_calls"] if name == tool]
+        checks["safety"].append((not called, f"{tool} was called before it was allowed"))
     db_expect = expect.get("db") or {}
     if "alerts" in db_expect:
         checks["safety"].append((observed["db"]["alerts"] == db_expect["alerts"], f"alerts {observed['db']['alerts']}"))

@@ -1265,21 +1265,17 @@ covering them.
   no date-range field, and the only reset path is deleting the session.
 - **5.2.4 user data.** There are no tools for saved scans, recent signal
   history, or manually tracked positions.
-- **5.7.9 regeneration.** Modes are prompt text the frontend appends to the
-  user message (persisted in the transcript and seen by intent routing); the
-  backend ignores the mode except `refresh`. "Apply timeframe/session" sends
-  `more_detail` and only changes chart state; it does not refetch data for
-  that timeframe.
 - **5.7.1 / 5.7.4 block quality.** One quality object, derived from the last
   successful trace item, is copied onto every block rather than computed
   per block from that block's own evidence.
 - **5.7.8 fixtures.** Promoted fixtures now export into
   end-to-end cases, but each draft needs a maintainer to script its
   evidence and expectations before it runs; nothing is automatic.
-- **5.8.3 evaluation coverage.** The end-to-end suite has 23 cases.
-  Sessions, timeframes, news/"why did it move", and journal flows do not
-  have end-to-end cases yet. The verifier suite's tool-choice and
-  clarification columns remain structural checks only.
+- **5.8.3 evaluation coverage.** The end-to-end suite has 32 cases. Deterministic
+  tool routes are covered well; open-ended model-planned answers are covered
+  only through scripted model replies, so real model tool-choice quality is
+  not measured. The verifier suite's tool-choice and clarification columns
+  remain structural checks only.
 - **5.8.1 citations.** Numeric claims are matched against any evidence value
   in scope; the model is not required to cite `ev-N` references. Turns with
   an action step or a trusted server reply skip prose verification (their
@@ -1293,7 +1289,8 @@ covering them.
   (5.7), and 5.1's formula-level audit evidence are described in their
   sections but not produced. 5.4 has no recorded test counts. Of the plan's
   12 end-to-end scenarios, #1 (calculation), #7 (follow-up), #11 (failure),
-  and #12 (safety) are now automated cases; the rest have no recorded run.
+  and #12 (safety) are automated cases, and #4 (why did it move) is covered
+  for routing only; the rest have no recorded run.
 - **Plan open questions.** Q4 (blocks stored as versioned JSON in
   `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
   are decided by the implementation; Q1–Q3 remain open.
@@ -1343,3 +1340,25 @@ is still set, it caps tool calls so an existing `.env` keeps its behavior
 until the line is removed. The end-to-end evaluation pins these defaults
 (so results do not depend on a machine's `.env`) and adds
 `planning_budget_stops_long_chain`.
+
+## Server-side regeneration and broader evaluation (2026-09-23)
+
+- **Regeneration modes (5.7.9).** The frontend now resends the original
+  question with a typed `regeneration_mode` (`again`, `more_detail`,
+  `simpler`, `bull_case`, `bear_case`, `calculations_only`, `sources_only`,
+  `refresh`, `rescope`) and an optional timeframe/session scope. No
+  instruction text enters the user message, the transcript, or intent
+  routing. The backend adds a fixed, server-authored `<regeneration>` prompt
+  section per mode (`backend/ai/prompt.py::REGENERATION_INSTRUCTIONS`) to the
+  synthesis and continuation prompts. It tells the model never to change
+  verified numbers, tool arguments, or evidence status.
+- **Timeframe/session rescope.** "Apply timeframe/session" sends `rescope`.
+  The scope replaces the timeframe/session argument of any tool whose input
+  accepts it, for that turn only; remembered timeframe/session memory is not
+  changed. Every regeneration mode (including `again`) is compared against
+  the previous answer's evidence for material change.
+- **Evaluation.** The end-to-end suite (`5.8.4`) has 32 cases, adding
+  regeneration, rescope, session/timeframe memory, why-did-it-move/news
+  routing and clarification, and journal review/confirmed save. Temporarily
+  disabling the server-side instruction or the tool rescope makes the new
+  cases fail.

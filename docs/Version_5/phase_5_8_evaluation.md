@@ -1,6 +1,6 @@
 # Phase 5.8 Evaluation Report
 
-**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.2`
+**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.4`
 **Verifier version:** `5.8.1`
 **Scope:** provider-free verifier, end-to-end Chat, and fallback-contract evaluation
 
@@ -31,14 +31,14 @@ counted only for cases that set an expectation in it:
 
 | Category | Passed | Applicable cases |
 | --- | ---: | ---: |
-| Correctness | 12 | 12 |
-| Tool choice | 17 | 17 |
-| Provenance | 4 | 4 |
-| Clarification | 2 | 2 |
-| Latency | 23 | 23 |
-| Safety | 5 | 5 |
+| Correctness | 17 | 17 |
+| Tool choice | 25 | 25 |
+| Provenance | 5 | 5 |
+| Clarification | 3 | 3 |
+| Latency | 32 | 32 |
+| Safety | 7 | 7 |
 
-The 23 cases cover:
+The 32 cases cover:
 
 - **Calculations:** position risk from "Buy 200 AAPL at $220, stop $212"
   (plan matrix #1), a missing-input clarification, and the "use the same
@@ -56,6 +56,16 @@ The 23 cases cover:
   blocked, and an invented ticker blocked.
 - **Failure modes:** a tool timeout, a model outage (blocking and
   streaming), and AI disabled.
+- **Budgets:** a long compound request stopped by the planning budget.
+- **Regeneration:** a mode applied as a server-side prompt section, with the
+  question persisted unchanged; a timeframe/session rescope applied to the
+  tool call for that turn only, with the remembered timeframe unchanged.
+- **Sessions and timeframes:** remembered timeframe reuse and a
+  premarket-scoped tool call.
+- **Why did it move / news:** routing to `why_did_it_move` and `get_news`,
+  and a clarification when no ticker is known.
+- **Journal:** journal review routing, and a save that needs confirmation
+  (ignoring the model's own confirmation) before the tool is called.
 
 When the harness was first run, it found two real gaps. There was no
 deterministic path for plan matrix #1, and the calculator had no

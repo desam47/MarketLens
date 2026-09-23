@@ -1085,6 +1085,15 @@ def _prepare_turn(
         next_state["timeframe"] = planner_state.get("timeframe")
     if next_state["session"] is None:
         next_state["session"] = planner_state.get("session")
+    # A regeneration scope applies to that regeneration only; it is not
+    # written into the remembered timeframe/session. Transient per-turn
+    # request, overwritten (or cleared) every turn.
+    active_scope = _regeneration_tool_scope(regeneration_scope)
+    next_state["active_regeneration"] = (
+        {"mode": regeneration_mode, "scope": active_scope}
+        if regeneration_mode or active_scope
+        else None
+    )
     repo.set_planner_state(session_id, json.dumps(next_state, sort_keys=True))
 
     return _Turn(
@@ -1144,6 +1153,46 @@ def _material_change(turn: _Turn, current_fingerprint: str | None) -> bool:
         and current_fingerprint
         and turn.previous_evidence_fingerprint != current_fingerprint
     )
+
+
+def _regeneration_tool_scope(scope: dict | None) -> dict[str, str]:
+    """Normalize a regeneration timeframe/session request for tool calls."""
+    result: dict[str, str] = {}
+    if not scope:
+        return result
+    if scope.get("timeframe"):
+        try:
+            result["timeframe"] = normalize_timeframe(str(scope["timeframe"]))
+        except ValueError:
+            pass
+    if scope.get("session") and scope.get("session") != "auto":
+        try:
+            result["session"] = normalize_session(str(scope["session"]))
+        except ValueError:
+            pass
+    return result
+
+
+def _apply_regeneration_scope(action: str, arguments: dict, planner_state: dict | None) -> dict:
+    """Give a scoped regeneration's timeframe/session to tools that take them.
+
+    The trader explicitly asked for this scope, so it replaces whatever the
+    route or model chose, but only for tools whose input has that field.
+    """
+    active = (planner_state or {}).get("active_regeneration") or {}
+    scope = active.get("scope") or {}
+    if not scope:
+        return arguments
+    try:
+        fields = default_registry.get(action).input_model.model_fields
+    except ValueError:
+        return arguments
+    scoped = dict(arguments)
+    if scope.get("timeframe") and "timeframe" in fields:
+        scoped["timeframe"] = scope["timeframe"]
+    if scope.get("session") and "session" in fields:
+        scoped["session"] = scope["session"]
+    return scoped
 
 
 def _expire_carried_confirmation(turn: _Turn) -> None:
@@ -1978,6 +2027,7 @@ def _generate_reply(
         token_budget=budget,
         chart_state=(planner_state or {}).get("chart_state"),
         preferences=preferences,
+        regeneration=(planner_state or {}).get("active_regeneration"),
     )
     synthesis_model = _chat_route_model("synthesis", _chat_route_model("planning"))
     _trace_model_route(trace, "synthesis", synthesis_model)
@@ -2446,6 +2496,7 @@ def _run_turn_actions(
             token_budget=_prompt_token_budget(CHAT_CONTINUATION_SYSTEM_PROMPT, _CONTINUATION_MAX_TOKENS),
             chart_state=(planner_state or {}).get("chart_state"),
             preferences=preferences,
+            regeneration=(planner_state or {}).get("active_regeneration"),
         )
         next_cost = _estimate_tokens(prompt, CHAT_CONTINUATION_SYSTEM_PROMPT) + _CONTINUATION_MAX_TOKENS
         if _turn_tokens_used(budget_trace) + next_cost > token_budget:
@@ -2670,6 +2721,7 @@ def _generate_reply_streaming(
         token_budget=budget,
         chart_state=turn.chart_state,
         preferences=turn.preferences,
+        regeneration=turn.planner_state.get("active_regeneration"),
     )
 
     chat_model = _chat_route_model("synthesis", _chat_route_model("planning"))
@@ -3683,6 +3735,7 @@ def _run_market_tool(
         # The session owns the ledger.  Never trust the model to carry the
         # previous records forward or to rewrite their original fields.
         arguments["existing_assumptions"] = list((planner_state or {}).get("research_assumptions", []))
+    arguments = _apply_regeneration_scope(parsed.action, arguments, planner_state)
     request_scope: dict[str, object] = {}
     if isinstance(arguments.get("session"), str):
         try:

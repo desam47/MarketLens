@@ -1,5 +1,5 @@
 {
-  "version": "5.8.3",
+  "version": "5.8.4",
   "description": "Provider-free end-to-end Chat cases. Each turn runs through answer_chat_message (or stream_chat_message) with scripted model replies, scripted tool results, and a private in-memory database.",
   "cases": [
     {
@@ -973,6 +973,432 @@
               "AAPL"
             ],
             "tools": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "regeneration_mode_is_server_side",
+      "category": "regeneration",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "turns": [
+        {
+          "user": "give me a quick read on AAPL",
+          "model": [
+            {
+              "reply": "AAPL is at $150.",
+              "grounded": true,
+              "action": "none"
+            }
+          ],
+          "expect": {
+            "prompt_not_contains": [
+              "<regeneration>"
+            ],
+            "verification": "verified"
+          }
+        },
+        {
+          "user": "give me a quick read on AAPL",
+          "regeneration_mode": "simpler",
+          "model": [
+            {
+              "reply": "AAPL is at $150.",
+              "grounded": true,
+              "action": "none"
+            }
+          ],
+          "expect": {
+            "prompt_contains": [
+              "<regeneration>",
+              "simpler, more concise"
+            ],
+            "prompt_not_contains": [
+              "Response regeneration mode"
+            ],
+            "memory": {
+              "last_user_question": "give me a quick read on AAPL"
+            },
+            "verification": "verified"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rescope_applies_to_tools_once",
+      "category": "sessions_timeframes",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "get_bars": {
+          "provider": "evaluation",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "bars": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "show AAPL price history on the 5m",
+          "expect": {
+            "tools": [
+              "get_bars"
+            ],
+            "tool_arguments": {
+              "get_bars": {
+                "symbol": "AAPL",
+                "timeframe": "5m"
+              }
+            },
+            "max_model_calls": 0,
+            "memory": {
+              "timeframe": "5m"
+            }
+          }
+        },
+        {
+          "user": "show AAPL price history on the 5m",
+          "regeneration_mode": "rescope",
+          "regeneration_scope": {
+            "timeframe": "15m",
+            "session": "regular"
+          },
+          "expect": {
+            "tools": [
+              "get_bars"
+            ],
+            "tool_arguments": {
+              "get_bars": {
+                "timeframe": "15m",
+                "session": "regular"
+              }
+            },
+            "max_model_calls": 0,
+            "memory": {
+              "timeframe": "5m"
+            }
+          }
+        },
+        {
+          "user": "show AAPL price history again",
+          "expect": {
+            "tool_arguments": {
+              "get_bars": {
+                "timeframe": "5m"
+              }
+            },
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "session_scoped_tool_call",
+      "category": "sessions_timeframes",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "get_session_stats": {
+          "provider": "webull",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "session": "premarket",
+            "open": 148.0,
+            "close": 149.5
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "how did AAPL trade in premarket?",
+          "model": [
+            {
+              "reply": "ok",
+              "grounded": true,
+              "action": "get_session_stats",
+              "action_tool_arguments": {
+                "symbol": "AAPL",
+                "session": "premarket"
+              }
+            }
+          ],
+          "expect": {
+            "tools": [
+              "get_session_stats"
+            ],
+            "tool_arguments": {
+              "get_session_stats": {
+                "symbol": "AAPL",
+                "session": "premarket"
+              }
+            },
+            "reply_contains": [
+              "session premarket"
+            ],
+            "memory": {
+              "session": "premarket"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "why_did_it_move_routes",
+      "category": "why_move",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "why_did_it_move": {
+          "provider": "evaluation",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "change_percent": -2.1,
+            "confirmed_catalysts": [],
+            "unknowns": [
+              "No verified catalyst."
+            ]
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "why did AAPL drop today?",
+          "expect": {
+            "tools": [
+              "why_did_it_move"
+            ],
+            "tool_arguments": {
+              "why_did_it_move": {
+                "symbol": "AAPL"
+              }
+            },
+            "max_model_calls": 0,
+            "requires_evidence": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "why_did_it_move_without_symbol_asks",
+      "category": "clarification",
+      "turns": [
+        {
+          "user": "why did it move?",
+          "expect": {
+            "clarification": true,
+            "tools": [],
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "news_routes",
+      "category": "why_move",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "get_news": {
+          "provider": "finnhub",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "items": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "any news on AAPL?",
+          "expect": {
+            "tools": [
+              "get_news"
+            ],
+            "tool_arguments": {
+              "get_news": {
+                "symbol": "AAPL"
+              }
+            },
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "journal_review_routes",
+      "category": "journal",
+      "tools": {
+        "get_trade_journal": {
+          "provider": "MarketLens local snapshot",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "available": false,
+            "reason": "Trade Journal entries are browser-local."
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "review my trade journal",
+          "expect": {
+            "tools": [
+              "get_trade_journal"
+            ],
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "journal_save_requires_confirmation",
+      "category": "journal",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "save_to_journal": {
+          "provider": "MarketLens local journal",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "saved": true,
+            "entry": {
+              "symbol": "AAPL"
+            }
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "save this AAPL plan to my journal",
+          "model": [
+            {
+              "reply": "Saved.",
+              "grounded": true,
+              "action": "save_to_journal",
+              "action_confirmed": true,
+              "action_tool_arguments": {
+                "entry": {
+                  "symbol": "AAPL",
+                  "status": "planned",
+                  "entry_price": 220,
+                  "stop_price": 212,
+                  "target_price": 236,
+                  "notes": "breakout"
+                }
+              }
+            }
+          ],
+          "expect": {
+            "step_status": {
+              "save_to_journal": "needs_confirmation"
+            },
+            "not_called": [
+              "save_to_journal"
+            ],
+            "reply_not_contains": [
+              "Saved."
+            ],
+            "db": {
+              "pending_confirmation": {
+                "action": "save_to_journal"
+              }
+            }
+          }
+        },
+        {
+          "user": "yes",
+          "model": [
+            {
+              "reply": "Done.",
+              "grounded": true,
+              "action": "none"
+            }
+          ],
+          "expect": {
+            "tools": [
+              "save_to_journal"
+            ],
+            "tool_arguments": {
+              "save_to_journal": {
+                "entry": {
+                  "symbol": "AAPL",
+                  "stop_price": 212
+                }
+              }
+            },
+            "db": {
+              "pending_confirmation": null
+            }
           }
         }
       ]

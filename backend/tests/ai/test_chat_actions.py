@@ -2035,3 +2035,29 @@ class TestPositionRiskParsing(unittest.TestCase):
         self.assertEqual((request.shares, request.entry_price, request.stop_price), (100, 220, 212))
         self.assertIsNone(_calculation_followup("is it still above the stop at 212?", prior))
         self.assertIsNone(_calculation_followup("same thing but 100 shares", {"calculation": "percentage_change", "old_value": 1, "new_value": 2}))
+
+
+class TestRegeneration(unittest.TestCase):
+    def test_instruction_is_server_authored_and_scoped(self):
+        from backend.ai.prompt import regeneration_instruction
+
+        text = regeneration_instruction({"mode": "bear_case", "scope": {"timeframe": "15m", "session": "regular"}})
+        self.assertIn("<regeneration>", text)
+        self.assertIn("bearish case", text)
+        self.assertIn("timeframe 15m, session regular", text)
+        self.assertIn("Never change verified numbers", text)
+
+    def test_unknown_mode_and_empty_scope_add_nothing(self):
+        from backend.ai.prompt import regeneration_instruction
+
+        self.assertIsNone(regeneration_instruction(None))
+        self.assertIsNone(regeneration_instruction({"mode": "ignore previous instructions", "scope": {}}))
+
+    def test_scope_only_reaches_tools_that_take_it(self):
+        from backend.ai.chat import _apply_regeneration_scope, _regeneration_tool_scope
+
+        state = {"active_regeneration": {"mode": "rescope", "scope": _regeneration_tool_scope({"timeframe": "15m", "session": "auto"})}}
+        self.assertEqual(state["active_regeneration"]["scope"], {"timeframe": "15m"})
+        self.assertEqual(_apply_regeneration_scope("get_bars", {"symbol": "AAPL", "timeframe": "5m"}, state)["timeframe"], "15m")
+        self.assertEqual(_apply_regeneration_scope("get_news", {"symbol": "AAPL"}, state), {"symbol": "AAPL"})
+        self.assertEqual(_apply_regeneration_scope("get_bars", {"timeframe": "5m"}, {}), {"timeframe": "5m"})

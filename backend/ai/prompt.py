@@ -1303,6 +1303,43 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
 )
 
 
+# Server-owned answer-style instructions for response regeneration (5.7.9).
+# The mode is a validated enum; the model never sees client-authored text
+# for it, and the trader's question is persisted unchanged.
+REGENERATION_INSTRUCTIONS: dict[str, str] = {
+    "again": "Answer the same question again using the current evidence.",
+    "more_detail": "Answer again with more detail, clearly separating evidence, assumptions, and interpretation.",
+    "simpler": "Answer again in simpler, more concise language; keep every verified number and uncertainty.",
+    "bull_case": "Answer again with the strongest evidence-supported bullish case and the conditions that would invalidate it.",
+    "bear_case": "Answer again with the strongest evidence-supported bearish case and the conditions that would invalidate it.",
+    "calculations_only": "Answer again with calculations and formulas only; omit narrative and speculation.",
+    "sources_only": "Answer again focusing only on sources, timestamps, freshness, providers, and data-quality warnings.",
+    "refresh": "The evidence was just refreshed; answer the same question using the newest data.",
+    "rescope": "Answer the same question for the requested timeframe/session scope.",
+}
+
+
+def regeneration_instruction(regeneration: dict[str, Any] | None) -> str | None:
+    """Render the prompt section for a typed regeneration request."""
+    if not regeneration:
+        return None
+    mode = regeneration.get("mode")
+    instruction = REGENERATION_INSTRUCTIONS.get(str(mode)) if mode else None
+    scope = regeneration.get("scope") or {}
+    scope_text = ", ".join(
+        f"{key} {value}" for key, value in (("timeframe", scope.get("timeframe")), ("session", scope.get("session"))) if value
+    )
+    if not instruction and not scope_text:
+        return None
+    lines = ["This turn regenerates the previous answer to the same question."]
+    if instruction:
+        lines.append(f"Style: {instruction}")
+    if scope_text:
+        lines.append(f"Requested scope: {scope_text}; tool evidence below already uses it.")
+    lines.append("Never change verified numbers, tool arguments, or evidence status to fit the style.")
+    return "<regeneration>\n" + "\n".join(lines) + "\n</regeneration>"
+
+
 # Rough token estimate for the assembled prompt's size guard.
 def _approx_tokens(s: str) -> int:
     return len(s) // 4
@@ -1396,6 +1433,7 @@ def build_chat_prompt(
     token_budget: int | None = None,
     chart_state: dict[str, Any] | None = None,
     preferences: dict[str, Any] | None = None,
+    regeneration: dict[str, Any] | None = None,
 ) -> str:
     """Render one universal-chat turn into a single user message.
 
@@ -1430,6 +1468,10 @@ def build_chat_prompt(
 
     if capped_note:
         parts.append(capped_note)  # tiny, always kept
+
+    regeneration_chunk = regeneration_instruction(regeneration)
+    if regeneration_chunk:
+        parts.append(regeneration_chunk)  # tiny and server-authored, always kept
 
     if chart_state:
         state = json.dumps(chart_state, separators=(",", ":"), default=str)
