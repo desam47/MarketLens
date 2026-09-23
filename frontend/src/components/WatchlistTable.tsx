@@ -739,13 +739,6 @@ export function WatchlistTable({
 
   return (
     <div className="watchlist-table-container">
-      <WatchlistIntelligence
-        data={intelligence}
-        events={intelligenceEvents}
-        loading={intelligenceLoading}
-        error={intelligenceError}
-        onSelectSymbol={onSelectSymbol}
-      />
       <div className="watchlist-table-toolbar">
         <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
         <fieldset className="watchlist-session-filters" aria-label="Watchlist market sessions">
@@ -773,11 +766,6 @@ export function WatchlistTable({
         {!noSessionsSelected && missingSessionSymbols.length > 0 && (
           <span className="watchlist-session-hint" title={missingSessionSymbols.join(', ')}>
             No local data yet for {missingSessionSymbols.length} symbol{missingSessionSymbols.length === 1 ? '' : 's'}.
-          </span>
-        )}
-        {scanTimestamp && (
-          <span className="table-timestamp">
-            Scanned {formatETTime(scanTimestamp)}
           </span>
         )}
         <MarketDataFreshnessBadge
@@ -839,6 +827,11 @@ export function WatchlistTable({
         >
           {refreshing ? '⟳ Scanning…' : '↻ Rescan'}
         </button>
+        {scanTimestamp && (
+          <span className="table-timestamp">
+            Scanned {formatETTime(scanTimestamp)}
+          </span>
+        )}
       </div>
 
       {sorted.length === 0 ? (
@@ -913,6 +906,13 @@ export function WatchlistTable({
           </table>
         </div>
       )}
+      <WatchlistIntelligence
+        data={intelligence}
+        events={intelligenceEvents}
+        loading={intelligenceLoading}
+        error={intelligenceError}
+        onSelectSymbol={onSelectSymbol}
+      />
     </div>
   );
 }
