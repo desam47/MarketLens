@@ -17,12 +17,12 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { AlertConversationContext, ChatChartState, ChatMessage, ChatPreferences as ChatPreferencesType, ChatRegenerationMode, ChatResponseBlock } from '../services/api';
+import api, { AlertConversationContext, ChatChartState, ChatMessage, ChatPreferences as ChatPreferencesType, ChatRegenerationMode, ChatRegenerationScope, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 import type { AppPage, NavigationState } from '../utils/appNavigation';
 import { loadChartState } from '../utils/chartState';
 import { ChatPreferencesPanel } from './ChatPreferencesPanel';
-import { createChatNotebook, loadChatNotebooks, saveMessageToChatNotebook, type ChatNotebook } from '../utils/chatNotebooks';
+import { createChatNotebook, getChatNotebookClientKey, loadChatNotebooks, mergeServerChatNotebooks, saveMessageToChatNotebook, type ChatNotebook } from '../utils/chatNotebooks';
 import {
   isDefaultChatPreferences,
   loadChatPreferences,
@@ -69,6 +69,8 @@ const REPORT_PAGE_TARGETS: Record<string, AppPage> = {
   replay: 'signals',
   alerts: 'alerts',
   journal: 'journal',
+  options: 'options',
+  health: 'health',
 };
 
 function mergeSavedJournalEntry(entry: any): void {
@@ -178,6 +180,18 @@ export function ChatPanel({
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadServerNotebooks = (api as any).getChatNotebooks as ((clientKey: string) => Promise<any[]>) | undefined;
+    if (!loadServerNotebooks) return () => { cancelled = true; };
+    loadServerNotebooks(getChatNotebookClientKey()).then(serverNotebooks => {
+      if (!cancelled && Array.isArray(serverNotebooks) && serverNotebooks.length) {
+        setNotebooks(mergeServerChatNotebooks(serverNotebooks));
+      }
+    }).catch(() => { /* local notebooks remain available when the server is offline */ });
+    return () => { cancelled = true; };
+  }, []);
+
   const markSymbolWatchlisted = useCallback((symbol: string, watchlistId: number) => {
     setWatchlistIndex(prev =>
       prev ? { ...prev, memberOf: { ...prev.memberOf, [symbol]: watchlistId } } : prev);
@@ -273,7 +287,7 @@ export function ChatPanel({
     return () => clearInterval(interval);
   }, [sessionId, alertTriggerId, sending]);
 
-  const submit = useCallback(async (content: string, regenerationMode?: RegenerationMode) => {
+  const submit = useCallback(async (content: string, regenerationMode?: RegenerationMode, regenerationScope?: ChatRegenerationScope) => {
     if (!content || !sessionId || sending) return;
     setSending(true);
     setError(null);
@@ -333,6 +347,7 @@ export function ChatPanel({
         preferences: isDefaultChatPreferences(preferences) ? null : preferences,
         chartState: currentChartState,
         regenerationMode: apiRegenerationMode,
+        regenerationScope,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
@@ -341,11 +356,12 @@ export function ChatPanel({
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
-          const finalMsg = apiRegenerationMode
-            ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState, apiRegenerationMode)
+          const sentPreferences = isDefaultChatPreferences(preferences) ? null : preferences;
+          const finalMsg = (apiRegenerationMode || regenerationScope)
+            ? await api.sendChatMessage(sessionId, content, sentPreferences, currentChartState, apiRegenerationMode, regenerationScope)
             : currentChartState
-              ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState)
-              : await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
+              ? await api.sendChatMessage(sessionId, content, sentPreferences, currentChartState)
+              : await api.sendChatMessage(sessionId, content, sentPreferences);
           persistJournalBlocks(finalMsg.blocks);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
           adoptSymbol(finalMsg.focus, finalMsg.partial);
@@ -424,10 +440,21 @@ export function ChatPanel({
             notebooks={notebooks}
             newName={newNotebookName}
             onNewNameChange={setNewNotebookName}
-            onCreate={() => {
+            onCreate={async () => {
               const notebook = createChatNotebook(newNotebookName);
               setNotebooks(current => [notebook, ...current]);
               setNewNotebookName('');
+              const createServerNotebook = (api as any).createChatNotebook as ((clientKey: string, name: string) => Promise<unknown>) | undefined;
+              if (createServerNotebook) {
+                try {
+                  const serverNotebook = await createServerNotebook(getChatNotebookClientKey(), notebook.name);
+                  const loadServerNotebooks = (api as any).getChatNotebooks as ((clientKey: string) => Promise<any[]>) | undefined;
+                  if (loadServerNotebooks && serverNotebook) {
+                    const serverNotebooks = await loadServerNotebooks(getChatNotebookClientKey());
+                    if (Array.isArray(serverNotebooks)) setNotebooks(mergeServerChatNotebooks(serverNotebooks));
+                  }
+                } catch { /* browser-local notebook remains the fallback */ }
+              }
             }}
           />
         )}
@@ -501,7 +528,9 @@ export function ChatPanel({
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && previousUser && (
                   <ChatRegenerationRow
                     stale={messageNeedsRefresh(m)}
-                    onRegenerate={mode => submit(regenerationPrompt(previousUser.content, mode), mode)}
+                    currentChartState={chartState}
+                    preferredTimeframes={preferences.preferred_timeframes}
+                    onRegenerate={(mode, scope) => submit(regenerationPrompt(previousUser.content, mode, scope), mode, scope)}
                   />
                 )}
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && (
@@ -509,7 +538,14 @@ export function ChatPanel({
                     message={m}
                     question={previousUser?.content ?? ''}
                     notebooks={notebooks}
-                    onSaved={setNotebooks}
+                    onSaved={(updated, notebookId) => {
+                      setNotebooks(updated);
+                      const serverNotebookId = notebookId.startsWith('server-') ? Number(notebookId.slice(7)) : null;
+                      const saveServerItem = (api as any).saveChatNotebookItem as ((clientKey: string, id: number, messageId: number, question: string) => Promise<unknown>) | undefined;
+                      if (serverNotebookId && saveServerItem) {
+                        saveServerItem(getChatNotebookClientKey(), serverNotebookId, m.id, previousUser?.content ?? '').catch(() => { /* local copy remains */ });
+                      }
+                    }}
                   />
                 )}
               </div>
@@ -850,7 +886,7 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                 const navigation = block.data.navigation && typeof block.data.navigation === 'object'
                   ? block.data.navigation as NavigationState
                   : undefined;
-                return <button type="button" className="chat-quick-action-btn" key={key} onClick={() => onNavigate?.(target, key === 'symbol' ? symbol : undefined, navigation)}>{key === 'replay' ? 'Open Replay' : `Open ${key[0].toUpperCase()}${key.slice(1)}`}</button>;
+                return <button type="button" className="chat-quick-action-btn" key={key} onClick={() => onNavigate?.(target, ['symbol', 'options', 'health'].includes(key) ? symbol : undefined, navigation)}>{key === 'replay' ? 'Open Replay' : `Open ${key[0].toUpperCase()}${key.slice(1)}`}</button>;
               })}
             </div>
           </section>;
@@ -922,6 +958,7 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
   const [category, setCategory] = useState<string>('');
   const [comment, setComment] = useState('');
   const [saving, setSaving] = useState(false);
+  const [fixtureSaved, setFixtureSaved] = useState(false);
   const existing = message.feedback ?? null;
 
   const submit = async (rating: 'correct' | 'incorrect' | 'not_useful', withDetail: boolean) => {
@@ -944,7 +981,18 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
 
   if (existing) {
     const label = existing.rating === 'correct' ? '✓ Marked correct' : existing.rating === 'incorrect' ? '✗ Marked incorrect' : '⊘ Marked not useful';
-    return <div className="chat-feedback-row chat-feedback-done" role="status">{label}{existing.category ? ` · ${existing.category.replace(/_/g, ' ')}` : ''}</div>;
+    return <div className="chat-feedback-row chat-feedback-done" role="status">
+      <span>{label}{existing.category ? ` · ${existing.category.replace(/_/g, ' ')}` : ''}</span>
+      {(existing.rating === 'incorrect' || existing.rating === 'not_useful') && !fixtureSaved && (
+        <button type="button" className="chat-quick-action-btn" onClick={async () => {
+          try {
+            await api.createChatRegressionFixture(message.id);
+            setFixtureSaved(true);
+          } catch { /* fixture promotion is optional and can be retried */ }
+        }}>Add regression fixture</button>
+      )}
+      {fixtureSaved && <span> · fixture approved</span>}
+    </div>;
   }
 
   return (
@@ -983,7 +1031,7 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
 
 type RegenerationMode = 'again' | ChatRegenerationMode;
 
-function regenerationPrompt(question: string, mode: RegenerationMode): string {
+function regenerationPrompt(question: string, mode: RegenerationMode, scope?: ChatRegenerationScope): string {
   const instruction: Record<RegenerationMode, string> = {
     again: 'Answer again using the same question and current evidence.',
     more_detail: 'Answer again with more detail and clearly separated evidence, assumptions, and interpretation.',
@@ -994,7 +1042,10 @@ function regenerationPrompt(question: string, mode: RegenerationMode): string {
     sources_only: 'Answer again focusing on sources, timestamps, freshness, provider, and data-quality warnings.',
     refresh: 'Refresh the evidence for this question and answer using the newest available data. Preserve the original question.',
   };
-  return `${question}\n\n[Response regeneration mode: ${instruction[mode]}]`;
+  const scopeText = scope && (scope.timeframe || scope.session)
+    ? ` Use timeframe ${scope.timeframe || 'the existing timeframe'} and session ${scope.session || 'the existing session'}.`
+    : '';
+  return `${question}\n\n[Response regeneration mode: ${instruction[mode]}.${scopeText}]`;
 }
 
 function messageNeedsRefresh(message: ChatMessage): boolean {
@@ -1007,8 +1058,23 @@ function messageNeedsRefresh(message: ChatMessage): boolean {
   });
 }
 
-function ChatRegenerationRow({ stale, onRegenerate }: { stale: boolean; onRegenerate: (mode: RegenerationMode) => void }) {
+function ChatRegenerationRow({
+  stale,
+  currentChartState,
+  preferredTimeframes,
+  onRegenerate,
+}: {
+  stale: boolean;
+  currentChartState: ChatChartState | null;
+  preferredTimeframes: string[];
+  onRegenerate: (mode: RegenerationMode, scope?: ChatRegenerationScope) => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [timeframe, setTimeframe] = useState(currentChartState?.timeframe || preferredTimeframes[0] || '1d');
+  const initialSession = ['premarket', 'regular', 'after_hours', 'all', 'auto'].includes(currentChartState?.session || '')
+    ? currentChartState?.session as NonNullable<ChatRegenerationScope['session']>
+    : 'all';
+  const [session, setSession] = useState<NonNullable<ChatRegenerationScope['session']>>(initialSession);
   const options: Array<[RegenerationMode, string]> = [
     ['again', 'Run again'],
     ['more_detail', 'More detail'],
@@ -1023,6 +1089,15 @@ function ChatRegenerationRow({ stale, onRegenerate }: { stale: boolean; onRegene
       <button type="button" className="chat-quick-action-btn" onClick={() => onRegenerate('again')}>↻ Run again</button>
       <button type="button" className="chat-quick-action-btn" onClick={() => setOpen(value => !value)} aria-expanded={open}>More modes</button>
       {stale && <button type="button" className="chat-quick-action-btn chat-refresh-btn" onClick={() => onRegenerate('refresh')}>↻ Refresh current data</button>}
+      {open && <span className="chat-regeneration-scope" aria-label="Regeneration scope">
+        <label>Timeframe <select value={timeframe} onChange={event => setTimeframe(event.target.value)} aria-label="Regeneration timeframe">
+          {Array.from(new Set(['1m', '5m', '15m', '1h', '4h', '1d', '1wk', ...preferredTimeframes])).map(value => <option key={value} value={value}>{value}</option>)}
+        </select></label>
+        <label>Session <select value={session} onChange={event => setSession(event.target.value as NonNullable<ChatRegenerationScope['session']>)} aria-label="Regeneration session">
+          {(['all', 'premarket', 'regular', 'after_hours', 'auto'] as const).map(value => <option key={value} value={value}>{value.replace('_', ' ')}</option>)}
+        </select></label>
+        <button type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate('more_detail', { timeframe, session }); }}>Apply timeframe/session</button>
+      </span>}
       {open && <span className="chat-regeneration-options">{options.slice(1).map(([mode, label]) => (
         <button key={mode} type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate(mode); }}>{label}</button>
       ))}</span>}
@@ -1049,7 +1124,7 @@ function ChatNotebookPanel({
         <input value={newName} onChange={event => onNewNameChange(event.target.value)} placeholder="New notebook name" maxLength={120} aria-label="New notebook name" />
         <button type="button" className="chat-quick-action-btn" onClick={onCreate}>Create</button>
       </div>
-      <small>Notebooks stay in this browser and preserve the original answer evidence timestamps.</small>
+      <small>Notebooks sync to the server for this browser key and preserve original evidence timestamps.</small>
       {notebooks.length > 0 && <div className="chat-notebook-list">{notebooks.map(notebook => (
         <button key={notebook.id} type="button" className="chat-notebook-chip" onClick={() => setSelectedId(notebook.id)}>
           {notebook.name} · {notebook.items.length} saved
@@ -1085,7 +1160,7 @@ function NotebookSaveButton({
   message: ChatMessage;
   question: string;
   notebooks: ChatNotebook[];
-  onSaved: (notebooks: ChatNotebook[]) => void;
+  onSaved: (notebooks: ChatNotebook[], notebookId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   if (!notebooks.length) return null;
@@ -1093,7 +1168,7 @@ function NotebookSaveButton({
     <div className="chat-notebook-save-row">
       <button type="button" className="chat-quick-action-btn" onClick={() => setOpen(value => !value)} aria-expanded={open}>📓 Save to notebook</button>
       {open && <span className="chat-notebook-options">{notebooks.map(notebook => (
-        <button key={notebook.id} type="button" className="chat-quick-action-btn" onClick={() => { onSaved(saveMessageToChatNotebook(notebook.id, message, question)); setOpen(false); }}>
+        <button key={notebook.id} type="button" className="chat-quick-action-btn" onClick={() => { onSaved(saveMessageToChatNotebook(notebook.id, message, question), notebook.id); setOpen(false); }}>
           {notebook.name}
         </button>
       ))}</span>}

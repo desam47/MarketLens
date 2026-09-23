@@ -121,3 +121,63 @@ class ChatFeedback(Base):
 
     def __repr__(self):
         return f"<ChatFeedback(id={self.id}, message_id={self.message_id}, rating={self.rating})>"
+
+
+class ChatRegressionFixture(Base):
+    """An explicitly approved feedback example for deterministic regression tests."""
+
+    __tablename__ = "chat_regression_fixtures"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("chat_messages.id"), nullable=False, unique=True, index=True)
+    prompt = Column(Text, nullable=False)
+    response = Column(Text, nullable=False)
+    response_blocks = Column(Text, nullable=True)
+    rating = Column(String(16), nullable=False)
+    category = Column(String(32), nullable=True)
+    comment = Column(Text, nullable=True)
+    status = Column(String(16), nullable=False, server_default="approved")
+    created_at = Column(DateTime, default=now_ny)
+    updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
+
+    message = relationship("ChatMessage")
+
+
+class ResearchNotebook(Base):
+    """Server-backed research notebook owned by a stable browser/client key."""
+
+    __tablename__ = "research_notebooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_key = Column(String(80), nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    created_at = Column(DateTime, default=now_ny)
+    updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
+
+    items = relationship(
+        "ResearchNotebookItem",
+        back_populates="notebook",
+        cascade="all, delete-orphan",
+        order_by="ResearchNotebookItem.created_at.desc()",
+    )
+
+
+class ResearchNotebookItem(Base):
+    """A saved answer/evidence snapshot in a research notebook."""
+
+    __tablename__ = "research_notebook_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notebook_id = Column(Integer, ForeignKey("research_notebooks.id"), nullable=False, index=True)
+    message_id = Column(Integer, nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    response_blocks = Column(Text, nullable=True)
+    symbols = Column(Text, nullable=True)
+    content_types = Column(Text, nullable=True)
+    evidence_timestamps = Column(Text, nullable=True)
+    stale = Column(Integer, nullable=False, server_default="0")
+    material_change_detected = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, default=now_ny)
+
+    notebook = relationship("ResearchNotebook", back_populates="items")

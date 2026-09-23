@@ -33,6 +33,9 @@ _REQUIRED_EXISTING_TABLE_INDEXES = {
     "ai_digests": {"ix_ai_digests_session"},
     "alert_deliveries": {"ix_alert_deliveries_id"},
     "chat_sessions": {"ix_chat_sessions_scope"},
+    "chat_regression_fixtures": {"ix_chat_regression_fixtures_id", "ix_chat_regression_fixtures_message_id"},
+    "research_notebooks": {"ix_research_notebooks_id", "ix_research_notebooks_client_key"},
+    "research_notebook_items": {"ix_research_notebook_items_id", "ix_research_notebook_items_notebook_id", "ix_research_notebook_items_message_id"},
 }
 
 

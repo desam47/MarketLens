@@ -11,7 +11,14 @@ import unittest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.models import ChatFeedback, ChatMessage, ChatSession
+from backend.models import (
+    ChatFeedback,
+    ChatMessage,
+    ChatRegressionFixture,
+    ChatSession,
+    ResearchNotebook,
+    ResearchNotebookItem,
+)
 from backend.repositories.chat_repository import ChatRepository
 
 
@@ -21,7 +28,7 @@ class TestChatRepository(unittest.TestCase):
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
         )
-        for model in (ChatSession, ChatMessage, ChatFeedback):
+        for model in (ChatSession, ChatMessage, ChatFeedback, ChatRegressionFixture, ResearchNotebook, ResearchNotebookItem):
             model.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
@@ -192,7 +199,7 @@ class TestChatFeedback(unittest.TestCase):
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
         )
-        for model in (ChatSession, ChatMessage, ChatFeedback):
+        for model in (ChatSession, ChatMessage, ChatFeedback, ChatRegressionFixture, ResearchNotebook, ResearchNotebookItem):
             model.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
@@ -248,6 +255,37 @@ class TestChatFeedback(unittest.TestCase):
     def test_get_message_returns_none_for_missing_id(self):
         repo = self._repo()
         self.assertIsNone(repo.get_message(999))
+
+    def test_negative_feedback_can_be_promoted_to_fixture_once(self):
+        repo = self._repo()
+        session = repo.create_session("AAPL")
+        repo.add_message(session.id, "user", "How is AAPL?")
+        answer = repo.add_message(session.id, "assistant", "AAPL is bullish.", response_blocks=[{"type": "prose"}])
+        repo.set_feedback(answer.id, "incorrect", "wrong_data", "The quote was stale")
+
+        fixture = repo.create_regression_fixture(answer.id)
+        self.assertIsNotNone(fixture)
+        self.assertEqual(fixture.prompt, "How is AAPL?")
+        self.assertEqual(repo.create_regression_fixture(answer.id).id, fixture.id)
+
+    def test_notebooks_round_trip_items_and_client_isolation(self):
+        repo = self._repo()
+        notebook = repo.create_notebook("client-a-123456", "Trade ideas")
+        message = repo.add_message(repo.create_session("AAPL").id, "assistant", "AAPL is strong.", response_blocks=[])
+        item = repo.save_notebook_item(
+            notebook.id,
+            message_id=message.id,
+            question="How is AAPL?",
+            answer=message.content,
+            response_blocks=[],
+            symbols=["AAPL"],
+            content_types=["prose"],
+            evidence_timestamps=[],
+            stale=False,
+        )
+        self.assertEqual(item.question, "How is AAPL?")
+        self.assertEqual(repo.list_notebooks("client-a-123456")[0].items[0].id, item.id)
+        self.assertEqual(repo.list_notebooks("client-b-123456"), [])
 
 
 if __name__ == "__main__":

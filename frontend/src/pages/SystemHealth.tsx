@@ -11,6 +11,7 @@ import api, {
 } from '../services/api';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 import { ErrorBanner } from '../components/ErrorBanner';
+import type { NavigationState } from '../utils/appNavigation';
 
 /** Human-readable byte formatter for WAL/SHM file sizes. */
 function formatBytes(bytes: number): string {
@@ -578,7 +579,7 @@ const ConnectionTestCard = memo(function ConnectionTestCard({
 // Page component
 // ---------------------------------------------------------------------------
 
-export function SystemHealth() {
+export function SystemHealth({ navigation }: { navigation?: NavigationState }) {
   // Per-card state pairs
   const [health, setHealth] = useState<HealthData | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
@@ -739,6 +740,11 @@ export function SystemHealth() {
 
   return (
     <div className="system-health">
+      {navigation?.symbol && (
+        <p className="chat-chart-state-banner" role="status">
+          Opened from Chat with symbol context: {navigation.symbol.toUpperCase()}
+        </p>
+      )}
       <div className="health-header">
         <h1>System Health</h1>
         <div className="health-header-actions">

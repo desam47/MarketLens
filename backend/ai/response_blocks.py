@@ -8,6 +8,8 @@ rerunning tools.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,6 +54,8 @@ class BlockQuality(BaseModel):
     entitlement: str | None = None
     freshness_status: Literal["fresh", "recent", "stale", "unknown"] | None = None
     stale_after_seconds: float | None = None
+    evidence_fingerprint: str | None = None
+    material_change_detected: bool = False
 
 
 class ResponseBlock(BaseModel):
@@ -72,6 +76,8 @@ def _quality(
     partial: list[str],
     unavailable: list[str],
     trace: list[dict[str, Any]],
+    evidence_fingerprint: str | None = None,
+    material_change_detected: bool = False,
 ) -> BlockQuality:
     successful = next((item for item in reversed(trace) if item.get("ok") is True), None)
     failed = any(item.get("ok") is False for item in trace)
@@ -112,7 +118,41 @@ def _quality(
         entitlement=successful.get("entitlement") if successful else None,
         freshness_status=freshness_status,
         stale_after_seconds=_STALE_AFTER_SECONDS if successful else None,
+        evidence_fingerprint=evidence_fingerprint,
+        material_change_detected=material_change_detected,
     )
+
+
+def evidence_fingerprint(value: Any) -> str | None:
+    """Return a stable digest for evidence, excluding prose-only metadata."""
+    if isinstance(value, list) and value and isinstance(value[0], dict) and "type" in value[0]:
+        value = [
+            {
+                "type": block.get("type"),
+                "data": block.get("data"),
+                "quality": {
+                    key: block.get("quality", {}).get(key)
+                    for key in ("provider", "source_timestamp", "freshness_seconds", "session", "timeframe", "fallback")
+                    if isinstance(block.get("quality"), dict) and block.get("quality", {}).get(key) is not None
+                },
+            }
+            for block in value
+            if isinstance(block, dict) and block.get("type") not in {"prose", "suggested_followups"}
+        ]
+    elif isinstance(value, list) and value and isinstance(value[0], dict):
+        value = [
+            {
+                key: item.get(key)
+                for key in ("tool", "provider", "ok", "data", "visual_data", "symbol", "symbols", "result")
+                if item.get(key) is not None
+            }
+            for item in value
+            if isinstance(item, dict) and (item.get("tool") or item.get("provider") or item.get("data") or item.get("visual_data"))
+        ]
+    if not value:
+        return None
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
 def _calculation_block(trace: list[dict[str, Any]], quality: BlockQuality) -> ResponseBlock | None:
@@ -173,6 +213,7 @@ def build_response_blocks(
     preferences: dict[str, Any] | None = None,
     chart_state: dict[str, Any] | None = None,
     regeneration: dict[str, Any] | None = None,
+    material_change_detected: bool = False,
 ) -> list[dict[str, Any]]:
     """Build and validate the application-owned block envelope.
 
@@ -189,12 +230,15 @@ def build_response_blocks(
     """
 
     trace = list(trace or [])
+    fingerprint = evidence_fingerprint(trace)
     quality = _quality(
         grounded=grounded,
         focus=focus,
         partial=partial,
         unavailable=unavailable,
         trace=trace,
+        evidence_fingerprint=fingerprint,
+        material_change_detected=material_change_detected,
     )
     blocks: list[ResponseBlock] = [
         ResponseBlock(
@@ -232,6 +276,7 @@ def build_response_blocks(
                     "items": evidence,
                     **({"chart_state": chart_state} if chart_state else {}),
                     **({"regeneration": regeneration} if regeneration else {}),
+                    **({"evidence_fingerprint": fingerprint} if fingerprint else {}),
                 },
                 quality=quality,
             )

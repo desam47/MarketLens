@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../services/api';
+import type { ChatMessage, ChatNotebookResponse } from '../services/api';
 
 export interface NotebookItem {
   id: string;
@@ -22,6 +22,7 @@ export interface ChatNotebook {
 }
 
 const KEY = 'marketlens.chat.notebooks';
+const CLIENT_KEY = 'marketlens.chat.client_key';
 
 function read(): ChatNotebook[] {
   if (typeof window === 'undefined') return [];
@@ -38,6 +39,38 @@ function write(notebooks: ChatNotebook[]): void {
 }
 
 export function loadChatNotebooks(): ChatNotebook[] { return read(); }
+
+export function getChatNotebookClientKey(): string {
+  if (typeof window === 'undefined') return 'server-rendered-client';
+  const existing = window.localStorage.getItem(CLIENT_KEY);
+  if (existing) return existing;
+  const generated = `ml-client-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  try { window.localStorage.setItem(CLIENT_KEY, generated); } catch { /* optional storage */ }
+  return generated;
+}
+
+export function mergeServerChatNotebooks(serverNotebooks: ChatNotebookResponse[]): ChatNotebook[] {
+  const mapped = serverNotebooks.map(notebook => ({
+    id: `server-${notebook.id}`,
+    name: notebook.name,
+    created_at: notebook.created_at,
+    updated_at: notebook.updated_at,
+    items: notebook.items.map(item => ({
+      id: `server-item-${item.id}`,
+      message_id: item.message_id,
+      question: item.question,
+      answer: item.answer,
+      blocks: item.blocks ?? [],
+      symbols: item.symbols ?? [],
+      content_types: item.content_types ?? [],
+      stale: item.stale || item.material_change_detected,
+      evidence_timestamps: item.evidence_timestamps ?? [],
+      saved_at: item.created_at,
+    })),
+  }));
+  write(mapped);
+  return mapped;
+}
 
 export function createChatNotebook(name: string): ChatNotebook {
   const now = new Date().toISOString();

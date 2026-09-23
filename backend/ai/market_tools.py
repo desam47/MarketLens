@@ -2793,7 +2793,7 @@ def _deep_links(*pages: str) -> dict[str, str]:
 
 def _report_deep_links() -> dict[str, str]:
     """Return the stable page destinations exposed by every local report."""
-    return _deep_links("symbol", "scanner", "risk", "replay", "alerts", "journal")
+    return _deep_links("symbol", "scanner", "risk", "replay", "alerts", "journal", "options", "health")
 
 
 def _format_trade_plan_report(symbol: str, plan: dict[str, Any]) -> str:
@@ -3348,6 +3348,7 @@ _APPLICATION_PAGE_METADATA: dict[str, dict] = {
     "backtest": {"required_state": (), "topics": ("backtest", "historical", "performance", "replay")},
     "signals": {"required_state": ("symbol",), "topics": ("replay", "historical", "signals", "candles")},
     "health": {"required_state": (), "topics": ("health", "redis", "provider", "database", "status")},
+    "options": {"required_state": ("symbol",), "topics": ("options", "iv", "chain", "greeks")},
 }
 
 # Safety net only — used when the frontend source files can't be read or
@@ -3361,13 +3362,13 @@ _FALLBACK_ROUTES: dict[str, str] = {
     "dashboard": "#dashboard", "scanner": "#scanner", "symbol": "#symbol",
     "watchlist": "#watchlist", "hub": "#ai-hub", "calendar": "#calendar",
     "risk": "#risk", "journal": "#journal", "alerts": "#alerts",
-    "backtest": "#backtest", "signals": "#signals", "health": "#system-health",
+    "backtest": "#backtest", "signals": "#signals", "health": "#system-health", "options": "#options",
 }
 _FALLBACK_TITLES: dict[str, str] = {
     "dashboard": "Dashboard", "scanner": "Scanner", "symbol": "Symbol",
     "watchlist": "Watchlist", "hub": "AI Hub", "calendar": "Earnings & Events",
     "risk": "Risk Dashboard", "journal": "Trade Journal", "alerts": "Alerts",
-    "backtest": "Backtest", "signals": "Historical Signals", "health": "System Health",
+    "backtest": "Backtest", "signals": "Historical Signals", "health": "System Health", "options": "Options",
 }
 
 

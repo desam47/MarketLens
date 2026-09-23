@@ -21,6 +21,7 @@ const AIHubPage = lazy(() => import('./pages/AIHubPage').then(m => ({ default: m
 const RiskDashboardPage = lazy(() => import('./pages/RiskDashboardPage').then(m => ({ default: m.RiskDashboardPage })));
 const TradeJournalPage = lazy(() => import('./pages/TradeJournalPage').then(m => ({ default: m.TradeJournalPage })));
 const CalendarPage = lazy(() => import('./pages/CalendarPage').then(m => ({ default: m.CalendarPage })));
+const OptionsPage = lazy(() => import('./pages/OptionsPage').then(m => ({ default: m.OptionsPage })));
 
 // Loading skeleton while the chunk downloads — keeps the layout stable.
 const PageLoader = () => (
@@ -113,7 +114,9 @@ export default function App() {
       case 'backtest':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Backtest"><BacktestPage navigation={pageNavigation.backtest} /></PageErrorBoundary></Suspense>;
       case 'health':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="System Health"><SystemHealth /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="System Health"><SystemHealth navigation={pageNavigation.health} /></PageErrorBoundary></Suspense>;
+      case 'options':
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Options"><OptionsPage navigation={pageNavigation.options} /></PageErrorBoundary></Suspense>;
       case 'signals':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Historical Signals"><HistoricalSignalsPage navigation={pageNavigation.signals} /></PageErrorBoundary></Suspense>;
       case 'scanner':
@@ -168,6 +171,15 @@ export default function App() {
             >
               <span className="nav-icon">🔔</span>
               Alerts
+            </button>
+          </li>
+          <li>
+            <button
+              className={currentPage === 'options' ? 'active' : ''}
+              onClick={() => navigateTo('options', { symbol })}
+            >
+              <span className="nav-icon">📊</span>
+              Options
             </button>
           </li>
           <li>

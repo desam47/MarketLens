@@ -6286,6 +6286,25 @@ div.td-trend {
   gap: 6px;
 }
 
+.chat-regeneration-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  flex-wrap: wrap;
+  margin: .35rem 0;
+}
+
+.chat-regeneration-scope label {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  font-size: .78rem;
+}
+
+.chat-regeneration-scope select {
+  min-height: 2rem;
+}
+
 .chat-refresh-btn {
   border-color: var(--warning);
 }

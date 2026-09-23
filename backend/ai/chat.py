@@ -81,7 +81,7 @@ from backend.ai.prompt import (
     parse_chat_reply,
 )
 from backend.ai.reply_stream import ReplyExtractor
-from backend.ai.response_blocks import build_response_blocks
+from backend.ai.response_blocks import build_response_blocks, evidence_fingerprint
 
 # Chat runs its sync generator helpers on loop-less worker threads
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
@@ -625,8 +625,10 @@ class _Turn:
     planner_state: dict
     chart_state: dict | None = None
     regeneration_mode: str | None = None
+    regeneration_scope: dict | None = None
     reused_context: bool = False
     preferences: dict | None = None
+    previous_evidence_fingerprint: str | None = None
 
     @property
     def focus(self) -> list[str]:
@@ -655,6 +657,7 @@ def _prepare_turn(
     chart_state: dict | None = None,
     regeneration_mode: str | None = None,
     preferences: dict | None = None,
+    regeneration_scope: dict | None = None,
 ) -> _Turn:
     """Persist the user message and assemble the turn's quant context.
 
@@ -680,10 +683,27 @@ def _prepare_turn(
     except (TypeError, ValueError):
         planner_state = {}
 
-    history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
+    history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 2)
     # Exclude the message we just added — it's passed separately as
     # `new_message`, not duplicated into the transcript. Long prior
     # replies are clipped so the transcript can't dominate.
+    prior_assistant = next((m for m in reversed(history[:-1]) if m.role == "assistant"), None)
+    previous_fingerprint = None
+    if prior_assistant is not None:
+        try:
+            previous_blocks = json.loads(prior_assistant.response_blocks or "[]")
+            previous_fingerprint = next(
+                (
+                    block.get("quality", {}).get("evidence_fingerprint")
+                    for block in previous_blocks
+                    if isinstance(block, dict)
+                    and isinstance(block.get("quality"), dict)
+                    and block.get("quality", {}).get("evidence_fingerprint")
+                ),
+                None,
+            )
+        except (TypeError, ValueError):
+            previous_fingerprint = None
     transcript = [(m.role, _clip(m.content)) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
 
     alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
@@ -784,6 +804,12 @@ def _prepare_turn(
     saved_assumptions = planner_state.get("research_assumptions", [])
     if not isinstance(saved_assumptions, list):
         saved_assumptions = []
+    effective_chart_state = dict(chart_state or planner_state.get("chart_state") or {})
+    if regeneration_scope:
+        if regeneration_scope.get("timeframe"):
+            effective_chart_state["timeframe"] = regeneration_scope["timeframe"]
+        if regeneration_scope.get("session"):
+            effective_chart_state["session"] = regeneration_scope["session"]
     next_state = {
         "current_symbols": current_symbols,
         "previous_ticker": previous_ticker,
@@ -799,7 +825,7 @@ def _prepare_turn(
         "last_tool_result": planner_state.get("last_tool_result"),
         "pending_confirmation": planner_state.get("pending_confirmation"),
         "research_assumptions": saved_assumptions[:200],
-        "chart_state": chart_state or planner_state.get("chart_state"),
+        "chart_state": effective_chart_state or None,
         "updated_at": now_ny().isoformat(),
     }
     if next_state["timeframe"] is None:
@@ -820,8 +846,10 @@ def _prepare_turn(
         planner_state=next_state,
         chart_state=next_state.get("chart_state"),
         regeneration_mode=regeneration_mode,
+        regeneration_scope=regeneration_scope,
         reused_context=reused_context,
         preferences=preferences,
+        previous_evidence_fingerprint=previous_fingerprint,
     )
 
 
@@ -839,6 +867,7 @@ def answer_chat_message(
     preferences: dict | None = None,
     chart_state: dict | None = None,
     regeneration_mode: str | None = None,
+    regeneration_scope: dict | None = None,
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
     ChatMessage, and return
@@ -867,7 +896,7 @@ def answer_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
         trace: list[dict] = []
         if turn.regeneration_mode:
             trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
@@ -902,6 +931,17 @@ def answer_chat_message(
         # per-ticker quick-action buttons (add to watchlist / create alert)
         # key off `focus`/`partial` alone.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        current_fingerprint = evidence_fingerprint(trace)
+        material_change = bool(
+            turn.previous_evidence_fingerprint
+            and current_fingerprint
+            and turn.previous_evidence_fingerprint != current_fingerprint
+        )
+        regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
+        if regeneration is not None and turn.regeneration_scope:
+            regeneration["scope"] = turn.regeneration_scope
+        if regeneration is not None and material_change:
+            regeneration["material_change_detected"] = True
         blocks = build_response_blocks(
             content=reply_text,
             grounded=grounded,
@@ -911,7 +951,8 @@ def answer_chat_message(
             trace=trace,
             preferences=preferences,
             chart_state=turn.chart_state,
-            regeneration={"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None,
+            regeneration=regeneration,
+            material_change_detected=material_change,
         )
         assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
         assistant_message.planner_trace = trace
@@ -927,6 +968,7 @@ def stream_chat_message(
     preferences: dict | None = None,
     chart_state: dict | None = None,
     regeneration_mode: str | None = None,
+    regeneration_scope: dict | None = None,
 ) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
@@ -942,7 +984,7 @@ def stream_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
         yield (
             "meta",
             {
@@ -990,6 +1032,17 @@ def stream_chat_message(
         # run_screen) is merged into `focus` so the frontend's quick-action
         # buttons pick up tickers the turn's own message never named.
         focus = list(dict.fromkeys([*turn.focus, *screened]))
+        current_fingerprint = evidence_fingerprint(trace)
+        material_change = bool(
+            turn.previous_evidence_fingerprint
+            and current_fingerprint
+            and turn.previous_evidence_fingerprint != current_fingerprint
+        )
+        regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
+        if regeneration is not None and turn.regeneration_scope:
+            regeneration["scope"] = turn.regeneration_scope
+        if regeneration is not None and material_change:
+            regeneration["material_change_detected"] = True
         blocks = build_response_blocks(
             content=final_text,
             grounded=grounded,
@@ -999,7 +1052,8 @@ def stream_chat_message(
             trace=trace,
             preferences=preferences,
             chart_state=turn.chart_state,
-            regeneration={"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None,
+            regeneration=regeneration,
+            material_change_detected=material_change,
         )
         msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
         msg.planner_trace = trace

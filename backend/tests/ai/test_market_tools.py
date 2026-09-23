@@ -733,6 +733,7 @@ def test_application_help_routes_match_frontend_canonical_hashes() -> None:
         "risk": "#risk",
         "journal": "#journal",
         "calendar": "#calendar",
+        "options": "#options",
     }
 
     result = get_application_help_tool(ApplicationHelpRequest(limit=20))

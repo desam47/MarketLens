@@ -59,6 +59,23 @@ def test_regeneration_metadata_is_persisted_in_evidence() -> None:
     assert evidence["data"]["regeneration"] == {"mode": "refresh", "reused_context": False}
 
 
+def test_material_change_metadata_and_fingerprint_are_persisted() -> None:
+    blocks = build_response_blocks(
+        content="Updated answer.", grounded=True, focus=["AAPL"], partial=[], unavailable=[],
+        trace=[{
+            "tool": "get_quote", "ok": True, "provider": "test",
+            "source_timestamp": "2026-09-23T10:00:00Z", "data": {"price": 101},
+        }],
+        regeneration={"mode": "refresh", "reused_context": False, "material_change_detected": True},
+        material_change_detected=True,
+    )
+    quality = blocks[0]["quality"]
+    assert quality["evidence_fingerprint"]
+    assert quality["material_change_detected"] is True
+    evidence = next(block for block in blocks if block["type"] == "evidence")
+    assert evidence["data"]["regeneration"]["material_change_detected"] is True
+
+
 def test_old_evidence_is_marked_stale_by_the_backend_contract() -> None:
     blocks = build_response_blocks(
         content="Old answer.", grounded=True, focus=["AAPL"], partial=[], unavailable=[],

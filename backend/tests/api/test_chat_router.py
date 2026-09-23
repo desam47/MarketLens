@@ -448,6 +448,27 @@ class TestSendMessage(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 422)
 
+    @patch("backend.ai.chat.answer_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_forwards_typed_regeneration_scope(self, mock_repo_cls, mock_answer):
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_answer.return_value = (_mock_message(id=2, role="assistant", content="scoped"), True, ["AAPL"], [], [])
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={
+                "content": "How's AAPL?",
+                "regeneration_mode": "more_detail",
+                "regeneration_timeframe": "4h",
+                "regeneration_session": "regular",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mock_answer.call_args.args[5], {"timeframe": "4h", "session": "regular"})
+
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_404_when_session_missing(self, mock_repo_cls):
         mock_repo = MagicMock()

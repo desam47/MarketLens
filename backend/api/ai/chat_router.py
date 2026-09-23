@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from ...models import ChatMessage
 from ...models.chat import UNIVERSAL_SYMBOL
 from ...repositories.chat_repository import ChatRepository
 
@@ -150,6 +151,8 @@ class SendMessageRequest(BaseModel):
     preferences: ChatPreferences | None = None
     chart_state: ChatChartState | None = None
     regeneration_mode: ChatRegenerationMode | None = None
+    regeneration_timeframe: str | None = Field(default=None, min_length=1, max_length=20)
+    regeneration_session: Literal["premarket", "regular", "after_hours", "all", "auto"] | None = None
 
 
 class SetFeedbackRequest(BaseModel):
@@ -170,6 +173,103 @@ class SetFeedbackRequest(BaseModel):
         "unsafe_action",
     ] | None = None
     comment: str | None = Field(default=None, max_length=1000)
+
+
+class RegressionFixtureResponse(BaseModel):
+    id: int
+    message_id: int
+    prompt: str
+    response: str
+    rating: str
+    category: str | None
+    comment: str | None
+    status: str
+    created_at: str
+
+
+class NotebookItemResponse(BaseModel):
+    id: int
+    notebook_id: int
+    message_id: int
+    question: str
+    answer: str
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    symbols: list[str] = Field(default_factory=list)
+    content_types: list[str] = Field(default_factory=list)
+    evidence_timestamps: list[str] = Field(default_factory=list)
+    stale: bool
+    material_change_detected: bool
+    created_at: str
+
+
+class NotebookResponse(BaseModel):
+    id: int
+    name: str
+    created_at: str
+    updated_at: str
+    items: list[NotebookItemResponse] = Field(default_factory=list)
+
+
+class CreateNotebookRequest(BaseModel):
+    client_key: str = Field(..., min_length=8, max_length=80)
+    name: str = Field(..., min_length=1, max_length=120)
+
+
+class SaveNotebookItemRequest(BaseModel):
+    client_key: str = Field(..., min_length=8, max_length=80)
+    message_id: int = Field(..., gt=0)
+    question: str = Field(default="", max_length=2000)
+
+
+def _json_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except (TypeError, ValueError):
+        return []
+
+
+def _notebook_item_to_response(item) -> NotebookItemResponse:
+    return NotebookItemResponse(
+        id=item.id,
+        notebook_id=item.notebook_id,
+        message_id=item.message_id,
+        question=item.question,
+        answer=item.answer,
+        blocks=_json_list(item.response_blocks),
+        symbols=_json_list(item.symbols),
+        content_types=_json_list(item.content_types),
+        evidence_timestamps=_json_list(item.evidence_timestamps),
+        stale=bool(item.stale),
+        material_change_detected=bool(item.material_change_detected),
+        created_at=item.created_at.isoformat() if item.created_at else "",
+    )
+
+
+def _notebook_to_response(notebook) -> NotebookResponse:
+    return NotebookResponse(
+        id=notebook.id,
+        name=notebook.name,
+        created_at=notebook.created_at.isoformat() if notebook.created_at else "",
+        updated_at=notebook.updated_at.isoformat() if notebook.updated_at else "",
+        items=[_notebook_item_to_response(item) for item in (notebook.items or [])],
+    )
+
+
+def _fixture_to_response(fixture) -> RegressionFixtureResponse:
+    return RegressionFixtureResponse(
+        id=fixture.id,
+        message_id=fixture.message_id,
+        prompt=fixture.prompt,
+        response=fixture.response,
+        rating=fixture.rating,
+        category=fixture.category,
+        comment=fixture.comment,
+        status=fixture.status,
+        created_at=fixture.created_at.isoformat() if fixture.created_at else "",
+    )
 
 
 def _session_to_response(s) -> SessionResponse:
@@ -372,6 +472,134 @@ async def set_message_feedback(message_id: int, payload: SetFeedbackRequest):
         repo.close()
 
 
+@router.post("/messages/{message_id}/regression-fixture", response_model=RegressionFixtureResponse)
+async def create_regression_fixture(message_id: int):
+    """Promote an explicitly negative feedback record to a regression fixture."""
+    repo = ChatRepository()
+    try:
+        message = await asyncio.to_thread(repo.get_message, message_id)
+        if message is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+        fixture = await asyncio.to_thread(repo.create_regression_fixture, message_id)
+        if fixture is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Only an incorrect or not-useful assistant message with feedback can become a fixture",
+            )
+        return _fixture_to_response(fixture)
+    finally:
+        repo.close()
+
+
+@router.get("/regression-fixtures", response_model=list[RegressionFixtureResponse])
+async def list_regression_fixtures(limit: int = Query(default=100, ge=1, le=500)):
+    repo = ChatRepository()
+    try:
+        fixtures = await asyncio.to_thread(repo.get_regression_fixtures, limit)
+        return [_fixture_to_response(fixture) for fixture in fixtures]
+    finally:
+        repo.close()
+
+
+@router.get("/notebooks", response_model=list[NotebookResponse])
+async def list_notebooks(client_key: str = Query(..., min_length=8, max_length=80)):
+    repo = ChatRepository()
+    try:
+        notebooks = await asyncio.to_thread(repo.list_notebooks, client_key)
+        return [_notebook_to_response(notebook) for notebook in notebooks]
+    finally:
+        repo.close()
+
+
+@router.post("/notebooks", response_model=NotebookResponse)
+async def create_notebook(payload: CreateNotebookRequest):
+    repo = ChatRepository()
+    try:
+        notebook = await asyncio.to_thread(repo.create_notebook, payload.client_key, payload.name)
+        return _notebook_to_response(notebook)
+    finally:
+        repo.close()
+
+
+@router.post("/notebooks/{notebook_id}/items", response_model=NotebookItemResponse)
+async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest):
+    repo = ChatRepository()
+    try:
+        notebook = await asyncio.to_thread(repo.get_notebook, notebook_id, payload.client_key)
+        if notebook is None:
+            raise HTTPException(status_code=404, detail="Notebook not found")
+        message = await asyncio.to_thread(repo.get_message, payload.message_id)
+        if message is None or message.role != "assistant":
+            raise HTTPException(status_code=404, detail="Assistant message not found")
+        question = payload.question
+        if not question:
+            previous_user = (
+                repo.db.query(ChatMessage)
+                .filter(
+                    ChatMessage.session_id == message.session_id,
+                    ChatMessage.id < message.id,
+                    ChatMessage.role == "user",
+                )
+                .order_by(type(message).id.desc())
+                .first()
+            )
+            question = previous_user.content if previous_user is not None else "Saved answer"
+        blocks = []
+        try:
+            parsed = json.loads(message.response_blocks or "[]")
+            blocks = parsed if isinstance(parsed, list) else []
+        except (TypeError, ValueError):
+            blocks = []
+        symbols: set[str] = set()
+        content_types: set[str] = set()
+        evidence_timestamps: set[str] = set()
+        stale = False
+        material_change = False
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if isinstance(block_type, str):
+                content_types.add(block_type)
+            data = block.get("data") if isinstance(block.get("data"), dict) else {}
+            symbol_data = data.get("symbols") if isinstance(data.get("symbols"), dict) else {}
+            for symbol in [*symbol_data.get("verified", []), *symbol_data.get("partial", []), *symbol_data.get("unavailable", [])]:
+                if isinstance(symbol, str):
+                    symbols.add(symbol.upper())
+            if isinstance(data.get("symbol"), str):
+                symbols.add(data["symbol"].upper())
+            quality = block.get("quality") if isinstance(block.get("quality"), dict) else {}
+            if quality.get("state") == "stale" or quality.get("freshness_status") == "stale":
+                stale = True
+            regeneration = data.get("regeneration") if isinstance(data.get("regeneration"), dict) else {}
+            if quality.get("material_change_detected") or regeneration.get("material_change_detected"):
+                material_change = True
+            timestamp = quality.get("source_timestamp")
+            if isinstance(timestamp, str):
+                evidence_timestamps.add(timestamp)
+            for evidence in data.get("items", []) if isinstance(data.get("items"), list) else []:
+                if isinstance(evidence, dict) and isinstance(evidence.get("source_timestamp"), str):
+                    evidence_timestamps.add(evidence["source_timestamp"])
+        item = await asyncio.to_thread(
+            repo.save_notebook_item,
+            notebook_id,
+            message_id=payload.message_id,
+            question=question,
+            answer=message.content,
+            response_blocks=blocks,
+            symbols=sorted(symbols),
+            content_types=sorted(content_types),
+            evidence_timestamps=sorted(evidence_timestamps),
+            stale=stale,
+            material_change_detected=material_change,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Notebook not found")
+        return _notebook_item_to_response(item)
+    finally:
+        repo.close()
+
+
 @router.post("/sessions/{session_id}/messages", response_model=MessageResponse)
 async def send_message(session_id: int, payload: SendMessageRequest):
     """Send a message and get the AI's reply.
@@ -395,6 +623,11 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         args.append(payload.chart_state.model_dump() if payload.chart_state else None)
     if payload.regeneration_mode is not None:
         args.append(payload.regeneration_mode)
+    if payload.regeneration_timeframe is not None or payload.regeneration_session is not None:
+        args.append({
+            "timeframe": payload.regeneration_timeframe,
+            "session": payload.regeneration_session,
+        })
     message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args)
     return _message_to_response(
         message,
@@ -461,12 +694,22 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
         def drain():
             try:
                 preferences = payload.preferences.model_dump() if payload.preferences else None
-                if payload.chart_state is None and payload.regeneration_mode is None:
+                if (
+                    payload.chart_state is None
+                    and payload.regeneration_mode is None
+                    and payload.regeneration_timeframe is None
+                    and payload.regeneration_session is None
+                ):
                     events = stream_chat_message(session_id, payload.content, preferences)
                 else:
                     stream_args = [session_id, payload.content, preferences, payload.chart_state.model_dump() if payload.chart_state else None]
                     if payload.regeneration_mode is not None:
                         stream_args.append(payload.regeneration_mode)
+                    if payload.regeneration_timeframe is not None or payload.regeneration_session is not None:
+                        stream_args.append({
+                            "timeframe": payload.regeneration_timeframe,
+                            "session": payload.regeneration_session,
+                        })
                     events = stream_chat_message(*stream_args)
                 for ev in events:
                     if stop.is_set():

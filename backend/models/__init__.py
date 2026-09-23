@@ -28,7 +28,10 @@ from .backtest import BacktestTrade as BacktestTrade
 # Import chat models (Version 4, AI feature 4: conversational chat panel)
 from .chat import ChatFeedback as ChatFeedback
 from .chat import ChatMessage as ChatMessage
+from .chat import ChatRegressionFixture as ChatRegressionFixture
 from .chat import ChatSession as ChatSession
+from .chat import ResearchNotebook as ResearchNotebook
+from .chat import ResearchNotebookItem as ResearchNotebookItem
 
 # Import custom indicator models (Phase 2.3.4)
 from .custom_indicator import CustomIndicator as CustomIndicator

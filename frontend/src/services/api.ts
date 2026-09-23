@@ -2579,6 +2579,32 @@ class ApiService {
     });
   }
 
+  async createChatRegressionFixture(messageId: number): Promise<ChatRegressionFixture> {
+    return this.fetch<ChatRegressionFixture>(`/ai/chat/messages/${messageId}/regression-fixture`, {
+      method: 'POST',
+    });
+  }
+
+  async getChatNotebooks(clientKey: string): Promise<ChatNotebookResponse[]> {
+    return this.fetch<ChatNotebookResponse[]>(`/ai/chat/notebooks?client_key=${encodeURIComponent(clientKey)}`);
+  }
+
+  async createChatNotebook(clientKey: string, name: string): Promise<ChatNotebookResponse> {
+    return this.fetch<ChatNotebookResponse>('/ai/chat/notebooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_key: clientKey, name }),
+    });
+  }
+
+  async saveChatNotebookItem(clientKey: string, notebookId: number, messageId: number, question: string): Promise<ChatNotebookItemResponse> {
+    return this.fetch<ChatNotebookItemResponse>(`/ai/chat/notebooks/${notebookId}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_key: clientKey, message_id: messageId, question }),
+    });
+  }
+
   /**
    * Delete chat history. With an `alertTriggerId` it clears that
    * alert-opened thread; otherwise it clears the universal AI Hub chat
@@ -2599,6 +2625,7 @@ class ApiService {
     preferences?: ChatPreferences | null,
     chartState?: ChatChartState | null,
     regenerationMode?: ChatRegenerationMode | null,
+    regenerationScope?: ChatRegenerationScope | null,
   ): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -2608,6 +2635,7 @@ class ApiService {
         ...(preferences ? { preferences } : {}),
         ...(chartState ? { chart_state: chartState } : {}),
         ...(regenerationMode ? { regeneration_mode: regenerationMode } : {}),
+        ...(regenerationScope ? { regeneration_timeframe: regenerationScope.timeframe, regeneration_session: regenerationScope.session } : {}),
       }),
     }, AI_TIMEOUT_MS);
   }
@@ -2632,6 +2660,7 @@ class ApiService {
       preferences?: ChatPreferences | null;
       chartState?: ChatChartState | null;
       regenerationMode?: ChatRegenerationMode | null;
+      regenerationScope?: ChatRegenerationScope | null;
     } = {},
   ): Promise<ChatMessage> {
     const response = await fetch(
@@ -2644,6 +2673,7 @@ class ApiService {
           ...(opts.preferences ? { preferences: opts.preferences } : {}),
           ...(opts.chartState ? { chart_state: opts.chartState } : {}),
           ...(opts.regenerationMode ? { regeneration_mode: opts.regenerationMode } : {}),
+          ...(opts.regenerationScope ? { regeneration_timeframe: opts.regenerationScope.timeframe, regeneration_session: opts.regenerationScope.session } : {}),
         }),
         signal: opts.signal,
       },
@@ -2906,6 +2936,46 @@ export interface ChatPreferences {
 }
 
 export type ChatRegenerationMode = 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh';
+
+export interface ChatRegenerationScope {
+  timeframe?: string | null;
+  session?: 'premarket' | 'regular' | 'after_hours' | 'all' | 'auto' | null;
+}
+
+export interface ChatRegressionFixture {
+  id: number;
+  message_id: number;
+  prompt: string;
+  response: string;
+  rating: ChatFeedbackRating;
+  category: ChatFeedbackCategory | null;
+  comment: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface ChatNotebookItemResponse {
+  id: number;
+  notebook_id: number;
+  message_id: number;
+  question: string;
+  answer: string;
+  blocks: ChatResponseBlock[];
+  symbols: string[];
+  content_types: string[];
+  evidence_timestamps: string[];
+  stale: boolean;
+  material_change_detected: boolean;
+  created_at: string;
+}
+
+export interface ChatNotebookResponse {
+  id: number;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  items: ChatNotebookItemResponse[];
+}
 
 export interface ChatChartState {
   symbol: string;
