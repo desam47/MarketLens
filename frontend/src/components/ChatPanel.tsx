@@ -423,6 +423,13 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
   return (
     <span className="chat-tool-trace" title="Tools used to ground this answer">
       {tools.map((item, index) => {
+        if (item.kind === 'step') {
+          const status = item.status ?? 'completed';
+          const icon = status === 'completed' ? '✓' : status === 'reused' ? '↻' : status === 'failed' ? '⚠' : '•';
+          return <span className={`chat-tool-pill step-${status}`} key={`step-${item.step ?? index}`} title={item.reason ?? ''}>
+            {icon} Step {item.step ?? index + 1}: {item.tool} · {status}
+          </span>;
+        }
         const freshness = item.freshness_seconds == null ? '' : ` · ${Math.round(item.freshness_seconds)}s old`;
         const fallback = item.fallback ? ' · fallback' : '';
         return <span className={`chat-tool-pill ${item.ok ? 'ok' : 'error'}`} key={`${item.tool}-${index}`}>

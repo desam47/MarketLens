@@ -1344,6 +1344,16 @@ def _run_turn_actions(
         trace=trace,
         planner_state=planner_state,
     )
+    if trace is not None and parsed.action != "none":
+        trace.append(
+            {
+                "kind": "step",
+                "step": 1,
+                "status": "completed" if grounded else "failed",
+                "tool": parsed.action,
+                "depends_on": [],
+            }
+        )
     if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
         return text, grounded, screened
 
@@ -1369,6 +1379,17 @@ def _run_turn_actions(
             texts.append("I stopped the remaining step because this turn reached its time budget.")
             all_grounded = False
             planner.errors.append("time_budget_exhausted")
+            if trace is not None:
+                trace.append(
+                    {
+                        "kind": "step",
+                        "step": len(texts),
+                        "status": "stopped",
+                        "tool": "planning",
+                        "depends_on": [len(texts) - 1],
+                        "reason": "time_budget_exhausted",
+                    }
+                )
             break
         continuation = (
             "Original request: " + user_content + "\nAlready executed: " + " ".join(texts)
@@ -1393,6 +1414,17 @@ def _run_turn_actions(
             logger.info("chat multi-step continuation failed: %s", failure_reason)
             texts.append("I completed the available step, but could not safely plan the next step.")
             all_grounded = False
+            if trace is not None:
+                trace.append(
+                    {
+                        "kind": "step",
+                        "step": len(texts),
+                        "status": "failed",
+                        "tool": "planning",
+                        "depends_on": [len(texts) - 1],
+                        "reason": failure_reason,
+                    }
+                )
             break
 
         if next_parsed.wants_reanalysis or next_parsed.action == "none":
@@ -1422,6 +1454,17 @@ def _run_turn_actions(
                 texts.append("I stopped the remaining step because it repeated an action already executed in this turn.")
             all_grounded = False
             planner.errors.append("reused_action" if cached is not None else "duplicate_action")
+            if trace is not None:
+                trace.append(
+                    {
+                        "kind": "step",
+                        "step": len(texts),
+                        "status": "reused" if cached is not None else "stopped",
+                        "tool": next_parsed.action,
+                        "depends_on": [len(texts) - 1],
+                        "reason": "repeated_action",
+                    }
+                )
             break
         planner.executed_signatures.add(signature)
 
@@ -1435,6 +1478,16 @@ def _run_turn_actions(
             planner_state=planner_state,
         )
         texts.append(f"Step {len(texts) + 1}: {step_text}")
+        if trace is not None:
+            trace.append(
+                {
+                    "kind": "step",
+                    "step": len(texts),
+                    "status": "completed" if step_grounded else "failed",
+                    "tool": next_parsed.action,
+                    "depends_on": [len(texts) - 1],
+                }
+            )
         planner.completed_steps.append(step_text)
         all_grounded = all_grounded and step_grounded
         all_screened.extend(step_screened)

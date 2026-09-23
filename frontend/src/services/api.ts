@@ -2713,6 +2713,11 @@ export interface ChatMessage {
   tools?: Array<{
     tool: string;
     ok: boolean;
+    kind?: 'tool' | 'step' | string;
+    step?: number;
+    status?: 'running' | 'completed' | 'failed' | 'reused' | 'stopped' | string;
+    depends_on?: number[];
+    reason?: string;
     provider?: string;
     freshness_seconds?: number | null;
     fallback?: boolean;

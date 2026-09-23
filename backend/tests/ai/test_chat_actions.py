@@ -424,8 +424,8 @@ class TestRunTurnActions(_DBBase):
         self.assertFalse(grounded)
         run.assert_called_once()
         self.assertEqual(mock_ai.complete.call_count, 1)
-        self.assertEqual(trace[-1]["provider"], "turn-cache")
-        self.assertTrue(trace[-1]["reused"])
+        cache_event = next(item for item in trace if item.get("provider") == "turn-cache")
+        self.assertTrue(cache_event["reused"])
 
     def test_stops_before_continuation_when_turn_time_budget_is_exhausted(self):
         mock_ai = self._mock_complete(

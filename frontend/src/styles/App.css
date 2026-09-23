@@ -5779,6 +5779,9 @@ div.td-trend {
 .chat-tool-pill { border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 999px; padding: 0.12rem 0.4rem; }
 .chat-tool-pill.ok { color: var(--text-secondary); }
 .chat-tool-pill.error { color: var(--danger); }
+.chat-tool-pill.step-completed { color: var(--success); }
+.chat-tool-pill.step-reused { color: var(--accent-primary); }
+.chat-tool-pill.step-failed, .chat-tool-pill.step-stopped { color: var(--danger); }
 
 .chat-num-pos {
   color: var(--success);

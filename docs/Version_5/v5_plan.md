@@ -192,6 +192,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.6 Visible question decomposition
 - Split complex requests into ordered, user-visible subtasks with dependencies and completion state.
 - Continue with independent subtasks after a partial failure and state exactly which result could not be produced.
+- Chat responses now expose structured step events with status, tool, dependency, and failure/reuse reason; the frontend renders these beside provider traces.
 
 #### 5.3.7 Reusable workflows
 - Save editable workflows such as Morning Review, Evaluate a Breakout, Options Setup Review, and End-of-Day Journal Review.

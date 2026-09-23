@@ -515,7 +515,9 @@ against that exact action. High-confidence options, historical, scanner, risk,
 journal, and alert requests now route to typed tools before model action
 selection. Chained planning
 now also observes a configurable wall-clock budget and stops safely before
-starting another continuation when it expires. Complex-request
+starting another continuation when it expires. Structured step events now
+surface ordered completion, failure, reuse, and stop states with dependency
+metadata in the Chat UI. Complex-request
 decomposition, partial failure, saved workflows, model routing, and deterministic
 AI-off fallback must be exercised explicitly.
 
