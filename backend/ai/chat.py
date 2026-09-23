@@ -185,6 +185,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "what_changed",
         "compare_symbols",
         "scenario_analysis",
+        "historical_similarity",
         "run_screen",
     }
 
@@ -232,6 +233,7 @@ _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caus
 _WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yesterday|since my last visit|changed since)\b", re.I)
 _COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|weakest|best performing|worst performing|which .* (higher|lower|stronger|weaker))\b", re.I)
 _SCENARIO_INTENT = re.compile(r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock)\b", re.I)
+_SIMILARITY_INTENT = re.compile(r"\b(similar (?:setup|pattern|situation)|prior situations?|historical pattern|historical similarity|lookalike)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1084,6 +1086,18 @@ def _generate_reply(
                 "watchlist": watchlist,
                 "metric": metric,
                 "direction": direction,
+            },
+        )
+    elif _SIMILARITY_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I use for the historical similarity search?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified historical similarity search",
+            grounded=True,
+            action="historical_similarity",
+            action_tool_arguments={
+                "symbol": focus_symbols[0],
+                "timeframe": (planner_state or {}).get("timeframe") or "1d",
             },
         )
     elif _SCENARIO_INTENT.search(user_content):
@@ -2311,6 +2325,7 @@ _MARKET_TOOL_ACTIONS = {
     "what_changed",
     "compare_symbols",
     "scenario_analysis",
+    "historical_similarity",
     "import_csv",
 }
 

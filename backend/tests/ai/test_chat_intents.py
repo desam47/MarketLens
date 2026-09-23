@@ -231,3 +231,37 @@ def test_scenario_question_routes_to_scenario_tool(monkeypatch) -> None:
     assert "scenario_analysis" in text
     assert requests[0].arguments["price_shocks"] == {"AAPL": -5.0}
     complete.assert_not_called()
+
+
+def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"matches": [], "summaries": [], "look_ahead_safe": True},
+            provider="MarketLens similarity",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "show prior situations similar to AAPL",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+
+    assert grounded is True
+    assert "historical_similarity" in text
+    assert requests[0].arguments["symbol"] == "AAPL"
+    complete.assert_not_called()

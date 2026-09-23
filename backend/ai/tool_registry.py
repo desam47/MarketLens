@@ -358,6 +358,7 @@ def build_default_registry() -> ToolRegistry:
         ConfluenceRequest,
         CsvImportRequest,
         FundamentalsRequest,
+        HistoricalSimilarityRequest,
         IndicatorRequest,
         MoveAnalysisRequest,
         NewsRequest,
@@ -392,6 +393,7 @@ def build_default_registry() -> ToolRegistry:
         get_trade_journal_tool,
         get_trend_tool,
         get_watchlist_tool,
+        historical_similarity_tool,
         import_csv_tool,
         scenario_analysis_tool,
         what_changed_tool,
@@ -419,6 +421,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="what_changed", kind="read_only", description="Compare current verified data with a selected baseline.", input_model=ChangeAnalysisRequest, handler=what_changed_tool))
     registry.register(ToolSpec(name="compare_symbols", kind="read_only", description="Rank symbols or a watchlist using verified bar metrics.", input_model=ComparisonRequest, handler=compare_symbols_tool))
     registry.register(ToolSpec(name="scenario_analysis", kind="read_only", description="Recalculate explicit positions under deterministic what-if shocks.", input_model=ScenarioRequest, handler=scenario_analysis_tool))
+    registry.register(ToolSpec(name="historical_similarity", kind="read_only", description="Find prior bar windows with similar verified features and forward outcomes.", input_model=HistoricalSimilarityRequest, handler=historical_similarity_tool))
     registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))

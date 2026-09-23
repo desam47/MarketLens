@@ -8,6 +8,7 @@ from backend.ai.market_tools import (
     ComparisonRequest,
     ConfluenceRequest,
     CsvImportRequest,
+    HistoricalSimilarityRequest,
     IndicatorRequest,
     MoveAnalysisRequest,
     PositionInput,
@@ -35,6 +36,7 @@ from backend.ai.market_tools import (
     get_tape_state_tool,
     get_trade_journal_tool,
     get_trend_tool,
+    historical_similarity_tool,
     import_csv_tool,
     scenario_analysis_tool,
     what_changed_tool,
@@ -239,6 +241,36 @@ def test_scenario_analysis_is_honest_without_browser_positions() -> None:
     result = scenario_analysis_tool(ScenarioRequest(price_shocks={"AAPL": -5}))
     assert result.available is False
     assert "browser-local" in result.reason
+
+
+def test_historical_similarity_excludes_current_setup_from_matches(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    bars = [
+        {"timestamp": f"2026-01-{index + 1:02d}T16:00:00-05:00", "close": 100 + index}
+        for index in range(30)
+    ]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol=request.symbol,
+            timeframe=request.timeframe,
+            session=request.session,
+            bars=bars,
+            provider="test",
+            source_timestamp=bars[-1]["timestamp"],
+        ),
+    )
+
+    result = historical_similarity_tool(
+        HistoricalSimilarityRequest(symbol="AAPL", lookback=3, horizons=[1, 2], tolerance=10, max_matches=3)
+    )
+
+    assert result.available is True
+    assert result.look_ahead_safe is True
+    assert all(match["end_index"] <= 26 for match in result.matches)
+    assert result.summaries[0]["sample_size"] == 3
+    assert result.conclusion["status"] == "verified_similarity"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

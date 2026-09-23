@@ -6,7 +6,7 @@ import math
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from statistics import stdev
+from statistics import median, stdev
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -147,6 +147,19 @@ class ScenarioRequest(BaseModel):
     portfolio_shock_percent: float | None = None
     stop_price_overrides: dict[str, float] = Field(default_factory=dict, max_length=25)
     portfolio_value: float | None = Field(default=None, gt=0)
+
+
+class HistoricalSimilarityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    timeframe: str = "1d"
+    range: str = Field(default="2y", pattern=r"^[0-9]+(d|mo|y)$")
+    session: Literal["premarket", "regular", "after_hours", "all"] = "all"
+    lookback: int = Field(default=5, ge=2, le=50)
+    horizons: list[int] = Field(default_factory=lambda: [1, 5, 20], max_length=3)
+    max_matches: int = Field(default=10, ge=1, le=25)
+    tolerance: float = Field(default=2.0, gt=0, le=20)
 
 
 class TradeJournalRequest(BaseModel):
@@ -958,6 +971,123 @@ def scenario_analysis_tool(request: ScenarioRequest) -> BaseModel:
         provider="MarketLens calculator",
         source_timestamp=_database_timestamp(),
         conclusion={"status": "verified_scenario", "message": "Scenario outputs reflect only the supplied assumptions."},
+    )
+
+
+def historical_similarity_tool(request: HistoricalSimilarityRequest) -> BaseModel:
+    """Find prior bar windows with similar return/volatility features."""
+    symbol = request.symbol.upper()
+    horizons = sorted(set(request.horizons))
+    if not horizons or any(horizon < 1 or horizon > 252 for horizon in horizons):
+        raise ValueError("horizons must contain values from 1 through 252")
+    try:
+        payload = get_bars_tool(
+            BarsRequest(
+                symbol=symbol,
+                timeframe=request.timeframe,
+                range=request.range,
+                limit=2_000,
+                session=request.session,
+            )
+        ).model_dump(mode="json")
+    except Exception as exc:
+        return _Payload(
+            available=False,
+            symbol=symbol,
+            reason=str(exc),
+            matches=[],
+            summaries=[],
+            unknowns=[{"type": "bars", "reason": str(exc)}],
+            provider="MarketLens similarity",
+        )
+
+    bars = payload.get("bars", [])
+    closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
+    if len(closes) < request.lookback + max(horizons) + 2:
+        return _Payload(
+            available=False,
+            symbol=symbol,
+            timeframe=request.timeframe,
+            lookback=request.lookback,
+            reason="Not enough bars for a non-overlapping historical comparison and requested horizons",
+            matches=[],
+            summaries=[],
+            unknowns=[{"type": "baseline", "reason": "insufficient bars"}],
+            provider="MarketLens similarity",
+            source_timestamp=payload.get("source_timestamp"),
+        )
+
+    def features(end_index: int) -> tuple[float, float]:
+        window = closes[end_index - request.lookback + 1 : end_index + 1]
+        returns = [(window[index] / window[index - 1] - 1) * 100 for index in range(1, len(window)) if window[index - 1]]
+        cumulative = (window[-1] - window[0]) / abs(window[0]) * 100 if window[0] else 0.0
+        volatility = stdev(returns) if len(returns) >= 2 else 0.0
+        return cumulative, volatility
+
+    current_end = len(closes) - 1
+    current_return, current_volatility = features(current_end)
+    # Candidate windows end before the current lookback window. Their outcome
+    # bars may extend forward, but never into the current setup window.
+    latest_candidate_end = min(
+        len(closes) - request.lookback - 1,
+        len(closes) - max(horizons) - 1,
+    )
+    earliest_candidate_end = request.lookback - 1
+    candidates: list[dict[str, Any]] = []
+    for end_index in range(earliest_candidate_end, latest_candidate_end + 1):
+        candidate_return, candidate_volatility = features(end_index)
+        distance = abs(candidate_return - current_return) + abs(candidate_volatility - current_volatility)
+        if distance > request.tolerance:
+            continue
+        outcomes = {}
+        for horizon in horizons:
+            outcomes[str(horizon)] = (closes[end_index + horizon] - closes[end_index]) / abs(closes[end_index]) * 100 if closes[end_index] else None
+        candidates.append(
+            {
+                "end_index": end_index,
+                "timestamp": bars[end_index].get("timestamp") if end_index < len(bars) else None,
+                "distance": round(distance, 8),
+                "feature_return_percent": round(candidate_return, 8),
+                "feature_volatility_percent": round(candidate_volatility, 8),
+                "outcomes": outcomes,
+            }
+        )
+    candidates.sort(key=lambda item: (item["distance"], item["timestamp"] or ""), reverse=False)
+    matches = candidates[: request.max_matches]
+    summaries = []
+    for horizon in horizons:
+        values = [match["outcomes"][str(horizon)] for match in matches if match["outcomes"].get(str(horizon)) is not None]
+        summaries.append(
+            {
+                "horizon": horizon,
+                "sample_size": len(values),
+                "mean_return_percent": round(sum(values) / len(values), 8) if values else None,
+                "median_return_percent": round(median(values), 8) if values else None,
+                "win_rate_percent": round(sum(value > 0 for value in values) / len(values) * 100, 8) if values else None,
+                "min_return_percent": round(min(values), 8) if values else None,
+                "max_return_percent": round(max(values), 8) if values else None,
+            }
+        )
+    return _Payload(
+        available=True,
+        symbol=symbol,
+        timeframe=payload.get("timeframe", request.timeframe),
+        session=payload.get("session", request.session),
+        lookback=request.lookback,
+        horizons=horizons,
+        current_features={"return_percent": round(current_return, 8), "volatility_percent": round(current_volatility, 8)},
+        matches=matches,
+        summaries=summaries,
+        sample_size=len(matches),
+        look_ahead_safe=True,
+        unknowns=[] if matches else [{"type": "matches", "reason": "no prior windows within tolerance"}],
+        sources=[{"name": "bars", "provider": payload.get("provider"), "timestamp": payload.get("source_timestamp")}],
+        provider="MarketLens similarity",
+        source_timestamp=payload.get("source_timestamp"),
+        conclusion={
+            "status": "verified_similarity" if matches else "insufficient_similarity",
+            "message": "Historical outcomes are descriptive samples, not forecasts; small samples should not be generalized.",
+        },
     )
 
 

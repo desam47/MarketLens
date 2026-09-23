@@ -42,6 +42,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_trade_journal",
         "get_trend",
         "get_watchlist",
+        "historical_similarity",
         "import_csv",
         "scenario_analysis",
         "what_changed",
