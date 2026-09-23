@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete and Phase 5.5 is in progress (5.5.1–5.5.3 complete).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is in progress (5.5.1–5.5.3 complete); Phase 5.6 is in progress (5.6.1 complete).
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -76,7 +76,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, and 5.5.3 Alert-to-conversation are complete. Alert trigger rows open an alert-scoped AI Hub session with a typed read-only evidence bundle (trigger facts, quote/chart provenance, signals, catalyst context, market backdrop, and recent history); alert changes retain the existing confirmation gate. Scheduled summaries and the change inbox remain. |
-| 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
+| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1 Trade-plan builder is complete: `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. Portfolio/risk assistant, options research, journal coach, save/export, and decision checklist remain. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
@@ -601,11 +601,67 @@ Watchlist behavior, and production compilation.
 
 ## Phase 5.6 — Trade planning, risk, options, and journal coaching
 
-Not started. Audit must trace every numerical output to calculator results,
-verify missing-input clarification, preserve delayed options labels, and
-reproduce journal analytics from stored records. Options coverage must include
-calls, puts, defined-risk spreads, and IV percentile. Decision-checklist tests
-must distinguish completed, failed, unavailable, and skipped checks.
+**5.6.1 complete — Trade-plan builder.** `build_trade_plan`
+(`backend/ai/market_tools.py`) takes symbol, direction, entry (a single
+price or an explicit zone), stop, one or more targets, and optionally
+account_value + risk_percent, and returns entry zone/reference, per-target
+risk/reward, position size, an invalidation sentence, and the caller-supplied
+catalysts/risks/timeframe/session, structured and bounded rather than
+invented. Every reward:risk and position-size number is produced by calling
+`backend.ai.calculator.calculate()` (`risk_reward`, `position_size`) — the
+tool performs no arithmetic of its own, satisfying this phase's "all
+monetary and percentage values trace to calculator results" verification
+rule directly. A missing stop or target raises rather than defaulting one,
+per the phase's "missing stop/target/capital produces clarification, not
+invented defaults" rule; a stop/target inconsistent with the stated
+direction (e.g. a long with the stop above entry) also raises. Position
+sizing is independent of the rest of the plan: without account_value and
+risk_percent the tool still returns the verified entry/stop/target/
+reward-risk plan, with an honest `position_size_reason` instead of a guessed
+share count. The tool only builds and returns the plan for the user to
+review — saving it to the Journal or creating alerts from it are separate,
+explicitly-confirmed actions (5.6.5, not yet built). 8 focused tests cover
+the happy path (incl. an entry-zone/short-direction variant), the
+missing-sizing-inputs honest-unavailable path, default and caller-supplied
+invalidation text, and both required-field and direction-consistency
+rejections.
+
+Wiring `build_trade_plan` into Chat surfaced a real, pre-existing bug
+affecting Phase 5.2 tools, not just this one: `ChatReplyResponse.action`
+(`backend/ai/prompt.py`) is a strict Pydantic `Literal` gating every value
+Chat can construct or the model can select — and it was missing
+`get_alerts`, `get_sector_data`, `get_trend`, `get_confluence`,
+`get_relative_strength`, `get_tape_state`, `get_session_stats`,
+`get_calendar`, and `import_csv`. These are real, registered,
+individually-tested tools (per the Phase 5.2 section above) that Chat could
+never actually select — the model's own JSON would fail schema validation
+if it tried, and worse, `backend/ai/chat.py`'s deterministic
+`_ALERTS_TOOL_INTENT` branch unconditionally constructs
+`ChatReplyResponse(action="get_alerts", ...)`, which raised
+`ValidationError` on every single message matching that phrase (e.g. "show
+my alerts"). No existing test caught this because tool-level tests
+(`test_market_tools.py`, `test_tool_registry.py`, `test_tool_contracts.py`)
+exercise each tool directly or through `ToolRegistry`, never through
+`ChatReplyResponse` — so "the tool is implemented and tested" and "Chat can
+actually reach the tool" had silently diverged. Fixed by adding all nine
+plus `build_trade_plan` to the Literal and to both prompt-doc tool
+descriptions (so the model knows the newly-reachable tools exist and what
+arguments they need). A new standing regression guard,
+`backend/tests/ai/test_chat_action_schema.py`, asserts every
+`_MARKET_TOOL_ACTIONS` member is both a valid `ChatReplyResponse.action`
+value and actually constructible, and that every registered read-only tool
+is present in `_MARKET_TOOL_ACTIONS` — so this exact class of "registered
+but unreachable" gap fails a test immediately for any future tool, instead
+of sitting undetected until a specific phrase happens to trigger the crash.
+
+Remaining: portfolio/risk dashboard assistant (5.6.2), options research
+assistant (5.6.3), Trade Journal coach (5.6.4), save/export workflows
+(5.6.5), and the configurable decision checklist (5.6.6). Audit must trace
+every numerical output to calculator results, verify missing-input
+clarification, preserve delayed options labels, and reproduce journal
+analytics from stored records. Options coverage must include calls, puts,
+defined-risk spreads, and IV percentile. Decision-checklist tests must
+distinguish completed, failed, unavailable, and skipped checks.
 
 ---
 
