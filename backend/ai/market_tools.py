@@ -197,12 +197,32 @@ def get_support_resistance_tool(request: BarsRequest) -> BaseModel:
 
 
 def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
-    from backend.api.regime.router import get_engine
+    from backend.api.regime.router import _data_age_seconds, _freshness, _to_dashboard_tz, get_engine
 
-    signal = get_engine(request.symbol.upper()).get_current_regime()
+    symbol = request.symbol.upper()
+    signal = get_engine(symbol).get_current_regime()
     if signal is None:
-        raise ValueError(f"Market regime is not warmed for {request.symbol.upper()}")
-    return _Payload(symbol=request.symbol.upper(), **signal.model_dump(mode="json"))
+        return _Payload(
+            symbol=symbol,
+            regime="unknown",
+            confidence=0.0,
+            strength=0.0,
+            supporting_factors={},
+            timestamp=None,
+            data_age_seconds=None,
+            freshness="unknown",
+        )
+    age = _data_age_seconds(signal.timestamp)
+    return _Payload(
+        symbol=signal.symbol,
+        regime=signal.regime.value,
+        confidence=signal.confidence,
+        strength=signal.strength,
+        supporting_factors=signal.supporting_factors,
+        timestamp=_to_dashboard_tz(signal.timestamp),
+        data_age_seconds=age,
+        freshness=_freshness(age),
+    )
 
 
 def get_sector_data_tool(request: SymbolRequest) -> BaseModel:
@@ -215,14 +235,23 @@ def get_sector_data_tool(request: SymbolRequest) -> BaseModel:
 
 
 def get_market_context_tool(_: BaseModel) -> BaseModel:
-    from backend.api.market_context.router import _engine
+    from backend.api.market_context.router import _to_dashboard_tz, get_engine
 
-    if _engine is None:
-        raise ValueError("Market context is not warmed")
-    signal = _engine.get_current_context()
+    signal = get_engine().get_current_context()
     if signal is None:
-        raise ValueError("Market context is not available")
-    return _Payload(**signal.model_dump(mode="json"))
+        return _Payload(
+            regime="unknown",
+            confidence=0.0,
+            trend_strength=0.0,
+            momentum=0.0,
+            volatility_state="unknown",
+            sub_regimes={},
+            contributing_factors={"reason": "no_data"},
+            timestamp=None,
+        )
+    payload = signal.to_dict()
+    payload["timestamp"] = _to_dashboard_tz(signal.timestamp)
+    return _Payload(**payload)
 
 
 def _aux_manager():
@@ -313,6 +342,7 @@ def get_alerts_tool(request: AlertsRequest) -> BaseModel:
     """Read alert rules (and optionally their recent triggers) from the application database."""
     from backend.database import SessionLocal
     from backend.repositories.alert_repository import AlertRepository
+    from backend.utils.timezone import format_edt_iso
 
     db = SessionLocal()
     try:
@@ -334,13 +364,13 @@ def get_alerts_tool(request: AlertsRequest) -> BaseModel:
                 "condition_type": alert.condition_type,
                 "parameter": alert.parameter,
                 "is_enabled": alert.is_enabled,
-                "created_at": alert.created_at.isoformat() if alert.created_at else None,
-                "updated_at": alert.updated_at.isoformat() if alert.updated_at else None,
+                "created_at": format_edt_iso(alert.created_at),
+                "updated_at": format_edt_iso(alert.updated_at),
             }
             if request.include_recent_triggers:
                 row["recent_triggers"] = [
                     {
-                        "triggered_at": trigger.triggered_at.isoformat() if trigger.triggered_at else None,
+                        "triggered_at": format_edt_iso(trigger.triggered_at),
                         "observed_value": trigger.observed_value,
                         "message": trigger.message,
                     }

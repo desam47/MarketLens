@@ -21,6 +21,7 @@ from backend.ai.market_tools import (
 )
 from backend.models.market_data import Bar, DataStatus
 from backend.repositories.alert_repository import AlertRepository
+from backend.utils.timezone import format_edt_iso
 
 
 class _FakeManager:
@@ -107,8 +108,8 @@ def test_alerts_tool_reads_database_backed_rules_and_triggers() -> None:
                 "condition_type": "price_above",
                 "parameter": "220",
                 "is_enabled": True,
-                "created_at": alert.created_at.isoformat(),
-                "updated_at": alert.updated_at.isoformat(),
+                "created_at": format_edt_iso(alert.created_at),
+                "updated_at": format_edt_iso(alert.updated_at),
             }
         ]
     finally:

@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~55%) | Market, research, watchlist, risk, journal, alerts, and sector-data tools are registered with typed provenance. Missing: trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, dynamic app-help, and contract tests against page APIs. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~60%) | Market, research, watchlist, risk, journal, alerts, and sector-data tools are registered with typed provenance; 4 tools have contract tests against their page/API equivalents. Missing: trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, and dynamic app-help. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,8 +170,8 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 550 tests, and the full backend suite
-passes at 2802 tests.
+`backend/tests/ai/` suite passes at 550 tests (554 including the new
+contract-test file), and the full backend suite passes at 2806 tests.
 
 Remaining items named in the plan are still unimplemented and not yet
 reflected as done anywhere in this document: dedicated
@@ -183,9 +183,48 @@ tools (5.2.3) — `get_news`/`get_fundamentals` do not cover these; and CSV
 import tools (5.2.8), which have no code at all yet.
 Application-help (5.2.7) is a hardcoded 12-page table, not the
 route/feature-metadata-backed, deep-link-capable tool the plan describes.
-Contract tests comparing tool output against the equivalent existing page/API
-output — the phase's own stated verification bar — do not exist; current
-coverage is unit-level only.
+
+`backend/tests/ai/test_tool_contracts.py` now covers the phase's own stated
+verification bar for four tools: `get_sector_data` vs
+`GET /api/regime/{symbol}/sector`, `get_market_context` vs
+`GET /api/market-context/current`, `get_watchlist` vs
+`GET /api/watchlists/{id}` + `/symbols`, and `get_alerts` vs
+`GET /api/alerts/`. Each test mounts the real router (the
+`test_regime_api.py` pattern) and asserts the tool and the page/API return
+the same values for the same symbol/scope, not just plausible-looking ones.
+
+This surfaced two real bugs, not just missing coverage, both now fixed:
+1. `get_market_regime_tool` and `get_market_context_tool` called
+   `signal.model_dump(mode="json")` on plain Python objects — `RegimeSignal`
+   is a bare class with no `to_dict`/`model_dump` at all, and
+   `MarketContextSignal` is a dataclass with `to_dict()`, not `model_dump()`.
+   Both would raise `AttributeError` on the happy path (a signal actually
+   present), not just when unwarmed — no existing test exercised that path.
+   Fixed by reusing the same field-by-field serialization
+   (`_data_age_seconds`/`_freshness`/`_to_dashboard_tz`) the endpoints
+   themselves use, imported from `backend/api/regime/router.py` and
+   `backend/api/market_context/router.py`.
+2. Both tools also raised `ValueError` when the engine had no signal yet
+   (cold start / unwarmed), while their equivalent endpoints return a
+   graceful `200` with an honest `"unknown"`/`"no_data"` state. The tools
+   now return that same honest-unknown payload instead of erroring —
+   consistent with the plan's "graceful uncertainty when evidence is
+   missing" principle (top-level Goal 6), not a fabricated value.
+3. (Already fixed in the `get_alerts` slice, confirmed by the same pass.)
+   `get_alerts_tool` serialized `created_at`/`updated_at` as naive
+   `.isoformat()` while the alerts API uses `format_edt_iso` to attach an
+   explicit NY offset — the project-wide convention (naive datetimes are NY
+   local; without the offset, browser/JS code misreads them as local time).
+   Fixed to use `format_edt_iso` for consistency.
+
+Remaining tools without a contract test: `get_quote`/`get_bars` (would
+require a live/mocked provider, not exercised yet), `get_indicator`/
+`get_support_resistance` (derived from bars, no dedicated page endpoint to
+compare against), `get_news`/`get_fundamentals`/`get_options_snapshot`
+(aux-data provider paths, not yet compared against their page renderings),
+`get_risk_dashboard`/`get_trade_journal` (no server-side equivalent to
+compare against by design — browser-local data), and `get_application_help`
+(no equivalent API endpoint exists).
 
 Remaining work includes wiring multi-observation reconciliation into provider
 paths that expose multiple observations, complete freshness/fallback contracts
