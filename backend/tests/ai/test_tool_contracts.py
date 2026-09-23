@@ -13,11 +13,18 @@ from fastapi.testclient import TestClient
 
 from backend.ai.market_tools import (
     AlertsRequest,
+    ConfluenceRequest,
     SymbolRequest,
+    TapeRequest,
+    TrendRequest,
     WatchlistRequest,
     get_alerts_tool,
+    get_confluence_tool,
     get_market_context_tool,
+    get_relative_strength_tool,
     get_sector_data_tool,
+    get_tape_state_tool,
+    get_trend_tool,
     get_watchlist_tool,
 )
 from backend.database import SessionLocal
@@ -130,3 +137,83 @@ def test_alerts_tool_matches_alerts_api() -> None:
             if row.name == "Contract Test Alert":
                 repository.delete(row.id)
         repository.close()
+
+
+def test_trend_tool_matches_trend_endpoint() -> None:
+    from backend.api.trend.router import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    # Same shared TrendEngine registry backs both paths — whatever state
+    # it's in (cold in the sandboxed test DB, or warm from an earlier test
+    # in this session), the endpoint and the tool must describe it
+    # identically, since they read the identical engine instance.
+    api_body = client.get("/api/trend/AAPL/current/1d").json()
+    tool_result = get_trend_tool(TrendRequest(symbol="AAPL", timeframe="1d"))
+
+    for key in ("symbol", "timeframe", "direction", "strength", "confidence", "score", "data_status", "provider"):
+        assert getattr(tool_result, key) == api_body[key], f"{key} mismatch: tool={getattr(tool_result, key)!r} api={api_body[key]!r}"
+
+
+def test_confluence_tool_matches_confluence_endpoint() -> None:
+    from backend.api.multitimeframe.router import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    api_body = client.get("/api/multitimeframe/AAPL/confluence").json()
+    tool_result = get_confluence_tool(ConfluenceRequest(symbol="AAPL", preset="day_trading"))
+
+    for key in ("symbol", "direction", "strength", "alignment_score", "preset", "short_term_direction", "intermediate_direction", "higher_direction"):
+        assert getattr(tool_result, key) == api_body[key], f"{key} mismatch: tool={getattr(tool_result, key)!r} api={api_body[key]!r}"
+
+
+def test_relative_strength_tool_matches_relative_strength_endpoint() -> None:
+    from backend.api.regime.router import router
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    api_body = client.get("/api/regime/AAPL/relative-strength").json()
+    tool_result = get_relative_strength_tool(SymbolRequest(symbol="AAPL"))
+
+    assert tool_result.symbol == api_body["symbol"]
+    assert tool_result.count == api_body["count"]
+    # Each call recomputes signals fresh (datetime.now() at compute time,
+    # like SectorEngine.get_current_signal() above), so timestamps
+    # legitimately differ by microseconds between the two independent
+    # calls — compare every field except that one.
+    for tool_signal, api_signal in zip(tool_result.signals, api_body["signals"], strict=True):
+        for key in ("symbol", "benchmark", "rs_pct", "classification", "symbol_return_pct", "benchmark_return_pct", "lookback_days"):
+            assert tool_signal[key] == api_signal[key], f"{key} mismatch: tool={tool_signal[key]!r} api={api_signal[key]!r}"
+
+
+def test_tape_state_tool_matches_disabled_tape_endpoint(monkeypatch) -> None:
+    """Only the disabled-feature path is contract-tested live: an enabled
+    get_tape_engine() call activates a background-thread Webull seed
+    (backend/api/tape/registry.py::_schedule_seed), which the sandboxed
+    test environment's network guard is not a safe target for. The
+    enabled/live-snapshot path already has a mocked-engine unit test in
+    test_market_tools.py.
+    """
+    from backend.api.tape.router import router
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.tape, "enabled", False)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    api_response = client.get("/api/tape/AAPL")
+    assert api_response.status_code == 503
+
+    try:
+        get_tape_state_tool(TapeRequest(symbol="AAPL"))
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "TAPE_ENABLED" in str(exc)

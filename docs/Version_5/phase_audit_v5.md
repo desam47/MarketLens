@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~75%) | 20 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape). 4 have live contract tests against page/API equivalents; trend/confluence/RS/tape have cold-engine unit tests only. Missing: session-statistics tooling, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~80%) | 20 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape); 7 of 20 have live contract tests against page/API equivalents. Missing: session-statistics tooling, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,9 +170,9 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 559 tests (554 prior + 5 for
-trend/confluence/relative-strength/tape), and the full backend suite
-passes at 2813 tests.
+`backend/tests/ai/` suite passes at 563 tests (559 prior + 4 new contract
+tests for trend/confluence/relative-strength/tape), and the full backend
+suite passes at 2817 tests.
 
 `get_trend`, `get_confluence`, `get_relative_strength`, and `get_tape_state`
 are now implemented, closing most of 5.2.2's named engine list (trend,
@@ -197,10 +197,32 @@ builder rather than re-deriving the response shape:
   `TAPE_ENABLED=false` condition as an ordinary tool error instead of an
   unhandled exception.
 
-Five new focused tests cover the cold-engine ("no signal yet") path for
-each, plus the tape-disabled and tape-enabled paths — not yet a live/warm
-happy-path contract test in `test_tool_contracts.py` for these four
-(unlike sector/context/watchlist/alerts), which remains open.
+Five focused tests cover the cold-engine ("no signal yet") path for each,
+plus the tape-disabled and tape-enabled paths.
+
+`test_tool_contracts.py` now also covers `get_trend`, `get_confluence`, and
+`get_relative_strength` against their live endpoints (`GET
+/api/trend/{symbol}/current/{timeframe}`, `GET
+/api/multitimeframe/{symbol}/confluence`, `GET
+/api/regime/{symbol}/relative-strength`) — whatever state the shared engine
+registry is in when the test runs (cold in the sandboxed DB, or warm from
+an earlier test in the same session), tool and endpoint must describe it
+identically, since both read the same engine instance. This is now 7 of 20
+tools with a live contract test (sector, context, watchlist, alerts, trend,
+confluence, relative-strength). `get_tape_state` has a live contract test
+only for its disabled-feature path — the enabled/live-snapshot path was
+deliberately left to the mocked-engine unit test instead, because
+`get_tape_engine()` with `seed=True` (the only mode either the endpoint or
+the tool use) schedules a background-thread Webull seed
+(`backend/api/tape/registry.py::_schedule_seed`) that the sandboxed test
+environment's network guard is not a safe target for.
+
+Remaining tools without any contract test: `get_quote`/`get_bars` (would
+need a live/mocked provider), `get_indicator`/`get_support_resistance`
+(derived from bars, no dedicated page endpoint), `get_news`/
+`get_fundamentals`/`get_options_snapshot` (aux-data provider paths), `get_risk_dashboard`/`get_trade_journal` (no
+server-side equivalent by design), and `get_application_help` (no
+equivalent API endpoint).
 
 Still unimplemented and not yet reflected as done anywhere in this
 document: session-statistics tooling (5.2.2); dedicated
@@ -262,14 +284,9 @@ This surfaced two real bugs, not just missing coverage, both now fixed:
    local; without the offset, browser/JS code misreads them as local time).
    Fixed to use `format_edt_iso` for consistency.
 
-Remaining tools without a contract test: `get_quote`/`get_bars` (would
-require a live/mocked provider, not exercised yet), `get_indicator`/
-`get_support_resistance` (derived from bars, no dedicated page endpoint to
-compare against), `get_news`/`get_fundamentals`/`get_options_snapshot`
-(aux-data provider paths, not yet compared against their page renderings),
-`get_risk_dashboard`/`get_trade_journal` (no server-side equivalent to
-compare against by design — browser-local data), and `get_application_help`
-(no equivalent API endpoint exists).
+(Contract-test coverage as of this slice is summarized further down, after
+the trend/confluence/relative-strength/tape tools section, rather than
+duplicated here.)
 
 Remaining work includes wiring multi-observation reconciliation into provider
 paths that expose multiple observations, complete freshness/fallback contracts
