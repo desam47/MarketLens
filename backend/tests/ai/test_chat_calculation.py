@@ -1,4 +1,6 @@
-from backend.ai.chat import _finalize_parsed, _run_action
+from unittest.mock import Mock
+
+from backend.ai.chat import _finalize_parsed, _generate_reply, _run_action
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
@@ -38,6 +40,58 @@ def test_chat_fallback_parses_unambiguous_allocation_question() -> None:
     assert screened == []
     assert "allocation_percent=25.0" in text
     assert parsed.action == "calculate"
+
+
+def test_chat_asks_for_missing_calculation_inputs_without_ai_call(monkeypatch) -> None:
+    mock_complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", mock_complete)
+
+    text, grounded, screened = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "what is my allocation?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert "What values" in text
+    assert grounded is False
+    assert screened == []
+    mock_complete.assert_not_called()
+
+
+def test_chat_can_reuse_previous_calculation_inputs(monkeypatch) -> None:
+    mock_complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", mock_complete)
+
+    text, grounded, screened = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "use the previous values to calculate the allocation",
+        None,
+        False,
+        [],
+        {
+            "last_calculation_inputs": {
+                "calculation": "allocation",
+                "position_value": 25000,
+                "portfolio_value": 100000,
+            }
+        },
+    )
+
+    assert "allocation_percent=25.0" in text
+    assert grounded is True
+    assert screened == []
+    mock_complete.assert_not_called()
 
 
 def test_chat_market_tool_action_returns_provenance(monkeypatch) -> None:

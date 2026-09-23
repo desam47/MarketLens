@@ -164,6 +164,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.1 Planner/executor loop
 - Add a bounded cycle: understand → select tool → validate → execute → observe → continue or answer.
 - Default maximum: 5 tool calls and 2 model planning calls per turn, configurable through environment settings.
+- Enforce a configurable wall-clock budget for continuation planning (default 30 seconds); never start another continuation after it expires.
 - Stop on repeated calls, repeated errors, exhausted budget, timeout, or sufficient evidence.
 
 #### 5.3.2 Clarification and ambiguity handling
@@ -174,6 +175,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - Store active symbols, previous ticker, current watchlist, timeframe, session, date range, last calculation inputs, last tool result IDs, pending confirmation, and user preferences separately from prose history.
 - Resolve “it”, “that stock”, “the previous ticker”, “same timeframe”, and “use the previous stop” from structured state.
 - Keep memory local to the user/session and provide a clear reset path.
+- Current state now persists `previous_ticker`, `last_calculation_inputs`, and a bounded `last_tool_result`; exact calculations and missing calculation inputs are handled deterministically before an AI call.
 
 #### 5.3.4 Intent coverage
 - Support symbol, market, comparison, scanner, watchlist, portfolio, risk, options, historical, journal, calculation, and app-action intents.

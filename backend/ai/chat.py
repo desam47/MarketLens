@@ -75,6 +75,7 @@ from backend.ai.market_baseline import build_market_baseline
 from backend.ai.prompt import (
     CHAT_CONTINUATION_SYSTEM_PROMPT,
     CHAT_SYSTEM_PROMPT,
+    ChatReplyResponse,
     UncertaintyResponse,
     build_chat_prompt,
     parse_chat_reply,
@@ -109,6 +110,7 @@ _AMBIGUOUS_REFERENCE = re.compile(
 )
 # First action + up to this many chained follow-ups within one turn.
 _MAX_CHAIN_STEPS = 3
+_MAX_TURN_SECONDS = 30.0
 
 
 def _chain_step_limit() -> int:
@@ -118,6 +120,15 @@ def _chain_step_limit() -> int:
         getattr(settings.ai, "chat_max_planning_calls", _MAX_CHAIN_STEPS),
     )
     return max(1, min(int(configured), 8))
+
+
+def _turn_budget_seconds() -> float:
+    """Read the bounded wall-clock budget for chained planning safely."""
+    configured = getattr(settings.ai, "chat_max_turn_seconds", _MAX_TURN_SECONDS)
+    try:
+        return max(1.0, min(float(configured), 120.0))
+    except (TypeError, ValueError):
+        return _MAX_TURN_SECONDS
 
 
 def _action_signature(parsed) -> str:
@@ -210,6 +221,12 @@ _CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
 )
 
 _CALC_NUMBER_RE = re.compile(r"(?:\$|USD\s*)?([0-9][0-9,]*(?:\.\d+)?)", re.I)
+_CALCULATION_HINT = re.compile(
+    r"\b(allocation|cagr|correlation|drawdown|position size|risk[- ]reward|"
+    r"return|volatility|expected move|breakeven|calculate|percent(?:age)? change)\b",
+    re.I,
+)
+_REUSE_MEMORY_HINT = re.compile(r"\b(previous|prior|same|those|last|it)\b", re.I)
 
 
 def _numbers_from_text(text: str) -> list[float]:
@@ -528,7 +545,7 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
     want_funda = single and bool(_FUNDA_INTENT.search(user_content))
     want_stats = bool(_STATS_INTENT.search(user_content))
     want_baseline = (
-        (not symbols)
+        (not symbols and not _CALCULATION_HINT.search(user_content))
         or bool(_MARKET_INTENT.search(user_content))
         or bool(_ACTION_INTENT.search(user_content))
     )
@@ -572,12 +589,25 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
     # private prompt text here; the transcript remains the source for prose.
     remembered_symbols = [str(symbol).upper() for symbol in planner_state.get("current_symbols", []) if symbol]
     current_symbols = [block["symbol"] for block in symbol_blocks] or remembered_symbols[: settings.ai.chat_max_tickers]
+    previous_ticker = planner_state.get("previous_ticker")
+    if symbol_blocks and remembered_symbols and current_symbols != remembered_symbols:
+        previous_ticker = remembered_symbols[0]
+    elif previous_ticker:
+        previous_ticker = str(previous_ticker).upper()
+    current_calculation = _fallback_calculation(user_content)
     next_state = {
         "current_symbols": current_symbols,
+        "previous_ticker": previous_ticker,
         "watchlist": planner_state.get("watchlist"),
         "timeframe": _extract_memory_value(user_content, r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b"),
         "session": _extract_memory_value(user_content, r"\b(premarket|regular|after[- ]hours?|extended)\b"),
         "last_user_question": user_content[:300],
+        "last_calculation_inputs": (
+            current_calculation.model_dump(mode="json")
+            if current_calculation is not None
+            else planner_state.get("last_calculation_inputs")
+        ),
+        "last_tool_result": planner_state.get("last_tool_result"),
         "updated_at": now_ny().isoformat(),
     }
     if next_state["timeframe"] is None:
@@ -647,6 +677,16 @@ def answer_chat_message(
             turn.planner_state,
             trace,
         )
+        if trace:
+            turn.planner_state["last_tool_result"] = {
+                "tool": trace[-1].get("tool"),
+                "ok": trace[-1].get("ok"),
+                "provider": trace[-1].get("provider"),
+                "source_timestamp": trace[-1].get("source_timestamp"),
+            }
+            repo.set_planner_state(
+                session_id, json.dumps(turn.planner_state, sort_keys=True)
+            )
         # _generate_reply delegates action execution to _run_turn_actions;
         # attach its transient trace to the returned ORM object for the API.
         # It is intentionally not persisted in the prose message row.
@@ -712,6 +752,16 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
                 False,
             )
         grounded = grounded and not turn.unavailable
+        if trace:
+            turn.planner_state["last_tool_result"] = {
+                "tool": trace[-1].get("tool"),
+                "ok": trace[-1].get("ok"),
+                "provider": trace[-1].get("provider"),
+                "source_timestamp": trace[-1].get("source_timestamp"),
+            }
+            repo.set_planner_state(
+                session_id, json.dumps(turn.planner_state, sort_keys=True)
+            )
         msg = repo.add_message(session_id, "assistant", final_text)
         msg.planner_trace = trace
         # See answer_chat_message's matching comment — `screened` (from
@@ -871,6 +921,44 @@ def _generate_reply(
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
             return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
 
+    # Exact arithmetic is deterministic and must not spend an AI/provider
+    # call. Missing inputs get a precise clarification instead of a generic
+    # model failure; a follow-up may explicitly reuse the prior inputs.
+    if _CALCULATION_HINT.search(user_content):
+        calculation = _fallback_calculation(user_content)
+        prior = (planner_state or {}).get("last_calculation_inputs")
+        if calculation is None and prior and _REUSE_MEMORY_HINT.search(user_content):
+            try:
+                calculation = CalculationRequest(**prior)
+            except (TypeError, ValueError):
+                calculation = None
+        if calculation is None:
+            return (
+                "What values should I use for that calculation? Please provide the "
+                "relevant prices, position size, portfolio value, or risk inputs.",
+                False,
+                [],
+            )
+        deterministic = ChatReplyResponse(
+            reply="Verified calculation",
+            grounded=True,
+            action="calculate",
+            action_calculation=calculation,
+        )
+        return _run_turn_actions(
+            db,
+            deterministic,
+            symbol_blocks,
+            unavailable,
+            market_baseline,
+            transcript,
+            user_content,
+            alert_context,
+            trace=trace,
+            started_at=time.monotonic(),
+            planner_state=planner_state,
+        )
+
     if not ai_manager.enabled:
         return "AI is currently unavailable, so I can't answer that right now.", False, []
 
@@ -906,6 +994,7 @@ def _generate_reply(
         user_content,
         alert_context,
         trace=trace,
+        planner_state=planner_state,
     )
 
 
@@ -1014,6 +1103,7 @@ def _finalize_parsed(
     user_content: str = "",
     transcript: list[tuple[str, str]] | None = None,
     trace: list[dict] | None = None,
+    planner_state: dict | None = None,
 ) -> tuple[str, bool, list[str]]:
     """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded, screened)``.
 
@@ -1047,6 +1137,21 @@ def _finalize_parsed(
         if calculation is not None:
             parsed.action = "calculate"
             parsed.action_calculation = calculation
+        elif _CALCULATION_HINT.search(user_content):
+            prior = (planner_state or {}).get("last_calculation_inputs")
+            if prior and _REUSE_MEMORY_HINT.search(user_content):
+                try:
+                    parsed.action = "calculate"
+                    parsed.action_calculation = CalculationRequest(**prior)
+                except (TypeError, ValueError):
+                    prior = None
+            if parsed.action == "none":
+                return (
+                    "What values should I use for that calculation? Please provide the "
+                    "relevant prices, position size, portfolio value, or risk inputs.",
+                    False,
+                    [],
+                )
         else:
             fallback = _fallback_action(user_content, symbol_blocks)
             if fallback is not None:
@@ -1086,6 +1191,8 @@ def _run_turn_actions(
     user_content: str,
     alert_context: dict | None,
     trace: list[dict] | None = None,
+    started_at: float | None = None,
+    planner_state: dict | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
     the trader's own message hints at more than one request (see
@@ -1105,7 +1212,13 @@ def _run_turn_actions(
     last thing appended.
     """
     text, grounded, screened = _finalize_parsed(
-        db, parsed, symbol_blocks, user_content, transcript, trace=trace
+        db,
+        parsed,
+        symbol_blocks,
+        user_content,
+        transcript,
+        trace=trace,
+        planner_state=planner_state,
     )
     if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
         return text, grounded, screened
@@ -1120,8 +1233,15 @@ def _run_turn_actions(
         errors=[],
         max_steps=_chain_step_limit(),
     )
+    turn_started = time.monotonic() if started_at is None else started_at
+    turn_budget = _turn_budget_seconds()
 
     for _ in range(planner.max_steps - 1):
+        if time.monotonic() - turn_started >= turn_budget:
+            texts.append("I stopped the remaining step because this turn reached its time budget.")
+            all_grounded = False
+            planner.errors.append("time_budget_exhausted")
+            break
         continuation = (
             "Original request: " + user_content + "\nAlready executed: " + " ".join(texts)
         )
@@ -1165,6 +1285,7 @@ def _run_turn_actions(
             user_content,
             transcript,
             trace=trace,
+            planner_state=planner_state,
         )
         texts.append(f"Step {len(texts) + 1}: {step_text}")
         planner.completed_steps.append(step_text)
@@ -1318,6 +1439,7 @@ def _generate_reply_streaming(
             turn.user_content,
             turn.alert_context,
             trace=trace,
+            planner_state=turn.planner_state,
         ),
     )
 

@@ -47,6 +47,7 @@ from backend.ai.chat import (
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.provider import AIResponse
+from backend.config.settings import settings
 from backend.models import (
     Alert,
     AlertTrigger,
@@ -378,6 +379,29 @@ class TestRunTurnActions(_DBBase):
         self.assertIn("repeated", text)
         self.assertFalse(grounded)
         self.assertEqual(mock_ai.complete.call_count, 1)
+
+    def test_stops_before_continuation_when_turn_time_budget_is_exhausted(self):
+        mock_ai = self._mock_complete(
+            '{"reply": "should not be called", "grounded": true}'
+        )
+        previous = settings.ai.chat_max_turn_seconds
+        self.addCleanup(setattr, settings.ai, "chat_max_turn_seconds", previous)
+        settings.ai.chat_max_turn_seconds = 1
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        text, grounded, _ = _run_turn_actions(
+            self.db,
+            parsed,
+            [],
+            [],
+            None,
+            [],
+            "create Tech and then add NVDA",
+            None,
+            started_at=0,
+        )
+        self.assertIn("time budget", text)
+        self.assertFalse(grounded)
+        mock_ai.complete.assert_not_called()
 
     def test_continuation_failure_stops_chain_without_raising(self):
         p = patch("backend.ai.chat.ai_manager")

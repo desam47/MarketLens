@@ -428,6 +428,10 @@ class AISettings(BaseSettings):
     # request itself. Keep the defaults conservative for local providers.
     chat_max_chain_steps: int = Field(default=3, ge=1, le=8)
     chat_max_planning_calls: int = Field(default=3, ge=1, le=8)
+    # Wall-clock budget for chained planning calls in one turn. This does not
+    # interrupt an in-flight provider request; it prevents starting another
+    # continuation after the turn's budget is exhausted.
+    chat_max_turn_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
     # The chat's run_backtest action tool (2026-09-11) — a fresh 6-month
     # backtest of the engine's own signals, on demand. Off by default:
     # a chat-triggered backtest is a real, rate-limited compute cost.

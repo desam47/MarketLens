@@ -503,9 +503,13 @@ The current assistant response also exposes a transient tool trace with tool
 name, success/failure, provider, freshness, fallback, and warnings; it is
 rendered in Chat but intentionally not persisted in the prose message table.
 
-Remaining Phase 5.3 work includes planner state, clarification
-coverage, repeated-call protection, structured memory fields—including the
-previous ticker—and destructive action confirmation tests. Complex-request
+Remaining Phase 5.3 work includes broader planner state, clarification
+coverage, repeated-call protection, and destructive action confirmation tests.
+Structured memory now includes the previous ticker, last calculation inputs,
+and a bounded last-tool-result summary; exact calculations and missing
+calculation inputs are handled deterministically before an AI call. Chained planning
+now also observes a configurable wall-clock budget and stops safely before
+starting another continuation when it expires. Complex-request
 decomposition, partial failure, saved workflows, model routing, and deterministic
 AI-off fallback must be exercised explicitly.
 
