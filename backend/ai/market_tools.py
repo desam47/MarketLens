@@ -146,6 +146,24 @@ def _manager():
     return market_data_manager
 
 
+def _trend_engine_provider(trend_engine) -> str | None:
+    """Best-effort provider name fed into a single TrendEngine instance.
+
+    Checks the daily then minute timeframe's bar metadata (the two most
+    reliably warmed timeframes) and returns the first populated provider
+    name. Returns None if the engine has no warmed metadata yet (cold
+    engine) rather than guessing.
+    """
+    from backend.engines.timeframe import Timeframe
+
+    for tf in (Timeframe.ONE_DAY, Timeframe.ONE_MINUTE):
+        metadata = trend_engine.get_timeframe_metadata(tf)
+        provider = metadata.get("provider")
+        if provider:
+            return provider
+    return None
+
+
 def get_quote_tool(request: SymbolRequest) -> BaseModel:
     from backend.ai.tool_registry import normalize_session
     from backend.config.settings import settings
@@ -181,6 +199,7 @@ class _Payload(BaseModel):
 
 def get_bars_tool(request: BarsRequest) -> BaseModel:
     from backend.ai.tool_registry import normalize_session, normalize_timeframe
+    from backend.config.settings import settings
 
     timeframe = normalize_timeframe(request.timeframe)
     bars = _manager().get_historical_bars(
@@ -192,13 +211,15 @@ def get_bars_tool(request: BarsRequest) -> BaseModel:
     if not bars:
         raise ValueError(f"No {timeframe} bars available for {request.symbol.upper()}")
     selected = bars[-request.limit :]
+    provider = selected[-1].provider
     return _Payload(
         symbol=request.symbol.upper(),
         timeframe=timeframe,
         session=normalize_session(request.session),
         bars=[bar.model_dump(mode="json") for bar in selected],
-        provider=selected[-1].provider,
+        provider=provider,
         source_timestamp=selected[-1].timestamp,
+        fallback=provider != settings.market_data.primary_provider,
     )
 
 
@@ -271,6 +292,8 @@ def get_session_stats_tool(request: SessionStatsRequest) -> BaseModel:
             date=latest_date,
             available=False,
             reason=f"No {session} bars available for {latest_date}",
+            provider=bars_payload.provider,
+            fallback=bars_payload.fallback,
         )
 
     open_price = float(scoped_bars[0]["open"])
@@ -301,14 +324,19 @@ def get_session_stats_tool(request: SessionStatsRequest) -> BaseModel:
         bar_count=len(scoped_bars),
         provider=bars_payload.provider,
         source_timestamp=bars_payload.source_timestamp,
+        fallback=bars_payload.fallback,
     )
 
 
 def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
     from backend.api.regime.router import _data_age_seconds, _freshness, _to_dashboard_tz, get_engine
+    from backend.config.settings import settings
 
     symbol = request.symbol.upper()
-    signal = get_engine(symbol).get_current_regime()
+    regime_engine = get_engine(symbol)
+    provider = _trend_engine_provider(regime_engine.trend_engine) or "MarketLens engine"
+    fallback = provider != "MarketLens engine" and provider != settings.market_data.primary_provider
+    signal = regime_engine.get_current_regime()
     if signal is None:
         return _Payload(
             symbol=symbol,
@@ -319,6 +347,8 @@ def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
             timestamp=None,
             data_age_seconds=None,
             freshness="unknown",
+            provider=provider,
+            fallback=fallback,
         )
     age = _data_age_seconds(signal.timestamp)
     return _Payload(
@@ -330,16 +360,23 @@ def get_market_regime_tool(request: SymbolRequest) -> BaseModel:
         timestamp=_to_dashboard_tz(signal.timestamp),
         data_age_seconds=age,
         freshness=_freshness(age),
+        provider=provider,
+        fallback=fallback,
     )
 
 
 def get_sector_data_tool(request: SymbolRequest) -> BaseModel:
     """Get the symbol's sector alignment vs. its sector ETF and SPY."""
     from backend.api.regime.router import _get_sector_engine
+    from backend.config.settings import settings
 
     engine = _get_sector_engine(request.symbol.upper())
     signal = engine.get_current_signal()
-    return _Payload(**signal.to_dict())
+    # The stock's own engine is the most relevant single provider to name —
+    # the sector-ETF and SPY engines back the comparison, not the subject.
+    provider = _trend_engine_provider(engine._stock_eng) or "MarketLens engine"
+    fallback = provider != "MarketLens engine" and provider != settings.market_data.primary_provider
+    return _Payload(**signal.to_dict(), provider=provider, fallback=fallback)
 
 
 def get_trend_tool(request: TrendRequest) -> BaseModel:
@@ -350,9 +387,10 @@ def get_trend_tool(request: TrendRequest) -> BaseModel:
     re-deriving the signal shape here — see the get_market_regime_tool/
     get_market_context_tool incident for why that separation matters.
     """
+    from backend.ai.tool_registry import normalize_timeframe
     from backend.api.trend.registry import get_engine
     from backend.api.trend.router import _build_trend_payload
-    from backend.ai.tool_registry import normalize_timeframe
+    from backend.config.settings import settings
     from backend.engines.timeframe import Timeframe
 
     symbol = request.symbol.upper()
@@ -360,16 +398,26 @@ def get_trend_tool(request: TrendRequest) -> BaseModel:
     tf = Timeframe(timeframe)
     engine = get_engine(symbol)
     payload = _build_trend_payload(engine, symbol, timeframe, tf)
+    # Leave payload["provider"] exactly as the shared payload builder set it
+    # (including None on a cold engine) so this stays contract-identical to
+    # GET /api/trend/.../current/... — the registry already substitutes a
+    # generic label for a missing provider; duplicating that here would
+    # silently diverge from what the endpoint actually returns.
+    provider = payload.get("provider")
+    payload["fallback"] = bool(provider) and provider != settings.market_data.primary_provider
     return _Payload(**payload)
 
 
 def get_confluence_tool(request: ConfluenceRequest) -> BaseModel:
     """Get multi-timeframe confluence for a symbol under a trading-style preset."""
     from backend.api.multitimeframe.router import build_confluence_payload, get_engine
+    from backend.config.settings import settings
 
     symbol = request.symbol.upper()
     engine = get_engine(symbol, preset=request.preset)
     payload = build_confluence_payload(engine, symbol)
+    provider = payload.get("provider", "MarketLens engine")
+    payload["fallback"] = provider != "MarketLens engine" and provider != settings.market_data.primary_provider
     return _Payload(**payload)
 
 
@@ -384,6 +432,11 @@ def get_relative_strength_tool(request: SymbolRequest) -> BaseModel:
         symbol=symbol,
         signals=[signal.to_dict() for signal in signals],
         count=len(signals),
+        # Each signal already carries its own benchmark; this tool compares
+        # the symbol against several of them at once, so no single
+        # "provider" name describes the whole result the way it does for a
+        # single-instrument tool like get_trend.
+        provider="MarketLens engine",
     )
 
 
@@ -404,12 +457,23 @@ def get_tape_state_tool(request: TapeRequest) -> BaseModel:
 
     symbol = request.symbol.upper()
     snapshot = get_tape_engine(symbol).get_snapshot()
-    return _Payload(symbol=symbol, snapshot=snapshot, source_timestamp=format_edt_iso(now_ny()))
+    # Tape data only ever comes from the Webull trade-tick MQTT stream
+    # (backend/config/settings.py's TapeSettings docstring: "Off unless
+    # TAPE_ENABLED=true (and the Webull MQTT stream running)") — there is
+    # no fallback chain to be behind, so fallback is always False here.
+    return _Payload(
+        symbol=symbol, snapshot=snapshot, provider="webull", source_timestamp=format_edt_iso(now_ny())
+    )
 
 
 def get_market_context_tool(_: BaseModel) -> BaseModel:
     from backend.api.market_context.router import _to_dashboard_tz, get_engine
 
+    # Composite across 4 different index symbols (SPY/QQQ/IWM/VIX), not one
+    # instrument — no single provider name describes "the market", so this
+    # is intentionally the composite-engine label, not a guess at which
+    # index's provider matters most.
+    provider = "MarketLens engine"
     signal = get_engine().get_current_context()
     if signal is None:
         return _Payload(
@@ -421,9 +485,11 @@ def get_market_context_tool(_: BaseModel) -> BaseModel:
             sub_regimes={},
             contributing_factors={"reason": "no_data"},
             timestamp=None,
+            provider=provider,
         )
     payload = signal.to_dict()
     payload["timestamp"] = _to_dashboard_tz(signal.timestamp)
+    payload["provider"] = provider
     return _Payload(**payload)
 
 
@@ -434,12 +500,15 @@ def _aux_manager():
 
 
 def get_news_tool(request: NewsRequest) -> BaseModel:
+    from backend.config.settings import settings
+
     response = _aux_manager().get_news(request.symbol.upper(), limit=request.limit)
     return _Payload(
         symbol=response.symbol,
         items=[item.model_dump(mode="json") for item in response.items],
         provider=response.provider,
         source_timestamp=response.timestamp,
+        fallback=response.provider != settings.aux_data.news.primary_provider,
     )
 
 
@@ -464,16 +533,21 @@ def get_calendar_tool(request: CalendarRequest) -> BaseModel:
 
 
 def get_fundamentals_tool(request: FundamentalsRequest) -> BaseModel:
+    from backend.config.settings import settings
+
     response = _aux_manager().get_fundamentals(request.symbol.upper())
     return _Payload(
         symbol=response.symbol,
         data=response.data.model_dump(mode="json"),
         provider=response.provider,
         source_timestamp=response.timestamp,
+        fallback=response.provider != settings.aux_data.fundamentals.primary_provider,
     )
 
 
 def get_options_tool(request: OptionsRequest) -> BaseModel:
+    from backend.config.settings import settings
+
     response = _aux_manager().get_options(request.symbol.upper(), expiration=request.expiration)
     return _Payload(
         symbol=response.symbol,
@@ -483,6 +557,7 @@ def get_options_tool(request: OptionsRequest) -> BaseModel:
         iv_rank=response.iv_rank,
         provider=response.provider,
         source_timestamp=response.timestamp,
+        fallback=response.provider != settings.aux_data.options.primary_provider,
     )
 
 
@@ -720,9 +795,10 @@ def import_csv_tool(request: CsvImportRequest) -> BaseModel:
     existing app UI) that actually does that, the same explicit-snapshot
     pattern get_risk_dashboard_tool already uses.
     """
+    provider = "MarketLens local parser"
     header, rows, errors = _parse_csv_rows(request.csv_content, has_header=request.has_header)
     if not rows and not errors:
-        return _Payload(import_type=request.import_type, header=header, rows=[], row_count=0, errors=["No data rows found"])
+        return _Payload(import_type=request.import_type, header=header, rows=[], row_count=0, errors=["No data rows found"], provider=provider)
 
     required = _CSV_REQUIRED_COLUMNS[request.import_type]
     missing = [column for column in required if header and column not in header]
@@ -733,6 +809,7 @@ def import_csv_tool(request: CsvImportRequest) -> BaseModel:
             rows=[],
             row_count=0,
             errors=[f"Missing required column(s): {', '.join(missing)}"] + errors,
+            provider=provider,
         )
 
     if request.import_type == "positions":
@@ -772,6 +849,7 @@ def import_csv_tool(request: CsvImportRequest) -> BaseModel:
         rows=parsed,
         row_count=len(parsed),
         errors=errors,
+        provider=provider,
     )
 
 

@@ -65,9 +65,12 @@ def test_aux_tools_preserve_provider_and_payload(monkeypatch) -> None:
 
     assert news.provider == "finnhub_news"
     assert news.items[0]["headline"] == "Test headline"
+    assert news.fallback is False
     assert fundamentals.provider == "yfinance_fundamentals"
     assert fundamentals.data["pe_ratio"] == 20
+    assert fundamentals.fallback is False
     assert options.provider == "yfinance_options"
+    assert options.fallback is False
     assert options.expirations == ["2026-10-16"]
 
 
@@ -82,3 +85,21 @@ def test_calendar_tool_reuses_events_for_symbol(monkeypatch) -> None:
     assert result.symbol == "AAPL"
     assert result.provider == "yfinance"
     assert result.events == [{"source": "yfinance", "symbol": "AAPL", "event_type": "earnings", "date": "2026-10-01"}]
+
+
+def test_news_tool_reports_fallback_when_provider_is_not_primary(monkeypatch) -> None:
+    class _FakeFallbackAux:
+        def get_news(self, symbol, limit):
+            return NewsResponse(
+                symbol=symbol,
+                items=[],
+                provider="yfinance_news",  # not the configured primary (finnhub_news)
+                timestamp=datetime(2026, 9, 22, 12),
+            )
+
+    monkeypatch.setattr("backend.ai.market_tools._aux_manager", lambda: _FakeFallbackAux())
+
+    result = get_news_tool(NewsRequest(symbol="AAPL", limit=5))
+
+    assert result.provider == "yfinance_news"
+    assert result.fallback is True

@@ -166,9 +166,23 @@ def build_confluence_payload(engine: MultiTimeframeEngine, symbol: str) -> dict:
     """
     confluence_signal = engine.get_current_confluence()
 
+    # Composite across every configured timeframe's TrendEngine, all for the
+    # same symbol — they should agree on provider, so the first populated
+    # one is a representative answer, not a guess among disagreeing sources.
+    provider = "MarketLens engine"
+    for sub_engine in engine.trend_engines.values():
+        for tf in sub_engine.trend_history:
+            metadata = sub_engine.get_timeframe_metadata(tf)
+            if metadata.get("provider"):
+                provider = metadata["provider"]
+                break
+        if provider != "MarketLens engine":
+            break
+
     if confluence_signal is None:
         return {
             "symbol": symbol.upper(),
+            "provider": provider,
             "direction": "neutral",
             "strength": 0.0,
             "alignment_score": 0.0,
@@ -199,6 +213,7 @@ def build_confluence_payload(engine: MultiTimeframeEngine, symbol: str) -> dict:
         }
     return {
         "symbol": confluence_signal.symbol,
+        "provider": provider,
         "direction": confluence_signal.direction.value,
         "strength": confluence_signal.strength,
         "alignment_score": confluence_signal.alignment_score,

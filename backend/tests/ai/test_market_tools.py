@@ -19,6 +19,8 @@ from backend.ai.market_tools import (
     get_bars_tool,
     get_confluence_tool,
     get_indicator_tool,
+    get_market_context_tool,
+    get_market_regime_tool,
     get_quote_tool,
     get_relative_strength_tool,
     get_risk_dashboard_tool,
@@ -72,7 +74,10 @@ def test_market_tools_compute_from_provider_bars(monkeypatch) -> None:
 
     assert bars.symbol == "AAPL"
     assert len(bars.bars) == 10
+    assert bars.provider == "test"
+    assert bars.fallback is True  # "test" != configured primary provider
     assert indicator.value == 118
+    assert indicator.fallback is True  # inherited from get_bars_tool's payload
     assert levels.support == 108
     assert levels.resistance == 121
     quote = get_quote_tool(SymbolRequest(symbol="AAPL"))
@@ -147,7 +152,13 @@ def test_sector_data_tool_reports_alignment(monkeypatch) -> None:
                 "timestamp": datetime(2026, 9, 22, tzinfo=UTC).isoformat(),
             }
 
+    class _FakeStockEngine:
+        def get_timeframe_metadata(self, tf):
+            return {}
+
     class _FakeSectorEngine:
+        _stock_eng = _FakeStockEngine()
+
         def get_current_signal(self):
             return _FakeSignal()
 
@@ -165,6 +176,8 @@ def test_sector_data_tool_reports_alignment(monkeypatch) -> None:
     assert result.sector == "Technology"
     assert result.sector_etf == "XLK"
     assert result.alignment_level == "perfect"
+    assert result.provider == "MarketLens engine"
+    assert result.fallback is False
 
 
 def test_application_help_returns_verified_routes() -> None:
@@ -243,6 +256,7 @@ def test_confluence_tool_reports_neutral_on_cold_engine(monkeypatch) -> None:
 
     class _FakeConfluenceEngine:
         preset_name = "day_trading"
+        trend_engines: dict = {}
 
         def get_current_confluence(self):
             return None
@@ -258,6 +272,7 @@ def test_confluence_tool_reports_neutral_on_cold_engine(monkeypatch) -> None:
     assert result.direction == "neutral"
     assert result.preset == "day_trading"
     assert result.timeframe_signals == {}
+    assert result.provider == "MarketLens engine"
 
 
 def test_relative_strength_tool_reports_computed_signals(monkeypatch) -> None:
@@ -307,6 +322,49 @@ def test_tape_state_tool_reports_snapshot_when_enabled(monkeypatch) -> None:
     assert result.symbol == "AAPL"
     assert result.snapshot == {"buy_volume": 100, "sell_volume": 40}
     assert result.source_timestamp
+    assert result.provider == "webull"
+
+
+def test_market_regime_tool_reports_provider_and_fallback(monkeypatch) -> None:
+    import importlib
+
+    class _FakeTrendEngine:
+        def get_timeframe_metadata(self, tf):
+            return {"provider": "yfinance"}
+
+    class _FakeRegimeEngine:
+        trend_engine = _FakeTrendEngine()
+
+        def get_current_regime(self):
+            return None
+
+    regime_router_module = importlib.import_module("backend.api.regime.router")
+    monkeypatch.setattr(regime_router_module, "get_engine", lambda symbol: _FakeRegimeEngine())
+
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.market_data, "primary_provider", "webull")
+
+    result = get_market_regime_tool(SymbolRequest(symbol="AAPL"))
+
+    assert result.provider == "yfinance"
+    assert result.fallback is True
+
+
+def test_market_context_tool_reports_composite_provider(monkeypatch) -> None:
+    import importlib
+
+    class _FakeContextEngine:
+        def get_current_context(self):
+            return None
+
+    market_context_module = importlib.import_module("backend.api.market_context.router")
+    monkeypatch.setattr(market_context_module, "get_engine", lambda: _FakeContextEngine())
+
+    result = get_market_context_tool(SymbolRequest(symbol="AAPL"))
+
+    assert result.regime == "unknown"
+    assert result.provider == "MarketLens engine"
 
 
 def test_import_csv_parses_positions() -> None:

@@ -58,6 +58,7 @@ class ToolResult(BaseModel):
     source_timestamp: str | None = None
     freshness_seconds: float | None = Field(default=0, ge=0)
     fallback: bool = False
+    entitlement: str = "not_applicable"
 
 
 class ProviderObservation(BaseModel):
@@ -187,6 +188,7 @@ class ToolRegistry:
                 source_timestamp=source_timestamp or started_at,
                 freshness_seconds=freshness_seconds,
                 fallback=bool(payload.get("fallback", False)),
+                entitlement=_entitlement_status(provider),
             )
         except (ValueError, TypeError) as exc:
             return ToolResult(
@@ -224,6 +226,46 @@ def _data_quality_warnings(payload: Mapping[str, Any], freshness_seconds: float 
     if payload.get("fallback"):
         warnings.append("Fallback provider data was used.")
     return warnings
+
+
+# Providers whose access is actually gated by an account/subscription tier
+# (as opposed to "MarketLens ..." labels for internally-computed engines,
+# the local calculator, or database reads, where entitlement genuinely does
+# not apply — there is no subscription to lack). This intentionally
+# mirrors, in simplified form, the verified/declared/configured/unavailable
+# vocabulary backend/api/system/router.py's entitlement_status() already
+# uses for System Health — but that function also cross-references
+# per-capability runtime observation history (provider_history_stats()) to
+# earn "verified"; this tool-layer version only has the single completed
+# call's provider name to go on, so it collapses to a coarser signal:
+# "verified" the provider matched the configured primary, "declared" the
+# user declared coverage for it (Webull entitlements only, the one setting
+# that exists today), otherwise "configured" it is a recognized provider
+# without confirmed/declared access.
+_LIVE_DATA_PROVIDER_MARKERS = ("webull", "yfinance", "alpaca", "finnhub")
+
+
+def _entitlement_status(provider: str | None) -> str:
+    if not provider:
+        return "not_applicable"
+    normalized = provider.lower()
+    if not any(marker in normalized for marker in _LIVE_DATA_PROVIDER_MARKERS):
+        return "not_applicable"
+    from backend.config.settings import settings
+
+    if normalized == settings.market_data.primary_provider.lower():
+        return "verified"
+    if "webull" in normalized:
+        declared = {
+            item.strip().lower()
+            for item in settings.webull.declared_entitlements.split(",")
+            if item.strip()
+        }
+        if declared:
+            return "declared"
+    return "configured"
+
+
 def normalize_session(value: str | None) -> MarketSession:
     normalized = (value or "all").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {"premarket": "premarket", "pre_market": "premarket", "regular": "regular", "regular_hours": "regular", "afterhours": "after_hours", "after_hours": "after_hours", "all_sessions": "all", "all": "all"}

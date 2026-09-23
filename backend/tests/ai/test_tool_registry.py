@@ -8,6 +8,7 @@ from backend.ai.tool_registry import (
     ToolRegistry,
     ToolRequest,
     ToolSpec,
+    _entitlement_status,
     default_registry,
     normalize_percentage,
     normalize_session,
@@ -179,3 +180,63 @@ def test_reconciliation_allows_small_differences_and_requires_observations() -> 
     assert result.conflict is False
     with pytest.raises(ValueError):
         reconcile_observations([])
+
+
+def test_entitlement_status_not_applicable_for_internal_providers() -> None:
+    assert _entitlement_status(None) == "not_applicable"
+    assert _entitlement_status("MarketLens") == "not_applicable"
+    assert _entitlement_status("MarketLens engine") == "not_applicable"
+    assert _entitlement_status("MarketLens calculator") == "not_applicable"
+    assert _entitlement_status("MarketLens database") == "not_applicable"
+
+
+def test_entitlement_status_verified_for_configured_primary_provider(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.market_data, "primary_provider", "webull")
+
+    assert _entitlement_status("webull") == "verified"
+
+
+def test_entitlement_status_configured_for_non_primary_known_provider(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.market_data, "primary_provider", "webull")
+    monkeypatch.setattr(settings.webull, "declared_entitlements", "")
+
+    assert _entitlement_status("yfinance") == "configured"
+
+
+def test_entitlement_status_declared_for_webull_with_user_declared_coverage(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.market_data, "primary_provider", "yfinance")
+    monkeypatch.setattr(settings.webull, "declared_entitlements", "time_and_sales")
+
+    assert _entitlement_status("webull") == "declared"
+
+
+def test_registry_execute_propagates_entitlement(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.market_data, "primary_provider", "webull")
+
+    class EmptyRequest(BaseModel):
+        pass
+
+    class ProviderPayload(BaseModel):
+        provider: str = "webull"
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="provider_test",
+            kind="read_only",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: ProviderPayload(),
+        )
+    )
+    result = registry.execute(ToolRequest(tool_name="provider_test"))
+
+    assert result.entitlement == "verified"
