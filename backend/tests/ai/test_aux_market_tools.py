@@ -1,9 +1,11 @@
 from datetime import datetime
 
 from backend.ai.market_tools import (
+    CalendarRequest,
     FundamentalsRequest,
     NewsRequest,
     OptionsRequest,
+    get_calendar_tool,
     get_fundamentals_tool,
     get_news_tool,
     get_options_tool,
@@ -67,3 +69,16 @@ def test_aux_tools_preserve_provider_and_payload(monkeypatch) -> None:
     assert fundamentals.data["pe_ratio"] == 20
     assert options.provider == "yfinance_options"
     assert options.expirations == ["2026-10-16"]
+
+
+def test_calendar_tool_reuses_events_for_symbol(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.market_data.services.calendar_service.events_for_symbol",
+        lambda symbol: [{"symbol": symbol, "event_type": "earnings", "date": "2026-10-01"}],
+    )
+
+    result = get_calendar_tool(CalendarRequest(symbol="AAPL"))
+
+    assert result.symbol == "AAPL"
+    assert result.provider == "yfinance"
+    assert result.events == [{"source": "yfinance", "symbol": "AAPL", "event_type": "earnings", "date": "2026-10-01"}]

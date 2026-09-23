@@ -53,6 +53,12 @@ class TapeRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
 
 
+class CalendarRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+
+
 class NewsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -435,6 +441,26 @@ def get_news_tool(request: NewsRequest) -> BaseModel:
         provider=response.provider,
         source_timestamp=response.timestamp,
     )
+
+
+def get_calendar_tool(request: CalendarRequest) -> BaseModel:
+    """Get upcoming earnings and dividend catalyst events for a symbol.
+
+    Reuses backend.market_data.services.calendar_service.events_for_symbol
+    directly — the exact function GET /api/calendar/symbol/{symbol} calls,
+    including its 7-day-lookback/180-day-lookahead window and TTL cache —
+    so results cannot diverge from what the Earnings & Events page shows.
+    Insider ownership and analyst recommendation/target are already
+    covered by get_fundamentals rather than duplicated here.
+    """
+    from backend.market_data.services.calendar_service import events_for_symbol
+
+    symbol = request.symbol.upper()
+    # The endpoint constructs each raw dict as CalendarEvent(**event), whose
+    # `source: str = "yfinance"` default fills in a field events_for_symbol
+    # itself never sets — match that here so the shapes agree exactly.
+    events = [{"source": "yfinance", **event} for event in events_for_symbol(symbol)]
+    return _Payload(symbol=symbol, events=events, provider="yfinance")
 
 
 def get_fundamentals_tool(request: FundamentalsRequest) -> BaseModel:

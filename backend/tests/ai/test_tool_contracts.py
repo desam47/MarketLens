@@ -13,12 +13,14 @@ from fastapi.testclient import TestClient
 
 from backend.ai.market_tools import (
     AlertsRequest,
+    CalendarRequest,
     ConfluenceRequest,
     SymbolRequest,
     TapeRequest,
     TrendRequest,
     WatchlistRequest,
     get_alerts_tool,
+    get_calendar_tool,
     get_confluence_tool,
     get_market_context_tool,
     get_relative_strength_tool,
@@ -217,3 +219,34 @@ def test_tape_state_tool_matches_disabled_tape_endpoint(monkeypatch) -> None:
         raise AssertionError("expected ValueError")
     except ValueError as exc:
         assert "TAPE_ENABLED" in str(exc)
+
+
+def test_calendar_tool_matches_calendar_endpoint(monkeypatch) -> None:
+    """Both the endpoint and the tool call the exact same
+    events_for_symbol function, so this proves the wiring — that the tool
+    doesn't silently reshape or drop what that function returns — rather
+    than the (already-cached, real-yfinance-backed) data itself, which
+    this session's network guard makes unsafe to hit live.
+    """
+    import backend.api.calendar.router as calendar_router_module
+
+    fake_events = lambda symbol: [{"symbol": symbol, "event_type": "earnings", "date": "2026-10-01"}]  # noqa: E731
+    # backend/api/calendar/router.py does `from ...calendar_service import
+    # events_for_symbol` at module load, binding its own local name — the
+    # tool's inline from-import (fresh each call) picks up a patch on the
+    # source module, but the endpoint's already-bound reference does not.
+    # Both must be patched for the two to read the same fake data.
+    monkeypatch.setattr(
+        "backend.market_data.services.calendar_service.events_for_symbol", fake_events
+    )
+    monkeypatch.setattr(calendar_router_module, "events_for_symbol", fake_events)
+
+    app = FastAPI()
+    app.include_router(calendar_router_module.router)
+    client = TestClient(app)
+
+    api_body = client.get("/api/calendar/symbol/AAPL").json()
+    tool_result = get_calendar_tool(CalendarRequest(symbol="AAPL"))
+
+    assert tool_result.symbol == api_body["symbol"]
+    assert tool_result.events == api_body["events"]

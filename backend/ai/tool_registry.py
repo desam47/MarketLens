@@ -297,6 +297,7 @@ def build_default_registry() -> ToolRegistry:
         AlertsRequest,
         ApplicationHelpRequest,
         BarsRequest,
+        CalendarRequest,
         ConfluenceRequest,
         CsvImportRequest,
         FundamentalsRequest,
@@ -313,6 +314,7 @@ def build_default_registry() -> ToolRegistry:
         get_alerts_tool,
         get_application_help_tool,
         get_bars_tool,
+        get_calendar_tool,
         get_confluence_tool,
         get_fundamentals_tool,
         get_indicator_tool,
@@ -345,6 +347,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_confluence", kind="read_only", description="Get multi-timeframe confluence for a symbol under a trading-style preset.", input_model=ConfluenceRequest, handler=get_confluence_tool))
     registry.register(ToolSpec(name="get_relative_strength", kind="read_only", description="Get relative-strength signals for a symbol vs. SPY/QQQ.", input_model=SymbolRequest, handler=get_relative_strength_tool))
     registry.register(ToolSpec(name="get_tape_state", kind="read_only", description="Get the current tape snapshot: BBO, tape pressure, and large prints.", input_model=TapeRequest, handler=get_tape_state_tool))
+    registry.register(ToolSpec(name="get_calendar", kind="read_only", description="Get upcoming earnings/dividend catalyst events for a symbol.", input_model=CalendarRequest, handler=get_calendar_tool))
     registry.register(ToolSpec(name="get_news", kind="read_only", description="Get recent provider news.", input_model=NewsRequest, handler=get_news_tool))
     registry.register(ToolSpec(name="get_fundamentals", kind="read_only", description="Get a fundamentals snapshot.", input_model=FundamentalsRequest, handler=get_fundamentals_tool))
     registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))

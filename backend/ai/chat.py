@@ -1706,6 +1706,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_relative_strength",
     "get_tape_state",
     "get_session_stats",
+    "get_calendar",
     "import_csv",
 }
 

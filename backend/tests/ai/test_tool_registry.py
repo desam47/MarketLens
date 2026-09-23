@@ -22,6 +22,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_alerts",
         "get_application_help",
         "get_bars",
+        "get_calendar",
         "get_confluence",
         "get_fundamentals",
         "get_indicator",
