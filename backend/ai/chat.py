@@ -241,7 +241,10 @@ def _context_freshness_seconds(timestamp: object) -> float | None:
     try:
         parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
+            # Naive timestamps are America/New_York by project convention.
+            from backend.utils.timezone import NY
+
+            parsed = parsed.replace(tzinfo=NY)
         return round(max(0.0, (datetime.now(UTC) - parsed).total_seconds()), 3)
     except (TypeError, ValueError):
         return None

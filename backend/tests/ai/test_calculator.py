@@ -189,3 +189,41 @@ def test_position_risk_leaves_unavailable_outputs_empty() -> None:
 def test_position_risk_requires_shares() -> None:
     with pytest.raises(ValueError, match="shares"):
         calculate(CalculationRequest(calculation="position_risk", entry_price=220, stop_price=212))
+
+
+# Golden values below are computed by hand, independently of calculator.py.
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    [
+        ({"calculation": "return", "start_value": 200, "end_value": 250}, {"return": 25.0}),
+        ({"calculation": "cagr", "start_value": 100, "end_value": 121, "years": 2}, {"cagr": 10.0}),
+        # returns +10% then -10%: mean 0, sample variance (0.01 + 0.01) / 1 = 0.02
+        ({"calculation": "volatility", "prices": [100, 110, 99]}, {"period_volatility": 14.142135623730951}),
+        ({"calculation": "drawdown", "peak_value": 200, "trough_value": 150}, {"drawdown_percent": 25.0}),
+        ({"calculation": "risk_reward", "entry_price": 100, "stop_price": 95, "target_price": 110}, {"risk": 5.0, "reward": 10.0, "risk_reward": 2.0}),
+        ({"calculation": "allocation", "position_value": 25_000, "portfolio_value": 100_000}, {"allocation_percent": 25.0}),
+        ({"calculation": "options_breakeven", "option_type": "call", "strike": 100, "premium": 4}, {"breakeven": 104.0}),
+        ({"calculation": "options_breakeven", "option_type": "put", "strike": 100, "premium": 4}, {"breakeven": 96.0}),
+        ({"calculation": "options_intrinsic_value", "option_type": "call", "underlying_price": 105, "strike": 100, "premium": 7}, {"intrinsic_value": 5.0}),
+        ({"calculation": "options_intrinsic_value", "option_type": "put", "underlying_price": 105, "strike": 100, "premium": 2}, {"intrinsic_value": 0.0}),
+        ({"calculation": "options_extrinsic_value", "option_type": "call", "underlying_price": 105, "strike": 100, "premium": 7}, {"extrinsic_value": 2.0}),
+    ],
+)
+def test_golden_formula_values(request_fields: dict, expected: dict) -> None:
+    result = calculate(CalculationRequest(**request_fields))
+    assert result.values == pytest.approx(expected)
+    assert result.formulas
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"calculation": "return", "start_value": 0, "end_value": 10},
+        {"calculation": "cagr", "start_value": -5, "end_value": 10, "years": 1},
+        {"calculation": "risk_reward", "entry_price": 100, "stop_price": 100, "target_price": 110},
+        {"calculation": "options_breakeven", "strike": 100, "premium": 4},
+    ],
+)
+def test_invalid_inputs_are_rejected_not_defaulted(request_fields: dict) -> None:
+    with pytest.raises(ValueError):
+        calculate(CalculationRequest(**request_fields))

@@ -2061,3 +2061,14 @@ class TestRegeneration(unittest.TestCase):
         self.assertEqual(_apply_regeneration_scope("get_bars", {"symbol": "AAPL", "timeframe": "5m"}, state)["timeframe"], "15m")
         self.assertEqual(_apply_regeneration_scope("get_news", {"symbol": "AAPL"}, state), {"symbol": "AAPL"})
         self.assertEqual(_apply_regeneration_scope("get_bars", {"timeframe": "5m"}, {}), {"timeframe": "5m"})
+
+
+class TestContextFreshness(unittest.TestCase):
+    def test_naive_context_timestamp_is_new_york_time(self):
+        from datetime import timedelta
+
+        from backend.ai.chat import _context_freshness_seconds
+        from backend.utils.timezone import now_ny
+
+        age = _context_freshness_seconds((now_ny() - timedelta(seconds=30)).isoformat())
+        self.assertTrue(25 <= age <= 120, age)

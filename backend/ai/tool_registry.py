@@ -209,7 +209,11 @@ class ToolRegistry:
             finished_at = datetime.now(UTC).isoformat()
             payload = result.model_dump(mode="json")
             provider = str(payload.get("provider") or ("MarketLens calculator" if spec.name == "calculate" else "MarketLens"))
-            source_timestamp = payload.get("source_timestamp") or payload.get("timestamp")
+            source_timestamp = (
+                payload.get("source_timestamp")
+                or payload.get("timestamp")
+                or _oldest_nested_timestamp(payload)
+            )
             freshness_seconds = _freshness_seconds(source_timestamp)
             warnings = _data_quality_warnings(payload, freshness_seconds)
             if duration_ms > spec.max_duration_ms:
@@ -250,13 +254,42 @@ class ToolRegistry:
             )
 
 
+_NESTED_SOURCE_KEYS = ("sources", "signals")
+
+
+def _oldest_nested_timestamp(payload: Mapping[str, Any]) -> str | None:
+    """The oldest per-source timestamp of a composite result.
+
+    Composite tools (why_did_it_move, compare_symbols, the event timeline,
+    relative strength, ...) combine several timestamped reads. Their answer
+    is only as fresh as the oldest of them, so that is its source time.
+    """
+    oldest: tuple[float, str] | None = None
+    for key in _NESTED_SOURCE_KEYS:
+        items = payload.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items[:200]:
+            if not isinstance(item, Mapping):
+                continue
+            value = item.get("source_timestamp") or item.get("timestamp")
+            age = _freshness_seconds(value)
+            if age is not None and (oldest is None or age > oldest[0]):
+                oldest = (age, str(value))
+    return oldest[1] if oldest else None
+
+
 def _freshness_seconds(source_timestamp: Any) -> float | None:
     if not source_timestamp:
         return None
     try:
         source = datetime.fromisoformat(str(source_timestamp).replace("Z", "+00:00"))
         if source.tzinfo is None:
-            source = source.replace(tzinfo=UTC)
+            # Project convention: a naive timestamp is America/New_York local
+            # time. Reading it as UTC would age every naive bar by 4-5 hours.
+            from backend.utils.timezone import NY
+
+            source = source.replace(tzinfo=NY)
         return round(max(0.0, (datetime.now(UTC) - source).total_seconds()), 3)
     except (TypeError, ValueError):
         return None

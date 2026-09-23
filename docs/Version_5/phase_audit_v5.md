@@ -1279,13 +1279,20 @@ covering them.
   `phase_5_7_manual_qa.md` has not been run. The destructive-action and
   portfolio flows were covered by automated and synthetic tests, not live
   smoke.
-- **Audit obligations not yet written.** The per-tool source/cache/
-  provider-impact table (5.2), the per-block persistence/accessibility list
-  (5.7), and 5.1's formula-level audit evidence are described in their
-  sections but not produced. 5.4 has no recorded test counts. Of the plan's
-  12 end-to-end scenarios, #1 (calculation), #7 (follow-up), #11 (failure),
-  and #12 (safety) are automated cases, and #4 (why did it move) is covered
-  for routing only; the rest have no recorded run.
+- **Audit tables.** Written in [phase_audit_v5_tables.md](phase_audit_v5_tables.md):
+  - 5.1 formulas and golden tests;
+  - 5.2 per-tool source, cache, freshness, fallback, and tests;
+  - 5.4 test counts;
+  - 5.7 per-block persistence, quality, and accessibility;
+  - the plan's 12-scenario matrix (7 covered, 5 partial).
+
+  Freshness findings from the tables are fixed:
+  - composite tools report their oldest source;
+  - tape reports its last trade time;
+  - snapshot and computed tools no longer claim call time;
+  - naive timestamps are read as New York time.
+
+  Still open: 5.4 behavioral coverage is thin.
 - **Plan open questions.** Q4 (blocks stored as versioned JSON in
   `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
   are decided by the implementation; Q1–Q3 remain open.

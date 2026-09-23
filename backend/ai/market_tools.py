@@ -912,7 +912,6 @@ def get_tape_state_tool(request: TapeRequest) -> BaseModel:
         raise ValueError("Tape analytics are disabled (set TAPE_ENABLED=true).")
 
     from backend.api.tape.registry import get_tape_engine
-    from backend.utils.timezone import format_edt_iso, now_ny
 
     symbol = request.symbol.upper()
     snapshot = get_tape_engine(symbol).get_snapshot()
@@ -920,8 +919,10 @@ def get_tape_state_tool(request: TapeRequest) -> BaseModel:
     # (backend/config/settings.py's TapeSettings docstring: "Off unless
     # TAPE_ENABLED=true (and the Webull MQTT stream running)") — there is
     # no fallback chain to be behind, so fallback is always False here.
+    # The snapshot's age is the last trade the engine saw; with no trades
+    # yet it has no data time at all (never "now").
     return _Payload(
-        symbol=symbol, snapshot=snapshot, provider="webull", source_timestamp=format_edt_iso(now_ny())
+        symbol=symbol, snapshot=snapshot, provider="webull", source_timestamp=snapshot.get("last_trade_at")
     )
 
 
@@ -1275,7 +1276,7 @@ def scenario_analysis_tool(request: ScenarioRequest) -> BaseModel:
             positions=[],
             assumptions=["No forecast or execution was performed."],
             provider="MarketLens calculator",
-            source_timestamp=_database_timestamp(),
+            source_timestamp=None,
         )
 
     price_shocks = {symbol.upper(): value for symbol, value in request.price_shocks.items()}
@@ -1367,7 +1368,7 @@ def scenario_analysis_tool(request: ScenarioRequest) -> BaseModel:
             "Short positions use inverse P&L and exposure signs.",
         ],
         provider="MarketLens calculator",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         conclusion={"status": "verified_scenario", "message": "Scenario outputs reflect only the supplied assumptions."},
     )
 
@@ -1747,7 +1748,7 @@ def sensitivity_analysis_tool(request: SensitivityRequest) -> BaseModel:
         most_sensitive=drivers[:3],
         assumptions=["Each scenario varies one input at a time; outputs are conditional calculations, not forecasts.", "Fees, slippage, taxes, and execution effects are excluded."],
         provider="MarketLens calculator",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         conclusion={"status": "verified_sensitivity", "message": "Sensitivity shows how supplied assumptions change the calculated outputs."},
     )
 
@@ -2095,6 +2096,9 @@ def assumption_tracking_tool(request: AssumptionTrackingRequest) -> BaseModel:
 
 
 def _database_timestamp() -> str:
+    """Source time for a live application-database read: the data is current
+    as of this call. Never use it for browser snapshots or computed results,
+    whose data time is unknown (or comes from their nested sources)."""
     return datetime.now(UTC).isoformat()
 
 
@@ -2399,7 +2403,7 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
             reason="No server-side positions are configured. The Risk Dashboard stores manual positions in this browser; pass a position snapshot to calculate risk.",
             positions=[],
             provider="MarketLens local dashboard",
-            source_timestamp=_database_timestamp(),
+            source_timestamp=None,
         )
     gross = 0.0
     net = 0.0
@@ -2432,7 +2436,7 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
         stop_loss_risk=round(stop_risk, 8),
         sector_exposure=[{"sector": key, "market_value": round(value, 8), "weight_percent": round(value / gross * 100, 6) if gross else 0.0} for key, value in sorted(sectors.items(), key=lambda item: item[1], reverse=True)],
         provider="MarketLens calculator",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
     )
 
 
@@ -2463,7 +2467,7 @@ def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
             available=False,
             reason="No position snapshot was supplied. Risk Dashboard positions are browser-local; pass them to assess portfolio risk.",
             provider="MarketLens calculator",
-            source_timestamp=_database_timestamp(),
+            source_timestamp=None,
         )
 
     dashboard = get_risk_dashboard_tool(RiskDashboardRequest(positions=request.positions)).model_dump(mode="json")
@@ -2613,7 +2617,7 @@ def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
         proposed_trade=proposed_trade_result,
         unknowns=unknowns,
         provider="MarketLens calculator",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
     )
 
 
@@ -2906,7 +2910,7 @@ def build_trade_plan_tool(request: TradePlanRequest) -> BaseModel:
         formulas=formulas,
         assumptions=assumptions,
         provider="MarketLens calculator",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
     )
 
 
@@ -3020,7 +3024,7 @@ def decision_checklist_tool(request: DecisionChecklistRequest) -> BaseModel:
         counts=counts,
         ready=counts["failed"] == 0,
         provider="MarketLens checklist",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         assumptions=[
             "\"ready\" is true only when zero required checks failed; \"unavailable\" and \"skipped\" checks "
             "are visible above but do not block readiness by themselves — review them individually.",
@@ -3210,7 +3214,7 @@ def export_report_tool(request: ExportReportRequest) -> BaseModel:
         deep_links=links,
         generated_at=_database_timestamp(),
         provider="MarketLens report export",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         assumptions=[
             "This report is generated locally for the user to save/copy; nothing is uploaded or emailed.",
         ],
@@ -3232,7 +3236,7 @@ def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
         total_entries=len(entries),
         closed_entries=len(closed),
         provider="MarketLens local journal",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
     )
 
 
@@ -3262,7 +3266,7 @@ def save_to_journal_tool(request: SaveToJournalRequest) -> BaseModel:
         entries=entries,
         total_entries=len(entries),
         provider="MarketLens local journal",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         assumptions=[
             "The Journal has no server-side table; this returns the updated snapshot for the browser "
             "to persist locally, not a database write.",
@@ -3351,7 +3355,7 @@ def trade_journal_coach_tool(request: JournalCoachRequest) -> BaseModel:
             available=False,
             reason="Trade Journal entries are stored in this browser. Pass the local journal snapshot to coach on it.",
             provider="MarketLens local journal",
-            source_timestamp=_database_timestamp(),
+            source_timestamp=None,
         )
 
     entries = request.entries
@@ -3460,7 +3464,7 @@ def trade_journal_coach_tool(request: JournalCoachRequest) -> BaseModel:
         plan_vs_actual=plan_vs_actual,
         observations={key: {"count": len(items), "entries": items} for key, items in observations.items()},
         provider="MarketLens local journal",
-        source_timestamp=_database_timestamp(),
+        source_timestamp=None,
         assumptions=[
             "Win rate, expectancy, and R-multiples are computed only over closed entries with a usable "
             "entry_price, exit_price, and quantity; entries missing any of these are excluded and listed "

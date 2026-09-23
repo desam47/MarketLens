@@ -887,15 +887,28 @@ def test_tape_state_tool_reports_snapshot_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(settings.tape, "enabled", True)
     monkeypatch.setattr(
         "backend.api.tape.registry.get_tape_engine",
-        lambda symbol: type("_FakeTapeEngine", (), {"get_snapshot": lambda self: {"buy_volume": 100, "sell_volume": 40}})(),
+        lambda symbol: type("_FakeTapeEngine", (), {"get_snapshot": lambda self: {"buy_volume": 100, "sell_volume": 40, "last_trade_at": "2026-09-23T19:59:58+00:00"}})(),
     )
 
     result = get_tape_state_tool(TapeRequest(symbol="AAPL"))
 
     assert result.symbol == "AAPL"
-    assert result.snapshot == {"buy_volume": 100, "sell_volume": 40}
-    assert result.source_timestamp
+    assert result.snapshot["buy_volume"] == 100
+    # The data time is the engine's last trade, not the moment of the call.
+    assert result.source_timestamp == "2026-09-23T19:59:58+00:00"
     assert result.provider == "webull"
+
+
+def test_tape_state_tool_has_no_data_time_before_any_trade(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.tape, "enabled", True)
+    monkeypatch.setattr(
+        "backend.api.tape.registry.get_tape_engine",
+        lambda symbol: type("_FakeTapeEngine", (), {"get_snapshot": lambda self: {"buy_volume": 0, "last_trade_at": None}})(),
+    )
+
+    assert get_tape_state_tool(TapeRequest(symbol="AAPL")).source_timestamp is None
 
 
 def test_market_regime_tool_reports_provider_and_fallback(monkeypatch) -> None:

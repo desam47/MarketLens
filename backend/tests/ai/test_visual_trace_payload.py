@@ -116,3 +116,40 @@ def test_compare_symbols_still_produces_comparison_table() -> None:
     visual_type, visual_data = _visual_trace_payload("compare_symbols", data)
     assert visual_type == "comparison_table"
     assert visual_data["rows"] == [[1, "AAPL", 10.0, "rsi"]]
+
+
+def test_bars_become_a_bounded_chart() -> None:
+    kind, payload = _visual_trace_payload("get_bars", {"symbol": "AAPL", "timeframe": "5m", "session": "regular", "bars": [{"close": i} for i in range(200)]})
+    assert kind == "chart"
+    assert len(payload["bars"]) == 120  # bounded, newest kept
+    assert payload["bars"][-1] == {"close": 199}
+
+
+def test_indicator_becomes_an_indicator_table() -> None:
+    kind, payload = _visual_trace_payload("get_indicator", {"symbol": "AAPL", "indicator": "rsi", "value": 41.5})
+    assert kind == "indicator_table"
+    assert payload["indicators"] == {"rsi": 41.5}
+
+
+def test_risk_dashboard_becomes_a_risk_card_without_positions() -> None:
+    kind, payload = _visual_trace_payload("get_risk_dashboard", {"portfolio_value": 100_000, "gross_exposure": 60_000, "positions": [{"symbol": "AAPL"}]})
+    assert kind == "risk_card"
+    assert payload == {"portfolio_value": 100_000, "gross_exposure": 60_000}
+
+
+def test_scenario_keeps_only_scenario_fields() -> None:
+    kind, payload = _visual_trace_payload("scenario_analysis", {"shock_percent": -5, "total_pnl_delta": -3000, "raw_debug": "x"})
+    assert kind == "scenario"
+    assert payload == {"shock_percent": -5, "total_pnl_delta": -3000}
+
+
+def test_session_stats_become_a_session_card() -> None:
+    kind, payload = _visual_trace_payload("get_session_stats", {"symbol": "AAPL", "session": "premarket", "open": 148.0, "close": 149.5, "bars": [1, 2]})
+    assert kind == "session_stats"
+    assert payload == {"symbol": "AAPL", "session": "premarket", "open": 148.0, "close": 149.5}
+
+
+def test_historical_similarity_becomes_historical_outcomes() -> None:
+    kind, payload = _visual_trace_payload("historical_similarity", {"symbol": "AAPL", "sample_size": 12, "look_ahead_safe": True, "matches": [1, 2, 3]})
+    assert kind == "historical_outcomes"
+    assert payload == {"symbol": "AAPL", "sample_size": 12, "look_ahead_safe": True}

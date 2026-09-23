@@ -5,6 +5,7 @@ assert the derived snapshot (pattern from test_trend_engine.py).
 
 import time
 import unittest
+from datetime import UTC, datetime
 
 from backend.tape.tape_engine import TapeEngine
 
@@ -103,6 +104,8 @@ class TestTapeEngine(unittest.TestCase):
         self.assertGreater(snap["trade_velocity"], 0)
         self.assertEqual(len(snap["recent_prints"]), 4)
         self.assertEqual(snap["recent_prints"][0]["side"], "buy")
+        # The last trade (base + 4) is the snapshot's data time.
+        self.assertEqual(snap["last_trade_at"], datetime.fromtimestamp(base + 4, UTC).isoformat())
 
     def test_pressure_trend_detects_recent_buying_strength(self):
         e = TapeEngine("AAPL")
@@ -118,6 +121,7 @@ class TestTapeEngine(unittest.TestCase):
         self.assertEqual(snap["trade_count"], 0)
         self.assertIsNone(snap["buy_ratio"])
         self.assertIsNone(snap["last_block"])
+        self.assertIsNone(snap["last_trade_at"])
 
     def test_drain_pending_yields_one_second_bars(self):
         e = TapeEngine("AAPL")

@@ -319,6 +319,11 @@ class TapeEngine:
             "block_count_5m": len(blocks),
             "last_block": last_block,
             "recent_prints": recent_prints,
+            # When the engine last saw a trade; the snapshot is only as fresh
+            # as this, not as the time it was requested.
+            "last_trade_at": (
+                datetime.fromtimestamp(last_ts, UTC).isoformat() if last_ts is not None else None
+            ),
         }
 
     @staticmethod

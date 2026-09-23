@@ -555,3 +555,53 @@ def test_text_without_a_relative_date_resolves_to_none() -> None:
     from backend.ai.tool_registry import resolve_relative_date
 
     assert resolve_relative_date("how is AAPL trending?") is None
+
+
+def _registry_returning(payload: dict) -> ToolRegistry:
+    from backend.ai.market_tools import _Payload
+
+    registry = ToolRegistry()
+    registry.register(ToolSpec(name="fixed", kind="read_only", description="test", input_model=_EmptyRequest, handler=lambda _: _Payload(**payload)))
+    return registry
+
+
+def test_naive_source_time_is_read_as_new_york_not_utc() -> None:
+    from datetime import timedelta
+
+    from backend.utils.timezone import now_ny
+
+    naive_ny = (now_ny() - timedelta(seconds=30)).isoformat()  # naive NY, 30 s ago
+    result = _registry_returning({"source_timestamp": naive_ny}).execute(ToolRequest(tool_name="fixed"))
+    assert 25 <= result.freshness_seconds <= 120  # not 4-5 hours
+
+
+def test_composite_freshness_is_its_oldest_source() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    payload = {
+        "sources": [
+            {"name": "bars", "timestamp": (now - timedelta(seconds=10)).isoformat()},
+            {"name": "news", "timestamp": (now - timedelta(seconds=600)).isoformat()},
+            {"name": "unknown", "timestamp": None},
+        ]
+    }
+    result = _registry_returning(payload).execute(ToolRequest(tool_name="fixed"))
+    assert 590 <= result.freshness_seconds <= 700
+    assert result.source_timestamp == payload["sources"][1]["timestamp"]
+
+
+def test_top_level_source_time_wins_over_nested_sources() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    payload = {"source_timestamp": now.isoformat(), "sources": [{"timestamp": (now - timedelta(hours=1)).isoformat()}]}
+    result = _registry_returning(payload).execute(ToolRequest(tool_name="fixed"))
+    assert result.freshness_seconds < 60
+
+
+def test_browser_snapshot_tools_do_not_claim_fresh_data() -> None:
+    result = default_registry.execute(ToolRequest(tool_name="get_risk_dashboard", arguments={}))
+    assert result.ok is True
+    assert result.source_timestamp is None
+    assert result.freshness_seconds is None
