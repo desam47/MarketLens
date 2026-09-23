@@ -670,6 +670,35 @@ class TestSendMessageStream(unittest.TestCase):
         self.assertEqual(resp.status_code, 404)
 
 
+class TestResetMemory(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_reset_clears_planner_state_only(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.delete("/api/ai/chat/sessions/1/memory")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"session_id": 1, "reset": True})
+        mock_repo.set_planner_state.assert_called_once_with(1, "{}")
+        mock_repo.delete_sessions.assert_not_called()
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_reset_404_when_session_missing(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = None
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.delete("/api/ai/chat/sessions/999/memory")
+
+        self.assertEqual(resp.status_code, 404)
+        mock_repo.set_planner_state.assert_not_called()
+
+
 class TestClearSessions(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)

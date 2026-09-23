@@ -44,8 +44,10 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_quote",
         "get_relative_strength",
         "get_risk_dashboard",
+        "get_saved_scans",
         "get_sector_data",
         "get_session_stats",
+        "get_signal_history",
         "get_support_resistance",
         "get_tape_state",
         "get_trade_journal",
@@ -527,3 +529,29 @@ def test_registry_execute_propagates_entitlement(monkeypatch) -> None:
     result = registry.execute(ToolRequest(tool_name="provider_test"))
 
     assert result.entitlement == "verified"
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        ("what happened today", "2026-09-23T00:00:00", "2026-09-23T23:59:59"),
+        ("since yesterday", "2026-09-22T00:00:00", "2026-09-22T23:59:59"),
+        ("what changed since last Friday", "2026-09-18T00:00:00", "2026-09-18T23:59:59"),
+        ("on Wednesday", "2026-09-16T00:00:00", "2026-09-16T23:59:59"),  # today is Wednesday: the previous one
+        ("3 days ago", "2026-09-20T00:00:00", "2026-09-20T23:59:59"),
+        ("last week", "2026-09-14T00:00:00", "2026-09-20T23:59:59"),
+    ],
+)
+def test_relative_dates_resolve_in_new_york(text: str, start: str, end: str) -> None:
+    from datetime import datetime
+
+    from backend.ai.tool_registry import resolve_relative_date
+
+    resolved = resolve_relative_date(text, datetime(2026, 9, 23, 10, 0))  # a Wednesday
+    assert (resolved["start"], resolved["end"]) == (start, end)
+
+
+def test_text_without_a_relative_date_resolves_to_none() -> None:
+    from backend.ai.tool_registry import resolve_relative_date
+
+    assert resolve_relative_date("how is AAPL trending?") is None

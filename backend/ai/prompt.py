@@ -887,6 +887,8 @@ class ChatReplyResponse(BaseModel):
         "get_trade_journal",
         "get_application_help",
         "get_alerts",
+        "get_signal_history",
+        "get_saved_scans",
         "get_sector_data",
         "get_trend",
         "get_confluence",
@@ -1023,6 +1025,10 @@ _ACTION_TOOL_DOCS = (
       server cannot see localStorage. Use get_application_help for verified \
       page names, feature topics, and hash routes. get_alerts reads the \
       trader's own alert rules (optionally scoped to a symbol). \
+      get_signal_history reads recorded engine signals, trend-state \
+      transitions, and forward outcomes (optional symbol, timeframe, \
+      start/end). get_saved_scans needs an explicit Scanner preset \
+      snapshot; without one it reports the presets are browser-local. \
       get_sector_data / get_trend / get_confluence / get_relative_strength \
       need action_symbol; get_relative_strength compares against a \
       benchmark (default SPY). get_tape_state and get_session_stats need \
@@ -1295,7 +1301,8 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_market_regime, get_market_context, get_news, get_fundamentals, \
       get_options_snapshot, get_watchlist, get_watchlist_intelligence, \
       get_risk_dashboard, get_trade_journal, \
-      get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
+      get_application_help, get_alerts, get_signal_history, get_saved_scans, \
+      get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
       import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, save_to_journal, export_report, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """

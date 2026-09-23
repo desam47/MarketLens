@@ -16,6 +16,7 @@ jest.mock('../services/api', () => ({
     addSymbolToWatchlist: jest.fn(),
     createAlert: jest.fn(),
     setChatFeedback: jest.fn(),
+    resetChatMemory: jest.fn(),
   },
 }));
 
@@ -1022,5 +1023,19 @@ describe('ChatPanel (universal)', () => {
     }));
     expect(await screen.findByText(/couldn't verify one or more numbers/)).toBeInTheDocument();
     expect(screen.queryByText(/Unverified draft/)).not.toBeInTheDocument();
+  });
+
+  it('resets structured memory without clearing messages', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'How is AAPL?', created_at: '', grounded: null } as any,
+    ]);
+    (mockApi as any).resetChatMemory.mockResolvedValue({ session_id: 1, reset: true });
+    render(<ChatPanel />);
+    expect(await screen.findByText('How is AAPL?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /reset memory/i }));
+    await waitFor(() => expect((mockApi as any).resetChatMemory).toHaveBeenCalledWith(1));
+    expect(await screen.findByText(/Chat memory reset/)).toBeInTheDocument();
+    expect(screen.getByText('How is AAPL?')).toBeInTheDocument();
+    expect(mockApi.clearChatHistory).not.toHaveBeenCalled();
   });
 });

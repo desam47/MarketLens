@@ -97,6 +97,7 @@ from backend.ai.tool_registry import (
     default_registry,
     normalize_session,
     normalize_timeframe,
+    resolve_relative_date,
 )
 from backend.config.settings import settings
 from backend.models import Alert, AlertTrigger, ChatMessage
@@ -339,6 +340,8 @@ def _cacheable_chat_action(action: str) -> bool:
         "get_trade_journal",
         "get_application_help",
         "get_alerts",
+        "get_signal_history",
+        "get_saved_scans",
         "get_sector_data",
         "get_trend",
         "get_confluence",
@@ -397,6 +400,12 @@ _OPTIONS_TOOL_INTENT = re.compile(r"\b(options?|calls?|puts?|option chain|implie
 _HISTORICAL_TOOL_INTENT = re.compile(r"\b(historical|history|past bars?|candles?|price history|ohlc|replay)\b", re.I)
 _SCANNER_TOOL_INTENT = re.compile(r"\b(screen|scanner|scan|find stocks?|find tickers?|filter my watchlist)\b", re.I)
 _RISK_TOOL_INTENT = re.compile(r"\b(risk dashboard|portfolio risk|position risk|my positions|exposure|drawdown)\b", re.I)
+_SIGNAL_HISTORY_INTENT = re.compile(
+    r"\b(signal history|past signals?|recent signals?|previous signals?|signal log|recorded signals?|"
+    r"signals? (?:from|since|over|on|last)\b|when did .{1,40} (?:flip|turn) (?:bullish|bearish))",
+    re.I,
+)
+_SAVED_SCANS_INTENT = re.compile(r"\b(saved scans?|saved (?:scanner )?presets?|scan(?:ner)? presets?|my presets?)\b", re.I)
 _JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading journal|mistakes? review)\b", re.I)
 _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
 _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
@@ -706,6 +715,11 @@ _NAMED_WATCHLIST_LEADING_RE = re.compile(
 
 
 def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
+    resolved = _resolve_named_watchlist(db, user_content)
+    return resolved[1] if resolved else []
+
+
+def _resolve_named_watchlist(db, user_content: str) -> tuple[str, list[str]] | None:
     """Deterministically resolve a specific, real watchlist the trader
     NAMED in this message (e.g. 'analyze "My Watch" watchlist') to its
     real member symbols, so the turn builds genuine <context> blocks for
@@ -713,8 +727,8 @@ def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
     CHAT_SYSTEM_PROMPT rule 10) — that rule is for when no real
     watchlist can be resolved this way, not this case.
 
-    Returns ``[]`` (a silent no-op) whenever the captured name doesn't
-    match a real watchlist — never a guess.
+    Returns ``(name, symbols)``, or ``None`` (a silent no-op) whenever the
+    captured name doesn't match a real watchlist — never a guess.
     """
     m = _NAMED_WATCHLIST_RE.search(user_content)
     if m:
@@ -724,7 +738,7 @@ def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
         name = m2.group("name") if m2 else ""
     name = name.strip(" \"'“”")
     if not name:
-        return []
+        return None
     from backend.repositories.watchlist_repository import WatchlistRepository
 
     repo = WatchlistRepository(db)
@@ -736,8 +750,8 @@ def _resolve_named_watchlist_symbols(db, user_content: str) -> list[str]:
             None,
         )
     if wl is None:
-        return []
-    return [s.symbol for s in wl.symbols if s.is_enabled]
+        return None
+    return wl.name, [s.symbol for s in wl.symbols if s.is_enabled]
 
 
 # Short-lived per-symbol context cache — a burst of follow-ups about one
@@ -967,6 +981,7 @@ def _prepare_turn(
         else []
     )
     symbols, capped = resolve_turn_symbols(user_content, transcript, base)
+    remembered_watchlist = planner_state.get("watchlist")
 
     # A specific, real, named watchlist ("analyze my X watchlist") gets
     # its member symbols folded in as if they'd been named individually
@@ -979,7 +994,10 @@ def _prepare_turn(
     if not _WATCHLIST_CONTENTS_INTENT.search(user_content) and not _WATCHLIST_LIST_INTENT.search(
         user_content
     ):
-        named_wl_symbols = _resolve_named_watchlist_symbols(repo.db, user_content)
+        named_watchlist = _resolve_named_watchlist(repo.db, user_content)
+        named_wl_symbols = named_watchlist[1] if named_watchlist else []
+        if named_watchlist:
+            remembered_watchlist = named_watchlist[0]
         if named_wl_symbols:
             seen = {s.upper() for s in symbols}
             for sym in named_wl_symbols:
@@ -1051,6 +1069,7 @@ def _prepare_turn(
         previous_ticker = remembered_symbols[0]
     elif previous_ticker:
         previous_ticker = str(previous_ticker).upper()
+    turn_date_range = resolve_relative_date(user_content)
     current_calculation = _fallback_calculation(user_content) or _calculation_followup(
         user_content, planner_state.get("last_calculation_inputs")
     )
@@ -1066,7 +1085,11 @@ def _prepare_turn(
     next_state = {
         "current_symbols": current_symbols,
         "previous_ticker": previous_ticker,
-        "watchlist": planner_state.get("watchlist"),
+        "watchlist": remembered_watchlist,
+        "date_range": turn_date_range or planner_state.get("date_range"),
+        # Only a date named in this message scopes tools; the remembered
+        # date_range above is context, not a silent filter on later turns.
+        "active_date_range": turn_date_range,
         "timeframe": _extract_memory_value(user_content, r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b"),
         "session": _extract_memory_value(user_content, r"\b(premarket|regular|after[- ]hours?|extended)\b"),
         "last_user_question": user_content[:300],
@@ -1192,6 +1215,27 @@ def _apply_regeneration_scope(action: str, arguments: dict, planner_state: dict 
         scoped["timeframe"] = scope["timeframe"]
     if scope.get("session") and "session" in fields:
         scoped["session"] = scope["session"]
+    return scoped
+
+
+def _apply_date_scope(action: str, arguments: dict, planner_state: dict | None) -> dict:
+    """Map a date named in this message onto tools that take one.
+
+    "What happened last Friday" bounds the event timeline to that day;
+    "what changed since last Friday" compares against that day's close.
+    "yesterday"/"today" keep what_changed's own named references.
+    """
+    active = (planner_state or {}).get("active_date_range")
+    if not isinstance(active, dict):
+        return arguments
+    scoped = dict(arguments)
+    if action in {"market_event_timeline", "get_signal_history"}:
+        scoped.setdefault("start", active["start"])
+        scoped.setdefault("end", active["end"])
+    elif action == "what_changed" and active.get("phrase") not in {"today", "yesterday"}:
+        if scoped.get("reference") in (None, "previous_close") and not scoped.get("since"):
+            scoped["reference"] = "timestamp"
+            scoped["since"] = active["end"]
     return scoped
 
 
@@ -1705,6 +1749,28 @@ def _build_deterministic_chat_reply(
             grounded=True,
             action="calculate",
             action_calculation=calculation,
+        )
+
+    if _SAVED_SCANS_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified saved-scan lookup",
+            grounded=True,
+            action="get_saved_scans",
+            action_tool_arguments={},
+        )
+    if _SIGNAL_HISTORY_INTENT.search(user_content):
+        if len(focus_symbols) > 1:
+            return "Which ticker's signal history do you want?"
+        arguments: dict = {"symbol": focus_symbols[0]} if focus_symbols else {}
+        timeframe = _extract_memory_value(user_content, r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b")
+        if timeframe:
+            arguments["timeframe"] = timeframe
+        return ChatReplyResponse(
+            reply="Verified signal-history lookup",
+            grounded=True,
+            action="get_signal_history",
+            action_symbol=focus_symbols[0] if focus_symbols else None,
+            action_tool_arguments=arguments,
         )
 
     semantic_route = route_semantic_intent(
@@ -3469,6 +3535,8 @@ _MARKET_TOOL_ACTIONS = {
     "get_trade_journal",
     "get_application_help",
     "get_alerts",
+    "get_signal_history",
+    "get_saved_scans",
     "get_sector_data",
     "get_trend",
     "get_confluence",
@@ -3736,6 +3804,7 @@ def _run_market_tool(
         # previous records forward or to rewrite their original fields.
         arguments["existing_assumptions"] = list((planner_state or {}).get("research_assumptions", []))
     arguments = _apply_regeneration_scope(parsed.action, arguments, planner_state)
+    arguments = _apply_date_scope(parsed.action, arguments, planner_state)
     request_scope: dict[str, object] = {}
     if isinstance(arguments.get("session"), str):
         try:
@@ -3913,6 +3982,17 @@ _ACTION_HANDLERS = {
 }
 
 
+def _remember_watchlist_action(parsed, succeeded: bool, planner_state: dict | None) -> None:
+    """Keep the "current watchlist" memory in step with watchlist actions."""
+    name = (parsed.action_watchlist or "").strip()
+    if planner_state is None or not succeeded or not name:
+        return
+    if parsed.action in {"create_watchlist", "add_to_watchlist", "remove_from_watchlist"}:
+        planner_state["watchlist"] = name
+    elif parsed.action == "delete_watchlist" and str(planner_state.get("watchlist") or "").lower() == name.lower():
+        planner_state["watchlist"] = None
+
+
 def _run_action(
     db,
     parsed,
@@ -3959,6 +4039,7 @@ def _run_action(
         from backend.ai.market_baseline import invalidate_cache
 
         invalidate_cache()
+    _remember_watchlist_action(parsed, bool(result[1]), planner_state)
     if len(result) == 3:
         if trace is not None and parsed.action != "calculate":
             trace.append({

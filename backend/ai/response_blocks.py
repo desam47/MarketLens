@@ -80,8 +80,9 @@ def _quality(
     evidence_fingerprint: str | None = None,
     material_change_detected: bool = False,
 ) -> BlockQuality:
-    successful = next((item for item in reversed(trace) if item.get("ok") is True), None)
-    failed = any(item.get("ok") is False for item in trace)
+    evidence_items = [item for item in trace if _is_evidence_item(item)]
+    successful = _weakest_successful(evidence_items)
+    failed = any(item.get("ok") is False for item in evidence_items)
     if unavailable or failed or not grounded:
         state = "unavailable" if unavailable and not focus and not partial else "partial"
     elif partial:
@@ -124,6 +125,75 @@ def _quality(
     )
 
 
+_NON_EVIDENCE_KINDS = {"model", "model_call", "observability", "server_reply", "step", "regeneration"}
+
+
+def _is_evidence_item(item: dict[str, Any]) -> bool:
+    return bool(item.get("tool")) and item.get("kind") not in _NON_EVIDENCE_KINDS
+
+
+def _weakest_successful(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The successful evidence item that most limits the answer's quality.
+
+    A fallback source first, then the oldest known data age, then data with
+    no freshness at all; among equals the latest item. The turn-level label
+    must reflect the stalest input, not whichever tool happened to run last.
+    """
+    successful = [item for item in items if item.get("ok") is True]
+    if not successful:
+        return None
+
+    def rank(indexed: tuple[int, dict[str, Any]]) -> tuple[int, float, int]:
+        index, item = indexed
+        age = item.get("freshness_seconds")
+        known = isinstance(age, (int, float))
+        return (1 if item.get("fallback") else 0, float(age) if known else -1.0, index)
+
+    return max(enumerate(successful), key=rank)[1]
+
+
+def _item_quality(
+    item: dict[str, Any],
+    *,
+    evidence_fingerprint: str | None = None,
+    material_change_detected: bool = False,
+) -> BlockQuality:
+    """Quality for a block built from exactly one tool result."""
+    ok = item.get("ok") is True
+    freshness_seconds = item.get("freshness_seconds")
+    if not isinstance(freshness_seconds, (int, float)):
+        freshness_seconds = None
+        freshness_status = None if item.get("kind") == "calculation" else "unknown"
+    elif freshness_seconds <= 60:
+        freshness_status = "fresh"
+    elif freshness_seconds <= _STALE_AFTER_SECONDS:
+        freshness_status = "recent"
+    else:
+        freshness_status = "stale"
+    if not ok:
+        state, confidence = "unavailable", 0.0
+    elif item.get("fallback") or freshness_status == "stale":
+        state, confidence = "stale", 0.5
+    else:
+        state, confidence = "verified", 1.0
+    return BlockQuality(
+        state=state,
+        grounded=ok,
+        confidence=confidence,
+        provider=item.get("provider"),
+        source_timestamp=item.get("source_timestamp"),
+        freshness_seconds=freshness_seconds,
+        session=item.get("session"),
+        timeframe=item.get("timeframe"),
+        fallback=bool(item.get("fallback")),
+        entitlement=item.get("entitlement"),
+        freshness_status=freshness_status,
+        stale_after_seconds=_STALE_AFTER_SECONDS if freshness_seconds is not None else None,
+        evidence_fingerprint=evidence_fingerprint,
+        material_change_detected=material_change_detected,
+    )
+
+
 def evidence_fingerprint(value: Any) -> str | None:
     """Return a stable digest for evidence, excluding prose-only metadata."""
     if isinstance(value, list) and value and isinstance(value[0], dict) and "type" in value[0]:
@@ -158,7 +228,7 @@ def evidence_fingerprint(value: Any) -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
 
 
-def _calculation_block(trace: list[dict[str, Any]], quality: BlockQuality) -> ResponseBlock | None:
+def _calculation_block(trace: list[dict[str, Any]], **quality_context: Any) -> ResponseBlock | None:
     for item in reversed(trace):
         if item.get("kind") != "calculation" or not isinstance(item.get("data"), dict):
             continue
@@ -166,13 +236,16 @@ def _calculation_block(trace: list[dict[str, Any]], quality: BlockQuality) -> Re
             id="calculation-1",
             type="calculation",
             data=item["data"],
-            quality=quality,
+            quality=_item_quality(item, **quality_context),
         )
     return None
 
 
-def _visual_blocks(trace: list[dict[str, Any]], quality: BlockQuality) -> list[ResponseBlock]:
-    """Turn bounded tool visual payloads into typed UI blocks."""
+def _visual_blocks(trace: list[dict[str, Any]], **quality_context: Any) -> list[ResponseBlock]:
+    """Turn bounded tool visual payloads into typed UI blocks.
+
+    Each block's quality comes from the one tool result that produced it.
+    """
     blocks: list[ResponseBlock] = []
     for index, item in enumerate(trace, start=1):
         visual_type = item.get("visual_type")
@@ -188,7 +261,7 @@ def _visual_blocks(trace: list[dict[str, Any]], quality: BlockQuality) -> list[R
                 id=f"visual-{index}",
                 type=visual_type,
                 data=visual_data,
-                quality=quality,
+                quality=_item_quality(item, **quality_context),
             )
         )
     return blocks
@@ -306,10 +379,13 @@ def build_response_blocks(
             )
         )
 
-    calculation = _calculation_block(trace, quality)
+    # Data blocks carry the quality of their own source; answer-level blocks
+    # (prose, evidence, warnings, actions) carry the turn's weakest input.
+    item_context = {"evidence_fingerprint": fingerprint, "material_change_detected": material_change_detected}
+    calculation = _calculation_block(trace, **item_context)
     if calculation is not None:
         blocks.append(calculation)
-    blocks.extend(_visual_blocks(trace, quality))
+    blocks.extend(_visual_blocks(trace, **item_context))
 
     warnings: list[str] = []
     for item in trace:

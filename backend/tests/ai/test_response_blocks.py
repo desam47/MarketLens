@@ -305,3 +305,57 @@ def test_preferences_never_touch_calculation_or_evidence_blocks() -> None:
     assert calc_no_prefs == calc_with_prefs
     # Only the trailing suggested_followups block may differ.
     assert _followups(no_prefs) != _followups(with_prefs)
+
+
+def _mixed_trace() -> list[dict]:
+    return [
+        {
+            "tool": "get_bars", "ok": True, "provider": "webull", "freshness_seconds": 5,
+            "source_timestamp": "2026-09-23T15:59:55-04:00", "timeframe": "5m", "session": "regular",
+            "visual_type": "chart", "visual_data": {"symbol": "AAPL", "points": []},
+        },
+        {
+            "tool": "get_options_snapshot", "ok": True, "provider": "yfinance", "freshness_seconds": 1800,
+            "source_timestamp": "2026-09-23T15:30:00-04:00", "fallback": True,
+            "visual_type": "options_chain", "visual_data": {"symbol": "AAPL", "contracts": []},
+        },
+        {
+            "kind": "calculation", "tool": "calculate", "ok": True, "provider": "MarketLens calculator",
+            "data": {"values": {"total_risk": 1600}, "formulas": ["abs(entry - stop) * shares"]},
+        },
+    ]
+
+
+def test_each_data_block_carries_its_own_source_quality() -> None:
+    blocks = build_response_blocks(content="ok", grounded=True, focus=["AAPL"], partial=[], unavailable=[], trace=_mixed_trace())
+    by_type = {block["type"]: block["quality"] for block in blocks}
+
+    assert by_type["chart"]["provider"] == "webull"
+    assert by_type["chart"]["state"] == "verified"
+    assert by_type["chart"]["freshness_status"] == "fresh"
+    assert by_type["chart"]["timeframe"] == "5m"
+
+    assert by_type["options_chain"]["provider"] == "yfinance"
+    assert by_type["options_chain"]["state"] == "stale"
+    assert by_type["options_chain"]["fallback"] is True
+
+    assert by_type["calculation"]["provider"] == "MarketLens calculator"
+    assert by_type["calculation"]["state"] == "verified"
+    assert by_type["calculation"]["freshness_status"] is None
+
+
+def test_answer_level_quality_reflects_the_weakest_input_not_the_last_tool() -> None:
+    blocks = build_response_blocks(content="ok", grounded=True, focus=["AAPL"], partial=[], unavailable=[], trace=_mixed_trace())
+    prose = next(block["quality"] for block in blocks if block["type"] == "prose")
+    assert prose["state"] == "stale"
+    assert prose["provider"] == "yfinance"
+    assert prose["freshness_seconds"] == 1800
+
+
+def test_failed_model_call_does_not_degrade_answer_quality() -> None:
+    trace = [
+        {"kind": "model_call", "ok": False, "failure_kind": "parse_error"},
+        {"tool": "get_quote", "ok": True, "provider": "webull", "freshness_seconds": 3},
+    ]
+    blocks = build_response_blocks(content="ok", grounded=True, focus=["AAPL"], partial=[], unavailable=[], trace=trace)
+    assert blocks[0]["quality"]["state"] == "verified"

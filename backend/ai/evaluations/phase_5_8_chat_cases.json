@@ -1,5 +1,5 @@
 {
-  "version": "5.8.4",
+  "version": "5.8.5",
   "description": "Provider-free end-to-end Chat cases. Each turn runs through answer_chat_message (or stream_chat_message) with scripted model replies, scripted tool results, and a private in-memory database.",
   "cases": [
     {
@@ -1399,6 +1399,267 @@
             "db": {
               "pending_confirmation": null
             }
+          }
+        }
+      ]
+    },
+    {
+      "id": "relative_date_scopes_what_changed",
+      "category": "dates",
+      "freeze_now": "2026-09-23T10:00:00",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "what_changed": {
+          "provider": "evaluation",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "changes": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "what changed in AAPL since last Friday?",
+          "expect": {
+            "tools": [
+              "what_changed"
+            ],
+            "tool_arguments": {
+              "what_changed": {
+                "symbol": "AAPL",
+                "reference": "timestamp",
+                "since": "2026-09-18T23:59:59"
+              }
+            },
+            "max_model_calls": 0,
+            "memory": {
+              "date_range": {
+                "phrase": "last friday",
+                "start": "2026-09-18T00:00:00"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "relative_date_bounds_timeline",
+      "category": "dates",
+      "freeze_now": "2026-09-23T10:00:00",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "market_event_timeline": {
+          "provider": "MarketLens timeline",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "events": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "what happened with AAPL yesterday?",
+          "model": [
+            {
+              "reply": "ok",
+              "grounded": true,
+              "action": "market_event_timeline",
+              "action_tool_arguments": {
+                "symbol": "AAPL"
+              }
+            }
+          ],
+          "expect": {
+            "tools": [
+              "market_event_timeline"
+            ],
+            "tool_arguments": {
+              "market_event_timeline": {
+                "start": "2026-09-22T00:00:00",
+                "end": "2026-09-22T23:59:59"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "watchlist_memory_carries_to_comparison",
+      "category": "follow_up",
+      "seed": {
+        "watchlists": [
+          {
+            "name": "Tech",
+            "symbols": [
+              "AAPL",
+              "MSFT"
+            ]
+          }
+        ]
+      },
+      "symbol_universe": [
+        "AAPL",
+        "MSFT"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          }
+        },
+        "MSFT": {
+          "price": 400.0,
+          "trend_state": {
+            "direction": "up"
+          }
+        }
+      },
+      "tools": {
+        "compare_symbols": {
+          "provider": "MarketLens comparison",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "metric": "volume",
+            "rankings": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "how is my Tech watchlist doing?",
+          "model": [
+            {
+              "reply": "Here is the read.",
+              "grounded": false,
+              "action": "none"
+            }
+          ],
+          "expect": {
+            "memory": {
+              "watchlist": "Tech"
+            }
+          }
+        },
+        {
+          "user": "compare my watchlist by volume",
+          "expect": {
+            "tools": [
+              "compare_symbols"
+            ],
+            "tool_arguments": {
+              "compare_symbols": {
+                "watchlist": "Tech",
+                "metric": "volume"
+              }
+            },
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "signal_history_routes",
+      "category": "user_data",
+      "symbol_universe": [
+        "AAPL"
+      ],
+      "contexts": {
+        "AAPL": {
+          "price": 150.0,
+          "trend_state": {
+            "direction": "up"
+          },
+          "timestamp": "2026-09-23T15:59:50-04:00"
+        }
+      },
+      "tools": {
+        "get_signal_history": {
+          "provider": "MarketLens signal history",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "symbol": "AAPL",
+            "signals": [],
+            "transitions": [],
+            "available": false
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "show the recent signals for AAPL on the 1h",
+          "expect": {
+            "tools": [
+              "get_signal_history"
+            ],
+            "tool_arguments": {
+              "get_signal_history": {
+                "symbol": "AAPL",
+                "timeframe": "1h"
+              }
+            },
+            "max_model_calls": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "saved_scans_are_honestly_unavailable",
+      "category": "user_data",
+      "tools": {
+        "get_saved_scans": {
+          "provider": "MarketLens local scanner presets",
+          "freshness_seconds": 30,
+          "source_timestamp": "2026-09-23T15:59:30-04:00",
+          "data": {
+            "available": false,
+            "reason": "Saved Scanner presets are stored in this browser.",
+            "presets": []
+          }
+        }
+      },
+      "turns": [
+        {
+          "user": "show my saved scans",
+          "expect": {
+            "tools": [
+              "get_saved_scans"
+            ],
+            "tool_arguments": {
+              "get_saved_scans": {}
+            },
+            "max_model_calls": 0,
+            "reply_contains": [
+              "browser"
+            ]
           }
         }
       ]

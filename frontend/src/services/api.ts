@@ -2619,6 +2619,15 @@ class ApiService {
     return this.fetch(`/ai/chat/sessions${qs}`, { method: 'DELETE' });
   }
 
+  /**
+   * Forget a session's structured Chat memory (remembered tickers,
+   * watchlist, timeframe/session, dates, last calculation, pending
+   * confirmation) while keeping its messages. Backs "Reset memory".
+   */
+  async resetChatMemory(sessionId: number): Promise<{ session_id: number; reset: boolean }> {
+    return this.fetch(`/ai/chat/sessions/${sessionId}/memory`, { method: 'DELETE' });
+  }
+
   async sendChatMessage(
     sessionId: number,
     content: string,

@@ -8,6 +8,7 @@ through this interface.
 from __future__ import annotations
 
 import contextvars
+import re
 import threading
 import time
 from collections import deque
@@ -341,6 +342,54 @@ def normalize_timeframe(value: str) -> str:
     return normalized
 
 
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_RELATIVE_DATE_RE = re.compile(
+    r"\b(?P<today>today)\b"
+    r"|\b(?P<yesterday>yesterday)\b"
+    r"|\b(?P<days>\d{1,3})\s+(?:trading\s+)?days?\s+ago\b"
+    r"|\b(?P<lastweek>last\s+week)\b"
+    r"|\b(?:last|on|since|this\s+past)\s+(?P<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.I,
+)
+
+
+def resolve_relative_date(text: str, now: datetime | None = None) -> dict[str, str] | None:
+    """Resolve the first relative date phrase in ``text`` (plan 5.1.3).
+
+    Dates are calendar days in America/New_York. Returns ``{"phrase",
+    "start", "end"}`` with naive New York ISO timestamps covering the whole
+    day (or Monday–Sunday for "last week"), or ``None`` when no supported
+    phrase is present. "N days ago" counts calendar days, not sessions.
+    """
+    from datetime import timedelta
+
+    from backend.utils.timezone import now_ny
+
+    match = _RELATIVE_DATE_RE.search(text or "")
+    if not match:
+        return None
+    today = (now or now_ny()).date()
+    if match.group("today"):
+        start = end = today
+    elif match.group("yesterday"):
+        start = end = today - timedelta(days=1)
+    elif match.group("days"):
+        start = end = today - timedelta(days=int(match.group("days")))
+    elif match.group("lastweek"):
+        this_monday = today - timedelta(days=today.weekday())
+        start, end = this_monday - timedelta(days=7), this_monday - timedelta(days=1)
+    else:
+        target = _WEEKDAYS.index(match.group("weekday").lower())
+        # The most recent such weekday strictly before today.
+        delta = (today.weekday() - target) % 7 or 7
+        start = end = today - timedelta(days=delta)
+    return {
+        "phrase": match.group(0).lower(),
+        "start": f"{start.isoformat()}T00:00:00",
+        "end": f"{end.isoformat()}T23:59:59",
+    }
+
+
 def normalize_percentage(value: float, *, input_is_percent: bool = True) -> float:
     """Return a percentage in human units (e.g. 38.0, not 0.38)."""
     normalized = float(value) * (100 if not input_is_percent else 1)
@@ -419,11 +468,13 @@ def build_default_registry() -> ToolRegistry:
         OptionsResearchRequest,
         PortfolioRiskRequest,
         RiskDashboardRequest,
+        SavedScansRequest,
         SaveToJournalRequest,
         ScenarioRequest,
         SensitivityRequest,
         SessionStatsRequest,
         SignalExplanationRequest,
+        SignalHistoryRequest,
         SymbolRequest,
         TapeRequest,
         TradeJournalRequest,
@@ -453,8 +504,10 @@ def build_default_registry() -> ToolRegistry:
         get_quote_tool,
         get_relative_strength_tool,
         get_risk_dashboard_tool,
+        get_saved_scans_tool,
         get_sector_data_tool,
         get_session_stats_tool,
+        get_signal_history_tool,
         get_support_resistance_tool,
         get_tape_state_tool,
         get_trade_journal_tool,
@@ -507,6 +560,8 @@ def build_default_registry() -> ToolRegistry:
     # save is permitted only when the user asked for it (the deterministic
     # chat route sets operation=save), while review remains read-only.
     registry.register(ToolSpec(name="assumption_tracking", kind="read_only", description="Save and verify research assumptions without rewriting their original values.", input_model=AssumptionTrackingRequest, handler=assumption_tracking_tool))
+    registry.register(ToolSpec(name="get_signal_history", kind="read_only", description="Read recorded engine signals, trend-state transitions, and forward outcomes from the application database.", input_model=SignalHistoryRequest, handler=get_signal_history_tool))
+    registry.register(ToolSpec(name="get_saved_scans", kind="read_only", description="Summarize saved Scanner presets from an explicit browser snapshot; unavailable without one.", input_model=SavedScansRequest, handler=get_saved_scans_tool))
     registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="assess_portfolio_risk", kind="read_only", description="Explain concentration, sector exposure, correlation, volatility, stop risk, drawdown, and scenario results for an explicit position snapshot; optionally size a new trade against the portfolio's risk capacity.", input_model=PortfolioRiskRequest, handler=assess_portfolio_risk_tool))

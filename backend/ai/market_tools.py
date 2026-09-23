@@ -540,6 +540,31 @@ class AlertsRequest(BaseModel):
     trigger_limit: int = Field(default=10, ge=1, le=100)
 
 
+class SignalHistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    timeframe: str | None = Field(default=None, max_length=10)
+    start: str | None = None
+    end: str | None = None
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class SavedScanPreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=80)
+    filters: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    match: Literal["AND", "OR"] = "AND"
+
+
+class SavedScansRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    presets: list[SavedScanPreset] = Field(default_factory=list, max_length=50)
+    name: str | None = Field(default=None, max_length=80)
+
+
 class ApplicationHelpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -602,6 +627,28 @@ def get_quote_tool(request: SymbolRequest) -> BaseModel:
 
 class _Payload(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+def _fetch_bars_concurrently(requests: dict[str, BarsRequest]) -> dict[str, dict[str, Any] | Exception]:
+    """Fetch independent per-symbol bars in parallel (plan 5.3.5).
+
+    Each symbol is requested exactly once, so this changes latency, not the
+    number of provider calls. A failure is returned in place of that
+    symbol's payload rather than raised, preserving per-symbol unknowns.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    def fetch(bars_request: BarsRequest) -> dict[str, Any] | Exception:
+        try:
+            return get_bars_tool(bars_request).model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001 — reported per symbol by the caller
+            return exc
+
+    if len(requests) <= 1:
+        return {symbol: fetch(bars_request) for symbol, bars_request in requests.items()}
+    with ThreadPoolExecutor(max_workers=min(4, len(requests)), thread_name_prefix="chat-bars") as pool:
+        futures = {symbol: pool.submit(fetch, bars_request) for symbol, bars_request in requests.items()}
+        return {symbol: future.result() for symbol, future in futures.items()}
 
 
 def get_bars_tool(request: BarsRequest) -> BaseModel:
@@ -1140,17 +1187,15 @@ def compare_symbols_tool(request: ComparisonRequest) -> BaseModel:
         symbols = symbols[:25]
 
     rows: list[dict[str, Any]] = []
+    fetched = _fetch_bars_concurrently({
+        symbol: BarsRequest(symbol=symbol, timeframe=request.timeframe, range=request.range, limit=2_000, session=request.session)
+        for symbol in symbols
+    })
     for symbol in symbols:
         try:
-            payload = get_bars_tool(
-                BarsRequest(
-                    symbol=symbol,
-                    timeframe=request.timeframe,
-                    range=request.range,
-                    limit=2_000,
-                    session=request.session,
-                )
-            ).model_dump(mode="json")
+            payload = fetched[symbol]
+            if isinstance(payload, Exception):
+                raise payload
             bars = payload.get("bars", [])
             closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
             volumes = [float(bar.get("volume", 0) or 0) for bar in bars]
@@ -2233,6 +2278,114 @@ def get_alerts_tool(request: AlertsRequest) -> BaseModel:
         db.close()
 
 
+def _parse_ny_datetime(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp as naive America/New_York (the DB convention)."""
+    if not value:
+        return None
+    from backend.utils.timezone import to_ny
+
+    parsed = datetime.fromisoformat(value)
+    return to_ny(parsed).replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def get_signal_history_tool(request: SignalHistoryRequest) -> BaseModel:
+    """Read recorded engine signals (and their forward outcomes) from the database.
+
+    Rows are what ``SignalRecorder`` persisted at each bar close; outcome
+    fields stay null until enough later bars exist, and are reported as such.
+    """
+    from backend.ai.tool_registry import normalize_timeframe
+    from backend.database import SessionLocal
+    from backend.repositories.signal_repository import SignalRepository
+    from backend.utils.timezone import format_edt_iso
+
+    timeframe = normalize_timeframe(request.timeframe) if request.timeframe else None
+    db = SessionLocal()
+    try:
+        signals = SignalRepository(db).get_history(
+            symbol=request.symbol,
+            timeframe=timeframe,
+            limit=request.limit,
+            start_time=_parse_ny_datetime(request.start),
+            end_time=_parse_ny_datetime(request.end),
+        )
+        rows = [
+            {
+                "timestamp": format_edt_iso(signal.timestamp),
+                "symbol": signal.symbol,
+                "timeframe": signal.timeframe,
+                "price": signal.price,
+                "trend_state": signal.trend_state,
+                "trend_score": signal.trend_score,
+                "strength": signal.strength,
+                "market_regime": signal.market_regime,
+                "data_quality": signal.data_quality,
+                "return_5b": signal.return_5b,
+                "return_10b": signal.return_10b,
+                "return_20b": signal.return_20b,
+                "outcome_available": signal.return_5b is not None,
+            }
+            for signal in signals
+        ]
+    finally:
+        db.close()
+    # Oldest-first transitions between consecutive recorded states.
+    transitions = [
+        {"timestamp": later["timestamp"], "symbol": later["symbol"], "from": earlier["trend_state"], "to": later["trend_state"]}
+        for later, earlier in zip(rows, rows[1:], strict=False)
+        if later["symbol"] == earlier["symbol"]
+        and later["timeframe"] == earlier["timeframe"]
+        and later["trend_state"] != earlier["trend_state"]
+    ]
+    states: dict[str, int] = {}
+    for row in rows:
+        states[str(row["trend_state"])] = states.get(str(row["trend_state"]), 0) + 1
+    return _Payload(
+        symbol=request.symbol.upper() if request.symbol else None,
+        timeframe=timeframe,
+        start=request.start,
+        end=request.end,
+        available=bool(rows),
+        reason=None if rows else "No recorded signals match this scope.",
+        signals=rows,
+        signal_count=len(rows),
+        state_counts=states,
+        transitions=transitions,
+        provider="MarketLens signal history",
+        source_timestamp=rows[0]["timestamp"] if rows else None,
+    )
+
+
+def get_saved_scans_tool(request: SavedScansRequest) -> BaseModel:
+    """Summarize saved Scanner presets from an explicitly supplied snapshot.
+
+    Presets live in browser localStorage (``marketlens.scanner.presets``),
+    which the server cannot read; without a snapshot the answer is an honest
+    "unavailable", never an invented list.
+    """
+    if not request.presets:
+        return _Payload(
+            available=False,
+            reason="Saved Scanner presets are stored in this browser; the server has no copy. Open the Scanner page to see or run them.",
+            presets=[],
+            provider="MarketLens local scanner presets",
+            source_timestamp=None,
+        )
+    presets = request.presets
+    if request.name:
+        presets = [preset for preset in presets if preset.name.lower() == request.name.lower()]
+    return _Payload(
+        available=bool(presets),
+        reason=None if presets else f"No saved preset named {request.name!r}.",
+        presets=[
+            {"name": preset.name, "match": preset.match, "filter_count": len(preset.filters), "filters": preset.filters}
+            for preset in presets
+        ],
+        provider="MarketLens local scanner presets",
+        source_timestamp=None,
+    )
+
+
 def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
     """Summarize an explicitly supplied manual-position snapshot.
 
@@ -2331,9 +2484,15 @@ def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
     priced_symbols = [row["symbol"] for row in rows[:_PORTFOLIO_RISK_MAX_PRICED_SYMBOLS]]
     closes_by_symbol: dict[str, list[float]] = {}
     unknowns: list[dict[str, Any]] = []
+    fetched = _fetch_bars_concurrently({
+        symbol: BarsRequest(symbol=symbol, timeframe="1d", range=f"{request.lookback_days}d", limit=request.lookback_days)
+        for symbol in priced_symbols
+    })
     for symbol in priced_symbols:
         try:
-            bars = get_bars_tool(BarsRequest(symbol=symbol, timeframe="1d", range=f"{request.lookback_days}d", limit=request.lookback_days)).model_dump(mode="json")
+            bars = fetched[symbol]
+            if isinstance(bars, Exception):
+                raise bars
             closes = [float(bar["close"]) for bar in bars.get("bars", []) if bar.get("close") is not None]
             if len(closes) >= 5:
                 closes_by_symbol[symbol] = closes

@@ -1257,17 +1257,12 @@ clean `tsc --noEmit`.
 These are not fixed. They are recorded so the scorecard is not read as
 covering them.
 
-- **5.3.5 concurrency.** Chained tool reads run sequentially; only per-symbol
-  context building is parallel.
-- **5.1.3 relative dates.** Nothing resolves "today", "yesterday", or "last
-  Friday" to America/New_York dates.
-- **5.3.3 memory.** The `watchlist` memory field is never written, there is
-  no date-range field, and the only reset path is deleting the session.
-- **5.2.4 user data.** There are no tools for saved scans, recent signal
-  history, or manually tracked positions.
-- **5.7.1 / 5.7.4 block quality.** One quality object, derived from the last
-  successful trace item, is copied onto every block rather than computed
-  per block from that block's own evidence.
+- **5.3.5 concurrency.** Per-symbol reads inside comparisons and portfolio
+  risk now run in parallel, but chained steps still run one after another:
+  each continuation is a model decision that depends on what already ran.
+- **5.2.4 saved scans.** Scanner presets are browser-local and Chat does not
+  send them, so `get_saved_scans` honestly reports them unavailable from
+  Chat. Manually tracked positions remain the Risk Dashboard snapshot path.
 - **5.7.8 fixtures.** Promoted fixtures now export into
   end-to-end cases, but each draft needs a maintainer to script its
   evidence and expectations before it runs; nothing is automatic.
@@ -1362,3 +1357,37 @@ until the line is removed. The end-to-end evaluation pins these defaults
   routing and clarification, and journal review/confirmed save. Temporarily
   disabling the server-side instruction or the tool rescope makes the new
   cases fail.
+
+## Per-block quality, dates, memory, user-data tools, parallel reads (2026-09-23)
+
+- **Per-block quality (5.7.1 / 5.7.4).** Calculation and visual blocks
+  (chart, indicator table, options chain, risk/scenario/session cards,
+  historical outcomes, comparison/ranked results, report, journal save) now
+  carry the quality of the one tool result that produced them. Answer-level
+  blocks (prose, evidence, verification, warnings, actions) carry the
+  turn's weakest input: a fallback source first, then the oldest data age.
+  Previously they used whichever tool ran last. A failed model call no
+  longer marks the answer partial.
+- **Relative dates (5.1.3).** `tool_registry.resolve_relative_date` resolves
+  "today", "yesterday", "N days ago", "last week", and "last/on/since
+  <weekday>" to New York calendar days. A date named in the current message
+  bounds `market_event_timeline` and `get_signal_history` (start/end) and
+  turns "what changed since <day>" into a comparison with that day's close.
+  "today" and "yesterday" keep `what_changed`'s own references.
+- **Structured memory (5.3.3):**
+  - `date_range` is remembered.
+  - `watchlist` is set when a message names a real watchlist, and follows
+    create/add/remove/delete-watchlist actions.
+  - `DELETE /api/ai/chat/sessions/{id}/memory` (a "Reset memory" button in
+    Chat) clears all structured memory, including any pending confirmation,
+    and keeps the messages.
+- **User-data tools (5.2.4):**
+  - `get_signal_history` reads recorded engine signals, trend-state
+    transitions, and forward outcomes from the database.
+  - `get_saved_scans` summarizes an explicit Scanner-preset snapshot and
+    otherwise reports that presets are browser-local.
+  - Both have deterministic Chat routes.
+- **Parallel reads (5.3.5).** `compare_symbols` and `assess_portfolio_risk`
+  fetch their per-symbol bars concurrently (at most 4 at a time), still once
+  per symbol.
+- **Evaluation.** The end-to-end suite (`5.8.5`) has 37 cases, all passing.

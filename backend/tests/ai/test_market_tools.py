@@ -1602,3 +1602,87 @@ def test_export_report_requires_the_matching_nested_field() -> None:
         raise AssertionError("expected ValueError when trade_plan is missing")
     except ValueError as exc:
         assert "trade_plan" in str(exc)
+
+
+def test_signal_history_tool_reads_recorded_signals_and_transitions() -> None:
+    from datetime import datetime
+
+    from backend.ai.market_tools import SignalHistoryRequest, get_signal_history_tool
+    from backend.database import SessionLocal
+    from backend.repositories.signal_repository import SignalRepository
+
+    db = SessionLocal()
+    created: list[int] = []
+    try:
+        repository = SignalRepository(db)
+        for hour, state, outcome in ((10, "bearish", 1.2), (11, "bullish", None), (12, "bullish", None)):
+            created.append(repository.create(
+                symbol="ZZSIG", timestamp=datetime(2026, 9, 18, hour, 0), timeframe="1h",
+                price=100.0 + hour, trend_state=state, trend_score=10.0, return_5b=outcome,
+            ).id)
+
+        result = get_signal_history_tool(SignalHistoryRequest(symbol="zzsig", timeframe="1h"))
+        assert result.signal_count == 3
+        assert result.signals[0]["timestamp"] == "2026-09-18T12:00:00-04:00"  # newest first
+        assert result.source_timestamp == "2026-09-18T12:00:00-04:00"
+        assert result.state_counts == {"bullish": 2, "bearish": 1}
+        assert result.transitions == [{"timestamp": "2026-09-18T11:00:00-04:00", "symbol": "ZZSIG", "from": "bearish", "to": "bullish"}]
+        assert [row["outcome_available"] for row in result.signals] == [False, False, True]
+
+        scoped = get_signal_history_tool(SignalHistoryRequest(symbol="ZZSIG", start="2026-09-18T11:30:00", end="2026-09-18T23:59:59"))
+        assert scoped.signal_count == 1
+
+        empty = get_signal_history_tool(SignalHistoryRequest(symbol="ZZNONE"))
+        assert empty.available is False
+        assert empty.source_timestamp is None
+    finally:
+        for signal_id in created:
+            row = repository.get_by_id(signal_id)
+            if row is not None:
+                db.delete(row)
+        db.commit()
+        db.close()
+
+
+def test_saved_scans_tool_is_honest_without_a_browser_snapshot() -> None:
+    from backend.ai.market_tools import SavedScansRequest, get_saved_scans_tool
+
+    unavailable = get_saved_scans_tool(SavedScansRequest())
+    assert unavailable.available is False
+    assert "browser" in unavailable.reason
+    assert unavailable.presets == []
+
+    snapshot = get_saved_scans_tool(SavedScansRequest(
+        presets=[{"name": "Breakout", "filters": [{"type": "rsi", "op": "<", "value": 30}], "match": "AND"}],
+        name="breakout",
+    ))
+    assert snapshot.available is True
+    assert snapshot.presets[0]["filter_count"] == 1
+
+
+def test_compare_symbols_fetches_each_symbol_once_and_in_parallel(monkeypatch) -> None:
+    import threading
+    import time
+
+    from backend.ai.market_tools import ComparisonRequest, _Payload, compare_symbols_tool
+
+    calls: list[str] = []
+    lock = threading.Lock()
+
+    def slow_bars(request):
+        with lock:
+            calls.append(request.symbol)
+        time.sleep(0.2)
+        return _Payload(
+            symbol=request.symbol, provider="fixture", source_timestamp="2026-09-23T15:59:00-04:00",
+            bars=[{"close": 100.0}, {"close": 110.0 if request.symbol == "AAA" else 105.0}],
+        )
+
+    monkeypatch.setattr("backend.ai.market_tools.get_bars_tool", slow_bars)
+    started = time.perf_counter()
+    result = compare_symbols_tool(ComparisonRequest(symbols=["AAA", "BBB", "CCC", "DDD"]))
+    elapsed = time.perf_counter() - started
+
+    assert sorted(calls) == ["AAA", "BBB", "CCC", "DDD"]
+    assert elapsed < 0.6  # four 0.2 s reads run concurrently, not in sequence
+    assert result.model_dump()["rankings"][0]["symbol"] == "AAA"

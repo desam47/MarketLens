@@ -132,6 +132,7 @@ export function ChatPanel({
   const [sending, setSending] = useState(false);
   const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
@@ -246,6 +247,17 @@ export function ChatPanel({
       setClearing(false);
     }
   }, [alertTriggerId, alertSymbol]);
+
+  const handleResetMemory = useCallback(async () => {
+    if (!sessionId) return;
+    setError(null);
+    try {
+      await api.resetChatMemory(sessionId);
+      setMemoryNotice('Chat memory reset — remembered tickers, watchlist, timeframe, dates, and calculations are cleared. Messages are kept.');
+    } catch (e: any) {
+      setError(e?.message || 'Failed to reset chat memory');
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     // scrollTo is missing in jsdom — guard so tests don't throw.
@@ -444,8 +456,18 @@ export function ChatPanel({
             >
               {clearing ? '⟳' : '🗑 Clear'}
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleResetMemory}
+              disabled={loading || !sessionId || sending}
+              title="Forget remembered tickers, watchlist, timeframe, dates, and calculations; keep the messages"
+            >
+              ↺ Reset memory
+            </button>
           </div>
         </div>
+        {memoryNotice && <div className="chat-draft-status" role="status">{memoryNotice}</div>}
         {preferencesOpen && (
           <ChatPreferencesPanel
             preferences={preferences}

@@ -433,6 +433,30 @@ async def clear_sessions(
         repo.close()
 
 
+class ResetMemoryResponse(BaseModel):
+    session_id: int
+    reset: bool
+
+
+@router.delete("/sessions/{session_id}/memory", response_model=ResetMemoryResponse)
+async def reset_session_memory(session_id: int):
+    """Forget a session's structured memory but keep its messages (5.3.3).
+
+    Clears remembered symbols, previous ticker, watchlist, timeframe,
+    session, date range, last calculation inputs, last tool result, saved
+    research assumptions, chart state, and any pending confirmation.
+    """
+    repo = ChatRepository()
+    try:
+        session = await asyncio.to_thread(repo.get_session, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        await asyncio.to_thread(repo.set_planner_state, session_id, "{}")
+        return ResetMemoryResponse(session_id=session_id, reset=True)
+    finally:
+        repo.close()
+
+
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageResponse])
 async def get_messages(session_id: int, limit: int = Query(default=50, ge=1, le=200)):
     repo = ChatRepository()

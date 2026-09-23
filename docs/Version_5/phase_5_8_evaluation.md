@@ -1,6 +1,6 @@
 # Phase 5.8 Evaluation Report
 
-**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.4`
+**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.5`
 **Verifier version:** `5.8.1`
 **Scope:** provider-free verifier, end-to-end Chat, and fallback-contract evaluation
 
@@ -31,14 +31,14 @@ counted only for cases that set an expectation in it:
 
 | Category | Passed | Applicable cases |
 | --- | ---: | ---: |
-| Correctness | 17 | 17 |
-| Tool choice | 25 | 25 |
+| Correctness | 20 | 20 |
+| Tool choice | 30 | 30 |
 | Provenance | 5 | 5 |
 | Clarification | 3 | 3 |
-| Latency | 32 | 32 |
+| Latency | 37 | 37 |
 | Safety | 7 | 7 |
 
-The 32 cases cover:
+The 37 cases cover:
 
 - **Calculations:** position risk from "Buy 200 AAPL at $220, stop $212"
   (plan matrix #1), a missing-input clarification, and the "use the same
@@ -66,6 +66,13 @@ The 32 cases cover:
   and a clarification when no ticker is known.
 - **Journal:** journal review routing, and a save that needs confirmation
   (ignoring the model's own confirmation) before the tool is called.
+- **Dates and memory:**
+  - "since last Friday" scopes `what_changed` to that day's close;
+  - "yesterday" bounds the event timeline;
+  - a named watchlist is remembered for a later "compare my watchlist".
+  These cases run against a frozen New York clock.
+- **User data:** signal-history routing, and saved scans honestly reported as
+  browser-local.
 
 When the harness was first run, it found two real gaps. There was no
 deterministic path for plan matrix #1, and the calculator had no

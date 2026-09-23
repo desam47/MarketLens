@@ -201,6 +201,12 @@ class _Harness:
             ("backend.ai.chat._kickoff_backfill", lambda symbol: None),
         ):
             self.stack.enter_context(patch(target, value))
+        if self.case.get("freeze_now"):
+            # Relative dates ("last Friday") resolve against a fixed New York time.
+            from datetime import datetime
+
+            frozen = datetime.fromisoformat(self.case["freeze_now"])
+            self.stack.enter_context(patch("backend.utils.timezone.now_ny", lambda: frozen))
         for name, value in {**_DEFAULT_BUDGETS, **(self.case.get("budgets") or {})}.items():
             self.stack.enter_context(patch.object(settings.ai, name, value))
         self.model.enabled = bool(self.case.get("ai_enabled", True))
