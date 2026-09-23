@@ -1111,7 +1111,32 @@ Reliability foundation implemented (5.8.1–5.8.6):
   suites; and `npm run build` completed successfully. The four backend skips
   are environment-dependent Redis/loopback checks, not product failures.
 
-Remaining 5.8 work: complete security/privacy sign-off, run manual smoke
-tests across the major question and failure categories, and close the final
-release gate. The current automated evidence is recorded above; rerun it if
-the release-gate changes touch these paths.
+Security/privacy review and manual smoke evidence (2026-09-23):
+
+- Security/privacy review passed for the implemented reliability slice. The
+  focused observability, verifier, response-block, Chat action, Chat router,
+  and AI-manager suites passed (`287 passed`); the tracked source scan found
+  no private-key or API-key-shaped values outside tests/docs. Sanitized trace
+  arguments redact secret-looking keys and private prose, model/observability
+  metadata excludes prompt/reply content, and server-authored confirmation
+  remains the only path to a destructive action.
+- Live API smoke passed for health, a verified blocking calculation, a
+  verified streaming calculation with a final persisted frame, an unavailable
+  live quote (blocked rather than guessed), and a public-symbol comparison
+  with explicit insufficient-data warnings. The comparison also demonstrated
+  the bounded two-attempt planning fallback.
+- The live calculation-only cold-start turn took `1,691.636 ms`, exceeding
+  its `500 ms` target; this is recorded as a performance observation, not a
+  correctness or privacy failure. The provider-backed streaming turn stayed
+  within its `15,000 ms` target (`5,512.798 ms`).
+- Destructive-action and portfolio-risk live smoke was intentionally not
+  executed: one could mutate user data and the other could disclose private
+  portfolio state to an external provider. Their server gate and privacy
+  behavior remain covered by the focused automated suite and require a
+  sanctioned fixture/sandbox for manual release testing.
+
+Remaining 5.8 work: run the sanctioned destructive-action and synthetic
+portfolio-risk smoke cases, decide whether to optimize or accept the cold
+calculation target miss, and close the final release gate. The current
+automated and live evidence is recorded above; rerun it if release-gate
+changes touch these paths.
