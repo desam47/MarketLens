@@ -608,6 +608,7 @@ class _Turn:
     capped: bool
     base: list[str]
     planner_state: dict
+    chart_state: dict | None = None
 
     @property
     def focus(self) -> list[str]:
@@ -629,7 +630,12 @@ class _PlannerState:
     max_steps: int
 
 
-def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _Turn:
+def _prepare_turn(
+    repo: ChatRepository,
+    session_id: int,
+    user_content: str,
+    chart_state: dict | None = None,
+) -> _Turn:
     """Persist the user message and assemble the turn's quant context.
 
     Resolves the turn's tickers from the text (0..N, capped), attaches a
@@ -765,6 +771,7 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         "last_tool_result": planner_state.get("last_tool_result"),
         "pending_confirmation": planner_state.get("pending_confirmation"),
         "research_assumptions": saved_assumptions[:200],
+        "chart_state": chart_state or planner_state.get("chart_state"),
         "updated_at": now_ny().isoformat(),
     }
     if next_state["timeframe"] is None:
@@ -783,6 +790,7 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         capped=capped,
         base=base,
         planner_state=next_state,
+        chart_state=next_state.get("chart_state"),
     )
 
 
@@ -795,7 +803,10 @@ def _extract_memory_value(text: str, pattern: str) -> str | None:
 
 
 def answer_chat_message(
-    session_id: int, user_content: str, preferences: dict | None = None
+    session_id: int,
+    user_content: str,
+    preferences: dict | None = None,
+    chart_state: dict | None = None,
 ) -> tuple[ChatMessage, bool, list[str], list[str], list[str]]:
     """Persist ``user_content``, generate a reply, persist the assistant
     ChatMessage, and return
@@ -825,7 +836,7 @@ def answer_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state)
         trace: list[dict] = []
         reply_text, grounded, screened = _generate_reply(
             repo.db,
@@ -865,6 +876,7 @@ def answer_chat_message(
             unavailable=turn.unavailable,
             trace=trace,
             preferences=preferences,
+            chart_state=turn.chart_state,
         )
         assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
         assistant_message.planner_trace = trace
@@ -875,7 +887,10 @@ def answer_chat_message(
 
 
 def stream_chat_message(
-    session_id: int, user_content: str, preferences: dict | None = None
+    session_id: int,
+    user_content: str,
+    preferences: dict | None = None,
+    chart_state: dict | None = None,
 ) -> Iterator[tuple]:
     """Streaming sibling of :func:`answer_chat_message`.
 
@@ -891,7 +906,7 @@ def stream_chat_message(
     """
     repo = ChatRepository()
     try:
-        turn = _prepare_turn(repo, session_id, user_content)
+        turn = _prepare_turn(repo, session_id, user_content, chart_state)
         yield (
             "meta",
             {
@@ -945,6 +960,7 @@ def stream_chat_message(
             unavailable=turn.unavailable,
             trace=trace,
             preferences=preferences,
+            chart_state=turn.chart_state,
         )
         msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
         msg.planner_trace = trace
@@ -1404,6 +1420,7 @@ def _generate_reply(
         alert_context,
         capped_note=_capped_note(capped, symbol_blocks),
         token_budget=budget,
+        chart_state=(planner_state or {}).get("chart_state"),
     )
     synthesis_model = _chat_route_model("synthesis", _chat_route_model("planning"))
     _trace_model_route(trace, "synthesis", synthesis_model)
@@ -1811,6 +1828,7 @@ def _run_turn_actions(
             continuation,
             alert_context,
             token_budget=budget,
+            chart_state=(planner_state or {}).get("chart_state"),
         )
         next_parsed, failure_reason = _complete_and_parse(
             prompt,
@@ -1972,6 +1990,7 @@ def _generate_reply_streaming(
         turn.alert_context,
         capped_note=_capped_note(turn.capped, turn.symbol_blocks),
         token_budget=budget,
+        chart_state=turn.chart_state,
     )
 
     chat_model = _chat_route_model("synthesis", _chat_route_model("planning"))
@@ -2788,6 +2807,7 @@ def _run_market_tool(
             "session": result.session,
             "timeframe": result.timeframe,
             "fallback": result.fallback,
+            "entitlement": result.entitlement,
             "warnings": result.warnings,
         }
         visual = _visual_trace_payload(parsed.action, result.data)

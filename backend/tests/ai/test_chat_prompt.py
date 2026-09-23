@@ -77,6 +77,15 @@ class TestBuildChatPrompt(unittest.TestCase):
         self.assertIn('engine_warm="false"', p)
         self.assertIn("data_availability", p)
 
+    def test_explicit_chart_state_is_rendered_as_non_market_evidence(self):
+        p = build_chat_prompt(
+            [_WARM_BLOCK], [], None, [], "explain what I am looking at",
+            chart_state={"symbol": "AAPL", "timeframe": "1h", "session": "regular", "selected_candle": {"close": 201}},
+        )
+        self.assertIn("<chart_state>", p)
+        self.assertIn("selected_candle", p)
+        self.assertIn("not a market-data source", p)
+
 
 if __name__ == "__main__":
     unittest.main()

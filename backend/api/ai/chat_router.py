@@ -123,9 +123,26 @@ class ChatPreferences(BaseModel):
     preferred_units: Literal["percent", "dollars"] | None = None
 
 
+class ChatChartState(BaseModel):
+    """Explicit chart state supplied by the browser for one Chat turn."""
+
+    model_config = {"extra": "forbid"}
+
+    symbol: str = Field(..., min_length=1, max_length=20)
+    timeframe: str = Field(default="1d", min_length=1, max_length=20)
+    session: str = Field(default="all", min_length=1, max_length=20)
+    chart_type: str | None = Field(default=None, max_length=30)
+    active_indicators: list[str] = Field(default_factory=list, max_length=20)
+    visible_range: dict[str, float] | None = None
+    selected_candle: dict[str, Any] | None = None
+    drawings: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    updated_at: str = Field(..., max_length=80)
+
+
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=2000)
     preferences: ChatPreferences | None = None
+    chart_state: ChatChartState | None = None
 
 
 class SetFeedbackRequest(BaseModel):
@@ -366,12 +383,10 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     finally:
         repo.close()
 
-    message, grounded, focus, partial, unavailable = await asyncio.to_thread(
-        answer_chat_message,
-        session_id,
-        payload.content,
-        payload.preferences.model_dump() if payload.preferences else None,
-    )
+    args = [session_id, payload.content, payload.preferences.model_dump() if payload.preferences else None]
+    if payload.chart_state is not None:
+        args.append(payload.chart_state.model_dump())
+    message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args)
     return _message_to_response(
         message,
         grounded=grounded,
@@ -437,7 +452,11 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
         def drain():
             try:
                 preferences = payload.preferences.model_dump() if payload.preferences else None
-                for ev in stream_chat_message(session_id, payload.content, preferences):
+                if payload.chart_state is None:
+                    events = stream_chat_message(session_id, payload.content, preferences)
+                else:
+                    events = stream_chat_message(session_id, payload.content, preferences, payload.chart_state.model_dump())
+                for ev in events:
                     if stop.is_set():
                         break
                     if not _put_sse_item(loop, queue, ev):

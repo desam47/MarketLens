@@ -38,7 +38,7 @@ import { NLSearchBar } from '../components/NLSearchBar';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import api, { AlertConversationContext } from '../services/api';
 import { consumePendingAlertChat, type PendingAlertChat } from '../utils/alertConversation';
-import type { AppPage } from '../utils/appNavigation';
+import type { AppPage, NavigationState } from '../utils/appNavigation';
 
 // Heavy, self-fetching panels — same lazy pattern + same chunks
 // SymbolPage used for these.
@@ -55,7 +55,7 @@ const AITemplatesPanel = lazy(() =>
 interface AIHubPageProps {
   symbol: string;
   onSymbolChange: (symbol: string) => void;
-  onNavigate?: (page: AppPage, symbol?: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void;
 }
 
 const SECTIONS = [

@@ -1386,6 +1386,7 @@ def build_chat_prompt(
     alert_context: dict[str, Any] | None = None,
     capped_note: str | None = None,
     token_budget: int | None = None,
+    chart_state: dict[str, Any] | None = None,
 ) -> str:
     """Render one universal-chat turn into a single user message.
 
@@ -1420,6 +1421,16 @@ def build_chat_prompt(
 
     if capped_note:
         parts.append(capped_note)  # tiny, always kept
+
+    if chart_state:
+        state = json.dumps(chart_state, separators=(",", ":"), default=str)
+        chunk = (
+            "Explicit chart state from the trader's current/last visible chart "
+            "(use only to explain what is on screen; it is not a market-data source):\n"
+            f"<chart_state>\n{state}\n</chart_state>"
+        )
+        if fits(chunk):
+            parts.append(chunk)
 
     if market_baseline:
         mb = json.dumps(market_baseline, separators=(",", ":"), default=str)

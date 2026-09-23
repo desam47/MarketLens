@@ -1,0 +1,72 @@
+import type { ChatMessage } from '../services/api';
+
+export interface NotebookItem {
+  id: string;
+  message_id: number;
+  question: string;
+  answer: string;
+  blocks: ChatMessage['blocks'];
+  evidence_timestamps: string[];
+  saved_at: string;
+}
+
+export interface ChatNotebook {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  items: NotebookItem[];
+}
+
+const KEY = 'marketlens.chat.notebooks';
+
+function read(): ChatNotebook[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const value = JSON.parse(window.localStorage.getItem(KEY) || '[]');
+    return Array.isArray(value) ? value.filter(item => item && typeof item.id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function write(notebooks: ChatNotebook[]): void {
+  try { window.localStorage.setItem(KEY, JSON.stringify(notebooks.slice(0, 20))); } catch { /* optional storage */ }
+}
+
+export function loadChatNotebooks(): ChatNotebook[] { return read(); }
+
+export function createChatNotebook(name: string): ChatNotebook {
+  const now = new Date().toISOString();
+  const notebook: ChatNotebook = {
+    id: `notebook-${Date.now()}`,
+    name: name.trim().slice(0, 120) || 'Market research',
+    created_at: now,
+    updated_at: now,
+    items: [],
+  };
+  write([notebook, ...read()]);
+  return notebook;
+}
+
+export function saveMessageToChatNotebook(notebookId: string, message: ChatMessage, question: string): ChatNotebook[] {
+  const notebooks = read();
+  const now = new Date().toISOString();
+  const sourceTimestamps = (message.blocks ?? [])
+    .map(block => block.quality?.source_timestamp)
+    .filter((value): value is string => Boolean(value));
+  const item: NotebookItem = {
+    id: `notebook-item-${message.id}-${Date.now()}`,
+    message_id: message.id,
+    question: question.slice(0, 2000),
+    answer: message.content,
+    blocks: message.blocks ?? [],
+    evidence_timestamps: Array.from(new Set(sourceTimestamps)),
+    saved_at: now,
+  };
+  const updated = notebooks.map(notebook => notebook.id === notebookId
+    ? { ...notebook, updated_at: now, items: [item, ...notebook.items.filter(existing => existing.message_id !== message.id)].slice(0, 200) }
+    : notebook);
+  write(updated);
+  return updated;
+}

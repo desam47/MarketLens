@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1, 5.7.2, 5.7.3 (personal preferences), and 5.7.8 (feedback and correction loop) are complete. The rest of Phase 5.7 (chart-state awareness, state-preserving navigation, regeneration, notebooks, stale-answer refresh) and Phase 5.8 remain.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete. Phase 5.7.1, 5.7.2, 5.7.3 (personal preferences), 5.7.4 (answer contract), and 5.7.8 (feedback and correction loop) are complete. Initial slices of 5.7.6 (chart state), 5.7.7 (symbol/timeframe/session navigation), 5.7.9 (regeneration), 5.7.10 (browser-local notebooks), and 5.7.11 (stale-answer refresh) are implemented; full cross-page state preservation, accessibility sign-off, and richer notebook workflows remain. Phase 5.8 remains.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -19,8 +19,8 @@ available in AI Hub with a browser-local checkpoint, durable event sources,
 deduplication, source links, and no provider polling. Phase 5.6 is complete:
 its save/export workflow has server-enforced approval, local Journal
 persistence, downloadable reports, and actionable page links. Phase 5.7.1
-has started with a backward-compatible typed
-response envelope.
+and the 5.7.2/5.7.3/5.7.4/5.7.8 slices are complete; bounded initial slices
+of 5.7.6, 5.7.7, 5.7.9, 5.7.10, and 5.7.11 are implemented.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
 slice is now shipped on `development`. The strict calculator foundation in
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, 5.7.3 personal preferences, and 5.7.8 feedback/correction loop are complete — comparison/ranked blocks, full block-type coverage, a persisted-block contract test, missing/long-value robustness, interactive controls, a browser-local preferences panel, and Correct/Incorrect/Not Useful feedback with categories stored in a new `chat_feedback` table. Model-prompt-level terminology/risk-framing tailoring and regression-fixture export tooling are deliberately deferred. Chart-state awareness, state-preserving navigation, regeneration, and notebooks remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks, 5.7.2 visual/action cards, 5.7.3 personal preferences, 5.7.4 answer-contract metadata, and 5.7.8 feedback/correction loop are complete. Initial 5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 slices now cover explicit chart state, symbol/timeframe/session navigation, regeneration/refresh controls, and browser-local notebooks. Full cross-page state preservation, accessibility sign-off, richer notebook workflows, model-prompt terminology/risk framing, and regression-fixture export remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -414,26 +414,12 @@ fix, and the fallback path when the frontend source is unavailable.
 
 Full backend suite after all four: 2843 passed.
 
-Application-help (5.2.7) now carries a `required_state` field per page (e.g.
-the Symbol page declares `["symbol"]`, since the frontend carries the
-selected symbol as React state rather than a URL parameter — no app
-navigation action exists yet to consume it; that is Phase 5.7.7's job, and
-this only makes the current informational answer state the requirement
-honestly). Its 12-page table remains hardcoded rather than dynamically
-derived — a real cross-language source-of-truth split, since the actual
-router lives in TypeScript (`frontend/src/utils/appNavigation.ts`) and
-Python cannot import it — but auditing it caught a real, live bug: the
-"signals" page pointed at `#historical-replay`, a legacy alias the frontend
-still *accepts* on incoming links but never *produces* when navigating
-(`hashForPage('signals')` returns `#signals`). Fixed, and now guarded by
-`test_application_help_routes_match_frontend_canonical_hashes`, which
-hardcodes the frontend's 12 canonical page→hash pairs as an explicit
-drift trip-wire — it will fail loudly the next time either side adds,
-renames, or removes a page without the other being updated. True dynamic
-generation (reading the frontend's route table at test/build time, or a
-shared JSON manifest both stacks consume) is still not implemented; the
-hardcoded-but-guarded state here is a stopgap, not the plan's original
-ask.
+Application-help (5.2.7) now carries a `required_state` field per page and
+parses canonical hashes and page titles directly from the frontend source.
+`topics` and `required_state` remain intentionally domain-owned metadata;
+the route/title values no longer have a hand-copied Python source of truth.
+The parser has a labeled fallback snapshot for backend-only deployments and
+tests guard the canonical frontend route set.
 
 `backend/tests/ai/test_tool_contracts.py` now covers the phase's own stated
 verification bar for four tools: `get_sector_data` vs
@@ -986,6 +972,19 @@ both the blocking and streaming endpoints) and 11 new frontend tests
 turn-level forwarding), plus the full suite and a production build (3011
 backend / 183 frontend tests passing).
 
+**5.7.4 complete — Answer contract metadata (2026-09-23).** Every typed
+block now carries evidence-derived quality metadata for provider, source time,
+freshness, session, timeframe, fallback state, entitlement, confidence, and
+grounding. Evidence items expose the same entitlement state for the UI, so a
+provider limitation is visible without relying on model prose. The metadata is
+derived from the server-side `ToolResult` trace; it is never accepted from a
+model-generated quality claim.
+
+The focused response-block contract test covers entitlement propagation. The
+current checkout verification is 3,021 backend tests passed with 4
+environment-dependent skips, 192 frontend tests passed, and a successful
+frontend production build.
+
 **5.7.8 complete — Feedback and correction loop (2026-09-23).** Correct /
 Incorrect / Not Useful buttons appear under every assistant message, with
 an optional category (wrong data, wrong calculation, misunderstood
@@ -1017,6 +1016,30 @@ feedback rendering without re-offering buttons, no feedback UI on user
 messages), plus the full suite, a production build, and the migration
 verified against the live dev SQLite database (3024 backend / 187
 frontend tests passing).
+
+**5.7.6/5.7.7/5.7.9/5.7.10/5.7.11 initial slices (2026-09-23).** The Symbol
+chart now publishes an explicit bounded chart-state snapshot (symbol,
+timeframe, selected session, chart type, active indicators, visible range,
+selected candle, drawings, and update time) to browser-local storage. Chat
+validates and forwards that state to the backend prompt and persisted evidence
+block, so “explain what I’m looking at” can use explicit chart context rather
+than infer it from prose or a screenshot. Chat navigation can carry the
+current symbol/timeframe/session into Symbol, and the response UI offers
+bounded regeneration modes plus a freshness-triggered “Refresh current data”
+action. Browser-local research notebooks can be named and can save assistant
+answers with their original evidence timestamps and typed blocks.
+
+These are deliberately bounded first slices: navigation currently consumes
+symbol/timeframe/session state (not every page-specific filter or selected
+record), notebooks are local answer collections rather than a server-backed
+multi-page research graph, and the accessibility/responsive review still
+needs an explicit manual pass.
+
+Focused verification includes chart-state and notebook storage tests, chart
+state prompt coverage, the existing Chat API suite, the full ChatPanel suite,
+and a successful production build. Current checkout verification: 3,021
+backend tests passed with 4 environment-dependent skips, 192 frontend tests
+passed, and the frontend production build completed successfully.
 
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration

@@ -17,6 +17,7 @@ def test_builds_calculation_evidence_and_followup_blocks() -> None:
                 "ok": True,
                 "provider": "MarketLens",
                 "source_timestamp": "2026-09-23T10:00:00",
+                "entitlement": "verified",
                 "data": {"values": {"allocation": 25}, "formulas": ["25000 / 100000"]},
             }
         ],
@@ -29,8 +30,10 @@ def test_builds_calculation_evidence_and_followup_blocks() -> None:
         "suggested_followups",
     ]
     assert blocks[1]["data"]["symbols"]["verified"] == ["AAPL"]
+    assert blocks[1]["data"]["items"][0]["entitlement"] == "verified"
     assert blocks[2]["data"]["values"]["allocation"] == 25
     assert blocks[2]["quality"]["state"] == "verified"
+    assert blocks[2]["quality"]["entitlement"] == "verified"
 
 
 def test_partial_and_unavailable_data_become_explicit_warning() -> None:

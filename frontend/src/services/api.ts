@@ -2593,11 +2593,20 @@ class ApiService {
     return this.fetch(`/ai/chat/sessions${qs}`, { method: 'DELETE' });
   }
 
-  async sendChatMessage(sessionId: number, content: string, preferences?: ChatPreferences | null): Promise<ChatMessage> {
+  async sendChatMessage(
+    sessionId: number,
+    content: string,
+    preferences?: ChatPreferences | null,
+    chartState?: ChatChartState | null,
+  ): Promise<ChatMessage> {
     return this.fetch<ChatMessage>(`/ai/chat/sessions/${sessionId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(preferences ? { content, preferences } : { content }),
+      body: JSON.stringify({
+        content,
+        ...(preferences ? { preferences } : {}),
+        ...(chartState ? { chart_state: chartState } : {}),
+      }),
     }, AI_TIMEOUT_MS);
   }
 
@@ -2619,6 +2628,7 @@ class ApiService {
       onMeta?: (m: { focus: string[]; partial: string[]; unavailable: string[] }) => void;
       signal?: AbortSignal;
       preferences?: ChatPreferences | null;
+      chartState?: ChatChartState | null;
     } = {},
   ): Promise<ChatMessage> {
     const response = await fetch(
@@ -2626,7 +2636,11 @@ class ApiService {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(opts.preferences ? { content, preferences: opts.preferences } : { content }),
+        body: JSON.stringify({
+          content,
+          ...(opts.preferences ? { preferences: opts.preferences } : {}),
+          ...(opts.chartState ? { chart_state: opts.chartState } : {}),
+        }),
         signal: opts.signal,
       },
     );
@@ -2887,6 +2901,18 @@ export interface ChatPreferences {
   preferred_units: 'percent' | 'dollars' | null;
 }
 
+export interface ChatChartState {
+  symbol: string;
+  timeframe: string;
+  session: string;
+  chart_type?: string;
+  active_indicators?: string[];
+  visible_range?: { from: number; to: number } | null;
+  selected_candle?: Record<string, any> | null;
+  drawings?: Array<{ type: string; label?: string | null; visible?: boolean }>;
+  updated_at: string;
+}
+
 export type ChatBlockType =
   | 'prose'
   | 'calculation'
@@ -2916,6 +2942,7 @@ export interface ChatBlockQuality {
   session?: string | null;
   timeframe?: string | null;
   fallback?: boolean;
+  entitlement?: string | null;
 }
 
 export interface ChatResponseBlock {

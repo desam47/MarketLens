@@ -29,6 +29,7 @@ import { EarningsBadge } from '../components/EarningsBadge';
 import { DEFAULT_GRID_TIMEFRAMES, DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference, classifySessionFromTimestamp } from '../utils/marketSession';
 import { useMarketSession } from '../hooks/useMarketSession';
+import { saveChartState, type ChartState } from '../utils/chartState';
 
 // Heavy panels are loaded on demand so the initial route bundle stays small.
 // Each panel makes its own API calls and isn't needed for the first paint.
@@ -51,6 +52,8 @@ const CustomIndicatorsPanel = lazy(() =>
 interface SymbolPageProps {
   symbol: string;
   onSymbolChange: (symbol: string) => void;
+  initialTimeframe?: string;
+  initialSession?: SessionFilter;
 }
 
 // Color maps
@@ -636,7 +639,7 @@ function mergeLiveBarIntoMinuteBars(bars: Bar[], update: BarUpdateData): Bar[] {
 }
 
 // --- Main page ---
-export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
+export function SymbolPage({ symbol, onSymbolChange, initialTimeframe, initialSession }: SymbolPageProps) {
   const [quote, setQuote] = useState<MarketQuote | null>(null);
   const [liveQuote, setLiveQuote] = useState<LiveQuoteUpdateData | null>(null);
   const [quoteConnectionStatus, setQuoteConnectionStatus] = useState<RealtimeConnectionStatus>('closed');
@@ -662,6 +665,7 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
 
   const [bars, setBars] = useState<Bar[]>([]);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>(() => readSessionPreference());
+  const [drawings, setDrawings] = useState<Array<{ drawing_type: string; label: string | null; is_visible: boolean }>>([]);
   const [barsLoading, setBarsLoading] = useState(true);
   const [loadingOlderBars, setLoadingOlderBars] = useState(false);
   const [hasOlderBars, setHasOlderBars] = useState(false);
@@ -698,7 +702,24 @@ export function SymbolPage({ symbol, onSymbolChange }: SymbolPageProps) {
   // the currently-displayed symbol's tape data.
   const tapeRequestSymbolRef = useRef<string>(symbol);
 
-  const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
+  const [timeframe, setTimeframe] = useState<string>(initialTimeframe || DEFAULT_TIMEFRAME);
+  useEffect(() => {
+    if (initialTimeframe) setTimeframe(initialTimeframe);
+  }, [initialTimeframe]);
+  useEffect(() => {
+    if (initialSession) setSessionFilter(initialSession);
+  }, [initialSession]);
+  useEffect(() => {
+    let cancelled = false;
+    // Older test doubles / backend deployments may not expose drawings yet;
+    // chart state remains valid without that optional enrichment.
+    if (typeof api.getDrawingTools !== 'function') return () => { cancelled = true; };
+    api.getDrawingTools({ symbol, timeframe })
+      .then(rows => { if (!cancelled) setDrawings(rows.map(row => ({ drawing_type: row.drawing_type, label: row.label, is_visible: row.is_visible }))); })
+      .catch(() => { if (!cancelled) setDrawings([]); });
+    return () => { cancelled = true; };
+  }, [symbol, timeframe]);
+  const handleChartStateChange = useCallback((state: ChartState) => saveChartState(state), []);
   useEffect(() => {
     let cancelled = false;
     api.getSymbolCalendar(symbol).then(result => { if (!cancelled) setCalendarEvents(result.events); }).catch(() => { if (!cancelled) setCalendarEvents([]); });
@@ -1437,6 +1458,9 @@ const fetchBars = useCallback(async () => {
             marketSession={marketSession?.session}
             initialActiveOverlays={['supertrend']}
             timeframe={timeframe}
+            sessionFilter={sessionFilter}
+            drawings={drawings}
+            onStateChange={handleChartStateChange}
             onTimeframeChange={setTimeframe}
             timeframeOptions={TIMEFRAMES.map(tf => ({ value: tf, label: TIMEFRAME_LABELS[tf] || tf }))}
             chartMode={chartMode}

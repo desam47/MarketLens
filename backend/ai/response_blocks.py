@@ -47,6 +47,7 @@ class BlockQuality(BaseModel):
     session: str | None = None
     timeframe: str | None = None
     fallback: bool = False
+    entitlement: str | None = None
 
 
 class ResponseBlock(BaseModel):
@@ -92,6 +93,7 @@ def _quality(
         session=successful.get("session") if successful else None,
         timeframe=successful.get("timeframe") if successful else None,
         fallback=bool(successful.get("fallback")) if successful else False,
+        entitlement=successful.get("entitlement") if successful else None,
     )
 
 
@@ -140,6 +142,7 @@ def build_response_blocks(
     unavailable: list[str],
     trace: list[dict[str, Any]] | None = None,
     preferences: dict[str, Any] | None = None,
+    chart_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build and validate the application-owned block envelope.
 
@@ -183,6 +186,7 @@ def build_response_blocks(
                 "session",
                 "timeframe",
                 "fallback",
+                "entitlement",
                 "warnings",
                 "status",
             )
@@ -191,7 +195,7 @@ def build_response_blocks(
         for item in trace
         if item.get("tool") or item.get("provider")
     ]
-    if focus or partial or unavailable or evidence:
+    if focus or partial or unavailable or evidence or chart_state:
         blocks.append(
             ResponseBlock(
                 id="evidence-1",
@@ -203,6 +207,7 @@ def build_response_blocks(
                         "unavailable": list(unavailable),
                     },
                     "items": evidence,
+                    **({"chart_state": chart_state} if chart_state else {}),
                 },
                 quality=quality,
             )

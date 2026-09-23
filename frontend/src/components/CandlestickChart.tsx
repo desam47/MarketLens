@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Bar, Transition } from '../services/api';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
+import type { ChartState } from '../utils/chartState';
 import {
   type ChartType,
   CHART_TYPES,
@@ -60,6 +61,9 @@ interface CandlestickChartProps {
   than fetched here so multi-panel grids (many CandlestickChart instances) share
   one poll instead of one per panel. */
   marketSession?: 'premarket' | 'regular' | 'after_hours' | 'closed' | null;
+  sessionFilter?: string;
+  onStateChange?: (state: ChartState) => void;
+  drawings?: Array<{ drawing_type: string; label?: string | null; is_visible?: boolean }>;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -86,6 +90,9 @@ function CandlestickChartImpl({
   hideHeader = false,
   bare = false,
   marketSession,
+  sessionFilter = 'all',
+  onStateChange,
+  drawings = [],
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -115,6 +122,27 @@ function CandlestickChartImpl({
     return bands;
   })() : [], [bars]);
   const [sessionBandPositions, setSessionBandPositions] = useState<Array<{ session: string; left: number; width: number }>>([]);
+  const selectedCandleRef = useRef<ChartState['selected_candle']>(null);
+
+  const emitState = useCallback(() => {
+    if (!onStateChange) return;
+    const range = chartRef.current?.timeScale().getVisibleLogicalRange?.();
+    onStateChange({
+      symbol,
+      timeframe: timeframe || '1d',
+      session: sessionFilter,
+      chart_type: chartType,
+      active_indicators: Array.from(activeOverlaysProp ?? internalOverlays),
+      visible_range: range && Number.isFinite(range.from) && Number.isFinite(range.to)
+        ? { from: range.from, to: range.to }
+        : null,
+      selected_candle: selectedCandleRef.current,
+      drawings: drawings.map(d => ({ type: d.drawing_type, label: d.label, visible: d.is_visible })),
+      updated_at: new Date().toISOString(),
+    });
+  }, [activeOverlaysProp, chartType, drawings, internalOverlays, onStateChange, sessionFilter, symbol, timeframe]);
+  const emitStateRef = useRef(emitState);
+  emitStateRef.current = emitState;
 
   // The multi-timeframe grid controls all child chart types from one shared
   // toolbar. Keep the local chart state in sync when that controlled initial
@@ -220,6 +248,23 @@ function CandlestickChartImpl({
 
         chartRef.current = chart;
         setReady(true);
+        chart.subscribeCrosshairMove((param: any) => {
+          const data = param?.seriesData?.get?.(seriesRef.current);
+          if (data) {
+            selectedCandleRef.current = {
+              timestamp: data.time ?? param.time ?? '',
+              open: data.open ?? null,
+              high: data.high ?? null,
+              low: data.low ?? null,
+              close: data.close ?? data.value ?? null,
+              volume: null,
+            };
+          } else if (!param?.time) {
+            selectedCandleRef.current = null;
+          }
+          emitStateRef.current();
+        });
+        chart.timeScale().subscribeVisibleLogicalRangeChange(() => emitStateRef.current());
 
         // Fallback wheel navigation for embedded/multi-panel layouts. Some
         // browsers route wheel events to the scrolling page before the
@@ -441,7 +486,12 @@ function CandlestickChartImpl({
       chart.timeScale().fitContent();
       fittedDataKeyRef.current = dataKey;
     }
-  }, [bars, transitions, ready, activeOverlays, chartType, showMarkers, timeframe, symbol]);
+    emitState();
+  }, [bars, transitions, ready, activeOverlays, chartType, showMarkers, timeframe, symbol, emitState]);
+
+  useEffect(() => {
+    emitState();
+  }, [emitState]);
 
   // Session shading must follow the chart's actual time scale. Percentage
   // positions based on the loaded array drift as the user pans/zooms, so map
@@ -632,6 +682,9 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.hideHeader === next.hideHeader &&
     prev.bare === next.bare &&
     prev.marketSession === next.marketSession
+    && prev.sessionFilter === next.sessionFilter
+    && prev.onStateChange === next.onStateChange
+    && prev.drawings === next.drawings
   );
 });
 

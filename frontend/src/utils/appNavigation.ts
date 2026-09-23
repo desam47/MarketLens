@@ -12,6 +12,14 @@ export type AppPage =
   | 'journal'
   | 'calendar';
 
+export interface NavigationState {
+  symbol?: string;
+  timeframe?: string;
+  session?: string;
+  filters?: Record<string, string | number | boolean | string[]>;
+  selectedRecords?: string[];
+}
+
 const HASH_BY_PAGE: Record<AppPage, string> = {
   dashboard: '#dashboard',
   watchlist: '#watchlist',

@@ -128,6 +128,38 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('region', { name: 'Journal save' })).toHaveTextContent('AAPL');
   });
 
+  it('offers regeneration and freshness refresh for an older grounded answer', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'How is AAPL?', created_at: '', grounded: null } as any,
+      {
+        id: 2, session_id: 1, role: 'assistant', content: 'Old answer.', created_at: '', grounded: true,
+        focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [{ id: 'evidence-1', type: 'evidence', data: { symbols: { verified: ['AAPL'], partial: [], unavailable: [] }, items: [] }, quality: { state: 'stale', grounded: true, confidence: 0.5, source_timestamp: '2020-01-01T00:00:00Z' } }],
+      } as any,
+    ]);
+    mockApi.streamChatMessage.mockImplementation(async () => ({
+      id: 3, session_id: 1, role: 'assistant', content: 'New answer.', created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+    } as any));
+    render(<ChatPanel />);
+    expect(await screen.findByText('Old answer.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '↻ Refresh current data' }));
+    await waitFor(() => expect(mockApi.streamChatMessage).toHaveBeenCalledWith(1, expect.stringContaining('Refresh the evidence'), expect.anything()));
+  });
+
+  it('creates a local notebook and saves an answer with the notebook action', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'Compare AAPL and MSFT', created_at: '', grounded: null } as any,
+      { id: 2, session_id: 1, role: 'assistant', content: 'Comparison.', created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [], blocks: [] } as any,
+    ]);
+    render(<ChatPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /Notebooks/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New notebook name' }), { target: { value: 'Trade ideas' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: '📓 Save to notebook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Trade ideas' }));
+    expect(window.localStorage.getItem('marketlens.chat.notebooks')).toContain('Compare AAPL and MSFT');
+  });
+
   it('renders every remaining typed block type (5.7.1 component coverage)', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

@@ -4,7 +4,7 @@ import { Dashboard } from './pages/Dashboard';
 import { PageErrorBoundary } from './components/PageErrorBoundary';
 import { StartupModeNotice } from './components/StartupModeNotice';
 import { StartupModeContext, type StartupMode } from './contexts/StartupModeContext';
-import { hashForPage, pageForHash, type AppPage } from './utils/appNavigation';
+import { hashForPage, pageForHash, type AppPage, type NavigationState } from './utils/appNavigation';
 import './styles/App.css';
 
 // Phase 3.6.6: code-split all non-dashboard pages.
@@ -39,6 +39,7 @@ export default function App() {
   // want without disturbing (or being disturbed by) the rest of the app.
   // Lifted to App (not page-local) so it survives nav-tab switches.
   const [hubSymbol, setHubSymbol] = useState<string>('SPY');
+  const [symbolNavigation, setSymbolNavigation] = useState<NavigationState>({});
   const [startupMode, setStartupMode] = useState<StartupMode>(null);
 
   useEffect(() => {
@@ -72,9 +73,10 @@ export default function App() {
     return () => window.removeEventListener('hashchange', syncPageFromHash);
   }, []);
 
-  const navigateTo = useCallback((page: AppPage) => {
+  const navigateTo = useCallback((page: AppPage, navigation: NavigationState = {}) => {
     const nextHash = hashForPage(page);
     setCurrentPage(page);
+    if (page === 'symbol') setSymbolNavigation(navigation);
 
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash;
@@ -101,9 +103,9 @@ export default function App() {
       case 'watchlist':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Watchlist"><WatchlistPage onSelectSymbol={(s) => { setSymbol(s); navigateTo('symbol'); }} /></PageErrorBoundary></Suspense>;
       case 'symbol':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} initialTimeframe={symbolNavigation.timeframe} initialSession={symbolNavigation.session as any} /></PageErrorBoundary></Suspense>;
       case 'hub':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} onNavigate={(page, targetSymbol) => { if (targetSymbol) { setSymbol(targetSymbol); setHubSymbol(targetSymbol); } navigateTo(page); }} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} onNavigate={(page, targetSymbol, navigation) => { if (targetSymbol) { setSymbol(targetSymbol); setHubSymbol(targetSymbol); } navigateTo(page, { ...navigation, ...(targetSymbol ? { symbol: targetSymbol } : {}) }); }} /></PageErrorBoundary></Suspense>;
       case 'alerts':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':

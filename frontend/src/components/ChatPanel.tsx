@@ -17,10 +17,12 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { AlertConversationContext, ChatMessage, ChatPreferences as ChatPreferencesType, ChatResponseBlock } from '../services/api';
+import api, { AlertConversationContext, ChatChartState, ChatMessage, ChatPreferences as ChatPreferencesType, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
-import type { AppPage } from '../utils/appNavigation';
+import type { AppPage, NavigationState } from '../utils/appNavigation';
+import { loadChartState } from '../utils/chartState';
 import { ChatPreferencesPanel } from './ChatPreferencesPanel';
+import { createChatNotebook, loadChatNotebooks, saveMessageToChatNotebook, type ChatNotebook } from '../utils/chatNotebooks';
 import {
   isDefaultChatPreferences,
   loadChatPreferences,
@@ -40,7 +42,7 @@ interface ChatPanelProps {
    * tickers were named. Fires at most once per turn.
    */
   onSymbolResolved?: (symbol: string) => void;
-  onNavigate?: (page: AppPage, symbol?: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void;
 }
 
 // A message in local state may be a not-yet-finalized streaming bubble.
@@ -133,8 +135,22 @@ export function ChatPanel({
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
   const [preferences, setPreferences] = useState<ChatPreferencesType>(() => loadChatPreferences());
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [chartState, setChartState] = useState<ChatChartState | null>(() => loadChartState());
+  const [notebooks, setNotebooks] = useState<ChatNotebook[]>(() => loadChatNotebooks());
+  const [notebooksOpen, setNotebooksOpen] = useState(false);
+  const [newNotebookName, setNewNotebookName] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const navigateFromChat = useCallback((page: AppPage, targetSymbol?: string, navigation?: NavigationState) => {
+    const state = chartState;
+    const nextNavigation = {
+      ...navigation,
+      ...(page === 'symbol' && state ? { timeframe: state.timeframe, session: state.session } : {}),
+    };
+    if (Object.keys(nextNavigation).length > 0) onNavigate?.(page, targetSymbol, nextNavigation);
+    else onNavigate?.(page, targetSymbol);
+  }, [chartState, onNavigate]);
 
   // Loaded once on mount so the very first quick-action button already
   // knows whether a ticker is watchlisted and how many lists exist —
@@ -261,6 +277,8 @@ export function ChatPanel({
     if (!content || !sessionId || sending) return;
     setSending(true);
     setError(null);
+    const currentChartState = loadChartState();
+    setChartState(currentChartState);
     const now = Date.now();
     const optimisticUser: LocalMessage = {
       id: -now,
@@ -312,6 +330,7 @@ export function ChatPanel({
           );
         },
         preferences: isDefaultChatPreferences(preferences) ? null : preferences,
+        chartState: currentChartState,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
@@ -320,7 +339,9 @@ export function ChatPanel({
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
         try {
-          const finalMsg = await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
+          const finalMsg = currentChartState
+            ? await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences, currentChartState)
+            : await api.sendChatMessage(sessionId, content, isDefaultChatPreferences(preferences) ? null : preferences);
           persistJournalBlocks(finalMsg.blocks);
           setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
           adoptSymbol(finalMsg.focus, finalMsg.partial);
@@ -365,6 +386,15 @@ export function ChatPanel({
             </button>
             <button
               type="button"
+              className={`btn btn-secondary ${notebooks.length ? 'chat-pref-set' : ''}`}
+              onClick={() => setNotebooksOpen(open => !open)}
+              aria-expanded={notebooksOpen}
+              title="Save grounded answers into local research notebooks"
+            >
+              📓 Notebooks
+            </button>
+            <button
+              type="button"
               className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
               onClick={handleClear}
               disabled={loading || clearing || messages.length === 0}
@@ -385,11 +415,29 @@ export function ChatPanel({
             onClose={() => setPreferencesOpen(false)}
           />
         )}
+        {notebooksOpen && (
+          <ChatNotebookPanel
+            notebooks={notebooks}
+            newName={newNotebookName}
+            onNewNameChange={setNewNotebookName}
+            onCreate={() => {
+              const notebook = createChatNotebook(newNotebookName);
+              setNotebooks(current => [notebook, ...current]);
+              setNewNotebookName('');
+            }}
+          />
+        )}
         <p className="info-text">
           Uses live quant data where available — full coverage for your watchlist,
           price&nbsp;+&nbsp;indicators only for other tickers. Research to inform your
           own decision, not financial advice.
         </p>
+        {chartState && (
+          <small className="chat-chart-state-banner" role="status">
+            Chart context ready: {chartState.symbol} · {chartState.timeframe} · {chartState.session}
+            {chartState.selected_candle ? ' · selected candle' : ''}
+          </small>
+        )}
         {alertContext && <AlertContextAttachment context={alertContext} />}
       </div>
 
@@ -414,8 +462,9 @@ export function ChatPanel({
             </div>
           </div>
         )}
-        {messages.map(m => {
+        {messages.map((m, messageIndex) => {
           const pending = m.streaming && !m.content;
+          const previousUser = messages.slice(0, messageIndex).reverse().find(item => item.role === 'user');
           return (
             <div key={m.id} className={`chat-bubble-row ${m.role}`}>
               <div className={`chat-bubble ${m.role}${pending ? ' chat-bubble-pending' : ''}`}>
@@ -424,7 +473,7 @@ export function ChatPanel({
                   : m.role === 'assistant'
                     ? highlightMessage(m.content, m.focus ?? [], m.partial ?? [], m.unavailable ?? [])
                     : m.content}
-                {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} onNavigate={onNavigate} />}
+                {m.role === 'assistant' && !m.streaming && <TypedResponseBlocks blocks={m.blocks ?? []} onNavigate={navigateFromChat} />}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && <ToolTraceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && (
@@ -434,7 +483,7 @@ export function ChatPanel({
                     watchlistIndex={watchlistIndex}
                     onWatchlisted={markSymbolWatchlisted}
                     onWatchlistCreated={addWatchlistToIndex}
-                    onNavigate={onNavigate}
+                    onNavigate={navigateFromChat}
                   />
                 )}
                 {m.role === 'assistant' && !m.streaming && m.id > 0 && (
@@ -443,6 +492,20 @@ export function ChatPanel({
                     onSaved={(messageId, feedback) =>
                       setMessages(prev => prev.map(msg => (msg.id === messageId ? { ...msg, feedback } : msg)))
                     }
+                  />
+                )}
+                {m.role === 'assistant' && !m.streaming && m.id > 0 && previousUser && (
+                  <ChatRegenerationRow
+                    stale={messageNeedsRefresh(m)}
+                    onRegenerate={mode => submit(regenerationPrompt(previousUser.content, mode))}
+                  />
+                )}
+                {m.role === 'assistant' && !m.streaming && m.id > 0 && (
+                  <NotebookSaveButton
+                    message={m}
+                    question={previousUser?.content ?? ''}
+                    notebooks={notebooks}
+                    onSaved={setNotebooks}
                   />
                 )}
               </div>
@@ -531,7 +594,7 @@ function recomputeScenario(positions: any[], shockPercent: number): { grossExpos
 }
 
 /** Render the application-owned typed envelope without parsing model markup. */
-function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock[]; onNavigate?: (page: AppPage, symbol?: string) => void }) {
+function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock[]; onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void }) {
   const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
   // Per-block "show all" toggles (evidence/options tables, mini chart)
   // keyed by block.id — expand the SAME bounded data already delivered,
@@ -580,12 +643,19 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                 <li key={`${item.tool ?? 'evidence'}-${index}`}>
                   {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
                   {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
+                  {item.entitlement && item.entitlement !== 'not_applicable' ? ` · entitlement: ${item.entitlement}` : ''}
                 </li>
               ))}</ul>}
               {items.length > 8 && (
                 <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
                   {expanded ? 'Show less' : `Show all ${items.length}`}
                 </button>
+              )}
+              {block.data.chart_state && (
+                <small className="chat-chart-state-note">
+                  Chart context: {block.data.chart_state.symbol ?? 'symbol'} · {block.data.chart_state.timeframe ?? 'timeframe'} · {block.data.chart_state.session ?? 'session'}
+                  {block.data.chart_state.selected_candle ? ' · selected candle included' : ''}
+                </small>
               )}
             </section>
           );
@@ -767,7 +837,10 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
               {Object.entries(links).map(([key, route]) => {
                 const target = REPORT_PAGE_TARGETS[key];
                 if (!target || typeof route !== 'string') return null;
-                return <button type="button" className="chat-quick-action-btn" key={key} onClick={() => onNavigate?.(target, key === 'symbol' ? symbol : undefined)}>{key === 'replay' ? 'Open Replay' : `Open ${key[0].toUpperCase()}${key.slice(1)}`}</button>;
+                const navigation = block.data.navigation && typeof block.data.navigation === 'object'
+                  ? block.data.navigation as NavigationState
+                  : undefined;
+                return <button type="button" className="chat-quick-action-btn" key={key} onClick={() => onNavigate?.(target, key === 'symbol' ? symbol : undefined, navigation)}>{key === 'replay' ? 'Open Replay' : `Open ${key[0].toUpperCase()}${key.slice(1)}`}</button>;
               })}
             </div>
           </section>;
@@ -898,6 +971,120 @@ function ChatFeedbackRow({ message, onSaved }: { message: ChatMessage; onSaved: 
   );
 }
 
+type RegenerationMode = 'again' | 'more_detail' | 'simpler' | 'bull_case' | 'bear_case' | 'calculations_only' | 'sources_only' | 'refresh';
+
+function regenerationPrompt(question: string, mode: RegenerationMode): string {
+  const instruction: Record<RegenerationMode, string> = {
+    again: 'Answer again using the same question and current evidence.',
+    more_detail: 'Answer again with more detail and clearly separated evidence, assumptions, and interpretation.',
+    simpler: 'Answer again in simpler, more concise language while preserving verified numbers and uncertainty.',
+    bull_case: 'Answer again with the strongest evidence-supported bullish case and its invalidation conditions.',
+    bear_case: 'Answer again with the strongest evidence-supported bearish case and its invalidation conditions.',
+    calculations_only: 'Answer again with calculations and formulas only; omit narrative speculation.',
+    sources_only: 'Answer again focusing on sources, timestamps, freshness, provider, and data-quality warnings.',
+    refresh: 'Refresh the evidence for this question and answer using the newest available data. Preserve the original question.',
+  };
+  return `${question}\n\n[Response regeneration mode: ${instruction[mode]}]`;
+}
+
+function messageNeedsRefresh(message: ChatMessage): boolean {
+  return (message.blocks ?? []).some(block => {
+    if (block.quality?.state === 'stale') return true;
+    const source = block.quality?.source_timestamp;
+    if (!source) return false;
+    const ageSeconds = (Date.now() - new Date(source).getTime()) / 1000;
+    return Number.isFinite(ageSeconds) && ageSeconds > 900 && block.quality?.session !== 'closed';
+  });
+}
+
+function ChatRegenerationRow({ stale, onRegenerate }: { stale: boolean; onRegenerate: (mode: RegenerationMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const options: Array<[RegenerationMode, string]> = [
+    ['again', 'Run again'],
+    ['more_detail', 'More detail'],
+    ['simpler', 'Simpler'],
+    ['bull_case', 'Bull case'],
+    ['bear_case', 'Bear case'],
+    ['calculations_only', 'Calculations only'],
+    ['sources_only', 'Sources only'],
+  ];
+  return (
+    <div className="chat-regeneration-row" aria-label="Regenerate answer">
+      <button type="button" className="chat-quick-action-btn" onClick={() => onRegenerate('again')}>↻ Run again</button>
+      <button type="button" className="chat-quick-action-btn" onClick={() => setOpen(value => !value)} aria-expanded={open}>More modes</button>
+      {stale && <button type="button" className="chat-quick-action-btn chat-refresh-btn" onClick={() => onRegenerate('refresh')}>↻ Refresh current data</button>}
+      {open && <span className="chat-regeneration-options">{options.slice(1).map(([mode, label]) => (
+        <button key={mode} type="button" className="chat-quick-action-btn" onClick={() => { setOpen(false); onRegenerate(mode); }}>{label}</button>
+      ))}</span>}
+    </div>
+  );
+}
+
+function ChatNotebookPanel({
+  notebooks,
+  newName,
+  onNewNameChange,
+  onCreate,
+}: {
+  notebooks: ChatNotebook[];
+  newName: string;
+  onNewNameChange: (value: string) => void;
+  onCreate: () => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = notebooks.find(notebook => notebook.id === selectedId) ?? null;
+  return (
+    <div className="chat-notebook-panel" aria-label="Research notebooks">
+      <div className="chat-notebook-create">
+        <input value={newName} onChange={event => onNewNameChange(event.target.value)} placeholder="New notebook name" maxLength={120} aria-label="New notebook name" />
+        <button type="button" className="chat-quick-action-btn" onClick={onCreate}>Create</button>
+      </div>
+      <small>Notebooks stay in this browser and preserve the original answer evidence timestamps.</small>
+      {notebooks.length > 0 && <div className="chat-notebook-list">{notebooks.map(notebook => (
+        <button key={notebook.id} type="button" className="chat-notebook-chip" onClick={() => setSelectedId(notebook.id)}>
+          {notebook.name} · {notebook.items.length} saved
+        </button>
+      ))}</div>}
+      {selected && (
+        <div className="chat-notebook-items" aria-label={`${selected.name} saved answers`}>
+          {selected.items.length === 0 ? <small>No answers saved yet.</small> : selected.items.slice(0, 10).map(item => (
+            <article key={item.id} className="chat-notebook-item">
+              <strong>{item.question || 'Saved answer'}</strong>
+              <span>{item.answer.slice(0, 220)}{item.answer.length > 220 ? '…' : ''}</span>
+              <small>Saved {formatAlertTime(item.saved_at)}{item.evidence_timestamps.length ? ` · evidence ${formatAlertTime(item.evidence_timestamps[0])}` : ''}</small>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotebookSaveButton({
+  message,
+  question,
+  notebooks,
+  onSaved,
+}: {
+  message: ChatMessage;
+  question: string;
+  notebooks: ChatNotebook[];
+  onSaved: (notebooks: ChatNotebook[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!notebooks.length) return null;
+  return (
+    <div className="chat-notebook-save-row">
+      <button type="button" className="chat-quick-action-btn" onClick={() => setOpen(value => !value)} aria-expanded={open}>📓 Save to notebook</button>
+      {open && <span className="chat-notebook-options">{notebooks.map(notebook => (
+        <button key={notebook.id} type="button" className="chat-quick-action-btn" onClick={() => { onSaved(saveMessageToChatNotebook(notebook.id, message, question)); setOpen(false); }}>
+          {notebook.name}
+        </button>
+      ))}</span>}
+    </div>
+  );
+}
+
 function ProvenanceRow({ message }: { message: ChatMessage }) {
   const focus = message.focus ?? [];
   const partial = message.partial ?? [];
@@ -988,7 +1175,7 @@ function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistC
   watchlistIndex: WatchlistIndex | null;
   onWatchlisted: (symbol: string, watchlistId: number) => void;
   onWatchlistCreated: (wl: WatchlistOption) => void;
-  onNavigate?: (page: AppPage, symbol?: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void;
 }) {
   if (symbols.length === 0 && !onNavigate) return null;
   return (
@@ -1032,7 +1219,7 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
   watchlistIndex: WatchlistIndex | null;
   onWatchlisted: (symbol: string, watchlistId: number) => void;
   onWatchlistCreated: (wl: WatchlistOption) => void;
-  onNavigate?: (page: AppPage, symbol?: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void;
 }) {
   const [watchlistState, setWatchlistState] = useState<QuickActionState>('idle');
   const [pickerOpen, setPickerOpen] = useState(false);

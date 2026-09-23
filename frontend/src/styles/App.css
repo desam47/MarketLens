@@ -6268,6 +6268,90 @@ div.td-trend {
   min-width: 8rem;
 }
 
+.chat-regeneration-row,
+.chat-notebook-save-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-regeneration-options,
+.chat-notebook-options {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-refresh-btn {
+  border-color: var(--warning);
+}
+
+.chat-notebook-panel {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.chat-notebook-create {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-notebook-create input {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-notebook-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.chat-notebook-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-notebook-items {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.chat-notebook-item {
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border-left: 2px solid var(--accent-primary);
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+
+.chat-notebook-item span,
+.chat-notebook-item small,
+.chat-chart-state-banner {
+  color: var(--text-muted);
+}
+
+.chat-chart-state-note {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-muted);
+}
+
 .chat-quick-alert-input {
   width: 4.5rem;
   font-size: 0.7rem;
