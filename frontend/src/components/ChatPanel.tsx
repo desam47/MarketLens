@@ -17,11 +17,13 @@
  * universal session and its messages — then opens a fresh session.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import api, { ChatMessage } from '../services/api';
+import api, { AlertConversationContext, ChatMessage } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
 
 interface ChatPanelProps {
   alertTriggerId?: number | null;
+  alertSymbol?: string | null;
+  alertContext?: AlertConversationContext | null;
   /**
    * Called with the primary ticker a chat turn resolved to (the first
    * `focus`, else the first `partial`). The AI Hub uses this to point
@@ -55,7 +57,12 @@ const EXAMPLES = [
   'Compare AAPL and MSFT',
 ];
 
-export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanelProps) {
+export function ChatPanel({
+  alertTriggerId = null,
+  alertSymbol = null,
+  alertContext = null,
+  onSymbolResolved,
+}: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [input, setInput] = useState('');
@@ -114,7 +121,9 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
 
     (async () => {
       try {
-        const session = await api.createChatSession(undefined, alertTriggerId);
+        // Alert sessions retain the triggering symbol so the first follow-up
+        // automatically receives the same ticker context as the attachment.
+        const session = await api.createChatSession(alertSymbol ?? undefined, alertTriggerId);
         if (cancelled) return;
         setSessionId(session.id);
         const history = await api.getChatMessages(session.id);
@@ -128,7 +137,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
     })();
 
     return () => { cancelled = true; };
-  }, [alertTriggerId, sessionAttempt]);
+  }, [alertTriggerId, alertSymbol, sessionAttempt]);
 
   const handleClear = useCallback(async () => {
     setClearing(true);
@@ -137,7 +146,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
       // Actually flush the history — sessions + messages — not just
       // hide it behind a new session.
       await api.clearChatHistory(alertTriggerId ?? undefined);
-      const session = await api.createChatSession(undefined, alertTriggerId, true);
+      const session = await api.createChatSession(alertSymbol ?? undefined, alertTriggerId, true);
       setSessionId(session.id);
       setMessages([]);
       setInput('');
@@ -146,7 +155,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
     } finally {
       setClearing(false);
     }
-  }, [alertTriggerId]);
+  }, [alertTriggerId, alertSymbol]);
 
   useEffect(() => {
     // scrollTo is missing in jsdom — guard so tests don't throw.
@@ -296,6 +305,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
           price&nbsp;+&nbsp;indicators only for other tickers. Research to inform your
           own decision, not financial advice.
         </p>
+        {alertContext && <AlertContextAttachment context={alertContext} />}
       </div>
 
       {error && (
@@ -366,6 +376,42 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
       </form>
     </div>
   );
+}
+
+function AlertContextAttachment({ context }: { context: AlertConversationContext }) {
+  const { alert, trigger, chart_state: chart, provenance, recent_triggers: recent, warnings } = context;
+  const signalCount = chart.signals?.length ?? 0;
+  const catalystCount = Array.isArray(context.symbol_context.news)
+    ? context.symbol_context.news.length
+    : 0;
+  return (
+    <div className="chat-alert-context" role="status" aria-label="Alert context attached">
+      <div className="chat-alert-context-heading">
+        <strong>🔔 Alert context attached</strong>
+        <span className="label">{alert.name} · {trigger.symbol} · {trigger.triggered_at ? formatAlertTime(trigger.triggered_at) : 'time unavailable'}</span>
+      </div>
+      <div className="chat-alert-context-facts">
+        <span><b>Trigger:</b> {trigger.message || trigger.observed_value || 'Condition matched'}</span>
+        <span><b>Chart:</b> {chart.timeframe || '1d'} · {chart.session || 'session unknown'}{chart.last_price != null ? ` · $${chart.last_price.toFixed(2)}` : ''}</span>
+        <span><b>Evidence:</b> {signalCount} signal{signalCount === 1 ? '' : 's'} · {catalystCount} catalyst item{catalystCount === 1 ? '' : 's'} · {recent.length} recent trigger{recent.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="chat-alert-context-provenance">
+        {provenance.provider} · {provenance.data_status} · {provenance.as_of ? formatAlertTime(provenance.as_of) : 'timestamp unavailable'}
+      </div>
+      {warnings.length > 0 && <div className="chat-alert-context-warning">⚠ {warnings.join(' ')}</div>}
+      <p className="chat-alert-context-help">Ask Chat to explain the move, review the signal, or propose a related alert. Changes still require confirmation.</p>
+    </div>
+  );
+}
+
+function formatAlertTime(value: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
 }
 
 /** Per-message row showing which tickers the answer was grounded in. */

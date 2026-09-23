@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import api, { Alert, AlertTrigger } from '../services/api';
 import { formatETDateTime } from './chartMath';
+import { openAlertConversation } from '../utils/alertConversation';
 
 interface AlertsCardProps {
   /** Optional symbol to prefill the form with. */
@@ -453,6 +454,16 @@ export function AlertsCard({ defaultSymbol = '' }: AlertsCardProps) {
                     <span className="ai-badge">AI</span> {t.ai_commentary}
                   </div>
                 )}
+                {alert && <div className="alert-trigger-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => openAlertConversation(t)}
+                    title="Open this fired alert with its verified context in AI Hub"
+                  >
+                    💬 Open in AI Hub
+                  </button>
+                </div>}
               </div>
             );
           })}

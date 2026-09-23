@@ -32,6 +32,7 @@ const trigger = (over: Partial<any> = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.sessionStorage.clear();
   mockApi.getAlerts.mockResolvedValue([]);
   mockApi.getActiveAlertTriggers.mockResolvedValue([]);
 });
@@ -78,6 +79,18 @@ describe('AlertsCard trigger history', () => {
     fireEvent.click(screen.getByTitle(/clear this history/i));
 
     expect(mockApi.clearAlertTriggers).not.toHaveBeenCalled();
+  });
+
+  it('hands a fired trigger to AI Hub as a one-shot context attachment', async () => {
+    mockApi.getAlerts.mockResolvedValue([alert()]);
+    mockApi.getActiveAlertTriggers.mockResolvedValue([trigger({ id: 17, symbol: 'AAPL' })]);
+    render(<AlertsCard />);
+
+    fireEvent.click(await screen.findByTitle(/open this fired alert/i));
+
+    expect(JSON.parse(window.sessionStorage.getItem('marketlens.ai-hub.pending-alert') || '{}'))
+      .toEqual({ triggerId: 17, symbol: 'AAPL' });
+    expect(window.location.hash).toBe('#ai-hub');
   });
 });
 

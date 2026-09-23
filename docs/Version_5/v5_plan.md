@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-22
-**Status:** Active. Phase 5.1, Phase 5.2, Phase 5.3, and Phase 5.4 are complete; Phase 5.5 is next.
+**Status:** Active. Phase 5.1, Phase 5.2, Phase 5.3, and Phase 5.4 are complete; Phase 5.5 is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -282,7 +282,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
-**Status:** 🟡 In progress. Items 5.5.1–5.5.2 are implemented and verified; items 5.5.3–5.5.5 remain.
+**Status:** 🟡 In progress. Items 5.5.1–5.5.3 are implemented and verified; items 5.5.4–5.5.5 remain.
 
 **Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
 
@@ -299,8 +299,9 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - ✅ Rank from backend data and preserve the selected session scope. The briefing never starts a second scan: it reuses the Watchlist table's scanner cache and uses local 1-minute session bars for a filtered session scope; its status, baseline, coverage, and missing-data warnings stay visible.
 
 #### 5.5.3 Alert-to-conversation workflow
-- Open Chat with the fired alert, triggering observation, current quote, chart state, signal explanation, catalyst context, and recent history already attached.
-- Allow safe follow-up creation or modification of related alerts.
+- ✅ Open Chat from any fired-trigger row in Alerts or Signal Alert Center. The hand-off is one-shot and preserves the trigger id and symbol across hash navigation.
+- ✅ Attach the persisted alert rule/observation plus a read-only snapshot of current quote provenance, chart timeframe/session, signal explanation, catalyst/news context, market backdrop, and recent trigger history. Gaps are shown as warnings with provider/freshness metadata.
+- ✅ Keep follow-up alert creation/modification on the existing closed action set. Destructive changes remain server-confirmed; opening the context is read-only and never fires or edits an alert.
 
 #### 5.5.4 Scheduled summaries
 - Optional premarket plan, midday update, post-market recap, and weekly review.
@@ -314,7 +315,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 ### Verification
 - Natural-language filters match Scanner's displayed and executed filters exactly.
 - Briefings state their cutoff time and do not mix sessions silently.
-- Alert conversations reproduce the actual triggering values and timestamps.
+- Alert conversations reproduce the actual triggering values and timestamps, show the attached provider/freshness state, and preserve the triggering symbol when the first Chat follow-up is sent.
 
 ---
 

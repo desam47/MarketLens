@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { Alert, AlertDelivery, AlertDeliverySummary, AlertTrigger } from '../services/api';
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { openAlertConversation } from '../utils/alertConversation';
 
 const ALERT_TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'] as const;
 const ACK_KEY = 'marketlens.signal-alerts.acknowledged';
@@ -442,7 +443,7 @@ export function SignalAlertCenter() {
           const alert = alertById.get(trigger.alert_id);
           return <div className="signal-alert-trigger" key={trigger.id}>
             <div><strong>{trigger.symbol}</strong><span className="label">{alert ? ` · ${alert.name}` : ''} · {formatETDateTime(trigger.triggered_at)} ET</span><div>{trigger.message || trigger.observed_value || 'Signal profile matched.'}</div>{trigger.ai_commentary && <div className="alert-trigger-ai-commentary"><span className="ai-badge">AI</span> {trigger.ai_commentary}</div>}</div>
-            <div className="signal-alert-trigger-actions"><a className="btn btn-secondary btn-small" href="#historical-replay">Replay</a><button className="btn btn-small" onClick={() => acknowledge(trigger.id)}>Acknowledge</button></div>
+            <div className="signal-alert-trigger-actions"><a className="btn btn-secondary btn-small" href="#historical-replay">Replay</a><button className="btn btn-secondary btn-small" onClick={() => openAlertConversation(trigger)}>💬 AI Hub</button><button className="btn btn-small" onClick={() => acknowledge(trigger.id)}>Acknowledge</button></div>
           </div>;
         })}
       </div>}

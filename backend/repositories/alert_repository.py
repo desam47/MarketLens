@@ -120,6 +120,10 @@ class AlertRepository:
             .all()
         )
 
+    def get_trigger(self, trigger_id: int) -> AlertTrigger | None:
+        """Return one fired trigger by id for read-only alert workflows."""
+        return self.db.query(AlertTrigger).filter(AlertTrigger.id == trigger_id).first()
+
     def get_deliveries(self, alert_id: int, limit: int = 100) -> list[AlertDelivery]:
         return (
             self.db.query(AlertDelivery)

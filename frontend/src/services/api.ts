@@ -341,6 +341,35 @@ export interface AlertTrigger {
   ai_commentary?: string | null;
 }
 
+/** Read-only evidence bundle attached when a fired alert opens AI Hub Chat. */
+export interface AlertConversationContext {
+  alert: Alert;
+  trigger: AlertTrigger;
+  recent_triggers: AlertTrigger[];
+  symbol_context: Record<string, any>;
+  chart_state: {
+    symbol: string;
+    timeframe: string;
+    session: string;
+    signals?: string[];
+    signal_explanation?: Record<string, any>;
+    last_price?: number | null;
+    change_pct?: number | null;
+    quote_timestamp?: string | null;
+    provider?: string | null;
+    [key: string]: any;
+  };
+  market_context: Record<string, any>;
+  provenance: {
+    provider: string;
+    as_of: string | null;
+    data_status: string;
+    freshness: string;
+    source: string;
+  };
+  warnings: string[];
+}
+
 export interface AlertDelivery {
   id: number;
   trigger_id: number;
@@ -1925,6 +1954,12 @@ class ApiService {
 
   async getActiveAlertTriggers(): Promise<AlertTrigger[]> {
     return this.fetch<AlertTrigger[]>('/alerts/active');
+  }
+
+  async getAlertConversationContext(triggerId: number): Promise<AlertConversationContext> {
+    return this.fetch<AlertConversationContext>(
+      `/alerts/triggers/${triggerId}/conversation-context`,
+    );
   }
 
   /**

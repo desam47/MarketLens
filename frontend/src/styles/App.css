@@ -2599,6 +2599,12 @@ h4 {
   color: var(--text-muted);
 }
 
+.alert-trigger-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.35rem;
+}
+
 .ai-badge {
   display: inline-block;
   background: var(--accent-primary);
@@ -5803,6 +5809,30 @@ div.td-trend {
 .chat-panel-header-top h2 {
   margin: 0;
 }
+
+.chat-alert-context {
+  margin-top: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 0.5rem;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.chat-alert-context-heading,
+.chat-alert-context-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.chat-alert-context-heading strong { color: var(--text-primary); }
+.chat-alert-context-facts { margin-top: 0.35rem; }
+.chat-alert-context-provenance { margin-top: 0.35rem; color: var(--text-muted); }
+.chat-alert-context-warning { margin-top: 0.35rem; color: var(--warning, #f59e0b); }
+.chat-alert-context-help { margin: 0.4rem 0 0; color: var(--text-muted); }
 
 .chat-panel-error {
   background: rgba(239, 68, 68, 0.08);

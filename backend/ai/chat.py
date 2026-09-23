@@ -88,7 +88,7 @@ from backend.ai.reply_stream import ReplyExtractor
 from backend.ai.sync_bridge import run_sync, stream_sync
 from backend.ai.tool_registry import ToolRequest, default_registry
 from backend.config.settings import settings
-from backend.models import AlertTrigger, ChatMessage
+from backend.models import Alert, AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
 from backend.repositories.chat_repository import ChatRepository
 from backend.utils.timezone import now_ny
@@ -547,12 +547,48 @@ def _build_alert_context(db, alert_trigger_id: int | None) -> dict | None:
     trigger = db.query(AlertTrigger).filter(AlertTrigger.id == alert_trigger_id).first()
     if trigger is None:
         return None
+    alert = db.query(Alert).filter(Alert.id == trigger.alert_id).first()
+    recent_triggers = (
+        db.query(AlertTrigger)
+        .filter(AlertTrigger.alert_id == trigger.alert_id)
+        .order_by(AlertTrigger.triggered_at.desc())
+        .limit(10)
+        .all()
+    )
     return {
+        # Keep the flat aliases for older prompt traces while the nested
+        # sections make the evidence/fact boundary explicit for new turns.
         "symbol": trigger.symbol,
         "message": trigger.message,
         "observed_value": trigger.observed_value,
         "ai_commentary": trigger.ai_commentary,
         "triggered_at": str(trigger.triggered_at) if trigger.triggered_at else None,
+        "alert": {
+            "id": alert.id if alert is not None else trigger.alert_id,
+            "name": alert.name if alert is not None else None,
+            "symbol": alert.symbol if alert is not None else trigger.symbol,
+            "condition_type": alert.condition_type if alert is not None else None,
+            "parameter": alert.parameter if alert is not None else None,
+            "is_enabled": alert.is_enabled if alert is not None else None,
+        },
+        "trigger": {
+            "id": trigger.id,
+            "symbol": trigger.symbol,
+            "message": trigger.message,
+            "observed_value": trigger.observed_value,
+            "ai_commentary": trigger.ai_commentary,
+            "triggered_at": str(trigger.triggered_at) if trigger.triggered_at else None,
+        },
+        "recent_triggers": [
+            {
+                "id": row.id,
+                "symbol": row.symbol,
+                "message": row.message,
+                "observed_value": row.observed_value,
+                "triggered_at": str(row.triggered_at) if row.triggered_at else None,
+            }
+            for row in recent_triggers
+        ],
     }
 
 

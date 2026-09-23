@@ -35,6 +35,8 @@ import { AIProviderBadge } from '../components/AIProviderBadge';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import api, { AlertConversationContext } from '../services/api';
+import { consumePendingAlertChat, type PendingAlertChat } from '../utils/alertConversation';
 
 // Heavy, self-fetching panels — same lazy pattern + same chunks
 // SymbolPage used for these.
@@ -69,6 +71,29 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
   // Which sections have been mounted. Chat mounts on open; the rest are
   // added as they scroll into view or get jumped to, and never removed.
   const [revealed, setRevealed] = useState<Set<SectionId>>(() => new Set<SectionId>(['chat']));
+  const [pendingAlert] = useState<PendingAlertChat | null>(() => consumePendingAlertChat());
+  const [alertContext, setAlertContext] = useState<AlertConversationContext | null>(null);
+
+  useEffect(() => {
+    if (!pendingAlert) return;
+    if (pendingAlert.symbol && pendingAlert.symbol.toUpperCase() !== symbol.toUpperCase()) {
+      onSymbolChange(pendingAlert.symbol);
+    }
+  }, [pendingAlert, symbol, onSymbolChange]);
+
+  useEffect(() => {
+    if (!pendingAlert) return;
+    let cancelled = false;
+    api.getAlertConversationContext(pendingAlert.triggerId)
+      .then(context => {
+        if (!cancelled) setAlertContext(context);
+      })
+      .catch(() => {
+        // Chat still opens as an alert-scoped session. Its backend context
+        // builder will retry the live symbol context on the first question.
+    });
+    return () => { cancelled = true; };
+  }, [pendingAlert]);
 
   // The header ↻ and the SymbolInput submit re-key AITemplatesPanel only.
   // Re-mounting AIAnalysisPanel would orphan an in-flight billable
@@ -208,7 +233,12 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
         {revealed.has('chat') ? (
           <PageErrorBoundary pageName="AI Chat">
             <Suspense fallback={<div className="panel-skeleton">Loading chat…</div>}>
-              <ChatPanel onSymbolResolved={adoptSymbolFromChat} />
+              <ChatPanel
+                alertTriggerId={pendingAlert?.triggerId ?? null}
+                alertSymbol={pendingAlert?.symbol ?? null}
+                alertContext={alertContext}
+                onSymbolResolved={adoptSymbolFromChat}
+              />
             </Suspense>
           </PageErrorBoundary>
         ) : (

@@ -202,6 +202,13 @@ describe('ChatPanel (universal)', () => {
     expect(mockApi.getChatMessages).not.toHaveBeenCalled();
   });
 
+  it('keeps the triggering symbol on an alert-scoped session', async () => {
+    mockApi.getChatMessages.mockResolvedValueOnce([]);
+    render(<ChatPanel alertTriggerId={42} alertSymbol="AAPL" />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    expect(mockApi.createChatSession).toHaveBeenCalledWith('AAPL', 42);
+  });
+
   describe('quick actions', () => {
     beforeEach(() => {
       mockApi.getChatMessages.mockResolvedValue([

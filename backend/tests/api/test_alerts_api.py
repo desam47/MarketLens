@@ -301,6 +301,52 @@ class TestAlertsAPI(unittest.TestCase):
             response = self.client.get("/api/alerts/999/triggers")
         self.assertEqual(response.status_code, 404)
 
+    # --- GET /api/alerts/triggers/{id}/conversation-context --------------
+
+    def test_alert_conversation_context_attaches_verified_snapshot(self):
+        alert_row = _mock_alert(id=7, name="AAPL breakout", condition_type="breakout", parameter="20")
+        trigger_row = _mock_trigger(
+            id=42,
+            alert_id=7,
+            symbol="AAPL",
+            observed_value="191.20",
+            message="AAPL broke above the 20-bar high",
+        )
+        with (
+            patch("backend.api.alerts.router.AlertRepository") as MockRepo,
+            patch("backend.ai.context.build_context") as build_context,
+            patch("backend.ai.market_baseline.build_market_baseline", return_value={"regime": "risk_on"}),
+        ):
+            repo = MockRepo.return_value
+            repo.get_trigger.return_value = trigger_row
+            repo.get_by_id.return_value = alert_row
+            repo.get_triggers.return_value = [trigger_row]
+            build_context.return_value.compact.return_value = {
+                "symbol": "AAPL",
+                "price": 191.2,
+                "timestamp": "2026-09-22T12:00:00-04:00",
+                "data_status": "live",
+                "news": [{"headline": "Verified catalyst"}],
+            }
+
+            response = self.client.get("/api/alerts/triggers/42/conversation-context")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["alert"]["name"], "AAPL breakout")
+        self.assertEqual(data["trigger"]["id"], 42)
+        self.assertEqual(data["symbol_context"]["price"], 191.2)
+        self.assertEqual(data["market_context"]["regime"], "risk_on")
+        self.assertEqual(data["provenance"]["data_status"], "live")
+        self.assertEqual(data["warnings"], [])
+
+    def test_alert_conversation_context_missing_trigger_is_404(self):
+        with patch("backend.api.alerts.router.AlertRepository") as MockRepo:
+            MockRepo.return_value.get_trigger.return_value = None
+            response = self.client.get("/api/alerts/triggers/404/conversation-context")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Alert trigger not found")
+
 
 if __name__ == "__main__":
     unittest.main()

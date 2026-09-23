@@ -3,7 +3,9 @@ Alert API endpoints.
 """
 
 import asyncio
+import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_serializer
@@ -17,6 +19,7 @@ from backend.repositories.alert_repository import AlertRepository
 from backend.utils.timezone import format_edt_iso
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
+logger = logging.getLogger(__name__)
 
 # --- Request / Response models -----------------------------------------
 
@@ -120,6 +123,19 @@ class AlertDeliverySummaryResponse(BaseModel):
     by_channel: dict[str, int]
 
 
+class AlertConversationContextResponse(BaseModel):
+    """Verified, read-only context attached when a fired alert opens Chat."""
+
+    alert: AlertResponse
+    trigger: AlertTriggerResponse
+    recent_triggers: list[AlertTriggerResponse]
+    symbol_context: dict[str, Any]
+    chart_state: dict[str, Any]
+    market_context: dict[str, Any]
+    provenance: dict[str, Any]
+    warnings: list[str]
+
+
 # --- Endpoints ----------------------------------------------------------
 
 
@@ -158,6 +174,131 @@ async def list_active_triggers(db: Session = Depends(get_db)):
     """Triggers fired in the last 24 hours."""
     repo = AlertRepository(db)
     return await asyncio.to_thread(repo.get_recent_triggers)
+
+
+@router.get(
+    "/triggers/{trigger_id}/conversation-context",
+    response_model=AlertConversationContextResponse,
+)
+async def get_alert_conversation_context(trigger_id: int, db: Session = Depends(get_db)):
+    """Build the read-only evidence bundle used by Alert → AI Hub.
+
+    The trigger and alert are always loaded from the database. Quant and
+    catalyst sections are best-effort provider-backed snapshots; a provider
+    failure is returned as a visible warning instead of making the trigger
+    disappear or inventing a value. This endpoint never changes an alert,
+    fires a trigger, or creates a chat message/session.
+    """
+    repo = AlertRepository(db)
+    trigger = await asyncio.to_thread(repo.get_trigger, trigger_id)
+    if trigger is None:
+        raise HTTPException(status_code=404, detail="Alert trigger not found")
+    alert = await asyncio.to_thread(repo.get_by_id, trigger.alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    recent = await asyncio.to_thread(repo.get_triggers, alert.id, 20)
+    if not any(row.id == trigger.id for row in recent):
+        recent = [trigger, *recent]
+
+    warnings: list[str] = []
+    symbol_context: dict[str, Any] = {}
+    market_context: dict[str, Any] = {}
+    chart_state: dict[str, Any] = {
+        "symbol": trigger.symbol,
+        "timeframe": "1d",
+        "session": "unknown",
+        "signals": [],
+        "signal_explanation": {},
+    }
+    provider: str | None = None
+    data_status = "unknown"
+    as_of: str | None = None
+
+    def _build_snapshot() -> tuple[dict[str, Any], dict[str, Any]]:
+        from backend.ai.context import build_context
+        from backend.ai.market_baseline import build_market_baseline
+
+        context = build_context(
+            trigger.symbol,
+            include_news=True,
+            include_fundamentals=True,
+        ).compact()
+        try:
+            baseline = build_market_baseline()
+        except Exception:  # noqa: BLE001 - market backdrop is optional
+            baseline = {}
+        return context, baseline
+
+    try:
+        symbol_context, market_context = await asyncio.to_thread(_build_snapshot)
+    except Exception as exc:  # noqa: BLE001 - expose a partial, honest bundle
+        logger.info("Alert conversation context unavailable for trigger %s: %s", trigger_id, exc)
+        warnings.append("Verified symbol context is unavailable; persisted alert facts remain attached.")
+
+    # The context build populates the shared scanner cache. Read that cache for
+    # the exact signal explanation and quote provenance without another scan.
+    try:
+        from backend.scanner.scanner import market_scanner
+
+        scan = market_scanner.get_scan_result(trigger.symbol)
+        quote = scan.quote if scan is not None else None
+        if scan is not None:
+            chart_state.update(
+                {
+                    "signals": list(scan.signals or []),
+                    "signal_explanation": scan.explanation or {},
+                    "change_pct": scan.change_pct,
+                }
+            )
+        if quote is not None:
+            provider = quote.provider
+            data_status = str(getattr(quote.data_status, "value", quote.data_status))
+            as_of = format_edt_iso(quote.timestamp)
+            from backend.engines.market_calendar import us_market_calendar
+
+            session_type = us_market_calendar.get_session_type(quote.timestamp)
+            chart_state.update(
+                {
+                    "last_price": quote.price,
+                    "quote_timestamp": as_of,
+                    "provider": provider,
+                    "session": str(getattr(session_type, "value", session_type)).lower(),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - provenance is best-effort
+        logger.info("Alert conversation provenance unavailable for trigger %s: %s", trigger_id, exc)
+        warnings.append("Signal and quote provenance is unavailable for this snapshot.")
+
+    if not provider:
+        provider = str(symbol_context.get("provider") or "unknown")
+    if data_status == "unknown":
+        data_status = str(symbol_context.get("data_status") or "unknown")
+    as_of = as_of or symbol_context.get("timestamp")
+    if not symbol_context:
+        warnings.append("Chat can still use the persisted alert facts, but no live symbol snapshot is attached.")
+
+    # The UI and the model can distinguish evidence from interpretation: the
+    # trigger is persisted fact, symbol_context/chart_state are current
+    # snapshots, and warnings identify gaps rather than hiding them.
+    provenance = {
+        "provider": provider,
+        "as_of": as_of,
+        "data_status": data_status,
+        "freshness": "unknown" if not as_of else data_status.lower(),
+        "source": "MarketLens cached scanner/context snapshot",
+    }
+
+    return AlertConversationContextResponse(
+        alert=alert,
+        trigger=trigger,
+        recent_triggers=recent,
+        symbol_context=symbol_context,
+        chart_state=chart_state,
+        market_context=market_context,
+        provenance=provenance,
+        warnings=warnings,
+    )
 
 
 @router.delete("/triggers", response_model=ClearTriggersResponse)
