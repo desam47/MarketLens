@@ -193,6 +193,18 @@ class SensitivityRequest(BaseModel):
     volatility_percentages: list[float] = Field(default_factory=list, max_length=5)
 
 
+class MarketEventTimelineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    timeframe: str = "1d"
+    range: str = Field(default="5d", pattern=r"^[0-9]+(d|mo|y)$")
+    session: Literal["premarket", "regular", "after_hours", "all"] = "all"
+    start: str | None = None
+    end: str | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+
+
 class TradeJournalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1383,6 +1395,103 @@ def sensitivity_analysis_tool(request: SensitivityRequest) -> BaseModel:
         source_timestamp=_database_timestamp(),
         conclusion={"status": "verified_sensitivity", "message": "Sensitivity shows how supplied assumptions change the calculated outputs."},
     )
+
+
+def _timeline_timestamp(value: Any) -> tuple[str | None, datetime | None]:
+    """Normalize provider/date values to explicit America/New_York ISO."""
+    from backend.utils.timezone import NY, format_edt_iso
+
+    if value is None:
+        return None, None
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            text = str(value)
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=NY)
+        else:
+            parsed = parsed.astimezone(NY)
+        return format_edt_iso(parsed), parsed
+    except (TypeError, ValueError):
+        return str(value), None
+
+
+def market_event_timeline_tool(request: MarketEventTimelineRequest) -> BaseModel:
+    """Combine normalized price, session, signal, alert, and auxiliary events."""
+    symbol = request.symbol.upper()
+    events: list[dict[str, Any]] = []
+    unknowns: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    try:
+        bars_payload = get_bars_tool(BarsRequest(symbol=symbol, timeframe=request.timeframe, range=request.range, limit=500, session=request.session)).model_dump(mode="json")
+        previous_session = None
+        for bar in bars_payload.get("bars", []):
+            timestamp, _ = _timeline_timestamp(bar.get("timestamp"))
+            session = bar.get("session") or "unknown"
+            events.append({"type": "price_bar", "timestamp": timestamp, "symbol": symbol, "session": session, "data": {key: bar.get(key) for key in ("open", "high", "low", "close", "volume")}, "provider": bars_payload.get("provider"), "source_timestamp": bar.get("timestamp")})
+            if session != previous_session:
+                events.append({"type": "session_transition", "timestamp": timestamp, "symbol": symbol, "session": session, "data": {"from": previous_session, "to": session}, "provider": bars_payload.get("provider"), "source_timestamp": bar.get("timestamp")})
+                previous_session = session
+        sources.append({"name": "bars", "provider": bars_payload.get("provider"), "timestamp": bars_payload.get("source_timestamp")})
+    except Exception as exc:
+        unknowns.append({"type": "price_bars", "reason": str(exc)})
+
+    loaders: tuple[tuple[str, Any, str], ...] = (
+        ("signals", lambda: get_confluence_tool(ConfluenceRequest(symbol=symbol)), "timestamp"),
+        ("alerts", lambda: get_alerts_tool(AlertsRequest(symbol=symbol, include_recent_triggers=True)), "source_timestamp"),
+        ("news", lambda: get_news_tool(NewsRequest(symbol=symbol, limit=50)), "source_timestamp"),
+        ("calendar", lambda: get_calendar_tool(CalendarRequest(symbol=symbol)), "source_timestamp"),
+        ("fundamentals", lambda: get_fundamentals_tool(FundamentalsRequest(symbol=symbol)), "source_timestamp"),
+        ("options", lambda: get_options_tool(OptionsRequest(symbol=symbol)), "source_timestamp"),
+    )
+    for name, loader, timestamp_key in loaders:
+        try:
+            payload = loader().model_dump(mode="json")
+            sources.append({"name": name, "provider": payload.get("provider"), "timestamp": payload.get(timestamp_key) or payload.get("timestamp")})
+            if name == "signals" and payload.get("timestamp"):
+                timestamp, _ = _timeline_timestamp(payload.get("timestamp"))
+                events.append({"type": "signal", "timestamp": timestamp, "symbol": symbol, "session": request.session, "data": {key: payload.get(key) for key in ("direction", "strength", "alignment_score", "conflicting", "preset")}, "provider": payload.get("provider"), "source_timestamp": payload.get("timestamp")})
+            elif name == "alerts":
+                for alert in payload.get("alerts", []):
+                    for trigger in alert.get("recent_triggers", []):
+                        timestamp, _ = _timeline_timestamp(trigger.get("triggered_at"))
+                        events.append({"type": "alert", "timestamp": timestamp, "symbol": symbol, "session": request.session, "data": {"alert": alert.get("name"), **trigger}, "provider": payload.get("provider"), "source_timestamp": trigger.get("triggered_at")})
+            elif name == "news":
+                for item in payload.get("items", []):
+                    timestamp, _ = _timeline_timestamp(item.get("timestamp"))
+                    events.append({"type": "news", "timestamp": timestamp, "symbol": symbol, "session": request.session, "data": item, "provider": payload.get("provider"), "source_timestamp": item.get("timestamp")})
+            elif name == "calendar":
+                for item in payload.get("events", []):
+                    timestamp, _ = _timeline_timestamp(item.get("date"))
+                    events.append({"type": item.get("event_type", "calendar"), "timestamp": timestamp, "symbol": symbol, "session": "all", "data": item, "provider": payload.get("provider", "yfinance"), "source_timestamp": item.get("date")})
+            elif name == "fundamentals":
+                data = payload.get("data") or {}
+                timestamp, _ = _timeline_timestamp(payload.get("source_timestamp"))
+                if data.get("recommendation") is not None or data.get("analyst_target") is not None:
+                    events.append({"type": "analyst_snapshot", "timestamp": timestamp, "symbol": symbol, "session": "all", "data": {key: data.get(key) for key in ("recommendation", "analyst_target")}, "provider": payload.get("provider"), "source_timestamp": payload.get("source_timestamp")})
+                if data.get("insider_ownership") is not None:
+                    events.append({"type": "insider_snapshot", "timestamp": timestamp, "symbol": symbol, "session": "all", "data": {"insider_ownership": data.get("insider_ownership")}, "provider": payload.get("provider"), "source_timestamp": payload.get("source_timestamp")})
+            elif name == "options":
+                for chain in payload.get("chains", []):
+                    timestamp, _ = _timeline_timestamp(chain.get("expiration"))
+                    events.append({"type": "options_snapshot", "timestamp": timestamp, "symbol": symbol, "session": "all", "data": {key: chain.get(key) for key in ("expiration", "put_call_ratio", "total_call_volume", "total_put_volume", "unusual_activity")}, "provider": payload.get("provider"), "source_timestamp": payload.get("source_timestamp")})
+        except Exception as exc:
+            unknowns.append({"type": name, "reason": str(exc)})
+
+    start_dt = _timeline_timestamp(request.start)[1] if request.start else None
+    end_dt = _timeline_timestamp(request.end)[1] if request.end else None
+    filtered: list[dict[str, Any]] = []
+    for event in events:
+        event_dt = _timeline_timestamp(event.get("timestamp"))[1]
+        if start_dt and (event_dt is None or event_dt < start_dt):
+            continue
+        if end_dt and (event_dt is None or event_dt > end_dt):
+            continue
+        filtered.append(event)
+    filtered.sort(key=lambda event: event.get("timestamp") or "")
+    return _Payload(symbol=symbol, timeframe=request.timeframe, session=request.session, start=request.start, end=request.end, events=filtered[-request.limit :], event_count=len(filtered[-request.limit :]), total_event_count=len(filtered), unknowns=unknowns, sources=sources, provider="MarketLens timeline", conclusion={"status": "verified_timeline" if filtered else "insufficient_events", "message": "Events retain source/provider metadata and are normalized to America/New_York."})
 
 
 def _database_timestamp() -> str:

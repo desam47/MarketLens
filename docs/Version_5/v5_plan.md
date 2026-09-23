@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, and `sensitivity_analysis` evidence tools are implemented; event timeline, anomaly, and assumption tracking work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, `sensitivity_analysis`, and `market_event_timeline` evidence tools are implemented; anomaly and assumption tracking work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -260,6 +260,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.9 Unified market-event timeline
 - Order prices, session transitions, signals, alerts, news, earnings, analyst changes, insider activity, and options events on one normalized New York timeline.
 - Support “before”, “after”, and “between” questions without losing source timestamps or event provenance.
+- Implemented first slice: typed timeline aggregation with session-transition events, price bars, signals, alert triggers, news, calendar events, analyst/insider snapshots, options snapshots, source/provider metadata, and start/end filtering.
 
 #### 5.4.10 Proactive anomaly explanations
 - Detect unusual price, volume, spread, tape, options, correlation, and portfolio-risk changes relative to an explicit historical baseline.

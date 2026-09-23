@@ -11,6 +11,7 @@ from backend.ai.market_tools import (
     CsvImportRequest,
     HistoricalSimilarityRequest,
     IndicatorRequest,
+    MarketEventTimelineRequest,
     MoveAnalysisRequest,
     PositionInput,
     RiskDashboardRequest,
@@ -42,6 +43,7 @@ from backend.ai.market_tools import (
     get_trend_tool,
     historical_similarity_tool,
     import_csv_tool,
+    market_event_timeline_tool,
     scenario_analysis_tool,
     sensitivity_analysis_tool,
     signal_explanation_tool,
@@ -360,6 +362,38 @@ def test_sensitivity_analysis_varies_one_factor_at_a_time() -> None:
     assert result.scenarios[1]["risk_dollars"] == 1000
     assert result.scenarios[2]["allocation_percent"] == 20.0
     assert result.conclusion["status"] == "verified_sensitivity"
+
+
+def test_market_event_timeline_normalizes_and_orders_events(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol="AAPL",
+            provider="webull",
+            source_timestamp="2026-09-22T16:00:00-04:00",
+            bars=[
+                {"timestamp": "2026-09-22T09:30:00-04:00", "session": "regular", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1000},
+                {"timestamp": "2026-09-22T09:31:00-04:00", "session": "regular", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1200},
+            ],
+        ),
+    )
+    monkeypatch.setattr("backend.ai.market_tools.get_confluence_tool", lambda request: _Payload(symbol="AAPL", timestamp="2026-09-22T10:00:00-04:00", direction="bullish", provider="engine"))
+    monkeypatch.setattr("backend.ai.market_tools.get_alerts_tool", lambda request: _Payload(provider="db", alerts=[{"name": "breakout", "recent_triggers": [{"triggered_at": "2026-09-22T09:45:00-04:00", "observed_value": 101}]}]))
+    monkeypatch.setattr("backend.ai.market_tools.get_news_tool", lambda request: _Payload(provider="news", source_timestamp="2026-09-22T09:40:00-04:00", items=[{"timestamp": "2026-09-22T09:40:00-04:00", "headline": "AAPL update"}]))
+    monkeypatch.setattr("backend.ai.market_tools.get_calendar_tool", lambda request: _Payload(provider="yfinance", events=[]))
+    monkeypatch.setattr("backend.ai.market_tools.get_fundamentals_tool", lambda request: _Payload(provider="finnhub", source_timestamp="2026-09-22T08:00:00-04:00", data={"recommendation": "buy", "analyst_target": 120, "insider_ownership": 0.02}))
+    monkeypatch.setattr("backend.ai.market_tools.get_options_tool", lambda request: _Payload(provider="yahoo_finance", source_timestamp="2026-09-22T09:00:00-04:00", chains=[]))
+
+    result = market_event_timeline_tool(MarketEventTimelineRequest(symbol="AAPL", start="2026-09-22T09:30:00-04:00"))
+
+    assert result.conclusion["status"] == "verified_timeline"
+    assert result.events[0]["timestamp"].endswith("-04:00")
+    assert any(event["type"] == "session_transition" for event in result.events)
+    assert any(event["type"] == "signal" for event in result.events)
+    assert any(event["type"] == "alert" for event in result.events)
+    assert any(event["type"] == "news" for event in result.events)
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

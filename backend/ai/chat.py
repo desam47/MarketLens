@@ -189,6 +189,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "signal_explanation",
         "counterargument_review",
         "sensitivity_analysis",
+        "market_event_timeline",
         "run_screen",
     }
 
@@ -240,6 +241,7 @@ _SIMILARITY_INTENT = re.compile(r"\b(similar (?:setup|pattern|situation)|prior s
 _SIGNAL_EXPLANATION_INTENT = re.compile(r"\b(explain (?:the )?(?:signal|setup)|why (?:is|was) .* signal|signal explanation|which indicators triggered|what confirms .* signal)\b", re.I)
 _COUNTERARGUMENT_INTENT = re.compile(r"\b(what invalidates|what would invalidate|invalidation|counterargument|counter-argument|opposing evidence|what could prove .* wrong|what would break)\b", re.I)
 _SENSITIVITY_INTENT = re.compile(r"\b(sensitivity|how sensitive|vary (?:the )?(?:entry|stop|target|position size)|assumption impact)\b", re.I)
+_TIMELINE_INTENT = re.compile(r"\b(event timeline|timeline|what happened (?:before|after|around)|before the breakout|after earnings|between .* and)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1028,7 +1030,16 @@ def _generate_reply(
     # asking the model to choose an action. This keeps common requests
     # deterministic and makes missing symbol scope explicit.
     focus_symbols = [b["symbol"] for b in symbol_blocks]
-    if _OPTIONS_TOOL_INTENT.search(user_content):
+    if _TIMELINE_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I build the event timeline for?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified market-event timeline",
+            grounded=True,
+            action="market_event_timeline",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    elif _OPTIONS_TOOL_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return (
                 "Which ticker should I use for the options lookup?",
@@ -2360,6 +2371,7 @@ _MARKET_TOOL_ACTIONS = {
     "signal_explanation",
     "counterargument_review",
     "sensitivity_analysis",
+    "market_event_timeline",
     "import_csv",
 }
 
