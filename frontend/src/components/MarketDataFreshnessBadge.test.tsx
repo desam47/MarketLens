@@ -32,12 +32,12 @@ describe('MarketDataFreshnessBadge', () => {
     expect(screen.getByText('Delayed · 2m ago')).toBeInTheDocument();
   });
 
-  it('relabels a delayed reading as Mkt Closed when the exchange session is closed', () => {
+  it('relabels a delayed reading as Closed when the exchange session is closed', () => {
     render(
       <MarketDataFreshnessBadge dataStatus="DELAYED" ageSeconds={3600} showAge marketSession="closed" />,
     );
 
-    expect(screen.getByText('Mkt Closed · 1h ago')).toBeInTheDocument();
+    expect(screen.getByText('Closed · 1h ago')).toBeInTheDocument();
   });
 
   it('does not relabel a live quote as closed even during a closed session', () => {

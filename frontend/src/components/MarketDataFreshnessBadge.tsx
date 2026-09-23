@@ -15,7 +15,7 @@ interface MarketDataFreshnessBadgeProps {
   staleAfterSeconds?: number;
   provider?: string | null;
   /** Exchange session (from useMarketSession()). When 'closed' — evenings, weekends,
-   * holidays — an otherwise age-driven 'delayed'/'stale' reading is relabeled 'Mkt Closed'
+   * holidays — an otherwise age-driven 'delayed'/'stale' reading is relabeled 'Closed'
    * instead of counting up an alarming, ever-growing "Xh ago". */
   marketSession?: MarketSessionType | null;
 }
@@ -27,7 +27,7 @@ const labels: Record<BadgeState, string> = {
   stale: 'Stale',
   reconnecting: 'Reconnecting',
   unavailable: 'Unavailable',
-  closed: 'Mkt Closed',
+  closed: 'Closed',
 };
 
 function stateFromDataStatus(dataStatus?: string | null): BadgeState | null {

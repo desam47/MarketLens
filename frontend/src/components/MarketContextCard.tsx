@@ -116,7 +116,7 @@ export const MarketContextCard = memo(function MarketContextCard({ context, erro
 
       {context.timestamp && (
         <div className="timestamp">
-          {context.freshness === 'closed' ? 'MKT CLOSED' : (context.freshness || 'unknown').toUpperCase()}
+          {context.freshness === 'closed' ? 'CLOSED' : (context.freshness || 'unknown').toUpperCase()}
           {context.freshness !== 'closed' && context.data_age_seconds != null && ` · Signal age: ${Math.round(context.data_age_seconds)}s`}
           {' · '}Last index bar: {formatETDateTime(context.timestamp)}
         </div>
