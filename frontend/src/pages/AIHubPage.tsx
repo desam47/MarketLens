@@ -10,7 +10,7 @@
  * scroll of section anchors with a sticky section-jump nav.
  *   - Symbol-scoped: Chat, then AI Analysis (incl. the Trade Setup /
  *     advisor block), then Templates — driven by the page's own ticker.
- *   - Market-wide: the premarket/close AI Digest and AI Stock Search
+ *   - Market-wide: the What-changed Inbox, scheduled AI Digest, and AI Stock Search
  *     (picking a result repoints the symbol-scoped sections in place,
  *     without leaving the page).
  *
@@ -32,6 +32,7 @@ import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { PageErrorBoundary } from '../components/PageErrorBoundary';
 import { SymbolInput } from '../components/SymbolInput';
 import { AIProviderBadge } from '../components/AIProviderBadge';
+import { ChangeInbox } from '../components/ChangeInbox';
 import { DigestCard } from '../components/DigestCard';
 import { NLSearchBar } from '../components/NLSearchBar';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
@@ -59,6 +60,7 @@ const SECTIONS = [
   { id: 'chat', label: 'Chat' },
   { id: 'analysis', label: 'Analysis' },
   { id: 'templates', label: 'Templates' },
+  { id: 'changes', label: 'What changed' },
   { id: 'digest', label: 'Digest' },
   { id: 'search', label: 'Search' },
 ] as const;
@@ -274,6 +276,16 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
       </section>
 
       <h4 className="ai-hub-divider">Market-wide AI</h4>
+
+      <section id="hub-changes" className="ai-hub-section">
+        {revealed.has('changes') ? (
+          <PageErrorBoundary pageName="What changed">
+            <ChangeInbox />
+          </PageErrorBoundary>
+        ) : (
+          <div className="panel-skeleton" style={{ minHeight: 240 }}>What changed</div>
+        )}
+      </section>
 
       <section id="hub-digest" className="ai-hub-section">
         {revealed.has('digest') ? (

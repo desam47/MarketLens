@@ -5432,6 +5432,43 @@ div.td-trend {
   font-weight: 600;
 }
 
+/* Version 5.5.5 — local What-changed Inbox */
+.change-inbox-card { display: grid; gap: 0.85rem; }
+.change-inbox-header,
+.change-inbox-meta,
+.change-inbox-item,
+.change-inbox-item-side { display: flex; align-items: center; gap: 0.65rem; }
+.change-inbox-header { justify-content: space-between; align-items: flex-start; }
+.change-inbox-header h2 { margin: 0; font-size: 1.1rem; }
+.change-inbox-header p { margin: 0.2rem 0 0; }
+.change-inbox-meta { flex-wrap: wrap; }
+.change-inbox-list { display: grid; gap: 0.5rem; }
+.change-inbox-item {
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 0.4rem;
+  background: var(--bg-secondary);
+}
+.change-inbox-item.change-positive { border-left-color: var(--success); }
+.change-inbox-item.change-warning { border-left-color: var(--warning); }
+.change-inbox-item.change-error { border-left-color: var(--danger); }
+.change-inbox-item-main { min-width: 0; display: grid; gap: 0.18rem; }
+.change-inbox-category { color: var(--text-muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.change-inbox-item-main strong { color: var(--text-primary); font-size: 0.85rem; }
+.change-inbox-item-main p { margin: 0; color: var(--text-secondary); font-size: 0.78rem; overflow-wrap: anywhere; }
+.change-inbox-symbol { color: var(--accent-primary); font-size: 0.75rem; font-weight: 600; }
+.change-inbox-item-side { flex: 0 0 auto; flex-direction: column; align-items: flex-end; }
+.change-inbox-item-side time { color: var(--text-muted); font-size: 0.68rem; white-space: nowrap; }
+.change-inbox-warning { margin: 0; }
+
+@media (max-width: 680px) {
+  .change-inbox-item { flex-direction: column; }
+  .change-inbox-item-side { width: 100%; flex-direction: row; justify-content: space-between; align-items: center; }
+}
+
 .digest-error {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.3);

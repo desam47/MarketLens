@@ -2531,6 +2531,12 @@ class ApiService {
     return this.fetch<AIDigest>(`/ai/digest/generate?session=${session}`, { method: 'POST' }, AI_TIMEOUT_MS);
   }
 
+  async getChangeInbox(since?: string, limit: number = 50): Promise<ChangeInboxResponse> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (since) params.set('since', since);
+    return this.fetch<ChangeInboxResponse>(`/ai/changes?${params.toString()}`);
+  }
+
   // ── Version 4 AI feature 4: conversational chat panel ───────────────
 
   async createChatSession(
@@ -2737,6 +2743,32 @@ export interface AIDigest {
   market_regime: string | null;
   narrative: string | null;
   payload: AIDigestPayload | null;
+}
+
+// ── Version 5.5.5: What-changed Inbox ──────────────────────────────────
+
+export type ChangeCategory = 'watchlist' | 'alert' | 'signal' | 'catalyst' | 'provider';
+export type ChangeSeverity = 'info' | 'positive' | 'warning' | 'error';
+
+export interface ChangeItem {
+  id: string;
+  category: ChangeCategory;
+  severity: ChangeSeverity;
+  title: string;
+  detail: string | null;
+  symbol: string | null;
+  occurred_at: string;
+  href: string;
+  dedupe_key: string;
+}
+
+export interface ChangeInboxResponse {
+  since: string;
+  as_of: string;
+  items: ChangeItem[];
+  counts: Record<string, number>;
+  coverage: Record<string, boolean>;
+  warnings: string[];
 }
 
 // ── Version 4 AI feature 4: conversational chat panel ────────────────────

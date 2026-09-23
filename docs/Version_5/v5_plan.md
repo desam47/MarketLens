@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-23
-**Status:** Active. Phase 5.1, Phase 5.2, Phase 5.3, and Phase 5.4 are complete; Phase 5.5 is in progress.
+**Status:** Active. Phases 5.1–5.5 are complete; Phase 5.6 is in progress.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -282,7 +282,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
-**Status:** 🟡 In progress. Items 5.5.1–5.5.4 are implemented and verified; item 5.5.5 remains.
+**Status:** ✅ Complete. Items 5.5.1–5.5.5 are implemented and verified.
 
 **Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
 
@@ -310,8 +310,9 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - ✅ Delivery remains inside existing local MarketLens surfaces; no external messaging or order action was added.
 
 #### 5.5.5 What-changed inbox
-- Summarize changes since the user's last visit across watchlists, alerts, signals, catalysts, and provider health.
-- Deduplicate repeated events and link each summary item to its source page.
+- ✅ Summarize durable changes since the user's last local AI Hub visit across watchlists, alerts, signals, catalyst-source activity, and provider health without triggering provider calls.
+- ✅ Deduplicate repeated signal/provider events, bound the result set, retain explicit category/severity/timestamp metadata, and link every item to its source page.
+- ✅ Persist the checkpoint only in browser localStorage, preserving the app's local-only/no-account behavior and making a failed load non-destructive.
 
 ### Verification
 - Natural-language filters match Scanner's displayed and executed filters exactly.

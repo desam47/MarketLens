@@ -1,11 +1,11 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is in progress (5.5.1–5.5.4 complete); Phase 5.6 is in progress (5.6.1–5.6.3 complete).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.3 complete).
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
-**Current checkpoint (2026-09-22):** Version 4's implemented scope is
+**Current checkpoint (2026-09-23):** Version 4's implemented scope is
 merged to `main`. The `development` branch is synchronized with its remote
 and is the only branch receiving new Version 5 work. Phase 5.1 is complete.
 Phase 5.2 is complete: every tool explicitly named in the plan's
@@ -14,7 +14,10 @@ genuinely generated (not hand-copied) application-help route table (see
 the Phase 5.2 section's "Post-completion review" for the two items —
 multi-provider reconciliation, further contract-test expansion — found to
 be blocked on real architectural gaps rather than left undone). Phase 5.3
-is now the active delivery gate.
+is now complete. Phase 5.5 is also complete: the What-changed Inbox is
+available in AI Hub with a browser-local checkpoint, durable event sources,
+deduplication, source links, and no provider polling. Phase 5.6 remains the
+active delivery gate with 5.6.1–5.6.3 complete.
 
 **Latest delivery (commit `9ceedec`):** Phase 5.1's first implementation
 slice is now shipped on `development`. The strict calculator foundation in
@@ -75,7 +78,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
-| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, and 5.5.4 Scheduled Summaries are complete. Scheduled local summaries now cover premarket, midday, post-market, and weekly sessions with cutoff/window metadata and restart-safe deduplication; Weekly adds browser-local Journal review when data exists. The change inbox (5.5.5) remains. |
+| 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.3 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. Journal coach, save/export, and decision checklist remain. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
@@ -585,7 +588,17 @@ slot checks prevent duplicate generation after restarts. The Weekly tab adds
 performance, win rate, net P&L, plan coverage, strongest/weakest symbols, and
 recurring review themes from the browser-local Trade Journal when entries are
 available, and labels that source as local/non-broker-synced. No external
-delivery was introduced. The remaining 5.5 audit item is the change inbox.
+delivery was introduced.
+
+**5.5.5 complete — What-changed Inbox.** AI Hub now exposes a local,
+read-only change feed with a browser-local last-visit checkpoint. The bounded
+`GET /api/ai/changes` endpoint reads durable watchlist, alert, historical
+signal, provider-status, and already-recorded catalyst-source activity; it
+never polls providers. Signal and provider events are deduplicated, each item
+retains category, severity, symbol, timestamp, and a source-page link, and
+warnings explicitly distinguish source activity from verified catalyst data.
+Focused API tests cover deduplication, category coverage, source links, and an
+empty future checkpoint. The remaining Phase 5.5 work is complete.
 
 **5.5.2 complete — Watchlist Intelligence.** The Watchlist page now performs
 one normal Scanner request, then requests a deterministic briefing endpoint
