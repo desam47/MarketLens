@@ -2,7 +2,7 @@
  * WatchlistTable — column toggle, RS benchmark selector, keyboard handling.
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { WatchlistTable } from './WatchlistTable';
 import { rsCellLabel } from './watchlistUtils';
@@ -17,6 +17,7 @@ jest.mock('../services/api', () => ({
     updateWatchlistSymbol: jest.fn(),
     removeSymbolFromWatchlist: jest.fn(),
     getMarketSession: jest.fn().mockResolvedValue(null),
+    createRealtimeSubscriber: jest.fn(),
   },
 }));
 
@@ -24,7 +25,26 @@ const mockApi = api as unknown as {
   getWatchlistScan: jest.Mock;
   getWatchlistSessionPrices: jest.Mock;
   getBatchRelativeStrength: jest.Mock;
+  createRealtimeSubscriber: jest.Mock;
 };
+
+function fakeSubscriber() {
+  let onEvent: ((event: any) => void) | undefined;
+  const subscriber = {
+    onEvent: jest.fn((listener: (event: any) => void) => {
+      onEvent = listener;
+      return jest.fn();
+    }),
+    onStatus: jest.fn((listener: (status: string) => void) => {
+      listener('open');
+      return jest.fn();
+    }),
+    subscribeQuote: jest.fn(),
+    unsubscribeQuote: jest.fn(),
+    disconnect: jest.fn(),
+  };
+  return { subscriber, emit: (event: any) => onEvent?.(event) };
+}
 
 const rsSignal = (symbol: string, benchmark: string, rs_pct: number): RelativeStrengthSignal => ({
   symbol,
@@ -272,5 +292,82 @@ describe('empty and error states', () => {
     render(<WatchlistTable watchlistId={1} onSelectSymbol={jest.fn()} />);
 
     expect(await screen.findByText(/Watchlist scan timed out/)).toBeInTheDocument();
+  });
+});
+
+describe('combined view (all sessions selected) live quote staleness', () => {
+  function scanResultWithQuoteTimestamp(price: number, change: number, timestamp: string) {
+    return {
+      symbol: 'AAPL',
+      quote: { price, timestamp },
+      change,
+      change_pct: (change / (price - change)) * 100,
+      indicator_values: {}, scores: {}, total_score: 0, rank: null,
+      signals: [], trend_signals: {}, timestamp,
+      is_enabled: true, entity_type: 'stock',
+    };
+  }
+
+  it('ignores a live quote older than the last scan and keeps the scanned change %', async () => {
+    // priorClose = 102 - 2 = 100, so the scan's own change % is 2%.
+    mockApi.getWatchlistScan.mockResolvedValue({
+      timestamp: '2026-01-01T20:00:00Z',
+      count: 1,
+      results: [scanResultWithQuoteTimestamp(102, 2, '2026-01-01T20:00:00Z')],
+    });
+    mockApi.getBatchRelativeStrength.mockResolvedValue({ results: {} });
+    const { subscriber, emit } = fakeSubscriber();
+    mockApi.createRealtimeSubscriber.mockReturnValue(subscriber);
+
+    render(<WatchlistTable watchlistId={1} onSelectSymbol={jest.fn()} />);
+    expect(await screen.findByText('$102')).toBeInTheDocument();
+    expect(screen.getByText('+2%')).toBeInTheDocument();
+
+    // A tick timestamped BEFORE the scan's own quote -- e.g. a premarket
+    // trade that's been sitting in the live-quote map for hours with no
+    // newer tick since. Must not override the fresher scanned price.
+    act(() => {
+      emit({
+        type: 'quote_update',
+        symbol: 'AAPL',
+        data: {
+          price: 99, volume: 1, bid: null, ask: null, bid_size: null, ask_size: null,
+          timestamp: '2026-01-01T09:00:00Z', received_at: Date.now(), provider: 'webull', event_type: 'trade',
+        },
+      });
+    });
+
+    expect(screen.getByText('$102')).toBeInTheDocument();
+    expect(screen.getByText('+2%')).toBeInTheDocument();
+  });
+
+  it('applies a live quote newer than the last scan', async () => {
+    mockApi.getWatchlistScan.mockResolvedValue({
+      timestamp: '2026-01-01T20:00:00Z',
+      count: 1,
+      results: [scanResultWithQuoteTimestamp(102, 2, '2026-01-01T20:00:00Z')],
+    });
+    mockApi.getBatchRelativeStrength.mockResolvedValue({ results: {} });
+    const { subscriber, emit } = fakeSubscriber();
+    mockApi.createRealtimeSubscriber.mockReturnValue(subscriber);
+
+    render(<WatchlistTable watchlistId={1} onSelectSymbol={jest.fn()} />);
+    expect(await screen.findByText('$102')).toBeInTheDocument();
+
+    // A genuinely newer tick (after-hours, later than the scan) must still
+    // update the price and be reflected in change % (vs the same priorClose).
+    act(() => {
+      emit({
+        type: 'quote_update',
+        symbol: 'AAPL',
+        data: {
+          price: 103, volume: 1, bid: null, ask: null, bid_size: null, ask_size: null,
+          timestamp: '2026-01-01T21:00:00Z', received_at: Date.now(), provider: 'webull', event_type: 'trade',
+        },
+      });
+    });
+
+    expect(await screen.findByText('$103')).toBeInTheDocument();
+    expect(screen.getByText('+3%')).toBeInTheDocument();
   });
 });

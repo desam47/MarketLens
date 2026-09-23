@@ -573,10 +573,24 @@ export function WatchlistTable({
           },
         };
       }
+      // liveQuotes never expires an entry -- once a symbol gets a WebSocket
+      // tick it stays in state until a *newer* tick replaces it, so a quiet
+      // stock's last tick (say, from premarket) can sit there for hours
+      // after the 30s-polled scan has moved on through regular/after-hours.
+      // Without this guard the combined ("all sessions") view would keep
+      // computing change% off that stale price forever -- e.g. showing a
+      // premarket-vs-yesterday's-close % long after the actual after-hours
+      // price implies a different (correct) total-day %. Only trust `live`
+      // when it's at least as new as the scan's own quote.
+      const scanQuoteTimestamp = r.raw.quote?.timestamp ?? null;
+      const liveIsFresher = Boolean(
+        live?.timestamp
+        && (!scanQuoteTimestamp || Date.parse(live.timestamp) >= Date.parse(scanQuoteTimestamp)),
+      );
       // A live quote is useful even when the scanner has not yet produced a
       // valid prior-close baseline for this symbol. Never suppress the live
       // price just because change/change % cannot be recalculated yet.
-      if (!live || live.price == null) {
+      if (!live || live.price == null || !liveIsFresher) {
         return withRelativeStrength;
       }
       if (r.price == null || r.change == null) {
