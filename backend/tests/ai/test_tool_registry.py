@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 from pydantic import BaseModel
 
@@ -262,6 +264,73 @@ def test_registry_enforces_per_tool_rate_limit() -> None:
     limited = registry.execute(request)
     assert limited.ok is False
     assert "rate limit" in (limited.error or "").lower()
+
+
+class _EmptyRequest(BaseModel):
+    pass
+
+
+def _slow_registry(*, permission: str = "read_only", timeout_ms: int | None = 50) -> tuple[ToolRegistry, threading.Event]:
+    release = threading.Event()
+
+    def slow(_):
+        release.wait(2)
+        return _EmptyRequest()
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="slow_tool",
+            kind="read_only",
+            permission=permission,
+            description="test",
+            input_model=_EmptyRequest,
+            handler=slow,
+            timeout_ms=timeout_ms,
+        )
+    )
+    return registry, release
+
+
+def test_registry_times_out_a_hung_read_only_tool() -> None:
+    registry, release = _slow_registry()
+    try:
+        result = registry.execute(ToolRequest(tool_name="slow_tool"))
+    finally:
+        release.set()
+    assert result.ok is False
+    assert result.failure_kind == "timeout"
+    assert "timed out" in (result.error or "")
+    assert result.duration_ms < 1000
+
+
+def test_registry_uses_configured_default_tool_timeout(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.ai, "chat_tool_timeout_seconds", 0.05)
+    registry, release = _slow_registry(timeout_ms=None)
+    try:
+        result = registry.execute(ToolRequest(tool_name="slow_tool"))
+    finally:
+        release.set()
+    assert result.failure_kind == "timeout"
+
+
+def test_registry_never_times_out_a_mutating_tool() -> None:
+    registry, release = _slow_registry(permission="mutating")
+    # Finishes well after the 50 ms deadline; a mutating call must wait for it.
+    timer = threading.Timer(0.2, release.set)
+    timer.start()
+    result = registry.execute(ToolRequest(tool_name="slow_tool", confirmed=True))
+    timer.join()
+    assert result.ok is True
+    assert result.failure_kind is None
+
+
+def test_invalid_arguments_report_invalid_failure_kind() -> None:
+    result = default_registry.execute(ToolRequest(tool_name="calculate", arguments={"calculation": "nope"}))
+    assert result.ok is False
+    assert result.failure_kind == "invalid"
 
 
 def test_registry_requires_confirmation_for_mutating_tools() -> None:

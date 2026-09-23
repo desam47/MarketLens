@@ -45,9 +45,20 @@ def test_turn_observability_counts_calls_retries_failures_and_evidence() -> None
 def test_phase_5_8_failure_matrix_is_versioned_and_retries_are_bounded() -> None:
     path = Path(CASES_PATH).with_name("phase_5_8_failure_matrix.json")
     matrix = json.loads(path.read_text(encoding="utf-8"))
-    assert matrix["version"] == "5.8.0"
+    assert matrix["version"] == "5.8.1"
     assert matrix["retry_budget"]["chat_parse_attempts"] == CHAT_PARSE_MAX_ATTEMPTS
     assert all(case["max_provider_requests"] <= CHAT_PARSE_MAX_ATTEMPTS for case in matrix["cases"])
+    failures = {case["failure"] for case in matrix["cases"]}
+    assert {"tool_deadline_exceeded", "model_unavailable"} <= failures
+
+
+def test_failure_matrix_chat_cases_exist_in_the_end_to_end_suite() -> None:
+    from backend.ai.evaluations.chat_runner import load_chat_cases
+
+    matrix = json.loads(Path(CASES_PATH).with_name("phase_5_8_failure_matrix.json").read_text(encoding="utf-8"))
+    chat_ids = {case["id"] for case in load_chat_cases()["cases"]}
+    linked = [case["chat_case"] for case in matrix["cases"] if "chat_case" in case]
+    assert linked and set(linked) <= chat_ids
 
 
 def test_complete_and_parse_records_a_bounded_retry(monkeypatch) -> None:

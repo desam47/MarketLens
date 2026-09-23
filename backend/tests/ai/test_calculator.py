@@ -162,3 +162,30 @@ def test_unknown_inputs_and_missing_operation_fields_are_rejected() -> None:
 def test_calculator_does_not_evaluate_formulas() -> None:
     with pytest.raises(ValueError, match="old_value"):
         calculate(CalculationRequest(calculation="percentage_change", new_value=2))
+
+
+def test_position_risk_separates_per_share_total_and_portfolio_risk() -> None:
+    result = calculate(CalculationRequest(
+        calculation="position_risk", entry_price=220, stop_price=212, shares=200,
+        target_price=236, account_value=100_000,
+    ))
+    assert result.values == {
+        "per_share_risk": 8,
+        "total_risk": 1600,
+        "position_value": 44_000,
+        "portfolio_risk_percent": 1.6,
+        "reward_risk": 2,
+    }
+
+
+def test_position_risk_leaves_unavailable_outputs_empty() -> None:
+    result = calculate(CalculationRequest(calculation="position_risk", entry_price=220, stop_price=212, shares=200))
+    assert result.values["total_risk"] == 1600
+    assert result.values["portfolio_risk_percent"] is None
+    assert result.values["reward_risk"] is None
+    assert any("account_value" in assumption for assumption in result.assumptions)
+
+
+def test_position_risk_requires_shares() -> None:
+    with pytest.raises(ValueError, match="shares"):
+        calculate(CalculationRequest(calculation="position_risk", entry_price=220, stop_price=212))

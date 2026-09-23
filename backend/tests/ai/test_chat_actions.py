@@ -1959,3 +1959,31 @@ class TestMaterialChange(unittest.TestCase):
 
         self.assertTrue(_material_change(self._turn("refresh"), "new"))
         self.assertFalse(_material_change(self._turn("refresh"), "old"))
+
+
+class TestPositionRiskParsing(unittest.TestCase):
+    def test_labelled_fields_become_a_position_risk_request(self):
+        from backend.ai.chat import _position_risk_calculation
+
+        request = _position_risk_calculation("Buy 200 AAPL at $220, stop $212. What's my risk?")
+        self.assertEqual(
+            (request.calculation, request.shares, request.entry_price, request.stop_price),
+            ("position_risk", 200, 220, 212),
+        )
+        request = _position_risk_calculation("300 shares at 50 with a stop at 47, target 60, account 25,000")
+        self.assertEqual((request.entry_price, request.stop_price, request.target_price, request.account_value), (50, 47, 60, 25000))
+
+    def test_missing_label_is_not_guessed(self):
+        from backend.ai.chat import _position_risk_calculation
+
+        self.assertIsNone(_position_risk_calculation("I have 100 shares of AAPL, how is it doing?"))
+        self.assertIsNone(_position_risk_calculation("what if I buy AAPL at 220?"))
+
+    def test_followup_overrides_only_named_inputs(self):
+        from backend.ai.chat import _calculation_followup, _position_risk_calculation
+
+        prior = _position_risk_calculation("Buy 200 AAPL at $220, stop $212").model_dump()
+        request = _calculation_followup("Use the same stop but 100 shares", prior)
+        self.assertEqual((request.shares, request.entry_price, request.stop_price), (100, 220, 212))
+        self.assertIsNone(_calculation_followup("is it still above the stop at 212?", prior))
+        self.assertIsNone(_calculation_followup("same thing but 100 shares", {"calculation": "percentage_change", "old_value": 1, "new_value": 2}))

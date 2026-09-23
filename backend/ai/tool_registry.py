@@ -7,16 +7,20 @@ through this interface.
 
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.ai.calculator import CalculationRequest, calculate
+from backend.config.settings import settings
 
 ToolKind = Literal["read_only", "calculation"]
 ToolPermission = Literal["read_only", "calculation", "mutating"]
@@ -59,6 +63,8 @@ class ToolResult(BaseModel):
     freshness_seconds: float | None = Field(default=0, ge=0)
     fallback: bool = False
     entitlement: str = "not_applicable"
+    # "invalid" (rejected request), "timeout" (deadline exceeded); None on success.
+    failure_kind: str | None = None
 
 
 class ProviderObservation(BaseModel):
@@ -124,8 +130,40 @@ class ToolSpec(BaseModel):
     input_model: type[BaseModel]
     handler: Callable[[BaseModel], BaseModel]
     max_duration_ms: int = Field(default=5_000, gt=0, le=30_000)
+    # Hard deadline; None uses AI_CHAT_TOOL_TIMEOUT_SECONDS. Not applied to
+    # mutating tools, whose outcome must never be left unknown.
+    timeout_ms: int | None = Field(default=None, gt=0, le=120_000)
     permission: ToolPermission = "read_only"
     rate_limit_per_minute: int = Field(default=60, gt=0, le=10_000)
+
+
+# Shared worker pool for deadline-bounded handler calls. A timed-out handler
+# keeps its worker until it returns, so the pool is sized for a few stragglers.
+_TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="chat-tool")
+
+
+def _tool_timeout_seconds(spec: ToolSpec) -> float | None:
+    if spec.permission == "mutating":
+        return None
+    if spec.timeout_ms is not None:
+        return spec.timeout_ms / 1000
+    return float(getattr(settings.ai, "chat_tool_timeout_seconds", 20.0))
+
+
+class ToolTimeoutError(Exception):
+    """A tool handler exceeded its hard deadline."""
+
+
+def _run_handler(spec: ToolSpec, parsed: BaseModel) -> BaseModel:
+    timeout = _tool_timeout_seconds(spec)
+    if timeout is None:
+        return spec.handler(parsed)
+    context = contextvars.copy_context()
+    future = _TOOL_EXECUTOR.submit(context.run, spec.handler, parsed)
+    try:
+        return future.result(timeout=timeout)
+    except FutureTimeoutError as exc:
+        raise ToolTimeoutError(f"Tool timed out after {timeout:g}s: {spec.name}") from exc
 
 
 class ToolRegistry:
@@ -150,6 +188,7 @@ class ToolRegistry:
 
     def execute(self, request: ToolRequest) -> ToolResult:
         started_at = datetime.now(UTC).isoformat()
+        started: float | None = None
         try:
             spec = self.get(request.tool_name)
             if spec.permission == "mutating" and not request.confirmed:
@@ -164,7 +203,7 @@ class ToolRegistry:
                 calls.append(now)
             parsed = spec.input_model.model_validate(request.arguments)
             started = time.perf_counter()
-            result = spec.handler(parsed)
+            result = _run_handler(spec, parsed)
             duration_ms = (time.perf_counter() - started) * 1000
             finished_at = datetime.now(UTC).isoformat()
             payload = result.model_dump(mode="json")
@@ -194,11 +233,13 @@ class ToolRegistry:
                 fallback=bool(payload.get("fallback", False)),
                 entitlement=_entitlement_status(provider),
             )
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, ToolTimeoutError) as exc:
             return ToolResult(
                 tool_name=request.tool_name,
                 ok=False,
                 error=str(exc),
+                failure_kind="timeout" if isinstance(exc, ToolTimeoutError) else "invalid",
+                duration_ms=round((time.perf_counter() - started) * 1000, 3) if started is not None else 0,
                 started_at=started_at,
                 finished_at=datetime.now(UTC).isoformat(),
                 session=request.session,

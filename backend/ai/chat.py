@@ -461,10 +461,89 @@ _CALCULATION_HINT = re.compile(
     re.I,
 )
 _REUSE_MEMORY_HINT = re.compile(r"\b(previous|prior|same|those|last|it)\b", re.I)
+# Position-risk wording: "buy 200 AAPL at $220, stop $212", "300 shares at
+# 50 with a stop at 47". Each field is read from its own labelled phrase,
+# never from number order, so a missing label means a missing input.
+# A follow-up that changes remembered calculation inputs ("use the same stop
+# but 100 shares"). Narrower than _REUSE_MEMORY_HINT: "it" alone is not
+# enough ("is it still above the stop at 212?" is a question, not a re-run).
+_CALC_FOLLOWUP_HINT = re.compile(r"\b(same|previous|prior|instead|but|change|use|make it)\b", re.I)
+_NUM = r"\$?\s*([0-9][0-9,]*(?:\.\d+)?)"
+_SHARES_RE = re.compile(
+    r"\b(?:buy|bought|sell|sold|short|long)\s+" + _NUM[4:] + r"\s+(?:shares?\s+(?:of\s+)?)?(?:\$?[A-Za-z]{1,6}\b)?"
+    r"|\b([0-9][0-9,]*)\s+(?:shares?|sh)\b",
+    re.I,
+)
+_ENTRY_RE = re.compile(r"\bentry(?:\s+price)?\s*(?:at|of|is|=|:)?\s*" + _NUM, re.I)
+_AT_PRICE_RE = re.compile(r"\bat\s*" + _NUM, re.I)
+_NOT_ENTRY_BEFORE_AT = re.compile(r"\b(?:stop|stop[- ]?loss|target|take[- ]profit|account|portfolio)\W*$", re.I)
+_STOP_RE = re.compile(r"\bstop(?:[- ]?loss)?\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
+_TARGET_RE = re.compile(r"\b(?:target|take[- ]profit)\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
+_ACCOUNT_RE = re.compile(r"\b(?:account|portfolio)\s*(?:value|size|balance)?\s*(?:of|is|=|:)?\s*" + _NUM, re.I)
 
 
 def _numbers_from_text(text: str) -> list[float]:
     return [float(raw.replace(",", "")) for raw in _CALC_NUMBER_RE.findall(text)]
+
+
+def _labelled_number(pattern: re.Pattern, text: str) -> float | None:
+    match = pattern.search(text)
+    if not match:
+        return None
+    raw = next((group for group in match.groups() if group), None)
+    return float(raw.replace(",", "")) if raw else None
+
+
+def _entry_price(user_content: str) -> float | None:
+    """"entry 220" or the first "at 220" that is not "stop at"/"target at"."""
+    labelled = _labelled_number(_ENTRY_RE, user_content)
+    if labelled is not None:
+        return labelled
+    for match in _AT_PRICE_RE.finditer(user_content):
+        if not _NOT_ENTRY_BEFORE_AT.search(user_content[max(0, match.start() - 16):match.start()]):
+            return float(match.group(1).replace(",", ""))
+    return None
+
+
+def _position_risk_fields(user_content: str) -> dict[str, float]:
+    """Labelled position-risk inputs present in ``user_content``."""
+    fields = {
+        "shares": _labelled_number(_SHARES_RE, user_content),
+        "entry_price": _entry_price(user_content),
+        "stop_price": _labelled_number(_STOP_RE, user_content),
+        "target_price": _labelled_number(_TARGET_RE, user_content),
+        "account_value": _labelled_number(_ACCOUNT_RE, user_content),
+    }
+    return {key: value for key, value in fields.items() if value is not None and value > 0}
+
+
+def _position_risk_calculation(user_content: str) -> CalculationRequest | None:
+    fields = _position_risk_fields(user_content)
+    if not {"shares", "entry_price", "stop_price"} <= fields.keys():
+        return None
+    try:
+        return CalculationRequest(calculation="position_risk", **fields)
+    except (TypeError, ValueError):
+        return None
+
+
+def _calculation_followup(user_content: str, prior: dict | None) -> CalculationRequest | None:
+    """Re-run the previous calculation with explicitly changed inputs.
+
+    "Use the same stop but 100 shares" keeps every remembered input and
+    replaces only the labelled ones named in this message.
+    """
+    if not isinstance(prior, dict) or not _CALC_FOLLOWUP_HINT.search(user_content):
+        return None
+    overrides = _position_risk_fields(user_content)
+    if not overrides:
+        return None
+    if prior.get("calculation") not in {"position_risk", "position_size", "risk_reward"}:
+        return None
+    try:
+        return CalculationRequest(**{**prior, **overrides})
+    except (TypeError, ValueError):
+        return None
 
 
 def _fallback_calculation(user_content: str) -> CalculationRequest | None:
@@ -474,6 +553,9 @@ def _fallback_calculation(user_content: str) -> CalculationRequest | None:
     the exact number of inputs needed, otherwise the model gets a chance to
     clarify the request normally.
     """
+    position_risk = _position_risk_calculation(user_content)
+    if position_risk is not None:
+        return position_risk
     text = user_content.lower()
     numbers = _numbers_from_text(user_content)
     if len(numbers) == 2 and "allocation" in text and "portfolio" in text:
@@ -921,7 +1003,9 @@ def _prepare_turn(
         previous_ticker = remembered_symbols[0]
     elif previous_ticker:
         previous_ticker = str(previous_ticker).upper()
-    current_calculation = _fallback_calculation(user_content)
+    current_calculation = _fallback_calculation(user_content) or _calculation_followup(
+        user_content, planner_state.get("last_calculation_inputs")
+    )
     saved_assumptions = planner_state.get("research_assumptions", [])
     if not isinstance(saved_assumptions, list):
         saved_assumptions = []
@@ -1485,6 +1569,19 @@ def _build_deterministic_chat_reply(
     function prevents the two transport paths from acquiring different
     intent behavior.
     """
+    if not _COMPARISON_INTENT.search(user_content) and not _ASSUMPTION_INTENT.search(user_content):
+        # Applying this message's overrides is idempotent, so it is safe
+        # whether or not _prepare_turn already stored them in memory.
+        position = _position_risk_calculation(user_content) or _calculation_followup(
+            user_content, (planner_state or {}).get("last_calculation_inputs")
+        )
+        if position is not None:
+            return ChatReplyResponse(
+                reply="Verified calculation",
+                grounded=True,
+                action="calculate",
+                action_calculation=position,
+            )
     if (
         _CALCULATION_HINT.search(user_content)
         and not _COMPARISON_INTENT.search(user_content)
@@ -3543,7 +3640,7 @@ def _run_market_tool(
                 "ok": False,
                 "provider": result.provider,
                 "error": result.error,
-                "failure_kind": "tool_error",
+                "failure_kind": result.failure_kind or "tool_error",
                 "duration_ms": result.duration_ms,
                 "arguments": sanitize_arguments(arguments),
                 "provider_request_count": 0,

@@ -1,17 +1,69 @@
 {
-  "version": "5.8.0",
-  "retry_budget": {
-    "chat_parse_attempts": 2,
-    "planning_attempts_per_step": 1,
-    "max_chain_steps": 3,
-    "max_turn_seconds": 30
+ "version": "5.8.1",
+ "retry_budget": {
+  "chat_parse_attempts": 2,
+  "planning_attempts_per_step": 1,
+  "max_chain_steps": 3,
+  "max_turn_seconds": 30,
+  "tool_timeout_seconds": 20
+ },
+ "cases": [
+  {
+   "id": "provider_outage",
+   "failure": "provider_unavailable",
+   "expected": "explicit_uncertainty",
+   "max_provider_requests": 2
   },
-  "cases": [
-    {"id": "provider_outage", "failure": "provider_unavailable", "expected": "explicit_uncertainty", "max_provider_requests": 2},
-    {"id": "malformed_reply", "failure": "parse_error", "expected": "clarification_or_uncertainty", "max_provider_requests": 2},
-    {"id": "stale_evidence", "failure": "stale_data", "expected": "blocked_live_claim", "max_provider_requests": 0},
-    {"id": "partial_symbol", "failure": "partial_symbol_failure", "expected": "partial_answer_with_warning", "max_provider_requests": 0},
-    {"id": "stream_before_first_chunk", "failure": "stream_provider_unavailable", "expected": "bounded_fallback_chain", "max_provider_requests": 2},
-    {"id": "stream_after_first_chunk", "failure": "stream_mid_response_failure", "expected": "stop_without_duplicate_retry", "max_provider_requests": 1}
-  ]
+  {
+   "id": "malformed_reply",
+   "failure": "parse_error",
+   "expected": "clarification_or_uncertainty",
+   "max_provider_requests": 2
+  },
+  {
+   "id": "stale_evidence",
+   "failure": "stale_data",
+   "expected": "blocked_live_claim",
+   "max_provider_requests": 0
+  },
+  {
+   "id": "partial_symbol",
+   "failure": "partial_symbol_failure",
+   "expected": "partial_answer_with_warning",
+   "max_provider_requests": 0
+  },
+  {
+   "id": "stream_before_first_chunk",
+   "failure": "stream_provider_unavailable",
+   "expected": "bounded_fallback_chain",
+   "max_provider_requests": 2
+  },
+  {
+   "id": "stream_after_first_chunk",
+   "failure": "stream_mid_response_failure",
+   "expected": "stop_without_duplicate_retry",
+   "max_provider_requests": 1
+  },
+  {
+   "id": "tool_timeout",
+   "failure": "tool_deadline_exceeded",
+   "expected": "explicit_uncertainty",
+   "max_provider_requests": 1,
+   "chat_case": "tool_timeout_is_explicit"
+  },
+  {
+   "id": "model_outage",
+   "failure": "model_unavailable",
+   "expected": "explicit_uncertainty",
+   "max_provider_requests": 2,
+   "chat_case": "model_outage_is_explicit"
+  },
+  {
+   "id": "model_outage_stream",
+   "failure": "stream_model_unavailable",
+   "expected": "explicit_uncertainty",
+   "max_provider_requests": 2,
+   "chat_case": "model_outage_stream_is_explicit"
+  }
+ ]
 }

@@ -1262,9 +1262,6 @@ covering them.
   per-turn token budget is enforced.
 - **5.3.5 concurrency.** Chained tool reads run sequentially; only per-symbol
   context building is parallel.
-- **5.1.4 / 5.8.5 timeouts.** `ToolSpec.max_duration_ms` only adds a warning
-  after the handler returns; there is no enforced tool timeout. The failure
-  matrix has no tool-timeout or model-outage case.
 - **5.1.3 relative dates.** Nothing resolves "today", "yesterday", or "last
   Friday" to America/New_York dates.
 - **5.3.3 memory.** The `watchlist` memory field is never written, there is
@@ -1279,14 +1276,13 @@ covering them.
 - **5.7.1 / 5.7.4 block quality.** One quality object, derived from the last
   successful trace item, is copied onto every block rather than computed
   per block from that block's own evidence.
-- **5.7.8 fixtures.** Promoted regression fixtures are stored in
-  `chat_regression_fixtures`; neither the test suite nor the evaluation
-  runner reads them.
-- **5.8.3 evaluation.** `backend/ai/evaluations/runner.py` runs
-  `verify_answer` over canned answer+trace pairs. Its `tool_choice` score
-  checks that the expected tool appears in the canned trace, so it cannot
-  fail. Routing, planning, clarification, and follow-up behavior are not
-  evaluated; "19/19 in every category" measures the verifier only.
+- **5.7.8 fixtures.** Promoted fixtures now export into
+  end-to-end cases, but each draft needs a maintainer to script its
+  evidence and expectations before it runs; nothing is automatic.
+- **5.8.3 evaluation coverage.** The end-to-end suite has 23 cases.
+  Sessions, timeframes, news/"why did it move", and journal flows do not
+  have end-to-end cases yet. The verifier suite's tool-choice and
+  clarification columns remain structural checks only.
 - **5.8.1 citations.** Numeric claims are matched against any evidence value
   in scope; the model is not required to cite `ev-N` references. Turns with
   an action step or a trusted server reply skip prose verification (their
@@ -1298,8 +1294,34 @@ covering them.
 - **Audit obligations not yet written.** The per-tool source/cache/
   provider-impact table (5.2), the per-block persistence/accessibility list
   (5.7), and 5.1's formula-level audit evidence are described in their
-  sections but not produced. 5.4 has no recorded test counts. The plan's
-  12-scenario end-to-end matrix has no recorded run.
+  sections but not produced. 5.4 has no recorded test counts. Of the plan's
+  12 end-to-end scenarios, #1 (calculation), #7 (follow-up), #11 (failure),
+  and #12 (safety) are now automated cases; the rest have no recorded run.
 - **Plan open questions.** Q4 (blocks stored as versioned JSON in
   `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
   are decided by the implementation; Q1–Q3 remain open.
+
+## End-to-end Chat evaluation and tool timeouts (2026-09-23)
+
+- **Evaluation suite.** `backend/ai/evaluations/chat_runner.py` runs 23
+  versioned conversations (`phase_5_8_chat_cases.json`) through the real
+  blocking/streaming Chat path, with only the model, tools, context, and
+  database scripted. All 23 pass; categories are counted only where a case
+  sets an expectation. See `phase_5_8_evaluation.md`.
+- **Regression fixtures** export via
+  `python -m backend.ai.evaluations.export_fixtures` into reviewable case
+  drafts that run with the suite after review (closes the 5.7.8
+  "nothing consumes fixtures" gap, with a manual review step).
+- **Gaps the harness found, now fixed:**
+  - New calculator operation `position_risk`: per-share risk, total risk,
+    position value, and optional portfolio-risk percent and reward/risk as
+    separate outputs, as 5.1.2 requires.
+  - Labelled-input parsing, so "Buy 200 AAPL at $220, stop $212" is
+    calculated deterministically.
+  - "Use the same stop but 100 shares" replaces only the named inputs of
+    the remembered calculation.
+- **Tool timeout (5.1.4 / 5.8.5).** Read-only and calculation tools now run
+  under a hard deadline (`AI_CHAT_TOOL_TIMEOUT_SECONDS`, default 20 s, or
+  `ToolSpec.timeout_ms`). An overrun returns `failure_kind: "timeout"`.
+  Mutating tools get no deadline. The failure matrix (`5.8.1`) adds
+  tool-timeout and model-outage rows linked to their end-to-end cases.

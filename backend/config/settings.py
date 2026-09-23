@@ -437,6 +437,11 @@ class AISettings(BaseSettings):
     # interrupt an in-flight provider request; it prevents starting another
     # continuation after the turn's budget is exhausted.
     chat_max_turn_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
+    # Hard deadline for one read-only/calculation tool call. A call that
+    # overruns returns a failed "timeout" result so the turn can finish;
+    # the worker thread itself cannot be interrupted and finishes in the
+    # background. Mutating tools are never cut off mid-write.
+    chat_tool_timeout_seconds: float = Field(default=20.0, ge=1.0, le=120.0)
     # The chat's run_backtest action tool (2026-09-11) — a fresh 6-month
     # backtest of the engine's own signals, on demand. Off by default:
     # a chat-triggered backtest is a real, rate-limited compute cost.

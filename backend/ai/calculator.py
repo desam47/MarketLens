@@ -20,6 +20,7 @@ CalculationName = Literal[
     "cagr",
     "weighted_average",
     "position_size",
+    "position_risk",
     "risk_reward",
     "allocation",
     "volatility",
@@ -179,6 +180,32 @@ def calculate(request: CalculationRequest) -> CalculationResult:
             "risk_dollars / per_share_risk",
         ]
         assumptions.append("Position size is fractional; round down to whole shares before placing an order.")
+    elif op == "position_risk":
+        # Risk of a position the trader already sized: per-share, total, and
+        # (when inputs allow) portfolio-risk percent and reward/risk, each a
+        # distinct output rather than one blended number.
+        entry, stop, shares = _require(request, "entry_price", "stop_price", "shares")
+        per_share = abs(entry - stop)
+        if per_share == 0:
+            raise ValueError("entry_price and stop_price must differ")
+        values = {
+            "per_share_risk": per_share,
+            "total_risk": per_share * shares,
+            "position_value": entry * shares,
+            "portfolio_risk_percent": None,
+            "reward_risk": None,
+        }
+        formulas = ["abs(entry_price - stop_price)", "per_share_risk * shares", "entry_price * shares"]
+        if request.account_value is not None:
+            values["portfolio_risk_percent"] = per_share * shares / float(request.account_value) * 100
+            formulas.append("total_risk / account_value * 100")
+        else:
+            assumptions.append("Portfolio-risk percent needs account_value.")
+        if request.target_price is not None:
+            values["reward_risk"] = abs(float(request.target_price) - entry) / per_share
+            formulas.append("abs(target_price - entry_price) / per_share_risk")
+        else:
+            assumptions.append("Reward/risk needs target_price.")
     elif op == "risk_reward":
         entry, stop, target = _require(request, "entry_price", "stop_price", "target_price")
         risk = abs(entry - stop)

@@ -997,7 +997,8 @@ _ACTION_TOOL_DOCS = (
     - calculate is a read-only deterministic tool. Set action_calculation \
       to a validated request with one named calculation (percentage_change, \
       dollar_change, return, cagr, weighted_average, position_size, \
-      risk_reward, allocation, volatility, drawdown, max_drawdown, \
+      position_risk (entry_price, stop_price, shares; optional \
+      target_price, account_value), risk_reward, allocation, volatility, drawdown, max_drawdown, \
       correlation, options_breakeven, options_intrinsic_value, \
       options_extrinsic_value, options_max_gain_loss, or expected_move). \
       Never do the arithmetic in reply; the app returns verified values, \

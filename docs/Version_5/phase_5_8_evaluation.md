@@ -1,17 +1,86 @@
 # Phase 5.8 Evaluation Report
 
-**Harness version:** `5.8.0`
+**Harness versions:** verifier cases `5.8.0`, end-to-end Chat cases `5.8.2`
 **Verifier version:** `5.8.1`
-**Scope:** provider-free verifier and fallback-contract evaluation
+**Scope:** provider-free verifier, end-to-end Chat, and fallback-contract evaluation
 
-## Categories
+There are two suites. The **verifier suite** (below, 19 cases) checks the
+answer verifier on canned answer/trace pairs; its tool-choice and
+clarification columns only check the canned trace, so they cannot fail on
+their own and say nothing about how Chat routes a question. The
+**end-to-end Chat suite** (added 2026-09-23) runs real conversations and is
+the one that measures routing, tool choice, clarification, memory, and
+action safety.
+
+## End-to-end Chat suite
+
+`backend/ai/evaluations/chat_runner.py` drives each case through
+`answer_chat_message` or `stream_chat_message`. Ticker resolution,
+deterministic and semantic routing, the bounded model planner, confirmation
+gates, structured memory, and answer verification run unmodified. Only the
+edges are scripted: a private in-memory database seeded per case, scripted
+model replies (or a raised outage), scripted registry tool results
+(`calculate` runs for real), a scripted screen, and fixture symbol context.
+A model call with no scripted reply fails the case, so a question that
+should route deterministically cannot silently fall through to the model.
+
+Cases live in `backend/ai/evaluations/phase_5_8_chat_cases.json`. Run them
+with `python -m backend.ai.evaluations.chat_runner`; pytest runs each case
+in `backend/tests/ai/test_phase_5_8_chat_evaluation.py`. A category is
+counted only for cases that set an expectation in it:
+
+| Category | Passed | Applicable cases |
+| --- | ---: | ---: |
+| Correctness | 12 | 12 |
+| Tool choice | 17 | 17 |
+| Provenance | 4 | 4 |
+| Clarification | 2 | 2 |
+| Latency | 23 | 23 |
+| Safety | 5 | 5 |
+
+The 23 cases cover:
+
+- **Calculations:** position risk from "Buy 200 AAPL at $220, stop $212"
+  (plan matrix #1), a missing-input clarification, and the "use the same
+  stop but 100 shares" follow-up (plan matrix #7).
+- **Routing:** options (blocking and streaming), a two-symbol options
+  clarification, comparison, pronoun follow-up, scanner, alerts, and
+  portfolio risk.
+- **Action safety:**
+  - confirm-then-execute;
+  - decline-then-"ok thanks" never executing;
+  - a model trying to confirm itself;
+  - additive alert creation;
+  - a multi-step compound request.
+- **Verification:** a verified grounded answer, a hallucinated price
+  blocked, and an invented ticker blocked.
+- **Failure modes:** a tool timeout, a model outage (blocking and
+  streaming), and AI disabled.
+
+When the harness was first run, it found two real gaps. There was no
+deterministic path for plan matrix #1, and the calculator had no
+quantity-based position-risk operation. The "same stop but 100 shares"
+follow-up (matrix #7) did not reuse remembered inputs. Both were fixed
+(`position_risk` calculation, labelled-input parsing, and follow-up
+overrides). Temporarily reverting the confirmation-expiry fix makes
+`declined_confirmation_never_executes_later` fail, which confirms the
+suite catches regressions.
+
+**Regression fixtures.** `python -m backend.ai.evaluations.export_fixtures`
+turns approved `chat_regression_fixtures` rows into
+`backend/ai/evaluations/regression/fixture_<id>.json` drafts in the same
+case shape. Drafts start with `"needs_review": true` and are reported as
+pending (not run) until a maintainer scripts their evidence and
+expectations; reviewed files then run with the suite.
+
+## Verifier suite categories
 
 Each case is scored for correctness, tool choice, provenance, clarification
 quality, latency-budget compliance, and action safety. Runtime latency and
 provider-request measurements come from the persisted observability event;
 provider-free cases use a zero external-latency budget.
 
-## Current result
+## Verifier suite result
 
 | Category | Passed | Total |
 | --- | ---: | ---: |
@@ -71,8 +140,18 @@ The four backend skips are environment-dependent Redis/loopback checks.
 
 ## Failure matrix
 
-`backend/ai/evaluations/phase_5_8_failure_matrix.json` records the expected
-fallback contract for provider outages, malformed replies, stale data, partial
-symbol coverage, stream failure before the first chunk, and stream failure
-after a chunk. Chat parsing is capped at two attempts; a stream that has
+`backend/ai/evaluations/phase_5_8_failure_matrix.json` (version `5.8.1`)
+records the expected fallback contract for provider outages, malformed
+replies, stale data, partial symbol coverage, stream failure before the first
+chunk, stream failure after a chunk, tool timeouts, and model outages. The
+tool-timeout and model-outage rows name the end-to-end Chat case that
+exercises them.
+
+Every read-only and calculation tool call now has a hard deadline
+(`AI_CHAT_TOOL_TIMEOUT_SECONDS`, default 20 s, or a per-tool
+`ToolSpec.timeout_ms`). An overrun returns a failed result with
+`failure_kind: "timeout"`, so the turn finishes with an explicit message.
+The worker thread cannot be interrupted and finishes in the background.
+Mutating tools are never given a deadline, so a write is never left in an
+unknown state. Chat parsing is capped at two attempts; a stream that has
 already emitted text is stopped rather than replayed through another provider.
