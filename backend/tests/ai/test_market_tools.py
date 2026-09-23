@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from backend.ai.market_tools import (
     AlertsRequest,
@@ -11,6 +11,7 @@ from backend.ai.market_tools import (
     ConfluenceRequest,
     CounterargumentRequest,
     CsvImportRequest,
+    DecisionChecklistRequest,
     HistoricalSimilarityRequest,
     IndicatorRequest,
     JournalCoachRequest,
@@ -39,6 +40,7 @@ from backend.ai.market_tools import (
     build_trade_plan_tool,
     compare_symbols_tool,
     counterargument_review_tool,
+    decision_checklist_tool,
     get_alerts_tool,
     get_application_help_tool,
     get_bars_tool,
@@ -1443,3 +1445,90 @@ def test_journal_coach_filters_by_symbol_and_setup() -> None:
     by_setup = trade_journal_coach_tool(JournalCoachRequest(entries=entries, setup="breakout")).model_dump()
     assert by_setup["total_entries"] == 2
     assert {row["symbol"] for row in by_setup["plan_vs_actual"]} == {"AAPL", "SPY"}
+
+
+def _patch_checklist_tools(monkeypatch, *, trend_direction="uptrend", earnings_dates=None,
+                            quote_age_seconds=5, option_oi=500, option_volume=50):
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_trend_tool",
+        lambda request: _Payload(symbol=request.symbol, direction=trend_direction, strength="strong", provider="engine"),
+    )
+    events = [{"symbol": "AAPL", "event_type": "earnings", "date": d, "source": "yfinance"} for d in (earnings_dates or [])]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_calendar_tool",
+        lambda request: _Payload(symbol=request.symbol, events=events, provider="yfinance"),
+    )
+    quote_timestamp = (datetime.now(UTC) - timedelta(seconds=quote_age_seconds)).isoformat()
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_quote_tool",
+        lambda request: _Payload(symbol=request.symbol, price=205, timestamp=quote_timestamp, provider="webull"),
+    )
+    chain = {
+        "expiration": "2099-12-31",
+        "calls": [{"strike": 210, "expiration": "2099-12-31", "option_type": "call", "open_interest": option_oi, "volume": option_volume}],
+        "puts": [],
+    }
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_options_tool",
+        lambda request: _Payload(symbol=request.symbol, chains=[chain], expirations=["2099-12-31"], provider="yahoo_finance", source_timestamp="now"),
+    )
+
+
+def test_decision_checklist_all_checks_pass(monkeypatch) -> None:
+    _patch_checklist_tools(monkeypatch, trend_direction="uptrend", earnings_dates=[])
+    result = decision_checklist_tool(DecisionChecklistRequest(
+        symbol="AAPL", direction="long",
+        entry_price=200, stop_price=190, account_value=50_000, risk_percent=2,
+        option_leg=OptionLegRef(expiration="2099-12-31", strike=210, option_type="call"),
+    )).model_dump()
+
+    assert result["ready"] is True
+    assert result["counts"]["completed"] == 7
+    assert result["counts"]["failed"] == 0
+    checks = {c["check"]: c for c in result["checks"]}
+    assert checks["trend_alignment"]["status"] == "completed"
+    assert checks["verified_position_size"]["evidence"]["shares"] == 100
+
+
+def test_decision_checklist_reports_failures_and_unavailable(monkeypatch) -> None:
+    _patch_checklist_tools(monkeypatch, trend_direction="downtrend", earnings_dates=["2026-09-25"], quote_age_seconds=200)
+    result = decision_checklist_tool(DecisionChecklistRequest(symbol="AAPL", direction="long")).model_dump()
+
+    checks = {c["check"]: c for c in result["checks"]}
+    assert result["ready"] is False
+    assert checks["trend_alignment"]["status"] == "failed"
+    assert checks["catalyst_review"]["status"] == "failed"
+    assert checks["defined_stop"]["status"] == "failed"
+    assert checks["verified_position_size"]["status"] == "unavailable"
+    assert checks["earnings_risk"]["status"] == "unavailable"
+    assert checks["options_liquidity"]["status"] == "unavailable"
+    assert checks["data_freshness"]["status"] == "failed"
+
+
+def test_decision_checklist_skips_unrequested_checks() -> None:
+    result = decision_checklist_tool(DecisionChecklistRequest(
+        symbol="AAPL", direction="long", stop_price=190, required_checks=["defined_stop"],
+    )).model_dump()
+
+    checks = {c["check"]: c for c in result["checks"]}
+    assert checks["defined_stop"]["status"] == "completed"
+    assert result["counts"]["skipped"] == 6
+    for name in ("trend_alignment", "catalyst_review", "verified_position_size", "earnings_risk", "options_liquidity", "data_freshness"):
+        assert checks[name]["status"] == "skipped"
+    # ready is unaffected by skipped checks, only by failed ones.
+    assert result["ready"] is True
+
+
+def test_decision_checklist_flags_thin_options_liquidity(monkeypatch) -> None:
+    _patch_checklist_tools(monkeypatch, option_oi=5, option_volume=1)
+    result = decision_checklist_tool(DecisionChecklistRequest(
+        symbol="AAPL", direction="long",
+        option_leg=OptionLegRef(expiration="2099-12-31", strike=210, option_type="call"),
+        required_checks=["options_liquidity"],
+    )).model_dump()
+
+    checks = {c["check"]: c for c in result["checks"]}
+    assert checks["options_liquidity"]["status"] == "failed"
+    assert checks["options_liquidity"]["evidence"]["open_interest"] == 5

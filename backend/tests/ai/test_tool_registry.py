@@ -26,6 +26,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "calculate",
         "compare_symbols",
         "counterargument_review",
+        "decision_checklist",
         "get_alerts",
         "get_application_help",
         "get_bars",
@@ -167,6 +168,20 @@ def test_default_registry_executes_trade_journal_coach() -> None:
     assert result.data["available"] is True
     assert result.data["win_rate_percent"] == 100.0
     assert result.provider == "MarketLens local journal"
+
+
+def test_default_registry_executes_decision_checklist() -> None:
+    result = default_registry.execute(
+        ToolRequest(
+            tool_name="decision_checklist",
+            arguments={"symbol": "AAPL", "direction": "long", "stop_price": 190, "required_checks": ["defined_stop"]},
+        )
+    )
+    assert result.ok is True
+    checks = {c["check"]: c for c in result.data["checks"]}
+    assert checks["defined_stop"]["status"] == "completed"
+    assert checks["trend_alignment"]["status"] == "skipped"
+    assert result.provider == "MarketLens checklist"
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:

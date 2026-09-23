@@ -360,6 +360,7 @@ def build_default_registry() -> ToolRegistry:
         ConfluenceRequest,
         CounterargumentRequest,
         CsvImportRequest,
+        DecisionChecklistRequest,
         FundamentalsRequest,
         HistoricalSimilarityRequest,
         IndicatorRequest,
@@ -387,6 +388,7 @@ def build_default_registry() -> ToolRegistry:
         build_trade_plan_tool,
         compare_symbols_tool,
         counterargument_review_tool,
+        decision_checklist_tool,
         get_alerts_tool,
         get_application_help_tool,
         get_bars_tool,
@@ -456,6 +458,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="assess_portfolio_risk", kind="read_only", description="Explain concentration, sector exposure, correlation, volatility, stop risk, drawdown, and scenario results for an explicit position snapshot; optionally size a new trade against the portfolio's risk capacity.", input_model=PortfolioRiskRequest, handler=assess_portfolio_risk_tool))
     registry.register(ToolSpec(name="build_trade_plan", kind="read_only", description="Build a verified trade plan: entry/stop/targets/reward-risk/position size, for the user to review before saving.", input_model=TradePlanRequest, handler=build_trade_plan_tool))
+    registry.register(ToolSpec(name="decision_checklist", kind="read_only", description="Configurable pre-plan checklist (trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, data freshness) with completed/failed/unavailable/skipped states.", input_model=DecisionChecklistRequest, handler=decision_checklist_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
     registry.register(ToolSpec(name="trade_journal_coach", kind="read_only", description="Evidence-based Journal coaching: plan-vs-actual, recurring mistake observations, per-setup performance, win rate, and expectancy from an explicitly supplied journal snapshot.", input_model=JournalCoachRequest, handler=trade_journal_coach_tool))
     registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))

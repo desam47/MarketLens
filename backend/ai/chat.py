@@ -2516,6 +2516,7 @@ _MARKET_TOOL_ACTIONS = {
     "assess_portfolio_risk",
     "options_research",
     "trade_journal_coach",
+    "decision_checklist",
 }
 
 

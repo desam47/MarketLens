@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 complete).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains).
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -79,7 +79,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
-| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. Save/export and the decision checklist remain. |
+| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. `decision_checklist` runs a configurable seven-check pre-plan gate (trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, data freshness), each landing in completed/failed/unavailable/skipped against real evidence from the existing tools, with `required_checks` letting the caller configure which apply. Save/export (5.6.5) remains. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
@@ -797,13 +797,48 @@ symbol/setup filtering) plus a registry-level test. Registered as
 `trade_journal_coach` (read-only) and wired into Chat's action set/schema
 via the same path the 5.6.1 fix put in place.
 
-Remaining: save/export workflows (5.6.5) and the configurable decision
-checklist (5.6.6). Audit must trace every numerical output to calculator
-results, verify missing-input clarification, preserve delayed options
-labels, and reproduce journal analytics from stored records (satisfied for
-Trade Journal coach's own output above; still applies as new save/export
-and checklist work lands). Decision-checklist tests must distinguish
-completed, failed, unavailable, and skipped checks.
+**5.6.6 complete — Configurable decision checklist.** `decision_checklist`
+(`backend/ai/market_tools.py`) evaluates seven named pre-plan checks
+against real evidence from the existing tools — never re-derived, never
+guessed — each landing in exactly one of the plan's four required states:
+
+- `trend_alignment` — `get_trend_tool`'s direction (`uptrend`/`downtrend`)
+  compared against the stated trade direction; `unavailable` on a cold
+  (unwarmed) engine rather than a false pass/fail.
+- `catalyst_review` — `get_calendar_tool`'s events within a configurable
+  window (`catalyst_window_days`, default 7); any event in range is
+  `failed` (near-term catalyst risk), none is `completed`.
+- `defined_stop` — `completed` iff `stop_price` was supplied.
+- `verified_position_size` — `completed` via the same `calculate(position_size)`
+  call `build_trade_plan`/`assess_portfolio_risk` already use;
+  `unavailable` (not "failed") when entry/stop/account_value/risk_percent
+  aren't all present, since there's nothing to verify.
+- `earnings_risk` — `get_calendar_tool`'s earnings events between now and
+  a supplied option leg's own expiration; `unavailable` without an
+  `option_leg` (N/A for an equity trade), matching `options_liquidity`'s
+  same gate.
+- `options_liquidity` — reuses `options_research_tool`'s own
+  `_find_option_contract` matcher against a real fetched chain; open
+  interest/volume against configurable minimums.
+- `data_freshness` — the quote's own age against a configurable
+  `max_data_age_seconds` (default 60s).
+
+Any check not listed in `required_checks` (defaults to all seven) is
+reported `skipped` — the caller configuring which checks matter for a
+given trade, per the plan's own wording — never silently omitted from the
+response. The top-level `ready` field is true only when zero *required*
+checks failed; `unavailable`/`skipped` checks remain visible in the
+response rather than being treated as passing. 4 focused tool tests (all
+seven checks passing together, a mixed failed/unavailable scenario,
+narrowing `required_checks` to one check with the rest correctly reported
+`skipped`, and a thin-liquidity `failed` case) plus a registry-level test.
+Registered as `decision_checklist` (read-only) and wired into Chat's
+action set/schema via the same path the 5.6.1 fix put in place.
+
+Remaining: save/export workflows (5.6.5) — save an approved plan/review to
+the Journal, export a response as a local report, and deep links to
+Symbol/Scanner/Risk/Replay/Alerts/Journal. This is Phase 5.6's first
+mutating tool (a real Journal write) rather than a read-only one.
 
 ---
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import median, stdev
 from typing import Any, Literal
@@ -136,6 +136,46 @@ class OptionsResearchRequest(BaseModel):
     # chain or it is reported as unknown, not guessed.
     legs: list[OptionLegRef] = Field(default_factory=list, max_length=10)
     spreads: list[OptionsSpreadRef] = Field(default_factory=list, max_length=5)
+
+
+DecisionCheckName = Literal[
+    "trend_alignment",
+    "catalyst_review",
+    "defined_stop",
+    "verified_position_size",
+    "earnings_risk",
+    "options_liquidity",
+    "data_freshness",
+]
+
+_ALL_DECISION_CHECKS: tuple[DecisionCheckName, ...] = (
+    "trend_alignment", "catalyst_review", "defined_stop", "verified_position_size",
+    "earnings_risk", "options_liquidity", "data_freshness",
+)
+
+
+class DecisionChecklistRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    direction: Literal["long", "short"]
+    timeframe: str = Field(default="1d", max_length=20)
+    # Every check not listed here is reported "skipped" (intentionally not
+    # required for this trade), never silently omitted from the response.
+    # Defaults to all seven so nothing is skipped unless the caller
+    # deliberately narrows the list.
+    required_checks: list[DecisionCheckName] = Field(default_factory=lambda: list(_ALL_DECISION_CHECKS))
+    entry_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    account_value: float | None = Field(default=None, gt=0)
+    risk_percent: float | None = Field(default=None, gt=0, le=100)
+    catalyst_window_days: int = Field(default=7, ge=1, le=90)
+    # Set only for an options trade -- gates earnings_risk (checked against
+    # this leg's own expiration) and options_liquidity (N/A without one).
+    option_leg: OptionLegRef | None = None
+    min_open_interest: float = Field(default=100, ge=0)
+    min_volume: float = Field(default=10, ge=0)
+    max_data_age_seconds: float = Field(default=60, gt=0)
 
 
 class WatchlistRequest(BaseModel):
@@ -2520,6 +2560,135 @@ def build_trade_plan_tool(request: TradePlanRequest) -> BaseModel:
         provider="MarketLens calculator",
         source_timestamp=_database_timestamp(),
     )
+
+
+def _check_result(check: str, status: str, reason: str | None = None, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {"check": check, "status": status, "reason": reason, "evidence": evidence}
+
+
+def decision_checklist_tool(request: DecisionChecklistRequest) -> BaseModel:
+    """Configurable pre-plan decision checklist.
+
+    Each of the seven supported checks is evaluated against real evidence
+    from the existing tools/engines (never re-derived) and lands in exactly
+    one of four states: "completed" (evidence supports it), "failed"
+    (evidence contradicts it), "unavailable" (evidence couldn't be
+    obtained, e.g. no option leg was given for an options-only check), or
+    "skipped" (not in request.required_checks -- intentionally not
+    required for this trade, not silently omitted).
+    """
+    from backend.ai.calculator import CalculationRequest, calculate
+
+    symbol = request.symbol.upper()
+    required = set(request.required_checks)
+    results: list[dict[str, Any]] = []
+
+    def run(name: DecisionCheckName, evaluator) -> None:
+        if name not in required:
+            results.append(_check_result(name, "skipped", reason="Not in required_checks."))
+            return
+        try:
+            results.append(evaluator())
+        except Exception as exc:
+            results.append(_check_result(name, "unavailable", reason=str(exc)))
+
+    def check_trend_alignment() -> dict[str, Any]:
+        trend = get_trend_tool(TrendRequest(symbol=symbol, timeframe=request.timeframe)).model_dump(mode="json")
+        direction = str(trend.get("direction") or "unknown")
+        bullish, bearish = {"uptrend"}, {"downtrend"}
+        if direction == "unknown":
+            return _check_result("trend_alignment", "unavailable", reason="No warmed trend signal yet.", evidence={"direction": direction})
+        aligned = (request.direction == "long" and direction in bullish) or (request.direction == "short" and direction in bearish)
+        return _check_result("trend_alignment", "completed" if aligned else "failed", evidence={"direction": direction, "strength": trend.get("strength"), "requested_direction": request.direction})
+
+    def check_catalyst_review() -> dict[str, Any]:
+        calendar = get_calendar_tool(CalendarRequest(symbol=symbol)).model_dump(mode="json")
+        today = datetime.now(UTC).date()
+        window_end = today + timedelta(days=request.catalyst_window_days)
+        upcoming = [e for e in calendar.get("events", []) if _event_date_in_range(e, today, window_end)]
+        if upcoming:
+            return _check_result("catalyst_review", "failed", reason=f"Catalyst event(s) within {request.catalyst_window_days} day(s).", evidence={"events": upcoming})
+        return _check_result("catalyst_review", "completed", evidence={"events": []})
+
+    def check_defined_stop() -> dict[str, Any]:
+        if request.stop_price is None:
+            return _check_result("defined_stop", "failed", reason="No stop_price was supplied.")
+        return _check_result("defined_stop", "completed", evidence={"stop_price": request.stop_price})
+
+    def check_verified_position_size() -> dict[str, Any]:
+        if request.entry_price is None or request.stop_price is None or request.account_value is None or request.risk_percent is None:
+            missing = [n for n, v in (("entry_price", request.entry_price), ("stop_price", request.stop_price), ("account_value", request.account_value), ("risk_percent", request.risk_percent)) if v is None]
+            return _check_result("verified_position_size", "unavailable", reason=f"Missing: {', '.join(missing)}.")
+        sizing = calculate(CalculationRequest(calculation="position_size", entry_price=request.entry_price, stop_price=request.stop_price, account_value=request.account_value, risk_percent=request.risk_percent))
+        return _check_result("verified_position_size", "completed", evidence=sizing.values)
+
+    def check_earnings_risk() -> dict[str, Any]:
+        if request.option_leg is None:
+            return _check_result("earnings_risk", "unavailable", reason="No option_leg (expiration) was supplied.")
+        calendar = get_calendar_tool(CalendarRequest(symbol=symbol)).model_dump(mode="json")
+        today = datetime.now(UTC).date()
+        expiry = date.fromisoformat(request.option_leg.expiration)
+        upcoming = [e for e in calendar.get("events", []) if e.get("event_type") == "earnings" and _event_date_in_range(e, today, expiry)]
+        if upcoming:
+            return _check_result("earnings_risk", "failed", reason="Earnings fall before this option's expiration.", evidence={"events": upcoming, "expiration": request.option_leg.expiration})
+        return _check_result("earnings_risk", "completed", evidence={"events": [], "expiration": request.option_leg.expiration})
+
+    def check_options_liquidity() -> dict[str, Any]:
+        if request.option_leg is None:
+            return _check_result("options_liquidity", "unavailable", reason="Not an options trade (no option_leg supplied).")
+        options = get_options_tool(OptionsRequest(symbol=symbol, expiration=request.option_leg.expiration)).model_dump(mode="json")
+        contract = _find_option_contract(options.get("chains", []), request.option_leg)
+        if contract is None:
+            return _check_result("options_liquidity", "unavailable", reason="No matching contract in the fetched chain.")
+        oi, volume = contract.get("open_interest") or 0, contract.get("volume") or 0
+        liquid = oi >= request.min_open_interest and volume >= request.min_volume
+        return _check_result("options_liquidity", "completed" if liquid else "failed", evidence={"open_interest": oi, "volume": volume, "min_open_interest": request.min_open_interest, "min_volume": request.min_volume})
+
+    def check_data_freshness() -> dict[str, Any]:
+        quote = get_quote_tool(SymbolRequest(symbol=symbol)).model_dump(mode="json")
+        timestamp = quote.get("timestamp")
+        if not timestamp:
+            return _check_result("data_freshness", "unavailable", reason="Quote has no timestamp.")
+        source = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if source.tzinfo is None:
+            source = source.replace(tzinfo=UTC)
+        age_seconds = max(0.0, (datetime.now(UTC) - source).total_seconds())
+        fresh = age_seconds <= request.max_data_age_seconds
+        return _check_result("data_freshness", "completed" if fresh else "failed", evidence={"age_seconds": round(age_seconds, 3), "max_allowed_seconds": request.max_data_age_seconds, "provider": quote.get("provider")})
+
+    run("trend_alignment", check_trend_alignment)
+    run("catalyst_review", check_catalyst_review)
+    run("defined_stop", check_defined_stop)
+    run("verified_position_size", check_verified_position_size)
+    run("earnings_risk", check_earnings_risk)
+    run("options_liquidity", check_options_liquidity)
+    run("data_freshness", check_data_freshness)
+
+    counts = {status: sum(1 for r in results if r["status"] == status) for status in ("completed", "failed", "unavailable", "skipped")}
+    return _Payload(
+        symbol=symbol,
+        direction=request.direction,
+        checks=results,
+        counts=counts,
+        ready=counts["failed"] == 0,
+        provider="MarketLens checklist",
+        source_timestamp=_database_timestamp(),
+        assumptions=[
+            "\"ready\" is true only when zero required checks failed; \"unavailable\" and \"skipped\" checks "
+            "are visible above but do not block readiness by themselves — review them individually.",
+        ],
+    )
+
+
+def _event_date_in_range(event: dict[str, Any], start, end) -> bool:
+    raw = event.get("date")
+    if not raw:
+        return False
+    try:
+        event_date = date.fromisoformat(str(raw))
+    except ValueError:
+        return False
+    return start <= event_date <= end
 
 
 def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
