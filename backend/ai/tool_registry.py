@@ -185,7 +185,11 @@ class ToolRegistry:
                 session=request.session,
                 timeframe=request.timeframe,
                 provider=provider,
-                source_timestamp=source_timestamp or started_at,
+                # An execution timestamp is not a provider timestamp. Keep
+                # provenance unknown when the handler did not supply one so
+                # live-answer verification cannot mistake call time for data
+                # freshness.
+                source_timestamp=source_timestamp,
                 freshness_seconds=freshness_seconds,
                 fallback=bool(payload.get("fallback", False)),
                 entitlement=_entitlement_status(provider),
@@ -200,7 +204,7 @@ class ToolRegistry:
                 session=request.session,
                 timeframe=request.timeframe,
                 provider="MarketLens",
-                source_timestamp=started_at,
+                source_timestamp=None,
             )
 
 
@@ -366,6 +370,7 @@ def build_default_registry() -> ToolRegistry:
         HistoricalSimilarityRequest,
         IndicatorRequest,
         JournalCoachRequest,
+        MarketContextRequest,
         MarketEventTimelineRequest,
         MoveAnalysisRequest,
         NewsRequest,
@@ -383,6 +388,7 @@ def build_default_registry() -> ToolRegistry:
         TradeJournalRequest,
         TradePlanRequest,
         TrendRequest,
+        WatchlistIntelligenceRequest,
         WatchlistRequest,
         anomaly_analysis_tool,
         assess_portfolio_risk_tool,
@@ -412,6 +418,7 @@ def build_default_registry() -> ToolRegistry:
         get_tape_state_tool,
         get_trade_journal_tool,
         get_trend_tool,
+        get_watchlist_intelligence_tool,
         get_watchlist_tool,
         historical_similarity_tool,
         import_csv_tool,
@@ -431,7 +438,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_indicator", kind="read_only", description="Compute a supported indicator from verified bars.", input_model=IndicatorRequest, handler=get_indicator_tool))
     registry.register(ToolSpec(name="get_support_resistance", kind="read_only", description="Get range support and resistance from verified bars.", input_model=BarsRequest, handler=get_support_resistance_tool))
     registry.register(ToolSpec(name="get_market_regime", kind="read_only", description="Get the current warmed market regime.", input_model=SymbolRequest, handler=get_market_regime_tool))
-    registry.register(ToolSpec(name="get_market_context", kind="read_only", description="Get the current warmed market context.", input_model=BaseModel, handler=get_market_context_tool))
+    registry.register(ToolSpec(name="get_market_context", kind="read_only", description="Get the current warmed market context.", input_model=MarketContextRequest, handler=get_market_context_tool))
     registry.register(ToolSpec(name="get_sector_data", kind="read_only", description="Get a symbol's sector alignment vs. its sector ETF and SPY.", input_model=SymbolRequest, handler=get_sector_data_tool))
     registry.register(ToolSpec(name="get_session_stats", kind="read_only", description="Get O/H/L/C, volume, VWAP, and range for the most recent trading day, scoped to one session.", input_model=SessionStatsRequest, handler=get_session_stats_tool))
     registry.register(ToolSpec(name="get_trend", kind="read_only", description="Get the current trend for a symbol on one timeframe.", input_model=TrendRequest, handler=get_trend_tool))
@@ -444,6 +451,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_options_snapshot", kind="read_only", description="Get an options chain snapshot.", input_model=OptionsRequest, handler=get_options_tool))
     registry.register(ToolSpec(name="options_research", kind="read_only", description="Explain and compare calls, puts, and defined-risk vertical spreads: IV, IV rank, expected move, volume, open interest, put/call ratio, unusual activity, breakeven, max gain/loss, and assignment exposure.", input_model=OptionsResearchRequest, handler=options_research_tool))
     registry.register(ToolSpec(name="get_watchlist", kind="read_only", description="Read an application watchlist and its symbols.", input_model=WatchlistRequest, handler=get_watchlist_tool))
+    registry.register(ToolSpec(name="get_watchlist_intelligence", kind="read_only", description="Rank enabled names by weakness, strength, deterioration, or relative underperformance using cached scanner results and warming missing names on demand.", input_model=WatchlistIntelligenceRequest, handler=get_watchlist_intelligence_tool, max_duration_ms=30_000))
     registry.register(ToolSpec(name="why_did_it_move", kind="read_only", description="Assemble evidence for a symbol's move without claiming causation.", input_model=MoveAnalysisRequest, handler=why_did_it_move_tool))
     registry.register(ToolSpec(name="what_changed", kind="read_only", description="Compare current verified data with a selected baseline.", input_model=ChangeAnalysisRequest, handler=what_changed_tool))
     registry.register(ToolSpec(name="compare_symbols", kind="read_only", description="Rank symbols or a watchlist using verified bar metrics.", input_model=ComparisonRequest, handler=compare_symbols_tool))

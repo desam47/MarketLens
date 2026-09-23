@@ -1,12 +1,13 @@
 # MarketLens
 
-**Market Intelligence and Quantitative Research Platform** — real-time market regime detection, multi-timeframe trend analysis, confluence scoring, strategy recommendation, scanner rankings, alerts, backtesting, and optional AI-powered analysis.
+**Market Intelligence and Quantitative Research Platform** — real-time market regime detection, multi-timeframe trend analysis, confluence scoring, strategy recommendation, scanner rankings, alerts, backtesting, and a grounded AI Hub copilot.
 
-> Current version: v3.3.0 · Python 3.12 · FastAPI · React 18 · SQLite
+> Current product line: Version 5 — Intelligent AI Hub Chat · Python 3.12 · FastAPI · React 18 · SQLite
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Version 5 AI Hub](#version-5--intelligent-ai-hub-chat)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
@@ -36,7 +37,29 @@ MarketLens is a full-stack application that:
 10. **Fires alerts** — price, % change, RSI threshold, and regime-change triggers
 11. **Backtests strategies** — replay scanner signals over historical bars to measure forward returns
 12. **Scans markets** — real-time scanner with WebSocket updates, named rankings, top movers
-13. **Optional AI analysis** — plug in any Ollama-compatible LLM for natural-language market commentary
+13. **Grounded AI Hub** — chat, market analysis, research tools, calculations, scenario analysis, and typed evidence-backed response blocks
+14. **Safe AI workflows** — explicit tool boundaries, provider/freshness provenance, confirmation-gated mutations, and no order execution path
+
+## Version 5 — Intelligent AI Hub Chat
+
+Version 5 turns the AI Hub into a grounded MarketLens copilot. It can answer
+market, symbol, watchlist, portfolio, risk, options, journal, and application
+workflow questions through bounded backend tools and typed responses.
+
+The AI Hub includes:
+
+- deterministic calculator and market-data tools with formulas, assumptions, timestamps, freshness, and source metadata
+- structured chat response blocks for evidence, comparisons, scenarios, explanations, timelines, and sensitivity analysis
+- high-confidence semantic routing shared by blocking and streaming Chat, mapping common natural-language variants to typed tools, preserving user-owned scope safely, and asking for clarification when scope is ambiguous
+- server-owned context evidence and provider provenance carried into answer verification, including symbol-scoped numeric claims and honest freshness when a source timestamp is unavailable
+- scanner, watchlist intelligence, alerts, market digest, and local “What changed” inbox workflows
+- trade planning, portfolio-risk, options research, journal coaching, browser-local journal snapshots, and downloadable reports
+- browser-local chat preferences, feedback, notebooks, and checkpoint state without adding server-side user identity assumptions
+- confirmation-gated journal writes and other destructive actions; no order execution tool or route
+
+Phases 5.1–5.8 are complete. The remaining release activity is the reviewed
+handoff from `development` to the protected stable branch. Detailed evidence
+is maintained in [`docs/Version_5/`](docs/Version_5/).
 
 ---
 
@@ -145,7 +168,7 @@ MarketLens/
 │       ├── main.py             # App entry point, middleware, router includes
 │       ├── dependencies.py     # get_db(), get_current_user() stubs
 │       ├── alerts/
-│       ├── ai/                 # /api/ai — analyze, jobs
+│       ├── ai/                 # /api/ai — grounded chat, analysis, jobs, templates, digest, changes
 │       ├── ai_templates/       # /api/ai/templates — custom prompt templates
 │       ├── analysis/           # /api/analysis — transitions, S/R, divergences
 │       ├── aux_data/
@@ -177,11 +200,11 @@ MarketLens/
 │   ├── public/
 │   ├── src/
 │   │   ├── App.tsx            # Root — page routing + global symbol state
-│   │   ├── components/        # 28 React components (cards, panels, charts)
+│   │   ├── components/        # React components (cards, panels, charts, AI Hub workflows)
 │   │   ├── hooks/             # useMarketStream, useScannerStream (WebSocket)
-│   │   ├── pages/             # 8 pages (Dashboard, Symbol, Watchlist, etc.)
+│   │   ├── pages/             # Application pages and route surfaces
 │   │   ├── services/
-│   │   │   └── api.ts         # Typed API client (~1500 lines)
+│   │   │   └── api.ts         # Typed API client for market, AI, workflow, and stream APIs
 │   │   └── styles/
 │   │       └── App.css         # All custom styles
 │   ├── package.json
@@ -464,12 +487,32 @@ All endpoints are under `/api/`. Base URL: `http://localhost:5001/api`.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/ai/calculate` | Run a deterministic, backend-verified calculation |
 | POST | `/ai/analyze` | Run AI analysis for a symbol |
+| POST | `/ai/analyze/stream` | Stream AI analysis output |
 | GET | `/ai/status` | Provider status (enabled/disabled) |
 | GET | `/ai/config` | Current AI config |
 | PATCH | `/ai/config` | Update AI config |
 | POST | `/ai/jobs` | Submit background analysis job |
 | GET | `/ai/jobs/{id}` | Get background job status + result |
+
+### AI Hub Chat and Workflows
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/ai/chat/sessions` | Create a grounded chat session |
+| GET | `/ai/chat/sessions/{id}/messages` | List session messages |
+| POST | `/ai/chat/sessions/{id}/messages` | Send a chat message and receive typed response blocks |
+| POST | `/ai/chat/sessions/{id}/messages/stream` | Stream a grounded chat response |
+| POST | `/ai/chat/messages/{id}/feedback` | Record feedback on an assistant message |
+| GET | `/ai/chat/notebooks` | List browser-keyed chat notebooks |
+| POST | `/ai/chat/notebooks/{id}/items` | Save a chat message to a notebook |
+| GET | `/ai/changes` | Read the local What-changed activity inbox without provider polling |
+| GET | `/ai/digest/latest` | Read the latest market digest |
+| GET | `/ai/digest/history` | List generated market digests |
+| POST | `/ai/digest/generate` | Generate a market digest |
+| GET | `/ai/workflows` | List saved AI workflows |
+| POST | `/ai/workflows/{id}/run` | Run a saved workflow |
 
 ### AI Templates
 
@@ -856,7 +899,7 @@ Event-driven backtester. Replays historical bars and scanner signals. Computes e
 | Symbol | `#symbol` | Deep-dive on a single symbol |
 | Watchlist | `#watchlist` | Manage watchlists + symbol scanning |
 | Scanner | `#scanner` | Live scanner with WebSocket updates |
-| AI Hub | `#hub` | Grounded AI analysis, chat, and research tools |
+| AI Hub | `#hub` | Grounded chat, analysis, templates, market digest, What changed, scanner, and research tools |
 | Earnings & Events | `#calendar` | Earnings and market-event calendar |
 | Risk Dashboard | `#risk` | Position, concentration, exposure, and drawdown review |
 | Trade Journal | `#journal` | Manual trades, outcomes, and review notes |
@@ -879,11 +922,16 @@ Event-driven backtester. Replays historical bars and scanner signals. Computes e
 | `CandlestickChart` | TradingView Lightweight Charts integration |
 | `MTFScoreGrid` | Per-timeframe score heatmap |
 | `AIAnalysisPanel` | LLM-powered market commentary |
+| `ChatPanel` | Grounded chat with typed response blocks, provenance, feedback, notebooks, and safe action confirmations |
+| `ChangeInbox` | Browser-checkpointed local activity feed for watchlists, alerts, signals, catalysts, and provider health |
+| `NaturalLanguageScannerBuilder` | Converts supported scanner language into reviewable filter criteria |
+| `WatchlistIntelligence` | Watchlist-level evidence, sessions, and ranked intelligence |
+| `AITemplatesPanel` | AI prompt-template management and background analysis controls |
 | `AlertsCard` | Alert management panel |
 
 ### API Client (`frontend/src/services/api.ts`)
 
-~1500-line typed API client. All methods return typed Promises. Key methods:
+Typed API client. All methods return typed Promises. Key methods:
 
 ```typescript
 api.getRegime(symbol)                    // MarketRegimeEngine state
@@ -893,7 +941,14 @@ api.getStrategy(symbol)                 // Strategy recommendation
 api.getMarketContext()                  // SPY/QQQ/IWM/VIX snapshot
 api.getTopMovers(direction, limit)     // Bullish/bearish movers
 api.getWatchlistScan(watchlistId)      // Full watchlist ranked scan
+api.getWatchlistIntelligence(...)       // Watchlist-level intelligence
 api.analyzeSymbol(symbol, timeframe)    // AI analysis (if enabled)
+api.getChangeInbox(since, limit)        // Local What-changed activity feed
+api.createChatSession(...)              // Start a grounded AI Hub chat session
+api.sendChatMessage(...)                // Send a typed chat request
+api.streamChatMessage(...)              // Stream a grounded chat response
+api.getChatNotebooks(clientKey)         // Browser-local chat notebook metadata
+api.saveChatNotebookItem(...)           // Save a chat message to a notebook
 api.createAlert(alert)                  // Create a price/signal alert
 api.runBacktest(config)                 // Trigger a backtest
 ```

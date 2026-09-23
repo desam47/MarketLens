@@ -954,4 +954,19 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText('Fallback reply.')).toBeInTheDocument();
     expect(mockApi.sendChatMessage).toHaveBeenCalledWith(1, 'how is the market', null);
   });
+
+  it('preserves partial text when a stream fails after emitting a delta', async () => {
+    mockApi.streamChatMessage.mockImplementation(async (_id: number, _content: string, opts: any) => {
+      opts.onDelta?.('Partial answer');
+      throw new Error('stream interrupted');
+    });
+    render(<ChatPanel />);
+    await screen.findByPlaceholderText(/Ask about any stock/i);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'how is the market' } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText(/Partial answer/)).toBeInTheDocument();
+    expect(screen.getByText(/Stream interrupted before verification completed/)).toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
 });

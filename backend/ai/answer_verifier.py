@@ -26,8 +26,9 @@ _TICKER_RE = re.compile(
 )
 _BARE_TICKER_RE = re.compile(r"\b[A-Z]{2,6}\b")
 _NON_TICKER_CAPS = {
-    "AI", "API", "BUY", "GDP", "HOLD", "IV", "OI", "PE", "RSI", "SELL", "SMA",
-    "USD", "UTC", "VWAP",
+    "ADX", "AI", "API", "ATR", "BBO", "BUY", "CPI", "DMI", "EMA", "ETF",
+    "FOMC", "GDP", "HOLD", "IV", "MACD", "NAV", "OHLC", "OI", "PE", "RSI",
+    "SEC", "SELL", "SMA", "USD", "UTC", "VWAP",
 }
 _TIMEFRAME_RE = re.compile(r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b", re.I)
 _SESSION_RE = re.compile(r"\b(premarket|pre-market|regular|regular session|after[- ]hours?|extended)\b", re.I)
@@ -141,7 +142,13 @@ def _numbers_from_text(text: str) -> list[tuple[float, str | None, str | None]]:
             unit = unit.lower()
         if match.group("prefix"):
             unit = "currency"
-        claims.append((float(raw.replace(",", "")), unit, text[max(0, start - 24):min(len(text), end + 24)]))
+        snippet_start = max(0, start - 24)
+        snippet_end = min(len(text), end + 24)
+        snippet = text[snippet_start:snippet_end]
+        relative_start = start - snippet_start
+        relative_end = end - snippet_start
+        context = snippet[:relative_start] + "__CLAIM__" + snippet[relative_end:]
+        claims.append((float(raw.replace(",", "")), unit, context))
     return claims
 
 
@@ -171,7 +178,51 @@ def _evidence_unit_families(numbers: dict[str, float]) -> set[str]:
 def _safe_uncertainty(issues: list[str]) -> str:
     if "unknown_ticker" in issues:
         return "I couldn't verify that answer because it referenced unsupported market data. Please provide a supported ticker and retry."
+    if "live_claim_without_freshness" in issues or "stale_live_claim" in issues:
+        return "I couldn't verify that as current because the available market data is missing a trustworthy freshness timestamp."
+    if "unsupported_numeric_claim" in issues or "unit_mismatch" in issues:
+        return "I couldn't verify one or more numbers in that answer against the available source data."
     return "I couldn't verify that answer against the available evidence. Please retry with current data or ask for the source data."
+
+
+def _claim_symbol(context: str | None, allowed: set[str]) -> str | None:
+    if not context:
+        return None
+    marker = context.find("__CLAIM__")
+    before = context[:marker] if marker >= 0 else context
+    candidates = [match.group(0).upper() for match in _BARE_TICKER_RE.finditer(before)]
+    scoped = [symbol for symbol in candidates if symbol in allowed]
+    if scoped:
+        return scoped[-1]
+    after = context[marker + len("__CLAIM__"):] if marker >= 0 else ""
+    after_candidates = [match.group(0).upper() for match in _BARE_TICKER_RE.finditer(after)]
+    after_scoped = [symbol for symbol in after_candidates if symbol in allowed]
+    return after_scoped[0] if after_scoped else None
+
+
+def _evidence_by_symbol(successful: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    grouped: dict[str, dict[str, float]] = {}
+    for item in successful:
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        grouped.setdefault(symbol, {}).update(_evidence_numbers(item))
+    return grouped
+
+
+def _evidence_labels(successful: list[dict[str, Any]]) -> dict[str, set[str]]:
+    grouped: dict[str, set[str]] = {}
+    for item in successful:
+        symbol = str(item.get("symbol") or "").upper() or "*"
+        labels = item.get("evidence_labels")
+        if not isinstance(labels, dict):
+            continue
+        grouped.setdefault(symbol, set()).update(
+            str(value).lower().replace("_", " ")
+            for value in labels.values()
+            if isinstance(value, str) and value
+        )
+    return grouped
 
 
 def _calculation_issues(trace: list[dict[str, Any]]) -> list[str]:
@@ -274,18 +325,26 @@ def verify_answer(
         item_numbers = _evidence_numbers(item)
         evidence_numbers.update(item_numbers)
         evidence_families.update(_evidence_unit_families(item_numbers))
+    evidence_by_symbol = _evidence_by_symbol(successful)
+    evidence_labels = _evidence_labels(successful)
     user_numbers = {number for number, _, _ in _numbers_from_text(user_content)}
     directional_claim = bool(_POSITIVE_DIRECTION_RE.search(content) or _NEGATIVE_DIRECTION_RE.search(content))
 
-    for value, unit, _context in numeric_claims:
+    for value, unit, context in numeric_claims:
+        claim_symbol = _claim_symbol(context, allowed)
+        scoped_numbers = (
+            evidence_by_symbol.get(claim_symbol, evidence_numbers)
+            if claim_symbol
+            else evidence_numbers
+        )
         matched_evidence = any(
             abs(value - candidate) <= max(0.02 if abs(candidate) < 10 else 0.01, abs(candidate) * 0.0005)
-            for candidate in evidence_numbers.values()
+            for candidate in scoped_numbers.values()
         )
         if not matched_evidence and directional_claim:
             matched_evidence = any(
                 abs(abs(value) - abs(candidate)) <= max(0.02 if abs(candidate) < 10 else 0.01, abs(candidate) * 0.0005)
-                for candidate in evidence_numbers.values()
+                for candidate in scoped_numbers.values()
             )
         if value in user_numbers:
             matched_evidence = True
@@ -306,7 +365,7 @@ def verify_answer(
     if live_claim:
         fresh_evidence = [
             item for item in successful
-            if isinstance(item.get("freshness_seconds"), (int, float)) or item.get("source_timestamp")
+            if isinstance(item.get("freshness_seconds"), (int, float))
         ]
         if not fresh_evidence:
             issues.append("live_claim_without_freshness")
@@ -348,6 +407,25 @@ def verify_answer(
     ]
     if directional_values:
         if _POSITIVE_DIRECTION_RE.search(content) and all(value < 0 for value in directional_values):
+            issues.append("contradictory_evidence")
+            unsupported += 1
+
+    positive_claim = bool(_POSITIVE_DIRECTION_RE.search(content))
+    negative_claim = bool(_NEGATIVE_DIRECTION_RE.search(content))
+    sideways_claim = bool(re.search(r"\b(sideways|flat|range[- ]bound|mixed)\b", content, re.I))
+    label_sets = list(evidence_labels.values())
+    if label_sets:
+        known_labels = {label for labels in label_sets for label in labels}
+        positive_labels = {"bullish", "up", "rising", "strong", "positive"}
+        negative_labels = {"bearish", "down", "falling", "weak", "negative"}
+        sideways_labels = {"sideways", "flat", "mixed", "neutral"}
+        if positive_claim and known_labels.intersection(negative_labels) and not known_labels.intersection(positive_labels):
+            issues.append("contradictory_evidence")
+            unsupported += 1
+        elif negative_claim and known_labels.intersection(positive_labels) and not known_labels.intersection(negative_labels):
+            issues.append("contradictory_evidence")
+            unsupported += 1
+        elif sideways_claim and known_labels.intersection(positive_labels | negative_labels) and not known_labels.intersection(sideways_labels):
             issues.append("contradictory_evidence")
             unsupported += 1
         elif _NEGATIVE_DIRECTION_RE.search(content) and all(value > 0 for value in directional_values):

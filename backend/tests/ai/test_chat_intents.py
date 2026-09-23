@@ -1,6 +1,13 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
 
-from backend.ai.chat import _generate_reply, _run_market_tool
+from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
+from backend.ai.chat import (
+    _append_context_evidence,
+    _generate_reply,
+    _generate_reply_streaming,
+    _run_market_tool,
+)
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
@@ -39,6 +46,153 @@ def test_options_question_routes_to_typed_tool_without_ai(monkeypatch) -> None:
     assert grounded is True
     assert "get_options_snapshot" in text
     complete.assert_not_called()
+
+
+def test_market_overview_routes_to_verified_context_without_ai(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "regime": "risk_on",
+                "confidence": 0.82,
+                "trend_strength": 0.61,
+                "momentum": 0.24,
+                "volatility_state": "normal",
+                "timestamp": "2026-09-23T15:00:00-04:00",
+            },
+            provider="MarketLens engine",
+            source_timestamp="2026-09-23T15:00:00-04:00",
+            freshness_seconds=60.0,
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "What's the market doing today?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "risk on" in text
+    assert "momentum +0.24" in text
+    assert requests[0].tool_name == "get_market_context"
+    complete.assert_not_called()
+
+
+def test_symbol_overview_routes_to_verified_trend_without_ai(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "symbol": "NVDA",
+                "direction": "sideways",
+                "strength": "weak",
+                "classification": "weak_bullish",
+                "data_status": "ok",
+            },
+            provider="webull",
+            source_timestamp="2026-09-23T16:00:00-04:00",
+            freshness_seconds=60.0,
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("NVDA")],
+        [],
+        None,
+        [],
+        "How's NVDA looking?",
+        None,
+        False,
+        ["NVDA"],
+        {},
+    )
+
+    assert grounded is True
+    assert "NVDA trend" in text
+    assert "weak bullish classification" in text
+    assert requests[0].tool_name == "get_trend"
+    assert requests[0].timeframe == "1d"
+    complete.assert_not_called()
+
+
+def test_streaming_symbol_overview_uses_the_same_typed_route(monkeypatch) -> None:
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"symbol": "NVDA", "direction": "sideways", "strength": "weak", "classification": "weak_bullish"},
+            provider="webull",
+            source_timestamp="2026-09-23T16:00:00-04:00",
+            freshness_seconds=60.0,
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    turn = SimpleNamespace(
+        symbol_blocks=[_symbol_block("NVDA")],
+        unavailable=[],
+        base=["NVDA"],
+        user_content="How's NVDA looking?",
+        planner_state={},
+        market_baseline=None,
+        transcript=[],
+        alert_context=None,
+        preferences=None,
+        chart_state=None,
+    )
+    events = list(_generate_reply_streaming(None, turn, []))
+
+    result = next(payload for kind, payload in events if kind == "result")
+    assert result[1] is True
+    assert "NVDA trend" in result[0]
+    assert requests[0].tool_name == "get_trend"
+
+
+def test_prompt_context_is_available_to_the_answer_verifier() -> None:
+    trace = []
+    turn = SimpleNamespace(
+        symbol_blocks=[
+            {
+                "symbol": "AAPL",
+                "context": {
+                    "price": 101.0,
+                    "direction": "bullish",
+                    "source_timestamp": "2026-09-23T16:00:00-04:00",
+                },
+            }
+        ],
+        market_baseline={"regime_live": {"regime": "risk_on", "source_timestamp": "2026-09-23T16:00:00-04:00"}},
+    )
+    _append_context_evidence(trace, turn)
+    assign_evidence_ids(trace)
+
+    result = verify_answer("AAPL is bullish at $101.", trace, allowed_symbols=["AAPL"])
+
+    assert result.status == "verified"
+    assert result.evidence_refs == ["ev-1", "ev-2"]
 
 
 def test_options_question_requires_symbol_scope(monkeypatch) -> None:
@@ -166,6 +320,95 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
     complete.assert_not_called()
 
 
+def test_watchlist_semantics_route_without_model_guessing(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "watchlist_name": "Core",
+                "concern": "weak",
+                "data_status": "ready",
+                "watchlist_size": 3,
+                "analyzed_symbols": 3,
+                "top_bearish": [{"symbol": "AAPL", "change_pct": -3.2, "score": -18}],
+                "deteriorating": [],
+                "relative_strength": [],
+            },
+            provider="MarketLens scanner cache",
+            source_timestamp="2026-09-23T14:00:00-04:00",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "Which of my names look weak?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "AAPL" in text
+    assert requests[0].tool_name == "get_watchlist_intelligence"
+    assert requests[0].arguments["concern"] == "weak"
+    complete.assert_not_called()
+
+
+def test_named_watchlist_semantics_preserves_scope(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={
+                "watchlist_name": "Default",
+                "concern": "weak",
+                "data_status": "ready",
+                "watchlist_size": 1,
+                "analyzed_symbols": 1,
+                "top_bearish": [{"symbol": "AAPL", "change_pct": -3.2, "score": -18}],
+                "deteriorating": [],
+            },
+            provider="MarketLens scanner cache",
+            source_timestamp="2026-09-23T14:00:00-04:00",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "Which of my names look weak in Default watchlist?",
+        None,
+        False,
+        [],
+        {},
+    )
+
+    assert grounded is True
+    assert "Default" in text
+    assert requests[0].tool_name == "get_watchlist_intelligence"
+    assert requests[0].arguments == {"concern": "weak", "name": "Default"}
+    complete.assert_not_called()
+
+
 def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
     complete = Mock()
     monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
@@ -176,27 +419,42 @@ def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
         return ToolResult(
             tool_name=request.tool_name,
             ok=True,
-            data={"rankings": [{"symbol": "NVDA", "rank": 1}], "unknowns": []},
+            data={
+                "rankings": [
+                    {"symbol": "AAPL", "rank": 1, "value": 12.5, "metric": "volatility_percent"},
+                    {"symbol": "MSFT", "rank": 2, "value": 4.2, "metric": "volatility_percent"},
+                ],
+                "unknowns": [],
+            },
             provider="MarketLens comparison",
         )
 
     monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    trace = []
     text, grounded, _ = _generate_reply(
         None,
         [_symbol_block("AAPL"), _symbol_block("MSFT")],
         [],
         None,
         [],
-        "compare AAPL with MSFT by volatility",
+        "compare AAPL and MSFT by volatility",
         None,
         False,
         ["AAPL", "MSFT"],
         {},
+        trace,
     )
 
     assert grounded is True
     assert "compare_symbols" in text
     assert requests[0].arguments["metric"] == "volatility_percent"
+    verification = verify_answer(
+        text,
+        trace,
+        allowed_symbols=["AAPL", "MSFT"],
+        user_content="compare AAPL and MSFT by volatility",
+    )
+    assert verification.status == "verified"
     complete.assert_not_called()
 
 

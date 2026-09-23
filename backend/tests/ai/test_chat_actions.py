@@ -1752,7 +1752,7 @@ class TestEndToEnd(unittest.TestCase):
         ):
             msg, grounded, focus, partial, unavailable = answer_chat_message(
                 self.session_id,
-                "which of my names look weak",
+                "screen my watchlist for oversold names",
             )
 
         self.assertTrue(grounded)

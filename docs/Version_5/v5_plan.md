@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-22
 **Last updated:** 2026-09-23
-**Status:** Active. Phases 5.1–5.7 are complete; Phase 5.8 is in progress.
+**Status:** Active. Phases 5.1–5.8 are complete; Version 5 release handoff to the protected stable branch remains outside this plan.
 **Scope:** Turn AI Hub Chat into a grounded, calculation-capable MarketLens copilot that can answer broad market, symbol, watchlist, portfolio, risk, options, journal, and application-workflow questions through bounded backend tools and typed responses.
 **Repository workflow:** Build and commit Version 5 changes on `development`; merge reviewed work into protected `main` for stable releases.
 
@@ -419,6 +419,10 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.8 — Reliability, evaluation, and release hardening
 
+**Status:** COMPLETE. Automated, synthetic-private, live smoke, and final
+release-gate evidence is recorded in `phase_audit_v5.md` and
+`phase_5_8_evaluation.md`.
+
 **Why now:** “Answers almost everything” is only useful when correctness and failure behavior are measurable.
 
 ### Items
@@ -448,11 +452,25 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - Track cache hit rate, tool-call count, model calls, prompt size, and provider request count per turn.
 
 #### 5.8.7 Release gate
-- No order execution path.
-- All destructive actions confirmation-tested.
-- Calculator golden tests pass.
-- Full backend/frontend suites pass.
-- Manual smoke test covers the major question categories and failure modes.
+- ✅ No order execution path.
+- ✅ All destructive actions confirmation-tested.
+- ✅ Calculator golden tests pass.
+- ✅ Full backend/frontend suites pass.
+- ✅ Manual smoke test covers the major question categories and failure modes.
+
+#### Semantic routing hardening follow-up
+- ✅ High-confidence natural-language variants now map to canonical typed
+  intents before model synthesis, including watchlist intelligence and common
+  symbol research questions.
+- ✅ Watchlist intelligence is available as a read-only Chat tool with safe
+  scope resolution, evidence-only response formatting, aggregation of enabled
+  names across active watchlists for unnamed “my names” requests, and exact
+  scoping when a watchlist is named.
+- ✅ Blocking and streaming Chat use the same semantic route and provider-free
+  regression coverage.
+- Open-ended language remains eligible for the bounded model planner; future
+  intent additions must add a canonical route, a verified tool contract, and
+  paraphrase/evidence tests rather than relying on prompt wording alone.
 
 ---
 

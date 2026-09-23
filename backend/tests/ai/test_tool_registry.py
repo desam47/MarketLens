@@ -49,6 +49,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_trade_journal",
         "get_trend",
         "get_watchlist",
+        "get_watchlist_intelligence",
         "historical_similarity",
         "import_csv",
         "market_event_timeline",
@@ -71,7 +72,36 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert result.data["values"]["dollar_change"] == 3
     assert result.duration_ms >= 0
     assert result.provider == "MarketLens calculator"
-    assert result.source_timestamp
+    # Calculator output is not provider market data; execution time must not
+    # be mislabeled as a source timestamp or freshness signal.
+    assert result.source_timestamp is None
+    assert result.freshness_seconds is None
+
+
+def test_registry_does_not_promote_execution_time_to_source_timestamp() -> None:
+    class EmptyRequest(BaseModel):
+        pass
+
+    class NoTimestampPayload(BaseModel):
+        provider: str = "fixture"
+        value: float = 1
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="no_timestamp",
+            kind="read_only",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: NoTimestampPayload(),
+        )
+    )
+
+    result = registry.execute(ToolRequest(tool_name="no_timestamp"))
+
+    assert result.ok is True
+    assert result.source_timestamp is None
+    assert result.freshness_seconds is None
 
 
 def test_default_registry_executes_build_trade_plan() -> None:

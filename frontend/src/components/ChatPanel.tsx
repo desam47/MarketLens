@@ -332,6 +332,7 @@ export function ChatPanel({
     };
 
     let sawDelta = false;
+    let streamedContent = '';
     try {
       const finalMsg = await api.streamChatMessage(sessionId, content, {
         onMeta: m => {
@@ -340,6 +341,7 @@ export function ChatPanel({
         },
         onDelta: t => {
           sawDelta = true;
+          streamedContent += t;
           setMessages(prev =>
             prev.map(m => (m.id === placeholderId ? { ...m, content: m.content + t } : m)),
           );
@@ -371,6 +373,14 @@ export function ChatPanel({
         }
       } else {
         setError(e?.message || 'Failed to send message');
+        if (sawDelta && streamedContent) {
+          patchPlaceholder({
+            content: `${streamedContent}\n\nStream interrupted before verification completed. Retry to get a verified answer.`,
+            grounded: false,
+            streaming: false,
+          });
+          return;
+        }
       }
       setMessages(prev => prev.filter(m => m.id !== optimisticUser.id && m.id !== placeholderId));
       setInput(content);
@@ -675,7 +685,7 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
             <section className={`chat-typed-card chat-verification-card ${status}`} key={block.id} role="status" aria-label="Answer verification">
               <div className="chat-typed-card-heading">Answer verification <span className={`chat-quality ${quality.state}`}>{statusLabel}</span></div>
               <p>{refs.length > 0 ? `Checked against ${refs.length} evidence source${refs.length === 1 ? '' : 's'}.` : 'No source evidence was available for this answer.'}</p>
-              {issues.length > 0 && <ul>{issues.map((issue: string) => <li key={issue}>{issue.replace(/_/g, ' ')}</li>)}</ul>}
+              {issues.length > 0 && <ul>{issues.map((issue: string) => <li key={issue}>{formatVerificationIssue(issue)}</li>)}</ul>}
               <small>Verifier {String(block.data.version ?? 'unknown')}</small>
             </section>
           );
@@ -911,10 +921,26 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
             <span>Suggested:</span>{items.map((item: string) => <span className="chat-followup-chip" key={item}>{item}</span>)}
           </div>;
         }
-        return null;
+        return <div className="chat-typed-warning" key={block.id} role="status">
+          Some structured answer details are unavailable in this client version.
+        </div>;
       })}
     </div>
   );
+}
+
+function formatVerificationIssue(issue: string): string {
+  const labels: Record<string, string> = {
+    unknown_ticker: 'Unsupported ticker or market term',
+    unsupported_numeric_claim: 'A number could not be matched to source data',
+    unit_mismatch: 'The answer used a different unit than the source data',
+    live_claim_without_freshness: 'Current-data freshness could not be verified',
+    stale_live_claim: 'The available current-data source is stale',
+    timeframe_mismatch: 'The answer used a different timeframe than the source',
+    session_mismatch: 'The answer used a different market session than the source',
+    contradictory_evidence: 'The answer conflicts with the source direction',
+  };
+  return labels[issue] ?? issue.replace(/_/g, ' ');
 }
 
 function AlertContextAttachment({ context }: { context: AlertConversationContext }) {

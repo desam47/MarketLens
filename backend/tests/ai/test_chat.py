@@ -141,7 +141,7 @@ class TestUniversalTurn(_Base):
         )
 
         msg, grounded, focus, partial, unavailable = answer_chat_message(
-            self.session.id, "how's the market"
+            self.session.id, "what should I know?"
         )
 
         mock_ctx.assert_not_called()
@@ -186,7 +186,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.chat_model = "openai_compatible:auto/best-free"
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "ok", "grounded": true}'))
 
-        answer_chat_message(self.session.id, "how's the market")
+        answer_chat_message(self.session.id, "what should I know?")
 
         self.assertEqual(
             mock_ai.complete.call_args.kwargs["model"],
@@ -204,7 +204,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.chat_model = ""
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "ok", "grounded": true}'))
 
-        answer_chat_message(self.session.id, "how's the market")
+        answer_chat_message(self.session.id, "what should I know?")
 
         self.assertIsNone(mock_ai.complete.call_args.kwargs["model"])
 
@@ -217,7 +217,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
 
-        answer_chat_message(self.session.id, "compare AAPL and MSFT")
+        answer_chat_message(self.session.id, "tell me about AAPL and MSFT")
 
         self.assertEqual(mock_ctx.call_count, 2)
         # multi-ticker turn: aux data off
@@ -249,6 +249,27 @@ class TestUniversalTurn(_Base):
             "<unavailable_symbols>RIVN</unavailable_symbols>",
             mock_ai.complete.call_args.kwargs["prompt"],
         )
+
+    @patch("backend.ai.chat.ai_manager")
+    @patch("backend.ai.chat.build_context")
+    def test_unavailable_comparison_returns_clear_data_message(self, mock_ctx, mock_ai):
+        self.mock_resolve.return_value = (["AAPL", "MSFT"], False)
+        mock_ctx.side_effect = [
+            InsufficientDataError("no data for AAPL"),
+            InsufficientDataError("no data for MSFT"),
+        ]
+        mock_ai.is_available = AsyncMock(return_value=True)
+
+        msg, grounded, focus, partial, unavailable = answer_chat_message(
+            self.session.id, "Compare AAPL and MSFT"
+        )
+
+        self.assertEqual(msg.content, "I don't have enough verified data for AAPL, MSFT to compare them.")
+        self.assertFalse(grounded)
+        self.assertEqual(focus, [])
+        self.assertEqual(partial, [])
+        self.assertEqual(unavailable, ["AAPL", "MSFT"])
+        mock_ai.complete.assert_not_called()
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
@@ -298,7 +319,7 @@ class TestUniversalTurn(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.complete = AsyncMock(return_value=_reply())
 
-        answer_chat_message(self.session.id, "compare five things")
+        answer_chat_message(self.session.id, "tell me about five things")
 
         self.assertIn(
             "more tickers than I can dig into", mock_ai.complete.call_args.kwargs["prompt"]
@@ -312,7 +333,7 @@ class TestDegradeContract(_Base):
         mock_ai.enabled = False
         mock_ai.is_available = AsyncMock(return_value=False)
         msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
-        self.assertFalse(grounded)
+        self.assertTrue(grounded)
         self.assertIn("unavailable", msg.content.lower())
 
     @patch("backend.ai.chat.ai_manager")
@@ -653,7 +674,7 @@ class TestStreamChatMessage(_Base):
             ]
         )
 
-        events = self._drain(self.session.id, "how's the market")
+        events = self._drain(self.session.id, "what should I know?")
         kinds = [e[0] for e in events]
         self.assertEqual(kinds[0], "meta")
         self.assertIn("delta", kinds)
@@ -683,7 +704,7 @@ class TestStreamChatMessage(_Base):
         mock_ai.settings.chat_streaming = False
         mock_ai.complete = AsyncMock(return_value=_reply('{"reply": "one shot", "grounded": true}'))
 
-        events = self._drain(self.session.id, "how's the market")
+        events = self._drain(self.session.id, "what should I know?")
         mock_ai.stream.assert_not_called()
         self.assertEqual([p for k, p in events if k == "delta"], ["one shot"])
         self.assertEqual(events[-1][1][0].content, "one shot")
@@ -701,7 +722,7 @@ class TestStreamChatMessage(_Base):
             ]
         )
 
-        events = self._drain(self.session.id, "how's the market")
+        events = self._drain(self.session.id, "what should I know?")
         self.assertEqual(mock_ai.complete.call_count, 2)
         msg, grounded, *_ = events[-1][1]
         self.assertTrue(grounded)
@@ -718,7 +739,7 @@ class TestStreamChatMessage(_Base):
             _astream(['```json\n{"reply": "recovered", "grounded": true}\n```']),
         ]
 
-        events = self._drain(self.session.id, "how's the market")
+        events = self._drain(self.session.id, "what should I know?")
         self.assertEqual(mock_ai.stream.call_count, 2)
         msg, grounded, *_ = events[-1][1]
         self.assertTrue(grounded)
@@ -732,10 +753,10 @@ class TestStreamChatMessage(_Base):
         mock_ai.settings.max_tokens = 20000
         mock_ai.settings.chat_streaming = True
 
-        events = self._drain(self.session.id, "how's the market")
+        events = self._drain(self.session.id, "what should I know?")
         self.assertEqual(events[-1][0], "final")
         msg, grounded, *_ = events[-1][1]
-        self.assertFalse(grounded)
+        self.assertTrue(grounded)
         self.assertIn("unavailable", msg.content.lower())
 
     @patch("backend.ai.chat.analyze_symbol")

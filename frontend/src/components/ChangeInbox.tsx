@@ -75,7 +75,7 @@ export function ChangeInbox() {
           {data.items.length === 0 ? (
             <p className="empty-state">Nothing new since your last visit.</p>
           ) : (
-            <div className="change-inbox-list">
+            <div className="change-inbox-list" role="region" aria-label="What changed items" tabIndex={0}>
               {data.items.map(item => (
                 <article className={`change-inbox-item change-${item.severity}`} key={item.id}>
                   <div className="change-inbox-item-main">

@@ -46,3 +46,23 @@ test('refresh requests only new activity from the current checkpoint', async () 
   await waitFor(() => expect(mockApi.getChangeInbox).toHaveBeenCalledTimes(2));
   expect(mockApi.getChangeInbox).toHaveBeenLastCalledWith(response.as_of);
 });
+
+test('keeps long change lists in a keyboard-accessible scroll region', async () => {
+  const longResponse = {
+    ...response,
+    items: Array.from({ length: 40 }, (_, index) => ({
+      ...response.items[0],
+      id: `alert:alert-trigger:${index}`,
+      title: `Alert fired: Breakout ${index + 1}`,
+    })),
+    counts: { alert: 40 },
+  };
+  mockApi.getChangeInbox.mockResolvedValueOnce(longResponse);
+
+  render(<ChangeInbox />);
+
+  const list = await screen.findByRole('region', { name: 'What changed items' });
+  expect(list).toHaveClass('change-inbox-list');
+  expect(list).toHaveAttribute('tabindex', '0');
+  expect(screen.getByText('Alert fired: Breakout 40')).toBeInTheDocument();
+});

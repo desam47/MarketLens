@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.7 are complete. Phase 5.8.1–5.8.6 are implemented and covered by automated verification; 5.8.7 release-gate work remains.
+**Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -84,7 +84,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
 | 5.7 | Structured Chat UI and personalization | ✅ COMPLETE | Typed blocks, visual/action cards, preferences, answer-contract metadata, feedback classification, chart state, context-preserving navigation (including Options/System Health), typed regeneration with timeframe/session scope, server-backed notebooks with local fallback, approved regression-fixture promotion, age and material-change freshness, and accessibility/responsive verification are complete. |
-| 5.8 | Reliability, evaluation, and release hardening | 🟡 IN PROGRESS | Verification, scored evaluation, sanitized observability, bounded fallback matrix, and performance targets are implemented; security/privacy sign-off, manual smoke tests, and final release gate remain. |
+| 5.8 | Reliability, evaluation, and release hardening | ✅ COMPLETE | Verification, scored evaluation, sanitized observability, bounded fallback matrix, performance decision, security/privacy review, sanctioned private-flow smoke, manual smoke evidence, and final release gate are complete. |
 
 ---
 
@@ -1149,6 +1149,61 @@ Security/privacy review and manual smoke evidence (2026-09-23):
   benchmark must warm the process before judging this target. No target
   relaxation or correctness change was made.
 
-Remaining 5.8 work: close the final release gate. The current automated,
-synthetic-private, and live evidence is recorded above; rerun it if
-release-gate changes touch these paths.
+Phase 5.8 completion and final release gate (2026-09-23):
+
+- No order-execution tool or route is present; destructive tools remain
+  backend-confirmation-gated.
+- Backend validation: `3,080 passed, 4 skipped, 30 subtests passed`.
+  The four skips are environment-dependent Redis/loopback checks.
+- Frontend validation: `42` suites and `198` tests passed; `npm run build`
+  compiled successfully.
+- Provider-free Phase 5.8 evaluation: `19/19` cases passed in every scored
+  category. The sanctioned synthetic private-flow smoke and the recorded
+  public/failure-mode live smoke also passed.
+- The hot calculation target decision and its cold/warm startup exception are
+  documented above. No target relaxation or correctness change was made.
+
+Phase 5.8 is complete. Any remaining action is the normal reviewed handoff
+from `development` to the protected stable branch, not unfinished Phase 5.8
+implementation work.
+
+### Post-gate semantic routing hardening (2026-09-23)
+
+The AI Hub now has a high-confidence `SemanticRoute` layer before model
+synthesis for common natural-language variants. It exposes the scanner-backed
+Watchlist Intelligence aggregation as the typed
+`get_watchlist_intelligence` Chat tool, aggregates enabled names across all
+active watchlists when scope is omitted, preserves exact scope for explicitly
+named lists, warms missing symbols on demand, and formats evidence-backed
+results for both blocking and streaming Chat. Common symbol research variants also reuse the canonical
+typed-tool path. Exact/paraphrase, tool-contract, ambiguity, and formatting
+coverage was added; the full backend suite now passes with `3,080` tests,
+`4` environment skips, and `30` subtests.
+
+### Chat gap closure (2026-09-23)
+
+The follow-up reliability pass closed the remaining Chat gaps identified after
+the release gate:
+
+- blocking and streaming Chat now share one deterministic intent planner,
+  including calculation, scanner, scenario, anomaly, signal, assumption,
+  historical, and research-tool routes;
+- prompt-provided symbol and market context is represented as bounded,
+  server-owned verifier evidence, with qualitative labels and symbol-scoped
+  numeric matching;
+- Chat propagates timeframe/session metadata to tool traces, and the registry
+  no longer treats tool execution time as provider data freshness;
+- common overview, market, indicator, and portfolio phrasing routes to typed
+  tools, while finance acronyms no longer trigger unsupported-ticker failures;
+- interrupted streams preserve partial text with an explicit retry message,
+  and the frontend renders user-readable verification issues and unknown typed
+  blocks safely.
+
+Focused Chat/verifier coverage and the full backend suite pass; frontend Chat
+tests and the production build also pass. The four backend skips remain
+environment-dependent Redis/loopback checks.
+
+This is hardening of the completed release gate, not a claim that every
+possible natural-language expression is deterministic. Unsupported or
+open-ended questions still use the bounded model planner, and any new intent
+must add a canonical route, a verified tool contract, and evidence tests.

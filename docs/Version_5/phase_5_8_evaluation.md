@@ -29,6 +29,24 @@ comparisons, scanner results, portfolio risk, follow-up clarification,
 adversarial instructions, provider failure, and destructive-action
 confirmation without execution.
 
+## Semantic routing hardening follow-up
+
+The post-gate semantic-routing slice adds a canonical `SemanticRoute` layer,
+the read-only `get_watchlist_intelligence` Chat tool, server-owned watchlist
+scope resolution, evidence-only watchlist formatting, on-demand warming of
+missing scanner symbols, and the same route in blocking and streaming Chat.
+Provider-free coverage includes exact and
+paraphrased watchlist questions, common symbol research questions, aggregated
+multi-watchlist scope, and the tool-registry contract. The existing 19-case
+scored harness remains unchanged; open-ended requests continue through the
+bounded model planner and must not be treated as deterministic unless a
+a canonical route and evidence contract exist. The follow-up reliability pass
+now uses one deterministic planner for blocking and streaming Chat, records
+bounded prompt context as verifier evidence, preserves tool timeframe/session
+metadata, rejects synthetic freshness timestamps, scopes numeric claims to
+their named symbol where possible, and covers common market, indicator, and
+portfolio phrasing.
+
 ## Private-flow smoke and latency decision
 
 The sanctioned private-flow fixture in
@@ -42,6 +60,14 @@ measurements were `5,539.949 ms` cold-process, `1,035.558 ms` first-warm, and
 `4.291 ms` repeated-hot; the hot measurement passed. Release performance
 checks must warm the process and SQLite/cache layer before evaluating this
 target; the cold and first-warm values are accepted startup outliers.
+
+## Final release gate
+
+The Phase 5.8 release gate passed on 2026-09-23: no order-execution route is
+registered, destructive actions remain confirmation-gated, the full backend
+and frontend validation suites are green, the production frontend build
+compiles, and all 19 provider-free evaluation cases pass in every category.
+The four backend skips are environment-dependent Redis/loopback checks.
 
 ## Failure matrix
 

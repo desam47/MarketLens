@@ -75,6 +75,26 @@ def test_anomaly_analysis_ranks_by_absolute_z_score() -> None:
     assert visual_data["items"][-1]["score"] is None
 
 
+def test_watchlist_intelligence_builds_ranked_results_block() -> None:
+    visual_type, visual_data = _visual_trace_payload(
+        "get_watchlist_intelligence",
+        {
+            "concern": "weak",
+            "watchlist_name": "Core",
+            "data_status": "ready",
+            "watchlist_size": 2,
+            "analyzed_symbols": 2,
+            "top_bearish": [{"symbol": "AAPL", "score": -18, "change_pct": -3.2}],
+            "deteriorating": [{"symbol": "MSFT", "score": -11}],
+        },
+    )
+
+    assert visual_type == "ranked_results"
+    assert visual_data["title"] == "Weak watchlist names"
+    assert [item["name"] for item in visual_data["items"]] == ["AAPL", "MSFT"]
+    assert visual_data["coverage"]["analyzed_symbols"] == 2
+
+
 def test_anomaly_analysis_no_anomalies_still_returns_empty_ranked_block() -> None:
     visual_type, visual_data = _visual_trace_payload(
         "anomaly_analysis", {"symbol": "TSLA", "anomalies": []}

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import math
 import re
+import threading
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import median, stdev
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_WATCHLIST_INTELLIGENCE_SCAN_LOCK = threading.Lock()
 
 
 class SymbolRequest(BaseModel):
@@ -48,6 +51,12 @@ class ComparisonRequest(BaseModel):
     session: Literal["premarket", "regular", "after_hours", "all"] = "all"
     direction: Literal["desc", "asc"] = "desc"
     limit: int = Field(default=25, ge=1, le=25)
+
+
+class MarketContextRequest(BaseModel):
+    """Empty request for the composite market-context engine."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class IndicatorRequest(BarsRequest):
@@ -184,6 +193,16 @@ class WatchlistRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     watchlist_id: int | None = Field(default=None, ge=1)
     include_disabled: bool = False
+
+
+class WatchlistIntelligenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    watchlist_id: int | None = Field(default=None, ge=1)
+    concern: Literal["weak", "strong", "deteriorating", "underperforming", "all"] = "all"
+    session_scope: Literal["all", "none"] = "all"
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class PositionInput(BaseModel):
@@ -2070,6 +2089,97 @@ def get_watchlist_tool(request: WatchlistRequest) -> BaseModel:
             ],
             provider="MarketLens database",
             source_timestamp=_database_timestamp(),
+        )
+    finally:
+        db.close()
+
+
+def get_watchlist_intelligence_tool(request: WatchlistIntelligenceRequest) -> BaseModel:
+    """Return deterministic intelligence for the requested watchlist scope.
+
+    This reuses cached scanner results and warms only missing symbols on
+    demand. An omitted watchlist means the trader's enabled names across all
+    active watchlists; an explicitly named watchlist remains exact.
+    """
+    from backend.database import SessionLocal
+    from backend.repositories.watchlist_repository import WatchlistRepository
+    from backend.scanner.scanner import market_scanner
+    from backend.scanner.watchlist_intelligence import build_watchlist_intelligence
+
+    db = SessionLocal()
+    try:
+        repository = WatchlistRepository(db)
+        if request.watchlist_id is not None:
+            selected_watchlists = [repository.get_watchlist(request.watchlist_id)]
+        elif request.name:
+            selected_watchlists = [repository.get_watchlist_by_name(request.name.strip())]
+        else:
+            selected_watchlists = repository.get_watchlists(active_only=True)
+            if not selected_watchlists:
+                raise ValueError("You don't have an active watchlist yet")
+
+        if any(watchlist is None or not watchlist.is_active for watchlist in selected_watchlists):
+            raise ValueError("Watchlist was not found or is inactive")
+
+        symbols = []
+        seen_symbols = set()
+        for watchlist in selected_watchlists:
+            rows = repository.get_watchlist_symbols(watchlist.id, enabled_only=True)
+            for row in rows:
+                symbol = str(row.symbol).upper()
+                if symbol not in seen_symbols:
+                    seen_symbols.add(symbol)
+                    symbols.append(symbol)
+        missing_symbols = [symbol for symbol in symbols if symbol not in market_scanner.scan_results]
+        scan_error = None
+        refreshed = False
+        if missing_symbols:
+            # Chat tools run synchronously. Bridge the one bounded scanner
+            # refresh onto the shared async loop, and re-check under a lock so
+            # concurrent Chat requests do not launch duplicate scans.
+            from backend.ai.sync_bridge import run_sync
+
+            with _WATCHLIST_INTELLIGENCE_SCAN_LOCK:
+                missing_symbols = [
+                    symbol for symbol in symbols if symbol not in market_scanner.scan_results
+                ]
+                if missing_symbols:
+                    try:
+                        run_sync(market_scanner.scan_symbols_async(missing_symbols))
+                        refreshed = True
+                    except Exception:  # noqa: BLE001
+                        scan_error = "The scanner could not refresh all missing names right now."
+
+        results = [
+            market_scanner.scan_results[symbol]
+            for symbol in symbols
+            if symbol in market_scanner.scan_results
+        ]
+        is_aggregate = request.watchlist_id is None and not request.name and len(selected_watchlists) > 1
+        watchlist_id = None if is_aggregate else selected_watchlists[0].id
+        watchlist_name = (
+            "All active watchlists" if is_aggregate else selected_watchlists[0].name
+        )
+        generated_at = datetime.now(UTC).isoformat()
+        payload = build_watchlist_intelligence(
+            results,
+            watchlist_size=len(symbols),
+            session_scope=request.session_scope,
+            top_n=request.limit,
+        )
+        warnings = list(payload.get("warnings") or [])
+        if scan_error:
+            warnings.append(scan_error)
+        payload["warnings"] = warnings
+        return _Payload(
+            watchlist_id=watchlist_id,
+            watchlist_name=watchlist_name,
+            concern=request.concern,
+            generated_at=generated_at,
+            provider="MarketLens scanner cache",
+            source_timestamp=generated_at,
+            provider_request_count=1 if refreshed else 0,
+            **payload,
         )
     finally:
         db.close()

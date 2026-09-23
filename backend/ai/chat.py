@@ -64,10 +64,12 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from backend.ai.analyze import analyze_symbol
+from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
 from backend.ai.calculator import CalculationRequest
+from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
 from backend.ai.chat_symbols import resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
@@ -80,17 +82,21 @@ from backend.ai.prompt import (
     build_chat_prompt,
     parse_chat_reply,
 )
+from backend.ai.provider import StreamAttribution
 from backend.ai.reply_stream import ReplyExtractor
 from backend.ai.response_blocks import build_response_blocks, evidence_fingerprint
-from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
-from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
+from backend.ai.semantic_router import route_semantic_intent
 
 # Chat runs its sync generator helpers on loop-less worker threads
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
 # bridged with run_sync/stream_sync rather than awaited.
 from backend.ai.sync_bridge import run_sync, stream_sync
-from backend.ai.tool_registry import ToolRequest, default_registry
-from backend.ai.provider import StreamAttribution
+from backend.ai.tool_registry import (
+    ToolRequest,
+    default_registry,
+    normalize_session,
+    normalize_timeframe,
+)
 from backend.config.settings import settings
 from backend.models import Alert, AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
@@ -108,7 +114,11 @@ _TRANSCRIPT_MSG_CHARS = 600  # per-message clip inside the transcript
 # deterministic gate on the trader's OWN message — chaining is only
 # ever attempted when this matches, so an ordinary single-action turn
 # never pays for the extra completion call.
-_MULTI_STEP_HINT = re.compile(r"\band\b|\bthen\b|\balso\b|;", re.I)
+_MULTI_STEP_HINT = re.compile(
+    r"(?:\bthen\b|\balso\b|;|\band\s+(?:add|remove|create|delete|modify|"
+    r"show|get|compare|check|run|calculate|explain|review|save|export|screen)\b)",
+    re.I,
+)
 _AMBIGUOUS_REFERENCE = re.compile(
     r"\b(it|that stock|that ticker|the previous ticker|this one|that one)\b", re.I
 )
@@ -178,6 +188,92 @@ def _action_trace_arguments(parsed) -> dict:
     return sanitize_arguments(arguments)
 
 
+def _context_freshness_seconds(timestamp: object) -> float | None:
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return round(max(0.0, (datetime.now(UTC) - parsed).total_seconds()), 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _context_source_timestamp(payload: dict) -> str | None:
+    for key in ("source_timestamp", "timestamp", "as_of", "generated_at"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _context_labels(payload: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for key in ("direction", "trend", "classification", "regime", "market_regime", "volatility_state"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            labels[key] = value
+    return labels
+
+
+def _append_context_evidence(trace: list[dict], turn: _Turn) -> None:
+    """Expose bounded server-owned context to the verifier as evidence.
+
+    Prompt context is not automatically evidence: the verifier only trusts
+    trace entries. These entries contain bounded numeric/qualitative fields,
+    never the full private market baseline or raw prompt payload.
+    """
+    for block in turn.symbol_blocks:
+        context = block.get("context") if isinstance(block, dict) else None
+        if not isinstance(context, dict):
+            continue
+        item = {
+            "tool": "chat_symbol_context",
+            "ok": True,
+            "provider": "MarketLens context",
+            "symbol": str(block.get("symbol") or "").upper(),
+            "arguments": {"symbol": str(block.get("symbol") or "").upper()},
+        }
+        values = _bounded_numeric_evidence(context)
+        if values:
+            item["evidence_values"] = values
+        labels = _context_labels(context)
+        if labels:
+            item["evidence_labels"] = labels
+        source_timestamp = _context_source_timestamp(context)
+        if source_timestamp:
+            item["source_timestamp"] = source_timestamp
+            item["freshness_seconds"] = _context_freshness_seconds(source_timestamp)
+        trace.append(item)
+
+    baseline = turn.market_baseline
+    if not isinstance(baseline, dict):
+        return
+    regime = baseline.get("regime_live")
+    regime_payload = regime if isinstance(regime, dict) else {}
+    baseline_values = _bounded_numeric_evidence(regime_payload)
+    baseline_labels = _context_labels({**baseline, **regime_payload})
+    source_timestamp = (
+        _context_source_timestamp(regime_payload)
+        or _context_source_timestamp(baseline)
+    )
+    item = {
+        "tool": "chat_market_baseline",
+        "ok": True,
+        "provider": "MarketLens baseline",
+        "arguments": {},
+    }
+    if baseline_values:
+        item["evidence_values"] = baseline_values
+    if baseline_labels:
+        item["evidence_labels"] = baseline_labels
+    if source_timestamp:
+        item["source_timestamp"] = source_timestamp
+        item["freshness_seconds"] = _context_freshness_seconds(source_timestamp)
+    trace.append(item)
+
+
 def _cacheable_chat_action(action: str) -> bool:
     """Return whether an action is safe to reuse within one turn."""
     return action in {
@@ -192,6 +288,7 @@ def _cacheable_chat_action(action: str) -> bool:
         "get_fundamentals",
         "get_options_snapshot",
         "get_watchlist",
+        "get_watchlist_intelligence",
         "get_risk_dashboard",
         "get_trade_journal",
         "get_application_help",
@@ -930,6 +1027,7 @@ def answer_chat_message(
         trace: list[dict] = []
         if turn.regeneration_mode:
             trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
+        _append_context_evidence(trace, turn)
         reply_text, grounded, screened = _generate_reply(
             repo.db,
             turn.symbol_blocks,
@@ -1044,6 +1142,7 @@ def stream_chat_message(
         trace: list[dict] = []
         if turn.regeneration_mode:
             trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
+        _append_context_evidence(trace, turn)
         try:
             for kind, payload in _generate_reply_streaming(repo.db, turn, trace):
                 if kind == "delta":
@@ -1307,6 +1406,267 @@ def _complete_and_parse(
     return None, failure_reason
 
 
+def _build_deterministic_chat_reply(
+    user_content: str,
+    *,
+    focus_symbols: list[str],
+    planner_state: dict | None = None,
+) -> ChatReplyResponse | str | None:
+    """Build the shared typed plan used by blocking and streaming Chat.
+
+    A string is an authoritative clarification; ``None`` means the bounded
+    model planner is still the right fallback. Keeping this decision in one
+    function prevents the two transport paths from acquiring different
+    intent behavior.
+    """
+    if (
+        _CALCULATION_HINT.search(user_content)
+        and not _COMPARISON_INTENT.search(user_content)
+        and not _ASSUMPTION_INTENT.search(user_content)
+    ):
+        calculation = _fallback_calculation(user_content)
+        prior = (planner_state or {}).get("last_calculation_inputs")
+        if calculation is None and prior and _REUSE_MEMORY_HINT.search(user_content):
+            try:
+                calculation = CalculationRequest(**prior)
+            except (TypeError, ValueError):
+                calculation = None
+        if calculation is None:
+            return (
+                "What values should I use for that calculation? Please provide the "
+                "relevant prices, position size, portfolio value, or risk inputs."
+            )
+        return ChatReplyResponse(
+            reply="Verified calculation",
+            grounded=True,
+            action="calculate",
+            action_calculation=calculation,
+        )
+
+    semantic_route = route_semantic_intent(
+        user_content,
+        focus_symbols=focus_symbols,
+        planner_state=planner_state,
+    )
+    if semantic_route is not None:
+        return ChatReplyResponse(
+            reply=f"Verified semantic route: {semantic_route.action}",
+            grounded=True,
+            action=semantic_route.action,
+            action_query=semantic_route.action_query,
+            action_tool_arguments=semantic_route.arguments,
+        )
+
+    if _ASSUMPTION_INTENT.search(user_content):
+        operation = "save" if _ASSUMPTION_SAVE_INTENT.search(user_content) else "review"
+        symbol = focus_symbols[0] if len(focus_symbols) == 1 else None
+        arguments = {"operation": operation, "symbol": symbol}
+        if operation == "save":
+            records = _parse_assumption_records(user_content, symbol)
+            if not records:
+                return (
+                    "What assumption should I save? Include a thesis, growth rate, stop, "
+                    "catalyst date, volatility, or invalidation condition."
+                )
+            arguments["assumptions"] = records
+        return ChatReplyResponse(
+            reply="Verified research-assumption review" if operation == "review" else "Save verified research assumption",
+            grounded=True,
+            action="assumption_tracking",
+            action_tool_arguments=arguments,
+            action_confirmed=operation == "save",
+        )
+
+    if _ANOMALY_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I check for anomalies?"
+        return ChatReplyResponse(
+            reply="Verified anomaly analysis",
+            grounded=True,
+            action="anomaly_analysis",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    if _TIMELINE_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I build the event timeline for?"
+        return ChatReplyResponse(
+            reply="Verified market-event timeline",
+            grounded=True,
+            action="market_event_timeline",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    if _OPTIONS_TOOL_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I use for the options lookup?"
+        return ChatReplyResponse(
+            reply="Verified options lookup",
+            grounded=True,
+            action="get_options_snapshot",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    if _WHY_MOVE_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I analyze for the move?"
+        return ChatReplyResponse(
+            reply="Verified move-evidence lookup",
+            grounded=True,
+            action="why_did_it_move",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    if _WHAT_CHANGED_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I compare for changes?"
+        lowered = user_content.lower()
+        reference = "last_visit" if "last visit" in lowered else "yesterday" if "yesterday" in lowered else "previous_close"
+        return ChatReplyResponse(
+            reply="Verified change comparison",
+            grounded=True,
+            action="what_changed",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={"symbol": focus_symbols[0], "reference": reference},
+        )
+    if _COMPARISON_INTENT.search(user_content) and (
+        sum(bool(re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)) for symbol in focus_symbols) >= 2
+        or "watchlist" in user_content.lower()
+    ):
+        lowered = user_content.lower()
+        watchlist = (planner_state or {}).get("watchlist") if "watchlist" in lowered else None
+        comparison_symbols = [
+            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
+        ]
+        metric = "return_percent"
+        if "volatility" in lowered:
+            metric = "volatility_percent"
+        elif "volume" in lowered:
+            metric = "volume"
+        elif "price" in lowered:
+            metric = "price"
+        elif any(word in lowered for word in ("today", "daily", "change")):
+            metric = "change_percent"
+        direction = "asc" if any(word in lowered for word in ("weakest", "worst", "lowest", "smallest")) else "desc"
+        return ChatReplyResponse(
+            reply="Verified symbol comparison",
+            grounded=True,
+            action="compare_symbols",
+            action_tool_arguments={
+                "symbols": comparison_symbols,
+                "watchlist": watchlist,
+                "metric": metric,
+                "direction": direction,
+            },
+        )
+    if _COUNTERARGUMENT_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I review for counterarguments and invalidation?"
+        return ChatReplyResponse(
+            reply="Verified counterargument review",
+            grounded=True,
+            action="counterargument_review",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
+    if _SIGNAL_EXPLANATION_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I explain the signal for?"
+        return ChatReplyResponse(
+            reply="Verified signal explanation",
+            grounded=True,
+            action="signal_explanation",
+            action_tool_arguments={
+                "symbol": focus_symbols[0],
+                "include_historical": "historical" in user_content.lower(),
+            },
+        )
+    if _SENSITIVITY_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified sensitivity analysis",
+            grounded=True,
+            action="sensitivity_analysis",
+            action_tool_arguments={},
+        )
+    if _SIMILARITY_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I use for the historical similarity search?"
+        return ChatReplyResponse(
+            reply="Verified historical similarity search",
+            grounded=True,
+            action="historical_similarity",
+            action_tool_arguments={
+                "symbol": focus_symbols[0],
+                "timeframe": (planner_state or {}).get("timeframe") or "1d",
+            },
+        )
+    if _SCENARIO_INTENT.search(user_content):
+        lowered = user_content.lower()
+        numbers = _numbers_from_text(user_content)
+        mentioned = [
+            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
+        ]
+        shock = numbers[0] if numbers and "%" in user_content else None
+        if shock is not None and any(word in lowered for word in ("drop", "fall", "down", "selloff", "sell-off")):
+            shock = -abs(shock)
+        elif shock is not None and any(word in lowered for word in ("rise", "up", "gain", "increase")):
+            shock = abs(shock)
+        price_shocks = {mentioned[0]: shock} if len(mentioned) == 1 and shock is not None else {}
+        portfolio_shock = shock if ("portfolio" in lowered or "selloff" in lowered or "sell-off" in lowered) else None
+        stop_overrides = {}
+        if "stop" in lowered and numbers and len(mentioned) == 1:
+            stop_overrides[mentioned[0]] = numbers[0]
+        return ChatReplyResponse(
+            reply="Verified scenario analysis",
+            grounded=True,
+            action="scenario_analysis",
+            action_tool_arguments={
+                "price_shocks": price_shocks,
+                "portfolio_shock_percent": portfolio_shock,
+                "stop_price_overrides": stop_overrides,
+            },
+        )
+    if _HISTORICAL_TOOL_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker and timeframe should I use for the historical data?"
+        return ChatReplyResponse(
+            reply="Verified historical data lookup",
+            grounded=True,
+            action="get_bars",
+            action_symbol=focus_symbols[0],
+            action_tool_arguments={
+                "symbol": focus_symbols[0],
+                "timeframe": (planner_state or {}).get("timeframe") or "1d",
+            },
+        )
+    if _SCANNER_TOOL_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified scanner request",
+            grounded=True,
+            action="run_screen",
+            action_query=user_content[:300],
+        )
+    if _RISK_TOOL_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified risk dashboard lookup",
+            grounded=True,
+            action="get_risk_dashboard",
+            action_tool_arguments={},
+        )
+    if _JOURNAL_TOOL_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified trade journal lookup",
+            grounded=True,
+            action="get_trade_journal",
+            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
+        )
+    if _ALERTS_TOOL_INTENT.search(user_content):
+        return ChatReplyResponse(
+            reply="Verified alerts lookup",
+            grounded=True,
+            action="get_alerts",
+            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
+        )
+    return None
+
+
 def _generate_reply(
     db,
     symbol_blocks: list[dict],
@@ -1342,6 +1702,10 @@ def _generate_reply(
     ):
         return f"I don't have enough data on {unavailable[0]} yet to answer that.", False, []
 
+    if not symbol_blocks and unavailable and _COMPARISON_INTENT.search(user_content):
+        names = ", ".join(unavailable)
+        return f"I don't have enough verified data for {names} to compare them.", False, []
+
     if not symbol_blocks:
         m = _WATCHLIST_CONTENTS_INTENT.search(user_content)
         if m:
@@ -1358,263 +1722,14 @@ def _generate_reply(
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
             return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
 
-    # Exact arithmetic is deterministic and must not spend an AI/provider
-    # call. Missing inputs get a precise clarification instead of a generic
-    # model failure; a follow-up may explicitly reuse the prior inputs.
-    if (
-        _CALCULATION_HINT.search(user_content)
-        and not _COMPARISON_INTENT.search(user_content)
-        and not _ASSUMPTION_INTENT.search(user_content)
-    ):
-        calculation = _fallback_calculation(user_content)
-        prior = (planner_state or {}).get("last_calculation_inputs")
-        if calculation is None and prior and _REUSE_MEMORY_HINT.search(user_content):
-            try:
-                calculation = CalculationRequest(**prior)
-            except (TypeError, ValueError):
-                calculation = None
-        if calculation is None:
-            return (
-                "What values should I use for that calculation? Please provide the "
-                "relevant prices, position size, portfolio value, or risk inputs.",
-                False,
-                [],
-            )
-        deterministic = ChatReplyResponse(
-            reply="Verified calculation",
-            grounded=True,
-            action="calculate",
-            action_calculation=calculation,
-        )
-        return _run_turn_actions(
-            db,
-            deterministic,
-            symbol_blocks,
-            unavailable,
-            market_baseline,
-            transcript,
-            user_content,
-            alert_context,
-            trace=trace,
-            started_at=time.monotonic(),
-            planner_state=planner_state,
-            preferences=preferences,
-        )
-
-    # Route high-confidence, read-only intents to their typed tools before
-    # asking the model to choose an action. This keeps common requests
-    # deterministic and makes missing symbol scope explicit.
     focus_symbols = [b["symbol"] for b in symbol_blocks]
-    if _ASSUMPTION_INTENT.search(user_content):
-        operation = "save" if _ASSUMPTION_SAVE_INTENT.search(user_content) else "review"
-        symbol = focus_symbols[0] if len(focus_symbols) == 1 else None
-        arguments = {"operation": operation, "symbol": symbol}
-        if operation == "save":
-            records = _parse_assumption_records(user_content, symbol)
-            if not records:
-                return (
-                    "What assumption should I save? Include a thesis, growth rate, stop, catalyst date, volatility, or invalidation condition.",
-                    False,
-                    [],
-                )
-            arguments["assumptions"] = records
-        deterministic = ChatReplyResponse(
-            reply="Verified research-assumption review" if operation == "review" else "Save verified research assumption",
-            grounded=True,
-            action="assumption_tracking",
-            action_tool_arguments=arguments,
-            action_confirmed=operation == "save",
-        )
-    elif _ANOMALY_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I check for anomalies?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified anomaly analysis",
-            grounded=True,
-            action="anomaly_analysis",
-            action_tool_arguments={"symbol": focus_symbols[0]},
-        )
-    elif _TIMELINE_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I build the event timeline for?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified market-event timeline",
-            grounded=True,
-            action="market_event_timeline",
-            action_tool_arguments={"symbol": focus_symbols[0]},
-        )
-    elif _OPTIONS_TOOL_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return (
-                "Which ticker should I use for the options lookup?",
-                False,
-                [],
-            )
-        deterministic = ChatReplyResponse(
-            reply="Verified options lookup",
-            grounded=True,
-            action="get_options_snapshot",
-            action_symbol=focus_symbols[0],
-            action_tool_arguments={"symbol": focus_symbols[0]},
-        )
-    elif _WHY_MOVE_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I analyze for the move?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified move-evidence lookup",
-            grounded=True,
-            action="why_did_it_move",
-            action_symbol=focus_symbols[0],
-            action_tool_arguments={"symbol": focus_symbols[0]},
-        )
-    elif _WHAT_CHANGED_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I compare for changes?", False, []
-        lowered = user_content.lower()
-        reference = "last_visit" if "last visit" in lowered else "yesterday" if "yesterday" in lowered else "previous_close"
-        deterministic = ChatReplyResponse(
-            reply="Verified change comparison",
-            grounded=True,
-            action="what_changed",
-            action_symbol=focus_symbols[0],
-            action_tool_arguments={"symbol": focus_symbols[0], "reference": reference},
-        )
-    elif _COMPARISON_INTENT.search(user_content) and (
-        sum(bool(re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)) for symbol in focus_symbols) >= 2
-        or "watchlist" in user_content.lower()
-    ):
-        lowered = user_content.lower()
-        watchlist = (planner_state or {}).get("watchlist") if "watchlist" in lowered else None
-        comparison_symbols = [
-            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
-        ]
-        metric = "return_percent"
-        if "volatility" in lowered:
-            metric = "volatility_percent"
-        elif "volume" in lowered:
-            metric = "volume"
-        elif "price" in lowered:
-            metric = "price"
-        elif "today" in lowered or "daily" in lowered or "change" in lowered:
-            metric = "change_percent"
-        direction = "asc" if any(word in lowered for word in ("weakest", "worst", "lowest", "smallest")) else "desc"
-        deterministic = ChatReplyResponse(
-            reply="Verified symbol comparison",
-            grounded=True,
-            action="compare_symbols",
-            action_tool_arguments={
-                "symbols": comparison_symbols,
-                "watchlist": watchlist,
-                "metric": metric,
-                "direction": direction,
-            },
-        )
-    elif _COUNTERARGUMENT_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I review for counterarguments and invalidation?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified counterargument review",
-            grounded=True,
-            action="counterargument_review",
-            action_tool_arguments={"symbol": focus_symbols[0]},
-        )
-    elif _SIGNAL_EXPLANATION_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I explain the signal for?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified signal explanation",
-            grounded=True,
-            action="signal_explanation",
-            action_tool_arguments={"symbol": focus_symbols[0], "include_historical": "historical" in user_content.lower()},
-        )
-    elif _SENSITIVITY_INTENT.search(user_content):
-        deterministic = ChatReplyResponse(
-            reply="Verified sensitivity analysis",
-            grounded=True,
-            action="sensitivity_analysis",
-            action_tool_arguments={},
-        )
-    elif _SIMILARITY_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker should I use for the historical similarity search?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified historical similarity search",
-            grounded=True,
-            action="historical_similarity",
-            action_tool_arguments={
-                "symbol": focus_symbols[0],
-                "timeframe": (planner_state or {}).get("timeframe") or "1d",
-            },
-        )
-    elif _SCENARIO_INTENT.search(user_content):
-        lowered = user_content.lower()
-        numbers = _numbers_from_text(user_content)
-        mentioned = [
-            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
-        ]
-        shock = numbers[0] if numbers and "%" in user_content else None
-        if shock is not None and any(word in lowered for word in ("drop", "fall", "down", "selloff", "sell-off")):
-            shock = -abs(shock)
-        elif shock is not None and any(word in lowered for word in ("rise", "up", "gain", "increase")):
-            shock = abs(shock)
-        price_shocks = {mentioned[0]: shock} if len(mentioned) == 1 and shock is not None else {}
-        portfolio_shock = shock if ("portfolio" in lowered or "selloff" in lowered or "sell-off" in lowered) else None
-        stop_overrides = {}
-        if "stop" in lowered and numbers and len(mentioned) == 1:
-            stop_overrides[mentioned[0]] = numbers[0]
-        deterministic = ChatReplyResponse(
-            reply="Verified scenario analysis",
-            grounded=True,
-            action="scenario_analysis",
-            action_tool_arguments={
-                "price_shocks": price_shocks,
-                "portfolio_shock_percent": portfolio_shock,
-                "stop_price_overrides": stop_overrides,
-            },
-        )
-    elif _HISTORICAL_TOOL_INTENT.search(user_content):
-        if len(focus_symbols) != 1:
-            return "Which ticker and timeframe should I use for the historical data?", False, []
-        deterministic = ChatReplyResponse(
-            reply="Verified historical data lookup",
-            grounded=True,
-            action="get_bars",
-            action_symbol=focus_symbols[0],
-            action_tool_arguments={
-                "symbol": focus_symbols[0],
-                "timeframe": (planner_state or {}).get("timeframe") or "1d",
-            },
-        )
-    elif _SCANNER_TOOL_INTENT.search(user_content):
-        deterministic = ChatReplyResponse(
-            reply="Verified scanner request",
-            grounded=True,
-            action="run_screen",
-            action_query=user_content[:300],
-        )
-    elif _RISK_TOOL_INTENT.search(user_content):
-        deterministic = ChatReplyResponse(
-            reply="Verified risk dashboard lookup",
-            grounded=True,
-            action="get_risk_dashboard",
-            action_tool_arguments={},
-        )
-    elif _JOURNAL_TOOL_INTENT.search(user_content):
-        deterministic = ChatReplyResponse(
-            reply="Verified trade journal lookup",
-            grounded=True,
-            action="get_trade_journal",
-            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
-        )
-    elif _ALERTS_TOOL_INTENT.search(user_content):
-        deterministic = ChatReplyResponse(
-            reply="Verified alerts lookup",
-            grounded=True,
-            action="get_alerts",
-            action_tool_arguments={"symbol": focus_symbols[0]} if len(focus_symbols) == 1 else {},
-        )
-    else:
-        deterministic = None
+    deterministic = _build_deterministic_chat_reply(
+        user_content,
+        focus_symbols=focus_symbols,
+        planner_state=planner_state,
+    )
+    if isinstance(deterministic, str):
+        return deterministic, False, []
     if deterministic is not None:
         return _run_turn_actions(
             db,
@@ -1634,7 +1749,7 @@ def _generate_reply(
         _trace_model_route(trace, "fallback", "deterministic")
         if trace is not None:
             trace.append({"kind": "server_reply", "trusted": True})
-        return _deterministic_context_reply(symbol_blocks, unavailable)
+        return _deterministic_context_reply(symbol_blocks, unavailable, market_baseline)
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
     prompt = build_chat_prompt(
@@ -1688,7 +1803,7 @@ def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
 
 
 def _deterministic_context_reply(
-    symbol_blocks: list[dict], unavailable: list[str]
+    symbol_blocks: list[dict], unavailable: list[str], market_baseline: dict | None = None
 ) -> tuple[str, bool, list[str]]:
     """Answer from already-built context when AI is unavailable.
 
@@ -1696,7 +1811,18 @@ def _deterministic_context_reply(
     it never invents a trend, catalyst, or recommendation.
     """
     if not symbol_blocks:
-        return "AI is unavailable and no verified symbol data is loaded for this question.", False, []
+        regime = (market_baseline or {}).get("regime_live")
+        if isinstance(regime, dict) and regime:
+            details = []
+            if regime.get("regime") or regime.get("market_regime"):
+                details.append(f"regime {str(regime.get('regime') or regime.get('market_regime')).replace('_', ' ')}")
+            if isinstance(regime.get("volatility_state"), str):
+                details.append(f"volatility {regime['volatility_state']}")
+            if isinstance(regime.get("momentum"), (int, float)):
+                details.append(f"momentum {float(regime['momentum']):+.2f}")
+            if details:
+                return "AI is unavailable, so here is a verified market-context snapshot: " + "; ".join(details) + ".", True, []
+        return "AI is unavailable and no verified market or symbol data is loaded for this question.", False, []
     rows: list[str] = []
     focus: list[str] = []
     for block in symbol_blocks:
@@ -2024,7 +2150,11 @@ def _run_turn_actions(
         )
     # A single assumption-tracking payload may contain several fields joined
     # by "and"; it is already one complete action, not a multi-step request.
-    if parsed.action == "assumption_tracking" or not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
+    if (
+        parsed.action in {"assumption_tracking", "compare_symbols"}
+        or not _action_was_executed(parsed)
+        or not _MULTI_STEP_HINT.search(user_content)
+    ):
         return text, grounded, screened
 
     texts = [f"Step 1: {text}"]
@@ -2211,6 +2341,18 @@ def _generate_reply_streaming(
         )
         return
 
+    if not turn.symbol_blocks and turn.unavailable and _COMPARISON_INTENT.search(turn.user_content):
+        names = ", ".join(turn.unavailable)
+        yield (
+            "result",
+            (
+                f"I don't have enough verified data for {names} to compare them.",
+                False,
+                [],
+            ),
+        )
+        return
+
     if not turn.symbol_blocks:
         m = _WATCHLIST_CONTENTS_INTENT.search(turn.user_content)
         if m:
@@ -2233,11 +2375,38 @@ def _generate_reply_streaming(
             )
             return
 
+    deterministic = _build_deterministic_chat_reply(
+        turn.user_content,
+        focus_symbols=[b["symbol"] for b in turn.symbol_blocks],
+        planner_state=turn.planner_state,
+    )
+    if isinstance(deterministic, str):
+        yield ("result", (deterministic, False, []))
+        return
+    if deterministic is not None:
+        yield (
+            "result",
+            _run_turn_actions(
+                db,
+                deterministic,
+                turn.symbol_blocks,
+                turn.unavailable,
+                turn.market_baseline,
+                turn.transcript,
+                turn.user_content,
+                turn.alert_context,
+                trace=trace,
+                planner_state=turn.planner_state,
+                preferences=turn.preferences,
+            ),
+        )
+        return
+
     if not ai_manager.enabled:
         _trace_model_route(trace, "fallback", "deterministic")
         if trace is not None:
             trace.append({"kind": "server_reply", "trusted": True})
-        yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable))
+        yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable, turn.market_baseline))
         return
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
@@ -2990,6 +3159,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_fundamentals",
     "get_options_snapshot",
     "get_watchlist",
+    "get_watchlist_intelligence",
     "get_risk_dashboard",
     "get_trade_journal",
     "get_application_help",
@@ -3054,6 +3224,46 @@ def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
         return "scenario", {key: data.get(key) for key in ("shock_percent", "base_gross_exposure", "scenario_gross_exposure", "total_pnl_delta", "base_stop_loss_risk", "scenario_stop_loss_risk", "positions", "unknowns", "conclusion") if key in data}
     if action == "get_session_stats":
         return "session_stats", {key: data.get(key) for key in ("symbol", "session", "date", "open", "high", "low", "close", "volume", "vwap", "range", "change", "change_percent", "bar_count", "available", "reason") if key in data}
+    if action == "get_watchlist_intelligence":
+        concern = str(data.get("concern") or "all")
+        sections = {
+            "weak": ("top_bearish", "deteriorating"),
+            "strong": ("top_bullish", "relative_strength"),
+            "deteriorating": ("deteriorating",),
+            "underperforming": ("top_bearish", "deteriorating"),
+            "all": ("top_bearish", "top_bullish", "deteriorating"),
+        }
+        items: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for section in sections.get(concern, sections["all"]):
+            for entry in data.get(section, []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                symbol = str(entry.get("symbol") or "").upper()
+                if not symbol or symbol in seen:
+                    continue
+                seen.add(symbol)
+                items.append({
+                    "name": symbol,
+                    "score": entry.get("score"),
+                    "metric": entry.get("metric"),
+                    "metric_label": entry.get("metric_label"),
+                    "change_pct": entry.get("change_pct"),
+                })
+                if len(items) >= 10:
+                    break
+            if len(items) >= 10:
+                break
+        return "ranked_results", {
+            "title": f"{concern.title()} watchlist names",
+            "items": items,
+            "watchlist_name": data.get("watchlist_name"),
+            "coverage": {
+                "analyzed_symbols": data.get("analyzed_symbols"),
+                "watchlist_size": data.get("watchlist_size"),
+                "data_status": data.get("data_status"),
+            },
+        }
     if action == "historical_similarity":
         return "historical_outcomes", {key: data.get(key) for key in ("symbol", "timeframe", "session", "summaries", "sample_size", "look_ahead_safe", "historical_note", "unknowns") if key in data}
     if action == "compare_symbols" and isinstance(data.get("rankings"), list):
@@ -3137,6 +3347,75 @@ def _bounded_numeric_evidence(value, prefix: str = "", *, depth: int = 0) -> dic
     return {}
 
 
+def _format_watchlist_intelligence(data: dict) -> str:
+    """Render a concise, evidence-only answer for semantic watchlist routes."""
+    concern = str(data.get("concern") or "all")
+    watchlist_name = str(data.get("watchlist_name") or "your watchlist")
+    labels = {
+        "weak": "Weakest names",
+        "strong": "Strongest names",
+        "deteriorating": "Most deteriorating names",
+        "underperforming": "Most underperforming names",
+        "all": "Watchlist intelligence",
+    }
+    sections = {
+        "weak": ("top_bearish", "deteriorating"),
+        "strong": ("top_bullish", "relative_strength", "mtf_alignment"),
+        "deteriorating": ("deteriorating", "top_bearish"),
+        "underperforming": ("top_bearish", "deteriorating"),
+        "all": ("top_bearish", "top_bullish", "deteriorating", "relative_strength"),
+    }
+
+    rows: list[str] = []
+    seen: set[str] = set()
+    for section in sections.get(concern, sections["all"]):
+        for item in data.get(section, []) or []:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            evidence: list[str] = []
+            change_pct = item.get("change_pct")
+            if isinstance(change_pct, (int, float)):
+                evidence.append(f"change {change_pct:+.2f}%")
+            score = item.get("score")
+            if isinstance(score, (int, float)):
+                evidence.append(f"score {score:+.1f}")
+            metric = item.get("metric")
+            metric_label = item.get("metric_label")
+            if isinstance(metric, (int, float)) and metric_label:
+                evidence.append(f"{metric_label} {metric:+.2f}")
+            details = item.get("details") or {}
+            benchmark = details.get("benchmark") if isinstance(details, dict) else None
+            if benchmark:
+                evidence.append(f"vs {benchmark}")
+            rows.append(f"- {symbol}: {', '.join(evidence) or 'scanner evidence available'}")
+            if len(rows) >= 5:
+                break
+        if len(rows) >= 5:
+            break
+
+    status = data.get("data_status") or "unknown"
+    analyzed = data.get("analyzed_symbols")
+    total = data.get("watchlist_size")
+    coverage = f"Coverage: {analyzed} of {total} names have scanner data." if isinstance(analyzed, int) and isinstance(total, int) else None
+    warnings = [str(item) for item in (data.get("warnings") or []) if item]
+
+    if not rows:
+        answer = f"I couldn't identify any {concern} names in \"{watchlist_name}\" from the current scanner cache."
+    else:
+        answer = f"{labels.get(concern, labels['all'])} in \"{watchlist_name}\":\n" + "\n".join(rows)
+    if coverage:
+        answer += f"\n{coverage}"
+    if status != "ready":
+        answer += f"\nData status: {status}."
+    if warnings:
+        answer += "\nNote: " + " ".join(warnings[:2])
+    return answer
+
+
 def _run_market_tool(
     db,
     parsed,
@@ -3151,8 +3430,45 @@ def _run_market_tool(
         # The session owns the ledger.  Never trust the model to carry the
         # previous records forward or to rewrite their original fields.
         arguments["existing_assumptions"] = list((planner_state or {}).get("research_assumptions", []))
+    request_scope: dict[str, object] = {}
+    if isinstance(arguments.get("session"), str):
+        try:
+            request_scope["session"] = normalize_session(arguments["session"])
+        except ValueError:
+            pass
+    if isinstance(arguments.get("timeframe"), str):
+        try:
+            request_scope["timeframe"] = normalize_timeframe(arguments["timeframe"])
+        except ValueError:
+            pass
+    elif parsed.action in {
+        "get_quote",
+        "get_bars",
+        "get_indicator",
+        "get_support_resistance",
+        "get_trend",
+        "get_confluence",
+        "get_relative_strength",
+        "get_tape_state",
+        "get_session_stats",
+        "why_did_it_move",
+        "what_changed",
+        "signal_explanation",
+        "historical_similarity",
+    }:
+        try:
+            request_scope["timeframe"] = normalize_timeframe(
+                str((planner_state or {}).get("timeframe") or "1d")
+            )
+        except ValueError:
+            request_scope["timeframe"] = "1d"
     result = default_registry.execute(
-        ToolRequest(tool_name=parsed.action, arguments=arguments, confirmed=bool(parsed.action_confirmed))
+        ToolRequest(
+            tool_name=parsed.action,
+            arguments=arguments,
+            confirmed=bool(parsed.action_confirmed),
+            **request_scope,
+        )
     )
     if not result.ok:
         if trace is not None:
@@ -3188,9 +3504,17 @@ def _run_market_tool(
             "duration_ms": result.duration_ms,
             "arguments": sanitize_arguments(arguments),
             "cache_hit": bool(result.data.get("cache_hit", False)),
-            "provider_request_count": 0 if str(result.provider).lower().startswith("marketlens") else 1,
+            "provider_request_count": int(
+                result.data.get("provider_request_count", 0)
+                if str(result.data.get("provider_request_count", 0)).isdigit()
+                else (0 if str(result.provider).lower().startswith("marketlens") else 1)
+            ),
         }
+        if isinstance(arguments.get("symbol"), str):
+            trace_item["symbol"] = arguments["symbol"].upper()
         numeric_evidence = _bounded_numeric_evidence(result.data)
+        if isinstance(result.freshness_seconds, (int, float)):
+            numeric_evidence["freshness_seconds"] = float(result.freshness_seconds)
         if numeric_evidence:
             trace_item["evidence_values"] = numeric_evidence
         visual = _visual_trace_payload(parsed.action, result.data)
@@ -3201,10 +3525,69 @@ def _run_market_tool(
         records = result.data.get("assumptions")
         if isinstance(records, list):
             planner_state["research_assumptions"] = records[:200]
+    if parsed.action == "get_watchlist_intelligence":
+        return _format_watchlist_intelligence(result.data), True
+    if parsed.action == "get_market_context":
+        regime = str(result.data.get("regime") or "unknown").replace("_", " ")
+        volatility = str(result.data.get("volatility_state") or "unknown")
+        confidence = result.data.get("confidence")
+        momentum = result.data.get("momentum")
+        trend_strength = result.data.get("trend_strength")
+        if regime == "unknown" and not any(
+            isinstance(value, (int, float)) for value in (confidence, momentum, trend_strength)
+        ):
+            return "I don't have enough verified market-context data to summarize the market.", False
+        details = [f"regime is {regime}", f"volatility is {volatility}"]
+        if isinstance(momentum, (int, float)):
+            details.append(f"momentum {float(momentum):+.2f}")
+        if isinstance(trend_strength, (int, float)):
+            details.append(f"trend strength {float(trend_strength):.2f}")
+        if isinstance(confidence, (int, float)):
+            details.append(f"confidence {float(confidence):.0%}")
+        return "Verified market context: " + "; ".join(details) + ".", True
+    if parsed.action == "get_trend":
+        symbol = str(result.data.get("symbol") or arguments.get("symbol") or "the symbol").upper()
+        direction = str(result.data.get("direction") or "unknown").replace("_", " ")
+        strength = str(result.data.get("strength") or "unknown").replace("_", " ")
+        classification = str(result.data.get("classification") or "").replace("_", " ")
+        if direction == "unknown" and strength == "unknown":
+            return f"I don't have enough verified trend data for {symbol}.", False
+        details = [f"{direction} direction", f"{strength} strength"]
+        if classification:
+            details.append(f"{classification} classification")
+        timeframe = result.timeframe or arguments.get("timeframe") or "1d"
+        return f"Verified {symbol} trend ({timeframe}): " + "; ".join(details) + ".", True
+    if parsed.action == "compare_symbols" and isinstance(result.data.get("rankings"), list):
+        metric = str(result.data.get("metric") or arguments.get("metric") or "value")
+        metric_labels = {
+            "return_percent": "return",
+            "change_percent": "daily change",
+            "volatility_percent": "volatility",
+            "price": "price",
+            "volume": "volume",
+        }
+        label = metric_labels.get(metric, metric.replace("_", " "))
+        rows = []
+        for row in result.data["rankings"][:10]:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or "").upper()
+            value = row.get("value")
+            rank = row.get("rank")
+            if not symbol or not isinstance(value, (int, float)):
+                continue
+            suffix = "%" if metric.endswith("_percent") else ""
+            prefix = "$" if metric == "price" else ""
+            rows.append(f"{symbol} {prefix}{float(value):.2f}{suffix} (rank {rank})")
+        if rows:
+            return f"Verified compare_symbols comparison by {label}: " + "; ".join(rows) + ".", True
+    payload = json.dumps(result.data, sort_keys=True, default=str, separators=(",", ":"))
+    if len(payload) > 1200:
+        payload = payload[:1200].rstrip() + "…"
     return (
         f"Verified {parsed.action} result from {result.provider} ({freshness}, "
         f"session {result.session}, timeframe {result.timeframe or 'not specified'}): "
-        f"{result.data}",
+        f"{payload}",
         True,
     )
 

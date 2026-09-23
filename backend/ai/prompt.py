@@ -882,6 +882,7 @@ class ChatReplyResponse(BaseModel):
         "anomaly_analysis",
         "assumption_tracking",
         "get_watchlist",
+        "get_watchlist_intelligence",
         "get_risk_dashboard",
         "get_trade_journal",
         "get_application_help",
@@ -1003,14 +1004,19 @@ _ACTION_TOOL_DOCS = (
       formulas, and assumptions.
     - get_quote / get_bars / get_indicator / get_support_resistance / \
       get_market_regime / get_market_context / get_news / get_fundamentals / \
-      get_options_snapshot / get_watchlist / get_risk_dashboard / \
+      get_options_snapshot / get_watchlist / get_watchlist_intelligence / get_risk_dashboard / \
       get_trade_journal / get_application_help / get_alerts / \
       get_sector_data / get_trend / get_confluence / get_relative_strength / \
       get_tape_state / get_session_stats / get_calendar / import_csv \
       are read-only grounded tools. \
       Set action to the exact tool name and put only its request fields in \
       action_tool_arguments (for example, symbol, timeframe, session, and \
-      range). For get_watchlist, use name or watchlist_id. Risk Dashboard \
+      range). For get_watchlist and get_watchlist_intelligence, use name or \
+      watchlist_id when the trader named one; otherwise let the server resolve \
+      the trader's enabled names across all active lists. For \
+      get_watchlist_intelligence, set concern to weak, strong, \
+      deteriorating, underperforming, or all; do not invent a weakness \
+      definition outside the returned evidence. Risk Dashboard \
       and Trade Journal are browser-local; pass an explicit positions or \
       entries snapshot when available, otherwise the tool reports that the \
       server cannot see localStorage. Use get_application_help for verified \
@@ -1286,7 +1292,8 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
       get_quote, get_bars, get_indicator, get_support_resistance, \
       get_market_regime, get_market_context, get_news, get_fundamentals, \
-      get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
+      get_options_snapshot, get_watchlist, get_watchlist_intelligence, \
+      get_risk_dashboard, get_trade_journal, \
       get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
       import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, save_to_journal, export_report, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
