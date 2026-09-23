@@ -33,6 +33,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_relative_strength",
         "get_risk_dashboard",
         "get_sector_data",
+        "get_session_stats",
         "get_support_resistance",
         "get_tape_state",
         "get_trade_journal",

@@ -9,6 +9,7 @@ from backend.ai.market_tools import (
     IndicatorRequest,
     PositionInput,
     RiskDashboardRequest,
+    SessionStatsRequest,
     SymbolRequest,
     TapeRequest,
     TradeJournalRequest,
@@ -22,6 +23,7 @@ from backend.ai.market_tools import (
     get_relative_strength_tool,
     get_risk_dashboard_tool,
     get_sector_data_tool,
+    get_session_stats_tool,
     get_support_resistance_tool,
     get_tape_state_tool,
     get_trade_journal_tool,
@@ -391,3 +393,67 @@ def test_import_csv_supports_headerless_mode() -> None:
     # this documents the honest failure mode rather than a silent guess.
     assert result.row_count == 0
     assert "symbol" in result.errors[0]
+
+
+class _FakeSessionManager:
+    """Two calendar days of bars; day 2 mixes premarket and regular
+    sessions so scoping (latest date, then requested session) is
+    actually exercised, not just the fetch/derive plumbing.
+    """
+
+    def get_historical_bars(self, symbol, timeframe, range_, include_extended_hours):
+        del range_, include_extended_hours
+        return [
+            Bar(symbol=symbol, timestamp=datetime(2026, 9, 21, 10), open=50, high=51, low=49, close=50.5, volume=500, timeframe=timeframe, provider="test", data_status=DataStatus.HISTORICAL, session="regular"),
+            Bar(symbol=symbol, timestamp=datetime(2026, 9, 22, 8, 0), open=100, high=101, low=99, close=100.5, volume=200, timeframe=timeframe, provider="test", data_status=DataStatus.HISTORICAL, session="premarket"),
+            Bar(symbol=symbol, timestamp=datetime(2026, 9, 22, 9, 30), open=101, high=105, low=100, close=104, volume=1000, timeframe=timeframe, provider="test", data_status=DataStatus.HISTORICAL, session="regular"),
+            Bar(symbol=symbol, timestamp=datetime(2026, 9, 22, 15, 59), open=104, high=106, low=103, close=105, volume=1500, timeframe=timeframe, provider="test", data_status=DataStatus.HISTORICAL, session="regular"),
+        ]
+
+
+def test_session_stats_scopes_to_latest_date_and_requested_session(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.market_tools._manager", lambda: _FakeSessionManager())
+
+    result = get_session_stats_tool(SessionStatsRequest(symbol="AAPL", session="regular"))
+
+    assert result.available is True
+    assert result.date == "2026-09-22"
+    assert result.open == 101
+    assert result.close == 105
+    assert result.high == 106
+    assert result.low == 100
+    assert result.volume == 2500
+    assert result.range == 6
+    assert result.bar_count == 2
+
+
+def test_session_stats_scopes_to_premarket_only(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.market_tools._manager", lambda: _FakeSessionManager())
+
+    result = get_session_stats_tool(SessionStatsRequest(symbol="AAPL", session="premarket"))
+
+    assert result.available is True
+    assert result.open == 100
+    assert result.close == 100.5
+    assert result.bar_count == 1
+
+
+def test_session_stats_all_sessions_spans_the_whole_day(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.market_tools._manager", lambda: _FakeSessionManager())
+
+    result = get_session_stats_tool(SessionStatsRequest(symbol="AAPL", session="all"))
+
+    assert result.available is True
+    assert result.open == 100  # premarket bar is chronologically first
+    assert result.close == 105
+    assert result.volume == 200 + 1000 + 1500
+    assert result.bar_count == 3
+
+
+def test_session_stats_reports_unavailable_for_missing_session(monkeypatch) -> None:
+    monkeypatch.setattr("backend.ai.market_tools._manager", lambda: _FakeSessionManager())
+
+    result = get_session_stats_tool(SessionStatsRequest(symbol="AAPL", session="after_hours"))
+
+    assert result.available is False
+    assert "after_hours" in result.reason

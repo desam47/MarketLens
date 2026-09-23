@@ -40,6 +40,13 @@ class ConfluenceRequest(BaseModel):
     preset: Literal["scalper", "day_trading", "swing", "all"] = "day_trading"
 
 
+class SessionStatsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    session: Literal["premarket", "regular", "after_hours", "all"] = "regular"
+
+
 class TapeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -221,6 +228,73 @@ def get_support_resistance_tool(request: BarsRequest) -> BaseModel:
         **payload.model_dump(),
         support=min(float(bar["low"]) for bar in bars),
         resistance=max(float(bar["high"]) for bar in bars),
+    )
+
+
+def get_session_stats_tool(request: SessionStatsRequest) -> BaseModel:
+    """Compute session-level statistics (O/H/L/C, volume, VWAP, range) for
+    the most recent trading day, scoped to one market session.
+
+    No dedicated page endpoint exists for this — same category as
+    get_indicator/get_support_resistance, derived directly from bars
+    already fetched through the shared manager/cache. Scoping honors each
+    bar's own per-bar session classification (Bar.session, stamped by the
+    provider/session-calendar boundary) rather than re-deriving session
+    windows independently, so it cannot disagree with what the bars
+    themselves already say about their session.
+    """
+    from backend.ai.tool_registry import normalize_session
+
+    bars_payload = get_bars_tool(
+        BarsRequest(symbol=request.symbol, timeframe="1m", range="5d", limit=2_000, session="all")
+    )
+    bars = bars_payload.bars
+    if not bars:
+        raise ValueError(f"No bars available for {request.symbol.upper()}")
+
+    latest_date = max(bar["timestamp"][:10] for bar in bars)
+    day_bars = [bar for bar in bars if bar["timestamp"].startswith(latest_date)]
+
+    session = normalize_session(request.session)
+    scoped_bars = day_bars if session == "all" else [bar for bar in day_bars if bar.get("session") == session]
+
+    if not scoped_bars:
+        return _Payload(
+            symbol=request.symbol.upper(),
+            session=session,
+            date=latest_date,
+            available=False,
+            reason=f"No {session} bars available for {latest_date}",
+        )
+
+    open_price = float(scoped_bars[0]["open"])
+    close_price = float(scoped_bars[-1]["close"])
+    high_price = max(float(bar["high"]) for bar in scoped_bars)
+    low_price = min(float(bar["low"]) for bar in scoped_bars)
+    volume = sum(float(bar["volume"]) for bar in scoped_bars)
+    typical_price_volume = sum(
+        ((float(bar["high"]) + float(bar["low"]) + float(bar["close"])) / 3) * float(bar["volume"])
+        for bar in scoped_bars
+    )
+    vwap = typical_price_volume / volume if volume else None
+
+    return _Payload(
+        symbol=request.symbol.upper(),
+        session=session,
+        date=latest_date,
+        available=True,
+        open=open_price,
+        high=high_price,
+        low=low_price,
+        close=close_price,
+        volume=volume,
+        range=round(high_price - low_price, 6),
+        change=round(close_price - open_price, 6),
+        change_percent=round((close_price - open_price) / abs(open_price) * 100, 6) if open_price else None,
+        vwap=round(vwap, 6) if vwap is not None else None,
+        bar_count=len(scoped_bars),
+        provider=bars_payload.provider,
+        source_timestamp=bars_payload.source_timestamp,
     )
 
 

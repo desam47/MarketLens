@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~90%) | 21 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape, CSV import); 7 of 21 have live contract tests against page/API equivalents. Missing: session-statistics tooling, catalyst/earnings/analyst tools, and true dynamic (non-hardcoded) app-help generation. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~95%) | 22 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, session-stats, app-help, trend, confluence, relative-strength, tape, CSV import); 7 of 22 have live contract tests against page/API equivalents. Missing: dedicated catalyst/earnings/analyst tools and true dynamic (non-hardcoded) app-help generation. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,8 +170,8 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 571 tests (563 prior + 8 for
-import_csv), and the full backend suite passes at 2825 tests.
+`backend/tests/ai/` suite passes at 575 tests (571 prior + 4 for
+get_session_stats), and the full backend suite passes at 2829 tests.
 
 `get_trend`, `get_confluence`, `get_relative_strength`, and `get_tape_state`
 are now implemented, closing most of 5.2.2's named engine list (trend,
@@ -248,10 +248,23 @@ error reporting, the row-count cap, headerless mode's honest failure (a
 `symbol` column name is still required, `column_1`/`column_2`/... will
 never satisfy it), and the formula-injection-is-inert guarantee.
 
+`get_session_stats` (5.2.2) is now implemented, completing that item's
+engine list. No dedicated page endpoint exists to contract-test against
+(same category as `get_indicator`/`get_support_resistance`), so it derives
+O/H/L/C, volume, VWAP, and range directly from 1-minute bars already
+fetched through the shared manager/cache. It scopes to the most recent
+trading day present in the bars, then to the requested session
+(premarket/regular/after_hours/all) using each bar's own per-bar `session`
+classification — never re-deriving session boundaries independently, so it
+cannot disagree with what the bars themselves already say. Returns an
+honest `available: false` with a reason when no bars exist for the
+requested session (e.g. asking for after-hours data on a day with none)
+rather than fabricating a zero-filled result. 4 new tests cover date/session
+scoping, an "all sessions" combined view, and the unavailable case.
+
 Still unimplemented and not yet reflected as done anywhere in this
-document: session-statistics tooling (5.2.2); dedicated
-catalyst/earnings/insider-activity/analyst-recommendation tools (5.2.3) —
-`get_news`/`get_fundamentals` do not cover these.
+document: dedicated catalyst/earnings/insider-activity/analyst-recommendation
+tools (5.2.3) — `get_news`/`get_fundamentals` do not cover these.
 
 Application-help (5.2.7) now carries a `required_state` field per page (e.g.
 the Symbol page declares `["symbol"]`, since the frontend carries the

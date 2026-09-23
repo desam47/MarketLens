@@ -304,6 +304,7 @@ def build_default_registry() -> ToolRegistry:
         NewsRequest,
         OptionsRequest,
         RiskDashboardRequest,
+        SessionStatsRequest,
         SymbolRequest,
         TapeRequest,
         TradeJournalRequest,
@@ -323,6 +324,7 @@ def build_default_registry() -> ToolRegistry:
         get_relative_strength_tool,
         get_risk_dashboard_tool,
         get_sector_data_tool,
+        get_session_stats_tool,
         get_support_resistance_tool,
         get_tape_state_tool,
         get_trade_journal_tool,
@@ -338,6 +340,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_market_regime", kind="read_only", description="Get the current warmed market regime.", input_model=SymbolRequest, handler=get_market_regime_tool))
     registry.register(ToolSpec(name="get_market_context", kind="read_only", description="Get the current warmed market context.", input_model=BaseModel, handler=get_market_context_tool))
     registry.register(ToolSpec(name="get_sector_data", kind="read_only", description="Get a symbol's sector alignment vs. its sector ETF and SPY.", input_model=SymbolRequest, handler=get_sector_data_tool))
+    registry.register(ToolSpec(name="get_session_stats", kind="read_only", description="Get O/H/L/C, volume, VWAP, and range for the most recent trading day, scoped to one session.", input_model=SessionStatsRequest, handler=get_session_stats_tool))
     registry.register(ToolSpec(name="get_trend", kind="read_only", description="Get the current trend for a symbol on one timeframe.", input_model=TrendRequest, handler=get_trend_tool))
     registry.register(ToolSpec(name="get_confluence", kind="read_only", description="Get multi-timeframe confluence for a symbol under a trading-style preset.", input_model=ConfluenceRequest, handler=get_confluence_tool))
     registry.register(ToolSpec(name="get_relative_strength", kind="read_only", description="Get relative-strength signals for a symbol vs. SPY/QQQ.", input_model=SymbolRequest, handler=get_relative_strength_tool))

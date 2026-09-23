@@ -1705,6 +1705,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_confluence",
     "get_relative_strength",
     "get_tape_state",
+    "get_session_stats",
     "import_csv",
 }
 
