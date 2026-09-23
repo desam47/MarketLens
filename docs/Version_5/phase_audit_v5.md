@@ -490,7 +490,15 @@ continuation failures never discard already completed results. Destructive
 actions remain backend-confirmed. Per-turn planner state tracks the original
 request, completed steps, duplicate signatures, and errors without persisting
 private orchestration data into the conversation transcript. The focused Chat
-action suite passes 111 tests with `DEBUG=false`.
+action suite passes 111 tests with `DEBUG=false`; the broader Chat/settings
+slice passes 155 tests.
+
+Structured conversational memory now persists bounded current symbols,
+watchlist, timeframe, session, last question, and update timestamp on each
+chat session. Ambiguous follow-ups that refer to multiple remembered symbols
+receive a deterministic clarification question before any provider or AI call.
+Compound replies now label completed subtasks as ordered steps and report when
+a dependent continuation cannot be planned safely.
 
 Remaining Phase 5.3 work includes planner state, clarification
 coverage, repeated-call protection, structured memory fields—including the

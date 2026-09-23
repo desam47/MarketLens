@@ -104,6 +104,9 @@ _TRANSCRIPT_MSG_CHARS = 600  # per-message clip inside the transcript
 # ever attempted when this matches, so an ordinary single-action turn
 # never pays for the extra completion call.
 _MULTI_STEP_HINT = re.compile(r"\band\b|\bthen\b|\balso\b|;", re.I)
+_AMBIGUOUS_REFERENCE = re.compile(
+    r"\b(it|that stock|that ticker|the previous ticker|this one|that one)\b", re.I
+)
 # First action + up to this many chained follow-ups within one turn.
 _MAX_CHAIN_STEPS = 3
 
@@ -435,6 +438,7 @@ class _Turn:
     alert_context: dict | None
     capped: bool
     base: list[str]
+    planner_state: dict
 
     @property
     def focus(self) -> list[str]:
@@ -468,6 +472,13 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         raise ValueError(f"chat session {session_id} not found")
 
     repo.add_message(session_id, "user", user_content)
+
+    try:
+        planner_state = json.loads(session.planner_state or "{}")
+        if not isinstance(planner_state, dict):
+            planner_state = {}
+    except (TypeError, ValueError):
+        planner_state = {}
 
     history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
     # Exclude the message we just added — it's passed separately as
@@ -557,6 +568,24 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
                 }
             )
 
+    # Persist only bounded, structured state. Never store tool payloads or
+    # private prompt text here; the transcript remains the source for prose.
+    remembered_symbols = [str(symbol).upper() for symbol in planner_state.get("current_symbols", []) if symbol]
+    current_symbols = [block["symbol"] for block in symbol_blocks] or remembered_symbols[: settings.ai.chat_max_tickers]
+    next_state = {
+        "current_symbols": current_symbols,
+        "watchlist": planner_state.get("watchlist"),
+        "timeframe": _extract_memory_value(user_content, r"\b(1m|2m|3m|5m|15m|30m|1h|4h|1d|1wk)\b"),
+        "session": _extract_memory_value(user_content, r"\b(premarket|regular|after[- ]hours?|extended)\b"),
+        "last_user_question": user_content[:300],
+        "updated_at": now_ny().isoformat(),
+    }
+    if next_state["timeframe"] is None:
+        next_state["timeframe"] = planner_state.get("timeframe")
+    if next_state["session"] is None:
+        next_state["session"] = planner_state.get("session")
+    repo.set_planner_state(session_id, json.dumps(next_state, sort_keys=True))
+
     return _Turn(
         symbol_blocks=symbol_blocks,
         unavailable=unavailable,
@@ -566,7 +595,16 @@ def _prepare_turn(repo: ChatRepository, session_id: int, user_content: str) -> _
         alert_context=alert_context,
         capped=capped,
         base=base,
+        planner_state=next_state,
     )
+
+
+def _extract_memory_value(text: str, pattern: str) -> str | None:
+    match = re.search(pattern, text, re.I)
+    if not match:
+        return None
+    value = match.group(1).lower().replace(" ", "_")
+    return "after_hours" if value in {"after-hour", "after-hours", "after_hours"} else value
 
 
 def answer_chat_message(
@@ -605,6 +643,7 @@ def answer_chat_message(
             turn.alert_context,
             turn.capped,
             turn.base,
+            turn.planner_state,
         )
         grounded = grounded and not turn.unavailable  # deterministic fail-safe
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
@@ -788,6 +827,7 @@ def _generate_reply(
     alert_context: dict | None,
     capped: bool,
     base_symbols: list[str],
+    planner_state: dict | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Call the AI and parse its reply. Never raises — degrades to a
     plain reply with grounded=False.
@@ -818,6 +858,9 @@ def _generate_reply(
                 return reply, True, []
         if _WATCHLIST_LIST_INTENT.search(user_content):
             return _watchlist_list_reply(db), True, []
+        remembered = (planner_state or {}).get("current_symbols", [])
+        if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
+            return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
 
     if not ai_manager.enabled:
         return "AI is currently unavailable, so I can't answer that right now.", False, []
@@ -1053,7 +1096,7 @@ def _run_turn_actions(
     if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
         return text, grounded, screened
 
-    texts = [text]
+    texts = [f"Step 1: {text}"]
     all_grounded = grounded
     all_screened = list(screened)
     planner = _PlannerState(
@@ -1086,6 +1129,8 @@ def _run_turn_actions(
         )
         if next_parsed is None:
             logger.info("chat multi-step continuation failed: %s", failure_reason)
+            texts.append("I completed the available step, but could not safely plan the next step.")
+            all_grounded = False
             break
 
         if next_parsed.wants_reanalysis or next_parsed.action == "none":
@@ -1106,7 +1151,7 @@ def _run_turn_actions(
             user_content,
             transcript,
         )
-        texts.append(step_text)
+        texts.append(f"Step {len(texts) + 1}: {step_text}")
         planner.completed_steps.append(step_text)
         all_grounded = all_grounded and step_grounded
         all_screened.extend(step_screened)
@@ -1153,6 +1198,13 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
                 return
         if _WATCHLIST_LIST_INTENT.search(turn.user_content):
             yield ("result", (_watchlist_list_reply(db), True, []))
+            return
+        remembered = turn.planner_state.get("current_symbols", [])
+        if _AMBIGUOUS_REFERENCE.search(turn.user_content) and len(remembered) > 1:
+            yield (
+                "result",
+                (f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []),
+            )
             return
 
     if not ai_manager.enabled:

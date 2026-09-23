@@ -150,7 +150,10 @@ with configurable planning budgets (default three steps), duplicate-action
 suppression, destructive-action confirmation, per-turn planner state, and safe
 partial-failure handling. The remaining items below
 extend this foundation into a general planner and structured conversational
-state.
+state. Session-backed memory now preserves bounded symbols, watchlist,
+timeframe, session, and last-question fields, and ambiguous multi-symbol
+follow-ups ask for clarification before tool execution. Compound replies label
+completed subtasks and explicitly report a safely stopped continuation.
 
 **Why now:** Broad questions often need several dependent operations, but the loop must stay predictable and safe.
 

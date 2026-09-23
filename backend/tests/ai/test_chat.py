@@ -12,13 +12,14 @@ resolve_turn_symbols / build_market_baseline / build_context are patched
 so no network or scanner state is needed.
 """
 
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.ai.chat import _prune_context, answer_chat_message
+from backend.ai.chat import _generate_reply, _prune_context, answer_chat_message
 from backend.ai.context import InsufficientDataError
 from backend.ai.prompt import AnalysisResponse, TradePlan, UncertaintyResponse
 from backend.ai.provider import AIResponse
@@ -123,6 +124,11 @@ class TestUniversalTurn(_Base):
         self.assertEqual(unavailable, [])
         self.assertEqual(msg.content, "AAPL up.")
         self.assertEqual([m.role for m in self._stored(self.session.id)], ["user", "assistant"])
+        self.db.expire_all()
+        stored_session = self.db.query(ChatSession).filter(ChatSession.id == self.session.id).one()
+        state = json.loads(stored_session.planner_state)
+        self.assertEqual(state["current_symbols"], ["AAPL"])
+        self.assertEqual(state["last_user_question"], "how's AAPL")
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")
@@ -144,6 +150,28 @@ class TestUniversalTurn(_Base):
         self.assertIn("<market>", prompt)
         self.assertNotIn("<context ", prompt)
         self.assertIn("No ticker resolved for this turn", prompt)
+
+    @patch("backend.ai.chat.build_context")
+    @patch("backend.ai.chat.ai_manager")
+    def test_ambiguous_reference_asks_for_clarification(self, mock_ctx, mock_ai):
+        mock_ai.enabled = True
+        reply, grounded, screened = _generate_reply(
+            self.db,
+            [],
+            [],
+            None,
+            [],
+            "what about it?",
+            None,
+            False,
+            [],
+            {"current_symbols": ["AAPL", "MSFT"]},
+        )
+        self.assertIn("AAPL", reply)
+        self.assertIn("MSFT", reply)
+        self.assertFalse(grounded)
+        self.assertEqual(screened, [])
+        mock_ai.complete.assert_not_called()
 
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")

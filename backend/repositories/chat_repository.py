@@ -101,6 +101,14 @@ class ChatRepository:
     def get_session(self, session_id: int) -> ChatSession | None:
         return self.db.query(ChatSession).filter(ChatSession.id == session_id).first()
 
+    def set_planner_state(self, session_id: int, state_json: str) -> None:
+        session = self.get_session(session_id)
+        if session is None:
+            return
+        session.planner_state = state_json
+        session.updated_at = now_ny()
+        self.db.commit()
+
     def delete_sessions(
         self,
         *,

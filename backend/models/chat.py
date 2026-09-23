@@ -52,6 +52,10 @@ class ChatSession(Base):
     alert_trigger_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=now_ny)
     updated_at = Column(DateTime, default=now_ny, onupdate=now_ny)
+    # JSON-encoded structured conversational state. Kept separate from the
+    # prose transcript so follow-up references survive reloads without making
+    # the model rediscover facts from clipped messages.
+    planner_state = Column(Text, nullable=True)
 
     messages = relationship(
         "ChatMessage",
