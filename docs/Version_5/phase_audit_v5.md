@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~60%) | Market, research, watchlist, risk, journal, alerts, and sector-data tools are registered with typed provenance; 4 tools have contract tests against their page/API equivalents. Missing: trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, and dynamic app-help. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~65%) | Market, research, watchlist, risk, journal, alerts, sector-data, and app-help (with required-state metadata + drift guard) tools are registered with typed provenance; 4 tools have contract tests against their page/API equivalents. Missing: trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,8 +170,9 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 550 tests (554 including the new
-contract-test file), and the full backend suite passes at 2806 tests.
+`backend/tests/ai/` suite passes at 554 tests (556 including the
+application-help drift-guard and required-state tests), and the full
+backend suite passes at 2808 tests.
 
 Remaining items named in the plan are still unimplemented and not yet
 reflected as done anywhere in this document: dedicated
@@ -181,8 +182,27 @@ today, not MarketLens's own trend/confluence/microstructure engines wrapped
 as tools; dedicated catalyst/earnings/insider-activity/analyst-recommendation
 tools (5.2.3) — `get_news`/`get_fundamentals` do not cover these; and CSV
 import tools (5.2.8), which have no code at all yet.
-Application-help (5.2.7) is a hardcoded 12-page table, not the
-route/feature-metadata-backed, deep-link-capable tool the plan describes.
+
+Application-help (5.2.7) now carries a `required_state` field per page (e.g.
+the Symbol page declares `["symbol"]`, since the frontend carries the
+selected symbol as React state rather than a URL parameter — no app
+navigation action exists yet to consume it; that is Phase 5.7.7's job, and
+this only makes the current informational answer state the requirement
+honestly). Its 12-page table remains hardcoded rather than dynamically
+derived — a real cross-language source-of-truth split, since the actual
+router lives in TypeScript (`frontend/src/utils/appNavigation.ts`) and
+Python cannot import it — but auditing it caught a real, live bug: the
+"signals" page pointed at `#historical-replay`, a legacy alias the frontend
+still *accepts* on incoming links but never *produces* when navigating
+(`hashForPage('signals')` returns `#signals`). Fixed, and now guarded by
+`test_application_help_routes_match_frontend_canonical_hashes`, which
+hardcodes the frontend's 12 canonical page→hash pairs as an explicit
+drift trip-wire — it will fail loudly the next time either side adds,
+renames, or removes a page without the other being updated. True dynamic
+generation (reading the frontend's route table at test/build time, or a
+shared JSON manifest both stacks consume) is still not implemented; the
+hardcoded-but-guarded state here is a stopgap, not the plan's original
+ask.
 
 `backend/tests/ai/test_tool_contracts.py` now covers the phase's own stated
 verification bar for four tools: `get_sector_data` vs

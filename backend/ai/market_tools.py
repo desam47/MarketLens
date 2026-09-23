@@ -455,19 +455,35 @@ def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
     )
 
 
+# Kept in sync by hand with frontend/src/utils/appNavigation.ts's AppPage
+# union and HASH_BY_PAGE map — that file is the actual routing source of
+# truth (window.location.hash), and Python can't import TypeScript. "route"
+# here must always be the value hashForPage(page) would produce there, not
+# any legacy/alias hash the frontend's PAGE_BY_HASH also still accepts for
+# incoming links (e.g. "signals" accepts both #signals and
+# #historical-replay on the way in, but only ever navigates *to* #signals —
+# that alias drift is exactly the kind of bug this table can silently grow
+# without the ai/tests/ai/test_market_tools.py cross-check).
+#
+# "required_state" documents what the caller must additionally supply
+# beyond the bare route — e.g. the Symbol page needs a symbol, since the
+# frontend carries it as React state, not a URL query param. No app
+# navigation action consumes this yet (that's Phase 5.7.7); today it is
+# purely so a grounded Chat answer states requirements honestly instead of
+# implying the bare hash alone is enough.
 _APPLICATION_PAGES = (
-    {"page": "dashboard", "title": "Dashboard", "route": "#dashboard", "topics": ("overview", "market", "movers", "latest prices")},
-    {"page": "scanner", "title": "Scanner", "route": "#scanner", "topics": ("scan", "filters", "breakout", "oversold", "volume")},
-    {"page": "symbol", "title": "Symbol", "route": "#symbol", "topics": ("chart", "quote", "options", "catalyst", "signal", "support resistance")},
-    {"page": "watchlist", "title": "Watchlist", "route": "#watchlist", "topics": ("watchlist", "symbols", "session prices")},
-    {"page": "hub", "title": "AI Hub", "route": "#ai-hub", "topics": ("chat", "assistant", "ai", "questions")},
-    {"page": "calendar", "title": "Earnings & Events", "route": "#calendar", "topics": ("earnings", "calendar", "events", "dividend")},
-    {"page": "risk", "title": "Risk Dashboard", "route": "#risk", "topics": ("risk", "positions", "exposure", "drawdown", "correlation", "stop")},
-    {"page": "journal", "title": "Trade Journal", "route": "#journal", "topics": ("journal", "thesis", "trade", "review", "screenshot")},
-    {"page": "alerts", "title": "Alerts", "route": "#alerts", "topics": ("alert", "notifications", "price", "volume", "news")},
-    {"page": "backtest", "title": "Backtest", "route": "#backtest", "topics": ("backtest", "historical", "performance", "replay")},
-    {"page": "signals", "title": "Historical Replay", "route": "#historical-replay", "topics": ("replay", "historical", "signals", "candles")},
-    {"page": "health", "title": "System Health", "route": "#system-health", "topics": ("health", "redis", "provider", "database", "status")},
+    {"page": "dashboard", "title": "Dashboard", "route": "#dashboard", "required_state": (), "topics": ("overview", "market", "movers", "latest prices")},
+    {"page": "scanner", "title": "Scanner", "route": "#scanner", "required_state": (), "topics": ("scan", "filters", "breakout", "oversold", "volume")},
+    {"page": "symbol", "title": "Symbol", "route": "#symbol", "required_state": ("symbol",), "topics": ("chart", "quote", "options", "catalyst", "signal", "support resistance")},
+    {"page": "watchlist", "title": "Watchlist", "route": "#watchlist", "required_state": (), "topics": ("watchlist", "symbols", "session prices")},
+    {"page": "hub", "title": "AI Hub", "route": "#ai-hub", "required_state": (), "topics": ("chat", "assistant", "ai", "questions")},
+    {"page": "calendar", "title": "Earnings & Events", "route": "#calendar", "required_state": (), "topics": ("earnings", "calendar", "events", "dividend")},
+    {"page": "risk", "title": "Risk Dashboard", "route": "#risk", "required_state": (), "topics": ("risk", "positions", "exposure", "drawdown", "correlation", "stop")},
+    {"page": "journal", "title": "Trade Journal", "route": "#journal", "required_state": (), "topics": ("journal", "thesis", "trade", "review", "screenshot")},
+    {"page": "alerts", "title": "Alerts", "route": "#alerts", "required_state": (), "topics": ("alert", "notifications", "price", "volume", "news")},
+    {"page": "backtest", "title": "Backtest", "route": "#backtest", "required_state": (), "topics": ("backtest", "historical", "performance", "replay")},
+    {"page": "signals", "title": "Historical Replay", "route": "#signals", "required_state": ("symbol",), "topics": ("replay", "historical", "signals", "candles")},
+    {"page": "health", "title": "System Health", "route": "#system-health", "required_state": (), "topics": ("health", "redis", "provider", "database", "status")},
 )
 
 
@@ -485,7 +501,16 @@ def get_application_help_tool(request: ApplicationHelpRequest) -> BaseModel:
         matches = list(_APPLICATION_PAGES)
     return _Payload(
         query=request.query,
-        matches=[{"page": page["page"], "title": page["title"], "route": page["route"], "topics": list(page["topics"])} for page in matches[:request.limit]],
+        matches=[
+            {
+                "page": page["page"],
+                "title": page["title"],
+                "route": page["route"],
+                "required_state": list(page["required_state"]),
+                "topics": list(page["topics"]),
+            }
+            for page in matches[: request.limit]
+        ],
         provider="MarketLens application metadata",
         source_timestamp=_database_timestamp(),
     )

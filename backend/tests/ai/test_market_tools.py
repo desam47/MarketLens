@@ -160,3 +160,42 @@ def test_application_help_returns_verified_routes() -> None:
     result = get_application_help_tool(ApplicationHelpRequest(query="where are my alerts"))
     assert result.matches[0]["title"] == "Alerts"
     assert result.matches[0]["route"] == "#alerts"
+
+
+def test_application_help_routes_match_frontend_canonical_hashes() -> None:
+    """Drift trip-wire: frontend/src/utils/appNavigation.ts's HASH_BY_PAGE is
+    the actual routing source of truth (Python can't import it), so this
+    hardcodes its 12 canonical page->hash pairs and fails loudly if either
+    side adds/renames/removes a page without updating the other. This is
+    exactly the mismatch that let "signals" silently point at the legacy
+    "#historical-replay" alias instead of the canonical "#signals" hash.
+    """
+    frontend_hash_by_page = {
+        "dashboard": "#dashboard",
+        "watchlist": "#watchlist",
+        "health": "#system-health",
+        "alerts": "#alerts",
+        "backtest": "#backtest",
+        "symbol": "#symbol",
+        "signals": "#signals",
+        "scanner": "#scanner",
+        "hub": "#ai-hub",
+        "risk": "#risk",
+        "journal": "#journal",
+        "calendar": "#calendar",
+    }
+
+    result = get_application_help_tool(ApplicationHelpRequest(limit=20))
+    tool_hash_by_page = {match["page"]: match["route"] for match in result.matches}
+
+    assert tool_hash_by_page == frontend_hash_by_page
+
+
+def test_application_help_declares_required_state_for_symbol_scoped_pages() -> None:
+    result = get_application_help_tool(ApplicationHelpRequest(query="chart for a stock"))
+    symbol_page = next(match for match in result.matches if match["page"] == "symbol")
+    assert symbol_page["required_state"] == ["symbol"]
+
+    dashboard = get_application_help_tool(ApplicationHelpRequest(query="dashboard overview"))
+    dashboard_page = next(match for match in dashboard.matches if match["page"] == "dashboard")
+    assert dashboard_page["required_state"] == []
