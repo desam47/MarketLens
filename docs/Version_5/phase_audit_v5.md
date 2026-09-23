@@ -72,7 +72,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟢 COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
+| 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -465,11 +465,13 @@ This surfaced two real bugs, not just missing coverage, both now fixed:
 the trend/confluence/relative-strength/tape tools section, rather than
 duplicated here.)
 
-Remaining work includes wiring multi-observation reconciliation into provider
-paths that expose multiple observations, complete freshness/fallback contracts
-for every tool, and safe local import handling. The application-help tool now returns verified page
-titles, feature topics, and current hash routes from the navigation catalog.
-Audit must record each tool's source API/service, cache behavior,
+The post-completion review records the remaining polish decisions: the
+reconciliation helper remains unit-tested infrastructure because no real
+multi-observation provider path exists, and contract coverage is intentionally
+limited to the page/API equivalents that can be exercised safely in this
+localhost build. The generated application-help tool returns verified page
+titles, feature topics, and current hash routes. Audit records each tool's
+source API/service, cache behavior,
 provider-call impact, freshness fields, delayed/fallback handling, and contract
 tests against existing page APIs. The audit must explicitly account for the
 quote, bars, indicator, support/resistance, regime, market-context, sector,
