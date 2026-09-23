@@ -24,9 +24,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=True),
         sa.Column("updated_at", sa.DateTime(), nullable=True),
     )
+    op.create_index("ix_chat_workflows_id", "chat_workflows", ["id"])
     op.create_index("ix_chat_workflows_name", "chat_workflows", ["name"], unique=True)
 
 
 def downgrade() -> None:
     op.drop_index("ix_chat_workflows_name", table_name="chat_workflows")
+    op.drop_index("ix_chat_workflows_id", table_name="chat_workflows")
     op.drop_table("chat_workflows")
