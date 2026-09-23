@@ -63,17 +63,31 @@ FRESHNESS_RECENT_SEC = 300
 FRESHNESS_STALE_SEC = 3600
 
 
-def _freshness(age_seconds: float | None) -> str:
-    """Bucket a data-age in seconds into a freshness label for the UI."""
+def _freshness(age_seconds: float | None, session_closed: bool = False) -> str:
+    """Bucket a data-age in seconds into a freshness label for the UI.
+
+    An age that would otherwise read "stale"/"stuck" is bucketed "closed"
+    instead when ``session_closed`` is True — the engine genuinely has
+    nothing newer to report because the exchange is shut (evening, weekend,
+    holiday), not because ingestion broke.
+    """
     if age_seconds is None:
         return "unknown"
     if age_seconds < FRESHNESS_FRESH_SEC:
         return "fresh"
     if age_seconds < FRESHNESS_RECENT_SEC:
         return "recent"
+    if session_closed:
+        return "closed"
     if age_seconds < FRESHNESS_STALE_SEC:
         return "stale"
     return "stuck"
+
+
+def _is_session_closed() -> bool:
+    from backend.engines.market_calendar import SessionType, us_market_calendar
+
+    return us_market_calendar.get_session_type(datetime.now(ZoneInfo("UTC"))) == SessionType.CLOSED
 
 
 def _data_age_seconds(ts: datetime | None) -> float | None:
@@ -208,7 +222,7 @@ async def get_current_regime(symbol: str):
                 "supporting_factors": regime_signal.supporting_factors,
                 "timestamp": _to_dashboard_tz(regime_signal.timestamp),
                 "data_age_seconds": age,
-                "freshness": _freshness(age),
+                "freshness": _freshness(age, session_closed=_is_session_closed()),
             }
         _regime_cache[key] = payload
         return payload
@@ -227,6 +241,7 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
     try:
         engine = get_engine(symbol.upper())
         history = engine.get_regime_history(limit=limit)
+        session_closed = _is_session_closed()
 
         payload = {
             "symbol": symbol.upper(),
@@ -238,7 +253,7 @@ async def get_regime_history(symbol: str, limit: int | None = 100):
                     "supporting_factors": signal.supporting_factors,
                     "timestamp": _to_dashboard_tz(signal.timestamp),
                     "data_age_seconds": _data_age_seconds(signal.timestamp),
-                    "freshness": _freshness(_data_age_seconds(signal.timestamp)),
+                    "freshness": _freshness(_data_age_seconds(signal.timestamp), session_closed=session_closed),
                 }
                 for signal in history
             ],

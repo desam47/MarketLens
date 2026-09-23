@@ -158,7 +158,7 @@ class MarketContextEngine:
             contributing_factors=factors,
             timestamp=ts,
             data_age_seconds=age,
-            freshness=self._freshness(age),
+            freshness=self._freshness(age, session_closed=self._is_session_closed()),
             sub_data_age_seconds=sub_ages,
         )
         if self._signals and self._same_signal_state(self._signals[-1], signal):
@@ -190,13 +190,21 @@ class MarketContextEngine:
         return timestamp.astimezone(UTC)
 
     @staticmethod
-    def _freshness(age: float | None) -> str:
+    def _is_session_closed() -> bool:
+        from ..engines.market_calendar import SessionType, us_market_calendar
+
+        return us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED
+
+    @staticmethod
+    def _freshness(age: float | None, session_closed: bool = False) -> str:
         if age is None:
             return "unknown"
         if age < 60:
             return "fresh"
         if age < 300:
             return "recent"
+        if session_closed:
+            return "closed"
         if age < 3600:
             return "stale"
         return "stuck"

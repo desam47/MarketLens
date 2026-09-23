@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import api, { SystemPerformance } from '../services/api';
 import { AlertsCard } from '../components/AlertsCard';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
+import { useMarketSession } from '../hooks/useMarketSession';
 
 export function AlertsPage() {
   const [performance, setPerformance] = useState<SystemPerformance | null>(null);
+  const marketSession = useMarketSession();
 
   useEffect(() => {
     let active = true;
@@ -29,6 +31,7 @@ export function AlertsPage() {
             timestamp={performance?.timestamp}
             provider={quoteEntitlement?.provider}
             dataStatus={performance ? 'LIVE' : 'ERROR'}
+            marketSession={marketSession?.session}
           />
         </div>
       </div>

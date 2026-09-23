@@ -5,7 +5,7 @@ interface MarketDataUpdateStatusProps {
   timestamp?: string | null;
   provider?: string | null;
   dataStatus?: string | null;
-  freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable' | null;
+  freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable' | 'closed' | null;
   connectionStatus?: 'connecting' | 'open' | 'closed' | 'reconnecting';
   marketSession?: 'premarket' | 'regular' | 'after_hours' | 'closed' | null;
   className?: string;

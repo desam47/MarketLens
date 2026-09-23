@@ -1438,6 +1438,7 @@ const fetchBars = useCallback(async () => {
             bars={bars.filter(bar => sessionMatchesPreference(bar, sessionFilter))}
             symbol={symbol}
             transitions={transitions}
+            marketSession={marketSession?.session}
             initialActiveOverlays={['supertrend']}
             timeframe={timeframe}
             onTimeframeChange={setTimeframe}

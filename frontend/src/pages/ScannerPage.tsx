@@ -3,6 +3,7 @@ import api, { CalendarEvent, FilterSpec, ScanResult, Watchlist } from '../servic
 import { FilterBuilder } from '../components/FilterBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
+import { useMarketSession } from '../hooks/useMarketSession';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { EarningsBadge } from '../components/EarningsBadge';
 
@@ -82,6 +83,7 @@ function matchReason(result: ScanResult): string {
 }
 
 export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
+  const marketSession = useMarketSession();
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [selectedWatchlist, setSelectedWatchlist] = useState<number | null>(null);
   const [symbols, setSymbols] = useState<string[]>([]);
@@ -283,6 +285,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
                       freshness={result.explanation?.data_freshness?.status}
                       timestamp={result.quote?.timestamp ?? result.timestamp}
                       provider={result.quote?.provider ?? result.explanation?.data_freshness?.provider}
+                      marketSession={marketSession?.session}
                     />
                     <span className="scanner-result-price">{result.quote?.price != null ? `$${result.quote.price.toFixed(2)}` : '—'}</span>
                   </button>

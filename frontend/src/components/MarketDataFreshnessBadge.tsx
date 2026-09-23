@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useStartupMode } from '../contexts/StartupModeContext';
 
-type Freshness = 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable';
+type Freshness = 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'unavailable' | 'closed';
 type BadgeState = 'live' | 'delayed' | 'cached' | 'stale' | 'reconnecting' | 'unavailable' | 'closed';
 type MarketSessionType = 'premarket' | 'regular' | 'after_hours' | 'closed';
 
@@ -59,6 +59,8 @@ function stateFromFreshness(freshness?: Freshness | null): BadgeState {
     case 'stale':
     case 'stuck':
       return 'stale';
+    case 'closed':
+      return 'closed';
     default:
       return 'unavailable';
   }
@@ -121,7 +123,7 @@ export function MarketDataFreshnessBadge({
   const providerLabel = provider ? provider.toUpperCase() : null;
   const title = startupMode === 'api'
     ? 'STARTUP_MODE=api is active, so live market-data updates are paused.'
-    : isClosedOverride
+    : state === 'closed'
     ? 'Market is closed. Price reflects the last available trade/quote.'
     : connectionState
     ? `Realtime connection: ${connectionStatus}`

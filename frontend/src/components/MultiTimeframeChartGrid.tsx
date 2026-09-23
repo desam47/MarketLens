@@ -4,6 +4,7 @@ import { CandlestickChart, ChartType } from './CandlestickChart';
 import { MarketDataFreshnessBadge } from './MarketDataFreshnessBadge';
 import { OVERLAYS, parseET, type OverlayKey } from './chartMath';
 import { useMarketStream, MarketSub } from '../hooks/useMarketStream';
+import { useMarketSession } from '../hooks/useMarketSession';
 import { DEFAULT_GRID_TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { sessionMatchesPreference, type SessionPreference } from '../utils/marketSession';
 
@@ -55,6 +56,7 @@ export function MultiTimeframeChartGrid({
   sessionFilter = 'all',
 }: MultiTimeframeChartGridProps) {
   const [chartType, setChartType] = useState<ChartType>(initialChartType);
+  const marketSession = useMarketSession();
   // Shared overlay state — one toolbar at the top of the grid toggles
   // every panel's indicators at once instead of each panel managing its
   // own (which would let them drift apart).
@@ -270,6 +272,7 @@ export function MultiTimeframeChartGrid({
                   <MarketDataFreshnessBadge
                     dataStatus={panel.bars[0]?.data_status}
                     timestamp={panel.bars[0]?.timestamp}
+                    marketSession={marketSession?.session}
                   />
                 </>
               )}
@@ -288,6 +291,7 @@ export function MultiTimeframeChartGrid({
                 showOverlayToolbar={false}
                 activeOverlays={activeOverlays}
                 onToggleOverlay={handleToggleOverlay}
+                marketSession={marketSession?.session}
                 bare
               />
             )}

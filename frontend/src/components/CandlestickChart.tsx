@@ -56,6 +56,10 @@ interface CandlestickChartProps {
   /** Render only the chart canvas, no card/header/toolbar wrapper.
   Used by the multi-TF grid so each panel is just the container. */
   bare?: boolean;
+  /** Exchange session, from the caller's useMarketSession() — threaded in rather
+  than fetched here so multi-panel grids (many CandlestickChart instances) share
+  one poll instead of one per panel. */
+  marketSession?: 'premarket' | 'regular' | 'after_hours' | 'closed' | null;
 }
 
 const LINE_COLOR = '#60a5fa';
@@ -81,6 +85,7 @@ function CandlestickChartImpl({
   onToggleOverlay,
   hideHeader = false,
   bare = false,
+  marketSession,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ChartLike | null>(null);
@@ -505,6 +510,7 @@ function CandlestickChartImpl({
             <MarketDataFreshnessBadge
               dataStatus={bars[0]?.data_status}
               timestamp={bars[0]?.timestamp}
+              marketSession={marketSession}
             />
             {timeframeOptions && timeframe !== undefined && onTimeframeChange && (
               <select
@@ -624,7 +630,8 @@ const CandlestickChart = React.memo(CandlestickChartImpl, (prev, next) => {
     prev.activeOverlays === next.activeOverlays &&
     prev.onToggleOverlay === next.onToggleOverlay &&
     prev.hideHeader === next.hideHeader &&
-    prev.bare === next.bare
+    prev.bare === next.bare &&
+    prev.marketSession === next.marketSession
   );
 });
 

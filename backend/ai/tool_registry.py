@@ -220,12 +220,25 @@ def _data_quality_warnings(payload: Mapping[str, Any], freshness_seconds: float 
     warnings: list[str] = []
     status = str(payload.get("data_status") or "").upper()
     if status in {"STALE", "DELAYED", "ERROR", "GAP", "INCOMPLETE"}:
-        warnings.append(f"Provider data status: {status}.")
+        note = f"Provider data status: {status}."
+        # STALE/GAP/INCOMPLETE can just mean "the market is closed, nothing new
+        # has traded" rather than a real ingestion problem. DELAYED is a fixed
+        # feed-type label (e.g. Webull's REST snapshot), not an age judgment,
+        # so it's excluded here rather than tagged as expected.
+        if status in {"STALE", "GAP", "INCOMPLETE"} and _is_market_session_closed():
+            note += " Market is currently closed, so this is expected."
+        warnings.append(note)
     if freshness_seconds is None and payload.get("provider"):
         warnings.append("Provider returned no parseable source timestamp.")
     if payload.get("fallback"):
         warnings.append("Fallback provider data was used.")
     return warnings
+
+
+def _is_market_session_closed() -> bool:
+    from backend.engines.market_calendar import SessionType, us_market_calendar
+
+    return us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED
 
 
 # Providers whose access is actually gated by an account/subscription tier

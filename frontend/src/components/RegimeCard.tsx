@@ -103,8 +103,8 @@ export const RegimeCard = memo(function RegimeCard({ regime, sectorData, error, 
       )}
       {regime.timestamp && (
         <div className="timestamp">
-          {regime.freshness.toUpperCase()}
-          {regime.data_age_seconds != null && ` · Signal age: ${Math.round(regime.data_age_seconds)}s`}
+          {regime.freshness === 'closed' ? 'MKT CLOSED' : regime.freshness.toUpperCase()}
+          {regime.freshness !== 'closed' && regime.data_age_seconds != null && ` · Signal age: ${Math.round(regime.data_age_seconds)}s`}
           {' · '}Last completed bar: {formatETDateTime(regime.timestamp)}
         </div>
       )}

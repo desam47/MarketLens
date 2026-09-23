@@ -13,6 +13,7 @@ import { NLSearchBar } from '../components/NLSearchBar';
 import { FreshnessIndicator } from '../components/FreshnessIndicator';
 import { SkeletonBlock } from '../components/SkeletonBlock';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
+import { useMarketSession } from '../hooks/useMarketSession';
 
 // Per-card skeletons rather than the page-level DashboardSkeleton
 // component (components/skeletons/DashboardSkeleton.tsx): that one
@@ -147,6 +148,7 @@ function readSelectedLayout(): string {
 }
 
 export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
+  const marketSession = useMarketSession();
   const [customLayouts, setCustomLayouts] = useState<DashboardLayout[]>(readCustomLayouts);
   const [selectedLayoutId, setSelectedLayoutId] = useState<string>(readSelectedLayout);
   const [layoutEditorOpen, setLayoutEditorOpen] = useState(false);
@@ -691,6 +693,7 @@ export function Dashboard({ symbol, onSymbolChange }: DashboardProps) {
                 timestamp={effectiveQuote.timestamp}
                 connectionStatus={quoteConnectionStatus}
                 provider={liveQuote?.provider}
+                marketSession={marketSession?.session}
               />
             </div>
           )}

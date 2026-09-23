@@ -83,14 +83,22 @@ def _safe_age_seconds(timestamp: datetime | None, now: datetime) -> float | None
         return None
 
 
-def _freshness_status(age_seconds: float | None) -> str:
+def _freshness_status(age_seconds: float | None, session_closed: bool = False) -> str:
     if age_seconds is None:
         return "unavailable"
     if age_seconds <= 60:
         return "fresh"
     if age_seconds <= 900:
         return "recent"
+    if session_closed:
+        return "closed"
     return "stale"
+
+
+def _is_session_closed(now: datetime) -> bool:
+    from backend.engines.market_calendar import SessionType, us_market_calendar
+
+    return us_market_calendar.get_session_type(now) == SessionType.CLOSED
 
 
 def _timeframe_agreement(trend_signals: dict[str, Any]) -> dict[str, Any]:
@@ -296,7 +304,7 @@ def build_signal_explanation(result, previous_result=None) -> dict[str, Any]:
     quote_timestamp = getattr(result.quote, "timestamp", None) if result.quote else None
     age_seconds = _safe_age_seconds(quote_timestamp, now)
     freshness = {
-        "status": _freshness_status(age_seconds),
+        "status": _freshness_status(age_seconds, session_closed=_is_session_closed(now)),
         "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
         "quote_timestamp": quote_timestamp.isoformat() if quote_timestamp else None,
         "scan_timestamp": result.timestamp.isoformat(),

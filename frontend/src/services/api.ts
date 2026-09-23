@@ -11,7 +11,7 @@ export interface RegimeData {
   supporting_factors: Record<string, any>;
   timestamp: string | null;
   data_age_seconds: number | null;
-  freshness: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown';
+  freshness: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'closed';
 }
 
 // Phase 8: market-wide context (aggregated from SPY/QQQ/IWM/VIX)
@@ -25,7 +25,7 @@ export interface MarketContextData {
   contributing_factors: Record<string, any>;
   timestamp: string | null;
   data_age_seconds?: number | null;
-  freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown';
+  freshness?: 'fresh' | 'recent' | 'stale' | 'stuck' | 'unknown' | 'closed';
   sub_data_age_seconds?: Record<string, number | null>;
 }
 
@@ -664,7 +664,7 @@ export interface SignalTimeframeAgreement {
 }
 
 export interface SignalDataFreshness {
-  status: 'fresh' | 'recent' | 'stale' | 'unavailable';
+  status: 'fresh' | 'recent' | 'stale' | 'unavailable' | 'closed';
   age_seconds: number | null;
   quote_timestamp: string | null;
   scan_timestamp: string;

@@ -154,6 +154,64 @@ def test_registry_surfaces_provider_freshness_and_quality_warning() -> None:
     assert any("STALE" in warning for warning in result.warnings)
 
 
+def test_stale_warning_notes_market_closed_when_session_is_shut(monkeypatch) -> None:
+    import backend.ai.tool_registry as tool_registry_module
+
+    class EmptyRequest(BaseModel):
+        pass
+
+    class ProviderPayload(BaseModel):
+        provider: str = "webull"
+        source_timestamp: str = "2020-01-01T00:00:00+00:00"
+        data_status: str = "STALE"
+
+    monkeypatch.setattr(tool_registry_module, "_is_market_session_closed", lambda: True)
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="provider_test",
+            kind="read_only",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: ProviderPayload(),
+        )
+    )
+    result = registry.execute(ToolRequest(tool_name="provider_test"))
+
+    assert any("STALE" in warning and "market is currently closed" in warning.lower() for warning in result.warnings)
+
+
+def test_delayed_warning_does_not_note_market_closed() -> None:
+    """DELAYED is a fixed feed-type label (Webull's REST snapshot), not an age
+    judgment — it must not get the "expected, market is closed" caveat that
+    STALE/GAP/INCOMPLETE get, since DELAYED is true whether or not the market
+    is open."""
+
+    class EmptyRequest(BaseModel):
+        pass
+
+    class ProviderPayload(BaseModel):
+        provider: str = "webull"
+        source_timestamp: str = "2020-01-01T00:00:00+00:00"
+        data_status: str = "DELAYED"
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            name="provider_test_delayed",
+            kind="read_only",
+            description="test",
+            input_model=EmptyRequest,
+            handler=lambda _: ProviderPayload(),
+        )
+    )
+    result = registry.execute(ToolRequest(tool_name="provider_test_delayed"))
+
+    assert any("DELAYED" in warning for warning in result.warnings)
+    assert not any("market is currently closed" in warning.lower() for warning in result.warnings)
+
+
 def test_reconciliation_prefers_primary_and_flags_material_conflicts() -> None:
     result = reconcile_observations(
         [

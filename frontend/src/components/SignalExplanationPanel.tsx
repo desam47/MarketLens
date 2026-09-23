@@ -131,7 +131,10 @@ export function SignalExplanationPanel({ symbol, explanation, liveQuote, tape }:
       </div>
 
       <div className="signal-explanation-meta">
-        <span><strong>Data:</strong> {titleCase(freshness.status)} · {formatAge(freshness.age_seconds)}</span>
+        <span>
+          <strong>Data:</strong> {freshness.status === 'closed' ? 'Mkt Closed' : titleCase(freshness.status)}
+          {freshness.status !== 'closed' && ` · ${formatAge(freshness.age_seconds)}`}
+        </span>
         {freshness.provider && <span><strong>Provider:</strong> {freshness.provider}</span>}
       </div>
 
