@@ -1018,6 +1018,10 @@ def get_options_tool(request: OptionsRequest) -> BaseModel:
         provider=response.provider,
         source_timestamp=response.timestamp,
         fallback=response.provider != settings.aux_data.options.primary_provider,
+        # Options chains come from delayed aux feeds (the Options page shows
+        # the same caveat); the registry turns this into a visible warning.
+        data_status="DELAYED",
+        price_note="Options prices are delayed/approximate market data, not executable quotes.",
     )
 
 
@@ -1090,6 +1094,24 @@ def why_did_it_move_tool(request: MoveAnalysisRequest) -> BaseModel:
     )
 
 
+def _previous_regular_close(bars: list[dict[str, Any]], current: dict[str, Any]) -> dict[str, Any] | None:
+    """The last regular-session bar from an earlier New York trading day.
+
+    Bar timestamps are serialized with their New York offset, so the first
+    ten characters are the New York date. For daily bars this is simply the
+    prior day's bar; for intraday bars it skips the current day's premarket
+    and earlier minutes so "change since previous close" means that.
+    """
+    current_day = str(current.get("timestamp") or "")[:10]
+    if not current_day:
+        return None
+    for bar in reversed(bars[:-1]):
+        day = str(bar.get("timestamp") or "")[:10]
+        if day and day < current_day and bar.get("session", "regular") == "regular":
+            return bar
+    return None
+
+
 def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
     """Compare current verified bars with an explicit baseline."""
     symbol = request.symbol.upper()
@@ -1107,7 +1129,13 @@ def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
         else:
             current = bars[-1]
             baseline = bars[-2]
-            if request.reference == "timestamp":
+            if request.reference in ("previous_close", "yesterday"):
+                previous_close = _previous_regular_close(bars, current)
+                if previous_close is not None:
+                    baseline = previous_close
+                elif current.get("timestamp"):
+                    unknowns.append({"type": "baseline", "reason": "no previous regular-session close in the requested range"})
+            elif request.reference == "timestamp":
                 if not request.since:
                     unknowns.append({"type": "baseline", "reason": "timestamp reference requires since"})
                 else:
@@ -1135,6 +1163,8 @@ def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
                         "type": "timestamp",
                         "current": current.get("timestamp"),
                         "baseline": baseline.get("timestamp"),
+                        "current_session": current.get("session"),
+                        "baseline_session": baseline.get("session"),
                         "reference": request.reference,
                     }
                 )
@@ -1244,6 +1274,16 @@ def compare_symbols_tool(request: ComparisonRequest) -> BaseModel:
         except Exception as exc:
             unknowns.append({"type": "symbol", "symbol": symbol, "reason": str(exc)})
 
+    # Rankings are only comparable when every symbol's latest bar is from the
+    # same time; a symbol whose data stopped earlier is flagged, not hidden.
+    latest_times = {row["symbol"]: row["source_timestamp"] for row in rows}
+    aligned = len({value for value in latest_times.values()}) <= 1
+    if not aligned:
+        unknowns.append({
+            "type": "alignment",
+            "reason": "latest bars are from different times; rankings mix observation times",
+            "latest_bar_times": latest_times,
+        })
     rows.sort(key=lambda row: (-row["value"] if request.direction == "desc" else row["value"], row["symbol"]))
     for rank, row in enumerate(rows[: request.limit], start=1):
         row["rank"] = rank
@@ -1256,12 +1296,13 @@ def compare_symbols_tool(request: ComparisonRequest) -> BaseModel:
         session=request.session,
         range=request.range,
         rankings=rows,
+        aligned=aligned,
         evaluated_count=len(rows),
         unknowns=unknowns,
         sources=sources,
         provider="MarketLens comparison",
         conclusion={
-            "status": "verified_ranking" if rows else "insufficient_data",
+            "status": ("verified_ranking" if aligned else "misaligned_ranking") if rows else "insufficient_data",
             "message": "Rankings are calculated from returned provider bars; they are not a forecast.",
         },
     )
@@ -1402,7 +1443,9 @@ def historical_similarity_tool(request: HistoricalSimilarityRequest) -> BaseMode
 
     bars = payload.get("bars", [])
     closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
-    if len(closes) < request.lookback + max(horizons) + 2:
+    # The current window plus at least one earlier window whose outcome bars
+    # finish before the current window starts.
+    if len(closes) < 2 * request.lookback + max(horizons):
         return _Payload(
             available=False,
             symbol=symbol,
@@ -1425,12 +1468,11 @@ def historical_similarity_tool(request: HistoricalSimilarityRequest) -> BaseMode
 
     current_end = len(closes) - 1
     current_return, current_volatility = features(current_end)
-    # Candidate windows end before the current lookback window. Their outcome
-    # bars may extend forward, but never into the current setup window.
-    latest_candidate_end = min(
-        len(closes) - request.lookback - 1,
-        len(closes) - max(horizons) - 1,
-    )
+    # Candidate windows end before the current lookback window, and their
+    # outcome bars (end + horizon) also finish before it starts, so no
+    # sample outcome overlaps the setup being compared.
+    current_start = len(closes) - request.lookback
+    latest_candidate_end = current_start - max(horizons) - 1
     earliest_candidate_end = request.lookback - 1
     candidates: list[dict[str, Any]] = []
     for end_index in range(earliest_candidate_end, latest_candidate_end + 1):
@@ -2793,6 +2835,7 @@ def options_research_tool(request: OptionsResearchRequest) -> BaseModel:
         provider=options.get("provider"),
         source_timestamp=options.get("source_timestamp"),
         fallback=options.get("fallback"),
+        data_status="DELAYED",
         assumptions=[
             "Prices are delayed/approximate market data (see provider/fallback), not executable quotes -- "
             "premium_source records whether the last trade or the bid/ask midpoint was used for the math.",

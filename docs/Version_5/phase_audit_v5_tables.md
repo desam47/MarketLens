@@ -119,21 +119,22 @@ post-completion review item 2).
 
 | Tool | Plan verification point | Tests (module: count) | Total |
 | --- | --- | --- | ---: |
-| `why_did_it_move` | facts vs correlations vs unknowns | `market_tools::test_move_analysis_separates_facts_correlations_and_unknowns`; routing in `chat_intents`, `semantic_router`, E2E | 4 + E2E |
-| `what_changed` | baseline comparison | `market_tools::test_what_changed_compares_current_bar_with_previous_close`; routing; E2E date scope | 3 + E2E |
-| `compare_symbols` | aligned, reproducible rankings | `market_tools` (3: ranking, missing symbol, parallel fetch); `visual_trace_payload`, `answer_verifier`, routing | 8 + E2E |
-| `scenario_analysis` | deterministic shocks, no forecast | `market_tools` (2: price/stop recalculation, honest unavailable) | 4 |
-| `historical_similarity` | look-ahead leakage, small samples | `market_tools::test_historical_similarity_excludes_current_setup_from_matches` (asserts `look_ahead_safe`) | 3 |
+| `why_did_it_move` | facts vs correlations vs unknowns | `market_tools` (3: facts/correlations/unknowns, headlines never causal, missing news as unknown); routing in `chat_intents`, `semantic_router`, E2E | 6 + E2E |
+| `what_changed` | baseline comparison | `market_tools` (3: previous close, premarket vs previous regular close, no earlier day → unknown); routing; E2E date scope | 5 + E2E |
+| `compare_symbols` | aligned, reproducible rankings | `market_tools` (5: ranking, missing symbol, parallel fetch, misaligned times flagged, aligned times); `visual_trace_payload`, `answer_verifier`, routing | 10 + E2E |
+| `scenario_analysis` | deterministic shocks, no forecast | `market_tools` (3: price/stop recalculation, honest unavailable, deterministic multi-position portfolio shock) | 5 |
+| `historical_similarity` | look-ahead leakage, small samples | `market_tools` (2: sample outcomes end before the current window, too few bars for a non-overlapping sample) | 4 |
 | `signal_explanation` | triggers, agreement, tape | `market_tools` (2), `scanner/test_explanation` (2) | 6 |
-| `counterargument_review` | no manufactured counter-evidence | `market_tools::test_counterargument_review_only_surfaces_available_opposing_evidence` | 3 |
+| `counterargument_review` | no manufactured counter-evidence | `market_tools` (2: available opposing evidence, none manufactured when absent) | 4 |
 | `sensitivity_analysis` | one factor at a time, conditional | `market_tools::test_sensitivity_analysis_varies_one_factor_at_a_time` | 3 |
-| `market_event_timeline` | NY ordering, before/after/between | `market_tools::test_market_event_timeline_normalizes_and_orders_events`; E2E date bounds | 3 + E2E |
+| `market_event_timeline` | NY ordering, before/after/between | `market_tools` (2: normalization/ordering, between-bounds with mixed UTC/NY offsets); E2E date bounds | 4 + E2E |
 | `anomaly_analysis` | explicit baseline and magnitude | `market_tools` (1), `visual_trace_payload` (4) | 7 |
 | `assumption_tracking` | immutable originals, stale/broken | `market_tools` (2), `chat_intents` (3) | 6 |
 
 Counts are test functions that reference the tool; each count includes the
-generic registry test. Most analysis tools have **one** behavioral test.
-See Finding 4.
+generic registry test. Nine behavioral tests were added after the first
+draft of this table. `signal_explanation`, `sensitivity_analysis`, and
+`anomaly_analysis` still rest on one or two behavioral cases each.
 
 ## 5.7 — Response blocks
 
@@ -184,15 +185,15 @@ pass in `phase_5_7_manual_qa.md` has not been run.
 | # | Scenario | Status | Evidence |
 | ---: | --- | --- | --- |
 | 1 | Buy 200 AAPL at , stop  → ,600 risk with formula | ✅ Automated | E2E `calculation_position_risk` |
-| 2 | Premarket change uses previous regular close, labels premarket time | ⚠️ Partial | E2E `session_scoped_tool_call` checks the session argument only; the previous-close baseline is not asserted |
-| 3 | AAPL vs MSFT from aligned timeframes and timestamps | ⚠️ Partial | `compare_symbols` unit tests (single timeframe per request); timestamp alignment not asserted |
+| 2 | Premarket change uses previous regular close, labels premarket time | ✅ Tool | `test_premarket_change_uses_previous_regular_close` (fixed: the baseline was the previous bar) |
+| 3 | AAPL vs MSFT from aligned timeframes and timestamps | ✅ Tool | one timeframe per request; misaligned latest bars now flagged (`test_compare_symbols_flags_misaligned_latest_bars`) |
 | 4 | Why move separates confirmed news from inferred effects | ✅ Tool + routing | `test_move_analysis_separates_facts_correlations_and_unknowns`; E2E `why_did_it_move_routes` |
-| 5 | 5% portfolio shock gives deterministic impacts | ⚠️ Tool only | `test_scenario_analysis_recalculates_price_and_stop_risk`; from Chat, positions are browser-local, so the tool reports them unavailable |
+| 5 | 5% portfolio shock gives deterministic impacts | ⚠️ Tool only | `test_portfolio_shock_is_deterministic_across_positions`; from Chat, positions are browser-local and not sent, so the tool reports them unavailable |
 | 6 | NL scanner filters identical to executed filters | ✅ Scanner page | `nl_search/test_scanner_builder`, `api/test_nl_search_router` (preview payload = executed payload) |
 | 7 | "Use the same stop but 100 shares" reuses state | ✅ Automated | E2E `followup_reuses_previous_stop` |
-| 8 | Breakeven and expected move show delayed/approximate provenance | ⚠️ Partial | `options_research` tests + golden formulas; the provenance label on the answer is not asserted |
+| 8 | Breakeven and expected move show delayed/approximate provenance | ✅ Tool | options results now carry `data_status: DELAYED` → a visible "Provider data status: DELAYED." warning (`test_options_snapshot_is_labelled_delayed_in_the_tool_result`) |
 | 9 | Fired alert opens a conversation with exact trigger evidence | ✅ API | `api/test_alerts_api` conversation-context tests |
-| 10 | Saved plan and later review keep original assumptions/calculations | ⚠️ Partial | E2E `journal_save_requires_confirmation`; the later review is not covered |
+| 10 | Saved plan and later review keep original assumptions/calculations | ✅ Tool + E2E | `test_saved_plan_keeps_original_assumptions_and_calculations_through_review`; E2E confirmation |
 | 11 | Provider outage → partial/stale answer with explicit warning | ✅ Automated | E2E `model_outage_is_explicit` (+ stream), `tool_timeout_is_explicit`, verifier stale cases |
 | 12 | Destructive actions confirmed; no order execution | ✅ Automated | E2E confirmation, decline, and self-confirmation cases; no order tool is registered |
 
@@ -231,13 +232,33 @@ Fixed after the tables were first written:
    evidence (`_context_freshness_seconds`) had the same bug. Both now read
    naive times as New York time.
 
+Found and fixed while adding coverage:
+
+5. **`historical_similarity` sample outcomes overlapped the current setup.**
+   A match could end so close to the current window that its outcome bars
+   landed inside it; the code comment claimed otherwise. Matches now end at
+   least `max(horizon) + 1` bars before the current window, and too-short
+   ranges report unavailable.
+6. **"Previous close" meant "previous bar".** `what_changed` compared
+   against `bars[-2]` for `previous_close`/`yesterday`, so an intraday or
+   premarket question compared against the prior minute. It now uses the
+   last regular-session bar from an earlier New York day, and labels both
+   sessions.
+7. **Comparisons silently mixed observation times.** `compare_symbols` now
+   reports `aligned` and flags differing latest-bar times
+   (`misaligned_ranking`).
+8. **Options snapshots carried no delayed label.** Options results now set
+   `data_status: DELAYED`, which surfaces as a warning in the answer.
+
 Still open:
 
-5. **5.4 behavioral coverage is thin.** Most analysis tools have one
-   behavioral test. Leakage, event ordering, and counter-evidence each rest
-   on a single case.
-6. **Plan scenarios 2, 3, 5, 8, and 10** are only partly covered (see the
-   matrix).
+9. **Scenario #5 from Chat.** Risk Dashboard positions (like Scanner presets
+   and Journal entries) are browser-local, and Chat does not send them, so
+   portfolio questions from Chat report "unavailable". Sending them would
+   pass private positions to the backend and, through the prompt, to the
+   configured AI provider. That is a product/privacy decision.
+10. `signal_explanation`, `sensitivity_analysis`, and `anomaly_analysis`
+   still have one or two behavioral cases each.
 
 Closed while writing this audit:
 - 11 golden formula cases and 4 invalid-input cases for `return`, `cagr`,

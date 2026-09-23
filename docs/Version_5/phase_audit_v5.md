@@ -1284,7 +1284,7 @@ covering them.
   - 5.2 per-tool source, cache, freshness, fallback, and tests;
   - 5.4 test counts;
   - 5.7 per-block persistence, quality, and accessibility;
-  - the plan's 12-scenario matrix (7 covered, 5 partial).
+  - the plan's 12-scenario matrix (11 covered, 1 partial: #5 from Chat).
 
   Freshness findings from the tables are fixed:
   - composite tools report their oldest source;
@@ -1292,7 +1292,16 @@ covering them.
   - snapshot and computed tools no longer claim call time;
   - naive timestamps are read as New York time.
 
-  Still open: 5.4 behavioral coverage is thin.
+  Adding coverage also found and fixed four behavior bugs:
+  - `historical_similarity` outcomes overlapped the current window;
+  - "previous close" in `what_changed` meant the previous bar;
+  - comparisons mixed observation times without saying so;
+  - options results lacked a delayed label.
+
+  Still open:
+  - portfolio scenarios from Chat need browser positions, which Chat
+    doesn't send (a privacy decision);
+  - three analysis tools have only one or two behavioral cases.
 - **Plan open questions.** Q4 (blocks stored as versioned JSON in
   `chat_messages.response_blocks`) and Q5 (preferences stay browser-local)
   are decided by the implementation; Q1–Q3 remain open.

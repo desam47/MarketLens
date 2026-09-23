@@ -299,9 +299,29 @@ def test_historical_similarity_excludes_current_setup_from_matches(monkeypatch) 
 
     assert result.available is True
     assert result.look_ahead_safe is True
-    assert all(match["end_index"] <= 26 for match in result.matches)
+    # 30 bars, lookback 3: the current window is bars 27-29. With a 2-bar
+    # horizon a match must end by bar 24 so its outcome (24 + 2 = 26) stays
+    # before the current window.
+    assert result.matches
+    assert all(match["end_index"] + 2 < 27 for match in result.matches)
     assert result.summaries[0]["sample_size"] == 3
     assert result.conclusion["status"] == "verified_similarity"
+
+
+def test_historical_similarity_needs_room_for_a_non_overlapping_sample(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    # lookback 5 + horizon 5 needs at least 2 * 5 + 5 = 15 bars.
+    bars = [{"timestamp": f"2026-01-{index + 1:02d}T16:00:00-05:00", "close": 100 + index} for index in range(14)]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, bars=bars, provider="test", source_timestamp=bars[-1]["timestamp"]),
+    )
+
+    result = historical_similarity_tool(HistoricalSimilarityRequest(symbol="AAPL", lookback=5, horizons=[5], tolerance=10))
+
+    assert result.available is False
+    assert result.matches == []
 
 
 def test_signal_explanation_reports_triggers_agreement_and_tape(monkeypatch) -> None:
@@ -1699,3 +1719,261 @@ def test_compare_symbols_fetches_each_symbol_once_and_in_parallel(monkeypatch) -
     assert sorted(calls) == ["AAA", "BBB", "CCC", "DDD"]
     assert elapsed < 0.6  # four 0.2 s reads run concurrently, not in sequence
     assert result.model_dump()["rankings"][0]["symbol"] == "AAA"
+
+
+# --- Additional 5.4 behavioral coverage (2026-09-23 audit) -----------------
+
+
+def _stub_move_sources(monkeypatch, news_items: list[dict]) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="2026-09-22T16:00:00-04:00",
+                                 bars=[{"close": 100, "volume": 1000}, {"close": 95, "volume": 3000}]),
+    )
+    monkeypatch.setattr("backend.ai.market_tools.get_news_tool", lambda request: _Payload(symbol=request.symbol, items=news_items, provider="news", source_timestamp="2026-09-22T15:00:00-04:00"))
+    monkeypatch.setattr("backend.ai.market_tools.get_options_tool", lambda request: _Payload(symbol=request.symbol, chains=[], provider="options"))
+    monkeypatch.setattr("backend.ai.market_tools.get_sector_data_tool", lambda request: _Payload(symbol=request.symbol, provider="engine"))
+    monkeypatch.setattr("backend.ai.market_tools.get_market_regime_tool", lambda request: _Payload(regime="risk_off", provider="engine"))
+    monkeypatch.setattr("backend.ai.market_tools.get_tape_state_tool", lambda request: _Payload(symbol=request.symbol, provider="webull"))
+
+
+def test_move_analysis_never_treats_headlines_as_proven_causes(monkeypatch) -> None:
+    _stub_move_sources(monkeypatch, [{"headline": "AAPL downgraded", "timestamp": "2026-09-22T14:00:00-04:00"}])
+
+    result = why_did_it_move_tool(MoveAnalysisRequest(symbol="AAPL"))
+
+    news = [item for item in result.correlations if item["type"] == "news_present"]
+    assert news and news[0]["causal"] is False
+    assert all(item["causal"] is False for item in result.correlations)
+    assert not any(fact["type"] == "news_present" for fact in result.facts)
+    assert result.conclusion["status"] == "evidence_only"
+
+
+def test_move_analysis_reports_missing_news_as_unknown(monkeypatch) -> None:
+    _stub_move_sources(monkeypatch, [])
+
+    result = why_did_it_move_tool(MoveAnalysisRequest(symbol="AAPL"))
+
+    assert result.facts[0]["change_percent"] == -5.0
+    assert any(item["type"] == "news" for item in result.unknowns)
+    assert not any(item["type"] == "news_present" for item in result.correlations)
+
+
+def test_counterargument_review_does_not_manufacture_opposing_evidence(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.signal_explanation_tool",
+        lambda request: _Payload(
+            symbol="AAPL", direction="bullish", indicators={}, triggers=[{"indicator": "macd", "direction": "bullish"}],
+            timeframe_agreement={"dominant": "bullish", "bullish": 3, "bearish": 0, "timeframes": []},
+            tape_relation={"contradicts": False}, tape={"direction": "bullish"}, freshness={"status": "fresh"},
+            sources=[], unknowns=[],
+        ),
+    )
+
+    result = counterargument_review_tool(CounterargumentRequest(symbol="AAPL"))
+
+    assert result.counterarguments == []
+    assert any(item["type"] == "counterargument" for item in result.unknowns)
+
+
+def test_market_event_timeline_between_bounds_and_orders_mixed_offsets(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol="AAPL", provider="webull", source_timestamp="2026-09-22T16:00:00-04:00", bars=[
+            {"timestamp": "2026-09-22T09:30:00-04:00", "session": "regular", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1000},
+            {"timestamp": "2026-09-22T11:00:00-04:00", "session": "regular", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1200},
+        ]),
+    )
+    monkeypatch.setattr("backend.ai.market_tools.get_confluence_tool", lambda request: _Payload(symbol="AAPL", provider="engine"))
+    monkeypatch.setattr("backend.ai.market_tools.get_alerts_tool", lambda request: _Payload(provider="db", alerts=[]))
+    # 14:10Z is 10:10 New York: inside the window, and must sort before 10:30 -04:00.
+    monkeypatch.setattr("backend.ai.market_tools.get_news_tool", lambda request: _Payload(provider="news", items=[
+        {"timestamp": "2026-09-22T14:10:00Z", "headline": "inside, UTC offset"},
+        {"timestamp": "2026-09-22T10:30:00-04:00", "headline": "inside, NY offset"},
+        {"timestamp": "2026-09-22T15:30:00-04:00", "headline": "after the window"},
+        {"timestamp": "2026-09-22T08:00:00-04:00", "headline": "before the window"},
+    ]))
+    monkeypatch.setattr("backend.ai.market_tools.get_calendar_tool", lambda request: _Payload(provider="yfinance", events=[]))
+    monkeypatch.setattr("backend.ai.market_tools.get_fundamentals_tool", lambda request: _Payload(provider="finnhub", data={}))
+    monkeypatch.setattr("backend.ai.market_tools.get_options_tool", lambda request: _Payload(provider="yahoo_finance", chains=[]))
+
+    result = market_event_timeline_tool(MarketEventTimelineRequest(
+        symbol="AAPL", start="2026-09-22T10:00:00-04:00", end="2026-09-22T12:00:00-04:00",
+    ))
+
+    headlines = [event["data"]["headline"] for event in result.events if event["type"] == "news"]
+    assert headlines == ["inside, UTC offset", "inside, NY offset"]
+    stamps = [event["timestamp"] for event in result.events]
+    assert stamps == sorted(stamps)
+    assert all("10:00:00" <= stamp[11:19] <= "12:00:00" for stamp in stamps)
+
+
+def test_portfolio_shock_is_deterministic_across_positions() -> None:
+    # Plan matrix #5: a 5% portfolio shock gives deterministic position and portfolio impacts.
+    request = ScenarioRequest(
+        positions=[
+            PositionInput(symbol="AAPL", quantity=100, entry_price=200, current_price=220, stop_price=190, sector="Technology"),
+            PositionInput(symbol="XOM", quantity=50, entry_price=100, current_price=110, stop_price=95, sector="Energy"),
+        ],
+        portfolio_shock_percent=-5,
+        portfolio_value=100_000,
+    )
+
+    first = scenario_analysis_tool(request).model_dump()
+    second = scenario_analysis_tool(request).model_dump()
+
+    by_symbol = {row["symbol"]: row for row in first["positions"]}
+    assert by_symbol["AAPL"]["scenario_price"] == 209  # 220 * 0.95
+    assert by_symbol["AAPL"]["pnl_delta"] == -1100
+    assert by_symbol["XOM"]["scenario_price"] == 104.5  # 110 * 0.95
+    assert by_symbol["XOM"]["pnl_delta"] == -275
+    assert first["total_pnl_delta"] == -1375
+    first.pop("source_timestamp", None)
+    second.pop("source_timestamp", None)
+    assert first == second
+
+
+def test_premarket_change_uses_previous_regular_close(monkeypatch) -> None:
+    # Plan matrix #2: a premarket change is measured from the previous regular
+    # close and labels the premarket timestamp, not the prior 1m bar.
+    from backend.ai.market_tools import _Payload
+
+    bars = [
+        {"timestamp": "2026-09-21T15:59:00-04:00", "session": "regular", "close": 100.0},
+        {"timestamp": "2026-09-21T16:30:00-04:00", "session": "after_hours", "close": 101.0},
+        {"timestamp": "2026-09-22T08:00:00-04:00", "session": "premarket", "close": 102.0},
+        {"timestamp": "2026-09-22T08:01:00-04:00", "session": "premarket", "close": 103.0},
+    ]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp=bars[-1]["timestamp"], bars=bars),
+    )
+
+    result = what_changed_tool(ChangeAnalysisRequest(symbol="AAPL", timeframe="1m", session="premarket"))
+
+    price, stamp = result.changes
+    assert price["baseline"] == 100.0
+    assert price["percent"] == 3.0
+    assert stamp["baseline"] == "2026-09-21T15:59:00-04:00"
+    assert stamp["current"] == "2026-09-22T08:01:00-04:00"
+    assert (stamp["baseline_session"], stamp["current_session"]) == ("regular", "premarket")
+
+
+def test_previous_close_is_unknown_when_the_range_has_no_earlier_day(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    bars = [
+        {"timestamp": "2026-09-22T08:00:00-04:00", "session": "premarket", "close": 102.0},
+        {"timestamp": "2026-09-22T08:01:00-04:00", "session": "premarket", "close": 103.0},
+    ]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp=bars[-1]["timestamp"], bars=bars),
+    )
+
+    result = what_changed_tool(ChangeAnalysisRequest(symbol="AAPL", timeframe="1m", session="premarket"))
+
+    assert result.changes == []
+    assert result.conclusion["status"] == "insufficient_baseline"
+
+
+def test_compare_symbols_flags_misaligned_latest_bars(monkeypatch) -> None:
+    # Plan matrix #3: comparisons must come from aligned timestamps.
+    from backend.ai.market_tools import ComparisonRequest, _Payload, compare_symbols_tool
+
+    times = {"AAPL": "2026-09-22T16:00:00-04:00", "MSFT": "2026-09-22T12:00:00-04:00"}
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp=times[request.symbol],
+                                 bars=[{"close": 100.0}, {"close": 105.0}]),
+    )
+
+    result = compare_symbols_tool(ComparisonRequest(symbols=["AAPL", "MSFT"]))
+
+    assert result.aligned is False
+    assert result.conclusion["status"] == "misaligned_ranking"
+    alignment = next(item for item in result.unknowns if item["type"] == "alignment")
+    assert alignment["latest_bar_times"] == times
+
+
+def test_compare_symbols_with_matching_times_is_aligned(monkeypatch) -> None:
+    from backend.ai.market_tools import ComparisonRequest, _Payload, compare_symbols_tool
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="2026-09-22T16:00:00-04:00",
+                                 bars=[{"close": 100.0}, {"close": 105.0}]),
+    )
+
+    result = compare_symbols_tool(ComparisonRequest(symbols=["AAPL", "MSFT"]))
+
+    assert result.aligned is True
+    assert result.conclusion["status"] == "verified_ranking"
+
+
+def test_options_snapshot_is_labelled_delayed_in_the_tool_result(monkeypatch) -> None:
+    # Plan matrix #8: options math must show delayed/approximate provenance.
+    from datetime import UTC, datetime
+
+    from backend.ai.tool_registry import ToolRequest, default_registry
+    from backend.models.aux_data import OptionsResponse
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools._aux_manager",
+        lambda: type("_Aux", (), {"get_options": lambda self, symbol, expiration=None: OptionsResponse(symbol=symbol, provider="yahoo_finance", timestamp=datetime.now(UTC))})(),
+    )
+
+    result = default_registry.execute(ToolRequest(tool_name="get_options_snapshot", arguments={"symbol": "AAPL"}))
+
+    assert result.ok is True
+    assert result.data["data_status"] == "DELAYED"
+    assert "Provider data status: DELAYED." in result.warnings
+    assert "not executable" in result.data["price_note"]
+
+
+def test_saved_plan_keeps_original_assumptions_and_calculations_through_review() -> None:
+    # Plan matrix #10: a saved plan and its later review preserve the original
+    # assumptions and calculations; the review never rewrites them.
+    import copy
+
+    from backend.ai.market_tools import (
+        JournalCoachRequest,
+        JournalEntryInput,
+        SaveToJournalRequest,
+        TradePlanRequest,
+        build_trade_plan_tool,
+        save_to_journal_tool,
+        trade_journal_coach_tool,
+    )
+
+    plan = build_trade_plan_tool(TradePlanRequest(
+        symbol="AAPL", direction="long", entry_price=200, stop_price=190, targets=[220],
+        account_value=100_000, risk_percent=1,
+    )).model_dump(mode="json")
+    original_plan = copy.deepcopy(plan)
+
+    saved = save_to_journal_tool(SaveToJournalRequest(entry=JournalEntryInput(
+        symbol="aapl", status="planned", quantity=100, entry_price=200, stop_price=190, target_price=220,
+        planned_entry=200, planned_stop=190, planned_target=220, thesis="Breakout above 200",
+        plan=plan, calculations={"risk_reward": plan["targets"][0]["risk_reward"]},
+    ))).saved_entry
+    assert saved["plan"] == original_plan
+    assert saved["thesis"] == "Breakout above 200"
+
+    # Later: the trade is closed below the planned target and reviewed.
+    closed = {**saved, "status": "closed", "exit_price": 212}
+    review = trade_journal_coach_tool(JournalCoachRequest(entries=[closed])).model_dump(mode="json")
+
+    row = review["plan_vs_actual"][0]
+    assert row["exit_classification"] == "closed_early"
+    assert row["evidence_attached"]["plan"] is True
+    assert row["evidence_attached"]["calculations"] is True
+    # The reviewed entry still carries the plan exactly as it was saved.
+    assert closed["plan"] == original_plan
+    assert closed["planned_stop"] == 190 and closed["planned_target"] == 220
