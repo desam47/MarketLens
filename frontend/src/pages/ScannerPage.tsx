@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { CalendarEvent, FilterSpec, ScanResult, Watchlist } from '../services/api';
 import { FilterBuilder } from '../components/FilterBuilder';
+import { NaturalLanguageScannerBuilder } from '../components/NaturalLanguageScannerBuilder';
 import { NamedRankingsPanel } from '../components/NamedRankingsPanel';
 import { MarketDataUpdateStatus } from '../components/MarketDataUpdateStatus';
 import { useMarketSession } from '../hooks/useMarketSession';
@@ -95,6 +96,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const [currentMatch, setCurrentMatch] = useState<'AND' | 'OR'>('AND');
   const [presetName, setPresetName] = useState('');
   const [presetVersion, setPresetVersion] = useState(0);
+  const [openBuilderForPreview, setOpenBuilderForPreview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [symbolsLoading, setSymbolsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,8 +185,20 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
   const loadPreset = (preset: SavedPreset) => {
     setCurrentFilters(preset.filters);
     setCurrentMatch(preset.match);
+    setOpenBuilderForPreview(false);
     setPresetVersion(v => v + 1);
   };
+
+  const useNaturalLanguagePreview = useCallback((filters: FilterSpec[], match: 'AND' | 'OR') => {
+    // FilterBuilder receives this exact payload and is deliberately opened so
+    // the trader can inspect or edit it before its normal debounced execution.
+    setResults([]);
+    setHasRunScan(false);
+    setCurrentFilters(filters);
+    setCurrentMatch(match);
+    setOpenBuilderForPreview(true);
+    setPresetVersion(version => version + 1);
+  }, []);
 
   const deletePreset = (name: string) => {
     const next = presets.filter(p => p.name !== name);
@@ -227,6 +241,11 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
       <div className="scanner-layout">
         <div>
           <div className="card scanner-builder-card">
+            <NaturalLanguageScannerBuilder
+              watchlistId={selectedWatchlist}
+              disabled={loading || symbolsLoading || symbols.length === 0}
+              onUsePreview={useNaturalLanguagePreview}
+            />
             <FilterBuilder
               key={presetVersion}
               symbols={symbols}
@@ -234,6 +253,7 @@ export function ScannerPage({ onSelectSymbol }: ScannerPageProps) {
               onClear={() => { setResults([]); setHasRunScan(false); }}
               initialFilters={currentFilters}
               initialMatch={currentMatch}
+              initiallyOpen={openBuilderForPreview}
               onFiltersChange={handleFiltersChange}
             />
             <div className="scanner-presets">

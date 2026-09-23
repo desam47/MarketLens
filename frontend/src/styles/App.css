@@ -3078,6 +3078,138 @@ h4 {
   margin-bottom: 1rem;
 }
 
+/* Phase 5.5.1 — Natural-language Scanner Builder.  Translation only builds
+   the existing FilterBuilder payload; the actual scan still starts below. */
+.nl-scanner-builder {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+}
+
+.nl-scanner-builder-heading,
+.nl-scanner-preview-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.nl-scanner-builder-heading h2 {
+  font-size: 1rem;
+  margin: 0 0 0.25rem;
+}
+
+.nl-scanner-builder-heading p,
+.nl-scanner-preview-description,
+.nl-scanner-preview-match {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.nl-scanner-builder-status,
+.nl-scanner-parser {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+}
+
+.nl-scanner-parser.needs-review {
+  border-color: #d97706;
+  color: #fbbf24;
+}
+
+.nl-scanner-builder-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.nl-scanner-builder-form input {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.7rem;
+}
+
+.nl-scanner-builder-form input:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+}
+
+.nl-scanner-builder-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.nl-scanner-example {
+  background: transparent;
+  border: 0;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  text-align: left;
+}
+
+.nl-scanner-example:hover {
+  text-decoration: underline;
+}
+
+.nl-scanner-preview {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+}
+
+.nl-scanner-filter-list,
+.nl-scanner-unresolved {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.nl-scanner-filter-list {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+
+.nl-scanner-unresolved,
+.nl-scanner-builder-error {
+  color: #fbbf24;
+  font-size: 0.8rem;
+}
+
+.nl-scanner-builder-error {
+  margin: 0.5rem 0 0;
+}
+
+@media (max-width: 640px) {
+  .nl-scanner-builder-heading,
+  .nl-scanner-builder-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .nl-scanner-builder-status {
+    align-self: flex-start;
+  }
+}
+
 .scanner-presets {
   border-top: 1px solid var(--border);
   margin-top: 1rem;

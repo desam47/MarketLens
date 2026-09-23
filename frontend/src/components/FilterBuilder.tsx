@@ -377,6 +377,8 @@ export interface FilterBuilderProps {
   /** Optional controlled starting state, used by saved scanner presets. */
   initialFilters?: FilterSpec[];
   initialMatch?: 'AND' | 'OR';
+  /** Open the editor when another UI surface loads a generated preview. */
+  initiallyOpen?: boolean;
   onFiltersChange?: (filters: FilterSpec[], match: 'AND' | 'OR') => void;
 }
 
@@ -390,11 +392,12 @@ export function FilterBuilder({
   onClear,
   initialFilters = [],
   initialMatch = 'AND',
+  initiallyOpen = false,
   onFiltersChange,
 }: FilterBuilderProps) {
   const [filters, setFilters] = useState<FilterSpec[]>(initialFilters);
   const [match, setMatch] = useState<'AND' | 'OR'>(initialMatch);
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(initiallyOpen);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeFilterType, setActiveFilterType] = useState<string>('daily_bullish');

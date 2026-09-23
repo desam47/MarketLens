@@ -762,6 +762,20 @@ export interface NLSearchResponse {
   timestamp: string;
 }
 
+/** A non-executing, editable translation for Scanner's Filter Builder. */
+export interface NLScannerPreviewResponse {
+  query: string;
+  filters: FilterSpec[];
+  match: 'AND' | 'OR';
+  filter_description: string;
+  filter_schema: Record<string, any>;
+  parser_used: 'ai' | 'rules' | 'default';
+  ai_translation_used: boolean;
+  ambiguous: boolean;
+  unresolved: string[];
+  timestamp: string;
+}
+
 // Phase 16: AI analysis types
 
 // The advisory layer (2026-09-10 — analyst → analyst + advisor).
@@ -2166,6 +2180,19 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(payload),
       signal,
+    }, AI_TIMEOUT_MS);
+  }
+
+  /** Translate a plain-English request into Filter Builder inputs only.
+   * This endpoint does not scan symbols or call market-data providers. */
+  async previewScannerFilters(payload: {
+    query: string;
+    watchlist_id?: number | null;
+    scope?: 'watchlist' | 'market';
+  }): Promise<NLScannerPreviewResponse> {
+    return this.fetch<NLScannerPreviewResponse>('/nl-search/preview', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }, AI_TIMEOUT_MS);
   }
 

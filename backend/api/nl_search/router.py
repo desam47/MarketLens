@@ -30,6 +30,7 @@ from backend.ai.sync_bridge import run_sync
 from ...nl_search.executor import execute_query
 from ...nl_search.parser import parse_query
 from ...nl_search.prompt import NL_EXPLAIN_PROMPT, build_explain_prompt
+from ...nl_search.scanner_builder import ScannerBuilderPreview, build_scanner_preview
 from ...nl_search.schema import NLFilters, NLSearchResponse, Ranking
 from ..dependencies import get_db
 
@@ -59,6 +60,18 @@ class NLSearchRequest(BaseModel):
     watchlist_id: int | None = Field(default=None)
     scope: str = Field(default="watchlist")
     ranking: Ranking | None = Field(default=None)
+
+
+class NLScannerPreviewRequest(BaseModel):
+    """Translate a natural-language request into editable Scanner filters."""
+
+    query: str = Field(..., min_length=2, max_length=500)
+    watchlist_id: int | None = Field(default=None)
+    scope: str = Field(default="watchlist", pattern=r"^(watchlist|market)$")
+
+
+class NLScannerPreviewResponse(ScannerBuilderPreview):
+    timestamp: str
 
 
 # --- Explanation helper ----------------------------------------------
@@ -132,6 +145,27 @@ def _maybe_explain(
 
 
 # --- Endpoint --------------------------------------------------------
+
+
+@router.post("/preview", response_model=NLScannerPreviewResponse)
+async def preview_scanner_filters(body: NLScannerPreviewRequest) -> NLScannerPreviewResponse:
+    """Translate a request without executing a scan.
+
+    The response is intentionally the exact ``filters`` / ``match`` payload
+    accepted by ``POST /api/scanner/filter``.  The frontend displays it first,
+    lets the trader edit it in Filter Builder, then executes that unchanged
+    payload—so there is no hidden second interpretation or provider request.
+    """
+    preview = await asyncio.to_thread(
+        build_scanner_preview,
+        body.query,
+        scope=body.scope,
+        watchlist_id=body.watchlist_id,
+    )
+    return NLScannerPreviewResponse(
+        **preview.model_dump(),
+        timestamp=_to_dashboard_tz(datetime.now(UTC)) or "",
+    )
 
 
 @router.post("", response_model=NLSearchResponse)

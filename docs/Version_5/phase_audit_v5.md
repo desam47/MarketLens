@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-22 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phase 5.1, Phase 5.2, and Phase 5.3 complete.
+**Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete and Phase 5.5 is in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -75,7 +75,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
-| 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
+| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder is complete: typed previews use the exact executable scanner filter format, are editable before scanning, and retain unsupported criteria as visible unresolved items. Watchlist intelligence, alert conversations, summaries, and the change inbox remain. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
@@ -542,11 +542,28 @@ transitions, and stale-assumption tests.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
-Not started. Audit must prove generated Scanner filters match executed filters,
-session boundaries are preserved, alert trigger values are exact, and scheduled
-summaries are deduplicated and timestamped. Weekly-review tests must cover
-performance, recurring mistakes, plan-versus-execution differences, and setup
-strengths/weaknesses when sufficient Journal data is available.
+**5.5.1 complete — Natural-language Scanner Builder.** The Scanner page accepts
+a plain-English request and calls `POST /api/nl-search/preview`. The endpoint
+returns the exact typed `FilterSpec[]` payload and `AND`/`OR` match mode used by
+`POST /api/scanner/filter`; it validates every standard filter through the
+same registry as execution. Previewing neither runs a scan nor makes a market
+data provider request. Selecting **Use editable filters** opens the existing
+Filter Builder with that exact payload, so the user can inspect or change it
+before the standard debounced Scanner request executes. Supported technical,
+session, volume, relative-strength, earnings-exclusion, and microstructure
+phrases are deterministic; unsupported news-catalyst language is explicitly
+marked unresolved rather than fabricated.
+
+Focused backend tests cover direct translations, every generated filter's
+registry compatibility, unknown wording, and the API payload contract.
+Focused frontend tests verify the preview is non-executing and hands the exact
+payload to the editor. The focused backend suite passes 120 tests and the
+Scanner frontend test suite plus production build pass.
+
+Remaining 5.5 audit work must prove watchlist-intelligence ranking and session
+boundaries, alert trigger values and conversation context, deduplicated and
+timestamped scheduled summaries, and weekly-review performance/mistake/setup
+analysis when sufficient Journal data is available.
 
 ---
 

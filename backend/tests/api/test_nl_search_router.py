@@ -246,6 +246,30 @@ class TestNLSearchEndpoint(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 422)
 
+    def test_scanner_preview_returns_the_exact_editable_filter_payload(self):
+        resp = client.post(
+            "/api/nl-search/preview",
+            json={
+                "query": "premarket breakouts with tight spread below 8 bps and buy tape pressure",
+                "scope": "watchlist",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["match"], "AND")
+        self.assertFalse(data["ambiguous"])
+        types = {item["type"] for item in data["filters"]}
+        self.assertTrue({"market_session", "breakout", "tight_spread", "tape_pressure"} <= types)
+
+        # The preview is intentionally not an alternate execution format:
+        # each standard entry builds in the exact registry /scanner/filter
+        # uses. (Earnings exclusion is validated separately by its router.)
+        from backend.scanner.filters import default_registry
+
+        for item in data["filters"]:
+            if item["type"] != "exclude_earnings_within_days":
+                default_registry.build(item)
+
 
 class TestNLSearchEndpointAIExplanation(unittest.TestCase):
     @patch("backend.api.nl_search.router.execute_query")

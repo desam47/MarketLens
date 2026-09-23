@@ -282,14 +282,16 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
+**Status:** 🟡 In progress. Item 5.5.1 is implemented and verified; items 5.5.2–5.5.5 remain.
+
 **Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
 
 ### Items
 
 #### 5.5.1 Natural-language scanner builder
-- Convert requests into visible, editable Scanner filters.
-- Preview parsed filters before execution when the request is ambiguous.
-- Support technical, session, volume, relative-strength, catalyst, and microstructure criteria already available in MarketLens.
+- ✅ Convert requests into visible, editable Scanner filters. The Scanner page now previews the exact `FilterSpec[]` and match mode before opening the standard editor.
+- ✅ Preview parsed filters before execution. Preview never scans or calls a market-data provider; users may edit the resulting filters before the existing Scanner request runs.
+- ✅ Support technical, session, volume, relative-strength, earnings-exclusion catalyst, and microstructure criteria already available in MarketLens. Unsupported catalyst language is shown as unresolved instead of guessed.
 
 #### 5.5.2 Watchlist intelligence
 - Daily briefing, best/worst movers, new breakouts, deteriorating setups, volume spikes, relative-strength changes, multi-timeframe alignment, earnings, catalysts, and sector rotation.
