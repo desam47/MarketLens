@@ -344,7 +344,9 @@ class AIManager:
                 deduped_chain.append(n)
 
         last_error: str | None = None
+        attempted_providers: list[str] = []
         for name in deduped_chain:
+            attempted_providers.append(name)
             try:
                 provider = self._get_provider(name)
             except ValueError as e:
@@ -377,13 +379,19 @@ class AIManager:
                 continue
             with self._lock:
                 self._last_success = {"provider": resp.provider, "model": resp.model}
+            resp.attempted_providers = attempted_providers
             return resp
 
         logger.warning(
             "All AI providers unavailable (last error: %s). Returning empty response.",
             last_error,
         )
-        return AIResponse(text=None, provider="none", model=self.settings.model)
+        return AIResponse(
+            text=None,
+            provider="none",
+            model=self.settings.model,
+            attempted_providers=attempted_providers,
+        )
 
     def last_answered(self) -> dict[str, str] | None:
         """``{"provider", "model"}`` of the most recent successful
@@ -446,7 +454,9 @@ class AIManager:
                 deduped_chain.append(n)
 
         last_error: str | None = None
+        attempted_providers: list[str] = []
         for name in deduped_chain:
+            attempted_providers.append(name)
             try:
                 provider = self._get_provider(name)
             except ValueError as e:
@@ -464,6 +474,7 @@ class AIManager:
                     attribution.structured = bool(
                         response_format is not None and provider.supports_structured_output
                     )
+                    attribution.attempted_providers = list(attempted_providers)
 
             started = False
             try:
@@ -494,6 +505,8 @@ class AIManager:
                 last_error = str(e)
                 continue
 
+        if attribution is not None:
+            attribution.attempted_providers = list(attempted_providers)
         logger.warning("All AI providers unavailable for stream (last error: %s).", last_error)
 
     # --- Internals -----------------------------------------------------

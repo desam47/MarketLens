@@ -83,12 +83,14 @@ from backend.ai.prompt import (
 from backend.ai.reply_stream import ReplyExtractor
 from backend.ai.response_blocks import build_response_blocks, evidence_fingerprint
 from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
+from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
 
 # Chat runs its sync generator helpers on loop-less worker threads
 # (ThreadPoolExecutor / asyncio.to_thread), so the async AI calls are
 # bridged with run_sync/stream_sync rather than awaited.
 from backend.ai.sync_bridge import run_sync, stream_sync
 from backend.ai.tool_registry import ToolRequest, default_registry
+from backend.ai.provider import StreamAttribution
 from backend.config.settings import settings
 from backend.models import Alert, AlertTrigger, ChatMessage
 from backend.models.chat import UNIVERSAL_SYMBOL
@@ -156,6 +158,24 @@ def _action_signature(parsed) -> str:
         if value is not None
     }
     return f"{parsed.action}:{json.dumps(arguments, sort_keys=True, default=str)}"
+
+
+def _action_trace_arguments(parsed) -> dict:
+    """Build a bounded, non-secret action argument snapshot for observability."""
+    arguments = dict(parsed.action_tool_arguments or {})
+    for key, value in {
+        "symbol": parsed.action_symbol,
+        "watchlist": parsed.action_watchlist,
+        "target_id": parsed.action_target_id,
+        "condition_type": parsed.action_condition_type,
+        "parameter": parsed.action_parameter,
+        "label": parsed.action_label,
+    }.items():
+        if value is not None and key not in arguments:
+            arguments[key] = value
+    if parsed.action_calculation is not None:
+        arguments["calculation"] = parsed.action_calculation.model_dump(mode="json")
+    return sanitize_arguments(arguments)
 
 
 def _cacheable_chat_action(action: str) -> bool:
@@ -862,6 +882,14 @@ def _extract_memory_value(text: str, pattern: str) -> str | None:
     return "after_hours" if value in {"after-hour", "after-hours", "after_hours"} else value
 
 
+def _append_turn_observability(trace: list[dict], started_at: float, user_content: str) -> None:
+    prompt_chars = max(
+        [int(item.get("prompt_chars", 0) or 0) for item in trace if item.get("kind") == "model_call"]
+        or [len(user_content)]
+    )
+    trace.append(build_turn_observability(trace, started_at=started_at, prompt_chars=prompt_chars))
+
+
 def answer_chat_message(
     session_id: int,
     user_content: str,
@@ -895,6 +923,7 @@ def answer_chat_message(
     assistant message explaining that, not an exception. An unexpected
     failure (e.g. the session doesn't exist) still raises.
     """
+    started_at = time.perf_counter()
     repo = ChatRepository()
     try:
         turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
@@ -943,6 +972,7 @@ def answer_chat_message(
         if verification.safe_content:
             reply_text = verification.safe_content
             grounded = False
+        _append_turn_observability(trace, started_at, user_content)
         current_fingerprint = evidence_fingerprint(trace)
         material_change = bool(
             turn.previous_evidence_fingerprint
@@ -995,6 +1025,7 @@ def stream_chat_message(
     assistant row and a ``final`` event. An unexpected failure before
     prep completes (e.g. bad session id) propagates on first iteration.
     """
+    started_at = time.perf_counter()
     repo = ChatRepository()
     try:
         turn = _prepare_turn(repo, session_id, user_content, chart_state, regeneration_mode, preferences, regeneration_scope)
@@ -1056,6 +1087,7 @@ def stream_chat_message(
         if verification.safe_content:
             final_text = verification.safe_content
             grounded = False
+        _append_turn_observability(trace, started_at, user_content)
         current_fingerprint = evidence_fingerprint(trace)
         material_change = bool(
             turn.previous_evidence_fingerprint
@@ -1151,6 +1183,7 @@ def _prune_context(ctx: dict, avail: dict, *, keep_stats: bool = False) -> dict:
 # meaningfully fewer user-visible "I couldn't process that" replies is
 # worth it. Total attempts = 1 + this.
 _CHAT_PARSE_RETRIES = 1
+CHAT_PARSE_MAX_ATTEMPTS = _CHAT_PARSE_RETRIES + 1
 
 
 def _chat_route_model(role: str, fallback: str | None = None) -> str | None:
@@ -1170,6 +1203,9 @@ def _complete_and_parse(
     max_tokens: int,
     model: str | None,
     repair_model: str | None = None,
+    *,
+    trace: list[dict] | None = None,
+    role: str = "synthesis",
 ):
     """One or more attempts at an AI completion + ``ChatReplyResponse``
     parse, retrying ``_CHAT_PARSE_RETRIES`` more time(s) on either a raw
@@ -1182,28 +1218,92 @@ def _complete_and_parse(
     """
     failure_reason = "ai_error"
     for attempt in range(_CHAT_PARSE_RETRIES + 1):
+        call_started = time.perf_counter()
+        requested_model = repair_model if attempt else model
         try:
             resp = run_sync(
                 ai_manager.complete(
                     prompt=prompt,
                     system=system,
                     max_tokens=max_tokens,
-                    model=repair_model if attempt else model,
+                    model=requested_model,
                 )
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Chat AI call raised (attempt %d): %s", attempt + 1, e)
             failure_reason = "ai_error"
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": role,
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "provider_exception",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "requested_model": requested_model,
+                    "provider_request_count": 1,
+                })
             continue
+        provider = getattr(resp, "provider", None)
+        response_model = getattr(resp, "model", None)
+        attempted_providers = list(getattr(resp, "attempted_providers", None) or [])
+        provider_request_count = len(attempted_providers) or 1
         if resp.text is None:
             logger.warning("Chat AI call returned no text (attempt %d)", attempt + 1)
             failure_reason = "ai_error"
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": role,
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "provider_no_text",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": provider,
+                    "model": response_model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": attempted_providers,
+                })
             continue
         try:
-            return parse_chat_reply(resp.text), None
+            parsed = parse_chat_reply(resp.text)
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": role,
+                    "attempt": attempt + 1,
+                    "ok": True,
+                    "status": "parsed",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": provider,
+                    "model": response_model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": attempted_providers,
+                })
+            return parsed, None
         except Exception as e:  # noqa: BLE001
             logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
             failure_reason = "parse_error"
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": role,
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "parse_error",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": provider,
+                    "model": response_model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": attempted_providers,
+                })
     return None, failure_reason
 
 
@@ -1532,6 +1632,8 @@ def _generate_reply(
 
     if not ai_manager.enabled:
         _trace_model_route(trace, "fallback", "deterministic")
+        if trace is not None:
+            trace.append({"kind": "server_reply", "trusted": True})
         return _deterministic_context_reply(symbol_blocks, unavailable)
 
     budget = max(2000, ai_manager.settings.max_tokens - 500)
@@ -1555,6 +1657,8 @@ def _generate_reply(
         500,
         synthesis_model,
         _chat_route_model("repair"),
+        trace=trace,
+        role="synthesis",
     )
     if parsed is None:
         if failure_reason == "ai_error":
@@ -1745,6 +1849,7 @@ def _finalize_parsed(
         if not target and len(known) == 1:
             target = known[0]
         if target and target in known:
+            reanalysis_started = time.perf_counter()
             text, grounded, reanalysis_evidence = _run_reanalysis(target)
             if grounded and trace is not None:
                 trace.append({
@@ -1753,6 +1858,9 @@ def _finalize_parsed(
                     "provider": "MarketLens analysis",
                     "freshness_seconds": 0.0,
                     "source_timestamp": now_ny().isoformat(),
+                    "duration_ms": round((time.perf_counter() - reanalysis_started) * 1000, 3),
+                    "arguments": sanitize_arguments({"symbol": target}),
+                    "provider_request_count": 1,
                     "evidence_values": reanalysis_evidence,
                 })
             return text, grounded, []
@@ -1911,6 +2019,7 @@ def _run_turn_actions(
                 "tool": parsed.action,
                 "depends_on": [],
                 "detail": _action_step_detail(parsed),
+                "arguments": _action_trace_arguments(parsed),
             }
         )
     # A single assumption-tracking payload may contain several fields joined
@@ -1973,6 +2082,8 @@ def _run_turn_actions(
             300,
             _chat_route_model("planning"),
             _chat_route_model("repair"),
+            trace=trace,
+            role="planning",
         )
         if next_parsed is None:
             logger.info("chat multi-step continuation failed: %s", failure_reason)
@@ -2012,6 +2123,10 @@ def _run_turn_actions(
                             "ok": cached_grounded,
                             "provider": "turn-cache",
                             "reused": True,
+                            "cache_hit": True,
+                            "duration_ms": 0.0,
+                            "provider_request_count": 0,
+                            "arguments": _action_trace_arguments(next_parsed),
                         }
                     )
             else:
@@ -2027,6 +2142,7 @@ def _run_turn_actions(
                         "tool": next_parsed.action,
                         "depends_on": [len(texts) - 1],
                         "reason": "repeated_action",
+                        "arguments": _action_trace_arguments(next_parsed),
                     }
                 )
             break
@@ -2051,6 +2167,7 @@ def _run_turn_actions(
                     "tool": next_parsed.action,
                     "depends_on": [len(texts) - 1],
                     "detail": _action_step_detail(next_parsed),
+                    "arguments": _action_trace_arguments(next_parsed),
                 }
             )
         planner.completed_steps.append(step_text)
@@ -2099,9 +2216,13 @@ def _generate_reply_streaming(
         if m:
             reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
             if reply:
+                if trace is not None:
+                    trace.append({"kind": "server_reply", "trusted": True})
                 yield ("result", (reply, True, []))
                 return
         if _WATCHLIST_LIST_INTENT.search(turn.user_content):
+            if trace is not None:
+                trace.append({"kind": "server_reply", "trusted": True})
             yield ("result", (_watchlist_list_reply(db), True, []))
             return
         remembered = turn.planner_state.get("current_symbols", [])
@@ -2114,6 +2235,8 @@ def _generate_reply_streaming(
 
     if not ai_manager.enabled:
         _trace_model_route(trace, "fallback", "deterministic")
+        if trace is not None:
+            trace.append({"kind": "server_reply", "trusted": True})
         yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable))
         return
 
@@ -2143,8 +2266,11 @@ def _generate_reply_streaming(
     # overwrites whatever partial text was shown, same as the existing
     # reanalysis-tool path already does.
     for attempt in range(_CHAT_PARSE_RETRIES + 1):
+        call_started = time.perf_counter()
         raw = ""
         extractor = ReplyExtractor()
+        attribution = StreamAttribution()
+        requested_model = repair_model if attempt else chat_model
         try:
             if ai_manager.settings.chat_streaming:
                 for chunk in stream_sync(
@@ -2152,7 +2278,8 @@ def _generate_reply_streaming(
                         prompt,
                         system=CHAT_SYSTEM_PROMPT,
                         max_tokens=500,
-                        model=repair_model if attempt else chat_model,
+                        model=requested_model,
+                        attribution=attribution,
                     )
                 ):
                     raw += chunk
@@ -2165,28 +2292,89 @@ def _generate_reply_streaming(
                         prompt,
                         system=CHAT_SYSTEM_PROMPT,
                         max_tokens=500,
-                        model=repair_model if attempt else chat_model,
+                        model=requested_model,
                     )
                 )
                 raw = resp.text or ""
+                attribution.provider = getattr(resp, "provider", None)
+                attribution.model = getattr(resp, "model", None)
+                attribution.attempted_providers = list(getattr(resp, "attempted_providers", None) or [])
                 delta = extractor.feed(raw)
                 if delta:
                     yield ("delta", delta)
         except Exception as e:  # noqa: BLE001
             logger.warning("Chat streaming AI call raised (attempt %d): %s", attempt + 1, e)
             failure_message = "Something went wrong reaching the AI provider — please try again."
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": "synthesis",
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "provider_exception",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "requested_model": requested_model,
+                    "provider_request_count": 1,
+                })
             continue
 
+        provider_request_count = len(attribution.attempted_providers or []) or 1
         if not raw.strip():
             failure_message = "AI is currently unavailable, so I can't answer that right now."
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": "synthesis",
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "provider_no_text",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": attribution.provider,
+                    "model": attribution.model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": list(attribution.attempted_providers or []),
+                })
             continue
 
         try:
             parsed = parse_chat_reply(raw)
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": "synthesis",
+                    "attempt": attempt + 1,
+                    "ok": True,
+                    "status": "parsed",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": attribution.provider,
+                    "model": attribution.model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": list(attribution.attempted_providers or []),
+                })
             break
         except Exception as e:  # noqa: BLE001
             logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
             failure_message = extractor.text.strip() or failure_message
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": "synthesis",
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "parse_error",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "provider": attribution.provider,
+                    "model": attribution.model,
+                    "requested_model": requested_model,
+                    "provider_request_count": provider_request_count,
+                    "providers_tried": list(attribution.attempted_providers or []),
+                })
 
     if parsed is None:
         yield ("result", (failure_message, False, []))
@@ -2752,6 +2940,9 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
                 "ok": False,
                 "provider": result.provider,
                 "error": result.error,
+                "failure_kind": "calculation_error",
+                "duration_ms": result.duration_ms,
+                "arguments": sanitize_arguments(request.model_dump(mode="json")),
                 "fallback": result.fallback,
             })
         return f"I couldn't calculate that safely: {result.error}", False
@@ -2768,12 +2959,18 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
             "freshness_seconds": result.freshness_seconds,
             "session": result.session,
             "timeframe": result.timeframe,
+            "duration_ms": result.duration_ms,
+            "arguments": sanitize_arguments(request.model_dump(mode="json")),
+            "cache_hit": bool(result.data.get("cache_hit", False)),
+            "provider_request_count": 0,
             "fallback": result.fallback,
             "data": {
                 "values": result.data.get("values", {}),
                 "formulas": result.data.get("formulas", []),
-                "operation": request.operation,
+                "operation": request.calculation,
+                "request": request.model_dump(mode="json"),
             },
+            "request": request.model_dump(mode="json"),
         })
     return (
         f"Verified calculation ({result.provider}, source {source_time}, "
@@ -2959,7 +3156,17 @@ def _run_market_tool(
     )
     if not result.ok:
         if trace is not None:
-            trace.append({"tool": parsed.action, "ok": False, "provider": result.provider, "error": result.error, "fallback": result.fallback})
+            trace.append({
+                "tool": parsed.action,
+                "ok": False,
+                "provider": result.provider,
+                "error": result.error,
+                "failure_kind": "tool_error",
+                "duration_ms": result.duration_ms,
+                "arguments": sanitize_arguments(arguments),
+                "provider_request_count": 0,
+                "fallback": result.fallback,
+            })
         return f"I couldn't retrieve that safely: {result.error}", False
     freshness = (
         f"{result.freshness_seconds:.1f}s old"
@@ -2978,6 +3185,10 @@ def _run_market_tool(
             "fallback": result.fallback,
             "entitlement": result.entitlement,
             "warnings": result.warnings,
+            "duration_ms": result.duration_ms,
+            "arguments": sanitize_arguments(arguments),
+            "cache_hit": bool(result.data.get("cache_hit", False)),
+            "provider_request_count": 0 if str(result.provider).lower().startswith("marketlens") else 1,
         }
         numeric_evidence = _bounded_numeric_evidence(result.data)
         if numeric_evidence:
@@ -3041,7 +3252,16 @@ def _run_action(
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
         if trace is not None:
-            trace.append({"tool": parsed.action, "ok": False, "provider": "MarketLens", "error": str(e), "fallback": False})
+            trace.append({
+                "tool": parsed.action,
+                "ok": False,
+                "provider": "MarketLens",
+                "error": str(e),
+                "failure_kind": "action_exception",
+                "arguments": _action_trace_arguments(parsed),
+                "provider_request_count": 0,
+                "fallback": False,
+            })
         return "Something went wrong doing that — please try again.", False, []
     if parsed.action in _BASELINE_MUTATING_ACTIONS:
         from backend.ai.market_baseline import invalidate_cache
@@ -3049,9 +3269,23 @@ def _run_action(
         invalidate_cache()
     if len(result) == 3:
         if trace is not None and parsed.action != "calculate":
-            trace.append({"tool": parsed.action, "ok": True, "provider": "MarketLens", "fallback": False})
+            trace.append({
+                "tool": parsed.action,
+                "ok": True,
+                "provider": "MarketLens",
+                "arguments": _action_trace_arguments(parsed),
+                "provider_request_count": 0,
+                "fallback": False,
+            })
         return result
     text, grounded = result
     if trace is not None and parsed.action != "calculate":
-        trace.append({"tool": parsed.action, "ok": grounded, "provider": "MarketLens", "fallback": False})
+        trace.append({
+            "tool": parsed.action,
+            "ok": grounded,
+            "provider": "MarketLens",
+            "arguments": _action_trace_arguments(parsed),
+            "provider_request_count": 0,
+            "fallback": False,
+        })
     return text, grounded, []

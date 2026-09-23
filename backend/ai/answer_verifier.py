@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from backend.ai.calculator import CalculationRequest, calculate
+
 VERIFIER_VERSION = "5.8.1"
 
 _NUMBER_RE = re.compile(
@@ -172,6 +174,35 @@ def _safe_uncertainty(issues: list[str]) -> str:
     return "I couldn't verify that answer against the available evidence. Please retry with current data or ask for the source data."
 
 
+def _calculation_issues(trace: list[dict[str, Any]]) -> list[str]:
+    """Recompute deterministic calculator results independently of the trace."""
+    issues: list[str] = []
+    for item in trace:
+        if item.get("kind") != "calculation" or item.get("ok") is not True:
+            continue
+        request = item.get("request")
+        actual = ((item.get("data") or {}).get("values") if isinstance(item.get("data"), dict) else None)
+        if not isinstance(request, dict) or not isinstance(actual, dict):
+            issues.append("calculation_unverifiable")
+            continue
+        try:
+            expected = calculate(CalculationRequest.model_validate(request)).values
+        except (TypeError, ValueError):
+            issues.append("calculation_unverifiable")
+            continue
+        for key, expected_value in expected.items():
+            actual_value = actual.get(key)
+            if expected_value is None and actual_value is None:
+                continue
+            if not isinstance(expected_value, (int, float)) or not isinstance(actual_value, (int, float)):
+                issues.append("calculation_mismatch")
+                continue
+            tolerance = max(0.0001, abs(float(expected_value)) * 0.0001)
+            if abs(float(expected_value) - float(actual_value)) > tolerance:
+                issues.append("calculation_mismatch")
+    return list(dict.fromkeys(issues))
+
+
 def verify_answer(
     content: str,
     trace: list[dict[str, Any]],
@@ -185,6 +216,18 @@ def verify_answer(
     assign_evidence_ids(trace)
     successful = _successful_evidence(trace)
     evidence_refs = [str(item["evidence_id"]) for item in successful]
+    calculation_issues = _calculation_issues(trace)
+    if calculation_issues:
+        return AnswerVerification(
+            version=VERIFIER_VERSION,
+            status="blocked",
+            issues=calculation_issues,
+            evidence_refs=evidence_refs,
+            claim_count=0,
+            numeric_claim_count=0,
+            unsupported_claim_count=len(calculation_issues),
+            safe_content=_safe_uncertainty(calculation_issues),
+        )
     action_steps = [item for item in trace if item.get("kind") == "step"]
     trusted_server_reply = any(item.get("kind") == "server_reply" and item.get("trusted") is True for item in trace)
     if action_steps or trusted_server_reply:

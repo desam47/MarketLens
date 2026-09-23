@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from backend.ai.answer_verifier import VERIFIER_VERSION, assign_evidence_ids, verify_answer
-from backend.ai.evaluations.runner import load_cases, run_cases
+from backend.ai.evaluations.runner import load_cases, run_cases, score_summary
 
 
 def test_evidence_ids_are_stable_and_exclude_action_steps() -> None:
@@ -36,3 +36,8 @@ def test_runner_reports_all_versioned_cases_as_passing() -> None:
     results = run_cases()
     assert len(results) == len(load_cases()["cases"])
     assert all(result["passed"] for result in results)
+    summary = score_summary(results)
+    assert summary["passed_cases"] == summary["case_count"]
+    assert set(summary["categories"]) == {
+        "correctness", "tool_choice", "provenance", "clarification", "latency", "safety",
+    }

@@ -148,7 +148,9 @@ def evidence_fingerprint(value: Any) -> str | None:
                 if item.get(key) is not None
             }
             for item in value
-            if isinstance(item, dict) and (item.get("tool") or item.get("provider") or item.get("data") or item.get("visual_data"))
+            if isinstance(item, dict)
+            and item.get("kind") not in {"model", "model_call", "observability", "server_reply", "step"}
+            and (item.get("tool") or item.get("data") or item.get("visual_data"))
         ]
     if not value:
         return None
@@ -270,7 +272,9 @@ def build_response_blocks(
 
     evidence = []
     for item in trace:
-        if not (item.get("tool") or item.get("provider")):
+        if item.get("kind") in {"model", "model_call", "observability", "server_reply", "step"}:
+            continue
+        if not item.get("tool"):
             continue
         freshness_status, stale_after_seconds = _trace_freshness(item)
         evidence.append({

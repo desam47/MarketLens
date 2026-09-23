@@ -3055,6 +3055,15 @@ export interface ChatMessage {
     kind?: 'tool' | 'step' | string;
     step?: number;
     status?: 'running' | 'completed' | 'failed' | 'reused' | 'stopped' | string;
+    duration_ms?: number;
+    attempt?: number;
+    failure_kind?: string;
+    evidence_id?: string;
+    provider_request_count?: number;
+    cache_hit?: boolean;
+    turn_duration_ms?: number;
+    target_class?: string;
+    within_target?: boolean;
     depends_on?: number[];
     reason?: string;
     provider?: string;

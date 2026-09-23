@@ -41,6 +41,8 @@ class AIResponse:
     # (via response_format / tool-use). Lets callers skip regex
     # extraction and parse the raw text directly.
     structured: bool = False
+    # Chain entries attempted for this request, without arguments or secrets.
+    attempted_providers: list[str] | None = None
 
 
 @dataclass
@@ -62,6 +64,7 @@ class StreamAttribution:
     provider: str | None = None
     model: str | None = None
     structured: bool = False
+    attempted_providers: list[str] | None = None
 
 
 class AIProvider(ABC):

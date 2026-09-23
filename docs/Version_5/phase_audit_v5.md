@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.7 are complete. Phase 5.8.1–5.8.3 are in progress with the initial verifier/evaluation slice implemented and covered by automated verification.
+**Status:** Active. Planning complete; Phases 5.1–5.7 are complete. Phase 5.8.1–5.8.6 are implemented and covered by automated verification; 5.8.7 release-gate work remains.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -84,7 +84,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
 | 5.7 | Structured Chat UI and personalization | ✅ COMPLETE | Typed blocks, visual/action cards, preferences, answer-contract metadata, feedback classification, chart state, context-preserving navigation (including Options/System Health), typed regeneration with timeframe/session scope, server-backed notebooks with local fallback, approved regression-fixture promotion, age and material-change freshness, and accessibility/responsive verification are complete. |
-| 5.8 | Reliability, evaluation, and release hardening | 🟡 IN PROGRESS | Initial answer verification, evidence references, and versioned evaluation harness are implemented; observability, failure matrix, performance targets, and final release gate remain. |
+| 5.8 | Reliability, evaluation, and release hardening | 🟡 IN PROGRESS | Verification, scored evaluation, sanitized observability, bounded fallback matrix, and performance targets are implemented; security/privacy sign-off, manual smoke tests, and final release gate remain. |
 
 ---
 
@@ -1072,7 +1072,7 @@ refresh each have persistence and UI coverage.
 
 ## Phase 5.8 — Reliability, evaluation, and release hardening
 
-Initial slice implemented (5.8.1–5.8.3):
+Reliability foundation implemented (5.8.1–5.8.6):
 
 - `backend/ai/answer_verifier.py` assigns application-owned `ev-N` references
   to read-only tool results and checks numeric claims against bounded,
@@ -1080,24 +1080,38 @@ Initial slice implemented (5.8.1–5.8.3):
   unknown tickers, wrong units, wrong sessions/timeframes, stale or freshness-
   missing live claims, and replaces blocked prose with explicit uncertainty
   before persistence. The existing server-authored destructive-action
-  confirmation and approved-payload replay paths remain unchanged.
+  confirmation and approved-payload replay paths remain unchanged. Typed
+  calculator traces now retain sanitized inputs and are independently
+  recomputed before an answer is persisted; mismatches are blocked.
 - Blocking and streaming Chat persistence both store a versioned
   `verification` response block (`5.8.1`) and expose evidence IDs/values in the
   evidence block. The frontend renders verified, limited, and blocked states
   as accessible status text.
 - `backend/ai/evaluations/phase_5_8_cases.json` is the versioned provider-free
-  harness (`5.8.0`) with eleven cases covering calculations/quotes, altered
-  numbers, units, prose/evidence contradictions, sessions, timeframes, unknown
-  tickers, freshness, options, provider failure, and confirmation safety.
-  Focused verifier, response-block, Chat, and Chat API coverage currently
-  passes (107 tests).
-- Checkout validation after this slice: full backend suite `3,044 passed,
+  harness (`5.8.0`) with nineteen cases covering calculations/quotes,
+  calculation mismatches, altered numbers, units, prose/evidence
+  contradictions, sessions, timeframes, unknown tickers, freshness, options,
+  comparisons, scanner results, portfolio risk, clarification, adversarial
+  prompts, provider failure, and confirmation safety. The runner scores
+  correctness, tool choice, provenance, clarification, latency, and safety;
+  the current report is 19/19 in every category and is recorded in
+  `docs/Version_5/phase_5_8_evaluation.md`.
+- `backend/ai/chat_observability.py` adds a bounded, sanitized audit event to
+  persisted Chat traces: tool/model counts, durations, provider attempts,
+  retry count, cache hits, failure kinds, prompt-size metadata, target class,
+  and evidence references. Secret-looking keys and private journal prose are
+  redacted or omitted.
+- The failure matrix is versioned with a two-attempt parse budget, bounded
+  planning/chain limits, and explicit stream fallback semantics. Performance
+  targets are defined for calculation-only (500 ms), cached-data (1.5 s),
+  database (3 s), and provider-backed (15 s) turns, with per-turn target
+  compliance persisted in the observability event.
+- Checkout validation after this slice: full backend suite `3,056 passed,
   4 skipped, 30 subtests passed`; full frontend suite `196 passed` across 42
   suites; and `npm run build` completed successfully. The four backend skips
   are environment-dependent Redis/loopback checks, not product failures.
 
-Remaining 5.8 work: publish the full evaluation scoring categories and
-results, add tool/provider request counts and latency measurements, complete
-the failure/fallback matrix and bounded retry evidence, document security and
-privacy checks, validate performance targets, run manual smoke tests, and
-close the final release gate.
+Remaining 5.8 work: complete security/privacy sign-off, run manual smoke
+tests across the major question and failure categories, and close the final
+release gate. The current automated evidence is recorded above; rerun it if
+the release-gate changes touch these paths.

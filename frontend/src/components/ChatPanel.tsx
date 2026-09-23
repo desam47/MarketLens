@@ -1254,6 +1254,11 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
           const icon = status === 'completed' ? '✓' : status === 'reused' ? '↻' : status === 'failed' ? '⚠' : '•';
           return <span className={`chat-tool-pill step-${status}`} key={`step-${item.step ?? index}`} title={item.reason ?? ''}>
             {icon} Step {item.step ?? index + 1}: {item.tool} · {status}
+            </span>;
+        }
+        if (item.kind === 'observability') {
+          return <span className="chat-tool-pill model-route" key={`observability-${index}`}>
+            ◌ Audit · {item.turn_duration_ms != null ? `${Math.round(item.turn_duration_ms)}ms` : 'measured'} · {item.within_target ? 'within target' : 'over target'}
           </span>;
         }
         const freshness = item.freshness_seconds == null ? '' : ` · ${Math.round(item.freshness_seconds)}s old`;
