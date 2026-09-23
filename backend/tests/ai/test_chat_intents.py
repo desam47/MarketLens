@@ -163,3 +163,37 @@ def test_what_changed_routes_to_comparison_tool(monkeypatch) -> None:
     assert "what_changed" in text
     assert requests[0].arguments["reference"] == "yesterday"
     complete.assert_not_called()
+
+
+def test_comparison_routes_to_ranking_tool(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(
+            tool_name=request.tool_name,
+            ok=True,
+            data={"rankings": [{"symbol": "NVDA", "rank": 1}], "unknowns": []},
+            provider="MarketLens comparison",
+        )
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL"), _symbol_block("MSFT")],
+        [],
+        None,
+        [],
+        "compare AAPL with MSFT by volatility",
+        None,
+        False,
+        ["AAPL", "MSFT"],
+        {},
+    )
+
+    assert grounded is True
+    assert "compare_symbols" in text
+    assert requests[0].arguments["metric"] == "volatility_percent"
+    complete.assert_not_called()

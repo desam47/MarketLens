@@ -5,6 +5,7 @@ from backend.ai.market_tools import (
     ApplicationHelpRequest,
     BarsRequest,
     ChangeAnalysisRequest,
+    ComparisonRequest,
     ConfluenceRequest,
     CsvImportRequest,
     IndicatorRequest,
@@ -16,6 +17,7 @@ from backend.ai.market_tools import (
     TapeRequest,
     TradeJournalRequest,
     TrendRequest,
+    compare_symbols_tool,
     get_alerts_tool,
     get_application_help_tool,
     get_bars_tool,
@@ -152,6 +154,55 @@ def test_what_changed_compares_current_bar_with_previous_close(monkeypatch) -> N
     result = what_changed_tool(ChangeAnalysisRequest(symbol="AAPL"))
     assert result.changes[0]["percent"] == 3.0
     assert result.conclusion["status"] == "verified_comparison"
+
+
+def test_compare_symbols_ranks_verified_returns(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    bars_by_symbol = {
+        "AAPL": [{"close": 100}, {"close": 110}],
+        "MSFT": [{"close": 100}, {"close": 105}],
+        "NVDA": [{"close": 100}, {"close": 120}],
+    }
+
+    def fake_bars(request):
+        return _Payload(
+            symbol=request.symbol,
+            bars=bars_by_symbol[request.symbol],
+            provider="test",
+            source_timestamp="2026-09-22T16:00:00-04:00",
+            session=request.session,
+        )
+
+    monkeypatch.setattr("backend.ai.market_tools.get_bars_tool", fake_bars)
+    result = compare_symbols_tool(ComparisonRequest(symbols=["AAPL", "MSFT", "NVDA"]))
+
+    assert [row["symbol"] for row in result.rankings] == ["NVDA", "AAPL", "MSFT"]
+    assert [row["rank"] for row in result.rankings] == [1, 2, 3]
+    assert result.rankings[0]["value"] == 20.0
+    assert result.conclusion["status"] == "verified_ranking"
+
+
+def test_compare_symbols_reports_missing_symbol_without_failing_all(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    def fake_bars(request):
+        if request.symbol == "BAD":
+            raise ValueError("no bars")
+        return _Payload(
+            symbol=request.symbol,
+            bars=[{"close": 100}, {"close": 110}],
+            provider="test",
+            source_timestamp="2026-09-22T16:00:00-04:00",
+            session=request.session,
+        )
+
+    monkeypatch.setattr("backend.ai.market_tools.get_bars_tool", fake_bars)
+    result = compare_symbols_tool(ComparisonRequest(symbols=["AAPL", "BAD"]))
+
+    assert result.evaluated_count == 1
+    assert result.rankings[0]["symbol"] == "AAPL"
+    assert result.unknowns[0]["symbol"] == "BAD"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import stdev
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,6 +34,19 @@ class ChangeAnalysisRequest(SymbolRequest):
     range: str = Field(default="1mo", pattern=r"^[0-9]+(d|mo|y)$")
     reference: Literal["previous_close", "yesterday", "last_visit", "timestamp"] = "previous_close"
     since: str | None = None
+
+
+class ComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(default_factory=list, max_length=25)
+    watchlist: str | None = Field(default=None, min_length=1, max_length=100)
+    metric: Literal["return_percent", "change_percent", "volatility_percent", "volume", "price"] = "return_percent"
+    timeframe: str = "1d"
+    range: str = Field(default="1mo", pattern=r"^[0-9]+(d|mo|y)$")
+    session: Literal["premarket", "regular", "after_hours", "all"] = "all"
+    direction: Literal["desc", "asc"] = "desc"
+    limit: int = Field(default=25, ge=1, le=25)
 
 
 class IndicatorRequest(BarsRequest):
@@ -710,6 +724,121 @@ def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
         sources=sources,
         conclusion={"status": "verified_comparison" if changes else "insufficient_baseline"},
         provider="MarketLens comparison",
+    )
+
+
+def compare_symbols_tool(request: ComparisonRequest) -> BaseModel:
+    """Rank verified symbol-bar metrics without asking the model to calculate."""
+    symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+    invalid = [symbol for symbol in symbols if not re.fullmatch(r"[A-Z0-9.\-]{1,20}", symbol)]
+    if invalid:
+        raise ValueError(f"Invalid symbol(s): {', '.join(invalid)}")
+
+    unknowns: list[dict[str, Any]] = []
+    sources: list[dict[str, Any]] = []
+    if request.watchlist:
+        try:
+            watchlist_payload = get_watchlist_tool(WatchlistRequest(name=request.watchlist)).model_dump(mode="json")
+            symbols.extend(str(item["symbol"]).upper() for item in watchlist_payload.get("symbols", []) if item.get("symbol"))
+            sources.append(
+                {
+                    "name": "watchlist",
+                    "provider": watchlist_payload.get("provider"),
+                    "timestamp": watchlist_payload.get("source_timestamp"),
+                }
+            )
+        except Exception as exc:
+            unknowns.append({"type": "watchlist", "reason": str(exc)})
+
+    symbols = list(dict.fromkeys(symbols))
+    invalid = [symbol for symbol in symbols if not re.fullmatch(r"[A-Z0-9.\-]{1,20}", symbol)]
+    if invalid:
+        raise ValueError(f"Invalid symbol(s): {', '.join(invalid)}")
+    if len(symbols) < 2:
+        raise ValueError("Provide at least two symbols or a watchlist with at least two symbols to compare")
+    if len(symbols) > 25:
+        unknowns.append({"type": "symbol_limit", "reason": "Only the first 25 symbols were evaluated", "requested": len(symbols)})
+        symbols = symbols[:25]
+
+    rows: list[dict[str, Any]] = []
+    for symbol in symbols:
+        try:
+            payload = get_bars_tool(
+                BarsRequest(
+                    symbol=symbol,
+                    timeframe=request.timeframe,
+                    range=request.range,
+                    limit=2_000,
+                    session=request.session,
+                )
+            ).model_dump(mode="json")
+            bars = payload.get("bars", [])
+            closes = [float(bar["close"]) for bar in bars if bar.get("close") is not None]
+            volumes = [float(bar.get("volume", 0) or 0) for bar in bars]
+            if len(closes) < 2:
+                unknowns.append({"type": "symbol", "symbol": symbol, "reason": "fewer than two bars available"})
+                continue
+            returns = [
+                (closes[index] - closes[index - 1]) / abs(closes[index - 1]) * 100
+                for index in range(1, len(closes))
+                if closes[index - 1]
+            ]
+            if request.metric == "return_percent":
+                value = (closes[-1] - closes[0]) / abs(closes[0]) * 100 if closes[0] else None
+            elif request.metric == "change_percent":
+                value = returns[-1] if returns else None
+            elif request.metric == "volatility_percent":
+                value = stdev(returns) if len(returns) >= 2 else None
+            elif request.metric == "volume":
+                value = volumes[-1]
+            else:
+                value = closes[-1]
+            if value is None:
+                unknowns.append({"type": "symbol", "symbol": symbol, "reason": "insufficient observations for metric"})
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "value": round(value, 8),
+                    "metric": request.metric,
+                    "latest_price": closes[-1],
+                    "bar_count": len(bars),
+                    "provider": payload.get("provider"),
+                    "source_timestamp": payload.get("source_timestamp"),
+                    "session": payload.get("session", request.session),
+                }
+            )
+            sources.append(
+                {
+                    "name": "bars",
+                    "symbol": symbol,
+                    "provider": payload.get("provider"),
+                    "timestamp": payload.get("source_timestamp"),
+                }
+            )
+        except Exception as exc:
+            unknowns.append({"type": "symbol", "symbol": symbol, "reason": str(exc)})
+
+    rows.sort(key=lambda row: (-row["value"] if request.direction == "desc" else row["value"], row["symbol"]))
+    for rank, row in enumerate(rows[: request.limit], start=1):
+        row["rank"] = rank
+    rows = rows[: request.limit]
+    return _Payload(
+        symbols=symbols,
+        metric=request.metric,
+        direction=request.direction,
+        timeframe=request.timeframe,
+        session=request.session,
+        range=request.range,
+        rankings=rows,
+        evaluated_count=len(rows),
+        unknowns=unknowns,
+        sources=sources,
+        provider="MarketLens comparison",
+        conclusion={
+            "status": "verified_ranking" if rows else "insufficient_data",
+            "message": "Rankings are calculated from returned provider bars; they are not a forecast.",
+        },
     )
 
 

@@ -181,7 +181,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.3.4 Intent coverage
 - Support symbol, market, comparison, scanner, watchlist, portfolio, risk, options, historical, journal, calculation, and app-action intents.
 - Replace fragile regex-only routing gradually; deterministic routes remain for exact DB questions and confirmation handling.
-- High-confidence options, historical bars, scanner, risk dashboard, journal, and alerts requests now route to typed tools before model action selection; comparison synthesis remains model-assisted.
+- High-confidence options, historical bars, scanner, risk dashboard, journal, alerts, and explicit symbol comparisons now route to typed tools before model action selection; narrative synthesis remains model-assisted.
 
 #### 5.3.5 Cost, latency, and rate-limit budgets
 - Prefer local database/cache tools before provider calls.
@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move` and `what_changed` evidence tools are implemented; broader analysis work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, and `compare_symbols` evidence tools are implemented; broader analysis work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -231,6 +231,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.3 Comparisons and rankings
 - Compare symbols or watchlists on returns, trend, confluence, relative strength, volatility, volume, valuation, catalysts, options, and data quality.
 - Backend performs sorting, normalization, and ranking; the model explains the result.
+- Implemented first slice: bounded symbol/watchlist rankings for verified return, daily change, volatility, volume, and price metrics, with deterministic ordering, rank numbers, provider timestamps, and per-symbol unknowns.
 
 #### 5.4.4 Scenario analysis
 - Answer position and portfolio “what if” questions: price shocks, stop changes, target changes, allocation changes, volatility changes, and broad-market selloffs.

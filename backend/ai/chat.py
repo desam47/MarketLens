@@ -182,6 +182,8 @@ def _cacheable_chat_action(action: str) -> bool:
         "get_session_stats",
         "get_calendar",
         "why_did_it_move",
+        "what_changed",
+        "compare_symbols",
         "run_screen",
     }
 
@@ -227,6 +229,7 @@ _JOURNAL_TOOL_INTENT = re.compile(r"\b(trade journal|journal entries?|trading jo
 _ALERTS_TOOL_INTENT = re.compile(r"\b(my alerts?|active alerts?|alert rules?|notifications?)\b", re.I)
 _WHY_MOVE_INTENT = re.compile(r"\b(why did .* move|why is .* (up|down)|what caused .* (move|drop|surge)|explain .* move)\b", re.I)
 _WHAT_CHANGED_INTENT = re.compile(r"\b(what changed|what has changed|since yesterday|since my last visit|changed since)\b", re.I)
+_COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|weakest|best performing|worst performing|which .* (higher|lower|stronger|weaker))\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -976,7 +979,7 @@ def _generate_reply(
     # Exact arithmetic is deterministic and must not spend an AI/provider
     # call. Missing inputs get a precise clarification instead of a generic
     # model failure; a follow-up may explicitly reuse the prior inputs.
-    if _CALCULATION_HINT.search(user_content):
+    if _CALCULATION_HINT.search(user_content) and not _COMPARISON_INTENT.search(user_content):
         calculation = _fallback_calculation(user_content)
         prior = (planner_state or {}).get("last_calculation_inputs")
         if calculation is None and prior and _REUSE_MEMORY_HINT.search(user_content):
@@ -1050,6 +1053,36 @@ def _generate_reply(
             action="what_changed",
             action_symbol=focus_symbols[0],
             action_tool_arguments={"symbol": focus_symbols[0], "reference": reference},
+        )
+    elif _COMPARISON_INTENT.search(user_content) and (
+        sum(bool(re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)) for symbol in focus_symbols) >= 2
+        or "watchlist" in user_content.lower()
+    ):
+        lowered = user_content.lower()
+        watchlist = (planner_state or {}).get("watchlist") if "watchlist" in lowered else None
+        comparison_symbols = [
+            symbol for symbol in focus_symbols if re.search(rf"\b{re.escape(symbol)}\b", user_content, re.I)
+        ]
+        metric = "return_percent"
+        if "volatility" in lowered:
+            metric = "volatility_percent"
+        elif "volume" in lowered:
+            metric = "volume"
+        elif "price" in lowered:
+            metric = "price"
+        elif "today" in lowered or "daily" in lowered or "change" in lowered:
+            metric = "change_percent"
+        direction = "asc" if any(word in lowered for word in ("weakest", "worst", "lowest", "smallest")) else "desc"
+        deterministic = ChatReplyResponse(
+            reply="Verified symbol comparison",
+            grounded=True,
+            action="compare_symbols",
+            action_tool_arguments={
+                "symbols": comparison_symbols,
+                "watchlist": watchlist,
+                "metric": metric,
+                "direction": direction,
+            },
         )
     elif _HISTORICAL_TOOL_INTENT.search(user_content):
         if len(focus_symbols) != 1:
@@ -2248,6 +2281,7 @@ _MARKET_TOOL_ACTIONS = {
     "get_calendar",
     "why_did_it_move",
     "what_changed",
+    "compare_symbols",
     "import_csv",
 }
 
