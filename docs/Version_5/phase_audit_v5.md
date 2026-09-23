@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 and the 5.7.2 visual/action slice are in progress.
+**Status:** Active. Planning complete; Phases 5.1–5.6 are complete; Phase 5.7.1 is complete; the 5.7.2 visual/action slice is in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -83,7 +83,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ✅ COMPLETE | 5.6.1–5.6.4 and 5.6.6 are complete. `build_trade_plan`, `assess_portfolio_risk`, `options_research`, `trade_journal_coach`, and `decision_checklist` use verified calculator/tool evidence and honest unavailable states. 5.6.5 validates and saves an approved typed Journal entry through a server-enforced confirmation gate, returns a bounded local snapshot for browser persistence, exports verified plans/reviews as local Markdown reports, and exposes Symbol, Scanner, Risk, Replay, Alerts, and Journal deep links rendered as Chat actions. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response-block foundation is implemented; 5.7.2 visual cards and navigation/action shortcuts are in progress; preferences, feedback, regeneration, notebooks and answer refresh remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response blocks are complete, including comparison/ranked blocks from tool results, full per-block-type component coverage, and a persisted-block API contract test. 5.7.2 visual cards and navigation/action shortcuts are in progress (missing/long-value robustness done; interactive controls remain); preferences, feedback, regeneration, notebooks and answer refresh remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -857,7 +857,7 @@ successful production build.
 
 ## Phase 5.7 — Structured Chat UI and personalization
 
-**5.7.1 foundation in progress — Typed response blocks (2026-09-23).** Chat
+**5.7.1 complete — Typed response blocks (2026-09-23).** Chat
 assistant messages now carry an application-owned, Pydantic-validated block
 envelope alongside the legacy prose `content`. The envelope supports prose,
 calculation, evidence, warning, suggested-follow-up, action-confirmation,
@@ -875,9 +875,33 @@ Focused verification: two backend response-block tests, 26 ChatPanel tests,
 and a successful frontend production build. The Alembic upgrade to head was
 also verified on a fresh in-project SQLite database.
 
-Remaining for 5.7.1: emit comparison/ranked blocks from the relevant tool
-results, add component coverage for every block type and mobile/long-value
-states, and add a live Chat API contract test for persisted historical blocks.
+**5.7.1 gap closure (2026-09-23).** All three items previously listed as
+remaining are now done. `ranked_results` blocks are emitted for
+`get_relative_strength` (ranked by `rs_pct` against each benchmark, missing
+values sorted last rather than dropped) and `anomaly_analysis` (ranked by
+`|z_score|`, threshold-triggered anomalies with no z-score sorted after the
+scored ones), alongside the existing `compare_symbols` `comparison_table`.
+`ChatPanel` now has direct render coverage for every one of the 17 block
+types (previously 4 of 17 — `calculation`, `warning`, `report`,
+`journal_save`), plus an edge-case test covering an empty chart, null
+indicator values, ragged comparison-table rows, a 5,000-character report
+body, and an empty ranked list. A new Chat API contract test exercises the
+real JSON persistence round trip on `GET .../messages`: every prior
+historical-message test left `response_blocks` as an implicit mock
+attribute that `_message_to_response`'s `json.loads` rejects and silently
+swallows, so the actual persisted-JSON path had never been exercised;
+separate tests now also cover a NULL `response_blocks` column (pre-5.7.1
+rows) and a corrupted JSON string, both degrading to an empty block list
+rather than a 500. "Mobile" here means component-level robustness against
+missing/long/ragged data (what can actually crash a component); real
+viewport/CSS layout continues to rely on existing responsive CSS
+(`overflow-x: auto` table wrappers, an `auto-fit` indicator grid, and
+`white-space: pre-wrap` on report bodies), which this test suite does not
+exercise.
+
+Focused verification: 9 new `_visual_trace_payload` tests, 3 new Chat API
+contract tests, and 2 new ChatPanel tests (2987 backend / 168 frontend
+tests passing overall).
 
 **5.7.2 visual/action slice in progress (2026-09-23).** Bounded visual
 payloads from bars, indicators, options, risk, scenarios, session statistics,
@@ -891,10 +915,12 @@ trade was recorded before the user submits it. Navigation changes page state
 only and cannot execute a market action.
 
 Focused verification: 3 backend response-block tests, 29 Chat/Journal
-component tests, and a successful production build. Remaining 5.7.2 work is
-deeper interactive controls (scenario sliders, chart/table expanders, and
-action-specific confirmation/results) plus coverage for every visual block at
-mobile widths and with missing/long values.
+component tests, and a successful production build. Missing/long-value
+robustness for the visual blocks (chart, indicator table, comparison table,
+report, ranked results) was added 2026-09-23 alongside the 5.7.1 gap
+closure above. Remaining 5.7.2 work is deeper interactive controls
+(scenario sliders, chart/table expanders, and action-specific
+confirmation/results).
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration
 behavior for older prose-only messages. Every data-backed block must be checked

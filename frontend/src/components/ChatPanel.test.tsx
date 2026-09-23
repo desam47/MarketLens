@@ -126,6 +126,144 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('region', { name: 'Journal save' })).toHaveTextContent('AAPL');
   });
 
+  it('renders every remaining typed block type (5.7.1 component coverage)', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 20, session_id: 1, role: 'assistant', content: 'Full breakdown.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+        blocks: [
+          {
+            id: 'evidence-1', type: 'evidence',
+            data: {
+              symbols: { verified: ['AAPL'], partial: [], unavailable: [] },
+              items: [{ tool: 'get_quote', provider: 'webull', timeframe: '1m', session: 'regular' }],
+            },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'action-1', type: 'action_confirmation',
+            data: { actions: [{ tool: 'create_alert', status: 'completed', reason: null }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'comparison-1', type: 'comparison_table',
+            data: { columns: ['Rank', 'Symbol', 'Value'], rows: [[1, 'AAPL', 10.2], [2, 'MSFT', 8.1]] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'ranked-1', type: 'ranked_results',
+            data: { title: 'AAPL relative strength', items: [{ name: 'vs QQQ', score: 4.5 }, { name: 'vs SPY', score: 1.2 }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'chart-1', type: 'chart',
+            data: { symbol: 'AAPL', timeframe: '1d', bars: [{ close: 100 }, { close: 102 }, { close: 101 }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'indicator-1', type: 'indicator_table',
+            data: { symbol: 'AAPL', indicators: { rsi: 62.4, adx: 28.1 }, triggers: [] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'options-1', type: 'options_chain',
+            data: { symbol: 'AAPL', iv: 0.31, iv_rank: 45, chains: [{ calls: [{ strike: 230, option_type: 'call', last_price: 3.2, volume: 500, open_interest: 1200 }], puts: [] }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'risk-1', type: 'risk_card',
+            data: { portfolio_value: 100000, gross_exposure: 40000, unknowns: [], conclusion: 'ok' },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'scenario-1', type: 'scenario',
+            data: { shock_percent: -10, total_pnl_delta: -4200, positions: [], unknowns: [] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'session-1', type: 'session_stats',
+            data: { symbol: 'AAPL', session: 'regular', open: 228.1, close: 230.4 },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'historical-1', type: 'historical_outcomes',
+            data: { summaries: [{ horizon: 5, sample_size: 42, mean_return_percent: 1.23, win_rate_percent: 58.4 }] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            id: 'followups-1', type: 'suggested_followups',
+            data: { items: ['Show the source data', 'Recheck with current data'] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+    render(<ChatPanel />);
+
+    expect(await screen.findByRole('region', { name: 'Evidence' })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('create_alert');
+    expect(screen.getByRole('region', { name: 'Comparison table' })).toHaveTextContent('MSFT');
+    expect(screen.getByRole('region', { name: 'Ranked results' })).toHaveTextContent('vs QQQ');
+    expect(screen.getByRole('img', { name: /price trend/i })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Indicator table' })).toHaveTextContent('62.40');
+    expect(screen.getByRole('region', { name: 'Options chain card' })).toHaveTextContent('230');
+    expect(screen.getByRole('region', { name: 'Risk snapshot' })).toHaveTextContent('100000');
+    expect(screen.getByRole('region', { name: 'Scenario analysis' })).toHaveTextContent('-4200');
+    expect(screen.getByRole('region', { name: 'Session statistics' })).toHaveTextContent('228.1');
+    expect(screen.getByRole('region', { name: 'Historical outcomes' })).toHaveTextContent('58.4%');
+    expect(screen.getByLabelText('Suggested follow-ups')).toHaveTextContent('Recheck with current data');
+  });
+
+  it('handles missing/long values without crashing (5.7.1 mobile/long-value coverage)', async () => {
+    const longText = 'A'.repeat(5000);
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 21, session_id: 1, role: 'assistant', content: 'Edge cases.',
+        created_at: '', grounded: true, focus: [], partial: [], unavailable: [],
+        blocks: [
+          {
+            // No bars at all — chart must show its empty state, not throw.
+            id: 'chart-empty', type: 'chart',
+            data: { symbol: 'ZZZZ', timeframe: '1d', bars: [] },
+            quality: { state: 'unavailable', grounded: false, confidence: 0 },
+          },
+          {
+            // Null indicator values mixed with real ones.
+            id: 'indicator-nulls', type: 'indicator_table',
+            data: { symbol: 'ZZZZ', indicators: { rsi: null, adx: undefined, ema_20: 101.5 } },
+            quality: { state: 'partial', grounded: false, confidence: 0.5 },
+          },
+          {
+            // Ragged rows (fewer cells than columns) in a comparison table.
+            id: 'comparison-ragged', type: 'comparison_table',
+            data: { columns: ['Rank', 'Symbol', 'Value'], rows: [[1, 'AAPL']] },
+            quality: { state: 'partial', grounded: false, confidence: 0.5 },
+          },
+          {
+            // Very long report content — must render, not truncate-crash.
+            id: 'report-long', type: 'report',
+            data: { title: 'Long report', content: longText, symbol: 'AAPL', deep_links: {} },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+          {
+            // Empty ranked list.
+            id: 'ranked-empty', type: 'ranked_results',
+            data: { title: 'No anomalies', items: [] },
+            quality: { state: 'verified', grounded: true, confidence: 1 },
+          },
+        ],
+      } as any,
+    ]);
+
+    render(<ChatPanel />);
+
+    expect(await screen.findByText('Chart data is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('101.50')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Comparison table' })).toHaveTextContent('AAPL');
+    expect(screen.getByRole('region', { name: 'Local report' })).toHaveTextContent(longText);
+    expect(screen.getByRole('region', { name: 'Ranked results' })).toBeInTheDocument();
+  });
+
   it('colorizes signed numbers in an assistant reply', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

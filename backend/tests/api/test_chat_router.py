@@ -4,6 +4,7 @@ panel endpoints.
 """
 
 import asyncio
+import json
 import threading
 import unittest
 from datetime import UTC, datetime
@@ -27,13 +28,18 @@ def _mock_session(id=1, symbol="AAPL", alert_trigger_id=None, scope=None):
     return s
 
 
-def _mock_message(id=1, session_id=1, role="user", content="hi"):
+def _mock_message(id=1, session_id=1, role="user", content="hi", response_blocks=None):
     m = MagicMock()
     m.id = id
     m.session_id = session_id
     m.role = role
     m.content = content
     m.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    # Explicit default (rather than leaving the MagicMock auto-attribute in
+    # place) so tests can distinguish "no persisted blocks" from "persisted
+    # blocks" instead of every unset access silently returning a truthy
+    # MagicMock that _message_to_response's JSON parse would reject anyway.
+    m.response_blocks = response_blocks
     return m
 
 
@@ -160,6 +166,84 @@ class TestGetMessages(unittest.TestCase):
 
         resp = self.client.get("/api/ai/chat/sessions/999/messages")
         self.assertEqual(resp.status_code, 404)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_persisted_blocks_round_trip_from_stored_json(self, mock_repo_cls):
+        """5.7.1 contract test: a historical row's response_blocks column
+        (a JSON string, as ChatRepository actually persists it) must come
+        back out of GET .../messages as the same typed block list — not
+        just today's freshly-generated response. Before this test, every
+        _mock_message() in this file left response_blocks as an
+        auto-created MagicMock attribute, which _message_to_response's
+        json.loads() rejects and silently swallows via its except clause
+        — so the real persisted-JSON path had zero coverage; every
+        historical-message test was unknowingly only exercising the
+        parse-failure fallback."""
+        stored_blocks = [
+            {
+                "id": "prose-1",
+                "type": "prose",
+                "data": {"text": "AAPL is a moderate uptrend."},
+                "quality": {"state": "verified", "grounded": True, "confidence": 1.0},
+            },
+            {
+                "id": "ranked-1",
+                "type": "ranked_results",
+                "data": {"title": "AAPL relative strength", "items": [{"name": "vs QQQ", "score": 4.5}]},
+                "quality": {"state": "verified", "grounded": True, "confidence": 1.0},
+            },
+        ]
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo.get_messages.return_value = [
+            _mock_message(id=1, role="user", content="how's AAPL doing?"),
+            _mock_message(
+                id=2,
+                role="assistant",
+                content="AAPL is a moderate uptrend.",
+                response_blocks=json.dumps(stored_blocks),
+            ),
+        ]
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions/1/messages")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data[0]["blocks"], [])  # user message never carries blocks
+        self.assertEqual(data[1]["blocks"], stored_blocks)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_missing_response_blocks_returns_empty_list_not_error(self, mock_repo_cls):
+        """A pre-5.7.1 historical row has no response_blocks column value
+        at all (NULL) — must degrade to an empty list, not 500."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo.get_messages.return_value = [
+            _mock_message(id=1, role="assistant", content="Old reply.", response_blocks=None),
+        ]
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions/1/messages")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()[0]["blocks"], [])
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_corrupted_response_blocks_json_degrades_to_empty_list(self, mock_repo_cls):
+        """A truncated/corrupted response_blocks string must not break the
+        whole transcript — degrade that one message's blocks to []."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo.get_messages.return_value = [
+            _mock_message(id=1, role="assistant", content="Reply.", response_blocks="{not valid json"),
+        ]
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/api/ai/chat/sessions/1/messages")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()[0]["blocks"], [])
 
 
 class TestSendMessage(unittest.TestCase):

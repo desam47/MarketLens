@@ -2650,6 +2650,44 @@ def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
         return "historical_outcomes", {key: data.get(key) for key in ("symbol", "timeframe", "session", "summaries", "sample_size", "look_ahead_safe", "historical_note", "unknowns") if key in data}
     if action == "compare_symbols" and isinstance(data.get("rankings"), list):
         return "comparison_table", {"columns": ["Rank", "Symbol", "Value", "Metric"], "rows": [[row.get("rank"), row.get("symbol"), row.get("value"), row.get("metric")] for row in data["rankings"][:25]]}
+    if action == "get_relative_strength" and isinstance(data.get("signals"), list):
+        signals = [item for item in data["signals"] if isinstance(item, dict)]
+        # rs_pct is the whole point of a relative-strength ranking (alpha vs
+        # each benchmark) — sorting missing values to the bottom instead of
+        # crashing or dropping them keeps a partial result still renderable.
+        ranked = sorted(signals, key=lambda item: item.get("rs_pct") if isinstance(item.get("rs_pct"), (int, float)) else float("-inf"), reverse=True)
+        return "ranked_results", {
+            "title": f"{data.get('symbol', 'Symbol')} relative strength vs benchmarks",
+            "items": [
+                {
+                    "name": f"vs {item.get('benchmark', 'benchmark')}",
+                    "score": item.get("rs_pct"),
+                    "classification": item.get("classification"),
+                }
+                for item in ranked
+            ],
+        }
+    if action == "anomaly_analysis" and isinstance(data.get("anomalies"), list):
+        anomalies = [item for item in data["anomalies"] if isinstance(item, dict)]
+        # Not every anomaly type carries a z_score (e.g. large_prints,
+        # portfolio_concentration are threshold-triggered, not z-scored) —
+        # those sort after the ones that do rather than being excluded.
+        ranked = sorted(
+            anomalies,
+            key=lambda item: abs(item["z_score"]) if isinstance(item.get("z_score"), (int, float)) else -1,
+            reverse=True,
+        )
+        return "ranked_results", {
+            "title": f"{data.get('symbol', 'Symbol')} anomalies",
+            "items": [
+                {
+                    "name": str(item.get("type", "anomaly")).replace("_", " "),
+                    "score": item.get("z_score"),
+                    "severity": item.get("severity"),
+                }
+                for item in ranked
+            ],
+        }
     if action == "export_report":
         content = data.get("content")
         if isinstance(content, str):
