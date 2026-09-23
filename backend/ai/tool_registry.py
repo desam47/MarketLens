@@ -363,6 +363,7 @@ def build_default_registry() -> ToolRegistry:
         FundamentalsRequest,
         HistoricalSimilarityRequest,
         IndicatorRequest,
+        JournalCoachRequest,
         MarketEventTimelineRequest,
         MoveAnalysisRequest,
         NewsRequest,
@@ -414,6 +415,7 @@ def build_default_registry() -> ToolRegistry:
         scenario_analysis_tool,
         sensitivity_analysis_tool,
         signal_explanation_tool,
+        trade_journal_coach_tool,
         what_changed_tool,
         why_did_it_move_tool,
     )
@@ -455,6 +457,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="assess_portfolio_risk", kind="read_only", description="Explain concentration, sector exposure, correlation, volatility, stop risk, drawdown, and scenario results for an explicit position snapshot; optionally size a new trade against the portfolio's risk capacity.", input_model=PortfolioRiskRequest, handler=assess_portfolio_risk_tool))
     registry.register(ToolSpec(name="build_trade_plan", kind="read_only", description="Build a verified trade plan: entry/stop/targets/reward-risk/position size, for the user to review before saving.", input_model=TradePlanRequest, handler=build_trade_plan_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
+    registry.register(ToolSpec(name="trade_journal_coach", kind="read_only", description="Evidence-based Journal coaching: plan-vs-actual, recurring mistake observations, per-setup performance, win rate, and expectancy from an explicitly supplied journal snapshot.", input_model=JournalCoachRequest, handler=trade_journal_coach_tool))
     registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))
     registry.register(ToolSpec(name="import_csv", kind="read_only", description="Parse and validate local CSV text into positions, watchlist symbols, or trade-journal rows.", input_model=CsvImportRequest, handler=import_csv_tool))
     return registry

@@ -370,6 +370,21 @@ class TradeJournalRequest(BaseModel):
     entries: list[dict[str, Any]] = Field(default_factory=list, max_length=1_000)
 
 
+class JournalCoachRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Journal entries are loose, browser-local dicts (same as
+    # TradeJournalRequest -- no fixed schema is enforced client-side).
+    # Recognized keys this tool looks for: symbol, side ("long"/"short"),
+    # status, quantity, entry_price, exit_price, stop_price, target_price,
+    # planned_entry, planned_stop, planned_target, setup (or strategy),
+    # account_value, risk_percent, signals, market_conditions,
+    # calculations, plan. Anything else is ignored, not rejected.
+    entries: list[dict[str, Any]] = Field(default_factory=list, max_length=1_000)
+    symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    setup: str | None = Field(default=None, max_length=100)
+
+
 class CsvImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2523,6 +2538,206 @@ def get_trade_journal_tool(request: TradeJournalRequest) -> BaseModel:
         closed_entries=len(closed),
         provider="MarketLens local journal",
         source_timestamp=_database_timestamp(),
+    )
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _realized_pnl(entry: dict[str, Any]) -> tuple[float | None, float | None, float | None, float | None]:
+    """(pnl, entry_price, exit_price, quantity) for one closed entry, or
+    (None, ...) if any required field is missing/invalid -- never guessed."""
+    side = str(entry.get("side") or "long").lower()
+    entry_price = _as_float(entry.get("entry_price"))
+    exit_price = _as_float(entry.get("exit_price"))
+    quantity = _as_float(entry.get("quantity"))
+    if entry_price is None or exit_price is None or quantity is None or quantity <= 0:
+        return None, entry_price, exit_price, quantity
+    sign = 1 if side == "long" else -1
+    return (exit_price - entry_price) * quantity * sign, entry_price, exit_price, quantity
+
+
+def _r_multiple(entry: dict[str, Any], pnl: float | None, entry_price: float | None, quantity: float | None) -> float | None:
+    """pnl expressed in multiples of the initial planned risk (entry - stop).
+
+    Uses whichever stop the entry actually recorded at open (stop_price),
+    falling back to planned_stop -- never the exit itself, which would make
+    every trade a trivial 1.0R or -1.0R."""
+    if pnl is None or entry_price is None or quantity is None:
+        return None
+    stop = _as_float(entry.get("stop_price"))
+    if stop is None:
+        stop = _as_float(entry.get("planned_stop"))
+    if stop is None:
+        return None
+    risk = abs(entry_price - stop) * quantity
+    if risk <= 0:
+        return None
+    return pnl / risk
+
+
+def _classify_exit(side: str, exit_price: float, planned_stop: float | None, planned_target: float | None) -> str:
+    favorable_sign = 1 if side == "long" else -1
+    if planned_target is not None and (exit_price - planned_target) * favorable_sign >= 0:
+        return "hit_or_beat_target"
+    if planned_stop is not None:
+        if (exit_price - planned_stop) * favorable_sign < 0:
+            return "exceeded_planned_stop"
+        if math.isclose(exit_price, planned_stop, rel_tol=1e-6, abs_tol=1e-6):
+            return "hit_planned_stop"
+    if planned_target is None and planned_stop is None:
+        return "unknown"
+    return "closed_early"
+
+
+def _evidence_attached(entry: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "signals": bool(entry.get("signals")),
+        "market_conditions": bool(entry.get("market_conditions")),
+        "calculations": bool(entry.get("calculations")),
+        "plan": bool(entry.get("plan")),
+    }
+
+
+def trade_journal_coach_tool(request: JournalCoachRequest) -> BaseModel:
+    """Evidence-based Trade Journal coaching: plan-vs-actual, recurring
+    mistake observations, per-setup performance, win rate, and expectancy.
+
+    Every number here comes from the entries the caller actually supplied
+    (Journal is browser-local); an entry missing the fields a given metric
+    needs is excluded from that metric with a stated reason, never
+    defaulted. Output is observations (facts), not advice -- turning these
+    into coaching language is Chat's job on top of this evidence, the same
+    separation signal_explanation/counterargument_review already use.
+    """
+    if not request.entries:
+        return _Payload(
+            available=False,
+            reason="Trade Journal entries are stored in this browser. Pass the local journal snapshot to coach on it.",
+            provider="MarketLens local journal",
+            source_timestamp=_database_timestamp(),
+        )
+
+    entries = request.entries
+    if request.symbol:
+        entries = [e for e in entries if str(e.get("symbol", "")).upper() == request.symbol.upper()]
+    if request.setup:
+        entries = [e for e in entries if str(e.get("setup") or e.get("strategy") or "").lower() == request.setup.lower()]
+
+    closed = [e for e in entries if e.get("status") == "closed"]
+    skipped: list[dict[str, Any]] = []
+    priced: list[dict[str, Any]] = []
+    for entry in closed:
+        pnl, entry_price, exit_price, quantity = _realized_pnl(entry)
+        if pnl is None:
+            skipped.append({"symbol": entry.get("symbol"), "reason": "missing or invalid entry_price/exit_price/quantity"})
+            continue
+        priced.append({
+            "entry": entry, "pnl": pnl, "entry_price": entry_price, "exit_price": exit_price,
+            "quantity": quantity, "r_multiple": _r_multiple(entry, pnl, entry_price, quantity),
+        })
+
+    wins = [p for p in priced if p["pnl"] > 0]
+    win_rate_percent = round(len(wins) / len(priced) * 100, 4) if priced else None
+    expectancy_per_trade = round(sum(p["pnl"] for p in priced) / len(priced), 6) if priced else None
+    r_multiples = [p["r_multiple"] for p in priced if p["r_multiple"] is not None]
+    average_r_multiple = round(sum(r_multiples) / len(r_multiples), 6) if r_multiples else None
+
+    setup_groups: dict[str, list[dict[str, Any]]] = {}
+    for p in priced:
+        key = str(p["entry"].get("setup") or p["entry"].get("strategy") or "untagged")
+        setup_groups.setdefault(key, []).append(p)
+    setup_performance = []
+    for key, group in sorted(setup_groups.items(), key=lambda item: len(item[1]), reverse=True):
+        group_wins = [p for p in group if p["pnl"] > 0]
+        group_r = [p["r_multiple"] for p in group if p["r_multiple"] is not None]
+        setup_performance.append({
+            "setup": key,
+            "trade_count": len(group),
+            "win_rate_percent": round(len(group_wins) / len(group) * 100, 4),
+            "expectancy_per_trade": round(sum(p["pnl"] for p in group) / len(group), 6),
+            "average_r_multiple": round(sum(group_r) / len(group_r), 6) if group_r else None,
+        })
+
+    plan_vs_actual: list[dict[str, Any]] = []
+    observations: dict[str, list[dict[str, Any]]] = {
+        "no_stop_defined": [],
+        "exceeded_planned_stop": [],
+        "exited_before_target": [],
+        "position_larger_than_risk_budget": [],
+    }
+    for entry in closed:
+        symbol = entry.get("symbol")
+        side = str(entry.get("side") or "long").lower()
+        stop = _as_float(entry.get("stop_price")) or _as_float(entry.get("planned_stop"))
+        if stop is None:
+            observations["no_stop_defined"].append({"symbol": symbol})
+
+        planned_entry = _as_float(entry.get("planned_entry"))
+        planned_stop = _as_float(entry.get("planned_stop"))
+        planned_target = _as_float(entry.get("planned_target"))
+        exit_price = _as_float(entry.get("exit_price"))
+        entry_price = _as_float(entry.get("entry_price"))
+        if exit_price is not None and (planned_stop is not None or planned_target is not None):
+            classification = _classify_exit(side, exit_price, planned_stop, planned_target)
+            plan_vs_actual.append({
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "planned_entry": planned_entry,
+                "exit_price": exit_price,
+                "planned_stop": planned_stop,
+                "planned_target": planned_target,
+                "exit_classification": classification,
+                "evidence_attached": _evidence_attached(entry),
+            })
+            if classification == "exceeded_planned_stop":
+                observations["exceeded_planned_stop"].append({"symbol": symbol})
+            elif classification == "closed_early":
+                observations["exited_before_target"].append({"symbol": symbol})
+
+        account_value = _as_float(entry.get("account_value"))
+        risk_percent = _as_float(entry.get("risk_percent"))
+        quantity = _as_float(entry.get("quantity"))
+        if account_value and risk_percent and entry_price and stop and quantity and entry_price != stop:
+            from backend.ai.calculator import CalculationRequest, calculate
+
+            intended = calculate(CalculationRequest(
+                calculation="position_size", entry_price=entry_price, stop_price=stop,
+                account_value=account_value, risk_percent=risk_percent,
+            ))
+            intended_shares = intended.values["shares"]
+            if intended_shares and quantity > intended_shares * 1.2:
+                observations["position_larger_than_risk_budget"].append({
+                    "symbol": symbol, "actual_quantity": quantity, "risk_budget_quantity": round(intended_shares, 4),
+                })
+
+    return _Payload(
+        available=True,
+        total_entries=len(entries),
+        closed_entries=len(closed),
+        priced_closed_entries=len(priced),
+        skipped_entries=skipped,
+        win_rate_percent=win_rate_percent,
+        expectancy_per_trade=expectancy_per_trade,
+        average_r_multiple=average_r_multiple,
+        setup_performance=setup_performance,
+        plan_vs_actual=plan_vs_actual,
+        observations={key: {"count": len(items), "entries": items} for key, items in observations.items()},
+        provider="MarketLens local journal",
+        source_timestamp=_database_timestamp(),
+        assumptions=[
+            "Win rate, expectancy, and R-multiples are computed only over closed entries with a usable "
+            "entry_price, exit_price, and quantity; entries missing any of these are excluded and listed "
+            "in skipped_entries, not defaulted.",
+            "These are observations from the supplied journal data, not trading advice.",
+        ],
     )
 
 

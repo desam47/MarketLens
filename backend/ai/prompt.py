@@ -897,6 +897,7 @@ class ChatReplyResponse(BaseModel):
         "build_trade_plan",
         "assess_portfolio_risk",
         "options_research",
+        "trade_journal_coach",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -1066,6 +1067,21 @@ _ACTION_TOOL_DOCS = (
       always labeled by source (last trade or bid/ask midpoint) and are \
       never executable — never state or imply a price the trader could \
       actually transact at.
+    - trade_journal_coach gives evidence-based Journal coaching: plan-vs- \
+      actual, recurring mistake observations, per-setup performance, win \
+      rate, and expectancy (average P&L and average R-multiple). Journal \
+      entries are browser-local — set action_tool_arguments.entries to the \
+      trader's local journal snapshot (loose dicts; recognized keys \
+      include symbol, side, status, quantity, entry_price, exit_price, \
+      stop_price, target_price, planned_entry, planned_stop, \
+      planned_target, setup/strategy). Optionally filter with .symbol or \
+      .setup. Win rate/expectancy/R-multiples only cover closed entries \
+      with a usable entry_price, exit_price, and quantity — others are \
+      listed in skipped_entries, never guessed. The output is observations \
+      from the data, not advice — frame your reply that way, distinguish \
+      facts (win rate, expectancy, exceeded-stop count) from your own \
+      interpretation, and never state a "mistake" the data doesn't \
+      actually show.
     - assumption_tracking saves or reviews research assumptions. For a save, \
       set operation="save", include one or more typed assumptions (category, \
       statement, optional expected_value, source), and set action_confirmed=true \
@@ -1227,7 +1243,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
       get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
-      import_csv, build_trade_plan, assess_portfolio_risk, options_research, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

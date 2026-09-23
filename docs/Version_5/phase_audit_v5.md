@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.3 complete).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 complete).
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -79,7 +79,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
-| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.3 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. Journal coach, save/export, and decision checklist remain. |
+| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. Save/export and the decision checklist remain. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
@@ -759,11 +759,50 @@ plus a registry-level test. Registered as `options_research` (read-only)
 and wired into Chat's action set/schema using the same path the 5.6.1 fix
 put in place.
 
-Remaining: Trade Journal coach (5.6.4), save/export workflows (5.6.5), and
-the configurable decision checklist (5.6.6). Audit must trace every
-numerical output to calculator results, verify missing-input
-clarification, preserve delayed options labels, and reproduce journal
-analytics from stored records. Decision-checklist tests must distinguish
+**5.6.4 complete — Trade Journal coach.** `trade_journal_coach`
+(`backend/ai/market_tools.py`) takes the same loose, browser-local entry
+snapshot `get_trade_journal` already accepts (no fixed schema — Journal
+entries are arbitrary dicts) and computes win rate, expectancy (average
+realized P&L per trade), and average R-multiple (P&L ÷ initial planned
+risk, using each entry's own `stop_price`/`planned_stop`) strictly over
+closed entries with a usable `entry_price`, `exit_price`, and `quantity`;
+anything else lands in `skipped_entries` with a stated reason rather than
+being defaulted or silently dropped. Groups the same statistics per `setup`/
+`strategy` tag (untagged entries form their own group, never excluded).
+Compares plan vs. actual per entry — `exit_classification` (`hit_or_beat_target`
+/ `hit_planned_stop` / `exceeded_planned_stop` / `closed_early` / `unknown`)
+derived directly from `planned_stop`/`planned_target` against the real
+`exit_price` — and surfaces four recurring-pattern **observations**, each a
+plain count with the affected symbols, never framed as advice: no stop was
+ever recorded, the stop was blown through, the trade closed before its
+planned target, and the position was meaningfully larger (>20%) than what
+`calculate(position_size)` implies the entry's own stated `account_value`/
+`risk_percent` would size — reusing the calculator rather than re-deriving
+sizing math, same as `build_trade_plan`/`assess_portfolio_risk`. Each
+plan-vs-actual row also reports an `evidence_attached` flag
+(`signals`/`market_conditions`/`calculations`/`plan`) — since entries are
+untyped dicts, attaching that evidence (the plan's first 5.6.4 bullet) was
+already possible; this makes it visible per entry rather than silently
+ignored. Assumptions explicitly state the output is observations from the
+supplied data, not trading advice, so Chat frames its reply accordingly
+(the phase's "distinguish observations from advice" rule) — coaching prose
+is Chat's job on top of this evidence, the same separation
+`signal_explanation`/`counterargument_review` already use. 8 focused tool
+tests (unavailable-without-entries, the full win-rate/expectancy/R-multiple
+computation across 7 mixed entries, per-setup grouping, all four
+observation types firing correctly — including a `TSLA` entry that
+legitimately lands in both `skipped_entries` *and* `no_stop_defined` since
+those are independent gaps — plan-vs-actual with evidence flags, and
+symbol/setup filtering) plus a registry-level test. Registered as
+`trade_journal_coach` (read-only) and wired into Chat's action set/schema
+via the same path the 5.6.1 fix put in place.
+
+Remaining: save/export workflows (5.6.5) and the configurable decision
+checklist (5.6.6). Audit must trace every numerical output to calculator
+results, verify missing-input clarification, preserve delayed options
+labels, and reproduce journal analytics from stored records (satisfied for
+Trade Journal coach's own output above; still applies as new save/export
+and checklist work lands). Decision-checklist tests must distinguish
 completed, failed, unavailable, and skipped checks.
 
 ---

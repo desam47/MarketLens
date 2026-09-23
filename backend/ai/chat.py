@@ -2515,6 +2515,7 @@ _MARKET_TOOL_ACTIONS = {
     "build_trade_plan",
     "assess_portfolio_risk",
     "options_research",
+    "trade_journal_coach",
 }
 
 

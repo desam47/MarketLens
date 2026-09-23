@@ -13,6 +13,7 @@ from backend.ai.market_tools import (
     CsvImportRequest,
     HistoricalSimilarityRequest,
     IndicatorRequest,
+    JournalCoachRequest,
     MarketEventTimelineRequest,
     MoveAnalysisRequest,
     OptionLegRef,
@@ -61,6 +62,7 @@ from backend.ai.market_tools import (
     scenario_analysis_tool,
     sensitivity_analysis_tool,
     signal_explanation_tool,
+    trade_journal_coach_tool,
     what_changed_tool,
     why_did_it_move_tool,
 )
@@ -1343,3 +1345,101 @@ def test_options_research_flags_near_expiration_risk(monkeypatch) -> None:
     result = options_research_tool(OptionsResearchRequest(symbol="AAPL")).model_dump()
 
     assert result["chain_summary"]["near_expiration_risk"] is True
+
+
+def test_journal_coach_reports_unavailable_without_entries() -> None:
+    result = trade_journal_coach_tool(JournalCoachRequest())
+    assert result.available is False
+    assert "browser" in result.reason
+
+
+def _coach_entries() -> list[dict]:
+    return [
+        # AAPL: win, has stop + planned_target, exits before target, evidence attached.
+        {"symbol": "AAPL", "side": "long", "status": "closed", "entry_price": 100, "exit_price": 110,
+         "quantity": 10, "stop_price": 95, "planned_entry": 99, "planned_target": 115, "setup": "breakout",
+         "signals": ["rsi_oversold"], "plan": {"note": "breakout continuation"}},
+        # MSFT: loss, blew through planned_stop, untagged, no evidence.
+        {"symbol": "MSFT", "side": "long", "status": "closed", "entry_price": 50, "exit_price": 40,
+         "quantity": 5, "planned_stop": 45},
+        # TSLA: missing exit_price -> skipped from pricing entirely.
+        {"symbol": "TSLA", "side": "long", "status": "closed", "entry_price": 200, "quantity": 2},
+        # NVDA: win, but no stop recorded at all -> no_stop_defined observation, excluded from R-multiples.
+        {"symbol": "NVDA", "side": "long", "status": "closed", "entry_price": 300, "exit_price": 310, "quantity": 1},
+        # AMD: win, position 2x the size the stated risk budget implies.
+        {"symbol": "AMD", "side": "long", "status": "closed", "entry_price": 100, "exit_price": 105,
+         "quantity": 20, "stop_price": 90, "account_value": 10_000, "risk_percent": 1},
+        # SPY: winning short, closes before reaching planned_target, same setup as AAPL.
+        {"symbol": "SPY", "side": "short", "status": "closed", "entry_price": 400, "exit_price": 390,
+         "quantity": 10, "stop_price": 410, "planned_target": 385, "setup": "breakout"},
+        # GOOG: still open -- must not affect closed-trade stats at all.
+        {"symbol": "GOOG", "side": "long", "status": "open", "entry_price": 150, "quantity": 5},
+    ]
+
+
+def test_journal_coach_computes_win_rate_expectancy_and_r_multiple() -> None:
+    result = trade_journal_coach_tool(JournalCoachRequest(entries=_coach_entries())).model_dump()
+
+    assert result["available"] is True
+    assert result["total_entries"] == 7
+    assert result["closed_entries"] == 6
+    assert result["priced_closed_entries"] == 5
+    assert len(result["skipped_entries"]) == 1
+    assert result["skipped_entries"][0]["symbol"] == "TSLA"
+
+    assert result["win_rate_percent"] == 80.0
+    assert result["expectancy_per_trade"] == 52.0
+    assert result["average_r_multiple"] == 0.375
+
+
+def test_journal_coach_groups_setup_performance() -> None:
+    result = trade_journal_coach_tool(JournalCoachRequest(entries=_coach_entries())).model_dump()
+    by_setup = {row["setup"]: row for row in result["setup_performance"]}
+
+    assert by_setup["breakout"]["trade_count"] == 2
+    assert by_setup["breakout"]["win_rate_percent"] == 100.0
+    assert by_setup["breakout"]["expectancy_per_trade"] == 100.0
+    assert by_setup["untagged"]["trade_count"] == 3
+    assert round(by_setup["untagged"]["win_rate_percent"], 2) == 66.67
+
+
+def test_journal_coach_flags_recurring_observations_not_advice() -> None:
+    result = trade_journal_coach_tool(JournalCoachRequest(entries=_coach_entries())).model_dump()
+    observations = result["observations"]
+
+    # NVDA has no stop at all; TSLA also has no stop (on top of missing
+    # exit_price, which separately puts it in skipped_entries) -- both are
+    # real risk-management gaps regardless of whether pricing succeeded.
+    assert observations["no_stop_defined"]["count"] == 2
+    assert {e["symbol"] for e in observations["no_stop_defined"]["entries"]} == {"NVDA", "TSLA"}
+    assert observations["exceeded_planned_stop"]["count"] == 1
+    assert observations["exceeded_planned_stop"]["entries"][0]["symbol"] == "MSFT"
+    assert observations["exited_before_target"]["count"] == 2
+    assert {e["symbol"] for e in observations["exited_before_target"]["entries"]} == {"AAPL", "SPY"}
+    assert observations["position_larger_than_risk_budget"]["count"] == 1
+    assert observations["position_larger_than_risk_budget"]["entries"][0]["symbol"] == "AMD"
+    assert any("not trading advice" in a for a in result["assumptions"])
+
+
+def test_journal_coach_reports_plan_vs_actual_with_evidence_flags() -> None:
+    result = trade_journal_coach_tool(JournalCoachRequest(entries=_coach_entries())).model_dump()
+    by_symbol = {row["symbol"]: row for row in result["plan_vs_actual"]}
+
+    assert set(by_symbol) == {"AAPL", "MSFT", "SPY"}
+    assert by_symbol["AAPL"]["exit_classification"] == "closed_early"
+    assert by_symbol["AAPL"]["planned_entry"] == 99
+    assert by_symbol["AAPL"]["evidence_attached"] == {"signals": True, "market_conditions": False, "calculations": False, "plan": True}
+    assert by_symbol["MSFT"]["exit_classification"] == "exceeded_planned_stop"
+    assert by_symbol["MSFT"]["evidence_attached"] == {"signals": False, "market_conditions": False, "calculations": False, "plan": False}
+    assert by_symbol["SPY"]["exit_classification"] == "closed_early"
+
+
+def test_journal_coach_filters_by_symbol_and_setup() -> None:
+    entries = _coach_entries()
+    by_symbol = trade_journal_coach_tool(JournalCoachRequest(entries=entries, symbol="AAPL")).model_dump()
+    assert by_symbol["total_entries"] == 1
+    assert by_symbol["closed_entries"] == 1
+
+    by_setup = trade_journal_coach_tool(JournalCoachRequest(entries=entries, setup="breakout")).model_dump()
+    assert by_setup["total_entries"] == 2
+    assert {row["symbol"] for row in by_setup["plan_vs_actual"]} == {"AAPL", "SPY"}

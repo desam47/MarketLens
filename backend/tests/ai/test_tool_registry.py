@@ -54,6 +54,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "scenario_analysis",
         "sensitivity_analysis",
         "signal_explanation",
+        "trade_journal_coach",
         "what_changed",
         "why_did_it_move",
     )
@@ -145,6 +146,27 @@ def test_default_registry_executes_options_research(monkeypatch) -> None:
     assert result.ok is True
     assert result.data["available"] is False
     assert result.provider == "yahoo_finance"
+
+
+def test_default_registry_executes_trade_journal_coach() -> None:
+    no_entries = default_registry.execute(ToolRequest(tool_name="trade_journal_coach", arguments={}))
+    assert no_entries.ok is True
+    assert no_entries.data["available"] is False
+
+    result = default_registry.execute(
+        ToolRequest(
+            tool_name="trade_journal_coach",
+            arguments={
+                "entries": [
+                    {"symbol": "AAPL", "side": "long", "status": "closed", "entry_price": 100, "exit_price": 110, "quantity": 10},
+                ],
+            },
+        )
+    )
+    assert result.ok is True
+    assert result.data["available"] is True
+    assert result.data["win_rate_percent"] == 100.0
+    assert result.provider == "MarketLens local journal"
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:
