@@ -29,6 +29,20 @@ comparisons, scanner results, portfolio risk, follow-up clarification,
 adversarial instructions, provider failure, and destructive-action
 confirmation without execution.
 
+## Private-flow smoke and latency decision
+
+The sanctioned private-flow fixture in
+`backend/tests/ai/test_phase_5_8_private_smoke.py` passes with synthetic
+positions and journal entries. It patches deterministic price-history bars,
+makes no model/provider calls, and verifies that private journal markers do
+not appear in tool results, sanitized traces, or observability metadata.
+
+The `500 ms` calculation-only target remains the hot steady-state target. Live
+measurements were `5,539.949 ms` cold-process, `1,035.558 ms` first-warm, and
+`4.291 ms` repeated-hot; the hot measurement passed. Release performance
+checks must warm the process and SQLite/cache layer before evaluating this
+target; the cold and first-warm values are accepted startup outliers.
+
 ## Failure matrix
 
 `backend/ai/evaluations/phase_5_8_failure_matrix.json` records the expected

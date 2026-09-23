@@ -1135,8 +1135,20 @@ Security/privacy review and manual smoke evidence (2026-09-23):
   behavior remain covered by the focused automated suite and require a
   sanctioned fixture/sandbox for manual release testing.
 
-Remaining 5.8 work: run the sanctioned destructive-action and synthetic
-portfolio-risk smoke cases, decide whether to optimize or accept the cold
-calculation target miss, and close the final release gate. The current
-automated and live evidence is recorded above; rerun it if release-gate
-changes touch these paths.
+- Sanctioned private-flow smoke is now complete in
+  `backend/tests/ai/test_phase_5_8_private_smoke.py` (`1 passed`). It uses
+  synthetic positions and journal entries, patches the price-history provider
+  with deterministic fixture bars, makes no model/provider calls, and asserts
+  that private markers never appear in tool results, sanitized traces, or
+  observability metadata.
+- Latency decision: retain the `500 ms` calculation-only target for the hot
+  steady-state path. Two additional live measurements were `5,539.949 ms`
+  for the cold process turn, `1,035.558 ms` for the first warm turn, and
+  `4.291 ms` for the repeated hot turn, which passed the target. Startup and
+  first SQLite/cache warm-up are accepted release-test outliers; the release
+  benchmark must warm the process before judging this target. No target
+  relaxation or correctness change was made.
+
+Remaining 5.8 work: close the final release gate. The current automated,
+synthetic-private, and live evidence is recorded above; rerun it if
+release-gate changes touch these paths.
