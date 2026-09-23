@@ -38,6 +38,7 @@ import { NLSearchBar } from '../components/NLSearchBar';
 import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import api, { AlertConversationContext } from '../services/api';
 import { consumePendingAlertChat, type PendingAlertChat } from '../utils/alertConversation';
+import type { AppPage } from '../utils/appNavigation';
 
 // Heavy, self-fetching panels — same lazy pattern + same chunks
 // SymbolPage used for these.
@@ -54,6 +55,7 @@ const AITemplatesPanel = lazy(() =>
 interface AIHubPageProps {
   symbol: string;
   onSymbolChange: (symbol: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string) => void;
 }
 
 const SECTIONS = [
@@ -66,7 +68,7 @@ const SECTIONS = [
 ] as const;
 type SectionId = typeof SECTIONS[number]['id'];
 
-export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
+export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps) {
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
   const [activeSection, setActiveSection] = useState<SectionId>('chat');
@@ -240,6 +242,7 @@ export function AIHubPage({ symbol, onSymbolChange }: AIHubPageProps) {
                 alertSymbol={pendingAlert?.symbol ?? null}
                 alertContext={alertContext}
                 onSymbolResolved={adoptSymbolFromChat}
+                onNavigate={onNavigate}
               />
             </Suspense>
           </PageErrorBoundary>

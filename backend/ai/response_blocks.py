@@ -21,6 +21,13 @@ BlockType = Literal[
     "action_confirmation",
     "comparison_table",
     "ranked_results",
+    "chart",
+    "indicator_table",
+    "options_chain",
+    "risk_card",
+    "scenario",
+    "session_stats",
+    "historical_outcomes",
 ]
 
 
@@ -99,6 +106,28 @@ def _calculation_block(trace: list[dict[str, Any]], quality: BlockQuality) -> Re
     return None
 
 
+def _visual_blocks(trace: list[dict[str, Any]], quality: BlockQuality) -> list[ResponseBlock]:
+    """Turn bounded tool visual payloads into typed UI blocks."""
+    blocks: list[ResponseBlock] = []
+    for index, item in enumerate(trace, start=1):
+        visual_type = item.get("visual_type")
+        visual_data = item.get("visual_data")
+        if visual_type not in {
+            "chart", "indicator_table", "options_chain", "risk_card", "scenario",
+            "session_stats", "historical_outcomes", "comparison_table", "ranked_results",
+        } or not isinstance(visual_data, dict):
+            continue
+        blocks.append(
+            ResponseBlock(
+                id=f"visual-{index}",
+                type=visual_type,
+                data=visual_data,
+                quality=quality,
+            )
+        )
+    return blocks
+
+
 def build_response_blocks(
     *,
     content: str,
@@ -170,6 +199,7 @@ def build_response_blocks(
     calculation = _calculation_block(trace, quality)
     if calculation is not None:
         blocks.append(calculation)
+    blocks.extend(_visual_blocks(trace, quality))
 
     warnings: list[str] = []
     for item in trace:

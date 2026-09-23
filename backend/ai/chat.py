@@ -2565,6 +2565,44 @@ _MARKET_TOOL_ACTIONS = {
 }
 
 
+def _visual_trace_payload(action: str, data: dict) -> tuple[str, dict] | None:
+    """Select small, renderable payloads without persisting full tool output."""
+    if action == "get_bars":
+        bars = data.get("bars")
+        if isinstance(bars, list):
+            return "chart", {"symbol": data.get("symbol"), "timeframe": data.get("timeframe"), "session": data.get("session"), "bars": bars[-120:]}
+    if action in {"get_indicator", "signal_explanation"}:
+        indicators = data.get("indicators") if action == "signal_explanation" else {
+            str(data.get("indicator", "indicator")): data.get("value"),
+        }
+        if isinstance(indicators, dict):
+            return "indicator_table", {"symbol": data.get("symbol"), "indicators": indicators, "triggers": data.get("triggers", [])}
+    if action in {"get_options_snapshot", "options_research"}:
+        chains = data.get("chains")
+        if isinstance(chains, list):
+            trimmed_chains = []
+            for chain in chains[:2]:
+                if not isinstance(chain, dict):
+                    continue
+                trimmed_chains.append({
+                    **chain,
+                    "calls": list(chain.get("calls") or [])[:7],
+                    "puts": list(chain.get("puts") or [])[:7],
+                })
+            return "options_chain", {"symbol": data.get("symbol"), "chains": trimmed_chains, "iv": data.get("near_term_iv"), "iv_rank": data.get("iv_rank"), "source_timestamp": data.get("source_timestamp")}
+    if action in {"get_risk_dashboard", "assess_portfolio_risk"}:
+        return "risk_card", {key: data.get(key) for key in ("portfolio_value", "gross_exposure", "net_exposure", "concentration", "sector_exposure", "stop_loss_risk", "drawdown", "unknowns", "conclusion") if key in data}
+    if action == "scenario_analysis":
+        return "scenario", {key: data.get(key) for key in ("shock_percent", "base_gross_exposure", "scenario_gross_exposure", "total_pnl_delta", "base_stop_loss_risk", "scenario_stop_loss_risk", "positions", "unknowns", "conclusion") if key in data}
+    if action == "get_session_stats":
+        return "session_stats", {key: data.get(key) for key in ("symbol", "session", "date", "open", "high", "low", "close", "volume", "vwap", "range", "change", "change_percent", "bar_count", "available", "reason") if key in data}
+    if action == "historical_similarity":
+        return "historical_outcomes", {key: data.get(key) for key in ("symbol", "timeframe", "session", "summaries", "sample_size", "look_ahead_safe", "historical_note", "unknowns") if key in data}
+    if action == "compare_symbols" and isinstance(data.get("rankings"), list):
+        return "comparison_table", {"columns": ["Rank", "Symbol", "Value", "Metric"], "rows": [[row.get("rank"), row.get("symbol"), row.get("value"), row.get("metric")] for row in data["rankings"][:25]]}
+    return None
+
+
 def _run_market_tool(
     db,
     parsed,
@@ -2592,7 +2630,7 @@ def _run_market_tool(
         else "freshness unavailable"
     )
     if trace is not None:
-        trace.append({
+        trace_item = {
             "tool": parsed.action,
             "ok": True,
             "provider": result.provider,
@@ -2602,7 +2640,11 @@ def _run_market_tool(
             "timeframe": result.timeframe,
             "fallback": result.fallback,
             "warnings": result.warnings,
-        })
+        }
+        visual = _visual_trace_payload(parsed.action, result.data)
+        if visual is not None:
+            trace_item["visual_type"], trace_item["visual_data"] = visual
+        trace.append(trace_item)
     if parsed.action == "assumption_tracking" and planner_state is not None:
         records = result.data.get("assumptions")
         if isinstance(records, list):

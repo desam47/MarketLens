@@ -79,6 +79,21 @@ describe('ChatPanel (universal)', () => {
     expect(screen.getByRole('status', { name: 'Answer warnings' })).toHaveTextContent('Partial source coverage.');
   });
 
+  it('offers visual/action shortcuts for a grounded symbol reply', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      {
+        id: 8, session_id: 1, role: 'assistant', content: 'AAPL is ready.',
+        created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [],
+      } as any,
+    ]);
+    const onNavigate = jest.fn();
+    render(<ChatPanel onNavigate={onNavigate} />);
+    expect(await screen.findByRole('button', { name: 'Open Symbol' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Symbol' }));
+    expect(onNavigate).toHaveBeenCalledWith('symbol', 'AAPL');
+    expect(screen.getByRole('button', { name: 'Open Scanner' })).toBeInTheDocument();
+  });
+
   it('colorizes signed numbers in an assistant reply', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

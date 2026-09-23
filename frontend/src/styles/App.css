@@ -5993,6 +5993,13 @@ div.td-trend {
 .chat-typed-table-wrap { overflow-x: auto; }
 .chat-typed-table-wrap table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
 .chat-typed-table-wrap th, .chat-typed-table-wrap td { padding: 0.25rem 0.4rem; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.chat-mini-chart svg { display: block; width: 100%; height: 5rem; margin: 0.2rem 0; background: var(--bg-primary); border-radius: 0.25rem; }
+.chat-mini-chart polyline { fill: none; stroke: var(--accent-primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.chat-mini-chart small, .chat-options-summary { color: var(--text-muted); }
+.chat-indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.2rem 0.75rem; margin: 0; }
+.chat-indicator-grid div { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px dotted var(--border); }
+.chat-indicator-grid dt { color: var(--text-muted); text-transform: capitalize; }
+.chat-indicator-grid dd { margin: 0; font-variant-numeric: tabular-nums; }
 .chat-evidence-symbols { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.3rem; }
 .chat-evidence-symbol { border-radius: 999px; padding: 0.1rem 0.35rem; border: 1px solid var(--border); }
 .chat-evidence-symbol.partial { color: var(--warning); }

@@ -19,6 +19,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api, { AlertConversationContext, ChatMessage, ChatResponseBlock } from '../services/api';
 import { highlightMessage } from '../utils/textHighlight';
+import type { AppPage } from '../utils/appNavigation';
 
 interface ChatPanelProps {
   alertTriggerId?: number | null;
@@ -32,6 +33,7 @@ interface ChatPanelProps {
    * tickers were named. Fires at most once per turn.
    */
   onSymbolResolved?: (symbol: string) => void;
+  onNavigate?: (page: AppPage, symbol?: string) => void;
 }
 
 // A message in local state may be a not-yet-finalized streaming bubble.
@@ -62,6 +64,7 @@ export function ChatPanel({
   alertSymbol = null,
   alertContext = null,
   onSymbolResolved,
+  onNavigate,
 }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -349,6 +352,7 @@ export function ChatPanel({
                     watchlistIndex={watchlistIndex}
                     onWatchlisted={markSymbolWatchlisted}
                     onWatchlistCreated={addWatchlistToIndex}
+                    onNavigate={onNavigate}
                   />
                 )}
               </div>
@@ -450,6 +454,50 @@ function TypedResponseBlocks({ blocks }: { blocks: ChatResponseBlock[] }) {
           return <section className="chat-typed-card" key={block.id} aria-label="Ranked results">
             <div className="chat-typed-card-heading">Ranked results <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
             <ol>{items.slice(0, 20).map((item: any, index: number) => <li key={index}>{typeof item === 'object' ? `${item.symbol ?? item.name ?? 'Result'}${item.score != null ? ` · ${item.score}` : ''}` : String(item)}</li>)}</ol>
+          </section>;
+        }
+        if (block.type === 'chart') {
+          const bars = Array.isArray(block.data.bars) ? block.data.bars : [];
+          const closes = bars.map((bar: any) => Number(bar.close)).filter(Number.isFinite);
+          const min = Math.min(...closes);
+          const max = Math.max(...closes);
+          const spread = max - min || 1;
+          const points = closes.map((close: number, index: number) => `${(index / Math.max(closes.length - 1, 1)) * 100},${36 - ((close - min) / spread) * 32}`).join(' ');
+          return <section className="chat-typed-card chat-mini-chart" key={block.id} aria-label="Mini price chart">
+            <div className="chat-typed-card-heading">Price chart <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            {closes.length > 1 ? <svg viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label={`${block.data.symbol ?? 'Symbol'} price trend`}><polyline points={points} /></svg> : <p className="info-text">Chart data is unavailable.</p>}
+            <small>{block.data.symbol ?? 'Symbol'} · {block.data.timeframe ?? 'timeframe unavailable'} · {closes.length} bars</small>
+          </section>;
+        }
+        if (block.type === 'indicator_table') {
+          const indicators = block.data.indicators && typeof block.data.indicators === 'object' ? Object.entries(block.data.indicators) : [];
+          return <section className="chat-typed-card" key={block.id} aria-label="Indicator table">
+            <div className="chat-typed-card-heading">Indicators <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <dl className="chat-indicator-grid">{indicators.map(([name, value]) => <div key={name}><dt>{name.replace(/_/g, ' ')}</dt><dd>{typeof value === 'number' ? value.toFixed(2) : String(value ?? '—')}</dd></div>)}</dl>
+          </section>;
+        }
+        if (block.type === 'options_chain') {
+          const chain = Array.isArray(block.data.chains) ? block.data.chains[0] : null;
+          const contracts = [...(chain?.calls ?? []), ...(chain?.puts ?? [])].slice(0, 14);
+          return <section className="chat-typed-card" key={block.id} aria-label="Options chain card">
+            <div className="chat-typed-card-heading">Options snapshot <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <div className="chat-options-summary">IV {block.data.iv ?? '—'} · IV rank {block.data.iv_rank ?? '—'}</div>
+            {contracts.length > 0 ? <div className="chat-typed-table-wrap"><table><thead><tr><th>Type</th><th>Strike</th><th>Last</th><th>Volume</th><th>OI</th></tr></thead><tbody>{contracts.map((contract: any, index: number) => <tr key={`${contract.strike}-${contract.option_type}-${index}`}><td>{contract.option_type ?? (chain?.calls?.includes(contract) ? 'call' : 'put')}</td><td>{contract.strike ?? '—'}</td><td>{contract.last_price ?? contract.lastPrice ?? '—'}</td><td>{contract.volume ?? '—'}</td><td>{contract.open_interest ?? '—'}</td></tr>)}</tbody></table></div> : <p className="info-text">Options chain unavailable.</p>}
+          </section>;
+        }
+        if (block.type === 'risk_card' || block.type === 'scenario' || block.type === 'session_stats') {
+          const entries = Object.entries(block.data).filter(([key, value]) => !['unknowns', 'positions', 'conclusion', 'available'].includes(key) && value != null && typeof value !== 'object');
+          const title = block.type === 'risk_card' ? 'Risk snapshot' : block.type === 'scenario' ? 'Scenario analysis' : 'Session statistics';
+          return <section className="chat-typed-card" key={block.id} aria-label={title}>
+            <div className="chat-typed-card-heading">{title} <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <dl className="chat-indicator-grid">{entries.map(([name, value]) => <div key={name}><dt>{name.replace(/_/g, ' ')}</dt><dd>{typeof value === 'number' ? value.toFixed(2) : String(value)}</dd></div>)}</dl>
+          </section>;
+        }
+        if (block.type === 'historical_outcomes') {
+          const summaries = Array.isArray(block.data.summaries) ? block.data.summaries : [];
+          return <section className="chat-typed-card" key={block.id} aria-label="Historical outcomes">
+            <div className="chat-typed-card-heading">Historical outcomes <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
+            <div className="chat-typed-table-wrap"><table><thead><tr><th>Horizon</th><th>Sample</th><th>Mean return</th><th>Win rate</th></tr></thead><tbody>{summaries.map((summary: any) => <tr key={summary.horizon}><td>{summary.horizon} bars</td><td>{summary.sample_size ?? '—'}</td><td>{summary.mean_return_percent == null ? '—' : `${summary.mean_return_percent.toFixed(2)}%`}</td><td>{summary.win_rate_percent == null ? '—' : `${summary.win_rate_percent.toFixed(1)}%`}</td></tr>)}</tbody></table></div>
           </section>;
         }
         if (block.type === 'suggested_followups') {
@@ -586,15 +634,17 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
  * tag instead of the add button, and adding with 2+ lists asks which
  * one instead of guessing.
  */
-function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistCreated }: {
+function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistCreated, onNavigate }: {
   symbols: string[];
   watchlistIndex: WatchlistIndex | null;
   onWatchlisted: (symbol: string, watchlistId: number) => void;
   onWatchlistCreated: (wl: WatchlistOption) => void;
+  onNavigate?: (page: AppPage, symbol?: string) => void;
 }) {
-  if (symbols.length === 0) return null;
+  if (symbols.length === 0 && !onNavigate) return null;
   return (
     <div className="chat-quick-actions">
+      {onNavigate && <button type="button" className="chat-quick-action-btn" onClick={() => onNavigate('scanner')}>Open Scanner</button>}
       {symbols.map(sym => (
         <TickerQuickActions
           key={sym}
@@ -602,6 +652,7 @@ function ChatQuickActions({ symbols, watchlistIndex, onWatchlisted, onWatchlistC
           watchlistIndex={watchlistIndex}
           onWatchlisted={onWatchlisted}
           onWatchlistCreated={onWatchlistCreated}
+          onNavigate={onNavigate}
         />
       ))}
     </div>
@@ -627,11 +678,12 @@ const SIGNAL_PARAMETERS: { value: string; label: string }[] = [
   { value: 'BLOCK_ACTIVITY', label: 'Block Activity (tape)' },
 ];
 
-function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlistCreated }: {
+function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlistCreated, onNavigate }: {
   symbol: string;
   watchlistIndex: WatchlistIndex | null;
   onWatchlisted: (symbol: string, watchlistId: number) => void;
   onWatchlistCreated: (wl: WatchlistOption) => void;
+  onNavigate?: (page: AppPage, symbol?: string) => void;
 }) {
   const [watchlistState, setWatchlistState] = useState<QuickActionState>('idle');
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -703,9 +755,21 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
     }
   }, [symbol, alertCondition, alertValue]);
 
+  const saveJournalDraft = useCallback(() => {
+    try {
+      window.localStorage.setItem('marketlens.trade.journal.pending', JSON.stringify({
+        symbol,
+        thesis: `Research context from AI Chat for ${symbol}.`,
+        createdAt: new Date().toISOString(),
+      }));
+    } catch { /* navigation remains useful when storage is unavailable */ }
+    onNavigate?.('journal', symbol);
+  }, [symbol, onNavigate]);
+
   return (
     <div className="chat-quick-action">
       <span className="chat-quick-action-symbol">{symbol}</span>
+      {onNavigate && <button type="button" className="chat-quick-action-btn" onClick={() => onNavigate('symbol', symbol)}>Open Symbol</button>}
 
       {alreadyWatchlisted ? (
         <span className="chat-quick-action-tag" title={`${symbol} is already on a watchlist`}>
@@ -810,6 +874,7 @@ function TickerQuickActions({ symbol, watchlistIndex, onWatchlisted, onWatchlist
           </button>
         </form>
       )}
+      {onNavigate && <button type="button" className="chat-quick-action-btn" onClick={saveJournalDraft}>Save to Journal</button>}
     </div>
   );
 }

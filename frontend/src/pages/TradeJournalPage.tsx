@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import api, { HistoricalSignal, ScanResult, TapeSnapshot } from '../services/api';
 
 const STORAGE_KEY = 'marketlens.trade.journal';
+const PENDING_DRAFT_KEY = 'marketlens.trade.journal.pending';
 const MAX_SCREENSHOT_BYTES = 1_500_000;
 
 type TradeSide = 'long' | 'short';
@@ -136,7 +137,9 @@ function todayInputValue(): string {
 export function TradeJournalPage() {
   const [entries, setEntries] = useState<JournalEntry[]>(readEntries);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [symbol, setSymbol] = useState('');
+  const [symbol, setSymbol] = useState(() => {
+    try { return (JSON.parse(window.localStorage.getItem(PENDING_DRAFT_KEY) || '{}')?.symbol || ''); } catch { return ''; }
+  });
   const [side, setSide] = useState<TradeSide>('long');
   const [status, setStatus] = useState<TradeStatus>('planned');
   const [entryDate, setEntryDate] = useState(todayInputValue);
@@ -146,7 +149,9 @@ export function TradeJournalPage() {
   const [exitPrice, setExitPrice] = useState('');
   const [stopPrice, setStopPrice] = useState('');
   const [targetPrice, setTargetPrice] = useState('');
-  const [thesis, setThesis] = useState('');
+  const [thesis, setThesis] = useState(() => {
+    try { return (JSON.parse(window.localStorage.getItem(PENDING_DRAFT_KEY) || '{}')?.thesis || ''); } catch { return ''; }
+  });
   const [reviewNotes, setReviewNotes] = useState('');
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | TradeStatus>('all');
@@ -154,6 +159,10 @@ export function TradeJournalPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    try { window.localStorage.removeItem(PENDING_DRAFT_KEY); } catch { /* best effort */ }
+  }, []);
 
   useEffect(() => {
     try {

@@ -103,7 +103,7 @@ export default function App() {
       case 'symbol':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Symbol"><SymbolPage symbol={symbol} onSymbolChange={setSymbol} /></PageErrorBoundary></Suspense>;
       case 'hub':
-        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} /></PageErrorBoundary></Suspense>;
+        return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="AI Hub"><AIHubPage symbol={hubSymbol} onSymbolChange={setHubSymbol} onNavigate={(page, targetSymbol) => { if (targetSymbol) { setSymbol(targetSymbol); setHubSymbol(targetSymbol); } navigateTo(page); }} /></PageErrorBoundary></Suspense>;
       case 'alerts':
         return <Suspense fallback={<PageLoader />}><PageErrorBoundary key={currentPage} pageName="Alerts"><AlertsPage /></PageErrorBoundary></Suspense>;
       case 'backtest':

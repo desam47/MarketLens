@@ -2858,7 +2858,14 @@ export type ChatBlockType =
   | 'suggested_followups'
   | 'action_confirmation'
   | 'comparison_table'
-  | 'ranked_results';
+  | 'ranked_results'
+  | 'chart'
+  | 'indicator_table'
+  | 'options_chain'
+  | 'risk_card'
+  | 'scenario'
+  | 'session_stats'
+  | 'historical_outcomes';
 
 export interface ChatBlockQuality {
   state: 'verified' | 'partial' | 'unavailable' | 'stale' | 'unknown' | string;

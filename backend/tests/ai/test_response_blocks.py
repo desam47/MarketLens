@@ -45,3 +45,26 @@ def test_partial_and_unavailable_data_become_explicit_warning() -> None:
     warning = next(block for block in blocks if block["type"] == "warning")
     assert warning["quality"]["state"] == "partial"
     assert any("ZZZZ" in item for item in warning["data"]["items"])
+
+
+def test_visual_payload_is_persistable_and_keeps_quality_metadata() -> None:
+    blocks = build_response_blocks(
+        content="Here is the latest chart.",
+        grounded=True,
+        focus=["AAPL"],
+        partial=[],
+        unavailable=[],
+        trace=[
+            {
+                "tool": "get_bars",
+                "ok": True,
+                "provider": "webull",
+                "visual_type": "chart",
+                "visual_data": {"symbol": "AAPL", "bars": [{"close": 100}, {"close": 101}]},
+            }
+        ],
+    )
+
+    chart = next(block for block in blocks if block["type"] == "chart")
+    assert chart["data"]["symbol"] == "AAPL"
+    assert chart["quality"]["provider"] == "webull"

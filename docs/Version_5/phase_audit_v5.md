@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains); Phase 5.7.1 has started.
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is complete; Phase 5.6 is in progress (5.6.1–5.6.4 and 5.6.6 complete; 5.6.5 remains); Phase 5.7.1 and the 5.7.2 visual/action slice are in progress.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -82,7 +82,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ✅ COMPLETE | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, 5.5.4 Scheduled Summaries, and 5.5.5 What-changed Inbox are complete. The local AI Hub inbox uses a browser checkpoint, reads durable watchlist/alert/signal/provider activity, deduplicates repeated events, preserves timestamps/severity/source links, and does not trigger provider polling. |
 | 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1–5.6.4 are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. `options_research` explains/compares calls, puts, and defined-risk vertical spreads from a real fetched chain (IV, IV rank, expected move, volume, OI, put/call ratio, unusual activity, breakeven, max gain/loss, assignment, near-expiration risk), adding a new `options_vertical_spread` calculator operation so spread math is verified, not ad hoc. `trade_journal_coach` computes win rate/expectancy/average R-multiple, per-setup performance, and plan-vs-actual exit classification from an explicit journal snapshot, reporting observations (not advice) and excluding rather than guessing entries missing the fields a metric needs. `decision_checklist` runs a configurable seven-check pre-plan gate (trend alignment, catalyst review, defined stop, verified position size, earnings risk, options liquidity, data freshness), each landing in completed/failed/unavailable/skipped against real evidence from the existing tools, with `required_checks` letting the caller configure which apply. Save/export (5.6.5) remains. |
-| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response-block foundation is implemented; preferences, visual components, chart state, navigation, feedback, regeneration, notebooks and answer refresh remain. |
+| 5.7 | Structured Chat UI and personalization | 🟡 IN PROGRESS | 5.7.1 typed response-block foundation is implemented; 5.7.2 visual cards and navigation/action shortcuts are in progress; preferences, feedback, regeneration, notebooks and answer refresh remain. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
 ---
@@ -867,6 +867,23 @@ also verified on a fresh in-project SQLite database.
 Remaining for 5.7.1: emit comparison/ranked blocks from the relevant tool
 results, add component coverage for every block type and mobile/long-value
 states, and add a live Chat API contract test for persisted historical blocks.
+
+**5.7.2 visual/action slice in progress (2026-09-23).** Bounded visual
+payloads from bars, indicators, options, risk, scenarios, session statistics,
+historical outcomes, and symbol comparisons can now become typed blocks
+without persisting full tool responses. Chat renders mini price charts,
+indicator tables, options cards, risk/scenario/session cards, historical
+outcome tables, comparison/ranked results, and evidence quality labels. Chat
+also exposes safe UI shortcuts for Open Symbol, Open Scanner, and Save to
+Journal; Save to Journal creates a browser-local draft and never claims that a
+trade was recorded before the user submits it. Navigation changes page state
+only and cannot execute a market action.
+
+Focused verification: 3 backend response-block tests, 29 Chat/Journal
+component tests, and a successful production build. Remaining 5.7.2 work is
+deeper interactive controls (scenario sliders, chart/table expanders, and
+action-specific confirmation/results) plus coverage for every visual block at
+mobile widths and with missing/long values.
 Audit must list every response block, persistence version,
 accessibility test, responsive-layout test, preference location, and migration
 behavior for older prose-only messages. Every data-backed block must be checked
