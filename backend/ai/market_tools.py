@@ -171,6 +171,28 @@ class SignalExplanationRequest(BaseModel):
     include_historical: bool = False
 
 
+class CounterargumentRequest(SignalExplanationRequest):
+    pass
+
+
+class SensitivityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entry_price: float = Field(..., gt=0)
+    stop_price: float = Field(..., gt=0)
+    target_price: float | None = Field(default=None, gt=0)
+    quantity: float = Field(..., gt=0)
+    portfolio_value: float | None = Field(default=None, gt=0)
+    entry_prices: list[float] = Field(default_factory=list, max_length=5)
+    stop_prices: list[float] = Field(default_factory=list, max_length=5)
+    target_prices: list[float] = Field(default_factory=list, max_length=5)
+    quantities: list[float] = Field(default_factory=list, max_length=5)
+    underlying_price: float | None = Field(default=None, gt=0)
+    volatility_percent: float | None = Field(default=None, ge=0)
+    days_to_expiration: float | None = Field(default=None, gt=0)
+    volatility_percentages: list[float] = Field(default_factory=list, max_length=5)
+
+
 class TradeJournalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1255,6 +1277,111 @@ def signal_explanation_tool(request: SignalExplanationRequest) -> BaseModel:
         sources=sources,
         provider="MarketLens signal explanation",
         conclusion={"status": "verified_explanation" if trends or triggers else "insufficient_data", "message": "Evidence describes the current signal; it does not guarantee a future outcome."},
+    )
+
+
+def counterargument_review_tool(request: CounterargumentRequest) -> BaseModel:
+    """Surface only evidence-backed opposing evidence and invalidations."""
+    explanation = signal_explanation_tool(request).model_dump(mode="json")
+    direction = str(explanation.get("direction") or "neutral").lower()
+    dominant = direction if direction in {"bullish", "bearish"} else explanation.get("timeframe_agreement", {}).get("dominant", "neutral")
+    opposite = "bearish" if dominant == "bullish" else "bullish" if dominant == "bearish" else None
+    counterarguments: list[dict[str, Any]] = []
+    if opposite:
+        for row in explanation.get("timeframe_agreement", {}).get("timeframes", []):
+            if row.get("direction") == opposite:
+                counterarguments.append({"type": "timeframe_conflict", "timeframe": row.get("timeframe"), "direction": opposite, "confidence": row.get("confidence")})
+        for trigger in explanation.get("triggers", []):
+            if trigger.get("direction") == opposite:
+                counterarguments.append({"type": "indicator_conflict", **trigger})
+        if explanation.get("tape_relation", {}).get("contradicts"):
+            counterarguments.append({"type": "tape_conflict", "tape": explanation.get("tape")})
+
+    indicators = explanation.get("indicators", {})
+    invalidations: list[dict[str, Any]] = []
+    sma20 = indicators.get("sma_20")
+    if isinstance(sma20, (int, float)) and dominant in {"bullish", "bearish"}:
+        invalidations.append({"type": "price_level", "condition": "close_below" if dominant == "bullish" else "close_above", "level": sma20, "reason": "a moving-average break would contradict the current directional evidence"})
+    agreement = explanation.get("timeframe_agreement", {})
+    if dominant in {"bullish", "bearish"}:
+        invalidations.append({"type": "timeframe_alignment", "condition": "opposite_side_dominates", "threshold": {"current_dominant": dominant, "current_count": agreement.get(dominant), "opposite_count": agreement.get(opposite)}})
+    unknowns = list(explanation.get("unknowns", []))
+    if not counterarguments:
+        unknowns.append({"type": "counterargument", "reason": "no credible opposing evidence was available"})
+    if not invalidations:
+        unknowns.append({"type": "invalidation", "reason": "no evidence-backed invalidation threshold was available"})
+    return _Payload(
+        symbol=explanation.get("symbol", request.symbol.upper()),
+        direction=dominant,
+        supporting_evidence=explanation.get("triggers", []),
+        counterarguments=counterarguments,
+        invalidations=invalidations,
+        freshness=explanation.get("freshness"),
+        sources=explanation.get("sources", []),
+        unknowns=unknowns,
+        provider="MarketLens signal review",
+        conclusion={"status": "verified_review", "message": "Counterarguments and invalidations reflect available evidence; absent evidence is not treated as a balanced opposing case."},
+    )
+
+
+def sensitivity_analysis_tool(request: SensitivityRequest) -> BaseModel:
+    """Run bounded one-factor-at-a-time sensitivity calculations."""
+    if request.entry_price == request.stop_price:
+        raise ValueError("entry_price and stop_price must differ")
+    for name, values in (
+        ("entry_prices", request.entry_prices),
+        ("stop_prices", request.stop_prices),
+        ("target_prices", request.target_prices),
+        ("quantities", request.quantities),
+        ("volatility_percentages", request.volatility_percentages),
+    ):
+        if any(float(value) <= 0 for value in values):
+            raise ValueError(f"{name} must contain positive values")
+
+    def row(label: str, entry: float, stop: float, target: float | None, quantity: float, volatility: float | None) -> dict[str, Any]:
+        risk = abs(entry - stop) * quantity
+        reward = abs(target - entry) * quantity if target is not None else None
+        expected_move = None
+        if request.underlying_price is not None and volatility is not None and request.days_to_expiration:
+            iv = volatility / 100 if volatility > 10 else volatility
+            expected_move = request.underlying_price * iv * math.sqrt(request.days_to_expiration / 365)
+        return {
+            "case": label,
+            "entry_price": entry,
+            "stop_price": stop,
+            "target_price": target,
+            "quantity": quantity,
+            "risk_dollars": risk,
+            "reward_dollars": reward,
+            "risk_reward": reward / risk if reward is not None and risk else None,
+            "allocation_percent": entry * quantity / request.portfolio_value * 100 if request.portfolio_value else None,
+            "volatility_percent": volatility,
+            "expected_move": expected_move,
+        }
+
+    base = row("base", request.entry_price, request.stop_price, request.target_price, request.quantity, request.volatility_percent)
+    scenarios = [base]
+    scenarios.extend(row("entry", value, request.stop_price, request.target_price, request.quantity, request.volatility_percent) for value in request.entry_prices)
+    scenarios.extend(row("stop", request.entry_price, value, request.target_price, request.quantity, request.volatility_percent) for value in request.stop_prices)
+    scenarios.extend(row("target", request.entry_price, request.stop_price, value, request.quantity, request.volatility_percent) for value in request.target_prices)
+    scenarios.extend(row("quantity", request.entry_price, request.stop_price, request.target_price, value, request.volatility_percent) for value in request.quantities)
+    scenarios.extend(row("volatility", request.entry_price, request.stop_price, request.target_price, request.quantity, value) for value in request.volatility_percentages)
+    drivers = []
+    for field in ("risk_dollars", "reward_dollars", "risk_reward", "allocation_percent", "expected_move"):
+        values = [item[field] for item in scenarios[1:] if item[field] is not None]
+        base_value = base[field]
+        if values and base_value not in (None, 0):
+            drivers.append({"metric": field, "absolute_change": round(max(abs(value - base_value) for value in values), 8)})
+    drivers.sort(key=lambda item: item["absolute_change"], reverse=True)
+    return _Payload(
+        available=True,
+        base=base,
+        scenarios=scenarios[1:],
+        most_sensitive=drivers[:3],
+        assumptions=["Each scenario varies one input at a time; outputs are conditional calculations, not forecasts.", "Fees, slippage, taxes, and execution effects are excluded."],
+        provider="MarketLens calculator",
+        source_timestamp=_database_timestamp(),
+        conclusion={"status": "verified_sensitivity", "message": "Sensitivity shows how supplied assumptions change the calculated outputs."},
     )
 
 

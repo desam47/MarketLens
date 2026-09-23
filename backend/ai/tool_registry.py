@@ -356,6 +356,7 @@ def build_default_registry() -> ToolRegistry:
         ChangeAnalysisRequest,
         ComparisonRequest,
         ConfluenceRequest,
+        CounterargumentRequest,
         CsvImportRequest,
         FundamentalsRequest,
         HistoricalSimilarityRequest,
@@ -365,6 +366,7 @@ def build_default_registry() -> ToolRegistry:
         OptionsRequest,
         RiskDashboardRequest,
         ScenarioRequest,
+        SensitivityRequest,
         SessionStatsRequest,
         SignalExplanationRequest,
         SymbolRequest,
@@ -373,6 +375,7 @@ def build_default_registry() -> ToolRegistry:
         TrendRequest,
         WatchlistRequest,
         compare_symbols_tool,
+        counterargument_review_tool,
         get_alerts_tool,
         get_application_help_tool,
         get_bars_tool,
@@ -397,6 +400,7 @@ def build_default_registry() -> ToolRegistry:
         historical_similarity_tool,
         import_csv_tool,
         scenario_analysis_tool,
+        sensitivity_analysis_tool,
         signal_explanation_tool,
         what_changed_tool,
         why_did_it_move_tool,
@@ -425,6 +429,8 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="scenario_analysis", kind="read_only", description="Recalculate explicit positions under deterministic what-if shocks.", input_model=ScenarioRequest, handler=scenario_analysis_tool))
     registry.register(ToolSpec(name="historical_similarity", kind="read_only", description="Find prior bar windows with similar verified features and forward outcomes.", input_model=HistoricalSimilarityRequest, handler=historical_similarity_tool))
     registry.register(ToolSpec(name="signal_explanation", kind="read_only", description="Explain indicator, timeframe, tape, freshness, and signal-state evidence.", input_model=SignalExplanationRequest, handler=signal_explanation_tool))
+    registry.register(ToolSpec(name="counterargument_review", kind="read_only", description="Review opposing evidence and evidence-backed invalidation thresholds.", input_model=CounterargumentRequest, handler=counterargument_review_tool))
+    registry.register(ToolSpec(name="sensitivity_analysis", kind="read_only", description="Run bounded one-factor sensitivity calculations.", input_model=SensitivityRequest, handler=sensitivity_analysis_tool))
     registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))

@@ -876,6 +876,8 @@ class ChatReplyResponse(BaseModel):
         "scenario_analysis",
         "historical_similarity",
         "signal_explanation",
+        "counterargument_review",
+        "sensitivity_analysis",
         "get_watchlist",
         "get_risk_dashboard",
         "get_trade_journal",
@@ -1141,7 +1143,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       delete_watchlist, run_backtest, set_entity_type, run_screen, calculate, \
       get_quote, get_bars, get_indicator, get_support_resistance, \
       get_market_regime, get_market_context, get_news, get_fundamentals, \
-      get_options_snapshot, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation.
+      get_options_snapshot, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis.
 """
     + _ACTION_TOOL_DOCS
 )

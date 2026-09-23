@@ -213,7 +213,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.4 — Analysis, comparisons, scenarios, and explanations
 
-**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, and `signal_explanation` evidence tools are implemented; broader analysis work remains.
+**Status:** Active. The `why_did_it_move`, `what_changed`, `compare_symbols`, `scenario_analysis`, `historical_similarity`, `signal_explanation`, `counterargument_review`, and `sensitivity_analysis` evidence tools are implemented; event timeline, anomaly, and assumption tracking work remains.
 **Why now:** Once data and arithmetic are reliable, Chat can answer higher-value analytical questions.
 
 ### Items
@@ -250,10 +250,12 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 #### 5.4.7 Counterargument and invalidation review
 - For bullish conclusions, surface material bearish evidence; for bearish conclusions, surface material bullish evidence.
 - State the observations or thresholds that would invalidate the conclusion and avoid manufacturing a balanced argument when no credible counter-evidence exists.
+- Implemented first slice: typed opposing timeframe/indicator/tape evidence, moving-average and alignment invalidations, and explicit no-counterevidence unknowns.
 
 #### 5.4.8 Sensitivity analysis
 - Vary entry, stop, target, position size, allocation, volatility, and expected move across explicit user-selected or bounded scenarios.
 - Identify the assumptions with the greatest effect and label sensitivity output as conditional analysis rather than a forecast.
+- Implemented first slice: bounded one-factor-at-a-time entry/stop/target/quantity/volatility scenarios with risk, reward, allocation, expected-move outputs, sensitivity drivers, and conditional-analysis assumptions.
 
 #### 5.4.9 Unified market-event timeline
 - Order prices, session transitions, signals, alerts, news, earnings, analyst changes, insider activity, and options events on one normalized New York timeline.

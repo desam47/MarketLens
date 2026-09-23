@@ -21,6 +21,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
         "calculate",
         "compare_symbols",
+        "counterargument_review",
         "get_alerts",
         "get_application_help",
         "get_bars",
@@ -45,6 +46,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "historical_similarity",
         "import_csv",
         "scenario_analysis",
+        "sensitivity_analysis",
         "signal_explanation",
         "what_changed",
         "why_did_it_move",

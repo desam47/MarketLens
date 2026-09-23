@@ -299,3 +299,47 @@ def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
     assert "signal_explanation" in text
     assert requests[0].arguments["symbol"] == "AAPL"
     complete.assert_not_called()
+
+
+def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> None:
+    complete = Mock()
+    monkeypatch.setattr("backend.ai.chat.ai_manager.complete", complete)
+    requests = []
+
+    def execute(request):
+        requests.append(request)
+        return ToolResult(tool_name=request.tool_name, ok=True, data={"status": "verified"}, provider="MarketLens")
+
+    monkeypatch.setattr("backend.ai.chat.default_registry.execute", execute)
+    text, grounded, _ = _generate_reply(
+        None,
+        [_symbol_block("AAPL")],
+        [],
+        None,
+        [],
+        "what would invalidate the AAPL signal?",
+        None,
+        False,
+        ["AAPL"],
+        {},
+    )
+    assert grounded is True
+    assert "counterargument_review" in text
+    assert requests[-1].tool_name == "counterargument_review"
+
+    text, grounded, _ = _generate_reply(
+        None,
+        [],
+        [],
+        None,
+        [],
+        "show sensitivity for my entry versus stop",
+        None,
+        False,
+        [],
+        {},
+    )
+    assert grounded is True
+    assert "sensitivity_analysis" in text
+    assert requests[-1].tool_name == "sensitivity_analysis"
+    complete.assert_not_called()

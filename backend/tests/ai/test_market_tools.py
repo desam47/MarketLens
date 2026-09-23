@@ -7,6 +7,7 @@ from backend.ai.market_tools import (
     ChangeAnalysisRequest,
     ComparisonRequest,
     ConfluenceRequest,
+    CounterargumentRequest,
     CsvImportRequest,
     HistoricalSimilarityRequest,
     IndicatorRequest,
@@ -14,6 +15,7 @@ from backend.ai.market_tools import (
     PositionInput,
     RiskDashboardRequest,
     ScenarioRequest,
+    SensitivityRequest,
     SessionStatsRequest,
     SignalExplanationRequest,
     SymbolRequest,
@@ -21,6 +23,7 @@ from backend.ai.market_tools import (
     TradeJournalRequest,
     TrendRequest,
     compare_symbols_tool,
+    counterargument_review_tool,
     get_alerts_tool,
     get_application_help_tool,
     get_bars_tool,
@@ -40,6 +43,7 @@ from backend.ai.market_tools import (
     historical_similarity_tool,
     import_csv_tool,
     scenario_analysis_tool,
+    sensitivity_analysis_tool,
     signal_explanation_tool,
     what_changed_tool,
     why_did_it_move_tool,
@@ -305,6 +309,57 @@ def test_signal_explanation_reports_triggers_agreement_and_tape(monkeypatch) -> 
     assert result.tape_relation["confirms"] is True
     assert any(trigger["indicator"] == "rsi_14" for trigger in result.triggers)
     assert result.conclusion["status"] == "verified_explanation"
+
+
+def test_counterargument_review_only_surfaces_available_opposing_evidence(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.signal_explanation_tool",
+        lambda request: _Payload(
+            symbol="AAPL",
+            direction="bullish",
+            indicators={"sma_20": 100},
+            triggers=[{"indicator": "macd", "direction": "bullish"}],
+            timeframe_agreement={"dominant": "bullish", "bullish": 2, "bearish": 1, "timeframes": [{"timeframe": "1h", "direction": "bearish", "confidence": 0.4}]},
+            tape_relation={"contradicts": True},
+            tape={"direction": "bearish"},
+            freshness={"status": "fresh"},
+            sources=[],
+            unknowns=[],
+        ),
+    )
+
+    result = counterargument_review_tool(CounterargumentRequest(symbol="AAPL"))
+
+    assert result.direction == "bullish"
+    assert any(item["type"] == "timeframe_conflict" for item in result.counterarguments)
+    assert any(item["type"] == "tape_conflict" for item in result.counterarguments)
+    assert result.invalidations[0]["condition"] == "close_below"
+    assert result.conclusion["status"] == "verified_review"
+
+
+def test_sensitivity_analysis_varies_one_factor_at_a_time() -> None:
+    result = sensitivity_analysis_tool(
+        SensitivityRequest(
+            entry_price=100,
+            stop_price=95,
+            target_price=110,
+            quantity=100,
+            portfolio_value=100_000,
+            entry_prices=[105],
+            stop_prices=[90],
+            quantities=[200],
+        )
+    )
+
+    assert result.available is True
+    assert result.base["risk_dollars"] == 500
+    assert len(result.scenarios) == 3
+    assert result.scenarios[0]["case"] == "entry"
+    assert result.scenarios[1]["risk_dollars"] == 1000
+    assert result.scenarios[2]["allocation_percent"] == 20.0
+    assert result.conclusion["status"] == "verified_sensitivity"
 
 
 def test_risk_tool_calculates_explicit_position_snapshot() -> None:

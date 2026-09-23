@@ -187,6 +187,8 @@ def _cacheable_chat_action(action: str) -> bool:
         "scenario_analysis",
         "historical_similarity",
         "signal_explanation",
+        "counterargument_review",
+        "sensitivity_analysis",
         "run_screen",
     }
 
@@ -236,6 +238,8 @@ _COMPARISON_INTENT = re.compile(r"\b(compare|comparison|rank|ranking|strongest|w
 _SCENARIO_INTENT = re.compile(r"\b(what if|scenario|under a sell[- ]?off|drops?\b|falls?\b|rises?\b|stop (?:moves?|changes?)|shock)\b", re.I)
 _SIMILARITY_INTENT = re.compile(r"\b(similar (?:setup|pattern|situation)|prior situations?|historical pattern|historical similarity|lookalike)\b", re.I)
 _SIGNAL_EXPLANATION_INTENT = re.compile(r"\b(explain (?:the )?(?:signal|setup)|why (?:is|was) .* signal|signal explanation|which indicators triggered|what confirms .* signal)\b", re.I)
+_COUNTERARGUMENT_INTENT = re.compile(r"\b(what invalidates|what would invalidate|invalidation|counterargument|counter-argument|opposing evidence|what could prove .* wrong|what would break)\b", re.I)
+_SENSITIVITY_INTENT = re.compile(r"\b(sensitivity|how sensitive|vary (?:the )?(?:entry|stop|target|position size)|assumption impact)\b", re.I)
 
 # Deterministic safety net for delete_watchlist intent the model leaves
 # untagged (action="none", prose reply instead). Confirmed live
@@ -1090,6 +1094,15 @@ def _generate_reply(
                 "direction": direction,
             },
         )
+    elif _COUNTERARGUMENT_INTENT.search(user_content):
+        if len(focus_symbols) != 1:
+            return "Which ticker should I review for counterarguments and invalidation?", False, []
+        deterministic = ChatReplyResponse(
+            reply="Verified counterargument review",
+            grounded=True,
+            action="counterargument_review",
+            action_tool_arguments={"symbol": focus_symbols[0]},
+        )
     elif _SIGNAL_EXPLANATION_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return "Which ticker should I explain the signal for?", False, []
@@ -1098,6 +1111,13 @@ def _generate_reply(
             grounded=True,
             action="signal_explanation",
             action_tool_arguments={"symbol": focus_symbols[0], "include_historical": "historical" in user_content.lower()},
+        )
+    elif _SENSITIVITY_INTENT.search(user_content):
+        deterministic = ChatReplyResponse(
+            reply="Verified sensitivity analysis",
+            grounded=True,
+            action="sensitivity_analysis",
+            action_tool_arguments={},
         )
     elif _SIMILARITY_INTENT.search(user_content):
         if len(focus_symbols) != 1:
@@ -2338,6 +2358,8 @@ _MARKET_TOOL_ACTIONS = {
     "scenario_analysis",
     "historical_similarity",
     "signal_explanation",
+    "counterargument_review",
+    "sensitivity_analysis",
     "import_csv",
 }
 
