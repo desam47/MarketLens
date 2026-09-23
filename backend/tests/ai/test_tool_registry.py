@@ -22,6 +22,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_alerts",
         "get_application_help",
         "get_bars",
+        "get_confluence",
         "get_fundamentals",
         "get_indicator",
         "get_market_context",
@@ -29,10 +30,13 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_news",
         "get_options_snapshot",
         "get_quote",
+        "get_relative_strength",
         "get_risk_dashboard",
         "get_sector_data",
         "get_support_resistance",
+        "get_tape_state",
         "get_trade_journal",
+        "get_trend",
         "get_watchlist",
     )
     result = default_registry.execute(

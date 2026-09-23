@@ -26,6 +26,26 @@ class IndicatorRequest(BarsRequest):
     period: int = Field(default=14, ge=2, le=200)
 
 
+class TrendRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    timeframe: str = "1d"
+
+
+class ConfluenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    preset: Literal["scalper", "day_trading", "swing", "all"] = "day_trading"
+
+
+class TapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+
+
 class NewsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -232,6 +252,71 @@ def get_sector_data_tool(request: SymbolRequest) -> BaseModel:
     engine = _get_sector_engine(request.symbol.upper())
     signal = engine.get_current_signal()
     return _Payload(**signal.to_dict())
+
+
+def get_trend_tool(request: TrendRequest) -> BaseModel:
+    """Get the current trend for a symbol on one timeframe.
+
+    Reuses backend.api.trend.router's own payload builder (the same one
+    GET /api/trend/{symbol}/current/{timeframe} uses) rather than
+    re-deriving the signal shape here — see the get_market_regime_tool/
+    get_market_context_tool incident for why that separation matters.
+    """
+    from backend.api.trend.registry import get_engine
+    from backend.api.trend.router import _build_trend_payload
+    from backend.ai.tool_registry import normalize_timeframe
+    from backend.engines.timeframe import Timeframe
+
+    symbol = request.symbol.upper()
+    timeframe = normalize_timeframe(request.timeframe)
+    tf = Timeframe(timeframe)
+    engine = get_engine(symbol)
+    payload = _build_trend_payload(engine, symbol, timeframe, tf)
+    return _Payload(**payload)
+
+
+def get_confluence_tool(request: ConfluenceRequest) -> BaseModel:
+    """Get multi-timeframe confluence for a symbol under a trading-style preset."""
+    from backend.api.multitimeframe.router import build_confluence_payload, get_engine
+
+    symbol = request.symbol.upper()
+    engine = get_engine(symbol, preset=request.preset)
+    payload = build_confluence_payload(engine, symbol)
+    return _Payload(**payload)
+
+
+def get_relative_strength_tool(request: SymbolRequest) -> BaseModel:
+    """Get relative-strength signals for a symbol vs. its SPY/QQQ benchmarks."""
+    from backend.api.regime.router import _get_rs_engine
+
+    symbol = request.symbol.upper()
+    engine = _get_rs_engine(symbol)
+    signals = engine.compute()
+    return _Payload(
+        symbol=symbol,
+        signals=[signal.to_dict() for signal in signals],
+        count=len(signals),
+    )
+
+
+def get_tape_state_tool(request: TapeRequest) -> BaseModel:
+    """Get the current tape snapshot: BBO, tape pressure, and large prints.
+
+    Mirrors GET /api/tape/{symbol}, including its disabled-feature error —
+    tape analytics require TAPE_ENABLED=true, and this must surface that as
+    a normal tool error rather than a stack trace.
+    """
+    from backend.config.settings import settings
+
+    if not settings.tape.enabled:
+        raise ValueError("Tape analytics are disabled (set TAPE_ENABLED=true).")
+
+    from backend.api.tape.registry import get_tape_engine
+    from backend.utils.timezone import format_edt_iso, now_ny
+
+    symbol = request.symbol.upper()
+    snapshot = get_tape_engine(symbol).get_snapshot()
+    return _Payload(symbol=symbol, snapshot=snapshot, source_timestamp=format_edt_iso(now_ny()))
 
 
 def get_market_context_tool(_: BaseModel) -> BaseModel:

@@ -155,6 +155,72 @@ def _serialize_snapshot(snap: MultiTimeframeSnapshot) -> dict:
     }
 
 
+def build_confluence_payload(engine: MultiTimeframeEngine, symbol: str) -> dict:
+    """Build the confluence response payload for an already-resolved engine.
+
+    Shared by the HTTP endpoint and the AI Hub ``get_confluence`` tool so
+    both read the exact same fields off the exact same engine instance —
+    no separate reimplementation to drift out of sync (see the
+    get_market_regime_tool/get_market_context_tool incident: duplicated
+    ad hoc serialization silently diverged from the real endpoint).
+    """
+    confluence_signal = engine.get_current_confluence()
+
+    if confluence_signal is None:
+        return {
+            "symbol": symbol.upper(),
+            "direction": "neutral",
+            "strength": 0.0,
+            "alignment_score": 0.0,
+            "timeframe_signals": {},
+            "timestamp": None,
+            "bullish_alignment": 0.0,
+            "bearish_alignment": 0.0,
+            "conflicting": 0,
+            "short_term_direction": "no_signal",
+            "intermediate_direction": "no_signal",
+            "higher_direction": "no_signal",
+            "short_term_state": "neutral",
+            "intermediate_state": "neutral",
+            "higher_state": "neutral",
+            "preset": engine.preset_name,
+            "valid_coverage": 0.0,
+            "quality_weighted_score": 0.0,
+        }
+
+    # Convert timeframe signals to serializable format
+    timeframe_signals = {}
+    for tf, signal in confluence_signal.timeframe_signals.items():
+        timeframe_signals[tf.value] = {
+            "direction": signal.direction.value,
+            "strength": signal.strength.value,
+            "confidence": signal.confidence,
+            "timestamp": _to_dashboard_tz(signal.timestamp),
+        }
+    return {
+        "symbol": confluence_signal.symbol,
+        "direction": confluence_signal.direction.value,
+        "strength": confluence_signal.strength,
+        "alignment_score": confluence_signal.alignment_score,
+        "timeframe_signals": timeframe_signals,
+        "timestamp": _to_dashboard_tz(confluence_signal.timestamp),
+        "bullish_alignment": getattr(confluence_signal, "bullish_alignment", 0.0),
+        "bearish_alignment": getattr(confluence_signal, "bearish_alignment", 0.0),
+        "conflicting": getattr(confluence_signal, "conflicting", 0),
+        "short_term_direction": confluence_signal.short_term_direction.value,
+        "intermediate_direction": confluence_signal.intermediate_direction.value,
+        "higher_direction": confluence_signal.higher_direction.value,
+        "short_term_state": getattr(confluence_signal, "short_term_state", "neutral").value,
+        "intermediate_state": getattr(
+            confluence_signal, "intermediate_state", "neutral"
+        ).value,
+        "higher_state": getattr(confluence_signal, "higher_state", "neutral").value,
+        "preset": getattr(confluence_signal, "preset", engine.preset_name),
+        "valid_coverage": getattr(confluence_signal, "valid_coverage", 0.0),
+        "quality_weighted_score": getattr(confluence_signal, "quality_weighted_score", 0.0),
+    }
+
+
 @router.get("/{symbol}/confluence")
 async def get_current_confluence(
     symbol: str,
@@ -176,61 +242,7 @@ async def get_current_confluence(
         return cached
     try:
         engine = get_engine(symbol.upper(), preset=preset)
-        confluence_signal = engine.get_current_confluence()
-
-        if confluence_signal is None:
-            payload = {
-                "symbol": symbol.upper(),
-                "direction": "neutral",
-                "strength": 0.0,
-                "alignment_score": 0.0,
-                "timeframe_signals": {},
-                "timestamp": None,
-                "bullish_alignment": 0.0,
-                "bearish_alignment": 0.0,
-                "conflicting": 0,
-                "short_term_direction": "no_signal",
-                "intermediate_direction": "no_signal",
-                "higher_direction": "no_signal",
-                "short_term_state": "neutral",
-                "intermediate_state": "neutral",
-                "higher_state": "neutral",
-                "preset": engine.preset_name,
-                "valid_coverage": 0.0,
-                "quality_weighted_score": 0.0,
-            }
-        else:
-            # Convert timeframe signals to serializable format
-            timeframe_signals = {}
-            for tf, signal in confluence_signal.timeframe_signals.items():
-                timeframe_signals[tf.value] = {
-                    "direction": signal.direction.value,
-                    "strength": signal.strength.value,
-                    "confidence": signal.confidence,
-                    "timestamp": _to_dashboard_tz(signal.timestamp),
-                }
-            payload = {
-                "symbol": confluence_signal.symbol,
-                "direction": confluence_signal.direction.value,
-                "strength": confluence_signal.strength,
-                "alignment_score": confluence_signal.alignment_score,
-                "timeframe_signals": timeframe_signals,
-                "timestamp": _to_dashboard_tz(confluence_signal.timestamp),
-                "bullish_alignment": getattr(confluence_signal, "bullish_alignment", 0.0),
-                "bearish_alignment": getattr(confluence_signal, "bearish_alignment", 0.0),
-                "conflicting": getattr(confluence_signal, "conflicting", 0),
-                "short_term_direction": confluence_signal.short_term_direction.value,
-                "intermediate_direction": confluence_signal.intermediate_direction.value,
-                "higher_direction": confluence_signal.higher_direction.value,
-                "short_term_state": getattr(confluence_signal, "short_term_state", "neutral").value,
-                "intermediate_state": getattr(
-                    confluence_signal, "intermediate_state", "neutral"
-                ).value,
-                "higher_state": getattr(confluence_signal, "higher_state", "neutral").value,
-                "preset": getattr(confluence_signal, "preset", engine.preset_name),
-                "valid_coverage": getattr(confluence_signal, "valid_coverage", 0.0),
-                "quality_weighted_score": getattr(confluence_signal, "quality_weighted_score", 0.0),
-            }
+        payload = build_confluence_payload(engine, symbol)
         _confluence_cache[key] = payload
         return payload
     except Exception as e:

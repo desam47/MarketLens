@@ -66,7 +66,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 5.1 | Tool foundation and safe calculator | ✅ COMPLETE | Calculator (incl. assignment exposure), typed envelope, normalization, enforced registry permissions/rate limits, restricted formulas, metric catalog, Chat action, provenance metadata, and 24 focused tests are complete. |
-| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~65%) | Market, research, watchlist, risk, journal, alerts, sector-data, and app-help (with required-state metadata + drift guard) tools are registered with typed provenance; 4 tools have contract tests against their page/API equivalents. Missing: trend/confluence/microstructure tools, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
+| 5.2 | Grounded market-data tools and provenance | 🟡 IN PROGRESS (~75%) | 20 tools registered (market, research, watchlist, risk, journal, alerts, sector-data, app-help, trend, confluence, relative-strength, tape). 4 have live contract tests against page/API equivalents; trend/confluence/RS/tape have cold-engine unit tests only. Missing: session-statistics tooling, catalyst/earnings/analyst tools, CSV import, and true dynamic (non-hardcoded) app-help generation. |
 | 5.3 | Bounded orchestration, intent, and memory | ⬜ NOT STARTED | Limited tool loop, clarification, state, decomposition, reusable workflows, model routing and budgets. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ⬜ NOT STARTED | Why/what changed, rankings, scenarios, similarity, counterarguments, sensitivity, timelines, anomalies and assumptions. |
 | 5.5 | Scanner, watchlist, alerts, and briefings | ⬜ NOT STARTED | Natural-language filters, watchlist intelligence, alert conversations, scheduled summaries. |
@@ -170,18 +170,43 @@ shared, DB-seeded engine cache (the same one `/regime/{symbol}/sector`
 serves), returning sector, sector ETF, stock/sector/market trend agreement,
 and an alignment score/level — no new computation, no new provider calls.
 One focused test covers it. The 5.2 focused suite is now 16 tests; the full
-`backend/tests/ai/` suite passes at 554 tests (556 including the
-application-help drift-guard and required-state tests), and the full
-backend suite passes at 2808 tests.
+`backend/tests/ai/` suite passes at 559 tests (554 prior + 5 for
+trend/confluence/relative-strength/tape), and the full backend suite
+passes at 2813 tests.
 
-Remaining items named in the plan are still unimplemented and not yet
-reflected as done anywhere in this document: dedicated
-trend/confluence/relative-strength/BBO/tape-pressure/large-prints/
-session-statistics tools (5.2.2) — only generic sma/ema/rsi indicators exist
-today, not MarketLens's own trend/confluence/microstructure engines wrapped
-as tools; dedicated catalyst/earnings/insider-activity/analyst-recommendation
-tools (5.2.3) — `get_news`/`get_fundamentals` do not cover these; and CSV
-import tools (5.2.8), which have no code at all yet.
+`get_trend`, `get_confluence`, `get_relative_strength`, and `get_tape_state`
+are now implemented, closing most of 5.2.2's named engine list (trend,
+multi-timeframe confluence, relative strength, BBO, tape pressure, large
+prints — session-statistics is not covered). Each reuses the real engine
+registry and, where the endpoint had one, the endpoint's own payload
+builder rather than re-deriving the response shape:
+- `get_trend` calls `backend.api.trend.router._build_trend_payload` — the
+  exact function `GET /api/trend/{symbol}/current/{timeframe}` uses.
+- `get_confluence` calls a newly-extracted `build_confluence_payload`,
+  factored out of `GET /api/multitimeframe/{symbol}/confluence`'s
+  previously-inline logic into `backend/api/multitimeframe/router.py`
+  specifically so the endpoint and the tool cannot diverge — the endpoint
+  itself was refactored to call the same function; 35 existing MTF/
+  confluence tests confirm the refactor is behavior-preserving.
+- `get_relative_strength` reuses `backend.api.regime.router._get_rs_engine`
+  and each signal's own `.to_dict()`, matching
+  `GET /api/regime/{symbol}/relative-strength`.
+- `get_tape_state` reuses `backend.api.tape.registry.get_tape_engine(...)
+  .get_snapshot()` directly (the same one-line body
+  `GET /api/tape/{symbol}` has) and surfaces the same
+  `TAPE_ENABLED=false` condition as an ordinary tool error instead of an
+  unhandled exception.
+
+Five new focused tests cover the cold-engine ("no signal yet") path for
+each, plus the tape-disabled and tape-enabled paths — not yet a live/warm
+happy-path contract test in `test_tool_contracts.py` for these four
+(unlike sector/context/watchlist/alerts), which remains open.
+
+Still unimplemented and not yet reflected as done anywhere in this
+document: session-statistics tooling (5.2.2); dedicated
+catalyst/earnings/insider-activity/analyst-recommendation tools (5.2.3) —
+`get_news`/`get_fundamentals` do not cover these; and CSV import tools
+(5.2.8), which have no code at all yet.
 
 Application-help (5.2.7) now carries a `required_state` field per page (e.g.
 the Symbol page declares `["symbol"]`, since the frontend carries the

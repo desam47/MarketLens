@@ -1701,6 +1701,10 @@ _MARKET_TOOL_ACTIONS = {
     "get_application_help",
     "get_alerts",
     "get_sector_data",
+    "get_trend",
+    "get_confluence",
+    "get_relative_strength",
+    "get_tape_state",
 }
 
 

@@ -4,20 +4,27 @@ from backend.ai.market_tools import (
     AlertsRequest,
     ApplicationHelpRequest,
     BarsRequest,
+    ConfluenceRequest,
     IndicatorRequest,
     PositionInput,
     RiskDashboardRequest,
     SymbolRequest,
+    TapeRequest,
     TradeJournalRequest,
+    TrendRequest,
     get_alerts_tool,
     get_application_help_tool,
     get_bars_tool,
+    get_confluence_tool,
     get_indicator_tool,
     get_quote_tool,
+    get_relative_strength_tool,
     get_risk_dashboard_tool,
     get_sector_data_tool,
     get_support_resistance_tool,
+    get_tape_state_tool,
     get_trade_journal_tool,
+    get_trend_tool,
 )
 from backend.models.market_data import Bar, DataStatus
 from backend.repositories.alert_repository import AlertRepository
@@ -199,3 +206,100 @@ def test_application_help_declares_required_state_for_symbol_scoped_pages() -> N
     dashboard = get_application_help_tool(ApplicationHelpRequest(query="dashboard overview"))
     dashboard_page = next(match for match in dashboard.matches if match["page"] == "dashboard")
     assert dashboard_page["required_state"] == []
+
+
+def test_trend_tool_reports_current_trend_via_shared_payload_builder(monkeypatch) -> None:
+    """Cold-engine path: proves get_trend_tool delegates to the real
+    _build_trend_payload (same function GET /api/trend/.../current/... uses)
+    rather than re-deriving the response shape — see the confluence/regime
+    duplication incident this pattern is meant to avoid repeating.
+    """
+
+    class _FakeTrendEngine:
+        def get_current_trend(self, tf):
+            return None
+
+        def get_timeframe_metadata(self, tf):
+            return {}
+
+    monkeypatch.setattr(
+        "backend.api.trend.registry.get_engine", lambda symbol: _FakeTrendEngine()
+    )
+
+    result = get_trend_tool(TrendRequest(symbol="AAPL", timeframe="1d"))
+
+    assert result.symbol == "AAPL"
+    assert result.timeframe == "1d"
+    assert result.direction == "unknown"
+    assert result.confidence == 0.0
+
+
+def test_confluence_tool_reports_neutral_on_cold_engine(monkeypatch) -> None:
+    import importlib
+
+    class _FakeConfluenceEngine:
+        preset_name = "day_trading"
+
+        def get_current_confluence(self):
+            return None
+
+    mtf_router_module = importlib.import_module("backend.api.multitimeframe.router")
+    monkeypatch.setattr(
+        mtf_router_module, "get_engine", lambda symbol, preset="day_trading": _FakeConfluenceEngine()
+    )
+
+    result = get_confluence_tool(ConfluenceRequest(symbol="AAPL", preset="day_trading"))
+
+    assert result.symbol == "AAPL"
+    assert result.direction == "neutral"
+    assert result.preset == "day_trading"
+    assert result.timeframe_signals == {}
+
+
+def test_relative_strength_tool_reports_computed_signals(monkeypatch) -> None:
+    import importlib
+
+    class _FakeSignal:
+        def to_dict(self):
+            return {"symbol": "AAPL", "benchmark": "SPY", "rs_pct": 1.5, "classification": "leading"}
+
+    class _FakeRsEngine:
+        def compute(self):
+            return [_FakeSignal(), _FakeSignal()]
+
+    regime_router_module = importlib.import_module("backend.api.regime.router")
+    monkeypatch.setattr(regime_router_module, "_get_rs_engine", lambda symbol: _FakeRsEngine())
+
+    result = get_relative_strength_tool(SymbolRequest(symbol="AAPL"))
+
+    assert result.symbol == "AAPL"
+    assert result.count == 2
+    assert result.signals[0]["benchmark"] == "SPY"
+
+
+def test_tape_state_tool_reports_disabled_error(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.tape, "enabled", False)
+
+    try:
+        get_tape_state_tool(TapeRequest(symbol="AAPL"))
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "TAPE_ENABLED" in str(exc)
+
+
+def test_tape_state_tool_reports_snapshot_when_enabled(monkeypatch) -> None:
+    from backend.config.settings import settings
+
+    monkeypatch.setattr(settings.tape, "enabled", True)
+    monkeypatch.setattr(
+        "backend.api.tape.registry.get_tape_engine",
+        lambda symbol: type("_FakeTapeEngine", (), {"get_snapshot": lambda self: {"buy_volume": 100, "sell_volume": 40}})(),
+    )
+
+    result = get_tape_state_tool(TapeRequest(symbol="AAPL"))
+
+    assert result.symbol == "AAPL"
+    assert result.snapshot == {"buy_volume": 100, "sell_volume": 40}
+    assert result.source_timestamp
