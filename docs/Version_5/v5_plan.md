@@ -282,7 +282,7 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 ## Phase 5.5 — Scanner, watchlist, alerts, and briefings
 
-**Status:** 🟡 In progress. Item 5.5.1 is implemented and verified; items 5.5.2–5.5.5 remain.
+**Status:** 🟡 In progress. Items 5.5.1–5.5.2 are implemented and verified; items 5.5.3–5.5.5 remain.
 
 **Why now:** These are high-frequency workflows where Chat can save navigation and repetitive setup.
 
@@ -294,8 +294,9 @@ freshness, fallback, and failure metadata; historical prose remains unchanged.
 - ✅ Support technical, session, volume, relative-strength, earnings-exclusion catalyst, and microstructure criteria already available in MarketLens. Unsupported catalyst language is shown as unresolved instead of guessed.
 
 #### 5.5.2 Watchlist intelligence
-- Daily briefing, best/worst movers, new breakouts, deteriorating setups, volume spikes, relative-strength changes, multi-timeframe alignment, earnings, catalysts, and sector rotation.
-- Rank from backend data and preserve the selected session scope.
+- ✅ Grounded Watchlist Intelligence shows best/worst price movers, current 20-bar breakout signals, deteriorating setups, volume spikes, relative strength, and multi-timeframe alignment from the current Scanner cache.
+- ✅ Adds a provider-estimated earnings/dividend calendar and a clearly scoped watchlist-sector momentum view. It does not invent a news catalyst when no verified news-catalyst source is present.
+- ✅ Rank from backend data and preserve the selected session scope. The briefing never starts a second scan: it reuses the Watchlist table's scanner cache and uses local 1-minute session bars for a filtered session scope; its status, baseline, coverage, and missing-data warnings stay visible.
 
 #### 5.5.3 Alert-to-conversation workflow
 - Open Chat with the fired alert, triggering observation, current quote, chart state, signal explanation, catalyst context, and recent history already attached.

@@ -404,6 +404,40 @@ class TestScannerAPI(unittest.TestCase):
 
         self.mock_repo.get_all_watchlist_symbols.assert_called_once_with(1, include_disabled=True)
 
+    def test_watchlist_intelligence_reuses_cache_without_starting_a_second_scan(self):
+        self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
+        self.mock_repo.get_watchlist_symbols.return_value = [MagicMock(symbol="AAPL")]
+        result = _make_result(
+            "AAPL",
+            indicators={"breakout_20": True, "breakout_pct_20": 1.5, "volume_ratio": 2.0},
+            signals=["BREAKOUT_20"],
+            change_pct=2.5,
+        )
+        self.mock_scanner.scan_results = {"AAPL": result}
+
+        response = self.client.get("/api/scanner/watchlist/1/intelligence?sessions=all")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["data_status"], "ready")
+        self.assertEqual(data["session_scope"], "all")
+        self.assertEqual(data["top_bullish"][0]["symbol"], "AAPL")
+        self.assertEqual(data["breakouts"][0]["symbol"], "AAPL")
+        self.mock_scanner.scan_symbols.assert_not_called()
+        self.mock_scanner.scan_symbols_async.assert_not_awaited()
+
+    def test_watchlist_intelligence_reports_warming_cache_without_scanning(self):
+        self.mock_repo.get_watchlist.return_value = MagicMock(id=1)
+        self.mock_repo.get_watchlist_symbols.return_value = [MagicMock(symbol="AAPL")]
+        self.mock_scanner.scan_results = {}
+
+        response = self.client.get("/api/scanner/watchlist/1/intelligence")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["data_status"], "warming")
+        self.mock_scanner.scan_symbols.assert_not_called()
+        self.mock_scanner.scan_symbols_async.assert_not_awaited()
+
     def test_watchlist_session_prices_use_session_close_and_regular_baseline(self):
         """Session filtering reads local bars and compares against the proper close."""
         symbol = "SESSIONTEST"

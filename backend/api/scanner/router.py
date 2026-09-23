@@ -40,6 +40,7 @@ from ...scanner.filters import (
 )
 from ...scanner.ranking import RankingEngine, default_ranking_engine
 from ...scanner.scanner import ScanResult, market_scanner
+from ...scanner.watchlist_intelligence import build_watchlist_intelligence
 from ..dependencies import get_db
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,47 @@ class _RankedResponse(BaseModel):
     timestamp: str
     count: int
     results: list[_ScanResultResponse]
+
+
+class _WatchlistIntelligenceEntry(BaseModel):
+    symbol: str
+    price: float | None = None
+    change_pct: float | None = None
+    timestamp: str | None = None
+    session: str | None = None
+    score: float
+    signals: list[str] = Field(default_factory=list)
+    metric: float | None = None
+    metric_label: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class _SectorMomentumResponse(BaseModel):
+    sector: str
+    average_change_pct: float
+    advancing: int
+    declining: int
+    symbols: list[str]
+
+
+class _WatchlistIntelligenceResponse(BaseModel):
+    watchlist_id: int
+    generated_at: str
+    data_status: str
+    watchlist_size: int
+    analyzed_symbols: int
+    session_scope: str
+    price_basis: str
+    missing_symbols: list[str] = Field(default_factory=list)
+    top_bullish: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    top_bearish: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    breakouts: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    deteriorating: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    volume_spikes: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    relative_strength: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    mtf_alignment: list[_WatchlistIntelligenceEntry] = Field(default_factory=list)
+    sector_rotation: list[_SectorMomentumResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class _SessionPriceResponse(BaseModel):
@@ -674,6 +716,83 @@ async def get_watchlist_rankings(
     cache = _scoped_cache(symbols)
     ranked = engine.rank(cache, top_n=top_n)
     return [_serialize_named_ranking(rr) for rr in ranked.values()]
+
+
+def _normalize_intelligence_session_scope(value: str) -> str:
+    """Validate the Watchlist UI's selected session set without scanning."""
+    normalized = value.strip().lower()
+    if normalized in {"all", "none"}:
+        return normalized
+    selected = {part.strip() for part in normalized.split(",") if part.strip()}
+    valid = {"premarket", "regular", "after_hours"}
+    if not selected or not selected <= valid:
+        raise HTTPException(
+            status_code=422,
+            detail="sessions must be all, none, or a comma-separated set of premarket, regular, after_hours",
+        )
+    return "all" if selected == valid else ",".join(sorted(selected))
+
+
+@router.get(
+    "/watchlist/{watchlist_id}/intelligence",
+    response_model=_WatchlistIntelligenceResponse,
+)
+async def get_watchlist_intelligence(
+    watchlist_id: int,
+    sessions: str = Query(
+        default="all",
+        description="all, none, or comma-separated premarket,regular,after_hours.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return a grounded Watchlist briefing from the current scanner cache.
+
+    This endpoint intentionally *never* calls a market-data provider or starts
+    a scanner run.  The Watchlist table has one authoritative scanner request;
+    this endpoint reuses its results and, for a session-filtered view, reads
+    locally stored one-minute bars through the established session-price
+    helper.  A direct cold request reports ``warming`` instead of covertly
+    producing an expensive second scan.
+    """
+    session_scope = _normalize_intelligence_session_scope(sessions)
+    repo = WatchlistRepository(db)
+    watchlist = await asyncio.to_thread(repo.get_watchlist, watchlist_id)
+    if watchlist is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    rows = await asyncio.to_thread(repo.get_watchlist_symbols, watchlist_id, enabled_only=True)
+    symbols = [str(row if isinstance(row, str) else row.symbol).upper() for row in rows]
+    session_snapshots: dict[str, dict[str, Any]] = {}
+    missing_session_symbols: list[str] = []
+    if session_scope not in {"all", "none"}:
+        # Reuse the exact established session baseline calculation so this
+        # briefing's mover percentages agree with the Watchlist table.
+        snapshot_response = await asyncio.to_thread(
+            get_watchlist_session_prices, watchlist_id, session_scope, db
+        )
+        session_snapshots = {
+            item.symbol.upper(): item.model_dump()
+            for item in snapshot_response.results
+        }
+        enabled_set = set(symbols)
+        missing_session_symbols = [
+            symbol for symbol in snapshot_response.missing_symbols if symbol.upper() in enabled_set
+        ]
+
+    cached_results = _scoped_cache(symbols)
+    payload = await asyncio.to_thread(
+        build_watchlist_intelligence,
+        cached_results,
+        watchlist_size=len(symbols),
+        session_scope=session_scope,
+        session_snapshots=session_snapshots,
+        missing_session_symbols=missing_session_symbols,
+    )
+    return _WatchlistIntelligenceResponse(
+        watchlist_id=watchlist_id,
+        generated_at=_to_dashboard_tz(now_ny()),
+        **payload,
+    )
 
 
 # --- Symbol-level endpoints -------------------------------------------

@@ -12,7 +12,9 @@ jest.mock('../services/api', () => ({
   __esModule: true,
   default: {
     getWatchlistScan: jest.fn(),
+    getWatchlistIntelligence: jest.fn(),
     getWatchlistSessionPrices: jest.fn(),
+    getWatchlistCalendar: jest.fn(),
     getBatchRelativeStrength: jest.fn(),
     updateWatchlistSymbol: jest.fn(),
     removeSymbolFromWatchlist: jest.fn(),
@@ -23,7 +25,9 @@ jest.mock('../services/api', () => ({
 
 const mockApi = api as unknown as {
   getWatchlistScan: jest.Mock;
+  getWatchlistIntelligence: jest.Mock;
   getWatchlistSessionPrices: jest.Mock;
+  getWatchlistCalendar: jest.Mock;
   getBatchRelativeStrength: jest.Mock;
   createRealtimeSubscriber: jest.Mock;
 };
@@ -90,6 +94,19 @@ function mockData(symbols: string[]) {
       }]),
     ),
   });
+  mockApi.getWatchlistIntelligence.mockResolvedValue({
+    watchlist_id: 1,
+    generated_at: '2026-01-01T12:00:00-05:00',
+    data_status: 'ready',
+    watchlist_size: symbols.length,
+    analyzed_symbols: symbols.length,
+    session_scope: 'all',
+    price_basis: 'latest scanner quote and its scanner baseline',
+    missing_symbols: [],
+    top_bullish: [], top_bearish: [], breakouts: [], deteriorating: [], volume_spikes: [],
+    relative_strength: [], mtf_alignment: [], sector_rotation: [], warnings: [],
+  });
+  mockApi.getWatchlistCalendar.mockResolvedValue({ events: [] });
 }
 
 async function renderTable(symbols: string[], onSelectSymbol = jest.fn()) {
@@ -111,6 +128,19 @@ const manySymbols = () => Array.from({ length: 31 }, (_, i) => `SYM${String(i).p
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockApi.getWatchlistCalendar.mockResolvedValue({ events: [] });
+  mockApi.getWatchlistIntelligence.mockResolvedValue({
+    watchlist_id: 1,
+    generated_at: '2026-01-01T12:00:00-05:00',
+    data_status: 'warming',
+    watchlist_size: 0,
+    analyzed_symbols: 0,
+    session_scope: 'all',
+    price_basis: 'latest scanner quote and its scanner baseline',
+    missing_symbols: [],
+    top_bullish: [], top_bearish: [], breakouts: [], deteriorating: [], volume_spikes: [],
+    relative_strength: [], mtf_alignment: [], sector_rotation: [], warnings: [],
+  });
 });
 
 describe('RS benchmark selector', () => {

@@ -4,7 +4,9 @@ import api, {
   LiveQuoteUpdateData,
   RealtimeConnectionStatus,
   RealtimeEvent,
+  CalendarEvent,
   WatchlistScanResult,
+  WatchlistIntelligence as WatchlistIntelligenceData,
   WatchlistSessionPrice,
   RelativeStrengthData,
   RelativeStrengthSignal,
@@ -27,6 +29,7 @@ import {
   getVisibleColumns,
   buildVirtGridTemplateColumns,
 } from './watchlistColumns';
+import { WatchlistIntelligence } from './WatchlistIntelligence';
 
 const TREND_TFS = [
   { key: 'ONE_MINUTE', short: '1m' },
@@ -284,6 +287,10 @@ export function WatchlistTable({
   const [sessionPrices, setSessionPrices] = useState<Record<string, WatchlistSessionPrice>>({});
   const [missingSessionSymbols, setMissingSessionSymbols] = useState<string[]>([]);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [intelligence, setIntelligence] = useState<WatchlistIntelligenceData | null>(null);
+  const [intelligenceEvents, setIntelligenceEvents] = useState<CalendarEvent[]>([]);
+  const [intelligenceLoading, setIntelligenceLoading] = useState(false);
+  const [intelligenceError, setIntelligenceError] = useState<string | null>(null);
   const sessionRequestIdRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [sortCol, setSortCol] = useState(sortColumn);
@@ -326,6 +333,10 @@ export function WatchlistTable({
   // shows no price for any row (see the `!snapshot` branch in displayRows).
   const combinedSessionView = selectedSessions.size === MARKET_SESSIONS.length;
   const noSessionsSelected = selectedSessions.size === 0;
+  const intelligenceSessionScope = useMemo(
+    () => noSessionsSelected ? 'none' : combinedSessionView ? 'all' : sessionSelectionKey,
+    [combinedSessionView, noSessionsSelected, sessionSelectionKey],
+  );
 
   const liveSymbols = useMemo(
     () => Array.from(new Set(rows.map(row => row.symbol.trim().toUpperCase()).filter(Boolean))).sort(),
@@ -368,6 +379,30 @@ export function WatchlistTable({
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, [showColToggle]);
+
+  const fetchIntelligence = useCallback(async () => {
+    setIntelligenceLoading(true);
+    setIntelligenceError(null);
+    try {
+      const result = await api.getWatchlistIntelligence(watchlistId, intelligenceSessionScope);
+      setIntelligence(result);
+    } catch (e: any) {
+      setIntelligenceError(e?.message || 'Could not build the watchlist briefing');
+    } finally {
+      setIntelligenceLoading(false);
+    }
+  }, [intelligenceSessionScope, watchlistId]);
+
+  // Calendar data is provider-estimated and cached server-side. Fetch it only
+  // when the selected watchlist changes — session toggles and 30s rescans do
+  // not need to re-request corporate events.
+  useEffect(() => {
+    let active = true;
+    api.getWatchlistCalendar(watchlistId)
+      .then(calendar => { if (active) setIntelligenceEvents(calendar.events || []); })
+      .catch(() => { if (active) setIntelligenceEvents([]); });
+    return () => { active = false; };
+  }, [watchlistId]);
 
   const fetchData = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true);
@@ -422,6 +457,13 @@ export function WatchlistTable({
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // The Scanner request finishes before this runs, so Intelligence always
+  // reads that same cache rather than starting another provider-backed scan.
+  useEffect(() => {
+    if (scanTimestamp == null) return;
+    void fetchIntelligence();
+  }, [fetchIntelligence, scanTimestamp]);
 
   const fetchSessionPrices = useCallback(async () => {
     // Neither "everything" (unfiltered) nor "nothing" (no valid `sessions`
@@ -697,6 +739,13 @@ export function WatchlistTable({
 
   return (
     <div className="watchlist-table-container">
+      <WatchlistIntelligence
+        data={intelligence}
+        events={intelligenceEvents}
+        loading={intelligenceLoading}
+        error={intelligenceError}
+        onSelectSymbol={onSelectSymbol}
+      />
       <div className="watchlist-table-toolbar">
         <span className="table-count">{sorted.length} symbols{useVirtual ? ' (virtualized)' : ''}</span>
         <fieldset className="watchlist-session-filters" aria-label="Watchlist market sessions">

@@ -75,7 +75,7 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
-| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder is complete: typed previews use the exact executable scanner filter format, are editable before scanning, and retain unsupported criteria as visible unresolved items. Watchlist intelligence, alert conversations, summaries, and the change inbox remain. |
+| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder and 5.5.2 Watchlist Intelligence are complete. Scanner previews are typed and editable before execution; the Watchlist briefing reuses the existing scan cache, preserves session scope with local bars, shows coverage/freshness limits, and does not fabricate a news catalyst. Alert conversations, summaries, and the change inbox remain. |
 | 5.6 | Trade planning, risk, options, and journal coaching | ⬜ NOT STARTED | Verified plans, portfolio risk, options, journal analytics, save/export and decision checklists. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
@@ -560,10 +560,28 @@ Focused frontend tests verify the preview is non-executing and hands the exact
 payload to the editor. The focused backend suite passes 120 tests and the
 Scanner frontend test suite plus production build pass.
 
-Remaining 5.5 audit work must prove watchlist-intelligence ranking and session
-boundaries, alert trigger values and conversation context, deduplicated and
-timestamped scheduled summaries, and weekly-review performance/mistake/setup
-analysis when sufficient Journal data is available.
+Remaining 5.5 audit work must prove alert trigger values and conversation
+context, deduplicated and timestamped scheduled summaries, and weekly-review
+performance/mistake/setup analysis when sufficient Journal data is available.
+
+**5.5.2 complete — Watchlist Intelligence.** The Watchlist page now performs
+one normal Scanner request, then requests a deterministic briefing endpoint
+which only reads that current scanner cache. It never triggers another scanner
+or market-data provider request. For an explicit premarket, regular, or
+after-hours filter, it reuses the established local one-minute session-bar
+baseline so mover percentages match the Watchlist table. The typed response
+includes bullish/bearish movers, current 20-bar breakouts, deterioration,
+volume spikes, benchmark-relative strength, multi-timeframe confirmation, and
+watchlist-sector momentum. It reports warming/partial coverage, price basis,
+and missing selected-session bars instead of concealing data gaps. Corporate
+events use the existing cached provider-estimated calendar lookup once per
+watchlist; the UI explicitly declines to infer a news catalyst without a
+verified source.
+
+Focused backend tests cover selected-session ranking, signals, sector coverage,
+empty/no-session behavior, and the no-second-scan API guarantee. Focused
+frontend tests cover the grounded session display, symbol navigation, existing
+Watchlist behavior, and production compilation.
 
 ---
 

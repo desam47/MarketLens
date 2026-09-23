@@ -532,6 +532,47 @@ export interface WatchlistScanResponse {
   results: WatchlistScanResult[];
 }
 
+export interface WatchlistIntelligenceEntry {
+  symbol: string;
+  price: number | null;
+  change_pct: number | null;
+  timestamp: string | null;
+  session: string | null;
+  score: number;
+  signals: string[];
+  metric: number | null;
+  metric_label: string | null;
+  details: Record<string, any>;
+}
+
+export interface WatchlistSectorMomentum {
+  sector: string;
+  average_change_pct: number;
+  advancing: number;
+  declining: number;
+  symbols: string[];
+}
+
+export interface WatchlistIntelligence {
+  watchlist_id: number;
+  generated_at: string;
+  data_status: 'ready' | 'partial' | 'warming' | string;
+  watchlist_size: number;
+  analyzed_symbols: number;
+  session_scope: string;
+  price_basis: string;
+  missing_symbols: string[];
+  top_bullish: WatchlistIntelligenceEntry[];
+  top_bearish: WatchlistIntelligenceEntry[];
+  breakouts: WatchlistIntelligenceEntry[];
+  deteriorating: WatchlistIntelligenceEntry[];
+  volume_spikes: WatchlistIntelligenceEntry[];
+  relative_strength: WatchlistIntelligenceEntry[];
+  mtf_alignment: WatchlistIntelligenceEntry[];
+  sector_rotation: WatchlistSectorMomentum[];
+  warnings: string[];
+}
+
 export interface WatchlistSessionPrice {
   symbol: string;
   price: number;
@@ -2124,6 +2165,15 @@ class ApiService {
   // Phase 12: scan an entire watchlist (for the watchlist table)
   async getWatchlistScan(watchlistId: number): Promise<WatchlistScanResponse> {
     return this.fetch<WatchlistScanResponse>(`/scanner/watchlist/${watchlistId}`, undefined, 60000);
+  }
+
+  async getWatchlistIntelligence(
+    watchlistId: number,
+    sessions = 'all',
+  ): Promise<WatchlistIntelligence> {
+    return this.fetch<WatchlistIntelligence>(
+      `/scanner/watchlist/${watchlistId}/intelligence?sessions=${encodeURIComponent(sessions)}`,
+    );
   }
 
   async getWatchlistSessionPrices(
