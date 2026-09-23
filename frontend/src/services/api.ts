@@ -2710,6 +2710,15 @@ export interface ChatMessage {
   focus?: string[];
   partial?: string[];
   unavailable?: string[];
+  tools?: Array<{
+    tool: string;
+    ok: boolean;
+    provider?: string;
+    freshness_seconds?: number | null;
+    fallback?: boolean;
+    error?: string;
+    warnings?: string[];
+  }>;
 }
 
 export interface AIJobEnqueueResponse {

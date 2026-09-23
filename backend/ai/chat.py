@@ -633,6 +633,7 @@ def answer_chat_message(
     repo = ChatRepository()
     try:
         turn = _prepare_turn(repo, session_id, user_content)
+        trace: list[dict] = []
         reply_text, grounded, screened = _generate_reply(
             repo.db,
             turn.symbol_blocks,
@@ -644,9 +645,14 @@ def answer_chat_message(
             turn.capped,
             turn.base,
             turn.planner_state,
+            trace,
         )
-        grounded = grounded and not turn.unavailable  # deterministic fail-safe
+        # _generate_reply delegates action execution to _run_turn_actions;
+        # attach its transient trace to the returned ORM object for the API.
+        # It is intentionally not persisted in the prose message row.
         assistant_message = repo.add_message(session_id, "assistant", reply_text)
+        assistant_message.planner_trace = trace
+        grounded = grounded and not turn.unavailable  # deterministic fail-safe
         # `screened` is populated only by the run_screen tool — tickers the
         # turn's own message never named, so turn.focus (derived from the
         # user's text) wouldn't otherwise include them, and the frontend's
@@ -686,8 +692,9 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
         final_text: str | None = None
         grounded = False
         screened: list[str] = []
+        trace: list[dict] = []
         try:
-            for kind, payload in _generate_reply_streaming(repo.db, turn):
+            for kind, payload in _generate_reply_streaming(repo.db, turn, trace):
                 if kind == "delta":
                     yield ("delta", payload)
                 else:  # "result"
@@ -706,6 +713,7 @@ def stream_chat_message(session_id: int, user_content: str) -> Iterator[tuple]:
             )
         grounded = grounded and not turn.unavailable
         msg = repo.add_message(session_id, "assistant", final_text)
+        msg.planner_trace = trace
         # See answer_chat_message's matching comment — `screened` (from
         # run_screen) is merged into `focus` so the frontend's quick-action
         # buttons pick up tickers the turn's own message never named.
@@ -828,6 +836,7 @@ def _generate_reply(
     capped: bool,
     base_symbols: list[str],
     planner_state: dict | None = None,
+    trace: list[dict] | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Call the AI and parse its reply. Never raises — degrades to a
     plain reply with grounded=False.
@@ -896,6 +905,7 @@ def _generate_reply(
         transcript,
         user_content,
         alert_context,
+        trace=trace,
     )
 
 
@@ -1003,6 +1013,7 @@ def _finalize_parsed(
     symbol_blocks: list[dict],
     user_content: str = "",
     transcript: list[tuple[str, str]] | None = None,
+    trace: list[dict] | None = None,
 ) -> tuple[str, bool, list[str]]:
     """A parsed ``ChatReplyResponse`` -> ``(final_text, grounded, screened)``.
 
@@ -1048,7 +1059,7 @@ def _finalize_parsed(
     if parsed.action != "none":
         if parsed.action in _DESTRUCTIVE_ACTIONS and not parsed.action_confirmed:
             return _confirm_prompt(db, parsed), True, []
-        return _run_action(db, parsed)
+        return _run_action(db, parsed, trace=trace)
     return parsed.reply, parsed.grounded, []
 
 
@@ -1074,6 +1085,7 @@ def _run_turn_actions(
     transcript: list[tuple[str, str]],
     user_content: str,
     alert_context: dict | None,
+    trace: list[dict] | None = None,
 ) -> tuple[str, bool, list[str]]:
     """Runs ``parsed``'s tool via ``_finalize_parsed``, then — only when
     the trader's own message hints at more than one request (see
@@ -1092,7 +1104,9 @@ def _run_turn_actions(
     stops the chain there; its confirmation question (if any) is the
     last thing appended.
     """
-    text, grounded, screened = _finalize_parsed(db, parsed, symbol_blocks, user_content, transcript)
+    text, grounded, screened = _finalize_parsed(
+        db, parsed, symbol_blocks, user_content, transcript, trace=trace
+    )
     if not _action_was_executed(parsed) or not _MULTI_STEP_HINT.search(user_content):
         return text, grounded, screened
 
@@ -1150,6 +1164,7 @@ def _run_turn_actions(
             symbol_blocks,
             user_content,
             transcript,
+            trace=trace,
         )
         texts.append(f"Step {len(texts) + 1}: {step_text}")
         planner.completed_steps.append(step_text)
@@ -1161,7 +1176,9 @@ def _run_turn_actions(
     return " ".join(texts), all_grounded, list(dict.fromkeys(all_screened))
 
 
-def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
+def _generate_reply_streaming(
+    db, turn: _Turn, trace: list[dict] | None = None
+) -> Iterator[tuple]:
     """Streaming variant of :func:`_generate_reply`.
 
     Yields ``("delta", text)`` for each incremental piece of the reply,
@@ -1300,6 +1317,7 @@ def _generate_reply_streaming(db, turn: _Turn) -> Iterator[tuple]:
             turn.transcript,
             turn.user_content,
             turn.alert_context,
+            trace=trace,
         ),
     )
 
@@ -1825,7 +1843,7 @@ _MARKET_TOOL_ACTIONS = {
 }
 
 
-def _run_market_tool(db, parsed) -> tuple[str, bool]:
+def _run_market_tool(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool]:
     """Execute one read-only grounded market-data tool selected by Chat."""
     del db
     arguments = parsed.action_tool_arguments or {}
@@ -1833,12 +1851,26 @@ def _run_market_tool(db, parsed) -> tuple[str, bool]:
         ToolRequest(tool_name=parsed.action, arguments=arguments)
     )
     if not result.ok:
+        if trace is not None:
+            trace.append({"tool": parsed.action, "ok": False, "provider": result.provider, "error": result.error, "fallback": result.fallback})
         return f"I couldn't retrieve that safely: {result.error}", False
     freshness = (
         f"{result.freshness_seconds:.1f}s old"
         if result.freshness_seconds is not None
         else "freshness unavailable"
     )
+    if trace is not None:
+        trace.append({
+            "tool": parsed.action,
+            "ok": True,
+            "provider": result.provider,
+            "freshness_seconds": result.freshness_seconds,
+            "source_timestamp": result.source_timestamp,
+            "session": result.session,
+            "timeframe": result.timeframe,
+            "fallback": result.fallback,
+            "warnings": result.warnings,
+        })
     return (
         f"Verified {parsed.action} result from {result.provider} ({freshness}, "
         f"session {result.session}, timeframe {result.timeframe or 'not specified'}): "
@@ -1862,7 +1894,7 @@ _ACTION_HANDLERS = {
 }
 
 
-def _run_action(db, parsed) -> tuple[str, bool, list[str]]:
+def _run_action(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, bool, list[str]]:
     """Execute one action tool. Never raises — a failure degrades to a
     plain reply with grounded=False, same contract as _run_reanalysis.
 
@@ -1872,19 +1904,25 @@ def _run_action(db, parsed) -> tuple[str, bool, list[str]]:
     """
     handler = _ACTION_HANDLERS.get(parsed.action)
     if parsed.action in _MARKET_TOOL_ACTIONS:
-        return _run_market_tool(db, parsed) + ([],)
+        return _run_market_tool(db, parsed, trace=trace) + ([],)
     if handler is None:  # pragma: no cover — action is a closed Literal
         return "I couldn't do that — please try again.", False, []
     try:
         result = handler(db, parsed)
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
+        if trace is not None:
+            trace.append({"tool": parsed.action, "ok": False, "provider": "MarketLens", "error": str(e), "fallback": False})
         return "Something went wrong doing that — please try again.", False, []
     if parsed.action in _BASELINE_MUTATING_ACTIONS:
         from backend.ai.market_baseline import invalidate_cache
 
         invalidate_cache()
     if len(result) == 3:
+        if trace is not None:
+            trace.append({"tool": parsed.action, "ok": True, "provider": "MarketLens", "fallback": False})
         return result
     text, grounded = result
+    if trace is not None:
+        trace.append({"tool": parsed.action, "ok": grounded, "provider": "MarketLens", "fallback": False})
     return text, grounded, []

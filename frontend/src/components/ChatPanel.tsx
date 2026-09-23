@@ -330,6 +330,7 @@ export function ChatPanel({ alertTriggerId = null, onSymbolResolved }: ChatPanel
                     ? highlightMessage(m.content, m.focus ?? [], m.partial ?? [], m.unavailable ?? [])
                     : m.content}
                 {m.role === 'assistant' && !m.streaming && <ProvenanceRow message={m} />}
+                {m.role === 'assistant' && !m.streaming && <ToolTraceRow message={m} />}
                 {m.role === 'assistant' && !m.streaming && (
                   <ChatQuickActions
                     symbols={Array.from(new Set([...(m.focus ?? []), ...(m.partial ?? [])]))
@@ -412,6 +413,22 @@ function ProvenanceRow({ message }: { message: ChatMessage }) {
           {s} ✗ no data
         </span>
       ))}
+    </span>
+  );
+}
+
+function ToolTraceRow({ message }: { message: ChatMessage }) {
+  const tools = message.tools ?? [];
+  if (!tools.length) return null;
+  return (
+    <span className="chat-tool-trace" title="Tools used to ground this answer">
+      {tools.map((item, index) => {
+        const freshness = item.freshness_seconds == null ? '' : ` · ${Math.round(item.freshness_seconds)}s old`;
+        const fallback = item.fallback ? ' · fallback' : '';
+        return <span className={`chat-tool-pill ${item.ok ? 'ok' : 'error'}`} key={`${item.tool}-${index}`}>
+          {item.ok ? '✓' : '⚠'} {item.tool}{item.provider ? ` · ${item.provider}` : ''}{freshness}{fallback}
+        </span>;
+      })}
     </span>
   );
 }

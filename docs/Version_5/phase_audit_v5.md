@@ -499,6 +499,9 @@ chat session. Ambiguous follow-ups that refer to multiple remembered symbols
 receive a deterministic clarification question before any provider or AI call.
 Compound replies now label completed subtasks as ordered steps and report when
 a dependent continuation cannot be planned safely.
+The current assistant response also exposes a transient tool trace with tool
+name, success/failure, provider, freshness, fallback, and warnings; it is
+rendered in Chat but intentionally not persisted in the prose message table.
 
 Remaining Phase 5.3 work includes planner state, clarification
 coverage, repeated-call protection, structured memory fields—including the

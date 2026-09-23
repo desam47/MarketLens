@@ -88,6 +88,10 @@ class MessageResponse(BaseModel):
     focus: list[str] = []
     partial: list[str] = []
     unavailable: list[str] = []
+    # Transient execution trace for the current assistant response. Historical
+    # messages do not carry this because it is intentionally not stored in the
+    # prose message table.
+    tools: list[dict[str, Any]] = []
 
 
 class SendMessageRequest(BaseModel):
@@ -112,6 +116,7 @@ def _message_to_response(
     focus: list[str] | None = None,
     partial: list[str] | None = None,
     unavailable: list[str] | None = None,
+    tools: list[dict[str, Any]] | None = None,
 ) -> MessageResponse:
     return MessageResponse(
         id=m.id,
@@ -123,6 +128,7 @@ def _message_to_response(
         focus=focus or [],
         partial=partial or [],
         unavailable=unavailable or [],
+        tools=tools if tools is not None else list(getattr(m, "planner_trace", []) or []),
     )
 
 
@@ -271,6 +277,7 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         focus=focus,
         partial=partial,
         unavailable=unavailable,
+        tools=getattr(message, "planner_trace", []),
     )
 
 
@@ -372,6 +379,7 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                             focus=focus,
                             partial=partial,
                             unavailable=unavailable,
+                            tools=getattr(message, "planner_trace", []),
                         ).model_dump(),
                     )
                 elif kind == "error":

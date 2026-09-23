@@ -154,6 +154,8 @@ state. Session-backed memory now preserves bounded symbols, watchlist,
 timeframe, session, and last-question fields, and ambiguous multi-symbol
 follow-ups ask for clarification before tool execution. Compound replies label
 completed subtasks and explicitly report a safely stopped continuation.
+Current assistant responses expose a transient ordered tool trace with provider,
+freshness, fallback, and failure metadata; historical prose remains unchanged.
 
 **Why now:** Broad questions often need several dependent operations, but the loop must stay predictable and safe.
 
