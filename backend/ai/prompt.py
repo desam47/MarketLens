@@ -895,6 +895,7 @@ class ChatReplyResponse(BaseModel):
         "get_calendar",
         "import_csv",
         "build_trade_plan",
+        "assess_portfolio_risk",
     ] = "none"
     action_symbol: str | None = Field(default=None, max_length=20)
     action_watchlist: str | None = Field(default=None, max_length=120)
@@ -1034,6 +1035,19 @@ _ACTION_TOOL_DOCS = (
       calculator. If the trader hasn't given you a stop or at least one \
       target, ask for it instead of guessing one — the tool refuses to \
       build a plan without them.
+    - assess_portfolio_risk explains an explicitly supplied position \
+      snapshot's concentration, sector exposure, correlation, volatility, \
+      stop risk, portfolio drawdown, and (given price_shocks or \
+      portfolio_shock_percent) scenario results — Risk Dashboard positions \
+      are browser-local, so pass them in action_tool_arguments.positions \
+      the same shape get_risk_dashboard uses. To size a NEW trade against \
+      the portfolio, also set proposed_trade (symbol, direction, \
+      entry_price, stop_price, account_value, risk_percent, optional \
+      sector) and optionally risk_limits (max_position_percent, \
+      max_sector_percent). If proposed_trade is missing entry/stop/ \
+      account_value/risk_percent, or the sized position would breach a \
+      given risk_limits threshold, the tool returns recommended_size=null \
+      with the reason — never invent a size or silently shrink it to fit.
     - assumption_tracking saves or reviews research assumptions. For a save, \
       set operation="save", include one or more typed assumptions (category, \
       statement, optional expected_value, source), and set action_confirmed=true \
@@ -1195,7 +1209,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_options_snapshot, get_watchlist, get_risk_dashboard, get_trade_journal, \
       get_application_help, get_alerts, get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
-      import_csv, build_trade_plan, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      import_csv, build_trade_plan, assess_portfolio_risk, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )

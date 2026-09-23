@@ -137,6 +137,46 @@ class RiskDashboardRequest(BaseModel):
     positions: list[PositionInput] = Field(default_factory=list, max_length=500)
 
 
+class ProposedTrade(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    direction: Literal["long", "short"] = "long"
+    entry_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    sector: str | None = Field(default=None, max_length=100)
+    account_value: float | None = Field(default=None, gt=0)
+    risk_percent: float | None = Field(default=None, gt=0, le=100)
+
+
+class PortfolioRiskLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_position_percent: float | None = Field(default=None, gt=0, le=100)
+    max_sector_percent: float | None = Field(default=None, gt=0, le=100)
+
+
+class PortfolioRiskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Positions are browser-local, same as RiskDashboardRequest -- an
+    # explicit snapshot is required, never assumed.
+    positions: list[PositionInput] = Field(default_factory=list, max_length=500)
+    # Volatility/correlation/drawdown need each symbol's own price history,
+    # which (unlike the positions themselves) is NOT browser-local -- the
+    # server fetches it directly, same as every other bars-backed tool.
+    lookback_days: int = Field(default=60, ge=20, le=252)
+    # Passed straight through to scenario_analysis_tool for the "scenario
+    # results" part of this tool's explanation -- not reimplemented here.
+    price_shocks: dict[str, float] = Field(default_factory=dict, max_length=25)
+    portfolio_shock_percent: float | None = None
+    stop_price_overrides: dict[str, float] = Field(default_factory=dict, max_length=25)
+    # Optional: size a NEW trade against this portfolio's risk capacity.
+    # Without this, the tool only explains the existing portfolio.
+    proposed_trade: ProposedTrade | None = None
+    risk_limits: PortfolioRiskLimits | None = None
+
+
 class TradePlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1964,6 +2004,181 @@ def get_risk_dashboard_tool(request: RiskDashboardRequest) -> BaseModel:
         net_exposure=round(net, 8),
         stop_loss_risk=round(stop_risk, 8),
         sector_exposure=[{"sector": key, "market_value": round(value, 8), "weight_percent": round(value / gross * 100, 6) if gross else 0.0} for key, value in sorted(sectors.items(), key=lambda item: item[1], reverse=True)],
+        provider="MarketLens calculator",
+        source_timestamp=_database_timestamp(),
+    )
+
+
+# Correlation/volatility/drawdown are computed for at most this many
+# positions (the largest by weight) -- unbounded would mean one provider
+# call per held symbol; every other bars-backed tool in this module bounds
+# its work similarly (e.g. AnomalyAnalysisRequest, ScenarioRequest).
+_PORTFOLIO_RISK_MAX_PRICED_SYMBOLS = 10
+
+
+def assess_portfolio_risk_tool(request: PortfolioRiskRequest) -> BaseModel:
+    """Explain concentration, sector exposure, correlation, volatility,
+    stop risk, drawdown, and scenario results for an explicit position
+    snapshot; optionally size a new trade against the portfolio's risk
+    capacity.
+
+    Reuses get_risk_dashboard_tool (exposure/sector/stop risk) and
+    scenario_analysis_tool (what-if shocks) directly rather than
+    re-deriving their numbers. Volatility, correlation, and portfolio
+    drawdown are new here: they need each held symbol's own price history,
+    which (unlike the position snapshot itself) the server can fetch
+    directly.
+    """
+    from backend.ai.calculator import CalculationRequest, calculate
+
+    if not request.positions:
+        return _Payload(
+            available=False,
+            reason="No position snapshot was supplied. Risk Dashboard positions are browser-local; pass them to assess portfolio risk.",
+            provider="MarketLens calculator",
+            source_timestamp=_database_timestamp(),
+        )
+
+    dashboard = get_risk_dashboard_tool(RiskDashboardRequest(positions=request.positions)).model_dump(mode="json")
+    rows = sorted(dashboard["positions"], key=lambda row: row["weight_percent"], reverse=True)
+    concentration = {
+        "top_position": {"symbol": rows[0]["symbol"], "weight_percent": rows[0]["weight_percent"]} if rows else None,
+        "top_3_weight_percent": round(sum(row["weight_percent"] for row in rows[:3]), 6),
+        "top_sector": dashboard["sector_exposure"][0] if dashboard["sector_exposure"] else None,
+    }
+
+    scenario = scenario_analysis_tool(ScenarioRequest(
+        positions=request.positions,
+        price_shocks=request.price_shocks,
+        portfolio_shock_percent=request.portfolio_shock_percent,
+        stop_price_overrides=request.stop_price_overrides,
+    )).model_dump(mode="json")
+
+    priced_symbols = [row["symbol"] for row in rows[:_PORTFOLIO_RISK_MAX_PRICED_SYMBOLS]]
+    closes_by_symbol: dict[str, list[float]] = {}
+    unknowns: list[dict[str, Any]] = []
+    for symbol in priced_symbols:
+        try:
+            bars = get_bars_tool(BarsRequest(symbol=symbol, timeframe="1d", range=f"{request.lookback_days}d", limit=request.lookback_days)).model_dump(mode="json")
+            closes = [float(bar["close"]) for bar in bars.get("bars", []) if bar.get("close") is not None]
+            if len(closes) >= 5:
+                closes_by_symbol[symbol] = closes
+            else:
+                unknowns.append({"type": "price_history", "symbol": symbol, "reason": "fewer than 5 bars available"})
+        except Exception as exc:
+            unknowns.append({"type": "price_history", "symbol": symbol, "reason": str(exc)})
+    if len(priced_symbols) < len(rows):
+        unknowns.append({"type": "price_history", "reason": f"only the {_PORTFOLIO_RISK_MAX_PRICED_SYMBOLS} largest positions are priced for volatility/correlation/drawdown"})
+
+    volatility: dict[str, float | None] = {}
+    for symbol, closes in closes_by_symbol.items():
+        try:
+            result = calculate(CalculationRequest(calculation="volatility", prices=closes))
+            volatility[symbol] = result.values["period_volatility"]
+        except ValueError as exc:
+            unknowns.append({"type": "volatility", "symbol": symbol, "reason": str(exc)})
+
+    correlation_matrix: list[dict[str, Any]] = []
+    priced_list = list(closes_by_symbol.items())
+    for i in range(len(priced_list)):
+        for j in range(i + 1, len(priced_list)):
+            left_symbol, left_closes = priced_list[i]
+            right_symbol, right_closes = priced_list[j]
+            length = min(len(left_closes), len(right_closes))
+            try:
+                result = calculate(CalculationRequest(
+                    calculation="correlation",
+                    prices=left_closes[-length:],
+                    comparison_prices=right_closes[-length:],
+                ))
+                correlation_matrix.append({
+                    "symbol_a": left_symbol, "symbol_b": right_symbol,
+                    "correlation": result.values["correlation"], "sample_size": length,
+                })
+            except ValueError as exc:
+                unknowns.append({"type": "correlation", "symbols": [left_symbol, right_symbol], "reason": str(exc)})
+
+    portfolio_drawdown = None
+    quantity_by_symbol = {row["symbol"]: next(p.quantity for p in request.positions if p.symbol.upper() == row["symbol"]) for row in rows if row["symbol"] in closes_by_symbol}
+    if len(quantity_by_symbol) == len(priced_symbols) and quantity_by_symbol:
+        shared_length = min(len(closes) for closes in closes_by_symbol.values())
+        if shared_length >= 5:
+            equity_curve = [
+                sum(closes_by_symbol[symbol][-shared_length:][t] * quantity_by_symbol[symbol] for symbol in quantity_by_symbol)
+                for t in range(shared_length)
+            ]
+            result = calculate(CalculationRequest(calculation="max_drawdown", prices=equity_curve))
+            portfolio_drawdown = {
+                "maximum_drawdown_percent": result.values["maximum_drawdown_percent"],
+                "sample_size": shared_length,
+            }
+        else:
+            unknowns.append({"type": "portfolio_drawdown", "reason": "fewer than 5 shared bars across priced positions"})
+    else:
+        unknowns.append({"type": "portfolio_drawdown", "reason": "portfolio drawdown needs price history for every held position; some were unavailable"})
+
+    proposed_trade_result = None
+    if request.proposed_trade is not None:
+        trade = request.proposed_trade
+        if trade.entry_price is None or trade.stop_price is None:
+            proposed_trade_result = {"recommended_size": None, "reason": "entry_price and stop_price are required to size a new position."}
+        elif trade.account_value is None or trade.risk_percent is None:
+            proposed_trade_result = {"recommended_size": None, "reason": "account_value and risk_percent are required to size a new position against your risk budget."}
+        else:
+            sizing = calculate(CalculationRequest(
+                calculation="position_size",
+                entry_price=trade.entry_price,
+                stop_price=trade.stop_price,
+                account_value=trade.account_value,
+                risk_percent=trade.risk_percent,
+            ))
+            shares = sizing.values["shares"]
+            position_value = sizing.values["position_value"] or 0.0
+            new_gross = dashboard["gross_exposure"] + position_value
+            projected_position_percent = position_value / new_gross * 100 if new_gross else 0.0
+            projected_sector_percent = None
+            if trade.sector:
+                existing_sector_value = next((s["market_value"] for s in dashboard["sector_exposure"] if s["sector"] == trade.sector), 0.0)
+                projected_sector_percent = (existing_sector_value + position_value) / new_gross * 100 if new_gross else 0.0
+
+            breaches: list[str] = []
+            limits = request.risk_limits
+            if limits is not None:
+                if limits.max_position_percent is not None and projected_position_percent > limits.max_position_percent:
+                    breaches.append(f"would be {projected_position_percent:.1f}% of the portfolio, exceeding your {limits.max_position_percent:.1f}% max-position limit")
+                if limits.max_sector_percent is not None and projected_sector_percent is not None and projected_sector_percent > limits.max_sector_percent:
+                    breaches.append(f"would push {trade.sector} to {projected_sector_percent:.1f}% of the portfolio, exceeding your {limits.max_sector_percent:.1f}% max-sector limit")
+
+            if breaches:
+                proposed_trade_result = {
+                    "recommended_size": None,
+                    "reason": "; ".join(breaches),
+                    "computed_shares": shares,
+                    "projected_position_percent": round(projected_position_percent, 4),
+                    "projected_sector_percent": round(projected_sector_percent, 4) if projected_sector_percent is not None else None,
+                }
+            else:
+                proposed_trade_result = {
+                    "recommended_size": shares,
+                    "position_value": position_value,
+                    "projected_position_percent": round(projected_position_percent, 4),
+                    "projected_sector_percent": round(projected_sector_percent, 4) if projected_sector_percent is not None else None,
+                    "reason": None if limits is not None else "No risk_limits were supplied; this size was not checked against a portfolio limit.",
+                }
+
+    return _Payload(
+        available=True,
+        gross_exposure=dashboard["gross_exposure"],
+        net_exposure=dashboard["net_exposure"],
+        stop_loss_risk=dashboard["stop_loss_risk"],
+        sector_exposure=dashboard["sector_exposure"],
+        concentration=concentration,
+        volatility=volatility,
+        correlation_matrix=correlation_matrix,
+        portfolio_drawdown=portfolio_drawdown,
+        scenario=scenario,
+        proposed_trade=proposed_trade_result,
+        unknowns=unknowns,
         provider="MarketLens calculator",
         source_timestamp=_database_timestamp(),
     )

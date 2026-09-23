@@ -367,6 +367,7 @@ def build_default_registry() -> ToolRegistry:
         MoveAnalysisRequest,
         NewsRequest,
         OptionsRequest,
+        PortfolioRiskRequest,
         RiskDashboardRequest,
         ScenarioRequest,
         SensitivityRequest,
@@ -379,6 +380,7 @@ def build_default_registry() -> ToolRegistry:
         TrendRequest,
         WatchlistRequest,
         anomaly_analysis_tool,
+        assess_portfolio_risk_tool,
         assumption_tracking_tool,
         build_trade_plan_tool,
         compare_symbols_tool,
@@ -447,6 +449,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="assumption_tracking", kind="read_only", description="Save and verify research assumptions without rewriting their original values.", input_model=AssumptionTrackingRequest, handler=assumption_tracking_tool))
     registry.register(ToolSpec(name="get_alerts", kind="read_only", description="Read application alert rules and optionally their recent triggers.", input_model=AlertsRequest, handler=get_alerts_tool))
     registry.register(ToolSpec(name="get_risk_dashboard", kind="read_only", description="Summarize an explicitly supplied manual position snapshot.", input_model=RiskDashboardRequest, handler=get_risk_dashboard_tool))
+    registry.register(ToolSpec(name="assess_portfolio_risk", kind="read_only", description="Explain concentration, sector exposure, correlation, volatility, stop risk, drawdown, and scenario results for an explicit position snapshot; optionally size a new trade against the portfolio's risk capacity.", input_model=PortfolioRiskRequest, handler=assess_portfolio_risk_tool))
     registry.register(ToolSpec(name="build_trade_plan", kind="read_only", description="Build a verified trade plan: entry/stop/targets/reward-risk/position size, for the user to review before saving.", input_model=TradePlanRequest, handler=build_trade_plan_tool))
     registry.register(ToolSpec(name="get_trade_journal", kind="read_only", description="Search or summarize an explicitly supplied local trade journal snapshot.", input_model=TradeJournalRequest, handler=get_trade_journal_tool))
     registry.register(ToolSpec(name="get_application_help", kind="read_only", description="Find verified MarketLens pages and navigation targets.", input_model=ApplicationHelpRequest, handler=get_application_help_tool))

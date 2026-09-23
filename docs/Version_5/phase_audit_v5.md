@@ -1,7 +1,7 @@
 # Version 5 Phase Audit
 
 **Last updated:** 2026-09-23 (re-scoped from Charts to Intelligent AI Hub Chat)
-**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is in progress (5.5.1–5.5.3 complete); Phase 5.6 is in progress (5.6.1 complete).
+**Status:** Active. Planning complete; Phases 5.1–5.4 are complete; Phase 5.5 is in progress (5.5.1–5.5.4 complete); Phase 5.6 is in progress (5.6.1–5.6.2 complete).
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
 
@@ -75,8 +75,8 @@ and richer structured provenance cards belong to Phase 5.2 and later phases.
 | 5.2 | Grounded market-data tools and provenance | ✅ COMPLETE | 23 tools registered, every tool named in 5.2.1–5.2.8 implemented, with consistent freshness/fallback/entitlement fields and a generated (not hand-copied) application-help route table. 8 of 23 tools have live contract tests — traced to be close to the practical ceiling for this codebase (see 2026-09-22 review). Multi-provider reconciliation stays unit-tested infrastructure — no real multi-observation path exists to wire it into without a deliberate architecture change. |
 | 5.3 | Bounded orchestration, intent, and memory | ✅ COMPLETE | Bounded chaining, budgets, duplicate suppression/reuse, persistent memory and confirmations, deterministic intent routes, visible step decomposition, reusable workflows, role-specific model routes, and AI-off evidence-only fallback are implemented and tested. |
 | 5.4 | Analysis, comparisons, scenarios, and explanations | ✅ COMPLETE | The typed analysis tools provide evidence, baseline comparisons, bounded rankings, deterministic what-if outputs, look-ahead-safe historical samples, signal review, conditional sensitivity outputs, normalized event timelines, anomaly baselines, and an assumption ledger with immutable originals, source/creation provenance, stale/broken status transitions, and explicit unknowns. |
-| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, and 5.5.3 Alert-to-conversation are complete. Alert trigger rows open an alert-scoped AI Hub session with a typed read-only evidence bundle (trigger facts, quote/chart provenance, signals, catalyst context, market backdrop, and recent history); alert changes retain the existing confirmation gate. Scheduled summaries and the change inbox remain. |
-| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1 Trade-plan builder is complete: `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. Portfolio/risk assistant, options research, journal coach, save/export, and decision checklist remain. |
+| 5.5 | Scanner, watchlist, alerts, and briefings | 🟡 IN PROGRESS | 5.5.1 Natural-language Scanner Builder, 5.5.2 Watchlist Intelligence, 5.5.3 Alert-to-conversation, and 5.5.4 Scheduled Summaries are complete. Scheduled local summaries now cover premarket, midday, post-market, and weekly sessions with cutoff/window metadata and restart-safe deduplication; Weekly adds browser-local Journal review when data exists. The change inbox (5.5.5) remains. |
+| 5.6 | Trade planning, risk, options, and journal coaching | 🟡 IN PROGRESS | 5.6.1 Trade-plan builder and 5.6.2 Portfolio/Risk Dashboard assistant are complete. `build_trade_plan` computes entry/stop/target reward-risk and position size entirely via the verified calculator, refuses to guess a missing stop/target, and flags an inconsistent stop/target for the stated direction. `assess_portfolio_risk` explains concentration/sector/correlation/volatility/stop-risk/drawdown/scenario results for an explicit position snapshot and can size a proposed new trade against configurable risk limits, refusing (not shrinking) a size that would breach one. Options research, journal coach, save/export, and decision checklist remain. |
 | 5.7 | Structured Chat UI and personalization | ⬜ NOT STARTED | Typed UI, preferences, chart state, navigation, feedback, regeneration, notebooks and answer refresh. |
 | 5.8 | Reliability, evaluation, and release hardening | ⬜ NOT STARTED | Answer verification, hallucination controls, evaluation, audit trail, fallbacks, performance and release gate. |
 
@@ -575,8 +575,17 @@ server-side confirmation for destructive changes.
 
 Focused backend API tests cover verified context assembly and missing-trigger
 404 behavior; the alert and chat frontend suites pass, and the production
-frontend build succeeds. Remaining 5.5 audit work is deduplicated and
-timestamped scheduled summaries plus the change inbox.
+frontend build succeeds.
+
+**5.5.4 complete — Scheduled summaries.** The digest scheduler now produces
+local premarket, midday, post-market, and Friday weekly summaries. The API and
+AI Hub Digest card expose all four sessions, while every payload records its
+summary kind, cutoff, period window, and deterministic dedupe key. Durable
+slot checks prevent duplicate generation after restarts. The Weekly tab adds
+performance, win rate, net P&L, plan coverage, strongest/weakest symbols, and
+recurring review themes from the browser-local Trade Journal when entries are
+available, and labels that source as local/non-broker-synced. No external
+delivery was introduced. The remaining 5.5 audit item is the change inbox.
 
 **5.5.2 complete — Watchlist Intelligence.** The Watchlist page now performs
 one normal Scanner request, then requests a deterministic briefing endpoint
@@ -654,14 +663,48 @@ is present in `_MARKET_TOOL_ACTIONS` — so this exact class of "registered
 but unreachable" gap fails a test immediately for any future tool, instead
 of sitting undetected until a specific phrase happens to trigger the crash.
 
-Remaining: portfolio/risk dashboard assistant (5.6.2), options research
-assistant (5.6.3), Trade Journal coach (5.6.4), save/export workflows
-(5.6.5), and the configurable decision checklist (5.6.6). Audit must trace
-every numerical output to calculator results, verify missing-input
-clarification, preserve delayed options labels, and reproduce journal
-analytics from stored records. Options coverage must include calls, puts,
-defined-risk spreads, and IV percentile. Decision-checklist tests must
-distinguish completed, failed, unavailable, and skipped checks.
+**5.6.2 complete — Portfolio and Risk Dashboard assistant.**
+`assess_portfolio_risk` (`backend/ai/market_tools.py`) takes the same
+explicit browser-local position snapshot as `get_risk_dashboard` (required
+— never assumed) and explains concentration (top position, top-3 weight,
+top sector), sector exposure, stop-loss risk, volatility, pairwise
+correlation, and portfolio-level maximum drawdown, plus scenario results
+when price shocks are supplied. It reuses `get_risk_dashboard_tool` for
+exposure/sector/stop-risk and `scenario_analysis_tool` for the what-if
+shock results directly — neither is re-derived. Volatility, correlation,
+and drawdown are new: they need each held symbol's own price history,
+which (unlike the positions themselves) is not browser-local, so the tool
+fetches it itself via `get_bars_tool`, bounded to the 10 largest positions
+by weight to cap provider calls. Portfolio drawdown is computed from a
+synthetic equity curve (`Σ quantity_i × close_i(t)` across held symbols on
+shared trading days), not per-symbol — a real, if unlabeled, portfolio
+metric no existing tool produced. Optionally sizes one proposed new trade
+against the portfolio's risk capacity (calculator `position_size`, same as
+`build_trade_plan`) and, given `risk_limits` (max position/sector percent),
+refuses — never silently shrinks — a size that would breach one, returning
+`recommended_size: null` with the specific breach reason; without
+`risk_limits` it returns the computed size with an explicit note that no
+limit was checked. Missing entry/stop/account_value/risk_percent on the
+proposed trade also yields `recommended_size: null` with the specific
+missing field, matching this phase's "recommend no trade size when
+required inputs or risk limits are missing" rule directly. 6 focused tests
+cover the honest-unavailable path, concentration/sector/correlation/
+volatility/drawdown together (two symbols with identical price series,
+which makes correlation exactly 1.0 and drawdown exactly 0% — deterministic
+assertions, not approximate ones), both proposed-trade missing-input paths,
+an unconstrained sizing, and a max-position-limit breach. Registered as
+`assess_portfolio_risk` (read-only) and reachable from Chat via the same
+`_MARKET_TOOL_ACTIONS` / `ChatReplyResponse.action` wiring the 5.6.1 fix
+put in place.
+
+Remaining: options research assistant (5.6.3), Trade Journal coach (5.6.4),
+save/export workflows (5.6.5), and the configurable decision checklist
+(5.6.6). Audit must trace every numerical output to calculator results,
+verify missing-input clarification, preserve delayed options labels, and
+reproduce journal analytics from stored records. Options coverage must
+include calls, puts, defined-risk spreads, and IV percentile.
+Decision-checklist tests must distinguish completed, failed, unavailable,
+and skipped checks.
 
 ---
 

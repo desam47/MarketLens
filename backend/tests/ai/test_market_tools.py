@@ -15,7 +15,10 @@ from backend.ai.market_tools import (
     IndicatorRequest,
     MarketEventTimelineRequest,
     MoveAnalysisRequest,
+    PortfolioRiskLimits,
+    PortfolioRiskRequest,
     PositionInput,
+    ProposedTrade,
     RiskDashboardRequest,
     ScenarioRequest,
     SensitivityRequest,
@@ -27,6 +30,7 @@ from backend.ai.market_tools import (
     TradePlanRequest,
     TrendRequest,
     anomaly_analysis_tool,
+    assess_portfolio_risk_tool,
     assumption_tracking_tool,
     build_trade_plan_tool,
     compare_symbols_tool,
@@ -1070,3 +1074,119 @@ def test_session_stats_reports_unavailable_for_missing_session(monkeypatch) -> N
 
     assert result.available is False
     assert "after_hours" in result.reason
+
+
+def _monotonic_bars(closes: list[float]) -> list[dict]:
+    return [{"close": close, "volume": 1000} for close in closes]
+
+
+def test_portfolio_risk_reports_unavailable_without_positions() -> None:
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest())
+    assert result.available is False
+    assert "browser" in result.reason
+
+
+def test_portfolio_risk_explains_concentration_sector_correlation_volatility_drawdown(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    # Identical, strictly increasing series for both symbols: forces
+    # correlation == 1.0 exactly, equal volatility for both, and a
+    # zero-drawdown portfolio equity curve (never below a prior peak) --
+    # all cleanly assertable without approximate-equality fuzz.
+    closes = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="2026-09-22T16:00:00-04:00", bars=_monotonic_bars(closes)),
+    )
+    positions = [
+        PositionInput(symbol="AAPL", quantity=10, entry_price=90, current_price=115, sector="Technology"),
+        PositionInput(symbol="MSFT", quantity=10, entry_price=90, current_price=115, sector="Technology"),
+    ]
+
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest(positions=positions, lookback_days=20)).model_dump()
+
+    assert result["available"] is True
+    assert result["concentration"]["top_3_weight_percent"] == 100.0
+    assert result["sector_exposure"][0]["sector"] == "Technology"
+    assert result["volatility"]["AAPL"] == result["volatility"]["MSFT"]
+    assert result["volatility"]["AAPL"] > 0
+    assert len(result["correlation_matrix"]) == 1
+    assert result["correlation_matrix"][0]["correlation"] == 1.0
+    assert result["portfolio_drawdown"]["maximum_drawdown_percent"] == 0.0
+    assert result["scenario"]["symbol_count"] if "symbol_count" in result["scenario"] else True
+    assert "gross_exposure" in result
+
+
+def test_portfolio_risk_proposed_trade_requires_entry_and_stop(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="now", bars=_monotonic_bars([100, 101, 102, 103, 104])),
+    )
+    positions = [PositionInput(symbol="AAPL", quantity=10, entry_price=100, current_price=110)]
+
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest(
+        positions=positions,
+        proposed_trade=ProposedTrade(symbol="TSLA"),
+    )).model_dump()
+
+    assert result["proposed_trade"]["recommended_size"] is None
+    assert "entry_price" in result["proposed_trade"]["reason"]
+
+
+def test_portfolio_risk_proposed_trade_requires_sizing_inputs(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="now", bars=_monotonic_bars([100, 101, 102, 103, 104])),
+    )
+    positions = [PositionInput(symbol="AAPL", quantity=10, entry_price=100, current_price=110)]
+
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest(
+        positions=positions,
+        proposed_trade=ProposedTrade(symbol="TSLA", entry_price=200, stop_price=190),
+    )).model_dump()
+
+    assert result["proposed_trade"]["recommended_size"] is None
+    assert "account_value" in result["proposed_trade"]["reason"]
+
+
+def test_portfolio_risk_sizes_proposed_trade_without_limits(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="now", bars=_monotonic_bars([100, 101, 102, 103, 104])),
+    )
+    positions = [PositionInput(symbol="AAPL", quantity=10, entry_price=100, current_price=110)]
+
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest(
+        positions=positions,
+        proposed_trade=ProposedTrade(symbol="TSLA", entry_price=200, stop_price=190, account_value=50_000, risk_percent=2),
+    )).model_dump()
+
+    # risk_dollars = 50000 * 2% = 1000; shares = 1000 / 10 = 100
+    assert result["proposed_trade"]["recommended_size"] == 100
+    assert "No risk_limits" in result["proposed_trade"]["reason"]
+
+
+def test_portfolio_risk_refuses_size_that_breaches_max_position_limit(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(symbol=request.symbol, provider="test", source_timestamp="now", bars=_monotonic_bars([100, 101, 102, 103, 104])),
+    )
+    positions = [PositionInput(symbol="AAPL", quantity=10, entry_price=100, current_price=110)]
+
+    result = assess_portfolio_risk_tool(PortfolioRiskRequest(
+        positions=positions,
+        proposed_trade=ProposedTrade(symbol="TSLA", entry_price=200, stop_price=190, account_value=50_000, risk_percent=2),
+        risk_limits=PortfolioRiskLimits(max_position_percent=5),
+    )).model_dump()
+
+    assert result["proposed_trade"]["recommended_size"] is None
+    assert "max-position limit" in result["proposed_trade"]["reason"]
+    assert result["proposed_trade"]["computed_shares"] == 100

@@ -2513,6 +2513,7 @@ _MARKET_TOOL_ACTIONS = {
     "assumption_tracking",
     "import_csv",
     "build_trade_plan",
+    "assess_portfolio_risk",
 }
 
 

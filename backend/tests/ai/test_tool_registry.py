@@ -20,6 +20,7 @@ from backend.ai.tool_registry import (
 def test_default_registry_exposes_only_named_calculator() -> None:
     assert default_registry.names() == (
         "anomaly_analysis",
+        "assess_portfolio_risk",
         "assumption_tracking",
         "build_trade_plan",
         "calculate",
@@ -97,6 +98,37 @@ def test_default_registry_executes_build_trade_plan() -> None:
     )
     assert missing_stop.ok is False
     assert "stop_price" in (missing_stop.error or "")
+
+
+def test_default_registry_executes_assess_portfolio_risk(monkeypatch) -> None:
+    from backend.ai.market_tools import _Payload
+
+    monkeypatch.setattr(
+        "backend.ai.market_tools.get_bars_tool",
+        lambda request: _Payload(
+            symbol=request.symbol, provider="test", source_timestamp="now",
+            bars=[{"close": price, "volume": 1000} for price in (100, 101, 102, 103, 104)],
+        ),
+    )
+
+    no_positions = default_registry.execute(ToolRequest(tool_name="assess_portfolio_risk", arguments={}))
+    assert no_positions.ok is True
+    assert no_positions.data["available"] is False
+
+    result = default_registry.execute(
+        ToolRequest(
+            tool_name="assess_portfolio_risk",
+            arguments={
+                "positions": [
+                    {"symbol": "AAPL", "quantity": 10, "entry_price": 90, "current_price": 110, "sector": "Technology"},
+                ],
+            },
+        )
+    )
+    assert result.ok is True
+    assert result.data["available"] is True
+    assert result.data["concentration"]["top_position"]["symbol"] == "AAPL"
+    assert result.provider == "MarketLens calculator"
 
 
 def test_registry_rejects_unknown_tools_and_bad_arguments() -> None:
