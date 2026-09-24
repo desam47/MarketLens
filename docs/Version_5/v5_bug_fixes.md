@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 8: the four gaps fixed)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Nothing is pushed.
+**Last updated:** 2026-09-24 (batch 9: follow-ups, live checks, isolated e2e)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -48,23 +48,37 @@ code), so line numbers quoted in older notes or commits will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next:** nothing left in the tracker, and the four gaps are fixed
-(batch 8). What remains:
+**Next:** nothing left in the tracker; the gaps (batch 8) and the
+follow-ups (batch 9) are fixed. What remains:
 - **Push:** push `development` when you want it on `origin`.
-- **Check in the running app:** every fix was verified by automated tests
-  only; none has been tried in a browser. A short manual pass: press
-  Clear, then **Keep history**, and confirm nothing is deleted; send a
-  question and press **Cancel**, and confirm the reply still appears;
-  ask "TSLA max drawdown this year".
 - **Split `chat.py`:** the one open enhancement (see Enhancements). It is
-  a large refactor with no behaviour change, best done on its own.
-- **Optional follow-ups** from the entries above, none a bug today:
-  - `$10k` isn't read as 10,000 (BF-02).
-  - `BRK.B`-style tickers are unchecked against Yahoo (BF-14).
-  - A clarifying question shows as `failed` in the step trace (BF-16).
-  - The Playwright suite deletes every chat on the server it runs
-    against (see Gaps); pointing it at a separate test database would
-    fix that.
+  a large refactor with no behaviour change. It needs a decision first:
+  tests patch names on `backend.ai.chat` (`ai_manager`, `build_context`
+  and others), and code moved to another module stops seeing those
+  patches.
+- **STALE badge on daily closes:** new, found in the live check (see
+  BF-04's follow-ups).
+- **Full e2e run:** only group A (4 of 34 tests) was run on the isolated
+  servers.
+
+Done in batch 9:
+- **Checked in the running app** (headless Chromium via Playwright,
+  2026-09-24):
+  - Clear, then **Keep history**: the prompt showed, and the chat still
+    had its 2 stored messages.
+  - A question, then **Cancel**: the notice showed, the input stayed
+    usable, and the saved reply appeared 28 s later through the reply
+    poll, with no duplicate question.
+  - "TSLA max drawdown this year": −33.95%, VERIFIED (see BF-04).
+- **Follow-ups:** `$10k` account sizes (BF-02), class shares at Yahoo
+  (BF-14), and `needs_input` for question steps (BF-16).
+- **Isolated e2e:** `e2e/playwright.config.ts` now starts its own backend
+  on 5002 and frontend on 3002, and never reuses the dev servers. The
+  backend gets a fresh `.pytest_tmp/e2e/e2e.db`, migrated at startup,
+  with Redis off. That matters because the live RQ workers write to the
+  live database. It also gets its own log directory, and its CORS allows
+  only the test frontend. Group A passed 4/4 this way, and the live chat
+  kept 1 session and 6 messages.
 
 Housekeeping done:
 - **Phase audit counts (done 2026-09-24):** `phase_audit_v5.md` and
@@ -149,8 +163,10 @@ The example now gives entry 50, stop 48, account 10000, risk 1%.
 - `test_risk_reward_fallback_reads_labelled_inputs`
 
 **Follow-ups:**
-- A `k` suffix ("$10k account") is not parsed yet; that input is treated
-  as missing.
+- ~~A `k` suffix ("$10k account") is not parsed~~: fixed in batch 9. An
+  account size now reads a `k`/`m` suffix (`_account_value`); prices
+  don't, since "entry 10k" isn't realistic and a suffix there could
+  misread a word.
 - Inputs listed without labels ("entry, stop, target: 100, 95, 110") now
   get a clarifying question instead of a calculation.
 
@@ -291,12 +307,19 @@ Removing the route fails 3 tests; restoring the old reuse wording fails 1.
 - **Label mismatch:** "last week" / "last month" mean a trailing 7 or 30
   days, while "last year" means the previous calendar year. That matches
   common trader usage, and the reply shows the exact dates used.
-- **Timestamp convention:** bar dates are read from the timestamp's
-  first 10 characters, the same convention `get_session_stats` uses. A
-  provider that stamps daily bars at 00:00 UTC could shift a date by one;
-  this was not checked against live providers.
-- **Untested against live data:** the tool was not exercised against live
-  providers; all tests use patched bars.
+- **Timestamp convention (checked live, batch 9):** bar dates are read
+  from the timestamp's first 10 characters, the same convention
+  `get_session_stats` uses. Against Webull on 2026-09-24, "TSLA max
+  drawdown this year" used 2026-01-02 to 2026-09-23 (182 closes), the
+  right trading days, so no date shifted.
+- **Live data (checked, batch 9):** the same question in the running app
+  gave −33.95% ($451.67 on Jan 5 to $298.32 on Jul 29), marked VERIFIED.
+- **Evidence says STALE for an up-to-date close (new, open):** in that
+  reply the Evidence badge said STALE and the tool pill "124095s old".
+  Yesterday's close is the newest complete daily close, but its age is
+  counted from the daily bar's timestamp (midnight ET), so any
+  daily-close answer looks stale during the trading day. The age is also
+  shown in raw seconds.
 
 ### BF-05 — Positional argument misbinding in Chat router
 
@@ -766,10 +789,13 @@ form (`BRK-B` → `BRK.B`), matching `_NAME_TO_TICKER`'s `"berkshire":
 
 Two of the three fail on the old code.
 
-**Follow-up (unverified):** the providers pass the symbol through as
-given. Alpaca and Finnhub use `BRK.B`, but Yahoo expects `BRK-B`, so a
-Yahoo-only quote for a class share may still miss. This was not checked
-against live providers.
+**Follow-up (fixed in batch 9):** Yahoo did miss class shares. Asked
+live on 2026-09-24, its chart API answered `BRK.B` with "No data found"
+and `BRK-B` with a price. The Yahoo provider now asks for the dash form
+(`_yahoo_symbol` in `yfinance_provider.py`) and still returns `BRK.B`.
+Only the one-letter class form is translated, so exchange suffixes like
+`SHOP.TO` pass through. Tests: `test_class_shares_are_asked_for_in_yahoo_form_and_returned_in_app_form`
+and `TestYahooSymbolForm` in `backend/tests/market_data/test_yfinance_provider.py`.
 
 ### BF-15 — Add-to-watchlist creates a new list for a mistyped or differently-cased name
 
@@ -844,10 +870,15 @@ create the alert while the add was still waiting for an answer.
 
 Both fail with their stop removed.
 
-**Follow-up:** a clarification step shows as `failed` in the step trace
-(⚠). A distinct `needs_input` status would read better, but the handlers'
-`(text, grounded)` return can't tell a question from a failure without a
-wider change.
+**Follow-up (fixed in batch 9):** a clarification step used to show as
+`failed` (⚠). An ungrounded step whose reply ends in a question now
+records `needs_input` (`_asks_for_input`) and shows "?"
+(`stepIcon` in `ChatPanel.tsx`). The handlers' `(text, grounded)` return
+is unchanged: a question is recognised by its "?", which only affects
+the label, since the chain already stops on any ungrounded step. Tests:
+the two BF-16 chain tests now check the status, plus
+`test_a_step_that_failed_without_a_question_stays_failed` and
+`stepIcon (BF-16 follow-up)`.
 
 ### BF-17 — `_SHARES_RE` slice leaves a literal `s*`
 
@@ -957,9 +988,9 @@ All four were fixed on 2026-09-24 in batch 8.
   **Delete history**. `DELETE /api/ai/chat/sessions` with no filter now
   returns 400; wiping every chat takes an explicit `?all=true`. The
   Playwright helper `clearSessions` (`e2e/tests/chat.spec.ts`) was the
-  only bare caller and now passes `?all=true`. Note that this helper
-  deletes every chat on the dev server it runs against, before each e2e
-  test.
+  only bare caller and now passes `?all=true`. Since batch 9 the e2e
+  suite runs against its own servers (see Next), so that helper no longer
+  touches real history.
 - ~~**Blocking query in notebook save**~~ (fixed): the lookup of the
   question to save, the one query in `save_notebook_item` that ran on the
   event loop, now runs through `asyncio.to_thread` like the others.
@@ -1004,6 +1035,24 @@ All four were fixed on 2026-09-24 in batch 8.
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 9 (2026-09-24): follow-ups, live checks, isolated e2e
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai` | 1,027 passed, before the BF-16 test additions |
+| `test_chat_calculation.py`, `test_chat_actions.py` | pass, including the new suffix and `needs_input` tests |
+| `backend/tests/market_data/test_yfinance_provider.py` | 25 passed (2 new; 1 updated) |
+| `frontend/src/components/ChatPanel.test.tsx` | 61 passed (1 new) |
+| `tsc --noEmit` | 0 errors |
+| e2e group A on the isolated servers | 4 passed; live chat unchanged |
+
+**Mutation check:** removing each fix fails its tests:
+- suffix scaling fails 1;
+- the Yahoo translation fails 2;
+- the `needs_input` rule fails 3.
+
+Neither full suite was run.
 
 ### Batch 8 (2026-09-24): the four gaps
 
@@ -1155,13 +1204,14 @@ The full backend suite was not run.
 - **Batch 6:** commit `7aab462`, `fix(chat): one reply path for both transports; finish turns after disconnect`, on `development`.
 - **Batch 7:** commit `2728f43`, `feat(chat): cancel and time out streamed replies without resending`, on `development`.
 - **Docs:** commit `12420e5`, `docs(v5): correct tool and action counts; record housekeeping`, and commit `52af7dc`, `docs(v5): update BF-12 follow-up for alert-chat polling`, on `development`.
-- **Batch 8 (gaps):** commit `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
+- **Batch 8 (gaps):** commit `58abaf1`, `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
+- **Batch 9 (follow-ups):** commit `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | BF-01 | ✅ COMPLETE | batch 1 | `backend/ai/chat.py` | `test_chat_actions.py::TestConfirmationAffirmation` | `_AFFIRM_INTENT` matches only a whole-message affirmation. |
 | 2026-09-24 | BF-02 | ✅ COMPLETE | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (3 tests) | Labelled-field parsing; new `_RISK_PERCENT_RE`, `_ACCOUNT_BEFORE_RE`. |
-| 2026-09-24 | BF-03 | ⚠️ PARTIAL (completed in batch 5) | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (2 tests) | New `_CALC_DATE_RE`; the fallback steps aside when a date is present. |
+| 2026-09-24 | BF-03 | ✅ COMPLETE (finished in batch 5) | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (2 tests) | New `_CALC_DATE_RE`; the fallback steps aside when a date is present. |
 | 2026-09-24 | BF-05 | ✅ COMPLETE | batch 1 | `backend/api/ai/chat_router.py`, `backend/tests/api/test_chat_router.py` | `test_scope_without_mode_is_not_passed_as_chart_state` + 6 updated assertions | Keyword arguments via `_turn_kwargs`. |
 | 2026-09-24 | BF-12 | ✅ COMPLETE | batch 1 | `frontend/src/components/ChatPanel.tsx`, `ChatPanel.test.tsx` | `mergePolledMessages (BF-12)` (3 tests) | Poll swaps the server user row into the optimistic message. |
 | 2026-09-24 | BF-06 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestEndToEnd` (3 tests) | `_confirm_pending_action` runs before routing, the model and the AI-off fallback. |
@@ -1178,8 +1228,9 @@ The full backend suite was not run.
 | 2026-09-24 | BF-04 | ✅ COMPLETE | batch 5 | `backend/ai/market_tools.py`, `backend/ai/price_metric_intent.py` (new), `backend/ai/calculator.py`, `backend/ai/tool_registry.py`, `backend/ai/chat.py`, `backend/ai/prompt.py`, `backend/tests/ai/test_price_statistics.py` (new), `backend/tests/ai/test_tool_registry.py` | 37 tests | New `get_price_statistics` tool and parser; `return_correlation`; explicit reuse wording. |
 | 2026-09-24 | BF-03 | ✅ COMPLETE | batch 5 | (via BF-04) | `test_chat_routes_metric_questions_to_the_tool` | Date-range return questions now get a verified answer. |
 | 2026-09-24 | BF-09 | ✅ COMPLETE | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` (new), `backend/tests/ai/test_chat_intents.py` | 7 tests | One generator, `_reply_events`, for both transports. |
-| 2026-09-24 | BF-08 | ⚠️ PARTIAL (completed in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | No streamed text for action-like requests or once an action appears; frontend draft marking remains. |
-| 2026-09-24 | BF-13 | ⚠️ PARTIAL (completed in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | Turns finish after a disconnect; the user row is saved last. Frontend timeout/Cancel remains. |
+| 2026-09-24 | BF-08 | ✅ COMPLETE (finished in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | No streamed text for action-like requests or once an action appears; frontend draft marking remains. |
+| 2026-09-24 | BF-13 | ✅ COMPLETE (finished in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | Turns finish after a disconnect; the user row is saved last. Frontend timeout/Cancel remains. |
 | 2026-09-24 | BF-13 | ✅ COMPLETE | batch 7 | `frontend/src/services/api.ts`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.test.ts`, `frontend/src/components/ChatPanel.test.tsx` | 12 tests | Idle timeout; Cancel; cancel on session switch/unmount; no resend; the saved reply is fetched instead. |
 | 2026-09-24 | BF-08 | ✅ COMPLETE | batch 7 | (no code; see entry) | existing draft-label test | The draft label already existed (`f24b4cf`); with batch 6's gating nothing remained. |
 | 2026-09-24 | Gaps | ✅ FIXED | batch 8 | `backend/api/ai/chat_router.py`, `frontend/src/components/ChatPanel.tsx`, `e2e/tests/chat.spec.ts`, two test files (lint), plus tests | 5 new, 2 updated | Clear confirms first; a bare `DELETE /sessions` is refused (`?all=true` wipes all); notebook save fully off the event loop and type-checks symbol lists; 3 `ruff` errors fixed. |
+| 2026-09-24 | Follow-ups | ✅ FIXED | batch 9 | `backend/ai/chat.py`, `backend/market_data/providers/yfinance_provider.py`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.ts`, `frontend/src/styles/App.css`, `e2e/playwright.config.ts`, `e2e/tests/chat.spec.ts`, plus tests | 6 new, 3 updated | `$10k` account sizes; `BRK.B` at Yahoo; `needs_input` step status; isolated e2e servers; live checks in the running app. |

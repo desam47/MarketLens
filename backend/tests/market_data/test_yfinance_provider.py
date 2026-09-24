@@ -472,10 +472,18 @@ class TestBatchQuotesAuth(unittest.TestCase):
         self.assertEqual(self.quote_calls, [], "must not call the quote endpoint without a crumb")
 
     def test_special_symbols_are_passed_via_params_not_string_concatenation(self):
-        self.provider.get_batch_quotes(["^VIX", "BRK-B", "BRK.B"])
+        self.provider.get_batch_quotes(["^VIX", "BRK-B", "SHOP.TO"])
         url, kwargs = self.quote_calls[0]
         self.assertNotIn("?", url)
-        self.assertEqual(kwargs["params"]["symbols"], "^VIX,BRK-B,BRK.B")
+        self.assertEqual(kwargs["params"]["symbols"], "^VIX,BRK-B,SHOP.TO")
+
+    def test_class_shares_are_asked_for_in_yahoo_form_and_returned_in_app_form(self):
+        """BF-14 follow-up: Yahoo answers "BRK.B" with "No data found"."""
+        out = self.provider.get_batch_quotes(["BRK.B", "AAPL"])
+        _, kwargs = self.quote_calls[0]
+        self.assertEqual(kwargs["params"]["symbols"], "BRK-B,AAPL")
+        self.assertEqual(out["BRK.B"].symbol, "BRK.B")
+        self.assertEqual(out["BRK.B"].data_status, DataStatus.DELAYED)
 
     def test_a_symbol_missing_from_the_response_becomes_an_error_quote(self):
         self.cr.get.side_effect = lambda url, **k: _resp(200, _quote_body("AAPL"))
@@ -503,3 +511,27 @@ class TestBatchQuotesAuth(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestYahooSymbolForm(unittest.TestCase):
+    def test_chart_requests_use_the_dash_form_for_class_shares_only(self):
+        from backend.market_data.providers import yfinance_provider as mod
+
+        urls = []
+
+        def get(url, **kwargs):
+            urls.append(url)
+            return _resp(200, {"chart": {"result": [{"meta": {"regularMarketPrice": 500.0}}]}})
+
+        with patch(f"{_MOD}.curl_requests") as cr:
+            cr.get.side_effect = get
+            quote = YFinanceProvider().get_quote("BRK.B")
+            YFinanceProvider().get_quote("SHOP.TO")
+
+        self.assertIn("/chart/BRK-B?", urls[0])
+        self.assertIn("/chart/SHOP.TO?", urls[1])
+        self.assertEqual(quote.symbol, "BRK.B")
+        self.assertEqual(
+            [mod._yahoo_symbol(s) for s in ("brk.b", "BF.A", "AAPL", "^VIX", "SHOP.TO", "RDS.AB")],
+            ["BRK-B", "BF-A", "AAPL", "^VIX", "SHOP.TO", "RDS.AB"],
+        )

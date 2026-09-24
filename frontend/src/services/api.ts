@@ -3242,7 +3242,7 @@ export interface ChatMessage {
     model?: string;
     kind?: 'tool' | 'step' | string;
     step?: number;
-    status?: 'running' | 'completed' | 'failed' | 'reused' | 'stopped' | string;
+    status?: 'running' | 'completed' | 'failed' | 'reused' | 'stopped' | 'needs_input' | 'needs_confirmation' | string;
     duration_ms?: number;
     attempt?: number;
     failure_kind?: string;

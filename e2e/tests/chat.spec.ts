@@ -1,7 +1,9 @@
 /**
  * Chat E2E test suite — exercises the full Chat panel in the browser.
  *
- * Prerequisites: dev server running on localhost:3000 / API on localhost:5001.
+ * Runs against its own servers (see playwright.config.ts): a backend on
+ * localhost:5002 with a fresh database and a frontend on localhost:3002.
+ * The dev servers on 3000/5001 and their data are never touched.
  *
  * Test groups:
  *   A. Navigation & session bootstrap
@@ -15,12 +17,13 @@
  */
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
+import { E2E_API_PORT } from '../playwright.config';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/** Delete all chat sessions so each test starts with a clean slate. */
+/** Delete all chat sessions in the e2e database so each test starts clean. */
 async function clearSessions() {
-  await fetch('http://localhost:5001/api/ai/chat/sessions?all=true', { method: 'DELETE' })
+  await fetch(`http://127.0.0.1:${E2E_API_PORT}/api/ai/chat/sessions?all=true`, { method: 'DELETE' })
     .catch(() => { /* ignore — server may be briefly unavailable */ });
 }
 

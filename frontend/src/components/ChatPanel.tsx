@@ -67,6 +67,18 @@ const AWAIT_REPLY_POLL_MS = 4000;
 const AWAIT_REPLY_TIMEOUT_MS = 120000;
 
 /** Whether ``fresh`` holds a reply to the latest user message ``content``. */
+/** Icon for a Chat step status; a step waiting on the trader is a question, not a failure. */
+export function stepIcon(status?: string): string {
+  switch (status) {
+    case 'completed': return '✓';
+    case 'reused': return '↻';
+    case 'failed': return '⚠';
+    case 'needs_input':
+    case 'needs_confirmation': return '?';
+    default: return '•';
+  }
+}
+
 export function replyArrived(fresh: ChatMessage[], content: string): boolean {
   const userIndex = fresh.map(m => m.role === 'user' && m.content === content).lastIndexOf(true);
   return userIndex !== -1 && fresh.slice(userIndex + 1).some(m => m.role === 'assistant');
@@ -1002,7 +1014,7 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
             {actions.map((action: any, index: number) => {
               const detailText = describeActionDetail(action.tool, action.detail);
               return <span key={`${action.tool ?? 'action'}-${index}`}>
-                {action.status === 'completed' ? '✓' : action.status === 'failed' ? '⚠' : '•'} {action.tool ?? 'action'}{detailText ? `: ${detailText}` : ''} · {action.status ?? 'unknown'}
+                {stepIcon(action.status)} {action.tool ?? 'action'}{detailText ? `: ${detailText}` : ''} · {action.status ?? 'unknown'}
               </span>;
             })}
           </div>;
@@ -1608,7 +1620,7 @@ function ToolTraceRow({ message }: { message: ChatMessage }) {
         }
         if (item.kind === 'step') {
           const status = item.status ?? 'completed';
-          const icon = status === 'completed' ? '✓' : status === 'reused' ? '↻' : status === 'failed' ? '⚠' : '•';
+          const icon = stepIcon(status);
           return <span className={`chat-tool-pill step-${status}`} key={`step-${item.step ?? index}`} title={item.reason ?? ''}>
             {icon} Step {item.step ?? index + 1}: {item.tool} · {status}
             </span>;

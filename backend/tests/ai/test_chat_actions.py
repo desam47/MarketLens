@@ -492,6 +492,9 @@ class TestRunTurnActions(_DBBase):
         self.assertFalse(grounded)
         mock_ai.complete.assert_not_called()
         self.assertEqual(AlertRepository(self.db).get_all(), [])
+        # The step waits on the trader; it did not fail.
+        steps = [item for item in trace if item.get("kind") == "step"]
+        self.assertEqual([step["status"] for step in steps], ["needs_input"])
 
     def test_chain_stops_after_a_later_step_that_asked_a_question(self):
         repo = WatchlistRepository(self.db)
@@ -502,15 +505,25 @@ class TestRunTurnActions(_DBBase):
             '"action_condition_type": "price_above", "action_parameter": "200"}',
         )
         parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+        trace: list[dict] = []
 
         text, grounded, _ = _run_turn_actions(
             self.db, parsed, [], [], None, [],
             "create a watchlist called Tech and add NVDA to it, then alert me above 200", None,
+            trace=trace,
         )
 
         self.assertIn("which one", text.lower())
         self.assertEqual(mock_ai.complete.call_count, 1)
         self.assertEqual(AlertRepository(self.db).get_all(), [])
+        steps = [item for item in trace if item.get("kind") == "step"]
+        self.assertEqual([step["status"] for step in steps], ["completed", "needs_input"])
+
+    def test_a_step_that_failed_without_a_question_stays_failed(self):
+        from backend.ai.chat import _asks_for_input
+
+        self.assertTrue(_asks_for_input("Which one should I add it to? "))
+        self.assertFalse(_asks_for_input("I couldn't reach the alert service."))
 
     def test_continuation_call_uses_the_lean_system_prompt(self):
         # 2026-09-16 optimization: a chained continuation call must use

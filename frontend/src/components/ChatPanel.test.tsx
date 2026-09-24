@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import { ChatPanel, mergePolledMessages, replyArrived } from './ChatPanel';
+import { ChatPanel, mergePolledMessages, replyArrived, stepIcon } from './ChatPanel';
 import api from '../services/api';
 
 jest.mock('../services/api', () => ({
@@ -1278,5 +1278,17 @@ describe('replyArrived', () => {
     // An earlier answer to the same question doesn't count.
     expect(replyArrived([row(1, 'user', 'q'), row(2, 'assistant', 'a'), row(3, 'user', 'q')], 'q')).toBe(false);
     expect(replyArrived([row(1, 'assistant', 'a')], 'q')).toBe(false);
+  });
+});
+
+describe('stepIcon (BF-16 follow-up)', () => {
+  it('shows a step waiting on the trader as a question, not a failure', () => {
+    expect(stepIcon('needs_input')).toBe('?');
+    expect(stepIcon('needs_confirmation')).toBe('?');
+    expect(stepIcon('failed')).toBe('⚠');
+    expect(stepIcon('completed')).toBe('✓');
+    expect(stepIcon('reused')).toBe('↻');
+    expect(stepIcon('stopped')).toBe('•');
+    expect(stepIcon(undefined)).toBe('•');
   });
 });

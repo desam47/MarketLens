@@ -15,6 +15,7 @@ real browser (Chrome 120), bypassing the anti-bot protection.
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from datetime import UTC, datetime
@@ -35,6 +36,14 @@ from ..provider import BaseMarketDataProvider, safe_json
 logger = logging.getLogger(__name__)
 
 _CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+# Class shares are "BRK.B" in the app (and at Alpaca/Finnhub) but "BRK-B" at
+# Yahoo, which answers "BRK.B" with "No data found". Only the one-letter class
+# form is translated, so exchange suffixes like "SHOP.TO" pass through.
+_CLASS_SHARE_RE = re.compile(r"^([A-Z]{1,5})\.([A-Z])$")
+
+
+def _yahoo_symbol(symbol: str) -> str:
+    return _CLASS_SHARE_RE.sub(r"\1-\2", symbol.upper())
 # Yahoo's v7 batch-quote endpoint rejects anonymous calls with HTTP 401 ("User is unable
 # to access this feature"): it needs a session cookie plus a "crumb" token. The cookie
 # comes from fc.yahoo.com (which answers 404 but sets it), the crumb from getcrumb.
@@ -115,7 +124,7 @@ class YFinanceProvider(BaseMarketDataProvider):
             r = curl_requests.get(
                 _QUOTE_URL,
                 # ``params`` so symbols like ^VIX / BRK-B are URL-encoded correctly.
-                params={"symbols": ",".join(symbols), "crumb": crumb},
+                params={"symbols": ",".join(_yahoo_symbol(s) for s in symbols), "crumb": crumb},
                 cookies=cookies,
                 impersonate="chrome120",
                 timeout=15,
@@ -127,7 +136,7 @@ class YFinanceProvider(BaseMarketDataProvider):
 
     # ---------------------------------------------------------------- helpers
     def _fetch_chart(self, symbol: str, interval: str, range_: str) -> dict:
-        url = f"{_CHART_URL.format(symbol=symbol)}?interval={interval}&range={range_}&includePrePost=false&events=div%2Csplits"
+        url = f"{_CHART_URL.format(symbol=_yahoo_symbol(symbol))}?interval={interval}&range={range_}&includePrePost=false&events=div%2Csplits"
         r = curl_requests.get(
             url,
             impersonate="chrome120",
@@ -425,8 +434,8 @@ class YFinanceProvider(BaseMarketDataProvider):
             results = {}
             for symbol in symbols:
                 symbol_upper = symbol.upper()
-                if symbol_upper in quote_map:
-                    item = quote_map[symbol_upper]
+                if _yahoo_symbol(symbol_upper) in quote_map:
+                    item = quote_map[_yahoo_symbol(symbol_upper)]
                     # Build Quote object
                     quote = Quote(
                         symbol=symbol_upper,

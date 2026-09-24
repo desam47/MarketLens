@@ -601,12 +601,19 @@ _AT_PRICE_RE = re.compile(r"\bat\s*" + _NUM, re.I)
 _NOT_ENTRY_BEFORE_AT = re.compile(r"\b(?:stop|stop[- ]?loss|target|take[- ]profit|account|portfolio)\W*$", re.I)
 _STOP_RE = re.compile(r"\bstop(?:[- ]?loss)?\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
 _TARGET_RE = re.compile(r"\b(?:target|take[- ]profit)\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
-_ACCOUNT_RE = re.compile(r"\b(?:account|portfolio)\s*(?:value|size|balance)?\s*(?:of|is|=|:)?\s*" + _NUM, re.I)
+# An account size may carry a k/m suffix ("$10k", "1.5m"); prices never do.
+_AMOUNT_SUFFIX = r"(?:([km])\b)?"
+_ACCOUNT_RE = re.compile(
+    r"\b(?:account|portfolio)\s*(?:value|size|balance)?\s*(?:of|is|=|:)?\s*" + _NUM + _AMOUNT_SUFFIX, re.I
+)
 # "my $10,000 account" — the value before the label. Only consulted when
 # the label-first form above finds nothing.
 _ACCOUNT_BEFORE_RE = re.compile(
-    r"(?<![\d.,%])\$?([0-9](?:[0-9,]*[0-9])?(?:\.\d+)?)\s+(?:dollar\s+)?(?:account|portfolio)\b", re.I
+    r"(?<![\d.,%])\$?([0-9](?:[0-9,]*[0-9])?(?:\.\d+)?)" + _AMOUNT_SUFFIX
+    + r"\s+(?:dollar\s+)?(?:account|portfolio)\b",
+    re.I,
 )
+_SUFFIX_SCALE = {"k": 1_000, "m": 1_000_000}
 _RISK_PERCENT_RE = re.compile(
     r"\brisk(?:ing)?\s*(?:percent(?:age)?)?\s*(?:of|is|=|:)?\s*([0-9]+(?:\.\d+)?)\s*%"
     r"|\b([0-9]+(?:\.\d+)?)\s*%\s*(?:risk|of (?:my |the )?(?:account|portfolio))\b",
@@ -637,6 +644,17 @@ def _labelled_number(pattern: re.Pattern, text: str) -> float | None:
     return float(raw.replace(",", "")) if raw else None
 
 
+def _account_value(user_content: str) -> float | None:
+    """"account 25000", "$10k account", "portfolio of 1.5m"."""
+    for pattern in (_ACCOUNT_RE, _ACCOUNT_BEFORE_RE):
+        match = pattern.search(user_content)
+        if match:
+            value = float(match.group(1).replace(",", "")) * _SUFFIX_SCALE.get((match.group(2) or "").lower(), 1)
+            if value:
+                return value
+    return None
+
+
 def _entry_price(user_content: str) -> float | None:
     """"entry 220" or the first "at 220" that is not "stop at"/"target at"."""
     labelled = _labelled_number(_ENTRY_RE, user_content)
@@ -655,8 +673,7 @@ def _position_risk_fields(user_content: str) -> dict[str, float]:
         "entry_price": _entry_price(user_content),
         "stop_price": _labelled_number(_STOP_RE, user_content),
         "target_price": _labelled_number(_TARGET_RE, user_content),
-        "account_value": _labelled_number(_ACCOUNT_RE, user_content)
-        or _labelled_number(_ACCOUNT_BEFORE_RE, user_content),
+        "account_value": _account_value(user_content),
     }
     return {key: value for key, value in fields.items() if value is not None and value > 0}
 
@@ -3672,6 +3689,13 @@ def _trace_is_action_only(trace: list[dict]) -> bool:
     )
 
 
+def _asks_for_input(text: str) -> bool:
+    """An ungrounded step reply that ends in a question is waiting on the
+    trader ("which watchlist?"), not a failure. Only the trace label uses
+    this; the chain already stops on any ungrounded step."""
+    return text.rstrip().endswith("?")
+
+
 def _run_turn_actions(
     db,
     parsed,
@@ -3724,6 +3748,8 @@ def _run_turn_actions(
                     if executed and grounded
                     else "needs_confirmation"
                     if parsed.action in _DESTRUCTIVE_ACTIONS and not executed
+                    else "needs_input"
+                    if _asks_for_input(text)
                     else "failed"
                 ),
                 "tool": parsed.action,
@@ -3915,7 +3941,13 @@ def _run_turn_actions(
                 {
                     "kind": "step",
                     "step": len(texts),
-                    "status": "completed" if step_grounded else "failed",
+                    "status": (
+                        "completed"
+                        if step_grounded
+                        else "needs_input"
+                        if _asks_for_input(step_text)
+                        else "failed"
+                    ),
                     "tool": next_parsed.action,
                     "depends_on": [len(texts) - 1],
                     "detail": _action_step_detail(next_parsed),

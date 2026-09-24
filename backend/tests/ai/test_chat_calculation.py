@@ -226,3 +226,17 @@ def test_plain_percent_change_still_uses_the_fallback() -> None:
 
     assert request is not None
     assert (request.calculation, request.old_value, request.new_value) == ("percentage_change", 50, 60)
+
+
+def test_account_size_accepts_k_and_m_suffixes() -> None:
+    """BF-02 follow-up: "$10k account" was read as no account value."""
+    from backend.ai.chat import _account_value, _fallback_calculation
+
+    request = _fallback_calculation("position size: risk 1% of my $10k account, entry 50 stop 48")
+    assert request is not None
+    assert (request.calculation, request.account_value) == ("position_size", 10_000)
+    assert _account_value("account size 1.5m") == 1_500_000
+    assert _account_value("portfolio of 25K, entry 10") == 25_000
+    assert _account_value("my 10000 account") == 10_000
+    # A word that starts with k/m isn't a suffix.
+    assert _account_value("account 10 more shares") == 10
