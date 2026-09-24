@@ -37,9 +37,12 @@ from ...ai import (
     UncertaintyResponse,
     ai_manager,
 )
-from ...ai.analyze import analyze_symbol, analyze_symbol_stream
+from ...ai.analyze import _plan_validation, analyze_symbol, analyze_symbol_stream
+from ...ai.context import InsufficientDataError, build_context
 from ...ai.prompt import TradePlan
 from ...ai.tool_registry import ToolRequest, ToolResult, default_registry
+from ...ai.trade_plan_tracker import record_confirmed_trade_plan
+from ...config.settings import settings
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
 from ..rate_limit import _ai_limiter, check_rate_limit
@@ -105,6 +108,7 @@ class ConfigResponse(BaseModel):
     max_tokens: float
     temperature: float
     api_key_set: bool
+    trade_plan_tracking_enabled: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -158,6 +162,21 @@ class AnalyzeResponse(BaseModel):
     market_session: str = "unknown"
     cache_status: str = "fresh"
     trade_plan_validation: dict[str, Any] = Field(default_factory=dict)
+
+
+class TrackTradePlanRequest(BaseModel):
+    """The exact setup the trader saw and explicitly approved for tracking."""
+
+    symbol: str = Field(..., min_length=1, max_length=10)
+    timeframe: str = Field(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$")
+    trade_plan: TradePlan
+
+
+class TrackTradePlanResponse(BaseModel):
+    tracked: bool
+    duplicate: bool = False
+    outcome_id: int | None = None
+    validation: dict[str, Any] = Field(default_factory=dict)
 
 
 # --- Endpoints -----------------------------------------------------
@@ -438,6 +457,7 @@ async def ai_status() -> list[ProviderStatusResponse]:
 async def ai_config() -> ConfigResponse:
     """Return the frontend-safe AI configuration (no API key)."""
     cfg = ai_manager.safe_config()
+    cfg["trade_plan_tracking_enabled"] = settings.ai_trade_plan_tracking.enabled
     return ConfigResponse(**cfg)
 
 
@@ -457,4 +477,61 @@ async def update_ai_config(body: ConfigUpdateRequest) -> ConfigResponse:
     if body.enabled is not None:
         await asyncio.to_thread(ai_manager.set_enabled, body.enabled)
     cfg = ai_manager.safe_config()
+    cfg["trade_plan_tracking_enabled"] = settings.ai_trade_plan_tracking.enabled
     return ConfigResponse(**cfg)
+
+
+@router.post(
+    "/track-trade-plan",
+    response_model=TrackTradePlanResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def track_trade_plan(
+    request: TrackTradePlanRequest,
+    _rl: None = Depends(check_rate_limit(_ai_limiter)),
+) -> TrackTradePlanResponse:
+    """Track one explicitly confirmed, freshly validated actionable setup."""
+    if not settings.ai_trade_plan_tracking.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Trade-plan tracking is disabled in this environment.",
+        )
+
+    symbol = request.symbol.upper()
+    try:
+        ctx = await asyncio.to_thread(build_context, symbol, request.timeframe)
+    except InsufficientDataError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Current market data is insufficient to revalidate this setup.",
+        ) from None
+    except Exception:
+        logger.exception("trade-plan revalidation failed for %s", symbol)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Current market data is unavailable to revalidate this setup.",
+        ) from None
+
+    validation = _plan_validation(ctx, request.trade_plan)
+    if validation.get("status") != "verified":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=validation.get("reason") or "This setup is no longer validated.",
+        )
+
+    row, duplicate = await asyncio.to_thread(
+        record_confirmed_trade_plan,
+        symbol,
+        request.trade_plan,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Trade-plan tracking is disabled in this environment.",
+        )
+    return TrackTradePlanResponse(
+        tracked=True,
+        duplicate=duplicate,
+        outcome_id=row.id,
+        validation=validation,
+    )

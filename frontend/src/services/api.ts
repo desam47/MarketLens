@@ -923,6 +923,14 @@ export interface AIConfig {
   max_tokens: number;
   temperature: number;
   api_key_set: boolean;
+  trade_plan_tracking_enabled?: boolean;
+}
+
+export interface TrackTradePlanResponse {
+  tracked: boolean;
+  duplicate: boolean;
+  outcome_id: number | null;
+  validation: Record<string, unknown>;
 }
 
 export interface AIProviderStatus {
@@ -2343,6 +2351,19 @@ class ApiService {
             { method: 'POST', signal: options?.signal },
             AI_TIMEOUT_MS,
         );
+    }
+
+    async trackTradePlan(
+        symbol: string,
+        timeframe: string,
+        tradePlan: TradePlan,
+        signal?: AbortSignal,
+    ): Promise<TrackTradePlanResponse> {
+        return this.fetch<TrackTradePlanResponse>('/ai/track-trade-plan', {
+            method: 'POST',
+            body: JSON.stringify({ symbol, timeframe, trade_plan: tradePlan }),
+            signal,
+        }, AI_TIMEOUT_MS);
     }
 
   // Phase 16: AI provider config

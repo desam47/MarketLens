@@ -23,6 +23,7 @@ jest.mock('../services/api', () => ({
         cancelAIJob: jest.fn(),
         setAIEnabled: jest.fn(),
         getAIStatus: jest.fn(),
+        trackTradePlan: jest.fn(),
     },
 }));
 
@@ -34,6 +35,7 @@ const mockApi = api as unknown as {
     cancelAIJob: jest.Mock;
     setAIEnabled: jest.Mock;
     getAIStatus: jest.Mock;
+    trackTradePlan: jest.Mock;
 };
 
 interface AIAnalysisResult {
@@ -91,7 +93,7 @@ function makeResult(overrides: Partial<AIAnalysisResult> = {}): AIAnalysisResult
     };
 }
 
-function setConfig(enabled = true) {
+function setConfig(enabled = true, tracking = false) {
     mockApi.getAIConfig.mockResolvedValue({
         enabled,
         provider: 'ollama',
@@ -99,9 +101,17 @@ function setConfig(enabled = true) {
         model: 'llama3.2',
         base_url: 'http://localhost:11434/v1',
         api_key_set: false,
+        trade_plan_tracking_enabled: tracking,
         structured_output: true,
         max_tokens: 1000,
         temperature: 0.3,
+    });
+}
+
+async function runManualAnalysis() {
+    const button = await screen.findByRole('button', { name: /Analyze$/ });
+    await act(async () => {
+        button.click();
     });
 }
 
@@ -120,6 +130,8 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        expect(mockApi.analyzeSymbol).not.toHaveBeenCalled();
+        await runManualAnalysis();
         await waitFor(() => {
             expect(mockApi.analyzeSymbol).toHaveBeenCalledWith(
                 'AAPL',
@@ -138,6 +150,7 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        await runManualAnalysis();
         await waitFor(() => {
             expect(screen.getByText('+3.2%')).toHaveClass('chat-num-pos');
         });
@@ -156,6 +169,7 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        await runManualAnalysis();
         await waitFor(() => {
             expect(screen.getByText(/gpt-4o-mini/i)).toBeInTheDocument();
         });
@@ -171,6 +185,7 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        await runManualAnalysis();
         expect(await screen.findByText('Market-data evidence')).toBeInTheDocument();
         expect(screen.getByText('Cached analysis')).toBeInTheDocument();
         expect(screen.getByText(/Price \$201.25/)).toBeInTheDocument();
@@ -204,6 +219,7 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        await runManualAnalysis();
         expect(await screen.findByText('Track record')).toBeInTheDocument();
         expect(screen.getByText(/7 resolved calls · 71% win rate/)).toBeInTheDocument();
         expect(screen.getByText(/6 wins · 2 losses · 1 open · 0 expired/)).toBeInTheDocument();
@@ -225,8 +241,46 @@ describe('AIAnalysisPanel', () => {
         await act(async () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
+        await runManualAnalysis();
         expect(await screen.findByText('No validated trade setup.')).toBeInTheDocument();
         expect(screen.getByText(/Market data is stale/)).toBeInTheDocument();
+    });
+
+    it('requires confirmation before tracking a validated setup', async () => {
+        setConfig(true, true);
+        const plan = {
+            recommendation: 'buy',
+            conviction: 'high',
+            time_horizon: 'swing',
+            entry_zone_low: 100,
+            entry_zone_high: 102,
+            stop_loss: 96,
+            targets: [108],
+            risk_reward: 1.5,
+            thesis: 'Buy the pullback.',
+            invalidation: 'Close below support.',
+        };
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            trade_plan: plan,
+            trade_plan_validation: { status: 'verified', quote_price: 101 },
+        }));
+        mockApi.trackTradePlan.mockResolvedValue({
+            tracked: true,
+            duplicate: false,
+            outcome_id: 42,
+            validation: { status: 'verified' },
+        });
+        jest.spyOn(window, 'confirm').mockReturnValue(true);
+        render(<AIAnalysisPanel symbol="AAPL" />);
+        await runManualAnalysis();
+
+        const trackButton = await screen.findByRole('button', { name: /track this setup/i });
+        await act(async () => {
+            trackButton.click();
+        });
+        expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Track this validated BUY setup'));
+        expect(mockApi.trackTradePlan).toHaveBeenCalledWith('AAPL', '1d', plan);
+        expect(await screen.findByText('✓ Setup tracked')).toBeInTheDocument();
     });
 
     it('ignores an older response after the symbol changes', async () => {
@@ -237,10 +291,10 @@ describe('AIAnalysisPanel', () => {
             .mockImplementationOnce(() => new Promise(resolve => { resolveAAPL = resolve; }))
             .mockImplementationOnce(() => new Promise(resolve => { resolveMSFT = resolve; }));
         const { rerender } = render(<AIAnalysisPanel symbol="AAPL" />);
-        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
+        await runManualAnalysis();
 
         rerender(<AIAnalysisPanel symbol="MSFT" />);
-        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(2));
+        await runManualAnalysis();
 
         await act(async () => {
             resolveAAPL(makeResult({ summary: 'AAPL stale response.' }));
@@ -255,6 +309,7 @@ describe('AIAnalysisPanel', () => {
         setConfig(true);
         mockApi.analyzeSymbol.mockResolvedValue(makeResult());
         render(<AIAnalysisPanel symbol="AAPL" />);
+        await runManualAnalysis();
         await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
         await screen.findByText('Market-data evidence');
 
@@ -281,7 +336,6 @@ describe('AIAnalysisPanel', () => {
         });
         const ref = createRef<AIAnalysisPanelHandle>();
         render(<AIAnalysisPanel ref={ref} symbol="AAPL" />);
-        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
 
         await act(async () => {
             await ref.current!.runBackground(7);
@@ -310,7 +364,6 @@ describe('AIAnalysisPanel', () => {
         mockApi.cancelAIJob.mockResolvedValue({ status: 'cancelled', cancelled: true });
         const ref = createRef<AIAnalysisPanelHandle>();
         render(<AIAnalysisPanel ref={ref} symbol="AAPL" />);
-        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
 
         await act(async () => {
             await ref.current!.runBackground(9);

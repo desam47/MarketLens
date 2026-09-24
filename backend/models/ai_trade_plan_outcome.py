@@ -1,10 +1,9 @@
 """
 AI trade-plan outcome tracking (2026-09-11).
 
-One row per actionable (buy/sell) ``TradePlan`` the AI has ever
-proposed, captured at the single choke point every caller of
-``analyze_symbol()`` already goes through (see
-``backend.ai.trade_plan_tracker.record_trade_plan``). A background
+One row per actionable (buy/sell) ``TradePlan`` explicitly confirmed by the
+trader after fresh server-side validation (see
+``backend.ai.trade_plan_tracker.record_confirmed_trade_plan``). A background
 grading pass (``backend.ai.trade_plan_tracker._grade_once``) walks
 daily bars since ``created_at`` and resolves each open row to
 ``win`` / ``loss`` / ``expired`` once the entry/stop/targets or the
@@ -25,8 +24,8 @@ from backend.utils.timezone import now_ny
 
 
 class AITradePlanOutcome(Base):
-    """A single AI buy/sell call, captured at proposal time and graded
-    later against what actually happened.
+    """A single explicitly confirmed AI buy/sell setup, graded later
+    against what actually happened.
 
     Attributes
     ----------

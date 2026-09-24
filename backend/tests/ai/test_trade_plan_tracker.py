@@ -1,6 +1,6 @@
 """
 Tests for backend.ai.trade_plan_tracker (2026-09-11) — outcome
-tracking for the AI's own buy/sell trade_plan calls.
+tracking for explicitly confirmed buy/sell trade-plan calls.
 
 record_trade_plan / get_track_record each open their own SessionLocal()
 (patched to an in-memory sqlite sessionmaker below); _grade_row /
@@ -124,6 +124,35 @@ class TestRecordTradePlan(_DBBase):
     def test_disabled_flag_skips_capture(self):
         with patch.object(tracker.settings.ai_trade_plan_tracking, "enabled", False):
             tracker.record_trade_plan("AAPL", _analysis(trade_plan=_plan()))
+        self.assertEqual(self.db.query(AITradePlanOutcome).count(), 0)
+
+
+class TestConfirmedTradePlan(_DBBase):
+    def setUp(self):
+        super().setUp()
+        p = patch.object(tracker, "SessionLocal", self.Session)
+        p.start()
+        self.addCleanup(p.stop)
+        p2 = patch.object(tracker.settings.ai_trade_plan_tracking, "enabled", True)
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def test_confirmed_plan_is_deduplicated(self):
+        plan = _plan(recommendation="buy")
+        first, duplicate_first = tracker.record_confirmed_trade_plan("AAPL", plan)
+        second, duplicate_second = tracker.record_confirmed_trade_plan("AAPL", plan)
+
+        self.assertFalse(duplicate_first)
+        self.assertTrue(duplicate_second)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(self.db.query(AITradePlanOutcome).count(), 1)
+
+    def test_confirmed_hold_plan_is_not_recorded(self):
+        row, duplicate = tracker.record_confirmed_trade_plan(
+            "AAPL", _plan(recommendation="hold")
+        )
+        self.assertIsNone(row)
+        self.assertFalse(duplicate)
         self.assertEqual(self.db.query(AITradePlanOutcome).count(), 0)
 
 

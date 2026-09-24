@@ -5802,6 +5802,19 @@ div.td-trend {
   margin-top: 0.25rem !important;
 }
 
+.ai-tracking-action {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
+.ai-tracking-error {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+
 @media (max-width: 520px) {
   .ai-peer-list {
     columns: 1;

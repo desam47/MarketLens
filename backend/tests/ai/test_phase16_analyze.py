@@ -1578,8 +1578,10 @@ class TestTradePlanEvidenceValidation(unittest.TestCase):
 
 
 class TestTradePlanCapture(unittest.TestCase):
-    """analyze_symbol()'s single choke point for trade-plan outcome
-    tracking (2026-09-11) — see backend.ai.trade_plan_tracker."""
+    """Analysis must not create trade-plan outcome rows implicitly.
+
+    Explicit confirmation is covered by the tracker and API tests.
+    """
 
     def _buy_reply(self):
         return AIResponse(
@@ -1641,7 +1643,7 @@ class TestTradePlanCapture(unittest.TestCase):
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_buy_plan_is_captured(self, mock_ctx, mock_ai, mock_record):
+    def test_buy_plan_is_not_captured_without_explicit_confirmation(self, mock_ctx, mock_ai, mock_record):
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
             timeframe="1d",
@@ -1656,10 +1658,7 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ai.complete = AsyncMock()
         mock_ai.complete.return_value = self._buy_reply()
         result = asyncio.run(analyze_symbol("AAPL", "1d"))
-        mock_record.assert_called_once()
-        args, _ = mock_record.call_args
-        self.assertEqual(args[0], "AAPL")
-        self.assertIs(args[1], result)
+        mock_record.assert_not_called()
         self.assertEqual(result.trade_plan_validation["status"], "verified")
 
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
@@ -1683,7 +1682,7 @@ class TestTradePlanCapture(unittest.TestCase):
     @patch("backend.ai.trade_plan_tracker.record_trade_plan")
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_capture_failure_never_surfaces_as_an_analysis_failure(
+    def test_tracking_is_not_attempted_during_analysis(
         self,
         mock_ctx,
         mock_ai,
@@ -1704,6 +1703,7 @@ class TestTradePlanCapture(unittest.TestCase):
         mock_ai.complete.return_value = self._buy_reply()
         mock_record.side_effect = RuntimeError("db is down")
         result = asyncio.run(analyze_symbol("AAPL", "1d"))  # must not raise
+        mock_record.assert_not_called()
         self.assertEqual(result.trend, "bullish")
         self.assertIsNotNone(result.trade_plan)
 

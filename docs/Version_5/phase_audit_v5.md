@@ -1616,3 +1616,22 @@ until the line is removed. The end-to-end evaluation pins these defaults
 - **Regression coverage.** AIAnalysisPanel coverage now includes the context
   sections; the targeted panel suite passed with 11 tests, TypeScript passed,
   and the production build compiled successfully.
+
+## AI Analysis explicit setup tracking (2026-09-24)
+
+- **No passive side effects.** Analysis is now user-triggered in the panel;
+  changing symbols or timeframes clears and cancels prior work without
+  contacting a provider or recording a proposed setup. The analysis backend
+  no longer auto-captures Buy/Sell plans.
+- **Explicit confirmation.** A validated Buy/Sell result exposes a
+  `Track this setup` action only when tracking is enabled. The panel asks for
+  confirmation, shows saving/tracked/duplicate states, and keeps Hold/Avoid
+  and unvalidated plans out of the action path.
+- **Server revalidation and deduplication.** `POST /api/ai/track-trade-plan`
+  rebuilds fresh context, validates the exact submitted plan against the
+  current quote and structure, and records only a verified setup. Repeated
+  requests for the same open setup return the existing outcome instead of
+  creating another grading row.
+- **Regression coverage.** Backend coverage passed with 163 tests and 17
+  subtests; the targeted panel suite passed with 12 tests; TypeScript,
+  production build, Ruff, and `git diff --check` all passed.

@@ -108,6 +108,8 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
     const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
     const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
     const [backgroundError, setBackgroundError] = useState<string | null>(null);
+    const [trackingStatus, setTrackingStatus] = useState<'idle' | 'saving' | 'tracked' | 'duplicate' | 'error'>('idle');
+    const [trackingError, setTrackingError] = useState<string | null>(null);
     const pollRef = useRef<number | null>(null);
     const backgroundTimeoutRef = useRef<number | null>(null);
     const backgroundRunIdRef = useRef(0);
@@ -158,6 +160,8 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
         setBackgroundJobId(null);
         setBackgroundStatus(null);
         setBackgroundError(null);
+        setTrackingStatus('idle');
+        setTrackingError(null);
         try {
             const result = await api.analyzeSymbol(symbol, timeframe, {
                 force_refresh: forceRefresh,
@@ -280,13 +284,39 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
         refreshAnalysis: () => { void runAnalysis(true); },
     }), [cancelBackground, runAnalysis, runBackground]);
 
-  // Auto-run on mount when AI is enabled and the symbol changes.
-  useEffect(() => {
-    if (config?.enabled) {
-      runAnalysis();
+  const trackSetup = useCallback(async () => {
+    const plan = analysis?.trade_plan;
+    if (!plan || plan.recommendation === 'hold' || plan.recommendation === 'avoid') return;
+    if (analysis.trade_plan_validation?.status !== 'verified') return;
+    if (!window.confirm(`Track this validated ${plan.recommendation.toUpperCase()} setup for ${analysis.symbol || symbol}?`)) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, config?.enabled]);
+    setTrackingStatus('saving');
+    setTrackingError(null);
+    try {
+      const result = await api.trackTradePlan(analysis.symbol || symbol, analysis.timeframe || timeframe, plan);
+      setTrackingStatus(result.duplicate ? 'duplicate' : 'tracked');
+    } catch (e: any) {
+      setTrackingStatus('error');
+      setTrackingError(e.message || 'Unable to track this setup.');
+    }
+  }, [analysis, symbol, timeframe]);
+
+  // Analysis is intentionally user-triggered. Changing symbol/timeframe
+  // clears the previous result and cancels work, but never invokes a provider
+  // or records a setup just because the trader is browsing.
+  useEffect(() => {
+    analysisRequestIdRef.current += 1;
+    analysisAbortRef.current?.abort();
+    analysisAbortRef.current = null;
+    invalidateBackground();
+    setAnalysis(null);
+    setLoading(false);
+    setHasRun(false);
+    setError(null);
+    setTrackingStatus('idle');
+    setTrackingError(null);
+  }, [invalidateBackground, symbol, timeframe]);
 
   const aiDisabled = config ? !config.enabled : undefined;
 
@@ -403,7 +433,7 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
         ) : (
           <button
             className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
-            onClick={() => runAnalysis(true)}
+            onClick={() => { void runAnalysis(hasRun); }}
             disabled={loading || aiDisabled}
             title={aiDisabled ? 'AI is disabled' : 'Refresh market data and rerun AI analysis'}
           >
@@ -642,6 +672,23 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
                   {analysis.trade_plan_validation.resistances?.length
                     ? ` · resistance ${analysis.trade_plan_validation.resistances.map(money).join(', ')}` : ''}
                 </p>
+              )}
+              {analysis.trade_plan_validation?.status === 'verified'
+                && (analysis.trade_plan.recommendation === 'buy' || analysis.trade_plan.recommendation === 'sell')
+                && config?.trade_plan_tracking_enabled && (
+                <div className="ai-tracking-action">
+                  <button
+                    className="btn btn-small"
+                    onClick={() => { void trackSetup(); }}
+                    disabled={trackingStatus === 'saving' || trackingStatus === 'tracked' || trackingStatus === 'duplicate'}
+                  >
+                    {trackingStatus === 'saving' ? 'Tracking…'
+                      : trackingStatus === 'tracked' ? '✓ Setup tracked'
+                        : trackingStatus === 'duplicate' ? '✓ Already tracked'
+                          : 'Track this setup'}
+                  </button>
+                  {trackingError && <span className="ai-tracking-error" role="alert">{trackingError}</span>}
+                </div>
               )}
               <p className="tp-disclaimer">
                 Research to inform your own decision — not personalized financial advice.

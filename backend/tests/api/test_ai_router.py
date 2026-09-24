@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
@@ -12,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.config.settings import settings
 
 client = TestClient(app)
 
@@ -394,6 +396,48 @@ class TestAIConfigEndpoint(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["model"], "static-best-free")
         self.assertEqual(data["last_model"], "openai/gpt-oss-120b")
+
+
+class TestTrackTradePlanEndpoint(unittest.TestCase):
+    @patch.object(settings.ai_trade_plan_tracking, "enabled", True)
+    @patch("backend.api.ai.router.record_confirmed_trade_plan")
+    @patch("backend.api.ai.router.build_context")
+    def test_revalidates_and_tracks_explicitly_confirmed_plan(
+        self, mock_context, mock_record
+    ):
+        mock_context.return_value = SimpleNamespace(
+            data_status="LIVE",
+            price=101.0,
+            support_resistance={
+                "supports": [{"price": 95.0}],
+                "resistances": [{"price": 110.0}],
+            },
+        )
+        mock_record.return_value = (SimpleNamespace(id=42), False)
+        payload = {
+            "symbol": "AAPL",
+            "timeframe": "1d",
+            "trade_plan": {
+                "recommendation": "buy",
+                "conviction": "high",
+                "time_horizon": "swing",
+                "entry_zone_low": 100.0,
+                "entry_zone_high": 102.0,
+                "stop_loss": 94.0,
+                "targets": [108.0],
+                "risk_reward": 1.5,
+                "thesis": "Buy the pullback.",
+                "invalidation": "Close below support.",
+            },
+        }
+
+        response = client.post("/api/ai/track-trade-plan", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["outcome_id"], 42)
+        self.assertFalse(response.json()["duplicate"])
+        mock_context.assert_called_once_with("AAPL", "1d")
+        mock_record.assert_called_once()
 
 
 class TestAIConfigPatchEndpoint(unittest.TestCase):

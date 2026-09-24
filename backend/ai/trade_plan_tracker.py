@@ -1,10 +1,10 @@
 """
-Outcome tracking for the AI's own buy/sell trade_plan calls (2026-09-11).
+Outcome tracking for explicitly confirmed buy/sell trade plans (2026-09-11).
 
-``record_trade_plan()`` is called from a single choke point — the tail
-of ``analyze_symbol()`` — for every actionable (buy/sell) ``TradePlan``
-the AI proposes, regardless of caller (REST ``/api/ai/analyze``,
-``AIAnalysisPanel``'s Re-run, background jobs, chat's reanalysis tool).
+``record_confirmed_trade_plan()`` is called by the explicit
+``POST /api/ai/track-trade-plan`` action after the server revalidates the
+setup against fresh context. Analysis, refresh, and background runs never
+create outcome rows merely by producing a Buy/Sell proposal.
 ``hold``/``avoid`` plans are never captured — ``TradePlan.
 _check_consistency`` already clears their entry/stop/targets, so
 there's nothing to grade.
@@ -41,12 +41,10 @@ _DEFAULT_HOLDING_DAYS = 10
 
 
 def record_trade_plan(symbol: str, parsed) -> None:
-    """Persist one actionable (buy/sell) TradePlan for later grading.
+    """Persist one actionable plan for legacy/internal callers.
 
-    A no-op for hold/avoid (no actionable levels) or when tracking is
-    off. The caller (analyze_symbol) wraps this in its own try/except —
-    a capture failure must never surface as an analysis failure — so
-    this function is intentionally a straight, un-guarded write.
+    New user-facing flows must use :func:`record_confirmed_trade_plan`,
+    which deduplicates and is called only after fresh server-side validation.
     """
     plan = getattr(parsed, "trade_plan", None)
     if plan is None or plan.recommendation not in ("buy", "sell"):
@@ -74,6 +72,71 @@ def record_trade_plan(symbol: str, parsed) -> None:
             )
         )
         db.commit()
+    finally:
+        db.close()
+
+
+def record_confirmed_trade_plan(
+    symbol: str,
+    plan,
+    *,
+    provider: str = "user-confirmed",
+    model: str = "AIAnalysisPanel",
+) -> tuple[object | None, bool]:
+    """Persist a freshly server-validated plan after explicit confirmation.
+
+    Returns ``(row, duplicate)``. The caller must validate the plan against
+    fresh market context before calling this function. Open plans with the
+    same actionable fields are treated as duplicates so repeated clicks or
+    retries cannot create multiple grading records.
+    """
+    if plan is None or plan.recommendation not in ("buy", "sell"):
+        return None, False
+    if not settings.ai_trade_plan_tracking.enabled:
+        return None, False
+
+    from backend.models.ai_trade_plan_outcome import AITradePlanOutcome
+
+    targets_json = json.dumps([float(value) for value in plan.targets], separators=(",", ":"))
+    db = SessionLocal()
+    try:
+        candidates = (
+            db.query(AITradePlanOutcome)
+            .filter(
+                AITradePlanOutcome.symbol == symbol.upper(),
+                AITradePlanOutcome.status == "open",
+                AITradePlanOutcome.recommendation == plan.recommendation,
+                AITradePlanOutcome.conviction == plan.conviction,
+                AITradePlanOutcome.time_horizon == plan.time_horizon,
+            )
+            .all()
+        )
+        for row in candidates:
+            if (
+                row.entry_zone_low == plan.entry_zone_low
+                and row.entry_zone_high == plan.entry_zone_high
+                and row.stop_loss == plan.stop_loss
+                and row.targets_json == targets_json
+            ):
+                return row, True
+
+        row = AITradePlanOutcome(
+            symbol=symbol.upper(),
+            recommendation=plan.recommendation,
+            conviction=plan.conviction,
+            time_horizon=plan.time_horizon,
+            entry_zone_low=plan.entry_zone_low,
+            entry_zone_high=plan.entry_zone_high,
+            stop_loss=plan.stop_loss,
+            targets_json=targets_json,
+            risk_reward=plan.risk_reward,
+            provider=provider[:50],
+            model=model[:100],
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row, False
     finally:
         db.close()
 

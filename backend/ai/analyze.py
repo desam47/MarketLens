@@ -468,17 +468,6 @@ def _finalize_analysis(
     if parsed.trade_plan_validation.get("status") == "unavailable":
         parsed.trade_plan = None
 
-    # Single choke point: only a structurally validated actionable plan may
-    # enter the outcome tracker. Hold/avoid and withheld plans are analysis,
-    # not trade setups, and must not bias future calibration.
-    if parsed.trade_plan is not None and parsed.trade_plan.recommendation in {"buy", "sell"}:
-        try:
-            from backend.ai.trade_plan_tracker import record_trade_plan
-
-            record_trade_plan(symbol, parsed)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("trade plan capture failed for %s: %s", symbol, e)
-
     parsed = _with_context_metadata(parsed, ctx)
     _cache_result(cache_key, parsed)
     return parsed

@@ -243,9 +243,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Tape engine warmup failed: {e}")
 
     # AI trade-plan outcome tracking — background grading thread. Off
-    # unless AI_TRADE_PLAN_TRACKING_ENABLED=true; capture itself
-    # (analyze_symbol's choke point) is gated independently and doesn't
-    # need anything started here.
+    # unless AI_TRADE_PLAN_TRACKING_ENABLED=true. Rows are created only
+    # through the explicit, server-revalidated tracking endpoint.
     try:
         if settings.startup_mode == "full" and settings.ai_trade_plan_tracking.enabled:
             from backend.ai.trade_plan_tracker import start_trade_plan_tracker
