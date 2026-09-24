@@ -27,7 +27,7 @@ from sqlalchemy import and_, func
 
 from backend.database import SessionLocal
 from backend.models import BarModel, HistoricalSignal
-from backend.repositories.signal_repository import SignalRepository
+from backend.repositories.signal_repository import OUTCOME_WINDOWS, SignalRepository, outcome_anchor
 from backend.services.signal_replay import BarReplay, bar_end, is_closed, label_columns
 from backend.utils.timezone import now_ny
 
@@ -46,7 +46,7 @@ _FRESH = timedelta(minutes=15)
 
 # How many bars of forward data we need before an outcome is complete.
 # Per spec: 5/10/20-bar returns plus MFE/MAE across the same 20-bar window.
-REQUIRED_FORWARD_BARS = 20
+REQUIRED_FORWARD_BARS = OUTCOME_WINDOWS[-1]
 
 
 class SignalRecorder:
@@ -156,11 +156,13 @@ class SignalRecorder:
         """Compute forward outcomes for signals that have enough future data.
 
         Returns the number of signals updated. Safe to call on a schedule
-        (e.g. every 90s from the ingestion service) — it only touches
-        rows that have at least REQUIRED_FORWARD_BARS future bars stored.
+        (e.g. every 300s from the ingestion service) — it only touches
+        rows that enough stored later bars can advance (see
+        ``SignalRepository.get_signals_needing_outcomes``).
 
         Performance (Phase 3.x optimization):
-          - 1 query to fetch candidate signals
+          - candidate selection: one distinct-pair query, then two small
+            indexed queries per pending (symbol, timeframe) pair
           - 1 query to bulk-pre-fetch all future bars for the batch
             (vs N+1 — one query per candidate)
           - Binary search locates each candidate's bars in the pre-fetched
@@ -268,9 +270,7 @@ class SignalRecorder:
         # query grabs everything the batch will ever need.
         earliest_anchor: dict[tuple[str, str], datetime] = {}
         for s in candidates:
-            anchor = s.timestamp
-            if s.timeframe == "1d":
-                anchor = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
+            anchor = outcome_anchor(s.timeframe, s.timestamp)
             key = (s.symbol, s.timeframe)
             existing = earliest_anchor.get(key)
             if existing is None or anchor < existing:
@@ -654,10 +654,7 @@ class SignalRecorder:
         # forward-outcome math aligned to calendar days, normalize the anchor
         # to midnight: future bars are "anything strictly after the prior
         # midnight", which excludes same-day 13:30 noise.
-        if signal.timeframe == "1d":
-            anchor_ts = signal.timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-        else:
-            anchor_ts = signal.timestamp
+        anchor_ts = outcome_anchor(signal.timeframe, signal.timestamp)
 
         if future_bars_by_pair is not None:
             pair = (signal.symbol, signal.timeframe)

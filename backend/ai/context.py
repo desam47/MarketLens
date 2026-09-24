@@ -573,11 +573,15 @@ def _signal_stats_context(sym: str, timeframe: str) -> dict[str, Any]:
 
         stats = signal_recorder.get_stats(symbol=sym, timeframe=timeframe)
         if stats:
+            # Named for what they measure: returns seen from each call's own
+            # direction, over complete bullish/bearish outcomes only.
             signal_stats = {
                 "total_signals": stats.get("total", 0),
-                "avg_return_5b": stats.get("avg_return_5b"),
-                "avg_return_10b": stats.get("avg_return_10b"),
+                "complete_directional_signals": stats.get("directional_outcomes", 0),
+                "avg_signal_return_5b": stats.get("avg_return_5b"),
+                "avg_signal_return_10b": stats.get("avg_return_10b"),
                 "win_rate": stats.get("win_rate"),
+                "basis": "direction-adjusted: a bearish call earns when price falls; neutral signals excluded",
             }
     except Exception:  # noqa: BLE001
         logger.debug("AI context: signal_stats_context unavailable; section omitted", exc_info=True)

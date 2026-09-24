@@ -5,10 +5,79 @@ Repository for historical signal storage and research queries.
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
-from backend.models import HistoricalSignal
+from backend.models import BarModel, HistoricalSignal
+
+# Forward windows, in bars of the signal's own timeframe. MFE/MAE span the last one.
+OUTCOME_WINDOWS = (5, 10, 20)
+OUTCOME_FIELDS = ("return_5b", "return_10b", "return_20b", "mfe", "mae")
+DIRECTIONAL_STATES = ("bullish", "bearish")
+
+
+def outcome_anchor(timeframe: str, timestamp: datetime) -> datetime:
+    """Forward bars for an outcome are the bars strictly after this time.
+
+    Daily rows anchor at midnight (see ``SignalRecorder._compute_outcome_for_signal``).
+    Queue selection and the outcome calculation must share this rule.
+    """
+    if timeframe == "1d":
+        return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    return timestamp
+
+
+def outcome_complete_filter():
+    """SQL filter: every 5/10/20-bar return and the 20-bar excursions exist."""
+    return and_(*(getattr(HistoricalSignal, field).isnot(None) for field in OUTCOME_FIELDS))
+
+
+def outcome_pending_filter():
+    """SQL filter: at least one forward outcome is still missing."""
+    return or_(*(getattr(HistoricalSignal, field).is_(None) for field in OUTCOME_FIELDS))
+
+
+def is_outcome_complete(signal: Any) -> bool:
+    return all(getattr(signal, field) is not None for field in OUTCOME_FIELDS)
+
+
+def directional_outcome_expr(field: str):
+    """SQL counterpart of :func:`directional_outcome`."""
+    column = getattr(HistoricalSignal, field)
+    bearish_source = {"mfe": HistoricalSignal.mae, "mae": HistoricalSignal.mfe}.get(field, column)
+    return case(
+        (HistoricalSignal.trend_state == "bullish", column),
+        (HistoricalSignal.trend_state == "bearish", -bearish_source),
+        else_=None,
+    )
+
+
+def directional_outcome(signal: Any, field: str) -> float | None:
+    """A stored raw outcome seen from the signal's own call.
+
+    Stored returns are raw underlying movement. A bearish call earns when
+    price falls, so its return is the negated raw return, its favorable
+    excursion is the negated raw low-side MAE, and its adverse excursion is
+    the negated raw high-side MFE. Neutral and unknown rows made no call and
+    have no directional outcome.
+    """
+    state = getattr(signal, "trend_state", None)
+    if state == "bullish":
+        return getattr(signal, field)
+    if state != "bearish":
+        return None
+    source = {"mfe": "mae", "mae": "mfe"}.get(field, field)
+    value = getattr(signal, source)
+    return -value if value is not None else None
+
+
+def _next_outcome_window(signal: HistoricalSignal) -> int:
+    """How many later bars a pending row needs before recomputing changes it."""
+    if signal.return_5b is None:
+        return OUTCOME_WINDOWS[0]
+    if signal.return_10b is None:
+        return OUTCOME_WINDOWS[1]
+    return OUTCOME_WINDOWS[2]
 
 
 class SignalRepository:
@@ -174,13 +243,7 @@ class SignalRepository:
         if end_time:
             q = q.filter(HistoricalSignal.timestamp <= end_time)
         if completed_only:
-            q = q.filter(
-                HistoricalSignal.return_5b.isnot(None),
-                HistoricalSignal.return_10b.isnot(None),
-                HistoricalSignal.return_20b.isnot(None),
-                HistoricalSignal.mfe.isnot(None),
-                HistoricalSignal.mae.isnot(None),
-            )
+            q = q.filter(outcome_complete_filter())
         return q
 
     def delete_older_than(self, days: int = 90) -> int:
@@ -213,29 +276,59 @@ class SignalRepository:
     # --- Research / outcome queries -----------------------------------------
 
     def get_signals_needing_outcomes(self, limit: int = 100) -> list[HistoricalSignal]:
-        """Signals whose forward outcomes haven't been computed yet.
+        """Pending signals that enough new bars now exist to advance, oldest first.
 
-        A row remains eligible until every required forward metric exists.
-        This includes partially matured rows: a signal can have a valid 5-bar
-        return while still waiting for its 10/20-bar outcomes and final
-        20-bar MFE/MAE. Sorting oldest-first ensures we fill in order from
-        the beginning of history.
+        A row stays pending until every forward metric exists, including a
+        partially matured row that has its 5-bar return but still waits for
+        its 10/20-bar outcomes and 20-bar MFE/MAE. It is returned only when
+        recomputing it would write something new: when its pair now holds at
+        least as many later bars as its next missing window needs.
+
+        Rows that cannot advance yet (a weekly signal waiting 20 weeks, or a
+        symbol that no longer receives bars) are skipped instead of refilling
+        every batch, so they never block newer rows that can be completed.
         """
-        return (
-            self.db.query(HistoricalSignal)
-            .filter(
-                or_(
-                    HistoricalSignal.return_5b.is_(None),
-                    HistoricalSignal.return_10b.is_(None),
-                    HistoricalSignal.return_20b.is_(None),
-                    HistoricalSignal.mfe.is_(None),
-                    HistoricalSignal.mae.is_(None),
+        pending = outcome_pending_filter()
+        pairs = self.db.query(HistoricalSignal.symbol, HistoricalSignal.timeframe).filter(pending).distinct().all()
+        candidates: list[HistoricalSignal] = []
+        for symbol, timeframe in pairs:
+            newest = [
+                row[0]
+                for row in self.db.query(BarModel.timestamp)
+                .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
+                .order_by(BarModel.timestamp.desc())
+                .limit(OUTCOME_WINDOWS[-1])
+                .all()
+            ]
+            if len(newest) < OUTCOME_WINDOWS[0]:
+                continue
+            # The Nth-newest bar is later than a row's anchor exactly when at
+            # least N bars follow that anchor.
+            cutoffs = {n: newest[n - 1] for n in OUTCOME_WINDOWS if len(newest) >= n}
+            bound = cutoffs[OUTCOME_WINDOWS[0]]
+            if timeframe == "1d":
+                # Daily anchors are midnight; a row later that day shares the anchor.
+                bound = outcome_anchor(timeframe, bound) + timedelta(days=1)
+            rows = (
+                self.db.query(HistoricalSignal)
+                .filter(
+                    HistoricalSignal.symbol == symbol,
+                    HistoricalSignal.timeframe == timeframe,
+                    HistoricalSignal.timestamp < bound,
+                    pending,
                 )
+                .order_by(HistoricalSignal.timestamp.asc())
+                # Rows that cannot advance are the pair's newest, so a small
+                # margin past ``limit`` keeps every advanceable row in reach.
+                .limit(limit + OUTCOME_WINDOWS[-1])
+                .all()
             )
-            .order_by(HistoricalSignal.timestamp.asc())
-            .limit(limit)
-            .all()
-        )
+            for signal in rows:
+                cutoff = cutoffs.get(_next_outcome_window(signal))
+                if cutoff is not None and outcome_anchor(timeframe, signal.timestamp) < cutoff:
+                    candidates.append(signal)
+        candidates.sort(key=lambda signal: signal.timestamp)
+        return candidates[:limit]
 
     def update_outcomes(
         self,
@@ -290,47 +383,18 @@ class SignalRepository:
         Only includes signals that have outcomes computed. If ``symbols``
         is given, only signals for those symbols are included.
         """
-        directional_5b = case(
-            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_5b),
-            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_5b),
-            else_=None,
-        )
-        directional_10b = case(
-            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_10b),
-            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_10b),
-            else_=None,
-        )
-        directional_20b = case(
-            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_20b),
-            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_20b),
-            else_=None,
-        )
-        favorable_excursion = case(
-            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.mfe),
-            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.mae),
-            else_=None,
-        )
-        adverse_excursion = case(
-            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.mae),
-            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.mfe),
-            else_=None,
-        )
         q = self.db.query(
             HistoricalSignal.market_regime,
-            func.avg(directional_5b).label("avg_return_5b"),
-            func.avg(directional_10b).label("avg_return_10b"),
-            func.avg(directional_20b).label("avg_return_20b"),
-            func.avg(favorable_excursion).label("avg_mfe"),
-            func.avg(adverse_excursion).label("avg_mae"),
+            func.avg(directional_outcome_expr("return_5b")).label("avg_return_5b"),
+            func.avg(directional_outcome_expr("return_10b")).label("avg_return_10b"),
+            func.avg(directional_outcome_expr("return_20b")).label("avg_return_20b"),
+            func.avg(directional_outcome_expr("mfe")).label("avg_mfe"),
+            func.avg(directional_outcome_expr("mae")).label("avg_mae"),
             func.count(HistoricalSignal.id).label("count"),
         ).filter(
             HistoricalSignal.market_regime.isnot(None),
-            HistoricalSignal.return_5b.isnot(None),
-            HistoricalSignal.return_10b.isnot(None),
-            HistoricalSignal.return_20b.isnot(None),
-            HistoricalSignal.mfe.isnot(None),
-            HistoricalSignal.mae.isnot(None),
-            HistoricalSignal.trend_state.in_(("bullish", "bearish")),
+            outcome_complete_filter(),
+            HistoricalSignal.trend_state.in_(DIRECTIONAL_STATES),
         )
         if symbols:
             q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
@@ -367,37 +431,40 @@ class SignalRepository:
     def get_stats(self, symbol: str, timeframe: str | None = None) -> dict[str, Any]:
         """Track-record statistics for one symbol (optionally one timeframe).
 
-        ``total``            every stored signal.
-        ``with_outcomes``    those whose forward outcome has been computed.
-        ``avg_return_5b`` / ``avg_return_10b``   mean raw forward return (percent price change
-                             over the next 5 / 10 bars of that timeframe), None if none computed.
-        ``win_rate``         share of DIRECTIONAL signals that called it right: a bullish one wins
-                             when its 5-bar return is positive, a bearish one when it is negative.
-                             Neutral signals carry no call and are excluded; None if there are none.
+        ``total``                every stored signal.
+        ``with_outcomes``        those whose full 5/10/20-bar outcome is complete.
+        ``directional_outcomes`` complete bullish or bearish signals; the rest below use only these.
+        ``avg_return_5b`` / ``avg_return_10b``   mean direction-adjusted return over the next
+                                 5 / 10 bars: a bearish call earns when price falls. None if none.
+        ``win_rate``             share of those calls that were right: a bullish one wins when its
+                                 5-bar return is positive, a bearish one when it is negative.
 
-        Returns are stored raw (not direction-adjusted), so the win rate has to be computed
-        against each signal's own ``trend_state`` rather than as "return > 0".
+        Stored returns are raw underlying movement. Averaging them directly would report a
+        bearish call that worked as a loss and let neutral rows, which made no call, move the
+        average, so every figure here is computed against each signal's own ``trend_state``.
         """
         q = self.db.query(HistoricalSignal).filter(HistoricalSignal.symbol == symbol.upper())
         if timeframe:
             q = q.filter(HistoricalSignal.timeframe == timeframe)
-        with_outcome = HistoricalSignal.return_5b.isnot(None)
-        directional = with_outcome & HistoricalSignal.trend_state.in_(("bullish", "bearish"))
-        called_it = (
-            (HistoricalSignal.trend_state == "bullish") & (HistoricalSignal.return_5b > 0)
-        ) | ((HistoricalSignal.trend_state == "bearish") & (HistoricalSignal.return_5b < 0))
+        complete = outcome_complete_filter()
+        directional = and_(complete, HistoricalSignal.trend_state.in_(DIRECTIONAL_STATES))
+        called_it = or_(
+            and_(HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_5b > 0),
+            and_(HistoricalSignal.trend_state == "bearish", HistoricalSignal.return_5b < 0),
+        )
         row = q.with_entities(
             func.count(HistoricalSignal.id),
-            func.sum(case((with_outcome, 1), else_=0)),
-            func.avg(HistoricalSignal.return_5b),
-            func.avg(HistoricalSignal.return_10b),
+            func.sum(case((complete, 1), else_=0)),
             func.sum(case((directional, 1), else_=0)),
-            func.sum(case((directional & called_it, 1), else_=0)),
+            func.avg(case((directional, directional_outcome_expr("return_5b")), else_=None)),
+            func.avg(case((directional, directional_outcome_expr("return_10b")), else_=None)),
+            func.sum(case((and_(directional, called_it), 1), else_=0)),
         ).one()
-        total, with_outcomes, avg5, avg10, n_directional, n_wins = row
+        total, with_outcomes, n_directional, avg5, avg10, n_wins = row
         return {
             "total": int(total or 0),
             "with_outcomes": int(with_outcomes or 0),
+            "directional_outcomes": int(n_directional or 0),
             "avg_return_5b": round(float(avg5), 4) if avg5 is not None else None,
             "avg_return_10b": round(float(avg10), 4) if avg10 is not None else None,
             "win_rate": round(int(n_wins or 0) / int(n_directional), 4) if n_directional else None,

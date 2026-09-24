@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
+from backend.models.market_data_sql import BarModel
 from backend.models.signal import HistoricalSignal
 from backend.repositories.signal_repository import SignalRepository
 
@@ -25,6 +26,7 @@ class TestSignalRepository(unittest.TestCase):
             connect_args={"check_same_thread": False},
         )
         HistoricalSignal.__table__.create(self.engine, checkfirst=True)
+        BarModel.__table__.create(self.engine, checkfirst=True)
         self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def tearDown(self):
@@ -200,9 +202,22 @@ class TestSignalRepository(unittest.TestCase):
 
     # --- get_signals_needing_outcomes ---
 
+    def _bars(self, symbol, start, count, timeframe="1d"):
+        """``count`` daily bars for ``symbol``, the first one day after ``start``."""
+        with self.Session() as db:
+            for i in range(count):
+                db.add(BarModel(
+                    symbol=symbol, timeframe=timeframe, timestamp=start + timedelta(days=i + 1),
+                    open=100.0, high=101.0, low=99.0, close=100.0, volume=1_000,
+                    provider="test", data_status="historical",
+                ))
+            db.commit()
+
     def test_get_signals_needing_outcomes_returns_null_return_5b(self):
         self._create_signal(symbol="AAPL", return_5b=None)  # needs outcome
         self._create_signal(symbol="MSFT", return_5b=1.0)  # has outcome
+        self._bars("AAPL", datetime(2025, 1, 1), 5)
+        self._bars("MSFT", datetime(2025, 1, 1), 5)
         with self.Session() as db:
             rows = self._repo(db).get_signals_needing_outcomes(limit=10)
         self.assertEqual(len(rows), 1)
@@ -212,10 +227,49 @@ class TestSignalRepository(unittest.TestCase):
         self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 3), return_5b=None)
         self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 1), return_5b=None)
         self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 2), return_5b=None)
+        self._create_signal(symbol="MSFT", timestamp=datetime(2024, 12, 31), return_5b=None)
+        self._bars("AAPL", datetime(2025, 1, 1), 10)
+        self._bars("MSFT", datetime(2024, 12, 31), 10)
         with self.Session() as db:
             rows = self._repo(db).get_signals_needing_outcomes(limit=10)
         timestamps = [r.timestamp for r in rows]
+        self.assertEqual(len(rows), 4)
         self.assertEqual(timestamps, sorted(timestamps))
+
+    def test_get_signals_needing_outcomes_skips_rows_that_cannot_advance(self):
+        """HS-15: rows without enough later bars must not fill the batch ahead of newer rows."""
+        # A symbol that stopped receiving bars: three old pending rows, only two later bars.
+        for day in (1, 2, 3):
+            self._create_signal(symbol="NOK", timestamp=datetime(2025, 1, day), return_5b=None)
+        self._bars("NOK", datetime(2025, 1, 3), 2)
+        # A newer row whose pair has all the bars it needs.
+        self._create_signal(symbol="AAPL", timestamp=datetime(2025, 3, 1), return_5b=None)
+        self._bars("AAPL", datetime(2025, 3, 1), 20)
+        with self.Session() as db:
+            rows = self._repo(db).get_signals_needing_outcomes(limit=2)
+        self.assertEqual([(r.symbol, r.timestamp) for r in rows], [("AAPL", datetime(2025, 3, 1))])
+
+    def test_get_signals_needing_outcomes_waits_for_the_next_missing_window(self):
+        """A partial row returns only once enough bars exist to fill its next window."""
+        partial = dict(return_5b=1.0, return_10b=None, return_20b=None, mfe=None, mae=None)
+        self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 1), **partial)
+        self._bars("AAPL", datetime(2025, 1, 1), 9)  # 5b possible, 10b not yet
+        with self.Session() as db:
+            self.assertEqual(self._repo(db).get_signals_needing_outcomes(limit=10), [])
+        self._bars("AAPL", datetime(2025, 1, 10), 1)  # the 10th later bar arrives
+        with self.Session() as db:
+            rows = self._repo(db).get_signals_needing_outcomes(limit=10)
+        self.assertEqual(len(rows), 1)
+
+    def test_get_signals_needing_outcomes_needs_twenty_bars_for_the_final_window(self):
+        partial = dict(return_5b=1.0, return_10b=2.0, return_20b=None, mfe=None, mae=None)
+        self._create_signal(symbol="AAPL", timestamp=datetime(2025, 1, 1), **partial)
+        self._bars("AAPL", datetime(2025, 1, 1), 19)
+        with self.Session() as db:
+            self.assertEqual(self._repo(db).get_signals_needing_outcomes(limit=10), [])
+        self._bars("AAPL", datetime(2025, 1, 20), 1)
+        with self.Session() as db:
+            self.assertEqual(len(self._repo(db).get_signals_needing_outcomes(limit=10)), 1)
 
     # --- update_outcomes ---
 

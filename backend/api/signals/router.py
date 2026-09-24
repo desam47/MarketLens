@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
 from backend.market_data.services.ingestion_service import ingestion_service
-from backend.repositories.signal_repository import SignalRepository
+from backend.repositories.signal_repository import SignalRepository, directional_outcome
 from backend.services.signal_recorder import signal_recorder
 from backend.utils.timezone import format_edt_iso
 
@@ -191,19 +191,6 @@ def _research_time_range(
     return start, end
 
 
-def _directional_value(signal: SignalResponse, field: str) -> float | None:
-    value = getattr(signal, field)
-    if value is None or signal.trend_state not in {"bullish", "bearish"}:
-        return None
-    if signal.trend_state == "bullish":
-        return value
-    if field == "mfe":
-        return -signal.mae if signal.mae is not None else None
-    if field == "mae":
-        return -signal.mfe if signal.mfe is not None else None
-    return -value
-
-
 def _csv_value(value: object) -> object:
     """Avoid formula evaluation when a CSV is opened in a spreadsheet."""
     if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
@@ -340,9 +327,9 @@ def export_signal_research(
                 format_edt_iso(signal.timestamp), signal.symbol, signal.timeframe,
                 signal.trend_state or "", signal.market_regime or "", signal.return_5b,
                 signal.return_10b, signal.return_20b, signal.mfe, signal.mae,
-                _directional_value(signal, "return_5b"), _directional_value(signal, "return_10b"),
-                _directional_value(signal, "return_20b"), _directional_value(signal, "mfe"),
-                _directional_value(signal, "mae"), resolved_scope.mode,
+                directional_outcome(signal, "return_5b"), directional_outcome(signal, "return_10b"),
+                directional_outcome(signal, "return_20b"), directional_outcome(signal, "mfe"),
+                directional_outcome(signal, "mae"), resolved_scope.mode,
                 "; ".join(resolved_scope.watchlist_names),
             ])
 

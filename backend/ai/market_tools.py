@@ -2586,10 +2586,15 @@ def get_signal_history_tool(request: SignalHistoryRequest) -> BaseModel:
 
     Rows are what ``SignalRecorder`` persisted at each bar close; outcome
     fields stay null until enough later bars exist, and are reported as such.
+    ``outcome_complete`` means the full 5/10/20-bar outcome exists.
     """
     from backend.ai.tool_registry import normalize_timeframe
     from backend.database import SessionLocal
-    from backend.repositories.signal_repository import SignalRepository
+    from backend.repositories.signal_repository import (
+        SignalRepository,
+        directional_outcome,
+        is_outcome_complete,
+    )
     from backend.utils.timezone import format_edt_iso
 
     timeframe = normalize_timeframe(request.timeframe) if request.timeframe else None
@@ -2613,10 +2618,15 @@ def get_signal_history_tool(request: SignalHistoryRequest) -> BaseModel:
                 "strength": signal.strength,
                 "market_regime": signal.market_regime,
                 "data_quality": signal.data_quality,
-                "return_5b": signal.return_5b,
-                "return_10b": signal.return_10b,
-                "return_20b": signal.return_20b,
-                "outcome_available": signal.return_5b is not None,
+                # Stored returns are raw price movement; signal_return_* is the
+                # same move seen from the call (None for neutral rows).
+                "underlying_return_5b": signal.return_5b,
+                "underlying_return_10b": signal.return_10b,
+                "underlying_return_20b": signal.return_20b,
+                "signal_return_5b": directional_outcome(signal, "return_5b"),
+                "signal_return_10b": directional_outcome(signal, "return_10b"),
+                "signal_return_20b": directional_outcome(signal, "return_20b"),
+                "outcome_complete": is_outcome_complete(signal),
             }
             for signal in signals
         ]

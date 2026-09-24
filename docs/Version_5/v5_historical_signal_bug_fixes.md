@@ -1,9 +1,9 @@
 # Version 5 Historical Signals Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (review of batches 1 and 2a: HS-15 to HS-18 added; HS-13 and HS-14 status corrected)
-**Status:** Batch 1 and batch 2a are complete. A review of them found four new problems, two of them Critical. HS-15 keeps HS-01's fix from taking effect on the live database, and HS-16 is a path HS-03 missed. Eleven findings remain open.
-**Scorecard:** 7 ✅ COMPLETE, 1 ⚠️ PARTIAL, 10 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2b: HS-15 and HS-16)
+**Status:** Batches 1, 2a, and 2b are complete. Every Critical finding is fixed. Nine findings remain open: the methodology items (batch 2c) and the operational items (batch 3).
+**Scorecard:** 9 ✅ COMPLETE, 1 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 code review of the Historical Signals backend, API, storage, card, research dashboard, and replay panel at `d0aebd2` (HS-01 to HS-14). A follow-up review of batches 1 and 2a at `8f6a803` added HS-15 to HS-18.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md)
 
@@ -26,8 +26,8 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 | HS-02 | Critical | API + UI | “Delete >180d” deletes rows older than 30 days | Verified | ✅ COMPLETE |
 | HS-03 | Critical | Research + Replay | Raw underlying returns are presented as signal P&L | Verified | ✅ COMPLETE |
 | HS-04 | Critical | Research | Cumulative return chart is not a valid equity curve | Verified | ✅ COMPLETE |
-| HS-15 | Critical | Backend | The outcome queue stalls behind rows that cannot finish | Verified | ❌ NOT STARTED |
-| HS-16 | Critical | AI | AI Analysis reads raw price movement as the signals' track record | Verified | ❌ NOT STARTED |
+| HS-15 | Critical | Backend | The outcome queue stalls behind rows that cannot finish | Verified | ✅ COMPLETE |
+| HS-16 | Critical | AI | AI Analysis reads raw price movement as the signals' track record | Verified | ✅ COMPLETE |
 | HS-05 | High | Scope | Default scope silently uses only the first active watchlist | Verified | ✅ COMPLETE |
 | HS-06 | High | Research | Date filters and exports are silently limited to the newest 1,000 rows | Verified | ✅ COMPLETE |
 | HS-07 | High | Methodology | All timeframes combines incomparable horizons and hides recorded timeframes | Verified | ❌ NOT STARTED |
@@ -45,7 +45,7 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 
 1. ~~**Batch 1 — decision-data correctness:** HS-01, HS-02, HS-03, HS-04, and HS-13.~~ Done.
 2. ~~**Batch 2a — truthful scope:** HS-05 and HS-06.~~ Done.
-3. **Batch 2b — outcomes and AI correctness:** HS-15 and HS-16. Do these first: HS-15 keeps outcomes from maturing on the live database, and HS-16 feeds the model inverted track-record numbers.
+3. ~~**Batch 2b — outcomes and AI correctness:** HS-15 and HS-16.~~ Done.
 4. **Batch 2c — methodology:** HS-07, HS-08, HS-09, HS-10, and HS-17.
 5. **Batch 3 — operational integrity and regressions:** HS-11, HS-12, HS-18, then the rest of HS-14 as the release gate.
 
@@ -55,7 +55,7 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 
 ### HS-01 — Partial forward outcomes can remain incomplete forever
 
-**Status:** ✅ COMPLETE (2026-09-24, batch 1). See HS-15: the fix is correct row by row, but on the live database the queue stalls before most rows are reached.
+**Status:** ✅ COMPLETE (2026-09-24, batch 1). On the live database the queue then stalled before most rows were reached; batch 2b fixed that (HS-15).
 **Where:** `SignalRecorder._compute_outcome_for_signal` (`backend/services/signal_recorder.py:617`) and `SignalRepository.get_signals_needing_outcomes` (`backend/repositories/signal_repository.py:146`).
 
 The recorder intentionally calculates the outcome windows currently available. With five future bars it writes 5b, and with ten it writes 5b and 10b. Its comment says later backfills will fill remaining fields.
@@ -64,7 +64,7 @@ That cannot happen: the repository selects only rows where `return_5b IS NULL`. 
 
 **Impact:** a row can look completed while its later returns permanently remain absent and MFE/MAE reflect a shorter, unstated observation window.
 
-**Resolution:** the outcome queue now keeps any row with a missing return or excursion eligible. MFE/MAE are calculated only across the completed 20-bar window, and `_outcome_missing` remains true until all five values are present. The API's “completed only” filter and the frontend's completed counts use the same full-outcome contract. The AI stats and the chat tool still use the old 5-bar contract (HS-16).
+**Resolution:** the outcome queue now keeps any row with a missing return or excursion eligible. MFE/MAE are calculated only across the completed 20-bar window, and `_outcome_missing` remains true until all five values are present. The API's “completed only” filter and the frontend's completed counts use the same full-outcome contract. Batch 2b moved the AI stats and the chat tool to the same contract (HS-16).
 
 **Tests:** `test_backfill_outcomes_partial_row_matures_on_later_pass` proves one row progresses from 5/10 bars to a complete 20-bar outcome on a later pass. The focused recorder, repository, and signals API suite passed: 61 tests.
 
@@ -83,7 +83,7 @@ The visible destructive action confirms deletion beyond 180 days and calls `dele
 
 ### HS-03 — Raw underlying returns are presented as signal P&L
 
-**Status:** ✅ COMPLETE (2026-09-24, batch 1). The screens and regime aggregate are fixed; the AI path is not (HS-16).
+**Status:** ✅ COMPLETE (2026-09-24, batch 1). Batch 2b fixed the AI path and the Scanner's Signal Explanation panel, which this fix missed (HS-16).
 **Where:** `HistoricalSignalCard` (`frontend/src/components/HistoricalSignalCard.tsx:37`), `SignalResearchDashboard.metricRows` (`frontend/src/components/SignalResearchDashboard.tsx:31`), and replay statistics (`frontend/src/components/HistoricalReplayPanel.tsx:176`).
 
 Stored returns correctly represent raw price movement. A bearish call followed by a decline therefore has a negative raw return. The screens colour it red, average it as a loss, and the replay counts a win only when raw return is positive. MFE and MAE use the same long-only meaning.
@@ -109,7 +109,7 @@ The chart sums every raw 5-bar return in timestamp order. It combines symbols, d
 
 ### HS-15 — The outcome queue stalls behind rows that cannot finish
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2b)
 **Where:** `SignalRepository.get_signals_needing_outcomes` (`backend/repositories/signal_repository.py:215`), called with `limit=1000` every 300 s by `_signal_outcome_backfill_loop` (`backend/market_data/services/ingestion_service.py:2393`).
 
 The queue returns the 1,000 oldest rows that are missing any outcome. Since HS-01, a row stays queued until its full 20-bar outcome exists. Some rows can't get there for months, or ever:
@@ -127,11 +127,22 @@ Each pass reprocesses those same rows and never reaches the newer rows behind th
 
 **Impact:** most rows never mature, so every screen that counts complete outcomes shows only rows that matured before the fix. This doesn't clear itself. New weekly and daily rows keep the front of the queue full. Signals for removed symbols stay until retention prunes them, which takes 1,096 days for daily and weekly rows.
 
-**Resolution:** pick candidates that can make progress. For example, record when each row was last checked and order by that, or skip rows whose symbol and timeframe have no bar newer than the last check. Mark rows that can no longer mature, such as a symbol that stopped updating, as abandoned with a reason instead of retrying them forever. Add a regression test with more than one batch of unfinishable older rows and one finishable newer row.
+**Resolution:** the queue now returns a pending row only when recomputing it would write something new. For each symbol and timeframe with pending rows, it reads the 20 newest bar timestamps. A row with N later bars is exactly one whose anchor is older than the Nth-newest bar. A row is selected when its pair holds enough later bars for its next missing window: 5 bars for the 5-bar return, 10 for the 10-bar return, and 20 for the 20-bar return and excursions. Candidates from every pair are then merged oldest first.
+
+Rows that cannot advance are skipped rather than marked abandoned, so no schema change was needed. A symbol that starts receiving bars again becomes eligible on its own. The queue and the recorder now share `outcome_anchor` and `OUTCOME_WINDOWS`, so selection and calculation use the same daily midnight anchor and windows.
+
+**Tests:**
+
+- `test_get_signals_needing_outcomes_skips_rows_that_cannot_advance`: three stuck rows fill a batch of two, and the newer finishable row is still returned.
+- `test_get_signals_needing_outcomes_waits_for_the_next_missing_window` and `..._needs_twenty_bars_for_the_final_window`: a partial row returns only once its 10th, then 20th, later bar exists.
+- `test_backfill_outcomes_is_not_blocked_by_rows_that_cannot_finish`: through the recorder, a batch of two completes the newer row and leaves the stuck ones untouched.
+- `test_backfill_outcomes_bulk_prefetch_two_signals_same_symbol` now expects one update, not two. The row with a single later bar is no longer selected, whereas before it counted as "updated" although nothing was written.
+
+**Checked on a copy of the live tables:** the new selection returned 1,000 candidates in 1.7 s. It found 155,314 of 156,940 pending rows able to advance. The dev server runs with `--reload`, so the fix went live when the file was saved. Minutes later, the TSLA 5m signal from 2026-09-14 18:20 had its 20-bar return and excursions.
 
 ### HS-16 — AI Analysis reads raw price movement as the signals' track record
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2b)
 **Where:** `SignalRepository.get_stats` (`backend/repositories/signal_repository.py:367`) → `signal_recorder.get_stats` → `_signal_stats_context` (`backend/ai/context.py:568`) → `historical_signal_stats` in the analysis prompt. Also Chat's `get_signal_history_tool` (`backend/ai/market_tools.py:2584`; `outcome_available` at `:2619`).
 
 `get_stats` averages raw `return_5b` and `return_10b` across every row that has a 5-bar return, including neutral and warm-up rows. The win rate beside those averages is directional, but the averages are not. A row counts as having an outcome once its 5-bar return exists, which is the rule HS-01 replaced. `get_signal_history_tool` returns raw returns without saying they are raw, and it sets `outcome_available` from the 5-bar return alone.
@@ -147,7 +158,25 @@ Each pass reprocesses those same rows and never reaches the newer rows behind th
 
 **Impact:** for SMCI, NVDA, and TSLA, the model is told the engine's signals averaged gains when its calls lost money. The numbers also contradict the win rate next to them. This is the defect HS-03 fixed on screen.
 
-**Resolution:** return direction-adjusted averages that use the same rule as the regime aggregate. Exclude neutral and unknown rows, count only complete outcomes, and include the sample size. In the chat tool, label raw fields as underlying movement and apply the full-outcome rule. Share one backend helper with the export's `_directional_value` so the rule is defined once.
+`get_stats` also feeds the Scanner's Signal Explanation panel (`GET /api/scanner/{symbol}?include_history=true`), which showed the same raw averages as "avg 5-bar" next to a directional win rate.
+
+**Resolution:**
+
+- **Shared rule:** `signal_repository.py` now defines the rule once. `directional_outcome` works on a row and `directional_outcome_expr` in SQL; both negate a bearish call's return and swap its excursions. The full-outcome rule lives there too, as `is_outcome_complete` and `outcome_complete_filter`. The regime aggregate, the CSV export (replacing the router's `_directional_value`), `get_stats`, and the chat tool all use these helpers.
+- **`get_stats`:** averages and win rate now cover complete bullish and bearish outcomes only, and the averages are direction-adjusted. It adds `directional_outcomes` (the sample size), and `with_outcomes` now counts complete outcomes.
+- **AI context:** the model receives `avg_signal_return_5b`, `avg_signal_return_10b`, and `complete_directional_signals`, plus a `basis` note saying the figures are direction-adjusted.
+- **Chat tool:** `get_signal_history` now labels raw fields `underlying_return_*` and adds `signal_return_*`. `outcome_available` is replaced by `outcome_complete`, which follows the full-outcome rule.
+- **Signal Explanation panel:** it now reads "N completed bullish/bearish calls" and "avg signal 5-bar / 10-bar".
+
+**Tests:**
+
+- `test_averages_are_direction_adjusted`: a bearish call that worked counts as a gain, and a neutral row doesn't move the average.
+- `test_partial_outcomes_are_left_out`: a row with only its 5-bar return is excluded.
+- `test_signal_stats_context_is_populated` now expects the labelled keys and a +0.5% average (+2% bullish, −1% bearish loss).
+- `test_signal_history_tool_reads_recorded_signals_and_transitions`: a bearish call followed by a 1.2% rise reports underlying +1.2% and signal −1.2%.
+- The Signal Explanation panel test requires the new count and label.
+
+**Checked on a copy of the live tables:** daily `get_stats` now reports SMCI −4.98%, NVDA −0.57%, TSLA −0.82%, and PLTR +1.45%, in line with the directional column above.
 
 ---
 
@@ -286,8 +315,8 @@ The partial-fill test said a later backfill completes remaining outcomes but did
 - a `HistoricalSignalCard` test (none exists);
 - neutral replay calls and session alignment (HS-10);
 - duplicate inserts (HS-12);
-- queue progress past unfinishable rows (HS-15);
-- direction-adjusted AI stats (HS-16).
+- ~~queue progress past unfinishable rows (HS-15)~~: covered in batch 2b;
+- ~~direction-adjusted AI stats (HS-16)~~: covered in batch 2b.
 
 **Resolution:** add focused unit, API, and UI regressions for each open finding before changing behaviour; retain them as the Historical Signals release gate.
 
@@ -323,10 +352,10 @@ A 180-day manual delete therefore reaches only 1h, 4h, 1d, and 1wk signals. The 
 
 ## Gaps (not bugs)
 
-- **Outcome throughput:** the outcome loop handles at most 1,000 rows every 300 s, about 12,000 an hour. The pending backlog is 156,940 rows. Even after HS-15, clearing it takes about half a day of ingestion.
+- **Outcome throughput:** the outcome loop handles at most 1,000 rows every 300 s, about 12,000 an hour. After HS-15, about 155,000 pending rows can advance, so clearing the backlog takes roughly 13 hours of ingestion. `POST /api/signals/backfill` can drain it faster by hand.
 - **Scope definitions differ:** startup gap-fill's `_watched_symbols` takes every enabled symbol, whether or not its watchlist is active. The research `all_active` scope requires an active watchlist. Signals are therefore recorded for symbols that the default research scope excludes.
 - **Export memory:** the server streams the CSV, but the client reads it whole with `fetchRaw` before downloading. An `all_stored` export of about 617,000 rows is held in browser memory.
-- **Test coverage:** the gaps still open are listed in HS-14. None of the batch 1 or 2a regressions exercises the ingestion loop's batch size, which is why HS-15 wasn't caught.
+- **Test coverage:** the gaps still open are listed in HS-14. HS-15 wasn't caught because no batch 1 or 2a regression filled a batch with rows that could not finish; batch 2b added one.
 
 ## Enhancements
 
@@ -337,6 +366,23 @@ A 180-day manual delete therefore reaches only 1h, 4h, 1d, and 1wk signals. The 
 5. **Replay costs:** add optional commission and slippage to the simulated trades once HS-10 is fixed.
 
 ## Verification
+
+### Batch 2b (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| Signals API, all repository tests, signal recorder and replay, AI market tools, analysis, chat, scanner API | 558 passed, 17 subtests passed |
+| `SignalExplanationPanel`, `SignalResearchDashboard`, `HistoricalReplayPanel` suites | 3 passed |
+| TypeScript (`tsc --noEmit`) and `ruff` on the changed files | clean |
+
+**Mutation check:**
+
+- Restoring the old oldest-first queue fails five tests: the three new repository queue tests and both recorder tests above.
+- Restoring raw averages in `get_stats` fails three stats tests.
+
+**Probe on a copy of the live tables:** `signals` and `bars` were copied into a scratch database. The offline test guard refuses the live file, even read-only. On that copy, the queue selected 1,000 candidates in 1.7 s, and the direction-adjusted stats matched the HS-16 table.
+
+The full backend and frontend suites and the production build were not run.
 
 ### Review of batches 1 and 2a (2026-09-24, at `8f6a803`)
 
@@ -380,6 +426,7 @@ The full backend and frontend suites and the production build were not run for t
 - **Review and batch 1:** commit `8eb7ac9`, `fix(signals): correct historical outcome research`.
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
 - **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
+- **Batch 2b:** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -393,6 +440,8 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-06 | ✅ COMPLETE | `f762f8a` | `router.py`, `signal_repository.py`, `api.ts`, dashboard, tests | API and UI | Server-side research page and full scoped export. |
 | 2026-09-24 | HS-14 | ⚠️ PARTIAL | `8eb7ac9`, `f762f8a` | tests | see entry | Several regressions added; card, replay, duplicate, queue, and AI coverage remain. |
 | 2026-09-24 | HS-15 to HS-18 | ❌ NOT STARTED | `59e269a` | `docs/Version_5/v5_historical_signal_bug_fixes.md` | 9 live-database checks | Review of batches 1 and 2a logged four findings and refreshed HS-07 to HS-10 and HS-12 evidence. |
+| 2026-09-24 | HS-15 | ✅ COMPLETE | batch 2b | `signal_repository.py`, `signal_recorder.py`, `test_signal_repository.py`, `test_signal_recorder.py` | 4 new, 3 updated | Queue selects only rows that stored bars can advance. |
+| 2026-09-24 | HS-16 | ✅ COMPLETE | batch 2b | `signal_repository.py`, `router.py`, `context.py`, `market_tools.py`, `SignalExplanationPanel.tsx`, `api.ts`, tests | 2 new, 4 updated | One directional rule; AI, chat, and Scanner stats direction-adjusted and complete-only. |
 
 ---
 

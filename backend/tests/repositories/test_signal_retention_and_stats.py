@@ -41,7 +41,12 @@ class _Db(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine)
         self.addCleanup(self.engine.dispose)
 
-    def _add(self, tf="1m", days_old=0, symbol="AAPL", state="bullish", r5=None, r10=None, n=1):
+    def _add(
+        self, tf="1m", days_old=0, symbol="AAPL", state="bullish", r5=None, r10=None, n=1,
+        complete=True,
+    ):
+        """A signal row; with ``r5`` and ``complete``, its 20-bar outcome is filled in too."""
+        finished = r5 is not None and complete
         with self.Session() as db:
             for i in range(n):
                 db.add(
@@ -52,6 +57,9 @@ class _Db(unittest.TestCase):
                         trend_state=state,
                         return_5b=r5,
                         return_10b=r10,
+                        return_20b=r10 if finished else None,
+                        mfe=2.0 if finished else None,
+                        mae=-2.0 if finished else None,
                     )
                 )
             db.commit()
@@ -135,6 +143,7 @@ class TestSignalStats(_Db):
             {
                 "total": 0,
                 "with_outcomes": 0,
+                "directional_outcomes": 0,
                 "avg_return_5b": None,
                 "avg_return_10b": None,
                 "win_rate": None,
@@ -170,6 +179,24 @@ class TestSignalStats(_Db):
         stats = self._stats()
         self.assertEqual((stats["avg_return_5b"], stats["avg_return_10b"]), (2.0, 4.0))
 
+    def test_averages_are_direction_adjusted(self):
+        """HS-16: a bearish call that worked counts as a gain, and neutral rows stay out."""
+        self._add(state="bullish", r5=2.0, r10=4.0)
+        self._add(state="bearish", r5=-3.0, r10=-5.0)  # price fell: the call earned 3% / 5%
+        self._add(state="neutral", r5=10.0, r10=10.0)  # no call, so no effect
+        stats = self._stats()
+        self.assertEqual((stats["avg_return_5b"], stats["avg_return_10b"]), (2.5, 4.5))
+        self.assertEqual((stats["with_outcomes"], stats["directional_outcomes"]), (3, 2))
+        self.assertEqual(stats["win_rate"], 1.0)
+
+    def test_partial_outcomes_are_left_out(self):
+        """A row with its 5-bar return but no 20-bar outcome is not a finished result yet."""
+        self._add(state="bullish", r5=1.0, r10=1.0)
+        self._add(state="bullish", r5=-9.0, r10=None, complete=False)
+        stats = self._stats()
+        self.assertEqual((stats["total"], stats["with_outcomes"]), (2, 1))
+        self.assertEqual((stats["avg_return_5b"], stats["win_rate"]), (1.0, 1.0))
+
     def test_filters_by_symbol_case_insensitively_and_by_timeframe(self):
         self._add(tf="1d", symbol="AAPL", state="bullish", r5=1.0, r10=1.0)
         self._add(tf="1h", symbol="AAPL", state="bullish", r5=-1.0, r10=-1.0)
@@ -189,8 +216,17 @@ class TestAiContextGetsRealStats(_Db):
         self._add(tf="1d", state="bearish", r5=1.0, r10=1.0)
         with patch("backend.services.signal_recorder.SessionLocal", self.Session):
             ctx = _signal_stats_context("AAPL", "1d")
+        # The bearish call lost (price rose 1%), so it counts as -1% against the bullish +2%.
         self.assertEqual(
-            ctx, {"total_signals": 2, "avg_return_5b": 1.5, "avg_return_10b": 2.5, "win_rate": 0.5}
+            ctx,
+            {
+                "total_signals": 2,
+                "complete_directional_signals": 2,
+                "avg_signal_return_5b": 0.5,
+                "avg_signal_return_10b": 1.5,
+                "win_rate": 0.5,
+                "basis": "direction-adjusted: a bearish call earns when price falls; neutral signals excluded",
+            },
         )
 
     def test_the_recorder_has_the_method_the_ai_calls(self):

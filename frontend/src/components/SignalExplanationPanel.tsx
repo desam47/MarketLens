@@ -156,13 +156,13 @@ export function SignalExplanationPanel({ symbol, explanation, liveQuote, tape }:
       <div className="signal-history-strip">
         <div>
           <span className="score-breakdown-title">Historical daily signals</span>
-          <p>{history ? `${history.with_outcomes} completed outcomes from ${history.total} recorded signals.` : 'No completed historical outcomes yet.'}</p>
+          <p>{history ? `${history.directional_outcomes} completed bullish/bearish calls from ${history.total} recorded signals.` : 'No completed historical outcomes yet.'}</p>
         </div>
         {history && (
           <div className="signal-history-metrics">
             <span><strong>{history.win_rate == null ? '—' : `${(history.win_rate * 100).toFixed(0)}%`}</strong><small> win rate</small></span>
-            <span><strong>{formatReturn(history.avg_return_5b)}</strong><small> avg 5-bar</small></span>
-            <span><strong>{formatReturn(history.avg_return_10b)}</strong><small> avg 10-bar</small></span>
+            <span><strong>{formatReturn(history.avg_return_5b)}</strong><small> avg signal 5-bar</small></span>
+            <span><strong>{formatReturn(history.avg_return_10b)}</strong><small> avg signal 10-bar</small></span>
           </div>
         )}
       </div>

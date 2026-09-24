@@ -1661,7 +1661,11 @@ def test_signal_history_tool_reads_recorded_signals_and_transitions() -> None:
         assert result.source_timestamp == "2026-09-18T12:00:00-04:00"
         assert result.state_counts == {"bullish": 2, "bearish": 1}
         assert result.transitions == [{"timestamp": "2026-09-18T11:00:00-04:00", "symbol": "ZZSIG", "from": "bearish", "to": "bullish"}]
-        assert [row["outcome_available"] for row in result.signals] == [False, False, True]
+        assert [row["outcome_complete"] for row in result.signals] == [False, False, False]  # 5-bar only
+        oldest = result.signals[-1]
+        # A bearish call followed by a 1.2% rise lost 1.2%; the raw move stays labelled as such.
+        assert (oldest["underlying_return_5b"], oldest["signal_return_5b"]) == (1.2, -1.2)
+        assert "return_5b" not in oldest
 
         scoped = get_signal_history_tool(SignalHistoryRequest(symbol="ZZSIG", start="2026-09-18T11:30:00", end="2026-09-18T23:59:59"))
         assert scoped.signal_count == 1

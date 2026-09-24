@@ -276,6 +276,31 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(sig.mae)
         self.assertFalse(sig._outcome_missing)
 
+    def test_backfill_outcomes_is_not_blocked_by_rows_that_cannot_finish(self):
+        """HS-15: a full batch of stuck older rows must not starve a newer finishable row."""
+        # NOK stopped updating: two bars after its signals, never five.
+        for day in (1, 2, 3):
+            self._seed_signal("NOK", datetime(2025, 1, day), 10.0)
+        with self.Session() as db:
+            for day in (4, 5):
+                db.add(BarModel(
+                    symbol="NOK", timeframe="1d", timestamp=datetime(2025, 1, day),
+                    open=10.0, high=10.1, low=9.9, close=10.0, volume=1_000,
+                    provider="test", data_status="historical",
+                ))
+            db.commit()
+        newer = datetime(2025, 3, 1)
+        self._seed_signal("AAPL", newer, 100.0)
+        self._seed_bars("AAPL", newer, 100.0)
+
+        self.assertEqual(self.recorder.backfill_outcomes(batch_size=2), 1)
+        with self.Session() as db:
+            aapl = db.query(HistoricalSignal).filter_by(symbol="AAPL").one()
+            nok = db.query(HistoricalSignal).filter_by(symbol="NOK").all()
+        self.assertIsNotNone(aapl.return_20b)
+        self.assertFalse(aapl._outcome_missing)
+        self.assertTrue(all(sig.return_5b is None for sig in nok))
+
     def test_backfill_outcomes_zero_candidates(self):
         """No signals needing outcomes → returns 0."""
         updated = self.recorder.backfill_outcomes(batch_size=10)
@@ -371,7 +396,7 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         """Regression: two signals for the same symbol are handled independently.
 
         Signal A at Jan 1 (5 future bars → partial).
-        Signal B at Jan 7 (1 future bar → still pending).
+        Signal B at Jan 7 (1 future bar → still pending, not selected).
         Both are in the same (AAPL, 1d) bucket but must not share results.
         """
         anchor = datetime(2025, 1, 1)
@@ -420,8 +445,9 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             )
             db.commit()
 
+        # Only A is selected: B's single later bar cannot fill any window yet (HS-15).
         updated = self.recorder.backfill_outcomes(batch_size=50)
-        self.assertEqual(updated, 2)
+        self.assertEqual(updated, 1)
 
         with self.Session() as db:
             sigs = (

@@ -21,7 +21,7 @@ const explanation = {
   },
   changes: null,
   historical_performance: {
-    total: 12, with_outcomes: 10, avg_return_5b: 1.25, avg_return_10b: 2.5, win_rate: 0.7,
+    total: 12, with_outcomes: 10, directional_outcomes: 8, avg_return_5b: 1.25, avg_return_10b: 2.5, win_rate: 0.7,
   },
 };
 
@@ -34,4 +34,6 @@ test('renders signal drivers, timeframe agreement, freshness, and history', () =
   expect(screen.getByText('100%')).toBeInTheDocument();
   expect(screen.getByText(/Fresh · 20s ago/)).toBeInTheDocument();
   expect(screen.getByText('70%')).toBeInTheDocument();
+  expect(screen.getByText('8 completed bullish/bearish calls from 12 recorded signals.')).toBeInTheDocument();
+  expect(screen.getByText('avg signal 5-bar')).toBeInTheDocument();
 });

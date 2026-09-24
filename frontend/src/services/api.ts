@@ -803,7 +803,11 @@ export interface SignalChangeSummary {
 
 export interface SignalHistoricalPerformance {
   total: number;
+  /** Signals whose full 5/10/20-bar outcome is complete. */
   with_outcomes: number;
+  /** Complete bullish/bearish calls; the averages and win rate use only these. */
+  directional_outcomes: number;
+  /** Direction-adjusted: a bearish call earns when price falls. */
   avg_return_5b: number | null;
   avg_return_10b: number | null;
   win_rate: number | null;
