@@ -95,8 +95,11 @@ const SystemStatusBanner = memo(function SystemStatusBanner({
           <span className="value">
             {loading ? <SkeletonBlock width="80px" height="1.5rem" /> : (
               <>
-                <span className={`status-pulse ${freshness.pulseClass}`}></span>
-                {performance?.ingestion.tf_update_latency_seconds == null ? 'N/A' : `${Math.round(performance.ingestion.tf_update_latency_seconds)}s`}
+                <span className={`status-pulse ${freshness.pulseClass}`} aria-hidden="true"></span>
+                {/* Name the status as well as colouring it, so it doesn't rely on colour alone. */}
+                {performance?.ingestion.tf_update_latency_seconds == null
+                  ? freshness.label
+                  : `${freshness.label} · ${Math.round(performance.ingestion.tf_update_latency_seconds)}s`}
               </>
             )}
           </span>

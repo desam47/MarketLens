@@ -49,9 +49,9 @@ describe('SystemHealth', () => {
     expect(screen.getByRole('heading', { name: 'Runtime & Cache' })).toBeInTheDocument();
     expect(screen.getByText('Quotes')).toBeInTheDocument();
     expect(screen.getByText('90%')).toBeInTheDocument();
-    // Data freshness is the timeframe update latency.
+    // Data freshness names its status as well as colouring it, then gives the latency.
     expect(screen.getByText('Data Freshness')).toBeInTheDocument();
-    expect(screen.getByText('15s')).toBeInTheDocument();
+    expect(screen.getByText('Fresh · 15s')).toBeInTheDocument();
     expect(screen.getByText('Redis:')).toBeInTheDocument();
     expect(screen.getAllByText('Running')).toHaveLength(2);
     expect(screen.getByRole('heading', { name: 'Provider Availability' })).toBeInTheDocument();
@@ -61,5 +61,18 @@ describe('SystemHealth', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show Advanced Diagnostics' }));
     expect(screen.getAllByText('yfinance')).toHaveLength(2);  // primary provider + its status row
     expect(screen.getByText('finnhub')).toBeInTheDocument();
+  });
+
+  it.each([
+    [600, 'Stale · 600s'],
+    [120, 'Delayed · 120s'],
+    [null, 'Unknown'],
+  ])('names the freshness status for latency %s', async (latency, label) => {
+    const perf = await api.getSystemPerformance();
+    jest.spyOn(api, 'getSystemPerformance').mockResolvedValue({
+      ...perf, ingestion: { ...perf.ingestion, tf_update_latency_seconds: latency as any },
+    });
+    render(<SystemHealth />);
+    await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument());
   });
 });
