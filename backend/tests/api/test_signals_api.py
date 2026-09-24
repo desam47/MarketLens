@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from backend.api.main import app  # noqa: F401
 from backend.models.signal import HistoricalSignal
+from backend.models.watchlist import Watchlist, WatchlistSymbol
 
 
 def _override_get_db(session_factory):
@@ -121,6 +122,19 @@ class TestSignalsAPI(unittest.TestCase):
             db.refresh(sig)
             return sig
 
+    def _watchlist(self, name: str, symbols: list[str]) -> Watchlist:
+        with self.Session() as db:
+            watchlist = Watchlist(name=name, is_active=True)
+            db.add(watchlist)
+            db.flush()
+            db.add_all([
+                WatchlistSymbol(watchlist_id=watchlist.id, symbol=symbol, is_enabled=True, position=index)
+                for index, symbol in enumerate(symbols)
+            ])
+            db.commit()
+            db.refresh(watchlist)
+            return watchlist
+
     # --- list ---
 
     def test_list_signals_empty(self):
@@ -157,6 +171,63 @@ class TestSignalsAPI(unittest.TestCase):
             self._seed(symbol="AAPL", timestamp=datetime(2025, 1, i + 1))
         r = self.client.get("/api/signals/?limit=3&include_all=true")
         self.assertEqual(len(r.json()), 3)
+
+    def test_list_signals_unions_all_active_watchlists(self):
+        first = self._watchlist("Growth", ["AAPL"])
+        self._watchlist("Income", ["MSFT", "AAPL"])
+        self._seed(symbol="AAPL")
+        self._seed(symbol="MSFT")
+        self._seed(symbol="TSLA")
+
+        all_active = self.client.get("/api/signals/?scope=all_active")
+        self.assertEqual({row["symbol"] for row in all_active.json()}, {"AAPL", "MSFT"})
+
+        selected = self.client.get(f"/api/signals/?scope=watchlist&watchlist_id={first.id}")
+        self.assertEqual([row["symbol"] for row in selected.json()], ["AAPL"])
+
+    # --- research page and export ---
+
+    def test_research_page_filters_on_server_and_reports_coverage(self):
+        watchlist = self._watchlist("Growth", ["AAPL"])
+        self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 1))
+        self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 2))
+        self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 3))
+        self._seed(symbol="MSFT", timestamp=datetime(2025, 1, 3))
+
+        response = self.client.get(
+            f"/api/signals/research/signals?scope=watchlist&watchlist_id={watchlist.id}"
+            "&start_date=2025-01-02&end_date=2025-01-03&limit=1&offset=0"
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total"], 2)
+        self.assertEqual(len(body["records"]), 1)
+        self.assertTrue(body["has_more"])
+        self.assertEqual(body["scope"]["watchlist_names"], ["Growth"])
+        self.assertEqual(body["scope"]["symbols"], ["AAPL"])
+        self.assertEqual(body["records"][0]["timestamp"][:10], "2025-01-03")
+
+        second = self.client.get(
+            f"/api/signals/research/signals?scope=watchlist&watchlist_id={watchlist.id}"
+            "&start_date=2025-01-02&end_date=2025-01-03&limit=1&offset=1"
+        )
+        self.assertFalse(second.json()["has_more"])
+        self.assertEqual(second.json()["records"][0]["timestamp"][:10], "2025-01-02")
+
+    def test_research_export_uses_full_scoped_dataset_not_the_visible_page(self):
+        watchlist = self._watchlist("Growth", ["AAPL"])
+        self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 1))
+        self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 2))
+        self._seed(symbol="MSFT", timestamp=datetime(2025, 1, 2))
+
+        response = self.client.get(
+            f"/api/signals/research/export?scope=watchlist&watchlist_id={watchlist.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"].split(";")[0], "text/csv")
+        rows = response.text.strip().splitlines()
+        self.assertEqual(len(rows), 3)  # header plus both AAPL rows, never MSFT
+        self.assertTrue(all("MSFT" not in row for row in rows))
 
     # --- get by id ---
 

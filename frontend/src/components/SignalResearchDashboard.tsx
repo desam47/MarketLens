@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import api, { HistoricalSignal } from '../services/api';
+import api, { HistoricalSignal, SignalResearchPage, SignalScopeMode, Watchlist } from '../services/api';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import {
   directionalOutcome,
@@ -9,7 +9,6 @@ import {
 } from '../utils/signalOutcomes';
 
 const RESEARCH_TIMEFRAMES = ['all', '1m', '5m', '15m', '1h', '1d'] as const;
-const SIGNAL_LIMIT = 1000;
 
 type MetricRow = {
   label: string;
@@ -21,10 +20,6 @@ type MetricRow = {
 
 function fmt(value: number | null | undefined, suffix = ''): string {
   return value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(2)}${suffix}`;
-}
-
-function dateKey(timestamp: string): string {
-  return timestamp.slice(0, 10);
 }
 
 function metricRows(signals: HistoricalSignal[], getLabel: (signal: HistoricalSignal) => string): MetricRow[] {
@@ -56,28 +51,7 @@ function metricRows(signals: HistoricalSignal[], getLabel: (signal: HistoricalSi
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
-function downloadCsv(signals: HistoricalSignal[]): void {
-  const header = ['timestamp', 'symbol', 'timeframe', 'trend_state', 'market_regime', 'raw_return_5b', 'raw_return_10b', 'raw_return_20b', 'raw_mfe', 'raw_mae', 'signal_return_5b', 'signal_return_10b', 'signal_return_20b', 'favorable_excursion', 'adverse_excursion'];
-  const rows = signals.map((signal) => [
-    signal.timestamp,
-    signal.symbol,
-    signal.timeframe,
-    signal.trend_state || '',
-    signal.market_regime || '',
-    signal.return_5b ?? '',
-    signal.return_10b ?? '',
-    signal.return_20b ?? '',
-    signal.mfe ?? '',
-    signal.mae ?? '',
-    directionalOutcome(signal, 'return_5b') ?? '',
-    directionalOutcome(signal, 'return_10b') ?? '',
-    directionalOutcome(signal, 'return_20b') ?? '',
-    directionalOutcome(signal, 'mfe') ?? '',
-    directionalOutcome(signal, 'mae') ?? '',
-  ]);
-  const csv = [header, ...rows]
-    .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
-    .join('\n');
+function downloadCsv(csv: string): void {
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');
   link.href = url;
@@ -90,42 +64,60 @@ function downloadCsv(signals: HistoricalSignal[]): void {
 
 export function SignalResearchDashboard() {
   const [signals, setSignals] = useState<HistoricalSignal[]>([]);
+  const [page, setPage] = useState<SignalResearchPage | null>(null);
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [scope, setScope] = useState<SignalScopeMode>('all_active');
+  const [watchlistId, setWatchlistId] = useState<number | null>(null);
   const [timeframe, setTimeframe] = useState<string>('all');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const validDateRange = !fromDate || !toDate || fromDate <= toDate;
 
-  const loadSignals = useCallback(async () => {
+  const query = useMemo(() => ({
+    timeframe: timeframe === 'all' ? undefined : timeframe,
+    startDate: fromDate || undefined,
+    endDate: toDate || undefined,
+    scope,
+    watchlistId: scope === 'watchlist' ? watchlistId ?? undefined : undefined,
+    completedOnly: true,
+    limit: 250,
+  }), [fromDate, scope, timeframe, toDate, watchlistId]);
+
+  const loadSignals = useCallback(async (offset = 0) => {
+    if (!validDateRange || (scope === 'watchlist' && watchlistId == null)) return;
     setLoading(true);
     setError(null);
     try {
-      setSignals(await api.listSignals(undefined, undefined, SIGNAL_LIMIT, false));
+      const result = await api.getSignalResearch({ ...query, offset });
+      setPage(result);
+      setSignals(result.records);
     } catch (err: any) {
       setSignals([]);
+      setPage(null);
       setError(err?.message || 'Unable to load signal research data.');
     } finally {
       setLoading(false);
     }
+  }, [query, scope, validDateRange, watchlistId]);
+
+  useEffect(() => {
+    let active = true;
+    api.getWatchlists()
+      .then((rows) => { if (active) setWatchlists(rows.filter((row) => row.is_active)); })
+      .catch(() => { if (active) setWatchlists([]); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
-    void loadSignals();
+    void loadSignals(0);
   }, [loadSignals]);
 
-  const validDateRange = !fromDate || !toDate || fromDate <= toDate;
-  const filteredSignals = useMemo(() => {
-    if (!validDateRange) return [];
-    return signals.filter((signal) => {
-      const day = dateKey(signal.timestamp);
-      return (timeframe === 'all' || signal.timeframe === timeframe)
-        && (!fromDate || day >= fromDate)
-        && (!toDate || day <= toDate);
-    });
-  }, [signals, timeframe, fromDate, toDate, validDateRange]);
   const completedSignals = useMemo(
-    () => filteredSignals.filter(isSignalOutcomeComplete),
-    [filteredSignals],
+    () => signals.filter(isSignalOutcomeComplete),
+    [signals],
   );
   const directionalSignals = completedSignals.filter(isDirectionalSignal);
   const overallWinRate = directionalSignals.length
@@ -139,21 +131,60 @@ export function SignalResearchDashboard() {
       return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     })()
     : null;
-  const regimeRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.market_regime || 'unknown'), [filteredSignals]);
-  const trendRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.trend_state || 'unknown'), [filteredSignals]);
-  const timeframeRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.timeframe), [filteredSignals]);
+  const regimeRows = useMemo(() => metricRows(signals, (signal) => signal.market_regime || 'unknown'), [signals]);
+  const trendRows = useMemo(() => metricRows(signals, (signal) => signal.trend_state || 'unknown'), [signals]);
+  const timeframeRows = useMemo(() => metricRows(signals, (signal) => signal.timeframe), [signals]);
+  const scopeLabel = page
+    ? page.scope.mode === 'all_stored'
+      ? 'All stored signals'
+      : `${page.scope.watchlist_names.join(', ') || 'No active watchlists'} · ${page.scope.symbols.length} enabled symbols`
+    : 'Resolving scope…';
+
+  const exportResearch = async () => {
+    if (!validDateRange || (scope === 'watchlist' && watchlistId == null)) return;
+    setExporting(true);
+    setError(null);
+    try {
+      downloadCsv(await api.exportSignalResearch(query));
+    } catch (err: any) {
+      setError(err?.message || 'Unable to export the scoped signal research data.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="card signal-research-card">
       <div className="research-heading">
         <div>
           <h2>Signal Research Dashboard</h2>
-          <p className="label">Direction-adjusted completed 5-bar outcomes across the active watchlist. Compare one timeframe at a time before trusting a pattern.</p>
+          <p className="label">Direction-adjusted completed 5-bar outcomes. Scope and date coverage are shown below; page metrics never silently stand in for a larger dataset.</p>
         </div>
-        <button className="btn" onClick={() => downloadCsv(completedSignals)} disabled={!completedSignals.length}>Export CSV</button>
+        <button className="btn" onClick={() => void exportResearch()} disabled={!page?.total || exporting}>{exporting ? 'Exporting…' : 'Export CSV'}</button>
       </div>
 
       <div className="research-controls">
+        <label>
+          <span>Scope</span>
+          <select
+            value={scope === 'watchlist' ? `watchlist:${watchlistId ?? ''}` : scope}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value.startsWith('watchlist:')) {
+                setScope('watchlist');
+                setWatchlistId(Number(value.slice('watchlist:'.length)) || null);
+              } else {
+                setScope(value as SignalScopeMode);
+                setWatchlistId(null);
+              }
+            }}
+            aria-label="Research scope"
+          >
+            <option value="all_active">All active watchlists</option>
+            {watchlists.map((watchlist) => <option key={watchlist.id} value={`watchlist:${watchlist.id}`}>{watchlist.name}</option>)}
+            <option value="all_stored">All stored signals (offline research)</option>
+          </select>
+        </label>
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Research timeframe">
@@ -162,17 +193,22 @@ export function SignalResearchDashboard() {
         </label>
         <label><span>From</span><input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} aria-label="Research start date" /></label>
         <label><span>To</span><input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} aria-label="Research end date" /></label>
-        <button className="btn btn-primary" onClick={() => void loadSignals()} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
+        <button className="btn btn-primary" onClick={() => void loadSignals(0)} disabled={loading || !validDateRange}>{loading ? 'Loading…' : 'Refresh'}</button>
         {(fromDate || toDate) && <button className="btn" onClick={() => { setFromDate(''); setToDate(''); }}>Clear Dates</button>}
       </div>
 
       {error && <div className="error-text research-status">{error}</div>}
       {!error && !validDateRange && <div className="error-text research-status">The start date must be on or before the end date.</div>}
-      {!error && validDateRange && !loading && !signals.length && <div className="empty-state research-empty">No historical signals are available for the active watchlist.</div>}
+      {!error && validDateRange && page && (
+        <p className="label research-status" aria-label="Research coverage">
+          Scope: {scopeLabel}. Showing {page.total ? `${page.offset + 1}–${page.offset + signals.length} of ${page.total}` : '0 of 0'} complete matching records; metrics below apply to this page. CSV exports all {page.total.toLocaleString()} matching records.
+        </p>
+      )}
+      {!error && validDateRange && !loading && page && !signals.length && <div className="empty-state research-empty">No complete historical signals match this scope and date range.</div>}
       {!error && validDateRange && signals.length > 0 && (
         <>
           <div className="research-metrics">
-            <div><small>Signals</small><strong>{filteredSignals.length}</strong></div>
+            <div><small>Records on this page</small><strong>{signals.length}</strong></div>
             <div><small>Complete outcomes</small><strong>{completedSignals.length}</strong></div>
             <div><small>Directional win rate</small><strong>{overallWinRate == null ? '—' : `${overallWinRate.toFixed(1)}%`}</strong></div>
             <div><small>Avg signal 5-bar return</small><strong>{fmt(averageReturn, '%')}</strong></div>
@@ -184,6 +220,12 @@ export function SignalResearchDashboard() {
             <ResearchTable title="By Trend State" rows={trendRows} />
             <ResearchTable title="By Timeframe" rows={timeframeRows} />
           </div>
+          {page && (page.offset > 0 || page.has_more) && (
+            <div className="research-controls">
+              <button className="btn" onClick={() => void loadSignals(Math.max(0, page.offset - page.limit))} disabled={loading || page.offset === 0}>Previous page</button>
+              <button className="btn" onClick={() => void loadSignals(page.offset + page.limit)} disabled={loading || !page.has_more}>Next page</button>
+            </div>
+          )}
         </>
       )}
     </div>

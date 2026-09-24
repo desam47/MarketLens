@@ -15,9 +15,12 @@ ingestion service share one path to the DB.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
+from io import StringIO
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_serializer
 from sqlalchemy.orm import Session
 
@@ -100,6 +103,114 @@ class BackfillResponse(BaseModel):
     updated: int
 
 
+SignalScopeMode = Literal["all_active", "watchlist", "all_stored"]
+
+
+class ResolvedSignalScope(BaseModel):
+    mode: SignalScopeMode
+    watchlist_ids: list[int]
+    watchlist_names: list[str]
+    symbols: list[str]
+
+
+class SignalResearchPage(BaseModel):
+    records: list[SignalResponse]
+    total: int
+    offset: int
+    limit: int
+    has_more: bool
+    scope: ResolvedSignalScope
+    timeframe: str | None
+    start_date: date | None
+    end_date: date | None
+
+
+def _resolve_signal_scope(
+    db: Session,
+    *,
+    scope: SignalScopeMode,
+    watchlist_id: int | None,
+    include_all: bool = False,
+) -> tuple[ResolvedSignalScope, list[str] | None]:
+    """Resolve a research request to explicit watchlists and enabled symbols.
+
+    ``include_all`` is retained for existing callers. It maps to the explicit
+    offline ``all_stored`` scope rather than changing default UI behaviour.
+    """
+    from backend.repositories.watchlist_repository import WatchlistRepository
+
+    if include_all:
+        scope = "all_stored"
+    wl_repo = WatchlistRepository(db)
+    if scope == "all_stored":
+        return ResolvedSignalScope(
+            mode="all_stored", watchlist_ids=[], watchlist_names=[], symbols=[]
+        ), None
+
+    if scope == "watchlist":
+        if watchlist_id is None:
+            raise HTTPException(status_code=422, detail="watchlist_id is required for scope=watchlist")
+        watchlist = wl_repo.get_watchlist(watchlist_id)
+        if watchlist is None or not watchlist.is_active:
+            raise HTTPException(status_code=404, detail="Active watchlist not found")
+        symbols = [s.symbol.upper() for s in wl_repo.get_watchlist_symbols(watchlist.id, enabled_only=True)]
+        return ResolvedSignalScope(
+            mode="watchlist",
+            watchlist_ids=[watchlist.id],
+            watchlist_names=[watchlist.name],
+            symbols=symbols,
+        ), symbols
+
+    watchlists = wl_repo.get_watchlists(active_only=True)
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for watchlist in watchlists:
+        for row in wl_repo.get_watchlist_symbols(watchlist.id, enabled_only=True):
+            symbol = row.symbol.upper()
+            if symbol not in seen:
+                seen.add(symbol)
+                symbols.append(symbol)
+    return ResolvedSignalScope(
+        mode="all_active",
+        watchlist_ids=[watchlist.id for watchlist in watchlists],
+        watchlist_names=[watchlist.name for watchlist in watchlists],
+        symbols=symbols,
+    ), symbols
+
+
+def _research_time_range(
+    start_date: date | None, end_date: date | None
+) -> tuple[datetime | None, datetime | None]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    start = datetime.combine(start_date, time.min) if start_date else None
+    end = (
+        datetime.combine(end_date + timedelta(days=1), time.min) - timedelta(microseconds=1)
+        if end_date else None
+    )
+    return start, end
+
+
+def _directional_value(signal: SignalResponse, field: str) -> float | None:
+    value = getattr(signal, field)
+    if value is None or signal.trend_state not in {"bullish", "bearish"}:
+        return None
+    if signal.trend_state == "bullish":
+        return value
+    if field == "mfe":
+        return -signal.mae if signal.mae is not None else None
+    if field == "mae":
+        return -signal.mfe if signal.mfe is not None else None
+    return -value
+
+
+def _csv_value(value: object) -> object:
+    """Avoid formula evaluation when a CSV is opened in a spreadsheet."""
+    if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
+        return "'" + value
+    return value
+
+
 # --- Endpoints -------------------------------------------------------------
 
 
@@ -108,6 +219,8 @@ def list_signals(
     symbol: str | None = None,
     timeframe: str | None = None,
     limit: int = Query(100, le=1000),
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
     include_all: bool = Query(
         False, description="Include signals for symbols not in the active watchlist"
     ),
@@ -123,19 +236,10 @@ def list_signals(
     dashboard. Pass ``include_all=true`` to query across all symbols (used
     by research endpoints).
     """
-    from backend.repositories.watchlist_repository import WatchlistRepository
-
-    watchlist_symbols: list[str] = []
-    if not include_all:
-        wl_repo = WatchlistRepository(db)
-        for wl in wl_repo.get_watchlists(active_only=True):
-            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
-            if syms:
-                watchlist_symbols = [s.symbol.upper() for s in syms]
-                break
-
-    # If no watchlist has symbols, return empty rather than all historical rows.
-    if not include_all and not watchlist_symbols:
+    _, watchlist_symbols = _resolve_signal_scope(
+        db, scope=scope, watchlist_id=watchlist_id, include_all=include_all
+    )
+    if watchlist_symbols == []:
         return []
 
     repo = SignalRepository(db)
@@ -143,13 +247,116 @@ def list_signals(
         symbol=symbol,
         timeframe=timeframe,
         limit=limit,
-        symbols=watchlist_symbols if not include_all else None,
+        symbols=watchlist_symbols,
         completed_only=completed_only,
+    )
+
+
+@router.get("/research/signals", response_model=SignalResearchPage)
+def get_signal_research_page(
+    timeframe: str | None = None,
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
+    completed_only: bool = Query(True),
+    limit: int = Query(250, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """A page of research records with explicit population and coverage evidence."""
+    resolved_scope, symbols = _resolve_signal_scope(
+        db, scope=scope, watchlist_id=watchlist_id
+    )
+    start_time, end_time = _research_time_range(start_date, end_date)
+    if symbols == []:
+        rows, total = [], 0
+    else:
+        rows, total = SignalRepository(db).get_history_page(
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            symbols=symbols,
+            completed_only=completed_only,
+            limit=limit,
+            offset=offset,
+        )
+    return SignalResearchPage(
+        records=rows,
+        total=total,
+        offset=offset,
+        limit=limit,
+        has_more=offset + len(rows) < total,
+        scope=resolved_scope,
+        timeframe=timeframe,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@router.get("/research/export")
+def export_signal_research(
+    timeframe: str | None = None,
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
+    completed_only: bool = Query(True),
+    db: Session = Depends(get_db),
+):
+    """Export the full explicitly scoped research population as a CSV."""
+    resolved_scope, symbols = _resolve_signal_scope(
+        db, scope=scope, watchlist_id=watchlist_id
+    )
+    start_time, end_time = _research_time_range(start_date, end_date)
+    import csv
+
+    header = [
+        "timestamp", "symbol", "timeframe", "trend_state", "market_regime",
+        "raw_return_5b", "raw_return_10b", "raw_return_20b", "raw_mfe", "raw_mae",
+        "signal_return_5b", "signal_return_10b", "signal_return_20b",
+        "favorable_excursion", "adverse_excursion", "scope_mode", "scope_watchlists",
+    ]
+
+    def csv_line(values: list[object]) -> str:
+        output = StringIO()
+        csv.writer(output).writerow([_csv_value(value) for value in values])
+        return output.getvalue()
+
+    def generate():
+        yield csv_line(header)
+        if symbols == []:
+            return
+        rows = SignalRepository(db).iter_history(
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            symbols=symbols,
+            completed_only=completed_only,
+        )
+        for row in rows:
+            signal = SignalResponse.model_validate(row)
+            yield csv_line([
+                format_edt_iso(signal.timestamp), signal.symbol, signal.timeframe,
+                signal.trend_state or "", signal.market_regime or "", signal.return_5b,
+                signal.return_10b, signal.return_20b, signal.mfe, signal.mae,
+                _directional_value(signal, "return_5b"), _directional_value(signal, "return_10b"),
+                _directional_value(signal, "return_20b"), _directional_value(signal, "mfe"),
+                _directional_value(signal, "mae"), resolved_scope.mode,
+                "; ".join(resolved_scope.watchlist_names),
+            ])
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=marketlens-signal-research.csv"},
     )
 
 
 @router.get("/research/regime-performance", response_model=list[RegimePerformance])
 def get_regime_performance(
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
     include_all: bool = Query(
         False, description="Include signals for symbols not in the active watchlist"
     ),
@@ -163,24 +370,19 @@ def get_regime_performance(
     signals for symbols that have been removed from the watchlist
     (used by offline research).
     """
-    watchlist_symbols: list[str] | None = None
-    if not include_all:
-        from backend.repositories.watchlist_repository import WatchlistRepository
-
-        wl_repo = WatchlistRepository(db)
-        for wl in wl_repo.get_watchlists(active_only=True):
-            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
-            if syms:
-                watchlist_symbols = [s.symbol.upper() for s in syms]
-                break
-        if not watchlist_symbols:
-            return []  # no watchlist symbols → nothing to report
+    _, watchlist_symbols = _resolve_signal_scope(
+        db, scope=scope, watchlist_id=watchlist_id, include_all=include_all
+    )
+    if watchlist_symbols == []:
+        return []
     repo = SignalRepository(db)
     return repo.get_performance_by_regime(symbols=watchlist_symbols)
 
 
 @router.get("/research/count-by-regime", response_model=list[RegimeCount])
 def get_signal_count_by_regime(
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
     include_all: bool = Query(
         False, description="Include signals for symbols not in the active watchlist"
     ),
@@ -190,18 +392,11 @@ def get_signal_count_by_regime(
 
     By default, only counts signals for symbols in the active watchlist.
     """
-    watchlist_symbols: list[str] | None = None
-    if not include_all:
-        from backend.repositories.watchlist_repository import WatchlistRepository
-
-        wl_repo = WatchlistRepository(db)
-        for wl in wl_repo.get_watchlists(active_only=True):
-            syms = wl_repo.get_watchlist_symbols(wl.id, enabled_only=True)
-            if syms:
-                watchlist_symbols = [s.symbol.upper() for s in syms]
-                break
-        if not watchlist_symbols:
-            return []  # no watchlist symbols → nothing to report
+    _, watchlist_symbols = _resolve_signal_scope(
+        db, scope=scope, watchlist_id=watchlist_id, include_all=include_all
+    )
+    if watchlist_symbols == []:
+        return []
     repo = SignalRepository(db)
     return repo.count_by_regime(symbols=watchlist_symbols)
 

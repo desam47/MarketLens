@@ -671,6 +671,53 @@ export interface RegimeCount {
   count: number;
 }
 
+export type SignalScopeMode = 'all_active' | 'watchlist' | 'all_stored';
+
+export interface SignalResearchScope {
+  mode: SignalScopeMode;
+  watchlist_ids: number[];
+  watchlist_names: string[];
+  symbols: string[];
+}
+
+export interface SignalResearchQuery {
+  timeframe?: string;
+  startDate?: string;
+  endDate?: string;
+  scope?: SignalScopeMode;
+  watchlistId?: number;
+  completedOnly?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface SignalResearchPage {
+  records: HistoricalSignal[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  scope: SignalResearchScope;
+  timeframe: string | null;
+  start_date: string | null;
+  end_date: string | null;
+}
+
+function signalResearchParams(query: SignalResearchQuery, includePage: boolean): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.timeframe) params.set('timeframe', query.timeframe);
+  if (query.startDate) params.set('start_date', query.startDate);
+  if (query.endDate) params.set('end_date', query.endDate);
+  params.set('scope', query.scope || 'all_active');
+  if (query.watchlistId != null) params.set('watchlist_id', String(query.watchlistId));
+  params.set('completed_only', String(query.completedOnly !== false));
+  if (includePage) {
+    params.set('limit', String(query.limit || 250));
+    params.set('offset', String(query.offset || 0));
+  }
+  return params;
+}
+
 export interface ScanQuote {
   symbol: string;
   price: number | null;
@@ -2113,13 +2160,29 @@ class ApiService {
     timeframe?: string,
     limit = 100,
     completedOnly = false,
+    scope: SignalScopeMode = 'all_active',
+    watchlistId?: number,
   ): Promise<HistoricalSignal[]> {
     const params = new URLSearchParams();
     if (symbol) params.set('symbol', symbol);
     if (timeframe) params.set('timeframe', timeframe);
     params.set('limit', String(limit));
     if (completedOnly) params.set('completed_only', 'true');
+    params.set('scope', scope);
+    if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
     return this.fetch<HistoricalSignal[]>(`/signals/?${params.toString()}`);
+  }
+
+  async getSignalResearch(query: SignalResearchQuery = {}): Promise<SignalResearchPage> {
+    return this.fetch<SignalResearchPage>(
+      `/signals/research/signals?${signalResearchParams(query, true).toString()}`,
+    );
+  }
+
+  async exportSignalResearch(query: SignalResearchQuery = {}): Promise<string> {
+    return this.fetchRaw(
+      `/signals/research/export?${signalResearchParams(query, false).toString()}`,
+    );
   }
 
   async getLatestSignalsForSymbol(symbol: string): Promise<Record<string, HistoricalSignal>> {
@@ -2128,12 +2191,22 @@ class ApiService {
     );
   }
 
-  async getRegimePerformance(): Promise<RegimePerformance[]> {
-    return this.fetch<RegimePerformance[]>('/signals/research/regime-performance');
+  async getRegimePerformance(
+    scope: SignalScopeMode = 'all_active',
+    watchlistId?: number,
+  ): Promise<RegimePerformance[]> {
+    const params = new URLSearchParams({ scope });
+    if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
+    return this.fetch<RegimePerformance[]>(`/signals/research/regime-performance?${params.toString()}`);
   }
 
-  async getSignalCountByRegime(): Promise<RegimeCount[]> {
-    return this.fetch<RegimeCount[]>('/signals/research/count-by-regime');
+  async getSignalCountByRegime(
+    scope: SignalScopeMode = 'all_active',
+    watchlistId?: number,
+  ): Promise<RegimeCount[]> {
+    const params = new URLSearchParams({ scope });
+    if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
+    return this.fetch<RegimeCount[]>(`/signals/research/count-by-regime?${params.toString()}`);
   }
 
   async backfillOutcomes(batchSize = 50): Promise<{ updated: number }> {

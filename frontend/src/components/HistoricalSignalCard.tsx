@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import api, { HistoricalSignal, RegimeCount, RegimePerformance } from '../services/api';
+import api, { HistoricalSignal, RegimeCount, RegimePerformance, SignalScopeMode, Watchlist } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
 import { DEFAULT_TIMEFRAME, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { directionalOutcome, isSignalOutcomeComplete } from '../utils/signalOutcomes';
@@ -53,6 +53,9 @@ function regimeBadgeClass(regime: string | null | undefined): string {
 
 export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCardProps) {
   const [symbol, setSymbol] = useState(defaultSymbol);
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [scope, setScope] = useState<SignalScopeMode>('all_active');
+  const [watchlistId, setWatchlistId] = useState<number | undefined>();
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [completedOnly, setCompletedOnly] = useState(true);
   const [signals, setSignals] = useState<HistoricalSignal[]>([]);
@@ -79,6 +82,8 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         timeframe,
         100,
         completedOnly,
+        scope,
+        scope === 'watchlist' ? watchlistId : undefined,
       );
       setSignals(rows);
     } catch (err: any) {
@@ -87,19 +92,27 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
     } finally {
       setLoading(false);
     }
-  }, [symbol, timeframe, completedOnly]);
+  }, [symbol, timeframe, completedOnly, scope, watchlistId]);
 
   const loadResearch = useCallback(async () => {
     try {
       const [perf, counts] = await Promise.all([
-        api.getRegimePerformance(),
-        api.getSignalCountByRegime(),
+        api.getRegimePerformance(scope, scope === 'watchlist' ? watchlistId : undefined),
+        api.getSignalCountByRegime(scope, scope === 'watchlist' ? watchlistId : undefined),
       ]);
       setRegimePerformance(perf);
       setRegimeCounts(counts);
     } catch {
       // Best effort: leave previous values.
     }
+  }, [scope, watchlistId]);
+
+  useEffect(() => {
+    let active = true;
+    api.getWatchlists()
+      .then((rows) => { if (active) setWatchlists(rows.filter((row) => row.is_active)); })
+      .catch(() => { if (active) setWatchlists([]); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -168,6 +181,26 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
       </p>
 
       <div className="signal-filters">
+        <label>
+          <span>Scope</span>
+          <select
+            value={scope === 'watchlist' ? `watchlist:${watchlistId ?? ''}` : scope}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value.startsWith('watchlist:')) {
+                setScope('watchlist');
+                setWatchlistId(Number(value.slice('watchlist:'.length)) || undefined);
+              } else {
+                setScope(value as SignalScopeMode);
+                setWatchlistId(undefined);
+              }
+            }}
+            aria-label="Historical signal scope"
+          >
+            <option value="all_active">All active watchlists</option>
+            {watchlists.map((watchlist) => <option key={watchlist.id} value={`watchlist:${watchlist.id}`}>{watchlist.name}</option>)}
+          </select>
+        </label>
         <label>
           <span>Symbol</span>
           <input

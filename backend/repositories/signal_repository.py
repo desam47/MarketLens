@@ -96,8 +96,73 @@ class SignalRepository:
 
         ``completed_only`` skips rows whose full 20-bar outcome is not ready.
         """
-        q = self.db.query(HistoricalSignal)
+        return self._history_query(
+            symbol=symbol,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            symbols=symbols,
+            completed_only=completed_only,
+        ).order_by(desc(HistoricalSignal.timestamp)).limit(limit).all()
 
+    def get_history_page(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        limit: int = 250,
+        offset: int = 0,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        symbols: list[str] | None = None,
+        completed_only: bool = False,
+    ) -> tuple[list[HistoricalSignal], int]:
+        """One deterministic page plus the full matching count for research UI/export."""
+        q = self._history_query(
+            symbol=symbol,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            symbols=symbols,
+            completed_only=completed_only,
+        )
+        total = int(q.order_by(None).count())
+        rows = q.order_by(desc(HistoricalSignal.timestamp)).offset(offset).limit(limit).all()
+        return rows, total
+
+    def iter_history(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        symbols: list[str] | None = None,
+        completed_only: bool = False,
+        chunk_size: int = 5_000,
+    ):
+        """Stream the full matching population for exports without a hidden row cap."""
+        return self._history_query(
+            symbol=symbol,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            symbols=symbols,
+            completed_only=completed_only,
+        ).order_by(desc(HistoricalSignal.timestamp)).yield_per(chunk_size)
+
+    def _history_query(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        symbols: list[str] | None = None,
+        completed_only: bool = False,
+    ):
+        """Base historical-signal query shared by list, page, and export paths."""
+        q = self.db.query(HistoricalSignal)
         if symbol:
             q = q.filter(HistoricalSignal.symbol == symbol.upper())
         elif symbols:
@@ -116,8 +181,7 @@ class SignalRepository:
                 HistoricalSignal.mfe.isnot(None),
                 HistoricalSignal.mae.isnot(None),
             )
-
-        return q.order_by(desc(HistoricalSignal.timestamp)).limit(limit).all()
+        return q
 
     def delete_older_than(self, days: int = 90) -> int:
         """Delete signals older than ``days`` days. Returns count deleted."""

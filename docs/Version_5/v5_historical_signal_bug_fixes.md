@@ -1,13 +1,13 @@
 # Version 5 Historical Signals Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 1: HS-01 through HS-04)
-**Status:** Batch 1 is complete. The four P0 decision-data correctness issues are fixed and covered by focused backend/frontend regressions; ten follow-up gaps remain.
-**Scorecard:** 4 ✅ COMPLETE, 0 ⚠️ PARTIAL, 10 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2a: HS-05 and HS-06)
+**Status:** Batch 1 and the scope/coverage half of Batch 2 are complete. Six findings are fixed and covered by focused backend/frontend regressions; eight follow-up gaps remain.
+**Scorecard:** 6 ✅ COMPLETE, 0 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 code review of the Historical Signals backend, API, storage, card, research dashboard, and replay panel at `d0aebd2`.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md)
 
-"Verified" means the behaviour was reproduced with a throwaway probe test run under the project's offline pytest guards, or shown by a read-only query of the live database. "Code-read" means it follows from the code but was not reproduced. HS-01 through HS-04 are now verified; the remaining entries are Code-read.
+"Verified" means the behaviour was reproduced with a throwaway probe test run under the project's offline pytest guards, or shown by a read-only query of the live database. "Code-read" means it follows from the code but was not reproduced. HS-01 through HS-06 are now verified; the remaining entries are Code-read.
 
 Status legend (same as the phase audits):
 
@@ -26,8 +26,8 @@ Line numbers refer to the code at `d0aebd2`.
 | HS-02 | Critical | API + UI | “Delete >180d” deletes rows older than 30 days | Verified | ✅ COMPLETE |
 | HS-03 | Critical | Research + Replay | Raw underlying returns are presented as signal P&L | Verified | ✅ COMPLETE |
 | HS-04 | Critical | Research | Cumulative return chart is not a valid equity curve | Verified | ✅ COMPLETE |
-| HS-05 | High | Scope | Default scope silently uses only the first active watchlist | Code-read | ❌ NOT STARTED |
-| HS-06 | High | Research | Date filters and exports are silently limited to the newest 1,000 rows | Code-read | ❌ NOT STARTED |
+| HS-05 | High | Scope | Default scope silently uses only the first active watchlist | Verified | ✅ COMPLETE |
+| HS-06 | High | Research | Date filters and exports are silently limited to the newest 1,000 rows | Verified | ✅ COMPLETE |
 | HS-07 | High | Methodology | All timeframes combines incomparable horizons and hides recorded timeframes | Code-read | ❌ NOT STARTED |
 | HS-08 | High | Provenance | Regime data is not consistently historical, despite UI claims | Code-read | ❌ NOT STARTED |
 | HS-09 | High | Data quality | Several stored context fields are placeholders rather than evidence | Code-read | ❌ NOT STARTED |
@@ -40,7 +40,7 @@ Line numbers refer to the code at `d0aebd2`.
 **Next suggested order:**
 
 1. ~~**Batch 1 — decision-data correctness:** HS-01, HS-02, HS-03, and HS-04.~~ Done.
-2. **Batch 2 — truthful scope and methodology:** HS-05 through HS-10.
+2. **Batch 2 — truthful scope and methodology:** HS-05 and HS-06 are done; HS-07 through HS-10 remain.
 3. **Batch 3 — operational integrity and regressions:** HS-11 through HS-14.
 
 ---
@@ -107,25 +107,29 @@ The chart sums every raw 5-bar return in timestamp order. It combines symbols, d
 
 ### HS-05 — Default scope silently uses only the first active watchlist
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2a)
 **Where:** signal-list and research routes (`backend/api/signals/router.py:128`, `:166`, and `:193`).
 
 Each route iterates active watchlists and stops at the first non-empty list. It does not accept a selected watchlist ID, union active watchlists, or return resolved scope metadata.
 
 **Impact:** research silently excludes names whenever more than one watchlist is active; result membership can change with watchlist ordering.
 
-**Resolution:** require explicit selected-watchlist, all-active-watchlists, or supplied-symbol scope and return resolved watchlists, symbols, and exclusions as evidence.
+**Resolution:** every signal route now accepts explicit `all_active`, selected `watchlist`, or offline `all_stored` scope. `all_active` unions enabled symbols from every active list rather than stopping at the first one. The historical card and research dashboard expose the selected scope; the research response reports the exact watchlists and enabled symbols used.
+
+**Tests:** API coverage proves that two active lists are unioned and that selecting one list returns only its symbols. The research UI requires a coverage line naming the resolved watchlist and enabled-symbol count.
 
 ### HS-06 — Date filters and exports are silently limited to the newest 1,000 rows
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2a)
 **Where:** dashboard load (`frontend/src/components/SignalResearchDashboard.tsx:93`) and history query (`backend/repositories/signal_repository.py:85`).
 
 The dashboard fetches the newest 1,000 records once, then filters date and timeframe in the browser. The repository supports start/end times but the API does not expose them. CSV export uses that same truncated browser array.
 
 **Impact:** older date ranges can look empty or incomplete with no coverage warning, and exported research is not necessarily the selected population.
 
-**Resolution:** add server-side scope, timeframe, start/end, pagination, and total-count metadata. Export from the server-side filtered population or show explicit loaded-versus-total coverage.
+**Resolution:** a new server-side research endpoint applies scope, timeframe, start/end dates, complete-outcome policy, limit, and offset before returning records. It includes total count, page range, next-page availability, and resolved scope. The dashboard labels page-only metrics as page metrics and shows loaded-versus-total coverage. CSV export streams the full same scoped query on the server with no hidden row cap rather than exporting the current browser page.
+
+**Tests:** API regressions prove date filtering, selected-watchlist isolation, pagination metadata, and full scoped CSV export. The focused signal API/repository suite passed 46 tests; affected frontend suites and the production build passed.
 
 ### HS-07 — All timeframes combines incomparable horizons and hides recorded timeframes
 

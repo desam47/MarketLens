@@ -9,7 +9,12 @@ describe('SignalResearchDashboard', () => {
   });
 
   it('summarizes completed outcomes and groups them by regime, trend, and timeframe', async () => {
-    jest.spyOn(api, 'listSignals').mockResolvedValue([
+    jest.spyOn(api, 'getWatchlists').mockResolvedValue([]);
+    jest.spyOn(api, 'getSignalResearch').mockResolvedValue({
+      total: 2, offset: 0, limit: 250, has_more: false,
+      scope: { mode: 'all_active', watchlist_ids: [1], watchlist_names: ['Default'], symbols: ['SPY', 'QQQ'] },
+      timeframe: null, start_date: null, end_date: null,
+      records: [
       {
         id: 1, symbol: 'SPY', timestamp: '2026-09-01T15:00:00-04:00', timeframe: '1d', price: 100,
         trend_score: 70, trend_state: 'bullish', strength: 80, market_regime: 'risk_on',
@@ -24,7 +29,8 @@ describe('SignalResearchDashboard', () => {
         confidence_inputs: null, strategy_version: null, data_quality: null,
         return_5b: -1, return_10b: -2, return_20b: -3, mfe: 1, mae: -2, created_at: null,
       },
-    ]);
+      ],
+    });
 
     render(<SignalResearchDashboard />);
 
@@ -35,6 +41,9 @@ describe('SignalResearchDashboard', () => {
     expect(screen.getAllByText('1.50%').length).toBeGreaterThan(0);
     expect(screen.queryByText('Cumulative 5-bar signal return')).not.toBeInTheDocument();
     expect(screen.getByText(/not a strategy equity curve/)).toBeInTheDocument();
-    expect(api.listSignals).toHaveBeenCalledWith(undefined, undefined, 1000, false);
+    expect(screen.getByLabelText('Research coverage')).toHaveTextContent('Default · 2 enabled symbols');
+    expect(api.getSignalResearch).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'all_active', completedOnly: true, limit: 250, offset: 0,
+    }));
   });
 });
