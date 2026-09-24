@@ -1,9 +1,9 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (first fix batch: BF-01, BF-02, BF-03, BF-05, BF-12)
-**Status:** In progress. Batch 1 (BF-01, BF-02, BF-03, BF-05, BF-12) is committed.
-**Scorecard:** 4 ✅ COMPLETE, 1 ⚠️ PARTIAL, 14 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2: BF-06, BF-07, BF-11, BF-19)
+**Status:** In progress. Batch 1 (BF-01, BF-02, BF-03, BF-05, BF-12) and batch 2 (BF-06, BF-07, BF-11, BF-19) are committed.
+**Scorecard:** 8 ✅ COMPLETE, 1 ⚠️ PARTIAL, 10 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
 
@@ -18,9 +18,10 @@ Status legend (same as the phase audits):
 - ❌ **NOT STARTED** — no change made yet
 - 🟡 **DEFERRED** — intentionally postponed
 
-Line numbers refer to the working tree after the first fix batch. That
-batch added about 40 lines near the top of `chat.py`, so references in
-older notes are off by that much.
+Line numbers refer to the code as of batch 2. Each batch shifts
+`chat.py` (batch 1 added about 40 lines near the top; batch 2 about 120
+more, mostly the shared `_finish_turn`), so line numbers quoted in older
+notes or commits will not match.
 
 ## Scorecard
 
@@ -31,12 +32,12 @@ older notes are off by that much.
 | BF-03 | High | Backend | Date numbers become calculator inputs | Verified | ⚠️ PARTIAL |
 | BF-04 | Medium | Backend | Market-metric questions dead-end in the calculator | Verified | ❌ NOT STARTED |
 | BF-05 | Medium | API | Positional argument misbinding in Chat router | Verified | ✅ COMPLETE |
-| BF-06 | Medium | Backend | Destructive actions cannot be confirmed with AI off | Code-read | ❌ NOT STARTED |
-| BF-07 | Medium | Backend | Delete-alert confirmation does not name the alert | Code-read | ❌ NOT STARTED |
+| BF-06 | Medium | Backend | Destructive actions cannot be confirmed with AI off | Code-read | ✅ COMPLETE |
+| BF-07 | Medium | Backend | Delete-alert confirmation does not name the alert | Code-read | ✅ COMPLETE |
 | BF-08 | Medium | Backend | Stream shows unverified model text before verification | Code-read | ❌ NOT STARTED |
 | BF-09 | Medium | Backend | Streaming and blocking reply paths have drifted | Code-read | ❌ NOT STARTED |
 | BF-10 | Medium | Data | Message ids reused after Clear; feedback reattaches | Verified (live DB) | ❌ NOT STARTED |
-| BF-11 | Medium | Backend | Failed action leaves DB session unusable | Code-read | ❌ NOT STARTED |
+| BF-11 | Medium | Backend | Failed action leaves DB session unusable | Code-read | ✅ COMPLETE |
 | BF-12 | Medium | Frontend | Nudge poll duplicates the user's message | Code-read | ✅ COMPLETE |
 | BF-13 | Medium | Full stack | Stream timeout, disconnect, and resend gaps | Code-read | ❌ NOT STARTED |
 | BF-14 | Low | Backend | Dotted tickers (BRK.B) rejected | Verified | ❌ NOT STARTED |
@@ -44,16 +45,14 @@ older notes are off by that much.
 | BF-16 | Low | Backend | Clarification questions recorded as completed steps | Code-read | ❌ NOT STARTED |
 | BF-17 | Low | Backend | `_SHARES_RE` slice leaves a literal `s*` | Code-read | ❌ NOT STARTED |
 | BF-18 | Low | Tests | Network guard does not block curl_cffi (Yahoo) | Verified | ❌ NOT STARTED |
-| BF-19 | Low | Tests | Two ChatPanel tests fail on committed code | Verified | ❌ NOT STARTED |
+| BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 
 **Next suggested order:**
 
-1. BF-11 (a one-line rollback plus a guard).
-2. BF-06 (reuses the stricter BF-01 affirmation).
-3. BF-07.
-4. BF-10 (needs a migration; validate it on a DB copy first).
-5. BF-04.
-6. The streaming group: BF-08, BF-09, BF-13.
+1. BF-10 (needs a migration; validate it on a DB copy first).
+2. BF-04 (also finishes BF-03).
+3. The streaming group: BF-08, BF-09, BF-13.
+4. The low-severity items: BF-14 to BF-18.
 
 ---
 
@@ -62,7 +61,7 @@ older notes are off by that much.
 ### BF-01 — Affirmation prefix confirms destructive actions
 
 **Status:** ✅ COMPLETE (2026-09-24, batch 1)
-**Where:** `backend/ai/chat.py:557` (`_AFFIRM_INTENT`), used at `chat.py:3229` and `chat.py:3252`, and by `_fallback_confirmation`.
+**Where:** `backend/ai/chat.py:557` (`_AFFIRM_INTENT`), used at `chat.py:3276` and `chat.py:3299` (`_finalize_parsed`), `chat.py:3188` (`_fallback_confirmation`) and `chat.py:2870` (`_confirm_pending_action`, BF-06).
 
 `_AFFIRM_INTENT` only checked how the message starts. After a server
 confirmation prompt, if the model returned `action="none"`, the stored
@@ -177,7 +176,7 @@ so the fallback now steps aside entirely.
 ### BF-04 — Market-metric questions dead-end in the calculator
 
 **Status:** ❌ NOT STARTED
-**Where:** `chat.py:2477-2499`, `_CALCULATION_HINT` at `chat.py:570`, `_REUSE_MEMORY_HINT` at `chat.py:575`.
+**Where:** `chat.py:2470-2492` (in `_build_deterministic_chat_reply`), `_CALCULATION_HINT` at `chat.py:570`, `_REUSE_MEMORY_HINT` at `chat.py:575`.
 
 **Reproduced:**
 
@@ -224,34 +223,67 @@ a separate branch for the no-extras case.
 
 ### BF-06 — Destructive actions cannot be confirmed with AI off
 
-**Status:** ❌ NOT STARTED
-**Where:** the confirmation replay lives only in `_finalize_parsed`
-(`chat.py:3226-3238`), which runs only after a model reply. With AI off,
-"yes" goes to `_deterministic_context_reply` (`chat.py:2953`, and
-`chat.py:3681` in streaming), and `_expire_carried_confirmation` drops the
-pending action.
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
+**Where (before the fix):** the confirmation replay lived only in
+`_finalize_parsed`, which runs only after a model reply. With AI off,
+"yes" went to `_deterministic_context_reply`, and
+`_expire_carried_confirmation` dropped the pending action.
 
-**Fix:** check `pending_confirmation` plus the strict affirmation from
-BF-01 deterministically, before the model or the AI-off fallback.
+**Resolution:** a new `_confirm_pending_action` (`chat.py:2849`) runs
+first in both `_generate_reply` and `_generate_reply_streaming`. That is
+before intent routing, the model, the AI-off fallback and the legacy
+"no data" degrade. When the session has a pending confirmation and the
+message is a strict affirmation (the BF-01 `_AFFIRM_INTENT`), it replays
+the stored action through `_run_turn_actions`. `_finalize_parsed` still
+enforces the gate and replays the stored payload.
+
+Side effect: a "yes" to a pending action no longer costs a model call
+when AI is on either.
+
+**Tests:** in `backend/tests/ai/test_chat_actions.py::TestEndToEnd`:
+- `test_yes_confirms_with_ai_off`
+- `test_yes_confirms_on_the_streaming_path_without_a_model_call`
+- `test_decline_with_ai_off_keeps_the_watchlist`
+
+The first two fail with the fix removed.
 
 ### BF-07 — Delete-alert confirmation does not name the alert
 
-**Status:** ❌ NOT STARTED
-**Where:** `_confirm_prompt`, `chat.py:3983` (the `delete_alert` branch is at `chat.py:3996`).
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
+**Where:** `_destructive_target_problem` (`chat.py:4044`), `_confirm_prompt` (`chat.py:4079`), `_delete_watchlist` (`chat.py:4322`), called from `_finalize_parsed` (`chat.py:3200`).
 
-The prompt is "Delete that alert? Say yes to confirm." The target id is
-model-chosen, so the trader confirms without seeing what will be deleted.
+The prompt was "Delete that alert? Say yes to confirm." The target id is
+model-chosen, so the trader confirmed without seeing what would be
+deleted. The pending `delete_watchlist` stored the name, not the list
+resolved at prompt time.
 
-**Fix:** look up the alert and include its name, symbol, condition and
-threshold. If the id does not exist, refuse before asking.
-The pending `delete_watchlist` has the same weakness: it stores the name,
-not the id resolved at prompt time. Store the resolved id so the target
-cannot change between prompt and "yes".
+**Resolution:** before a destructive action gets a confirmation question,
+`_destructive_target_problem` resolves its target.
+
+- **`delete_alert`:**
+  - No id: Chat asks "Which alert should I delete?".
+  - Unknown id: "I couldn't find that alert — it may already be deleted."
+  - Existing alert: the prompt names it, e.g. `Delete the alert
+    "Breakout" (AAPL price above 200)? Say yes to confirm.`
+- **`delete_watchlist`:**
+  - Ambiguous or unknown: Chat answers directly and stores no pending
+    confirmation. Previously the ambiguity question left a pending action
+    with no target, which "yes" could replay.
+  - Resolved: the list's id is pinned on the pending confirmation, and
+    `_delete_watchlist` deletes by that id. A list created or renamed
+    between the question and "yes" cannot change the target.
+
+Any of these answers also clears a carried pending confirmation.
+
+**Tests:** `backend/tests/ai/test_chat_actions.py::TestDestructiveTargetResolution` (6 tests; 5 fail with the target check removed).
+
+**Follow-up:** `remove_from_watchlist` still stores the watchlist name, not
+an id. Its prompt already names the symbol and list, so it was left as is.
 
 ### BF-08 — Stream shows unverified model text before verification
 
 **Status:** ❌ NOT STARTED
-**Where:** `_generate_reply_streaming`, `chat.py:3730-3734`.
+**Where:** `_generate_reply_streaming`, `chat.py:3791-3795`.
 
 Deltas are the model's raw `reply` field, streamed before `verify_answer`
 and before any action runs. The note at `chat.py:544-551` records that the
@@ -265,20 +297,25 @@ alternative is to buffer until verification passes.
 ### BF-09 — Streaming and blocking reply paths have drifted
 
 **Status:** ❌ NOT STARTED
-**Where:** `_generate_reply` (`chat.py:2856`) vs `_generate_reply_streaming` (`chat.py:3585`).
+**Where:** `_generate_reply` (`chat.py:2897`) vs `_generate_reply_streaming` (`chat.py:3639`).
 
 - **No-data watchlist exemption:** the legacy "no data" degrade in
-  streaming (`chat.py:3613`) lacks the watchlist-intent exemption the
-  blocking path has (`chat.py:2893`). In a single-ticker session for a
+  streaming (`chat.py:3674`) lacks the watchlist-intent exemption the
+  blocking path has (`chat.py:2940`). In a single-ticker session for a
   ticker with no data, streaming refuses "add it to my watchlist".
 - **Parse failures:** streaming returns `extractor.text` (the raw
-  unparsed model reply) as the answer (`chat.py:3811`). Blocking returns
+  unparsed model reply) as the answer (`chat.py:3872`). Blocking returns
   "I couldn't process that — could you rephrase?"
 - **Time budget:** blocking passes `started_at` to the deterministic
   short-circuit; streaming does not, so the turn time budget differs.
 
 **Fix:** have a single generator implementation, with the blocking path
 as a thin wrapper that drains it.
+
+**Progress:** batch 2 moved the finishing half of a turn (verification,
+blocks, persistence) into a shared `_finish_turn` (BF-11), and the
+pending-confirmation check is shared (BF-06). The three drifts above are
+in the generation half and are still open.
 
 ### BF-10 — Message ids reused after Clear; feedback reattaches
 
@@ -303,20 +340,41 @@ message to a fixture can hit `UNIQUE(message_id)` and fail with a 500.
 
 ### BF-11 — Failed action leaves DB session unusable
 
-**Status:** ❌ NOT STARTED
-**Where:** `_run_action`, `chat.py:5408`.
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
+**Where:** `_rollback_quietly` (`chat.py:2062`), `_finish_turn` (`chat.py:2079`), `answer_chat_message` (`chat.py:1982`), `_run_action` (`chat.py:5494`).
 
-The exception is caught but `db.rollback()` is never called. If a flush
-failed (e.g. `IntegrityError`), the next `repo.add_message` on the same
-session raises `PendingRollbackError`. In the stream path the finalization
-fallback uses the same session, so no assistant row is saved.
+The exception was caught but `db.rollback()` was never called. If a flush
+failed (e.g. `IntegrityError`), the next write on the same session raised
+`PendingRollbackError`. The stream path's finalization fallback used the
+same session, so no assistant row was saved. `answer_chat_message` had no
+guard after the user message was saved, so any failure became a 500.
 
-`answer_chat_message` (`chat.py:1982`) also has no guard after the user
-message is saved, so any failure becomes a 500.
+**Resolution:**
 
-**Fix:** roll back in the `except` branch of `_run_action`. Give
-`answer_chat_message` the same "always persist one assistant row"
-finalization as `stream_chat_message`.
+- **Rollback on failure:** the new `_rollback_quietly(db)` runs in
+  `_run_action`'s `except`, in `_run_screen`'s `except`, and after a
+  generation or finalization failure in both transports. Earlier steps
+  commit their own work, so only the failed step's partial changes are
+  discarded.
+- **Shared finish:** verification, response blocks, planner-state
+  persistence and the assistant row now live in one `_finish_turn` used
+  by both `answer_chat_message` and `stream_chat_message`. It always
+  persists exactly one assistant row. If finishing fails, it rolls back
+  and stores "I couldn't finish verifying that answer…".
+- **Blocking generation guard:** `answer_chat_message` now catches a
+  generation exception like the stream path does and stores
+  "Something went wrong answering that — please try again."
+- **Stream wording:** the stream's generation-exception reply changed
+  from "…reaching the AI provider…" to the same neutral wording, because
+  the exception is not necessarily the provider's.
+  - Provider failures handled inside generation keep their own wording.
+
+**Tests:**
+- `backend/tests/ai/test_chat_actions.py::TestRunActionNeverRaises::test_failed_flush_is_rolled_back_so_the_session_stays_usable`
+  fails with `PendingRollbackError` without the rollback.
+- `backend/tests/ai/test_chat.py::TestTurnFailureStillPersistsOneReply`
+  (3 tests: blocking generation, blocking finalization, streaming
+  generation).
 
 ### BF-12 — Nudge poll duplicates the user's message
 
@@ -391,13 +449,13 @@ extraction in `backend/ai/chat_symbols.py` to keep class suffixes.
 
 **Status:** ❌ NOT STARTED
 
-`_add_to_watchlist` (`chat.py:4147`; the create call is at `chat.py:4159`)
+`_add_to_watchlist` (`chat.py:4252`; the create call is at `chat.py:4264`)
 creates a new watchlist when the named one is not found. A typo creates a
 stray list. Fix: ask ("No watchlist called 'Tehc' — create it?") or
 fuzzy-match existing names.
 
 Symbols rejected as unresolvable are also added (and backfilled) through
-the deterministic CRUD path (`chat.py:2820-2830`). Consider requiring a
+the deterministic CRUD path (`chat.py:2813-2823`). Consider requiring a
 known ticker, or asking for confirmation, for those.
 
 ### BF-16 — Clarification questions recorded as completed steps
@@ -426,21 +484,34 @@ provider uses `curl_cffi` (libcurl), which bypasses it. A probe under
 pytest received a real Yahoo 404 for `BRK`. Fix: patch
 `curl_cffi.requests` in the guard, or stub the Yahoo provider in tests.
 
-### BF-19 — Two ChatPanel tests fail on committed code
+### BF-19 — Evidence card lost its 8-item cap; two ChatPanel tests failing
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
+**Where:** evidence card in `TypedResponseBlocks`, `frontend/src/components/ChatPanel.tsx:816`.
 
-Found while verifying BF-12. These tests fail both with and without the
-BF-12 change. They were run against the committed `ChatPanel.tsx` and
-`ChatPanel.test.tsx` from `HEAD` (`165d882`).
+Found while verifying BF-12: two tests failed on `HEAD` as well as with
+the batch 1 changes.
 
 - `ChatPanel (universal) › renders the application-owned answer verification state`
 - `ChatPanel (universal) › expands evidence and options-chain tables beyond their default cap, and back (5.7.2)`
-  (fails at `expect(evidenceRegion.querySelectorAll('li')).toHaveLength(8)`)
 
-**Likely cause (not confirmed):** commit `af43696` ("collapse Answer
-verification and Evidence blocks by default"). If so, the tests need to
-expand the block before counting rows.
+**Cause:** commit `af43696` ("collapse Answer verification and Evidence
+blocks by default").
+
+- **Answer verification card:** the tests read its body without opening
+  it first. A test-only problem.
+- **Evidence card:** a real regression. The same `expanded` flag became
+  both "card open" and "show every item". An open card therefore always
+  listed everything, the 8-item cap was gone, and the "Show all N" button
+  could never appear. Only "Show less" remained, and it collapsed the
+  whole card.
+
+**Resolution:** the evidence card tracks "show all" under its own key
+(`${block.id}:all`). The heading opens the card with the list capped at
+8, and "Show all N" / "Show less" toggle the rest. The two tests now open
+the card first, and also assert that it starts collapsed.
+
+**Tests:** `ChatPanel.test.tsx` 52/52.
 
 ---
 
@@ -454,12 +525,12 @@ expand the block before counting rows.
 - **Unchecked model symbol lists:** the notebook save walks
   `symbols.verified/partial/unavailable` without checking they are lists,
   so a string would be split into characters.
-- **Existing lint errors:** two `ruff` errors are also present in the
+- **Existing lint errors:** three `ruff` errors are also present in the
   committed files. They are auto-fixable and unrelated to these fixes.
   - `backend/api/ai/chat_router.py:186` UP037: quoted forward reference
     `"BrowserScanFilter"`.
-  - `backend/tests/ai/test_chat_calculation.py:1` I001: import block not
-    sorted.
+  - `backend/tests/ai/test_chat_calculation.py:1` and
+    `backend/tests/ai/test_chat.py:15` I001: import block not sorted.
 
 ## Enhancements
 
@@ -475,7 +546,27 @@ expand the block before counting rows.
 5. **Split `chat.py`:** the module is ~5,450 lines. Split it into intent
    routing, actions, turn orchestration and formatting.
 
-## Verification (first fix batch, 2026-09-24)
+## Verification
+
+### Batch 2 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| All Chat-related backend tests (`backend/tests/ai/test_chat*.py`, `test_phase_5_8*.py`, `test_answer_verifier.py`, `test_response_blocks.py`, `backend/tests/api/test_chat_router.py`) | 451 passed, 13 subtests passed |
+| `frontend/src/components/ChatPanel.test.tsx` | 52 passed (BF-19 fixed the 2 failures) |
+| `tsc --noEmit` on the frontend | No errors in ChatPanel |
+| `ruff check` on the changed backend files | 1 error (`test_chat.py:15` I001), also present on `HEAD` |
+
+**Mutation check:** each new backend test was re-run with its fix removed
+and fails without it.
+- No rollback: the flush test fails with `PendingRollbackError`.
+- No deterministic confirmation: both BF-06 "yes" tests fail.
+- No target resolution: 5 of the 6 BF-07 tests fail.
+- No blocking generation guard: the blocking generation test fails.
+
+The full backend suite was not run.
+
+### Batch 1 (2026-09-24)
 
 | Suite | Result |
 |---|---|
@@ -489,7 +580,8 @@ The full backend suite was not run.
 
 ## Fix log
 
-Batch 1 is the commit `fix(chat): harden confirmations, calculator fallbacks, and turn arguments` on `development` (find it with `git log --grep "harden confirmations"`).
+- **Batch 1:** commit `b5afc49`, `fix(chat): harden confirmations, calculator fallbacks, and turn arguments`, on `development`.
+- **Batch 2:** commit `fix(chat): confirm safely with AI off and keep failed turns persistable`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -498,3 +590,7 @@ Batch 1 is the commit `fix(chat): harden confirmations, calculator fallbacks, an
 | 2026-09-24 | BF-03 | ⚠️ PARTIAL | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (2 tests) | New `_CALC_DATE_RE`; the fallback steps aside when a date is present. |
 | 2026-09-24 | BF-05 | ✅ COMPLETE | batch 1 | `backend/api/ai/chat_router.py`, `backend/tests/api/test_chat_router.py` | `test_scope_without_mode_is_not_passed_as_chart_state` + 6 updated assertions | Keyword arguments via `_turn_kwargs`. |
 | 2026-09-24 | BF-12 | ✅ COMPLETE | batch 1 | `frontend/src/components/ChatPanel.tsx`, `ChatPanel.test.tsx` | `mergePolledMessages (BF-12)` (3 tests) | Poll swaps the server user row into the optimistic message. |
+| 2026-09-24 | BF-06 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestEndToEnd` (3 tests) | `_confirm_pending_action` runs before routing, the model and the AI-off fallback. |
+| 2026-09-24 | BF-07 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestDestructiveTargetResolution` (6 tests) | `_destructive_target_problem` resolves the target first; the alert is named; the watchlist id is pinned. |
+| 2026-09-24 | BF-11 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestTurnFailureStillPersistsOneReply` (3 tests), flush-rollback test | `_rollback_quietly`; shared `_finish_turn`; blocking generation guard. |
+| 2026-09-24 | BF-19 | ✅ COMPLETE | batch 2 | `frontend/src/components/ChatPanel.tsx`, `ChatPanel.test.tsx` | `ChatPanel.test.tsx` 52/52 | Evidence "show all" has its own state; tests open the collapsed cards first. |

@@ -320,6 +320,84 @@ class TestConfirmGate(_DBBase):
         self.assertEqual(len(AlertRepository(self.db).get_all()), 1)
 
 
+class TestDestructiveTargetResolution(_DBBase):
+    """BF-07: a destructive confirmation names its real target, and there
+    is no confirmation (or pending state) for a target that doesn't exist
+    or isn't unique."""
+
+    def test_delete_alert_prompt_names_the_alert(self):
+        alert = AlertRepository(self.db).create("Breakout", "AAPL", "price_above", "200")
+        state = {}
+
+        text, grounded, _ = _finalize_parsed(
+            self.db, _parsed(action="delete_alert", action_target_id=alert.id), [], planner_state=state
+        )
+
+        self.assertIn('"Breakout" (AAPL price above 200)', text)
+        self.assertIn("confirm", text.lower())
+        self.assertEqual(state["pending_confirmation"]["target_id"], alert.id)
+
+    def test_delete_alert_with_unknown_id_is_refused_without_pending(self):
+        state = {}
+
+        text, grounded, _ = _finalize_parsed(
+            self.db, _parsed(action="delete_alert", action_target_id=9999), [], planner_state=state
+        )
+
+        self.assertIn("couldn't find that alert", text)
+        self.assertFalse(grounded)
+        self.assertIsNone(state["pending_confirmation"])
+
+    def test_delete_alert_without_id_asks_which_alert(self):
+        state = {}
+
+        text, grounded, _ = _finalize_parsed(self.db, _parsed(action="delete_alert"), [], planner_state=state)
+
+        self.assertIn("Which alert", text)
+        self.assertIsNone(state["pending_confirmation"])
+
+    def test_delete_watchlist_ambiguity_stores_no_pending_confirmation(self):
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("My Longs")
+        repo.create_watchlist("Swing Setups")
+        state = {}
+
+        text, grounded, _ = _finalize_parsed(self.db, _parsed(action="delete_watchlist"), [], planner_state=state)
+
+        self.assertIn("which one", text.lower())
+        self.assertFalse(grounded)
+        self.assertIsNone(state["pending_confirmation"])
+
+    def test_delete_watchlist_unknown_name_is_refused(self):
+        state = {}
+
+        text, grounded, _ = _finalize_parsed(
+            self.db, _parsed(action="delete_watchlist", action_watchlist="Nope"), [], planner_state=state
+        )
+
+        self.assertIn('couldn\'t find a watchlist called "Nope"', text)
+        self.assertIsNone(state["pending_confirmation"])
+
+    def test_confirmed_delete_watchlist_deletes_the_list_the_prompt_named(self):
+        repo = WatchlistRepository(self.db)
+        longs = repo.create_watchlist("My Longs")
+        state = {}
+        text, _, _ = _finalize_parsed(self.db, _parsed(action="delete_watchlist"), [], planner_state=state)
+        self.assertIn("My Longs", text)
+        self.assertEqual(state["pending_confirmation"]["target_id"], longs.id)
+
+        # A second list appears before the trader says yes. Re-resolving by
+        # "the only watchlist" would now be ambiguous; the pinned id is not.
+        swing = repo.create_watchlist("Swing Setups")
+        text, grounded, _ = _finalize_parsed(
+            self.db, _parsed(action="none", reply="yes"), [], user_content="yes", planner_state=state
+        )
+
+        self.assertIn('deleted "My Longs"', text)
+        self.assertIsNone(repo.get_watchlist(longs.id))
+        self.assertIsNotNone(repo.get_watchlist(swing.id))
+
+
 class TestRunTurnActions(_DBBase):
     """_run_turn_actions (2026-09-16): chains single-action completion
     calls within one turn under the per-turn budgets, gated on a cheap
@@ -1310,6 +1388,21 @@ class TestRunActionNeverRaises(_DBBase):
         self.assertFalse(grounded)
         self.assertIn("went wrong", text.lower())
 
+    def test_failed_flush_is_rolled_back_so_the_session_stays_usable(self):
+        """BF-11: without a rollback, the turn's later writes (planner state,
+        the assistant row) on this session raise PendingRollbackError."""
+
+        def broken_handler(db, parsed):
+            db.add(Alert(name=None, symbol="AAPL", condition_type="price_above", parameter="200"))
+            db.flush()  # NOT NULL violation
+
+        with patch("backend.ai.chat._ACTION_HANDLERS", {"create_alert": broken_handler}):
+            text, grounded, _ = _run_action(self.db, _parsed(action="create_alert"))
+
+        self.assertFalse(grounded)
+        alert = AlertRepository(self.db).create("A", "AAPL", "price_above", "200")
+        self.assertIsNotNone(alert.id)
+
     @patch("backend.ai.chat.default_registry.execute", side_effect=RuntimeError("provider down"))
     def test_market_tool_exception_degrades_gracefully(self, _execute):
         trace: list[dict] = []
@@ -2012,6 +2105,72 @@ class TestEndToEnd(unittest.TestCase):
         for sym in ("CTNT", "CYN", "DVLT", "AAPL", "MSFT"):
             self.assertNotIn(sym, msg.content)
         mock_ai.complete.assert_not_called()
+
+
+    # BF-06: a server-authored confirmation is honored on a strict "yes"
+    # before any model call, so it also works with AI off.
+
+    def _create_watchlist(self, name):
+        db = self.Session()
+        try:
+            return WatchlistRepository(db).create_watchlist(name).id
+        finally:
+            db.close()
+
+    def _watchlist_exists(self, watchlist_id):
+        db = self.Session()
+        try:
+            return WatchlistRepository(db).get_watchlist(watchlist_id) is not None
+        finally:
+            db.close()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_yes_confirms_with_ai_off(self, mock_ai):
+        mock_ai.enabled = False
+        mock_ai.complete = AsyncMock()
+        tech = self._create_watchlist("Tech")
+
+        first, *_ = answer_chat_message(self.session_id, "delete my Tech watchlist")
+        self.assertIn('Delete the watchlist "Tech"?', first.content)
+        self.assertTrue(self._watchlist_exists(tech))
+
+        second, grounded, *_ = answer_chat_message(self.session_id, "yes")
+
+        self.assertIn('deleted "Tech"', second.content)
+        self.assertTrue(grounded)
+        self.assertFalse(self._watchlist_exists(tech))
+        mock_ai.complete.assert_not_called()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_yes_confirms_on_the_streaming_path_without_a_model_call(self, mock_ai):
+        from backend.ai.chat import stream_chat_message
+
+        mock_ai.enabled = True
+        mock_ai.is_available = AsyncMock(return_value=True)
+        mock_ai.settings.max_tokens = 20000
+        mock_ai.complete = AsyncMock()
+        mock_ai.stream = MagicMock()
+        tech = self._create_watchlist("Tech")
+
+        list(stream_chat_message(self.session_id, "delete my Tech watchlist"))
+        events = list(stream_chat_message(self.session_id, "yes"))
+
+        msg = events[-1][1][0]
+        self.assertIn('deleted "Tech"', msg.content)
+        self.assertFalse(self._watchlist_exists(tech))
+        mock_ai.complete.assert_not_called()
+        mock_ai.stream.assert_not_called()
+
+    @patch("backend.ai.chat.ai_manager")
+    def test_decline_with_ai_off_keeps_the_watchlist(self, mock_ai):
+        mock_ai.enabled = False
+        tech = self._create_watchlist("Tech")
+
+        answer_chat_message(self.session_id, "delete my Tech watchlist")
+        answer_chat_message(self.session_id, "ok nevermind")
+        answer_chat_message(self.session_id, "yes")  # the pending action expired
+
+        self.assertTrue(self._watchlist_exists(tech))
 
 
 if __name__ == "__main__":

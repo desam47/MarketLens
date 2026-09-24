@@ -427,6 +427,45 @@ class TestDegradeContract(_Base):
         mock_ai.complete.assert_not_called()
 
 
+class TestTurnFailureStillPersistsOneReply(_Base):
+    """BF-11: once the user row is saved, both transports end in exactly
+    one persisted assistant row, even when generation or finishing raises."""
+
+    def _roles(self):
+        return [m.role for m in self._stored(self.session.id)]
+
+    @patch("backend.ai.chat._generate_reply", side_effect=RuntimeError("boom"))
+    def test_blocking_generation_exception(self, _gen):
+        msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
+
+        self.assertFalse(grounded)
+        self.assertEqual(msg.content, "Something went wrong answering that — please try again.")
+        self.assertEqual(self._roles(), ["user", "assistant"])
+
+    @patch("backend.ai.chat.verify_answer", side_effect=RuntimeError("verifier crashed"))
+    @patch("backend.ai.chat.ai_manager")
+    def test_blocking_finalization_exception(self, mock_ai, _verify):
+        mock_ai.enabled = False
+
+        msg, grounded, *_ = answer_chat_message(self.session.id, "hi")
+
+        self.assertFalse(grounded)
+        self.assertIn("couldn't finish verifying", msg.content)
+        self.assertEqual(self._roles(), ["user", "assistant"])
+
+    @patch("backend.ai.chat._generate_reply_streaming", side_effect=RuntimeError("boom"))
+    def test_streaming_generation_exception(self, _gen):
+        from backend.ai.chat import stream_chat_message
+
+        events = list(stream_chat_message(self.session.id, "hi"))
+
+        self.assertEqual(events[-1][0], "final")
+        msg, grounded, *_ = events[-1][1]
+        self.assertFalse(grounded)
+        self.assertEqual(msg.content, "Something went wrong answering that — please try again.")
+        self.assertEqual(self._roles(), ["user", "assistant"])
+
+
 class TestAlertContext(_Base):
     @patch("backend.ai.chat.ai_manager")
     @patch("backend.ai.chat.build_context")

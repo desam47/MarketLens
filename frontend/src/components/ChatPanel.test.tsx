@@ -95,7 +95,11 @@ describe('ChatPanel (universal)', () => {
       } as any,
     ]);
     render(<ChatPanel />);
-    expect(await screen.findByRole('status', { name: 'Answer verification' })).toHaveTextContent('Checked against 1 evidence source.');
+    const card = await screen.findByRole('status', { name: 'Answer verification' });
+    // Collapsed to its heading by default (af43696); the heading opens it.
+    expect(card).not.toHaveTextContent('Checked against 1 evidence source.');
+    fireEvent.click(within(card).getByRole('button', { name: /Answer verification/ }));
+    expect(card).toHaveTextContent('Checked against 1 evidence source.');
     expect(screen.getByText('Verifier 5.8.1')).toBeInTheDocument();
   });
 
@@ -414,6 +418,8 @@ describe('ChatPanel (universal)', () => {
     render(<ChatPanel />);
 
     const evidenceRegion = await screen.findByRole('region', { name: 'Evidence' });
+    expect(evidenceRegion.querySelectorAll('li')).toHaveLength(0); // collapsed by default
+    fireEvent.click(within(evidenceRegion).getByRole('button', { name: /^Evidence/ }));
     expect(evidenceRegion.querySelectorAll('li')).toHaveLength(8);
     fireEvent.click(within(evidenceRegion).getByRole('button', { name: 'Show all 10' }));
     expect(evidenceRegion.querySelectorAll('li')).toHaveLength(10);

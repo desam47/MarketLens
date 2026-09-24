@@ -2023,20 +2023,81 @@ def answer_chat_message(
         if turn.regeneration_mode:
             trace.append({"kind": "regeneration", "mode": turn.regeneration_mode, "reused_context": turn.reused_context})
         _append_context_evidence(trace, turn)
-        reply_text, grounded, screened = _generate_reply(
-            repo.db,
-            turn.symbol_blocks,
-            turn.unavailable,
-            turn.market_baseline,
-            turn.transcript,
-            turn.user_content,
-            turn.alert_context,
-            turn.capped,
-            turn.base,
-            turn.planner_state,
-            trace,
-            preferences,
+        try:
+            reply_text, grounded, screened = _generate_reply(
+                repo.db,
+                turn.symbol_blocks,
+                turn.unavailable,
+                turn.market_baseline,
+                turn.transcript,
+                turn.user_content,
+                turn.alert_context,
+                turn.capped,
+                turn.base,
+                turn.planner_state,
+                trace,
+                preferences,
+            )
+        except Exception as e:  # noqa: BLE001 — the user row is already persisted
+            logger.warning("Chat generation raised: %s", e)
+            _rollback_quietly(repo.db)
+            reply_text, grounded, screened = _TURN_FAILED_REPLY, False, []
+        assistant_message, grounded, focus = _finish_turn(
+            repo, session_id, turn, trace, reply_text, grounded, screened, started_at=started_at
         )
+        return assistant_message, grounded, focus, turn.partial, turn.unavailable
+    finally:
+        _TURN_BROWSER_DATA.reset(browser_token)
+        repo.close()
+
+
+# The generation step raised after the user row was persisted. The same
+# wording is used by both transports.
+_TURN_FAILED_REPLY = "Something went wrong answering that — please try again."
+_FINALIZE_FAILED_REPLY = (
+    "I couldn't finish verifying that answer. Nothing was retried; please ask again if you still need it."
+)
+
+
+def _rollback_quietly(db) -> None:
+    """Roll back a failed flush so the turn's session can still persist.
+
+    A caught exception from a handler or tool can leave the shared session
+    in a failed transaction; without a rollback every later write on it
+    (planner state, the assistant row) raises ``PendingRollbackError``.
+    Earlier steps already committed their own work, so only the failed
+    step's partial changes are discarded.
+    """
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("chat session rollback failed: %s", e)
+
+
+def _finish_turn(
+    repo: ChatRepository,
+    session_id: int,
+    turn: _Turn,
+    trace: list[dict],
+    final_text: str | None,
+    grounded: bool,
+    screened: list[str],
+    *,
+    started_at: float,
+) -> tuple[ChatMessage, bool, list[str]]:
+    """Verify, build blocks, and persist exactly one assistant row.
+
+    Shared by :func:`answer_chat_message` and :func:`stream_chat_message`.
+    The user message is already persisted and actions may have run, so a
+    failure while finishing still ends in one persisted assistant row;
+    otherwise the client would retry and re-run the whole turn. Returns
+    ``(message, grounded, focus)``.
+    """
+    try:
+        if final_text is None:
+            final_text, grounded = "AI is currently unavailable, so I can't answer that right now.", False
         if trace:
             turn.planner_state["last_tool_result"] = {
                 "tool": trace[-1].get("tool"),
@@ -2046,8 +2107,6 @@ def answer_chat_message(
             }
         _expire_carried_confirmation(turn)
         repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
-        # _generate_reply delegates action execution to _run_turn_actions;
-        # attach its transient trace to the returned ORM object for the API.
         if not _trace_is_action_only(trace):
             grounded = grounded and not turn.unavailable  # deterministic fail-safe
         # `screened` is populated only by the run_screen tool — tickers the
@@ -2058,16 +2117,16 @@ def answer_chat_message(
         focus = list(dict.fromkeys([*turn.focus, *screened]))
         assign_evidence_ids(trace)
         verification = verify_answer(
-            reply_text,
+            final_text,
             trace,
             allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable, *_baseline_symbols(turn.market_baseline)],
             unavailable_symbols=turn.unavailable,
-            user_content=user_content,
+            user_content=turn.user_content,
         )
         if verification.safe_content:
-            reply_text = verification.safe_content
+            final_text = verification.safe_content
             grounded = False
-        _append_turn_observability(trace, started_at, user_content)
+        _append_turn_observability(trace, started_at, turn.user_content)
         current_fingerprint = evidence_fingerprint(trace)
         material_change = _material_change(turn, current_fingerprint)
         regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
@@ -2076,25 +2135,30 @@ def answer_chat_message(
         if regeneration is not None and material_change:
             regeneration["material_change_detected"] = True
         blocks = build_response_blocks(
-            content=reply_text,
+            content=final_text,
             grounded=grounded,
             focus=focus,
             partial=turn.partial,
             unavailable=turn.unavailable,
             trace=trace,
-            preferences=preferences,
+            preferences=turn.preferences,
             chart_state=turn.chart_state,
             regeneration=regeneration,
             material_change_detected=material_change,
             verification=verification.model_dump(),
         )
-        assistant_message = repo.add_message(session_id, "assistant", reply_text, response_blocks=blocks)
-        assistant_message.planner_trace = trace
-        assistant_message.response_blocks_payload = blocks
-        return assistant_message, grounded, focus, turn.partial, turn.unavailable
-    finally:
-        _TURN_BROWSER_DATA.reset(browser_token)
-        repo.close()
+        msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
+        # Transient per-turn payloads for the API; not persisted columns.
+        msg.planner_trace = trace
+        msg.response_blocks_payload = blocks
+        return msg, grounded, focus
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Chat turn finalization failed: %s", e)
+        _rollback_quietly(repo.db)
+        msg = repo.add_message(session_id, "assistant", _FINALIZE_FAILED_REPLY)
+        msg.planner_trace = []
+        msg.response_blocks_payload = []
+        return msg, False, list(dict.fromkeys(turn.focus))
 
 
 def stream_chat_message(
@@ -2147,85 +2211,14 @@ def stream_chat_message(
                     yield ("delta", payload)
                 else:  # "result"
                     final_text, grounded, screened = payload
-        except Exception as e:  # noqa: BLE001 — mirror _generate_reply's contract
+        except Exception as e:  # noqa: BLE001 — the user row is already persisted
             logger.warning("Chat stream generation raised: %s", e)
-            final_text, grounded = (
-                "Something went wrong reaching the AI provider — please try again.",
-                False,
-            )
+            _rollback_quietly(repo.db)
+            final_text, grounded, screened = _TURN_FAILED_REPLY, False, []
 
-        # The user message is already persisted and actions may have run, so
-        # a failure while finishing must still end in one persisted assistant
-        # row; otherwise the client would retry and re-run the whole turn.
-        try:
-            if final_text is None:
-                final_text, grounded = (
-                    "AI is currently unavailable, so I can't answer that right now.",
-                    False,
-                )
-            if not _trace_is_action_only(trace):
-                grounded = grounded and not turn.unavailable
-            if trace:
-                turn.planner_state["last_tool_result"] = {
-                    "tool": trace[-1].get("tool"),
-                    "ok": trace[-1].get("ok"),
-                    "provider": trace[-1].get("provider"),
-                    "source_timestamp": trace[-1].get("source_timestamp"),
-                }
-            _expire_carried_confirmation(turn)
-            repo.set_planner_state(session_id, json.dumps(turn.planner_state, sort_keys=True))
-            if not _trace_is_action_only(trace):
-                grounded = grounded and not turn.unavailable
-            # See answer_chat_message's matching comment — `screened` (from
-            # run_screen) is merged into `focus` so the frontend's quick-action
-            # buttons pick up tickers the turn's own message never named.
-            focus = list(dict.fromkeys([*turn.focus, *screened]))
-            assign_evidence_ids(trace)
-            verification = verify_answer(
-                final_text,
-                trace,
-                allowed_symbols=[*turn.base, *focus, *turn.partial, *turn.unavailable, *_baseline_symbols(turn.market_baseline)],
-                unavailable_symbols=turn.unavailable,
-                user_content=user_content,
-            )
-            if verification.safe_content:
-                final_text = verification.safe_content
-                grounded = False
-            _append_turn_observability(trace, started_at, user_content)
-            current_fingerprint = evidence_fingerprint(trace)
-            material_change = _material_change(turn, current_fingerprint)
-            regeneration = {"mode": turn.regeneration_mode, "reused_context": turn.reused_context} if turn.regeneration_mode else None
-            if regeneration is not None and turn.regeneration_scope:
-                regeneration["scope"] = turn.regeneration_scope
-            if regeneration is not None and material_change:
-                regeneration["material_change_detected"] = True
-            blocks = build_response_blocks(
-                content=final_text,
-                grounded=grounded,
-                focus=focus,
-                partial=turn.partial,
-                unavailable=turn.unavailable,
-                trace=trace,
-                preferences=preferences,
-                chart_state=turn.chart_state,
-                regeneration=regeneration,
-                material_change_detected=material_change,
-                verification=verification.model_dump(),
-            )
-            msg = repo.add_message(session_id, "assistant", final_text, response_blocks=blocks)
-            msg.planner_trace = trace
-            msg.response_blocks_payload = blocks
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Chat stream finalization failed: %s", e)
-            focus = list(dict.fromkeys(turn.focus))
-            grounded = False
-            msg = repo.add_message(
-                session_id,
-                "assistant",
-                "I couldn't finish verifying that answer. Nothing was retried; please ask again if you still need it.",
-            )
-            msg.planner_trace = []
-            msg.response_blocks_payload = []
+        msg, grounded, focus = _finish_turn(
+            repo, session_id, turn, trace, final_text, grounded, screened, started_at=started_at
+        )
         yield ("final", (msg, grounded, focus, turn.partial, turn.unavailable))
     finally:
         try:
@@ -2853,6 +2846,54 @@ def _run_deterministic_shortcircuit(
     return None
 
 
+def _confirm_pending_action(
+    db,
+    user_content: str,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
+    transcript: list[tuple[str, str]],
+    alert_context: dict | None,
+    trace: list[dict] | None,
+    planner_state: dict | None,
+    preferences: dict | None = None,
+) -> tuple[str, bool, list[str]] | None:
+    """Execute the pending server-authored confirmation on a strict "yes".
+
+    Checked before intent routing, the model, and the AI-off fallback, so
+    confirming a destructive action never depends on a model call (with AI
+    off it previously could not be confirmed at all). ``_finalize_parsed``
+    still enforces the gate and replays the stored payload, not anything
+    from this turn.
+    """
+    pending = (planner_state or {}).get("pending_confirmation")
+    if not isinstance(pending, dict) or not pending.get("action") or not _AFFIRM_INTENT.match(user_content):
+        return None
+    parsed = ChatReplyResponse(
+        reply="Confirmed",
+        grounded=True,
+        action=pending["action"],
+        action_symbol=pending.get("symbol"),
+        action_watchlist=pending.get("watchlist"),
+        action_target_id=pending.get("target_id"),
+        action_tool_arguments=pending.get("tool_arguments"),
+        action_confirmed=True,
+    )
+    return _run_turn_actions(
+        db,
+        parsed,
+        symbol_blocks,
+        unavailable,
+        market_baseline,
+        transcript,
+        user_content,
+        alert_context,
+        trace=trace,
+        planner_state=planner_state,
+        preferences=preferences,
+    )
+
+
 def _generate_reply(
     db,
     symbol_blocks: list[dict],
@@ -2878,6 +2919,12 @@ def _generate_reply(
     When the AI's reply asks for ``wants_reanalysis``, runs the chat's
     one tool (see module docstring) for the named ticker instead.
     """
+    confirmed = _confirm_pending_action(
+        db, user_content, symbol_blocks, unavailable, market_baseline,
+        transcript, alert_context, trace, planner_state, preferences,
+    )
+    if confirmed is not None:
+        return confirmed
     if _AMBIGUOUS_RANKING_REFERENCE.search(user_content):
         if trace is not None:
             trace.append({"kind": "server_reply", "trusted": True})
@@ -3261,6 +3308,13 @@ def _finalize_parsed(
                     parsed.action_confirmed = True
             if not server_confirmed:
                 parsed.action_confirmed = False
+                problem = _destructive_target_problem(db, parsed)
+                if problem is not None:
+                    # Nothing (or no single thing) to act on: answer instead
+                    # of asking the trader to approve an unknown target.
+                    if planner_state is not None:
+                        planner_state["pending_confirmation"] = None
+                    return problem, False, []
                 if planner_state is not None:
                     tool_arguments = dict(parsed.action_tool_arguments or {})
                     # Existing browser-local entries are not needed to append
@@ -3596,6 +3650,13 @@ def _generate_reply_streaming(
     reanalysis-tool path it differs from what was streamed, and the
     caller overwrites the bubble with it.
     """
+    confirmed = _confirm_pending_action(
+        db, turn.user_content, turn.symbol_blocks, turn.unavailable, turn.market_baseline,
+        turn.transcript, turn.alert_context, trace, turn.planner_state, turn.preferences,
+    )
+    if confirmed is not None:
+        yield ("result", confirmed)
+        return
     if _AMBIGUOUS_RANKING_REFERENCE.search(turn.user_content):
         if trace is not None:
             trace.append({"kind": "server_reply", "trusted": True})
@@ -3980,6 +4041,41 @@ def _action_step_detail(parsed) -> dict[str, object] | None:
     return None
 
 
+def _destructive_target_problem(db, parsed) -> str | None:
+    """Resolve a destructive action's target before asking to confirm it.
+
+    Returns a reply to send instead of the confirmation question when there
+    is nothing, or no single thing, to act on. Otherwise pins the resolved
+    target on ``parsed`` so the stored pending confirmation replays exactly
+    what the question named, even if another watchlist is created or
+    renamed before the trader says yes.
+    """
+    if parsed.action == "delete_alert":
+        from backend.repositories.alert_repository import AlertRepository
+
+        if parsed.action_target_id is None:
+            return "Which alert should I delete? Tell me the ticker or the alert's name."
+        if AlertRepository(db).get_by_id(parsed.action_target_id) is None:
+            return "I couldn't find that alert — it may already be deleted."
+    elif parsed.action == "delete_watchlist":
+        wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
+        if ambiguous:
+            names = ", ".join(c.name for c in candidates)
+            return f"You have more than one watchlist ({names}) — which one should I delete?"
+        if wl is None:
+            if parsed.action_watchlist:
+                return f'I couldn\'t find a watchlist called "{parsed.action_watchlist}".'
+            return "You don't have any watchlists to delete."
+        parsed.action_watchlist = wl.name
+        parsed.action_target_id = wl.id
+    return None
+
+
+def _describe_alert(alert) -> str:
+    condition = (alert.condition_type or "").replace("_", " ")
+    return f'"{alert.name}" ({alert.symbol} {condition} {alert.parameter})'
+
+
 def _confirm_prompt(db, parsed) -> str:
     """Server-authored confirmation text for a destructive action —
     never the model's own prose, so wording never depends on the model
@@ -3994,6 +4090,15 @@ def _confirm_prompt(db, parsed) -> str:
     watchlist (or the actual ambiguity) instead of a vague fallback.
     """
     if parsed.action == "delete_alert":
+        from backend.repositories.alert_repository import AlertRepository
+
+        alert = (
+            AlertRepository(db).get_by_id(parsed.action_target_id)
+            if parsed.action_target_id is not None
+            else None
+        )
+        if alert is not None:
+            return f"Delete the alert {_describe_alert(alert)}? Say yes to confirm."
         return "Delete that alert? Say yes to confirm."
     if parsed.action == "remove_from_watchlist":
         sym = parsed.action_symbol or "that ticker"
@@ -4217,14 +4322,22 @@ def _create_watchlist(db, parsed) -> tuple[str, bool]:
 def _delete_watchlist(db, parsed) -> tuple[str, bool]:
     from backend.repositories.watchlist_repository import WatchlistRepository
 
-    wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
-    if ambiguous:
-        names = ", ".join(c.name for c in candidates)
-        return f"You have more than one watchlist ({names}) — which one should I delete?", True
-    if wl is None:
-        return "I couldn't find that watchlist.", False
+    repo = WatchlistRepository(db)
+    if parsed.action_target_id is not None:
+        # Pinned by _destructive_target_problem when the confirmation was
+        # asked: delete exactly the list the question named.
+        wl = repo.get_watchlist(parsed.action_target_id)
+        if wl is None:
+            return "That watchlist no longer exists.", False
+    else:
+        wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
+        if ambiguous:
+            names = ", ".join(c.name for c in candidates)
+            return f"You have more than one watchlist ({names}) — which one should I delete?", True
+        if wl is None:
+            return "I couldn't find that watchlist.", False
     name = wl.name
-    WatchlistRepository(db).delete_watchlist(wl.id)
+    repo.delete_watchlist(wl.id)
     return f'Done — deleted "{name}".', True
 
 
@@ -4354,6 +4467,7 @@ def _run_screen(db, parsed) -> tuple[str, bool, list[str]]:
         result = execute_query(filters, extras=extras, watchlist_id=watchlist_id, db=db)
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat run_screen failed for %r: %s", query, e)
+        _rollback_quietly(db)
         return "Something went wrong running that screen — please try again.", False, []
 
     if result.universe_size == 0:
@@ -5407,6 +5521,7 @@ def _run_action(
         )
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
+        _rollback_quietly(db)
         safe_error = sanitize_error_message(
             e,
             failure_kind="action_exception",

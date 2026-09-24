@@ -811,7 +811,11 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
           const symbols = block.data.symbols ?? {};
           const items = Array.isArray(block.data.items) ? block.data.items : [];
           const expanded = expandedBlocks.has(block.id);
-          const visibleItems = expanded ? items : items.slice(0, 8);
+          // Opening the card and showing every item are separate choices:
+          // an open card still caps the list at 8 until "Show all".
+          const showAllKey = `${block.id}:all`;
+          const showAll = expandedBlocks.has(showAllKey);
+          const visibleItems = showAll ? items : items.slice(0, 8);
           return (
             <section className="chat-typed-card chat-evidence-card" key={block.id} aria-label="Evidence">
               <button type="button" className="chat-typed-card-heading chat-collapsible-heading" onClick={() => toggleExpanded(block.id)} aria-expanded={expanded}>
@@ -833,8 +837,8 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
                   </li>
                 ))}</ul>}
                 {items.length > 8 && (
-                  <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
-                    Show less
+                  <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(showAllKey)}>
+                    {showAll ? 'Show less' : `Show all ${items.length}`}
                   </button>
                 )}
                 {block.data.chart_state && (
