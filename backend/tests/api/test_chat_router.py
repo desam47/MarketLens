@@ -753,12 +753,20 @@ class TestClearSessions(unittest.TestCase):
         mock_repo.delete_sessions.assert_called_once_with(scope="universal", alert_trigger_id=None)
 
     @patch("backend.api.ai.chat_router.ChatRepository")
-    def test_clear_all_history_no_filter(self, mock_repo_cls):
+    def test_a_bare_clear_is_refused_instead_of_wiping_everything(self, mock_repo_cls):
+        resp = self.client.delete("/api/ai/chat/sessions")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("all=true", resp.json()["detail"])
+        mock_repo_cls.assert_not_called()
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_clear_all_history_needs_an_explicit_all(self, mock_repo_cls):
         mock_repo = MagicMock()
-        mock_repo.delete_sessions.return_value = (0, 0)
+        mock_repo.delete_sessions.return_value = (3, 12)
         mock_repo_cls.return_value = mock_repo
 
-        resp = self.client.delete("/api/ai/chat/sessions")
+        resp = self.client.delete("/api/ai/chat/sessions?all=true")
 
         self.assertEqual(resp.status_code, 200)
         mock_repo.delete_sessions.assert_called_once_with(scope=None, alert_trigger_id=None)
@@ -833,3 +841,92 @@ class TestNotebookManagement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNotebookItemSave(unittest.TestCase):
+    """POST /notebooks/{id}/items against a real in-memory database."""
+
+    def setUp(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session, sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        from backend.models import (
+            ChatFeedback,
+            ChatMessage,
+            ChatSession,
+            ResearchNotebook,
+            ResearchNotebookItem,
+        )
+        from backend.repositories.chat_repository import ChatRepository
+
+        self.on_event_loop: list[bool] = []
+        on_event_loop = self.on_event_loop
+
+        class RecordingSession(Session):
+            def query(self, *entities, **kwargs):
+                try:
+                    asyncio.get_running_loop()
+                    on_event_loop.append(True)
+                except RuntimeError:
+                    on_event_loop.append(False)
+                return super().query(*entities, **kwargs)
+
+        engine = create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+        )
+        for model in (ChatSession, ChatMessage, ChatFeedback, ResearchNotebook, ResearchNotebookItem):
+            model.__table__.create(engine, checkfirst=True)
+        self.Session = sessionmaker(bind=engine, class_=RecordingSession, autoflush=False)
+        patcher = patch("backend.repositories.chat_repository.SessionLocal", self.Session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        repo = ChatRepository()
+        try:
+            session = repo.create_session(None)
+            repo.add_message(session.id, "user", "How is AAPL?")
+            self.message_id = repo.add_message(session.id, "assistant", "AAPL is up.").id
+            self.notebook_id = repo.create_notebook("client-a-123456", "Research").id
+        finally:
+            repo.close()
+        self.client = TestClient(app)
+
+    def _set_blocks(self, blocks):
+        from backend.models import ChatMessage
+
+        db = self.Session()
+        try:
+            db.query(ChatMessage).filter(ChatMessage.id == self.message_id).update(
+                {"response_blocks": json.dumps(blocks)}
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def _save(self, question=""):
+        return self.client.post(
+            f"/api/ai/chat/notebooks/{self.notebook_id}/items",
+            json={"client_key": "client-a-123456", "message_id": self.message_id, "question": question},
+        )
+
+    def test_the_question_lookup_runs_off_the_event_loop(self):
+        self.on_event_loop.clear()
+
+        resp = self._save()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["question"], "How is AAPL?")
+        self.assertTrue(self.on_event_loop)
+        self.assertNotIn(True, self.on_event_loop)
+
+    def test_symbol_lists_that_are_not_lists_are_skipped(self):
+        self._set_blocks([
+            {"type": "evidence", "data": {"symbols": {"verified": "AAPL", "partial": None, "unavailable": ["msft"]}}},
+            {"type": "evidence", "data": {"symbols": {"verified": ["nvda"]}}},
+        ])
+
+        resp = self._save("q")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["symbols"], ["MSFT", "NVDA"])

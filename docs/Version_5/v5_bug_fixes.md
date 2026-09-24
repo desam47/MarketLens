@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 7: the frontend half of BF-13; BF-08 closed)
-**Status:** All items complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB).
+**Last updated:** 2026-09-24 (batch 8: the four gaps fixed)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -48,7 +48,25 @@ code), so line numbers quoted in older notes or commits will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next:** nothing left in the tracker. Housekeeping:
+**Next:** nothing left in the tracker, and the four gaps are fixed
+(batch 8). What remains:
+- **Push:** push `development` when you want it on `origin`.
+- **Check in the running app:** every fix was verified by automated tests
+  only; none has been tried in a browser. A short manual pass: press
+  Clear, then **Keep history**, and confirm nothing is deleted; send a
+  question and press **Cancel**, and confirm the reply still appears;
+  ask "TSLA max drawdown this year".
+- **Split `chat.py`:** the one open enhancement (see Enhancements). It is
+  a large refactor with no behaviour change, best done on its own.
+- **Optional follow-ups** from the entries above, none a bug today:
+  - `$10k` isn't read as 10,000 (BF-02).
+  - `BRK.B`-style tickers are unchecked against Yahoo (BF-14).
+  - A clarifying question shows as `failed` in the step trace (BF-16).
+  - The Playwright suite deletes every chat on the server it runs
+    against (see Gaps); pointing it at a separate test database would
+    fix that.
+
+Housekeeping done:
 - **Phase audit counts (done 2026-09-24):** `phase_audit_v5.md` and
   `phase_audit_v5_tables.md` now say 45 tools and 56 actions. This doc
   first said 43 and 54, which counted only `get_price_statistics` and
@@ -57,7 +75,6 @@ code), so line numbers quoted in older notes or commits will not match.
   `.pytest_tmp/bf10/pre_bf10_backup.db` (1.1 GB), after confirming the
   live database is on `20260930_chat_id_autoincrement` with both chat
   tables using `AUTOINCREMENT`.
-- **Push:** push `development` when you want it on `origin`.
 
 ---
 
@@ -932,20 +949,46 @@ intended.
 
 ## Gaps (not bugs)
 
-- **Clear without confirmation:** the Clear button deletes the universal
-  chat history with no confirmation. `DELETE /api/ai/chat/sessions` with
-  no filter wipes every session.
-- **Blocking query in notebook save:** `save_notebook_item`
-  (`chat_router.py:660`) runs a synchronous DB query on the event loop.
-- **Unchecked model symbol lists:** the notebook save walks
-  `symbols.verified/partial/unavailable` without checking they are lists,
-  so a string would be split into characters.
-- **Existing lint errors:** three `ruff` errors are also present in the
-  committed files. They are auto-fixable and unrelated to these fixes.
-  - `backend/api/ai/chat_router.py:186` UP037: quoted forward reference
-    `"BrowserScanFilter"`.
-  - `backend/tests/ai/test_chat_calculation.py:1` and
-    `backend/tests/ai/test_chat.py:15` I001: import block not sorted.
+All four were fixed on 2026-09-24 in batch 8.
+
+- ~~**Clear without confirmation**~~ (fixed): Clear now asks first
+  ("Delete this chat's whole history? This can't be undone.", with
+  **Keep history** / **Delete history**), and nothing is deleted until
+  **Delete history**. `DELETE /api/ai/chat/sessions` with no filter now
+  returns 400; wiping every chat takes an explicit `?all=true`. The
+  Playwright helper `clearSessions` (`e2e/tests/chat.spec.ts`) was the
+  only bare caller and now passes `?all=true`. Note that this helper
+  deletes every chat on the dev server it runs against, before each e2e
+  test.
+- ~~**Blocking query in notebook save**~~ (fixed): the lookup of the
+  question to save, the one query in `save_notebook_item` that ran on the
+  event loop, now runs through `asyncio.to_thread` like the others.
+- ~~**Unchecked model symbol lists**~~ (fixed): the notebook save reads
+  `symbols.verified/partial/unavailable` only when each is a list, so a
+  string is no longer split into letters and a null no longer fails the
+  save. (The server builds these as lists today, in
+  `response_blocks.py`; this guards later changes.)
+- ~~**Existing lint errors**~~ (fixed): `ruff --fix` sorted the imports in
+  `test_chat.py` and `test_chat_calculation.py` and unquoted the
+  `BrowserScanFilter` annotation in `chat_router.py` (safe: the module
+  uses `from __future__ import annotations`).
+
+**Tests:**
+- **API:** in `backend/tests/api/test_chat_router.py`:
+  - `test_a_bare_clear_is_refused_instead_of_wiping_everything` and
+    `test_clear_all_history_needs_an_explicit_all` (the second replaces
+    `test_clear_all_history_no_filter`, which pinned the old wipe).
+  - `TestNotebookItemSave` (2 tests, real in-memory database). One checks
+    that no query in the save runs on the event loop; the other checks
+    that non-list symbol values are skipped.
+- **Chat panel:** in `ChatPanel.test.tsx`, the Clear test now confirms
+  first, and `Clear keeps the history when the confirmation is declined`
+  is new.
+- **Mutations:** removing each fix fails its test.
+- **Suites:** the affected backend suites pass (`test_chat_router.py`,
+  `test_chat.py`, `test_chat_calculation.py`, `test_chat_repository.py`:
+  136 tests). `ChatPanel.test.tsx` passes (60) and `tsc` has 0 errors.
+  ESLint has no new findings. Neither full suite was run.
 
 ## Enhancements
 
@@ -957,10 +1000,28 @@ intended.
 4. ~~**Verification-gated streaming**~~: action turns are held (batch 6)
    and other streamed text is labeled as a draft (already in `f24b4cf`),
    BF-08.
-5. **Split `chat.py`:** the module is ~5,450 lines. Split it into intent
+5. **Split `chat.py`:** the module is ~5,700 lines. Split it into intent
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 8 (2026-09-24): the four gaps
+
+| Suite | Result |
+|---|---|
+| `test_chat_router.py`, `test_chat.py`, `test_chat_calculation.py`, `test_chat_repository.py` | 136 passed (4 new tests; 1 replaced) |
+| `frontend/src/components/ChatPanel.test.tsx` | 60 passed (1 new; the Clear test now confirms first) |
+| `tsc --noEmit` | 0 errors |
+| `ruff check` on the changed backend files | 0 errors (the 3 older ones are fixed) |
+| `eslint` on the changed frontend files | No new findings (`ChatPanel.test.tsx` keeps its 24 older ones, as on `HEAD`) |
+
+**Mutation check:** removing each fix fails its test:
+- the bare-clear 400;
+- running the question lookup in a worker thread;
+- the list check;
+- the Clear confirmation.
+
+Neither full suite was run for this batch.
 
 ### Batch 7 (2026-09-24)
 
@@ -1092,13 +1153,15 @@ The full backend suite was not run.
 - **Batch 4:** commit `43c5e17`, `fix(chat): resolve class tickers and watchlist names, stop chains on questions`, on `development`.
 - **Batch 5:** commit `b73f8d3`, `feat(chat): answer return, volatility, drawdown and correlation questions`, on `development`.
 - **Batch 6:** commit `7aab462`, `fix(chat): one reply path for both transports; finish turns after disconnect`, on `development`.
-- **Batch 7:** commit `feat(chat): cancel and time out streamed replies without resending`, on `development`.
+- **Batch 7:** commit `2728f43`, `feat(chat): cancel and time out streamed replies without resending`, on `development`.
+- **Docs:** commit `12420e5`, `docs(v5): correct tool and action counts; record housekeeping`, and commit `52af7dc`, `docs(v5): update BF-12 follow-up for alert-chat polling`, on `development`.
+- **Batch 8 (gaps):** commit `fix(chat): confirm Clear, refuse bare history wipes, keep notebook save off the event loop`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | BF-01 | ✅ COMPLETE | batch 1 | `backend/ai/chat.py` | `test_chat_actions.py::TestConfirmationAffirmation` | `_AFFIRM_INTENT` matches only a whole-message affirmation. |
 | 2026-09-24 | BF-02 | ✅ COMPLETE | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (3 tests) | Labelled-field parsing; new `_RISK_PERCENT_RE`, `_ACCOUNT_BEFORE_RE`. |
-| 2026-09-24 | BF-03 | ⚠️ PARTIAL | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (2 tests) | New `_CALC_DATE_RE`; the fallback steps aside when a date is present. |
+| 2026-09-24 | BF-03 | ⚠️ PARTIAL (completed in batch 5) | batch 1 | `backend/ai/chat.py` | `test_chat_calculation.py` (2 tests) | New `_CALC_DATE_RE`; the fallback steps aside when a date is present. |
 | 2026-09-24 | BF-05 | ✅ COMPLETE | batch 1 | `backend/api/ai/chat_router.py`, `backend/tests/api/test_chat_router.py` | `test_scope_without_mode_is_not_passed_as_chart_state` + 6 updated assertions | Keyword arguments via `_turn_kwargs`. |
 | 2026-09-24 | BF-12 | ✅ COMPLETE | batch 1 | `frontend/src/components/ChatPanel.tsx`, `ChatPanel.test.tsx` | `mergePolledMessages (BF-12)` (3 tests) | Poll swaps the server user row into the optimistic message. |
 | 2026-09-24 | BF-06 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestEndToEnd` (3 tests) | `_confirm_pending_action` runs before routing, the model and the AI-off fallback. |
@@ -1115,7 +1178,8 @@ The full backend suite was not run.
 | 2026-09-24 | BF-04 | ✅ COMPLETE | batch 5 | `backend/ai/market_tools.py`, `backend/ai/price_metric_intent.py` (new), `backend/ai/calculator.py`, `backend/ai/tool_registry.py`, `backend/ai/chat.py`, `backend/ai/prompt.py`, `backend/tests/ai/test_price_statistics.py` (new), `backend/tests/ai/test_tool_registry.py` | 37 tests | New `get_price_statistics` tool and parser; `return_correlation`; explicit reuse wording. |
 | 2026-09-24 | BF-03 | ✅ COMPLETE | batch 5 | (via BF-04) | `test_chat_routes_metric_questions_to_the_tool` | Date-range return questions now get a verified answer. |
 | 2026-09-24 | BF-09 | ✅ COMPLETE | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` (new), `backend/tests/ai/test_chat_intents.py` | 7 tests | One generator, `_reply_events`, for both transports. |
-| 2026-09-24 | BF-08 | ⚠️ PARTIAL | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | No streamed text for action-like requests or once an action appears; frontend draft marking remains. |
-| 2026-09-24 | BF-13 | ⚠️ PARTIAL | batch 6 | `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | Turns finish after a disconnect; the user row is saved last. Frontend timeout/Cancel remains. |
+| 2026-09-24 | BF-08 | ⚠️ PARTIAL (completed in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | No streamed text for action-like requests or once an action appears; frontend draft marking remains. |
+| 2026-09-24 | BF-13 | ⚠️ PARTIAL (completed in batch 7) | batch 6 | `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | Turns finish after a disconnect; the user row is saved last. Frontend timeout/Cancel remains. |
 | 2026-09-24 | BF-13 | ✅ COMPLETE | batch 7 | `frontend/src/services/api.ts`, `frontend/src/components/ChatPanel.tsx`, `frontend/src/services/api.test.ts`, `frontend/src/components/ChatPanel.test.tsx` | 12 tests | Idle timeout; Cancel; cancel on session switch/unmount; no resend; the saved reply is fetched instead. |
 | 2026-09-24 | BF-08 | ✅ COMPLETE | batch 7 | (no code; see entry) | existing draft-label test | The draft label already existed (`f24b4cf`); with batch 6's gating nothing remained. |
+| 2026-09-24 | Gaps | ✅ FIXED | batch 8 | `backend/api/ai/chat_router.py`, `frontend/src/components/ChatPanel.tsx`, `e2e/tests/chat.spec.ts`, two test files (lint), plus tests | 5 new, 2 updated | Clear confirms first; a bare `DELETE /sessions` is refused (`?all=true` wipes all); notebook save fully off the event loop and type-checks symbol lists; 3 `ruff` errors fixed. |

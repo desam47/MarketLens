@@ -182,6 +182,8 @@ export function ChatPanel({
   const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
+  // Clear deletes history for good, so it asks first.
+  const [confirmingClear, setConfirmingClear] = useState(false);
   // The stream in flight. ``teardown`` marks an abort caused by leaving the
   // session (switch or unmount), after which nothing should be updated.
   const streamRef = useRef<{ controller: AbortController; teardown: boolean } | null>(null);
@@ -267,6 +269,7 @@ export function ChatPanel({
     setSessionId(null);
     setStreamNotice(null);
     setAwaitingReply(null);
+    setConfirmingClear(false);
 
     (async () => {
       try {
@@ -297,6 +300,7 @@ export function ChatPanel({
   }, [alertTriggerId, alertSymbol, sessionAttempt]);
 
   const handleClear = useCallback(async () => {
+    setConfirmingClear(false);
     setClearing(true);
     setError(null);
     try {
@@ -599,8 +603,8 @@ export function ChatPanel({
             <button
               type="button"
               className={`btn btn-secondary ${clearing ? 'btn-loading' : ''}`}
-              onClick={handleClear}
-              disabled={loading || clearing || messages.length === 0}
+              onClick={() => setConfirmingClear(true)}
+              disabled={loading || clearing || confirmingClear || messages.length === 0}
               title="Permanently delete this chat's history and start fresh"
             >
               {clearing ? '⟳' : '🗑 Clear'}
@@ -617,6 +621,13 @@ export function ChatPanel({
           </div>
         </div>
         {memoryNotice && <div className="chat-draft-status" role="status">{memoryNotice}</div>}
+        {confirmingClear && (
+          <div className="chat-notebook-confirm" role="alert">
+            <span>Delete this chat&apos;s whole history? This can&apos;t be undone.</span>
+            <button type="button" className="chat-quick-action-btn" onClick={() => setConfirmingClear(false)}>Keep history</button>
+            <button type="button" className="chat-quick-action-btn chat-notebook-danger" onClick={handleClear}>Delete history</button>
+          </div>
+        )}
         {preferencesOpen && (
           <ChatPreferencesPanel
             preferences={preferences}

@@ -20,7 +20,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 
 /** Delete all chat sessions so each test starts with a clean slate. */
 async function clearSessions() {
-  await fetch('http://localhost:5001/api/ai/chat/sessions', { method: 'DELETE' })
+  await fetch('http://localhost:5001/api/ai/chat/sessions?all=true', { method: 'DELETE' })
     .catch(() => { /* ignore — server may be briefly unavailable */ });
 }
 

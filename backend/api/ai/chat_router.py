@@ -183,7 +183,7 @@ class BrowserScanPreset(BaseModel):
     model_config = {"extra": "ignore"}
 
     name: str = Field(..., min_length=1, max_length=80)
-    filters: list["BrowserScanFilter"] = Field(default_factory=list, max_length=40)
+    filters: list[BrowserScanFilter] = Field(default_factory=list, max_length=40)
     match: Literal["AND", "OR"] = "AND"
 
 
@@ -480,15 +480,21 @@ class ClearHistoryResponse(BaseModel):
 async def clear_sessions(
     scope: Literal["universal", "symbol", "alert"] | None = Query(default=None),
     alert_trigger_id: int | None = Query(default=None),
+    all_sessions: bool = Query(default=False, alias="all"),
 ):
     """Delete chat sessions and every message under them.
 
     The "Clear" button in the AI Hub chat calls this with
     ``scope=universal`` so a clear actually flushes the thread instead
-    of leaving orphaned sessions behind. With no filter it wipes all
-    chat history; ``alert_trigger_id`` narrows it to an alert-opened
-    thread.
+    of leaving orphaned sessions behind; ``alert_trigger_id`` narrows it
+    to an alert-opened thread. Wiping every chat takes an explicit
+    ``all=true``: a bare call is refused rather than read as "everything".
     """
+    if scope is None and alert_trigger_id is None and not all_sessions:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass scope, alert_trigger_id, or all=true to delete every chat session.",
+        )
     repo = ChatRepository()
     try:
         sessions, messages = await asyncio.to_thread(
@@ -657,17 +663,20 @@ async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest)
             raise HTTPException(status_code=404, detail="Assistant message not found")
         question = payload.question
         if not question:
-            previous_user = (
-                repo.db.query(ChatMessage)
-                .filter(
-                    ChatMessage.session_id == message.session_id,
-                    ChatMessage.id < message.id,
-                    ChatMessage.role == "user",
+            def previous_user_content() -> str | None:
+                row = (
+                    repo.db.query(ChatMessage.content)
+                    .filter(
+                        ChatMessage.session_id == message.session_id,
+                        ChatMessage.id < message.id,
+                        ChatMessage.role == "user",
+                    )
+                    .order_by(ChatMessage.id.desc())
+                    .first()
                 )
-                .order_by(type(message).id.desc())
-                .first()
-            )
-            question = previous_user.content if previous_user is not None else "Saved answer"
+                return row[0] if row is not None else None
+
+            question = await asyncio.to_thread(previous_user_content) or "Saved answer"
         blocks = []
         try:
             parsed = json.loads(message.response_blocks or "[]")
@@ -687,9 +696,12 @@ async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest)
                 content_types.add(block_type)
             data = block.get("data") if isinstance(block.get("data"), dict) else {}
             symbol_data = data.get("symbols") if isinstance(data.get("symbols"), dict) else {}
-            for symbol in [*symbol_data.get("verified", []), *symbol_data.get("partial", []), *symbol_data.get("unavailable", [])]:
-                if isinstance(symbol, str):
-                    symbols.add(symbol.upper())
+            for key in ("verified", "partial", "unavailable"):
+                listed = symbol_data.get(key)
+                # A string here would otherwise be split into letters.
+                for symbol in listed if isinstance(listed, list) else []:
+                    if isinstance(symbol, str):
+                        symbols.add(symbol.upper())
             if isinstance(data.get("symbol"), str):
                 symbols.add(data["symbol"].upper())
             quality = block.get("quality") if isinstance(block.get("quality"), dict) else {}

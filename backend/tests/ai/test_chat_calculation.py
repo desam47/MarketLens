@@ -1,7 +1,12 @@
 from unittest.mock import Mock
 
 from backend.ai.calculator import CalculationRequest, calculate
-from backend.ai.chat import _finalize_parsed, _format_calculation_reply, _generate_reply, _run_action
+from backend.ai.chat import (
+    _finalize_parsed,
+    _format_calculation_reply,
+    _generate_reply,
+    _run_action,
+)
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 

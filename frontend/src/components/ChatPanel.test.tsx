@@ -986,10 +986,31 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText('old a')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /clear/i }));
+    // Nothing is deleted until the confirmation.
+    expect(screen.getByText(/whole history/)).toBeInTheDocument();
+    expect(mockApi.clearChatHistory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete history' }));
 
     await waitFor(() => expect(mockApi.clearChatHistory).toHaveBeenCalled());
     expect(mockApi.createChatSession).toHaveBeenCalledWith(undefined, null, true);
     await waitFor(() => expect(screen.queryByText('old a')).not.toBeInTheDocument());
+  });
+
+  it('Clear keeps the history when the confirmation is declined', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'old q', created_at: '', grounded: null } as any,
+      { id: 2, session_id: 1, role: 'assistant', content: 'old a', created_at: '', grounded: true } as any,
+    ]);
+    render(<ChatPanel />);
+    expect(await screen.findByText('old a')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /clear/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep history' }));
+
+    expect(screen.queryByText(/whole history/)).not.toBeInTheDocument();
+    expect(screen.getByText('old a')).toBeInTheDocument();
+    expect(mockApi.clearChatHistory).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /clear/i })).not.toBeDisabled();
   });
 
   it('falls back to the blocking endpoint when the stream never starts', async () => {

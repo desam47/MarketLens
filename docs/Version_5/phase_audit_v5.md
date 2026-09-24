@@ -1,6 +1,6 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-24 (Chat comparison freshness and Notebook management)
+**Last updated:** 2026-09-24 (link to the Chat bug fix tracker; tool and action counts)
 **Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
@@ -14,6 +14,11 @@ The 2026-09-23 Chat review found and fixed safety/verification bugs; see
 Post-completion review explains the two items (multi-provider
 reconciliation, further contract-test expansion) that are blocked on real
 architectural gaps rather than left undone.
+
+**Chat bug fixes (2026-09-24):** a second Chat review logged 20 bugs
+(BF-01 to BF-20) and four smaller gaps; all are fixed on `development`.
+The tracker, with each fix's tests and commits, is
+[v5_bug_fixes.md](v5_bug_fixes.md).
 
 The registry now has 45 tools and `ChatReplyResponse.action` accepts 56
 actions: the 45 registry tools plus 11 non-tool actions (`none`, the three
