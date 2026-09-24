@@ -426,7 +426,7 @@ The full backend and frontend suites and the production build were not run for t
 - **Review and batch 1:** commit `8eb7ac9`, `fix(signals): correct historical outcome research`.
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
 - **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
-- **Batch 2b:** in the working tree, not yet committed.
+- **Batch 2b:** commit `b430e06`, `fix(signals): unblock outcome queue and direction-adjust track record`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -440,8 +440,8 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-06 | ✅ COMPLETE | `f762f8a` | `router.py`, `signal_repository.py`, `api.ts`, dashboard, tests | API and UI | Server-side research page and full scoped export. |
 | 2026-09-24 | HS-14 | ⚠️ PARTIAL | `8eb7ac9`, `f762f8a` | tests | see entry | Several regressions added; card, replay, duplicate, queue, and AI coverage remain. |
 | 2026-09-24 | HS-15 to HS-18 | ❌ NOT STARTED | `59e269a` | `docs/Version_5/v5_historical_signal_bug_fixes.md` | 9 live-database checks | Review of batches 1 and 2a logged four findings and refreshed HS-07 to HS-10 and HS-12 evidence. |
-| 2026-09-24 | HS-15 | ✅ COMPLETE | batch 2b | `signal_repository.py`, `signal_recorder.py`, `test_signal_repository.py`, `test_signal_recorder.py` | 4 new, 3 updated | Queue selects only rows that stored bars can advance. |
-| 2026-09-24 | HS-16 | ✅ COMPLETE | batch 2b | `signal_repository.py`, `router.py`, `context.py`, `market_tools.py`, `SignalExplanationPanel.tsx`, `api.ts`, tests | 2 new, 4 updated | One directional rule; AI, chat, and Scanner stats direction-adjusted and complete-only. |
+| 2026-09-24 | HS-15 | ✅ COMPLETE | `b430e06` | `signal_repository.py`, `signal_recorder.py`, `test_signal_repository.py`, `test_signal_recorder.py` | 4 new, 3 updated | Queue selects only rows that stored bars can advance. |
+| 2026-09-24 | HS-16 | ✅ COMPLETE | `b430e06` | `signal_repository.py`, `router.py`, `context.py`, `market_tools.py`, `SignalExplanationPanel.tsx`, `api.ts`, tests | 2 new, 4 updated | One directional rule; AI, chat, and Scanner stats direction-adjusted and complete-only. |
 
 ---
 
