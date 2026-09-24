@@ -580,9 +580,11 @@ _REUSE_MEMORY_HINT = re.compile(r"\b(previous|prior|same|those|last|it)\b", re.I
 # but 100 shares"). Narrower than _REUSE_MEMORY_HINT: "it" alone is not
 # enough ("is it still above the stop at 212?" is a question, not a re-run).
 _CALC_FOLLOWUP_HINT = re.compile(r"\b(same|previous|prior|instead|but|change|use|make it)\b", re.I)
-_NUM = r"\$?\s*([0-9][0-9,]*(?:\.\d+)?)"
+_BARE_NUM = r"([0-9][0-9,]*(?:\.\d+)?)"
+_NUM = r"\$?\s*" + _BARE_NUM
 _SHARES_RE = re.compile(
-    r"\b(?:buy|bought|sell|sold|short|long)\s+" + _NUM[4:] + r"\s+(?:shares?\s+(?:of\s+)?)?(?:\$?[A-Za-z]{1,6}\b)?"
+    # A share count never carries "$", so it uses the bare number.
+    r"\b(?:buy|bought|sell|sold|short|long)\s+" + _BARE_NUM + r"\s+(?:shares?\s+(?:of\s+)?)?(?:\$?[A-Za-z]{1,6}\b)?"
     r"|\b([0-9][0-9,]*)\s+(?:shares?|sh)\b",
     re.I,
 )
@@ -2766,10 +2768,14 @@ def _build_deterministic_chat_reply(
     if not _MULTI_STEP_HINT.search(user_content) and _WATCHLIST_ADD_INTENT.search(user_content):
         if len(focus_symbols) != 1:
             return "Which ticker should I add to your watchlist?"
+        # "add RIVN to a new watchlist called Momentum" asks for the list to
+        # be created with the ticker in it; add_to_watchlist no longer
+        # creates a list from an unknown name.
+        creates = bool(_WATCHLIST_CREATE_INTENT.search(user_content))
         return ChatReplyResponse(
-            reply="Verified add to watchlist",
+            reply="Verified create watchlist" if creates else "Verified add to watchlist",
             grounded=True,
-            action="add_to_watchlist",
+            action="create_watchlist" if creates else "add_to_watchlist",
             action_symbol=focus_symbols[0],
             action_watchlist=_extract_watchlist_name(user_content),
         )
@@ -3444,6 +3450,10 @@ def _run_turn_actions(
     if (
         parsed.action in {"assumption_tracking", "compare_symbols"}
         or not _action_was_executed(parsed)
+        # A step that failed or asked a question ("which watchlist?") must
+        # be answered first: later steps often depend on it ("create X and
+        # add Y to it").
+        or not grounded
         or not _MULTI_STEP_HINT.search(user_content)
     ):
         return text, grounded, screened
@@ -3630,8 +3640,8 @@ def _run_turn_actions(
         all_screened.extend(step_screened)
         if _cacheable_chat_action(next_parsed.action):
             result_cache[signature] = (step_text, step_grounded, list(step_screened))
-        if not _action_was_executed(next_parsed):
-            break  # a pending confirmation — stop the chain here
+        if not _action_was_executed(next_parsed) or not step_grounded:
+            break  # a pending confirmation, a failure, or a question — stop here
 
     return " ".join(texts), all_grounded, list(dict.fromkeys(all_screened))
 
@@ -4138,6 +4148,19 @@ def _kickoff_backfill(symbol: str) -> None:
         logger.warning("chat action: backfill kickoff failed for %s: %s", symbol, e)
 
 
+def _find_watchlist_by_name(repo, name: str):
+    """An active watchlist by exact name, else by case-insensitive name.
+
+    Names reach here from the trader's own wording ("my tech watchlist"),
+    so an exact-only match turned a case difference into a second list.
+    """
+    wl = repo.get_watchlist_by_name(name)
+    if wl is not None:
+        return wl
+    lowered = name.strip().lower()
+    return next((w for w in repo.get_watchlists(active_only=True) if w.name.lower() == lowered), None)
+
+
 def _resolve_watchlist(db, name: str | None, *, containing_symbol: str | None = None):
     """``(watchlist, ambiguous, candidates)``.
 
@@ -4162,7 +4185,7 @@ def _resolve_watchlist(db, name: str | None, *, containing_symbol: str | None = 
 
     repo = WatchlistRepository(db)
     if name:
-        return repo.get_watchlist_by_name(name), False, []
+        return _find_watchlist_by_name(repo, name), False, []
 
     lists = repo.get_watchlists(active_only=True)
 
@@ -4258,14 +4281,32 @@ def _add_to_watchlist(db, parsed) -> tuple[str, bool]:
     wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
     if ambiguous:
         names = ", ".join(c.name for c in candidates)
-        return f"You have more than one watchlist ({names}) — which one should I add it to?", True
+        return f"You have more than one watchlist ({names}) — which one should I add it to?", False
     repo = WatchlistRepository(db)
     if wl is None:
+        existing = [w.name for w in repo.get_watchlists(active_only=True)]
+        if parsed.action_watchlist and existing:
+            # A name that matches no list is far more often a typo than a
+            # request for a new one; creating it silently left a stray list.
+            return _unknown_watchlist_reply(parsed.action_watchlist, existing, symbol), False
         wl = repo.create_watchlist(parsed.action_watchlist or "Watchlist")
     _, is_new, did_reenable = repo.add_symbol_to_watchlist(wl.id, symbol)
     if is_new or did_reenable:
         _kickoff_backfill(symbol)
     return f"Done — added {symbol} to {wl.name}.", True
+
+
+def _unknown_watchlist_reply(name: str, existing: list[str], symbol: str) -> str:
+    from difflib import get_close_matches
+
+    close = get_close_matches(name.lower(), [n.lower() for n in existing], n=1, cutoff=0.6)
+    if close:
+        match = next(n for n in existing if n.lower() == close[0])
+        return f'I couldn\'t find a watchlist called "{name}". Did you mean "{match}"?'
+    return (
+        f'I couldn\'t find a watchlist called "{name}". Your watchlists: {", ".join(existing)}. '
+        f'To start a new one, say "create a watchlist called {name} with {symbol}".'
+    )
 
 
 def _remove_from_watchlist(db, parsed) -> tuple[str, bool]:
@@ -4287,7 +4328,7 @@ def _remove_from_watchlist(db, parsed) -> tuple[str, bool]:
         return (
             f"{symbol} is on more than one watchlist ({names}) — "
             "which one should I remove it from?",
-            True,
+            False,
         )
     if wl is None:
         if parsed.action_watchlist:
@@ -4306,8 +4347,9 @@ def _create_watchlist(db, parsed) -> tuple[str, bool]:
     if not name:
         return "What should I call the new watchlist?", False
     repo = WatchlistRepository(db)
-    if repo.get_watchlist_by_name(name) is not None:
-        return f'A watchlist called "{name}" already exists.', False
+    existing = _find_watchlist_by_name(repo, name)
+    if existing is not None:
+        return f'A watchlist called "{existing.name}" already exists.', False
     wl = repo.create_watchlist(name)
     symbol = (parsed.action_symbol or "").upper().strip()
     suffix = ""
@@ -4333,7 +4375,7 @@ def _delete_watchlist(db, parsed) -> tuple[str, bool]:
         wl, ambiguous, candidates = _resolve_watchlist(db, parsed.action_watchlist)
         if ambiguous:
             names = ", ".join(c.name for c in candidates)
-            return f"You have more than one watchlist ({names}) — which one should I delete?", True
+            return f"You have more than one watchlist ({names}) — which one should I delete?", False
         if wl is None:
             return "I couldn't find that watchlist.", False
     name = wl.name
@@ -4408,7 +4450,7 @@ def _set_entity_type(db, parsed) -> tuple[str, bool]:
         names = ", ".join(c.name for c in candidates)
         return (
             f"{symbol} is on more than one watchlist ({names}) — which one should I update?",
-            True,
+            False,
         )
     if wl is None:
         if parsed.action_watchlist:

@@ -18,6 +18,9 @@ def _fake_scan_result() -> ScanResult:
     result.quote = MagicMock()
     result.quote.price = 185.0
     result.quote.timestamp = datetime.now(UTC)
+    # build_context reports the provider's own status label (669b4e4); a bare
+    # MagicMock has none and reads as "UNKNOWN".
+    result.quote.data_status = "LIVE"
     result.trend_signals = {
         "ONE_DAY": {"direction": "strong_bullish", "strength": "strong", "confidence": 0.85},
     }
@@ -119,7 +122,7 @@ class TestBuildContextNews(unittest.TestCase):
 
         self.assertEqual(ctx.news, [])
         # data_status must be unaffected by an aux-data failure.
-        self.assertEqual(ctx.data_status, "live")
+        self.assertEqual(ctx.data_status, "LIVE")
 
     @patch("backend.api.trend.registry.get_engine")
     @patch("backend.ai.context.market_scanner")
@@ -178,7 +181,7 @@ class TestBuildContextFundamentals(unittest.TestCase):
         ctx = build_context("AAPL", "1d")
 
         self.assertEqual(ctx.fundamentals, {})
-        self.assertEqual(ctx.data_status, "live")
+        self.assertEqual(ctx.data_status, "LIVE")
 
 
 if __name__ == "__main__":

@@ -471,6 +471,47 @@ class TestRunTurnActions(_DBBase):
         wl = WatchlistRepository(self.db).get_watchlist_by_name("Tech")
         self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist_symbol(wl.id, "NVDA"))
 
+    def test_no_chain_after_a_first_step_that_asked_a_question(self):
+        """BF-16: "which watchlist?" is not a completed step, so the rest of
+        the request must wait for the answer."""
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("Tech")
+        repo.create_watchlist("Swing Setups")
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "create_alert", "action_symbol": "RIVN", '
+            '"action_condition_type": "price_above", "action_parameter": "20"}',
+        )
+        parsed = _parsed(action="add_to_watchlist", action_symbol="RIVN")
+        trace: list[dict] = []
+
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [], "add RIVN to my watchlist, then alert me above 20", None, trace=trace
+        )
+
+        self.assertIn("which one", text.lower())
+        self.assertFalse(grounded)
+        mock_ai.complete.assert_not_called()
+        self.assertEqual(AlertRepository(self.db).get_all(), [])
+
+    def test_chain_stops_after_a_later_step_that_asked_a_question(self):
+        repo = WatchlistRepository(self.db)
+        repo.create_watchlist("Swing Setups")
+        mock_ai = self._mock_complete(
+            '{"reply": "ok", "grounded": true, "action": "add_to_watchlist", "action_symbol": "NVDA"}',
+            '{"reply": "ok", "grounded": true, "action": "create_alert", "action_symbol": "NVDA", '
+            '"action_condition_type": "price_above", "action_parameter": "200"}',
+        )
+        parsed = _parsed(action="create_watchlist", action_watchlist="Tech")
+
+        text, grounded, _ = _run_turn_actions(
+            self.db, parsed, [], [], None, [],
+            "create a watchlist called Tech and add NVDA to it, then alert me above 200", None,
+        )
+
+        self.assertIn("which one", text.lower())
+        self.assertEqual(mock_ai.complete.call_count, 1)
+        self.assertEqual(AlertRepository(self.db).get_all(), [])
+
     def test_continuation_call_uses_the_lean_system_prompt(self):
         # 2026-09-16 optimization: a chained continuation call must use
         # CHAT_CONTINUATION_SYSTEM_PROMPT, not the full CHAT_SYSTEM_PROMPT
@@ -873,6 +914,51 @@ class TestActionHandlers(_DBBase):
         _add_to_watchlist(self.db, _parsed(action_symbol="RIVN", action_watchlist="Swing Setups"))
         self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist_symbol(wl2.id, "RIVN"))
 
+    def test_add_to_watchlist_matches_the_name_case_insensitively(self):
+        """BF-15: "my tech watchlist" used to create a second list "tech"."""
+        tech = WatchlistRepository(self.db).create_watchlist("Tech")
+
+        text, grounded = _add_to_watchlist(self.db, _parsed(action_symbol="RIVN", action_watchlist="tech"))
+
+        self.assertTrue(grounded)
+        self.assertIn("added RIVN to Tech", text)
+        self.assertEqual([w.name for w in WatchlistRepository(self.db).get_watchlists()], ["Tech"])
+        self.assertIsNotNone(WatchlistRepository(self.db).get_watchlist_symbol(tech.id, "RIVN"))
+
+    def test_add_to_watchlist_with_a_mistyped_name_suggests_instead_of_creating(self):
+        """BF-15: a name matching no list used to create a stray list."""
+        WatchlistRepository(self.db).create_watchlist("Tech")
+
+        text, grounded = _add_to_watchlist(self.db, _parsed(action_symbol="RIVN", action_watchlist="Tehc"))
+
+        self.assertFalse(grounded)
+        self.assertIn('Did you mean "Tech"?', text)
+        self.assertEqual([w.name for w in WatchlistRepository(self.db).get_watchlists()], ["Tech"])
+        self.mock_backfill.assert_not_called()
+
+    def test_add_to_watchlist_with_an_unrelated_name_lists_the_real_ones(self):
+        WatchlistRepository(self.db).create_watchlist("Tech")
+
+        text, grounded = _add_to_watchlist(self.db, _parsed(action_symbol="RIVN", action_watchlist="Momentum"))
+
+        self.assertFalse(grounded)
+        self.assertIn("Your watchlists: Tech", text)
+        self.assertIn('create a watchlist called Momentum with RIVN', text)
+
+    def test_add_to_watchlist_named_list_is_created_when_there_are_none(self):
+        text, grounded = _add_to_watchlist(self.db, _parsed(action_symbol="RIVN", action_watchlist="Momentum"))
+
+        self.assertTrue(grounded)
+        self.assertEqual([w.name for w in WatchlistRepository(self.db).get_watchlists()], ["Momentum"])
+
+    def test_create_watchlist_duplicate_check_ignores_case(self):
+        WatchlistRepository(self.db).create_watchlist("Tech")
+
+        text, grounded = _create_watchlist(self.db, _parsed(action_watchlist="tech"))
+
+        self.assertFalse(grounded)
+        self.assertIn('"Tech" already exists', text)
+
     def test_add_to_watchlist_ambiguous_when_unnamed_and_multiple_lists(self):
         WatchlistRepository(self.db).create_watchlist("Watch1")
         WatchlistRepository(self.db).create_watchlist("Swing Setups")
@@ -935,7 +1021,8 @@ class TestActionHandlers(_DBBase):
 
         text, grounded = _remove_from_watchlist(self.db, _parsed(action_symbol="RIVN"))
 
-        self.assertTrue(grounded)
+        # BF-16: a question is not a completed action.
+        self.assertFalse(grounded)
         self.assertIn("Tech", text)
         self.assertIn("Swing Setups", text)
         # neither list touched — it asked instead of guessing
@@ -1051,7 +1138,8 @@ class TestSetEntityType(_DBBase):
             _parsed(action_symbol="SPY", action_entity_type="etf"),
         )
 
-        self.assertTrue(grounded)
+        # BF-16: a question is not a completed action.
+        self.assertFalse(grounded)
         self.assertIn("Tech", text)
         self.assertIn("Swing Setups", text)
         self.assertIsNone(repo.get_watchlist_symbol(tech.id, "SPY").entity_type)
@@ -1550,6 +1638,26 @@ class TestConfirmPromptWording(_DBBase):
         self.assertIn("My Longs", text)
         self.assertIn("Swing Setups", text)
         self.assertIn("which one", text.lower())
+
+
+class TestWatchlistAddRouting(unittest.TestCase):
+    """BF-15: add_to_watchlist no longer creates a list from an unknown
+    name, so "add X to a new watchlist called Y" routes to create_watchlist."""
+
+    def _route(self, text):
+        from backend.ai.chat import _build_deterministic_chat_reply
+
+        return _build_deterministic_chat_reply(text, focus_symbols=["RIVN"], planner_state={})
+
+    def test_add_to_a_new_named_watchlist_creates_it_with_the_ticker(self):
+        parsed = self._route("add RIVN to a new watchlist called Momentum")
+        self.assertEqual(
+            (parsed.action, parsed.action_symbol, parsed.action_watchlist), ("create_watchlist", "RIVN", "Momentum")
+        )
+
+    def test_add_to_an_existing_named_watchlist_stays_an_add(self):
+        parsed = self._route("add RIVN to my Tech watchlist")
+        self.assertEqual((parsed.action, parsed.action_watchlist), ("add_to_watchlist", "Tech"))
 
 
 class TestFallbackAction(unittest.TestCase):
@@ -2210,6 +2318,15 @@ class TestPositionRiskParsing(unittest.TestCase):
         )
         request = _position_risk_calculation("300 shares at 50 with a stop at 47, target 60, account 25,000")
         self.assertEqual((request.entry_price, request.stop_price, request.target_price, request.account_value), (50, 47, 60, 25000))
+
+    def test_share_count_pattern_has_no_stray_literal(self):
+        """BF-17: slicing _NUM[4:] left a literal "s*" in the pattern, so
+        "buy s200" read as 200 shares."""
+        from backend.ai.chat import _SHARES_RE
+
+        self.assertNotIn("s*(", _SHARES_RE.pattern)
+        self.assertIsNone(_SHARES_RE.search("buy s200 AAPL"))
+        self.assertEqual(_SHARES_RE.search("buy 200 AAPL").group(1), "200")
 
     def test_missing_label_is_not_guessed(self):
         from backend.ai.chat import _position_risk_calculation

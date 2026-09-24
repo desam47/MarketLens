@@ -66,6 +66,19 @@ class TestExtractSymbols(_Base):
         # ...but a cashtag forces it through.
         self.assertEqual(chat_symbols.extract_symbols("watching $IT closely"), ["IT"])
 
+    def test_share_class_suffix_is_part_of_the_ticker(self):
+        """BF-14: "BRK.B" used to resolve to a rejected "BRK"."""
+        self._patch_quotes({"BRK.B": _quote(480.0)})
+        for msg in ("price of BRK.B", "how is BRK-B doing", "watching $brk.b", "ticker: BRK-B"):
+            self.assertEqual(chat_symbols.extract_symbols(msg), ["BRK.B"], msg)
+
+    def test_share_class_suffix_does_not_swallow_words_or_sentence_ends(self):
+        self.assertEqual(chat_symbols.extract_symbols("I like AAPL. MSFT is fine"), ["AAPL", "MSFT"])
+        self.assertEqual(chat_symbols.extract_symbols("the SPY-QQQ spread"), ["SPY", "QQQ"])
+
+    def test_unresolved_dotted_ticker_is_reported_whole(self):
+        self.assertEqual(chat_symbols.extract_unresolved_explicit_symbols("price of BRK.B"), ["BRK.B"])
+
     def test_all_caps_message_extracts_nothing(self):
         self.assertEqual(chat_symbols.extract_symbols("WHY IS THE MARKET DOWN SO MUCH"), [])
 

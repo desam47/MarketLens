@@ -284,11 +284,14 @@ _CHAT_STOPWORDS = {
 
 # Cashtag / caret / explicit forms are high-confidence and skip shape
 # gating entirely.
-_RE_CASHTAG = re.compile(r"(?<![A-Za-z0-9])\$([A-Za-z]{1,5})(?:[.\-][A-Za-z]{1,2})?\b")
+# A share-class suffix ("BRK.B", "BRK-B", "$brk.b") is part of the ticker.
+# The dot form is canonical here (see _NAME_TO_TICKER's "BRK.B").
+_CLASS_SUFFIX = r"(?:[.\-][A-Za-z]{1,2})?"
+_RE_CASHTAG = re.compile(r"(?<![A-Za-z0-9])\$([A-Za-z]{1,5}" + _CLASS_SUFFIX + r")\b")
 _RE_CARET = re.compile(r"(?<![A-Za-z0-9])\^([A-Z]{1,6})\b")
 _RE_PAREN = re.compile(r"\(([A-Z]{1,5})\)")
 _RE_TICKER_KW = re.compile(r"\bticker[s]?:?\s+([A-Z][A-Z.\-]{0,6})\b")
-_RE_BARE = re.compile(r"(?<![A-Za-z0-9$^])([A-Z]{2,5})\b")
+_RE_BARE = re.compile(r"(?<![A-Za-z0-9$^])([A-Z]{2,5}(?:[.\-][A-Z]{1,2})?)\b")
 
 _RE_PRONOUN = re.compile(
     r"\b(it|its|it'?s|that|this|the stock|the name|the ticker|they|them|those)\b", re.I
@@ -418,6 +421,11 @@ def _known_symbols() -> set[str]:
     return known
 
 
+def _canonical(token: str) -> str:
+    """Upper-case a ticker and write any share-class suffix with a dot."""
+    return token.upper().replace("-", ".")
+
+
 def _cache_get(token: str) -> bool:
     if token in _VALID_CACHE:
         _VALID_CACHE.move_to_end(token)
@@ -500,7 +508,7 @@ def extract_unresolved_explicit_symbols(text: str, resolved: list[str] | None = 
     resolved_set = {str(symbol).upper() for symbol in (resolved or [])}
     output: list[str] = []
     for match in _RE_BARE.finditer(masked):
-        symbol = match.group(1).upper()
+        symbol = _canonical(match.group(1))
         if symbol in _CHAT_STOPWORDS or symbol in known or symbol in resolved_set or symbol in output:
             continue
         output.append(symbol)
@@ -618,13 +626,13 @@ def extract_symbols(text: str) -> list[str]:
     # the order they appear in the message.
     hits: list[tuple[int, str]] = []
     for m in _RE_CASHTAG.finditer(masked):
-        hits.append((m.start(), m.group(1).upper()))
+        hits.append((m.start(), _canonical(m.group(1))))
     for m in _RE_CARET.finditer(masked):
         hits.append((m.start(), "^" + m.group(1).upper()))
     for m in _RE_PAREN.finditer(masked):
         hits.append((m.start(), m.group(1).upper()))
     for m in _RE_TICKER_KW.finditer(masked):
-        hits.append((m.start(), m.group(1).rstrip(".-").upper()))
+        hits.append((m.start(), _canonical(m.group(1).rstrip(".-"))))
     for _, sym in sorted(hits):
         add(sym)
 
@@ -651,8 +659,10 @@ def extract_symbols(text: str) -> list[str]:
     # "how's aapl trending"). Safe even in a shouty all-caps sentence:
     # the known-set gate keeps ordinary words out and this never hits
     # live-quote validation. Stopwords ("IT", "ALL", ...) still excluded.
-    for m in re.finditer(r"(?<![A-Za-z0-9$^.])([A-Za-z]{1,5})\b", masked):
-        tok = m.group(1).upper()
+    for m in re.finditer(r"(?<![A-Za-z0-9$^.])([A-Za-z]{1,5}" + _CLASS_SUFFIX + r")\b", masked):
+        tok = _canonical(m.group(1))
+        if tok not in known:
+            tok = tok.split(".", 1)[0]  # "spy." / "aapl-ish": the base may still be known
         if tok not in strong and tok not in _CHAT_STOPWORDS and tok in known:
             add(tok)
 
@@ -662,7 +672,7 @@ def extract_symbols(text: str) -> list[str]:
     if words and not shouty:
         weak_unknown: list[str] = []
         for m in _RE_BARE.finditer(masked):
-            tok = m.group(1)
+            tok = _canonical(m.group(1))
             if tok in strong or tok in _CHAT_STOPWORDS or tok in known:
                 continue
             if len(tok) >= 2:

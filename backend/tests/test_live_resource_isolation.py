@@ -158,6 +158,31 @@ class TestNetworkGuard(unittest.TestCase):
         with self.assertRaises(OSError):
             socket.create_connection(("198.51.100.7", 443), timeout=2)
 
+    def test_curl_cffi_requests_are_refused_too(self):
+        """BF-18: the Yahoo provider uses curl_cffi, whose libcurl sockets bypass the
+        socket.connect guard; a probe under pytest got a real Yahoo response."""
+        from curl_cffi import requests as curl_requests
+
+        with self.assertRaises(curl_requests.exceptions.ConnectionError) as cm:
+            curl_requests.get("https://query1.finance.yahoo.com/v7/finance/quote", timeout=2)
+        self.assertIn("outbound network is disabled", str(cm.exception))
+        self.assertIsInstance(cm.exception, OSError)
+        self.assertTrue(
+            any("query1.finance.yahoo.com" in line for line in _conftest_attr("_NETWORK_ATTEMPTS"))
+        )
+
+    def test_curl_cffi_async_requests_are_refused_too(self):
+        import asyncio
+
+        from curl_cffi import requests as curl_requests
+
+        async def fetch():
+            async with curl_requests.AsyncSession() as session:
+                return await session.get("https://query1.finance.yahoo.com/", timeout=2)
+
+        with self.assertRaises(curl_requests.exceptions.ConnectionError):
+            asyncio.run(fetch())
+
     def test_loopback_connections_still_work(self):
         import socket
 
