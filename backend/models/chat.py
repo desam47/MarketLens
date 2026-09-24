@@ -43,6 +43,10 @@ class ChatSession(Base):
     """
 
     __tablename__ = "chat_sessions"
+    # Never reuse a deleted id (migration 20260930_chat_id_autoincrement):
+    # clearing the chat deletes the newest rows, and plain SQLite rowids
+    # would hand those ids straight back out.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
@@ -73,6 +77,10 @@ class ChatMessage(Base):
     the AI's reply."""
 
     __tablename__ = "chat_messages"
+    # Never reuse a deleted id: chat_feedback, chat_regression_fixtures and
+    # research_notebook_items keep message ids, and a reused id would attach
+    # them to an unrelated new message.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False, index=True)

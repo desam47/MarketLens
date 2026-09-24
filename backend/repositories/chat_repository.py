@@ -127,9 +127,12 @@ class ChatRepository:
         """Delete chat sessions and their messages.
 
         Filters are ANDed; no filter deletes every chat session. Returns
-        ``(sessions_deleted, messages_deleted)``. Messages are removed
-        explicitly (SQLite declares no ON DELETE CASCADE) before the
-        sessions.
+        ``(sessions_deleted, messages_deleted)``. Feedback on those
+        messages goes with them, then the messages, then the sessions
+        (SQLite declares no ON DELETE CASCADE). Regression fixtures and
+        notebook items are self-contained copies and are kept; message ids
+        are never reused (AUTOINCREMENT), so their ``message_id`` can't
+        attach to a later message.
         """
         q = self.db.query(ChatSession.id)
         if scope is not None:
@@ -139,6 +142,10 @@ class ChatRepository:
         ids = [row[0] for row in q.all()]
         if not ids:
             return (0, 0)
+        message_ids = self.db.query(ChatMessage.id).filter(ChatMessage.session_id.in_(ids))
+        self.db.query(ChatFeedback).filter(ChatFeedback.message_id.in_(message_ids)).delete(
+            synchronize_session=False
+        )
         msgs = (
             self.db.query(ChatMessage)
             .filter(ChatMessage.session_id.in_(ids))

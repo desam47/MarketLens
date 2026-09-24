@@ -1,9 +1,9 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2: BF-06, BF-07, BF-11, BF-19)
-**Status:** In progress. Batch 1 (BF-01, BF-02, BF-03, BF-05, BF-12) and batch 2 (BF-06, BF-07, BF-11, BF-19) are committed.
-**Scorecard:** 8 ✅ COMPLETE, 1 ⚠️ PARTIAL, 10 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 3: BF-10)
+**Status:** In progress. Batches 1, 2 and 3 are committed; batch 3's migration is applied to the live DB.
+**Scorecard:** 9 ✅ COMPLETE, 1 ⚠️ PARTIAL, 9 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
 
@@ -36,7 +36,7 @@ notes or commits will not match.
 | BF-07 | Medium | Backend | Delete-alert confirmation does not name the alert | Code-read | ✅ COMPLETE |
 | BF-08 | Medium | Backend | Stream shows unverified model text before verification | Code-read | ❌ NOT STARTED |
 | BF-09 | Medium | Backend | Streaming and blocking reply paths have drifted | Code-read | ❌ NOT STARTED |
-| BF-10 | Medium | Data | Message ids reused after Clear; feedback reattaches | Verified (live DB) | ❌ NOT STARTED |
+| BF-10 | Medium | Data | Message ids reused after Clear; feedback reattaches | Verified (live DB) | ✅ COMPLETE |
 | BF-11 | Medium | Backend | Failed action leaves DB session unusable | Code-read | ✅ COMPLETE |
 | BF-12 | Medium | Frontend | Nudge poll duplicates the user's message | Code-read | ✅ COMPLETE |
 | BF-13 | Medium | Full stack | Stream timeout, disconnect, and resend gaps | Code-read | ❌ NOT STARTED |
@@ -49,10 +49,9 @@ notes or commits will not match.
 
 **Next suggested order:**
 
-1. BF-10 (needs a migration; validate it on a DB copy first).
-2. BF-04 (also finishes BF-03).
-3. The streaming group: BF-08, BF-09, BF-13.
-4. The low-severity items: BF-14 to BF-18.
+1. BF-04 (also finishes BF-03).
+2. The streaming group: BF-08, BF-09, BF-13.
+3. The low-severity items: BF-14 to BF-18.
 
 ---
 
@@ -319,24 +318,84 @@ in the generation half and are still open.
 
 ### BF-10 — Message ids reused after Clear; feedback reattaches
 
-**Status:** ❌ NOT STARTED
-**Where:** `ChatRepository.delete_sessions` (`backend/repositories/chat_repository.py`).
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
+**Where:** migration `alembic/versions/20260930_chat_id_autoincrement.py`; `ChatSession` / `ChatMessage` in `backend/models/chat.py`; `ChatRepository.delete_sessions` in `backend/repositories/chat_repository.py`.
 
-`delete_sessions` removes messages and sessions but not `chat_feedback`,
+`delete_sessions` removed messages and sessions but not `chat_feedback`,
 `chat_regression_fixtures` or notebook items that reference message ids.
-The chat tables have no `AUTOINCREMENT`, so SQLite reuses freed ids. The
-live DB shows `count(chat_messages)=2, max(id)=2` after a clear.
+The chat tables had no `AUTOINCREMENT`, so SQLite reused freed ids. The
+live DB showed `count(chat_messages)=2, max(id)=2` after a clear.
 
-**Impact:** old ratings can appear on new messages. Promoting a new
-message to a fixture can hit `UNIQUE(message_id)` and fail with a 500.
+**Impact:**
+- **Feedback:** old ratings could appear on new messages.
+- **Fixtures:** promoting a new message could hit `UNIQUE(message_id)`
+  and fail with a 500.
+- **Notebooks (found while fixing):** `save_notebook_item` de-duplicates
+  by `(notebook_id, message_id)`. Saving a new answer whose id was reused
+  would silently overwrite an older saved item with a different answer.
+  The browser-local notebook merge also keys by message id.
 
-**Fix:**
+**Resolution:**
 
-- Delete (or detach) dependent feedback rows in `delete_sessions`.
-- Add `sqlite_autoincrement=True` to the chat tables via a migration.
-  Validate it on a DB copy first; see the `--reload` note in project memory.
-- Decide whether regression fixtures survive a clear. They copy prompt and
-  response, so they can drop the FK.
+- **Migration `20260930_chat_id_autoincrement`:**
+  - Deletes feedback whose message no longer exists.
+  - Rebuilds `chat_sessions` and `chat_messages` with `AUTOINCREMENT`,
+    using Alembic batch mode. Rows, defaults, the foreign key and all six
+    indexes are kept.
+  - Seeds `sqlite_sequence` so the next message id is above every id
+    still referenced anywhere: surviving messages, feedback, fixtures and
+    notebook items.
+  - Does nothing on non-SQLite databases.
+  - The downgrade rebuilds the tables without `AUTOINCREMENT`. Deleted
+    orphan feedback is not restored.
+- **Models:** `ChatSession` and `ChatMessage` declare
+  `sqlite_autoincrement=True`, so tables created by `create_all` (tests)
+  match.
+- **`delete_sessions`:** deletes those messages' feedback along with them.
+- **Decision — regression fixtures and notebook items survive a Clear.**
+  - Why: they are self-contained copies (prompt/response/blocks, or
+    question/answer/blocks), and fixtures are deliberate regression data.
+    They already survived a Clear before this change.
+  - Their `message_id` now points at a deleted message and can never
+    match a new one.
+  - `PRAGMA foreign_key_check` reports such fixtures. That is expected,
+    since this app does not enable foreign-key enforcement.
+
+**How it was applied:**
+- **Draft outside the project:** the migration was written and tested in
+  a scratch copy of `alembic/`, so the dev server's `--reload` could not
+  pick it up early.
+- **Tested on a copy:** it was validated on a copy of `marketlens.db`
+  under `.pytest_tmp/bf10/`. Seeded rows were kept, orphan feedback was
+  removed, the next id was 73 above a notebook reference of 72, and
+  downgrade and re-upgrade were clean.
+- **Backup:** `.pytest_tmp/bf10/pre_bf10_backup.db` (1.1 GB, passes
+  `quick_check`, revision `20260929_chat_notebooks_fixtures`). Delete it
+  once you're satisfied.
+- **Live migration:** adding the file to `alembic/versions/` triggered
+  the reload. The live DB upgraded at 2026-09-24 07:23 UTC, and the
+  server came back healthy (`/api/health` 200, chat session endpoint 200).
+- **Live state after:** both tables use `AUTOINCREMENT`, the 1 existing
+  session is intact, and all 6 indexes are present.
+
+**Tests:**
+- `backend/tests/migrations/test_chat_id_autoincrement_migration.py`
+  (2 tests: upgrade on seeded "cleared chat" data; downgrade keeps rows).
+- `backend/tests/repositories/test_chat_repository.py`:
+  - `test_delete_sessions_removes_feedback_but_keeps_fixtures_and_notebook_items`
+  - `test_ids_are_not_reused_after_a_clear`, which fails without
+    `sqlite_autoincrement`.
+
+**Follow-ups:**
+- `chat_feedback`, `chat_regression_fixtures` and the notebook tables
+  still use plain rowids. Their own ids are not referenced elsewhere, so
+  reuse there is harmless.
+- **SQLite gotchas met while validating:**
+  - Alembic reports "non-transactional DDL", so a failure partway through
+    a migration does not roll back. Back up first.
+  - A `.backup` copy of this WAL-mode DB cannot be opened with
+    `sqlite3 -readonly` (it can't create the `-shm` file). Open the copy
+    normally.
 
 ### BF-11 — Failed action leaves DB session unusable
 
@@ -548,6 +607,20 @@ the card first, and also assert that it starts collapsed.
 
 ## Verification
 
+### Batch 3 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/migrations/` (all migration tests, including the 2 new ones), `test_chat_repository.py`, and all Chat-related backend tests | 485 passed, 13 subtests passed |
+| Migration on a copy of the live DB (seeded rows, upgrade → downgrade → upgrade) | Rows kept, orphan feedback removed, next id above every reference |
+| Live DB after the reload | Revision `20260930_chat_id_autoincrement`, both tables `AUTOINCREMENT`, server healthy |
+| `ruff check` on the new migration | I001 import order, the same as the existing migrations (for example `20260929_chat_notebooks_and_fixtures.py`) |
+
+**Mutation check:** with `sqlite_autoincrement` removed from the models,
+`test_ids_are_not_reused_after_a_clear` fails.
+
+The full backend suite was not run.
+
 ### Batch 2 (2026-09-24)
 
 | Suite | Result |
@@ -581,7 +654,8 @@ The full backend suite was not run.
 ## Fix log
 
 - **Batch 1:** commit `b5afc49`, `fix(chat): harden confirmations, calculator fallbacks, and turn arguments`, on `development`.
-- **Batch 2:** commit `fix(chat): confirm safely with AI off and keep failed turns persistable`, on `development`.
+- **Batch 2:** commit `4381ae1`, `fix(chat): confirm safely with AI off and keep failed turns persistable`, on `development`.
+- **Batch 3:** commit `fix(chat): never reuse chat message and session ids`, on `development` (the migration was applied to the live DB before the commit).
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -594,3 +668,4 @@ The full backend suite was not run.
 | 2026-09-24 | BF-07 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestDestructiveTargetResolution` (6 tests) | `_destructive_target_problem` resolves the target first; the alert is named; the watchlist id is pinned. |
 | 2026-09-24 | BF-11 | ✅ COMPLETE | batch 2 | `backend/ai/chat.py`, `backend/tests/ai/test_chat.py`, `backend/tests/ai/test_chat_actions.py` | `TestTurnFailureStillPersistsOneReply` (3 tests), flush-rollback test | `_rollback_quietly`; shared `_finish_turn`; blocking generation guard. |
 | 2026-09-24 | BF-19 | ✅ COMPLETE | batch 2 | `frontend/src/components/ChatPanel.tsx`, `ChatPanel.test.tsx` | `ChatPanel.test.tsx` 52/52 | Evidence "show all" has its own state; tests open the collapsed cards first. |
+| 2026-09-24 | BF-10 | ✅ COMPLETE | batch 3 | `alembic/versions/20260930_chat_id_autoincrement.py`, `backend/models/chat.py`, `backend/repositories/chat_repository.py`, 2 test files | migration tests (2), repository tests (2) | AUTOINCREMENT on sessions/messages; orphan feedback removed; sequence seeded above every reference; feedback deleted on Clear. |

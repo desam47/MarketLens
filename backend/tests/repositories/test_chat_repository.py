@@ -191,6 +191,44 @@ class TestChatRepository(unittest.TestCase):
         self.assertEqual(repo.db.query(ChatSession).count(), 1)
 
 
+    def test_delete_sessions_removes_feedback_but_keeps_fixtures_and_notebook_items(self):
+        """BF-10: feedback belongs to its message and goes with it; fixtures
+        and notebook items are self-contained copies and survive a clear."""
+        repo = self._repo()
+        session = repo.create_session(scope="universal")
+        repo.add_message(session.id, "user", "How is AAPL?")
+        answer = repo.add_message(session.id, "assistant", "AAPL is bullish.")
+        repo.set_feedback(answer.id, "incorrect", "wrong_data", None)
+        repo.create_regression_fixture(answer.id)
+        notebook = repo.create_notebook("client-a-123456", "Ideas")
+        repo.save_notebook_item(
+            notebook.id, message_id=answer.id, question="How is AAPL?", answer=answer.content,
+            response_blocks=[], symbols=["AAPL"], content_types=[], evidence_timestamps=[], stale=False,
+        )
+
+        repo.delete_sessions(scope="universal")
+
+        self.assertEqual(repo.db.query(ChatFeedback).count(), 0)
+        self.assertEqual(repo.db.query(ChatRegressionFixture).count(), 1)
+        self.assertEqual(repo.db.query(ResearchNotebookItem).count(), 1)
+
+    def test_ids_are_not_reused_after_a_clear(self):
+        """BF-10: clearing deletes the newest rows; a plain SQLite rowid
+        would hand those ids to the next session and message."""
+        repo = self._repo()
+        old_session_id = repo.create_session(scope="universal").id
+        old_message_id = repo.add_message(old_session_id, "assistant", "old answer").id
+        repo.set_feedback(old_message_id, "correct", None, None)
+
+        repo.delete_sessions(scope="universal")
+        new_session = repo.create_session(scope="universal")
+        new_message = repo.add_message(new_session.id, "assistant", "new answer")
+
+        self.assertGreater(new_session.id, old_session_id)
+        self.assertGreater(new_message.id, old_message_id)
+        self.assertEqual(repo.get_feedback_for_messages([new_message.id]), {})
+
+
 class TestChatFeedback(unittest.TestCase):
     """5.7.8 feedback and correction loop."""
 
