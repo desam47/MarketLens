@@ -1,9 +1,9 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 5: BF-04, completing BF-03)
-**Status:** In progress. Batches 1 to 5 are committed (batch 3's migration is applied to the live DB).
-**Scorecard:** 17 ✅ COMPLETE, 0 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 6: BF-09, and the backend halves of BF-08 and BF-13)
+**Status:** In progress. Batches 1 to 6 are committed (batch 3's migration is applied to the live DB). The frontend halves of BF-08 and BF-13 remain.
+**Scorecard:** 18 ✅ COMPLETE, 2 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
 
@@ -18,10 +18,10 @@ Status legend (same as the phase audits):
 - ❌ **NOT STARTED** — no change made yet
 - 🟡 **DEFERRED** — intentionally postponed
 
-Line numbers refer to the code as of batch 5. Each batch shifts
+Line numbers refer to the code as of batch 6. Each batch shifts
 `chat.py` (batch 1 added about 40 lines near the top, batch 2 about 120
-more, batch 4 about 30, batch 5 about 110), so line numbers quoted in
-older notes or commits will not match.
+more, batch 4 about 30, batch 5 about 110; batch 6 moved the generation
+code), so line numbers quoted in older notes or commits will not match.
 
 ## Scorecard
 
@@ -34,12 +34,12 @@ older notes or commits will not match.
 | BF-05 | Medium | API | Positional argument misbinding in Chat router | Verified | ✅ COMPLETE |
 | BF-06 | Medium | Backend | Destructive actions cannot be confirmed with AI off | Code-read | ✅ COMPLETE |
 | BF-07 | Medium | Backend | Delete-alert confirmation does not name the alert | Code-read | ✅ COMPLETE |
-| BF-08 | Medium | Backend | Stream shows unverified model text before verification | Code-read | ❌ NOT STARTED |
-| BF-09 | Medium | Backend | Streaming and blocking reply paths have drifted | Code-read | ❌ NOT STARTED |
+| BF-08 | Medium | Backend | Stream shows unverified model text before verification | Verified | ⚠️ PARTIAL |
+| BF-09 | Medium | Backend | Streaming and blocking reply paths have drifted | Verified | ✅ COMPLETE |
 | BF-10 | Medium | Data | Message ids reused after Clear; feedback reattaches | Verified (live DB) | ✅ COMPLETE |
 | BF-11 | Medium | Backend | Failed action leaves DB session unusable | Code-read | ✅ COMPLETE |
 | BF-12 | Medium | Frontend | Nudge poll duplicates the user's message | Code-read | ✅ COMPLETE |
-| BF-13 | Medium | Full stack | Stream timeout, disconnect, and resend gaps | Code-read | ❌ NOT STARTED |
+| BF-13 | Medium | Full stack | Stream timeout, disconnect, and resend gaps | Verified | ⚠️ PARTIAL |
 | BF-14 | Low | Backend | Dotted tickers (BRK.B) rejected | Verified | ✅ COMPLETE |
 | BF-15 | Low | Backend | Add-to-watchlist creates a new list for a mistyped or differently-cased name | Verified | ✅ COMPLETE |
 | BF-16 | Low | Backend | Clarification questions recorded as completed steps | Code-read | ✅ COMPLETE |
@@ -48,9 +48,9 @@ older notes or commits will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next suggested order:** the streaming group, BF-08, BF-09 and BF-13,
-possibly split into a backend batch (one reply path) and a frontend batch
-(timeout and Cancel).
+**Next suggested order:** the frontend batch that finishes BF-08 and
+BF-13: mark streamed text as a draft until the final frame, and add a
+stream timeout and a Cancel button.
 
 ---
 
@@ -361,40 +361,94 @@ an id. Its prompt already names the symbol and list, so it was left as is.
 
 ### BF-08 — Stream shows unverified model text before verification
 
-**Status:** ❌ NOT STARTED
-**Where:** `_generate_reply_streaming`, `chat.py:3850-3854`.
+**Status:** ⚠️ PARTIAL (2026-09-24, batch 6; backend half)
+**Where:** `_holds_streamed_text` (`chat.py:2973`), `_stream_and_parse` (`chat.py:3096`), the one-shot branch of `_reply_events` (`chat.py:3204`).
 
-Deltas are the model's raw `reply` field, streamed before `verify_answer`
-and before any action runs. The note at `chat.py:544-551` records that the
-model sometimes writes a fake "Done — deleted…"; that text is visible until
-the `final` frame overwrites it.
+Deltas were the model's raw `reply` field, streamed before
+`verify_answer` and before any action ran. The note at `chat.py:544-551`
+records that the model sometimes writes a fake "Done — deleted…"; that
+text was visible until the `final` frame overwrote it.
 
-**Fix:** do not stream deltas when the parsed action is not `none`. Render
-streamed text as a clearly marked draft until `final` arrives. An
-alternative is to buffer until verification passes.
+**Resolution (backend):**
+
+- **Held for action-like requests:** no model text is streamed when the
+  message looks like a request the app answers with its own text. That
+  covers alerts, watchlist changes, delete/remove/save/create/cancel
+  wording, calculations, a saved assumption, and a "yes" to a
+  confirmation. The final frame still carries the answer; only the live
+  typing is lost for those turns.
+- **Stopped when an action shows up:** streaming also stops for the rest
+  of a model attempt as soon as its JSON shows an `action` other than
+  `none`, or `wants_reanalysis: true`.
+- **One-shot providers:** with `chat_streaming` off, the single delta is
+  sent only after parsing shows the reply is the model's own answer
+  (action `none`, no reanalysis).
+- **Prompt unchanged:** the prompt was left alone. It lists `"reply"`
+  first, so the action check mostly catches models that write `"action"`
+  first. Reordering the prompt's fields would change what the model is
+  asked for, which couldn't be tested against the live model.
+
+**Why ⚠️ PARTIAL:** ordinary answers still stream live, and the answer
+verifier can still replace them in the final frame (for example with a
+safer uncertainty message). The frontend half is to show streamed text as
+a clearly marked draft until the final frame arrives.
+
+**Tests:** in `backend/tests/ai/test_chat_reply_paths.py::TestStreamedTextGate`:
+- `test_an_action_request_streams_no_model_text`
+- `test_an_action_seen_early_in_the_json_stops_the_stream`
+- `test_non_streaming_provider_emits_no_delta_for_an_action`
+
+All three failed on the old code. Disabling the intent hold, or the
+early-action check, each fails its test.
 
 ### BF-09 — Streaming and blocking reply paths have drifted
 
-**Status:** ❌ NOT STARTED
-**Where:** `_generate_reply` (`chat.py:2952`) vs `_generate_reply_streaming` (`chat.py:3698`).
+**Status:** ✅ COMPLETE (2026-09-24, batch 6)
+**Where:** `_reply_events` (`chat.py:3204`), with `_reply_without_model` (`chat.py:2999`) and `_stream_and_parse` (`chat.py:3096`); `_generate_reply` (`chat.py:3305`) and `_generate_reply_streaming` (`chat.py:3936`) are now thin wrappers.
 
-- **No-data watchlist exemption:** the legacy "no data" degrade in
-  streaming (`chat.py:3733`) lacks the watchlist-intent exemption the
-  blocking path has (`chat.py:2995`). In a single-ticker session for a
-  ticker with no data, streaming refuses "add it to my watchlist".
-- **Parse failures:** streaming returns `extractor.text` (the raw
-  unparsed model reply) as the answer (`chat.py:3931`). Blocking returns
-  "I couldn't process that — could you rephrase?"
-- **Time budget:** blocking passes `started_at` to the deterministic
-  short-circuit; streaming does not, so the turn time budget differs.
+The generation half of a turn existed twice, and the copies had drifted:
 
-**Fix:** have a single generator implementation, with the blocking path
-as a thin wrapper that drains it.
+- **No-data watchlist exemption:** the streaming copy of the legacy "no
+  data" degrade lacked the watchlist-intent exemption the blocking copy
+  had. In a single-ticker session for a ticker with no data, streaming
+  refused "add it to my watchlist".
+- **Parse failures:** streaming answered with `extractor.text`, the raw
+  model text decoded from the broken JSON. Blocking answered "I couldn't
+  process that — could you rephrase?"
+- **No text from the model:** streaming said "AI is currently
+  unavailable…", blocking "Something went wrong reaching the AI
+  provider…".
+- **Time budget:** blocking passed `started_at` to the deterministic
+  short-circuit; streaming did not.
 
-**Progress:** batch 2 moved the finishing half of a turn (verification,
-blocks, persistence) into a shared `_finish_turn` (BF-11), and the
-pending-confirmation check is shared (BF-06). The three drifts above are
-in the generation half and are still open.
+**Resolution:** one generator, `_reply_events`, now runs the whole
+generation half for both transports.
+- **One routing path:** confirmations, clarifications, no-data answers,
+  deterministic routes and the AI-off fallback are one function,
+  `_reply_without_model`, using the blocking copy's behaviour (with the
+  watchlist exemption).
+- **One model call:** the model is called either as one completion (the
+  existing `_complete_and_parse`) or streamed through `_stream_and_parse`.
+  The streamed version makes the same attempts and trace records and
+  returns the same failure reasons.
+- **One wording per failure:** `_MODEL_FAILURE_REPLIES` gives one reply
+  per failure, whichever transport ran the turn.
+- **Same time budget:** both transports pass the same `started_at`.
+- **Wrappers kept:** `_generate_reply` drains the generator and
+  `_generate_reply_streaming` yields from it. Both names stay because
+  tests call and patch them.
+
+With batch 2's shared `_finish_turn`, the two transports now differ only
+in whether the model call streams.
+
+**Tests:** in `backend/tests/ai/test_chat_reply_paths.py`:
+- `test_model_failures_read_the_same_on_both_paths` runs the same model
+  outcome through both paths, with streaming providers on and off, and
+  requires identical results (6 cases).
+- `TestLegacyNoDataTurnWatchlistAdd`.
+
+The four drifted cases failed on the old code. One existing test built a
+stand-in `_Turn` without `capped`; `capped=False` was added to it.
 
 ### BF-10 — Message ids reused after Clear; feedback reattaches
 
@@ -550,27 +604,48 @@ provenance, which only the live response carries.
 
 ### BF-13 — Stream timeout, disconnect, and resend gaps
 
-**Status:** ❌ NOT STARTED
-**Where:** `frontend/src/services/api.ts` (`streamChatMessage`), `ChatPanel.tsx:388`, `chat_router.py:869-871`, `chat.py:1195`.
+**Status:** ⚠️ PARTIAL (2026-09-24, batch 6; backend half)
+**Where:** the stream drain in `send_message_stream` (`chat_router.py:867`); `_prepare_turn` (`chat.py:1171`, the user row is saved at `:1402`); the stream handling in `frontend/src/services/api.ts` (`streamChatMessage`) and `ChatPanel.tsx:388` for the remaining frontend half.
 
-- **No timeout:** the stream has no timeout or `AbortController`. A hung
-  stream leaves `sending=true` and the input locked; unmounting does not
-  cancel.
-- **Disconnect:** on client disconnect the drain loop breaks and the
-  generator is abandoned. The user message is saved with no assistant
-  reply, and actions may be half-done.
-- **Resend:** an exception in `_prepare_turn` after
-  `repo.add_message(..., "user", ...)` but before `meta` reports
-  `started=false`. The client then falls back to the blocking endpoint and
-  saves the user message twice.
+- **No timeout (open, frontend):** the stream has no timeout or
+  `AbortController`. A hung stream leaves `sending=true` and the input
+  locked; unmounting does not cancel.
+- **Disconnect (fixed):** on client disconnect the drain loop broke and
+  abandoned the turn generator. The user message was saved with no
+  assistant reply, and actions could be half-done.
+- **Resend (fixed):** an exception in `_prepare_turn` after the user row
+  was saved, but before `meta`, was reported as `started=false`. The
+  client then fell back to the blocking endpoint and saved the user
+  message twice.
 
-**Fix:**
+**Resolution (backend):**
 
-- Add a timeout, an `AbortController` and a Cancel button in the UI.
-- Run the turn to completion server-side regardless of the client, and
-  persist the reply.
-- Mark the turn as started as soon as the user row is saved (or save it
-  after context assembly).
+- **Disconnect:** after a disconnect the router's drain keeps running the
+  turn to the end without sending frames, so the reply is saved, and any
+  action already under way finishes and is recorded. A failed frame hand-off also
+  marks the client as gone, instead of abandoning the turn.
+- **Resend:** `_prepare_turn` now saves the user message last, after
+  context assembly and the planner-state write. A failure before `meta`
+  leaves nothing saved, so the client's resend is not a duplicate.
+- **Transcript unchanged:** the transcript is built from the prior
+  messages exactly as before, because the new message isn't in the
+  history it reads.
+- **A leftover message:** a reply finished after a disconnect appears on
+  the next load of the conversation or via the 20-second message poll.
+
+**Why ⚠️ PARTIAL:** the frontend half is not done: a stream timeout, an
+`AbortController`, a Cancel button, and cancelling on unmount.
+
+**Tests:** in `backend/tests/ai/test_chat_reply_paths.py`:
+- `test_a_client_disconnect_does_not_abandon_the_turn` drives the real
+  router endpoint and cancels the consumer mid-turn, as Starlette does on
+  disconnect.
+- `TestTurnStartAndDisconnect`:
+  - `test_a_failure_before_the_reply_starts_persists_nothing`
+  - `test_the_user_row_exists_by_meta_and_the_transcript_stays_in_order`
+
+Restoring the old `break`, or saving the user row first again, each fails
+its test.
 
 ---
 
@@ -798,18 +873,39 @@ intended.
 
 ## Enhancements
 
-1. **One reply path:** a single turn generator for streaming and blocking
-   (removes BF-09-class drift).
-2. **Server-side completion:** turns finish on the server even if the
-   client disconnects, plus a Cancel button in the UI.
+1. ~~**One reply path**~~: done in batch 6 (`_reply_events`, BF-09).
+2. **Server-side completion:** done in batch 6 (BF-13); the Cancel button
+   in the UI remains.
 3. ~~**Market-metric tools**~~: done in batch 5 as `get_price_statistics`
    (BF-04).
-4. **Verification-gated streaming:** hold or mark streamed text until
-   verification passes (BF-08).
+4. **Verification-gated streaming:** partly done in batch 6 (action turns
+   are held, BF-08); marking other streamed text as a draft remains.
 5. **Split `chat.py`:** the module is ~5,450 lines. Split it into intent
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 6 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai/test_chat_reply_paths.py` (new) | 13 passed; 10 of them failed on the old code |
+| `backend/tests/ai`, `backend/tests/api`, `backend/tests/repositories`, `backend/tests/integration` | 1,703 passed, 30 subtests passed |
+| `ruff check` on the changed files | 1 error (`chat_router.py:186` UP037), also on `HEAD` |
+
+**Mutation check:** each backend change was removed in turn, and exactly
+its test fails:
+- the intent hold;
+- the early-action check;
+- saving the user row last;
+- the drain's `continue`.
+
+**Full backend suite (run before the batch 6 commit):**
+- 3,361 passed, 49 subtests passed, 0 failed, in 44 s. That is 13 more
+  than batch 5's run: the new tests.
+- No blocked outbound network attempts.
+- The same unclosed-transport `ResourceWarning` as batch 5, on the same
+  test (`test_ai_manager.py::TestProviderStreaming::test_openai_stream_raises_unavailable_on_429`).
 
 ### Batch 5 (2026-09-24)
 
@@ -905,7 +1001,8 @@ The full backend suite was not run.
 - **Batch 2:** commit `4381ae1`, `fix(chat): confirm safely with AI off and keep failed turns persistable`, on `development`.
 - **Batch 3:** commit `f251177`, `fix(chat): never reuse chat message and session ids`, on `development` (the migration was applied to the live DB before the commit).
 - **Batch 4:** commit `43c5e17`, `fix(chat): resolve class tickers and watchlist names, stop chains on questions`, on `development`.
-- **Batch 5:** commit `feat(chat): answer return, volatility, drawdown and correlation questions`, on `development`.
+- **Batch 5:** commit `b73f8d3`, `feat(chat): answer return, volatility, drawdown and correlation questions`, on `development`.
+- **Batch 6:** commit `fix(chat): one reply path for both transports; finish turns after disconnect`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -927,3 +1024,6 @@ The full backend suite was not run.
 | 2026-09-24 | BF-20 | ✅ COMPLETE | batch 4 | `backend/tests/ai/test_context_news_fundamentals.py` | 2 tests fixed | Fake quote carries `data_status="LIVE"`. |
 | 2026-09-24 | BF-04 | ✅ COMPLETE | batch 5 | `backend/ai/market_tools.py`, `backend/ai/price_metric_intent.py` (new), `backend/ai/calculator.py`, `backend/ai/tool_registry.py`, `backend/ai/chat.py`, `backend/ai/prompt.py`, `backend/tests/ai/test_price_statistics.py` (new), `backend/tests/ai/test_tool_registry.py` | 37 tests | New `get_price_statistics` tool and parser; `return_correlation`; explicit reuse wording. |
 | 2026-09-24 | BF-03 | ✅ COMPLETE | batch 5 | (via BF-04) | `test_chat_routes_metric_questions_to_the_tool` | Date-range return questions now get a verified answer. |
+| 2026-09-24 | BF-09 | ✅ COMPLETE | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` (new), `backend/tests/ai/test_chat_intents.py` | 7 tests | One generator, `_reply_events`, for both transports. |
+| 2026-09-24 | BF-08 | ⚠️ PARTIAL | batch 6 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | No streamed text for action-like requests or once an action appears; frontend draft marking remains. |
+| 2026-09-24 | BF-13 | ⚠️ PARTIAL | batch 6 | `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/tests/ai/test_chat_reply_paths.py` | 3 tests | Turns finish after a disconnect; the user row is saved last. Frontend timeout/Cancel remains. |

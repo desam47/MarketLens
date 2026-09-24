@@ -1177,11 +1177,16 @@ def _prepare_turn(
     preferences: dict | None = None,
     regeneration_scope: dict | None = None,
 ) -> _Turn:
-    """Persist the user message and assemble the turn's quant context.
+    """Assemble the turn's quant context, then persist the user message.
 
     Resolves the turn's tickers from the text (0..N, capped), attaches a
     cheap market-wide baseline when relevant, and fans the per-symbol
     context builds out over a thread pool.
+
+    The user message is saved last (BF-13). Streaming reports the turn as
+    started once this returns, so a failure while assembling context leaves
+    nothing behind and the client can safely resend; saving first made that
+    resend a duplicate.
     """
     session = repo.get_session(session_id)
     if session is None:
@@ -1192,8 +1197,6 @@ def _prepare_turn(
         from backend.ai.market_baseline import invalidate_cache
         invalidate_cache()
 
-    repo.add_message(session_id, "user", user_content)
-
     try:
         planner_state = json.loads(session.planner_state or "{}")
         if not isinstance(planner_state, dict):
@@ -1201,11 +1204,12 @@ def _prepare_turn(
     except (TypeError, ValueError):
         planner_state = {}
 
-    history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 2)
-    # Exclude the message we just added — it's passed separately as
-    # `new_message`, not duplicated into the transcript. Long prior
-    # replies are clipped so the transcript can't dominate.
-    prior_assistant = next((m for m in reversed(history[:-1]) if m.role == "assistant"), None)
+    # The new message isn't saved yet, so history is exactly the prior
+    # turns; it's passed separately as `new_message`, not duplicated into
+    # the transcript. Long prior replies are clipped so the transcript
+    # can't dominate.
+    history = repo.get_messages(session_id, limit=_TRANSCRIPT_TURNS + 1)
+    prior_assistant = next((m for m in reversed(history) if m.role == "assistant"), None)
     previous_fingerprint = None
     if prior_assistant is not None:
         try:
@@ -1222,7 +1226,7 @@ def _prepare_turn(
             )
         except (TypeError, ValueError):
             previous_fingerprint = None
-    transcript = [(m.role, _clip(m.content)) for m in history[:-1]][-_TRANSCRIPT_TURNS:]
+    transcript = [(m.role, _clip(m.content)) for m in history][-_TRANSCRIPT_TURNS:]
 
     alert_context = _build_alert_context(repo.db, session.alert_trigger_id)
 
@@ -1395,6 +1399,7 @@ def _prepare_turn(
         else None
     )
     repo.set_planner_state(session_id, json.dumps(next_state, sort_keys=True))
+    repo.add_message(session_id, "user", user_content)
 
     return _Turn(
         symbol_blocks=symbol_blocks,
@@ -2949,7 +2954,49 @@ def _confirm_pending_action(
     )
 
 
-def _generate_reply(
+# The model's JSON is read while it streams. "action" usually comes after
+# "reply", so these only catch an action the model writes first.
+_STREAMED_ACTION_RE = re.compile(r'"action"\s*:\s*"(?P<name>[a-z_]+)"')
+_STREAMED_REANALYSIS_RE = re.compile(r'"wants_reanalysis"\s*:\s*true')
+# Requests whose answer is usually the app's own text rather than the model's.
+_MUTATING_REQUEST = re.compile(
+    r"\b(?:add|create|delete|remove|cancel|save|modify|update|relabel|set\s+(?:up\s+)?an?)\b", re.I
+)
+
+# One wording per model failure, whichever transport ran the turn.
+_MODEL_FAILURE_REPLIES = {
+    "ai_error": "Something went wrong reaching the AI provider — please try again.",
+    "parse_error": "I couldn't process that — could you rephrase?",
+}
+
+
+def _holds_streamed_text(user_content: str) -> bool:
+    """Whether this turn's model text must not be streamed live (BF-08).
+
+    For these requests the app usually replaces the model's "reply" with its
+    own result (an action, a calculation, a confirmation or a clarification),
+    and a model placeholder can read like a completion ("Done — alert set")
+    before anything has happened. Holding it only loses the typing effect:
+    the final frame carries the answer.
+    """
+    return any(
+        pattern.search(user_content)
+        for pattern in (
+            _ACTION_INTENT,
+            _MUTATING_REQUEST,
+            _WATCHLIST_ADD_INTENT,
+            _WATCHLIST_CREATE_INTENT,
+            _WATCHLIST_REMOVE_FROM_INTENT,
+            _WATCHLIST_DELETE_INTENT,
+            _DELETE_WATCHLIST_FALLBACK,
+            _CALCULATION_HINT,
+            _ASSUMPTION_SAVE_INTENT,
+            _AFFIRM_INTENT,
+        )
+    )
+
+
+def _reply_without_model(
     db,
     symbol_blocks: list[dict],
     unavailable: list[str],
@@ -2957,22 +3004,17 @@ def _generate_reply(
     transcript: list[tuple[str, str]],
     user_content: str,
     alert_context: dict | None,
-    capped: bool,
     base_symbols: list[str],
-    planner_state: dict | None = None,
-    trace: list[dict] | None = None,
-    preferences: dict | None = None,
-) -> tuple[str, bool, list[str]]:
-    """Call the AI and parse its reply. Never raises — degrades to a
-    plain reply with grounded=False.
+    planner_state: dict | None,
+    trace: list[dict] | None,
+    preferences: dict | None,
+    *,
+    started_at: float,
+) -> tuple[str, bool, list[str]] | None:
+    """A reply the server can give without the model, or ``None``.
 
-    Returns ``(text, grounded, screened)`` — ``screened`` is the tickers
-    a run_screen tool call surfaced (empty for every other path), for the
-    caller to fold into ``focus`` since they weren't named in the turn's
-    own message.
-
-    When the AI's reply asks for ``wants_reanalysis``, runs the chat's
-    one tool (see module docstring) for the named ticker instead.
+    Confirmations, clarifications, no-data answers, deterministic routes and
+    the AI-off fallback, in that order.
     """
     confirmed = _confirm_pending_action(
         db, user_content, symbol_blocks, unavailable, market_baseline,
@@ -2991,7 +3033,8 @@ def _generate_reply(
             [],
         )
     # Friendly degrade for a legacy single-symbol session whose only
-    # ticker has no data (keeps the pre-universal wording).
+    # ticker has no data (keeps the pre-universal wording). A watchlist
+    # request still goes through: adding the ticker is how it gets data.
     if (
         not symbol_blocks
         and unavailable
@@ -3030,16 +3073,6 @@ def _generate_reply(
             if trace is not None:
                 trace.append({"kind": "server_reply", "trusted": True})
             return f"I couldn't find current verified market data for {names}. Please check the ticker and try again.", False, []
-        if _AMBIGUOUS_RANKING_REFERENCE.search(user_content):
-            if trace is not None:
-                trace.append({"kind": "server_reply", "trusted": True})
-            return (
-                "Do you mean the weakest name from your last watchlist result, "
-                "or the weakest name across the market? Please specify a watchlist "
-                "or say market-wide.",
-                False,
-                [],
-            )
         remembered = (planner_state or {}).get("current_symbols", [])
         if _AMBIGUOUS_REFERENCE.search(user_content) and len(remembered) > 1:
             return f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []
@@ -3047,7 +3080,7 @@ def _generate_reply(
     det = _run_deterministic_shortcircuit(
         db, user_content, symbol_blocks, unavailable, market_baseline,
         transcript, alert_context, trace, planner_state,
-        preferences=preferences, started_at=time.monotonic(),
+        preferences=preferences, started_at=started_at,
     )
     if det is not None:
         return det
@@ -3057,6 +3090,153 @@ def _generate_reply(
         if trace is not None:
             trace.append({"kind": "server_reply", "trusted": True})
         return _deterministic_context_reply(symbol_blocks, unavailable, market_baseline)
+    return None
+
+
+def _stream_and_parse(
+    prompt: str,
+    model: str | None,
+    repair_model: str | None,
+    *,
+    trace: list[dict] | None,
+    hold: bool,
+):
+    """Stream the synthesis call, yielding the ``("delta", text)`` the gate allows.
+
+    The streaming counterpart of :func:`_complete_and_parse`: same attempts,
+    trace records and failure reasons, returned as ``(parsed,
+    failure_reason)`` when the generator finishes. Deltas stop for the rest
+    of an attempt once the JSON shows an action or a reanalysis, whose
+    placeholder text the app replaces; ``hold`` stops them from the start.
+    """
+    failure_reason = "ai_error"
+    for attempt in range(_CHAT_PARSE_RETRIES + 1):
+        call_started = time.perf_counter()
+        requested_model = repair_model if attempt else model
+        raw = ""
+        extractor = ReplyExtractor()
+        attribution = StreamAttribution()
+        blocked = hold
+        try:
+            for chunk in stream_sync(
+                ai_manager.stream(
+                    prompt,
+                    system=CHAT_SYSTEM_PROMPT,
+                    max_tokens=500,
+                    model=requested_model,
+                    attribution=attribution,
+                )
+            ):
+                raw += chunk
+                delta = extractor.feed(raw)
+                if not blocked:
+                    action = _STREAMED_ACTION_RE.search(raw)
+                    blocked = bool(
+                        (action is not None and action.group("name") != "none")
+                        or _STREAMED_REANALYSIS_RE.search(raw)
+                    )
+                if delta and not blocked:
+                    yield ("delta", delta)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Chat streaming AI call raised (attempt %d): %s", attempt + 1, e)
+            failure_reason = "ai_error"
+            if trace is not None:
+                trace.append({
+                    "kind": "model_call",
+                    "role": "synthesis",
+                    "attempt": attempt + 1,
+                    "ok": False,
+                    "failure_kind": "provider_exception",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                    "prompt_chars": len(prompt),
+                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT),
+                    "requested_model": requested_model,
+                    "provider_request_count": 1,
+                })
+            continue
+
+        record = {
+            "kind": "model_call",
+            "role": "synthesis",
+            "attempt": attempt + 1,
+            "prompt_chars": len(prompt),
+            "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
+            "provider": attribution.provider,
+            "model": attribution.model,
+            "requested_model": requested_model,
+            "provider_request_count": len(attribution.attempted_providers or []) or 1,
+            "providers_tried": list(attribution.attempted_providers or []),
+        }
+        if not raw.strip():
+            failure_reason = "ai_error"
+            if trace is not None:
+                trace.append({
+                    **record,
+                    "ok": False,
+                    "failure_kind": "provider_no_text",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                })
+            continue
+        try:
+            parsed = parse_chat_reply(raw)
+        except Exception as e:  # noqa: BLE001
+            logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
+            failure_reason = "parse_error"
+            if trace is not None:
+                trace.append({
+                    **record,
+                    "ok": False,
+                    "failure_kind": "parse_error",
+                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+                })
+            continue
+        if trace is not None:
+            trace.append({
+                **record,
+                "ok": True,
+                "status": "parsed",
+                "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
+            })
+        return parsed, None
+    return None, failure_reason
+
+
+def _reply_events(
+    db,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
+    transcript: list[tuple[str, str]],
+    user_content: str,
+    alert_context: dict | None,
+    capped: bool,
+    base_symbols: list[str],
+    planner_state: dict | None = None,
+    trace: list[dict] | None = None,
+    preferences: dict | None = None,
+    *,
+    stream_model: bool = False,
+) -> Iterator[tuple]:
+    """The one generation path for a Chat turn, for both transports (BF-09).
+
+    Yields ``("delta", text)`` 0..N times, then exactly one
+    ``("result", (text, grounded, screened))``; ``screened`` is the tickers a
+    run_screen call surfaced, for the caller to fold into ``focus``.
+
+    ``stream_model`` only changes how the model is called: streamed with live
+    deltas (when ``chat_streaming`` is on) or as one completion. Routing,
+    fallbacks and failure wording are shared, so the transports can't drift
+    apart again. Expected failures become a reply; an unexpected exception
+    propagates to the caller, which persists a failure reply (BF-11).
+    """
+    started_at = time.monotonic()
+    early = _reply_without_model(
+        db, symbol_blocks, unavailable, market_baseline, transcript, user_content,
+        alert_context, base_symbols, planner_state, trace, preferences, started_at=started_at,
+    )
+    if early is not None:
+        yield ("result", early)
+        return
 
     budget = _prompt_token_budget(CHAT_SYSTEM_PROMPT, 500)
     prompt = build_chat_prompt(
@@ -3073,34 +3253,92 @@ def _generate_reply(
         regeneration=(planner_state or {}).get("active_regeneration"),
     )
     synthesis_model = _chat_route_model("synthesis", _chat_route_model("planning"))
+    repair_model = _chat_route_model("repair")
     _trace_model_route(trace, "synthesis", synthesis_model)
-    parsed, failure_reason = _complete_and_parse(
-        prompt,
-        CHAT_SYSTEM_PROMPT,
-        500,
-        synthesis_model,
-        _chat_route_model("repair"),
-        trace=trace,
-        role="synthesis",
-    )
+    hold = _holds_streamed_text(user_content)
+    if stream_model and ai_manager.settings.chat_streaming:
+        parsed, failure_reason = yield from _stream_and_parse(
+            prompt, synthesis_model, repair_model, trace=trace, hold=hold
+        )
+    else:
+        parsed, failure_reason = _complete_and_parse(
+            prompt,
+            CHAT_SYSTEM_PROMPT,
+            500,
+            synthesis_model,
+            repair_model,
+            trace=trace,
+            role="synthesis",
+        )
+        if (
+            stream_model
+            and parsed is not None
+            and not hold
+            and parsed.action == "none"
+            and not parsed.wants_reanalysis
+            and parsed.reply
+        ):
+            # A one-shot provider returns the reply whole: one delta, and only
+            # once it is known to be the model's own answer.
+            yield ("delta", parsed.reply)
     if parsed is None:
-        if failure_reason == "ai_error":
-            return "Something went wrong reaching the AI provider — please try again.", False, []
-        return "I couldn't process that — could you rephrase?", False, []
+        yield ("result", (_MODEL_FAILURE_REPLIES[failure_reason or "ai_error"], False, []))
+        return
+    yield (
+        "result",
+        _run_turn_actions(
+            db,
+            parsed,
+            symbol_blocks,
+            unavailable,
+            market_baseline,
+            transcript,
+            user_content,
+            alert_context,
+            trace=trace,
+            planner_state=planner_state,
+            preferences=preferences,
+        ),
+    )
 
-    return _run_turn_actions(
+
+def _generate_reply(
+    db,
+    symbol_blocks: list[dict],
+    unavailable: list[str],
+    market_baseline: dict | None,
+    transcript: list[tuple[str, str]],
+    user_content: str,
+    alert_context: dict | None,
+    capped: bool,
+    base_symbols: list[str],
+    planner_state: dict | None = None,
+    trace: list[dict] | None = None,
+    preferences: dict | None = None,
+) -> tuple[str, bool, list[str]]:
+    """Blocking transport: :func:`_reply_events` drained to its result.
+
+    Returns ``(text, grounded, screened)``. When the model asks for
+    ``wants_reanalysis``, the reply is a real analyze_symbol() run instead.
+    """
+    for kind, payload in _reply_events(
         db,
-        parsed,
         symbol_blocks,
         unavailable,
         market_baseline,
         transcript,
         user_content,
         alert_context,
-        trace=trace,
-        planner_state=planner_state,
-        preferences=preferences,
-    )
+        capped,
+        base_symbols,
+        planner_state,
+        trace,
+        preferences,
+        stream_model=False,
+    ):
+        if kind == "result":
+            return payload
+    raise RuntimeError("chat reply generation ended without a result")  # pragma: no cover
 
 
 def _capped_note(capped: bool, symbol_blocks: list[dict]) -> str | None:
@@ -3698,273 +3936,26 @@ def _run_turn_actions(
 def _generate_reply_streaming(
     db, turn: _Turn, trace: list[dict] | None = None
 ) -> Iterator[tuple]:
-    """Streaming variant of :func:`_generate_reply`.
+    """Streaming transport: :func:`_reply_events` with live model deltas.
 
-    Yields ``("delta", text)`` for each incremental piece of the reply,
-    then exactly one ``("result", (final_text, grounded, screened))``.
-    Never raises — every failure mode ends in a ``("result", ...)``.
-
-    The streamed deltas are the model's ``reply`` field decoded live from
-    the partial JSON. The trailing ``result`` is authoritative: on the
-    reanalysis-tool path it differs from what was streamed, and the
-    caller overwrites the bubble with it.
+    Yields ``("delta", text)`` 0..N times, then exactly one
+    ``("result", (final_text, grounded, screened))``. The result is
+    authoritative: the client replaces any streamed text with it.
     """
-    confirmed = _confirm_pending_action(
-        db, turn.user_content, turn.symbol_blocks, turn.unavailable, turn.market_baseline,
-        turn.transcript, turn.alert_context, trace, turn.planner_state, turn.preferences,
-    )
-    if confirmed is not None:
-        yield ("result", confirmed)
-        return
-    if _AMBIGUOUS_RANKING_REFERENCE.search(turn.user_content):
-        if trace is not None:
-            trace.append({"kind": "server_reply", "trusted": True})
-        yield (
-            "result",
-            (
-                "Do you mean the weakest name from your last watchlist result, "
-                "or the weakest name across the market? Please specify a watchlist "
-                "or say market-wide.",
-                False,
-                [],
-            ),
-        )
-        return
-    if (
-        not turn.symbol_blocks
-        and turn.unavailable
-        and turn.base
-        and set(turn.unavailable) == {s.upper() for s in turn.base}
-    ):
-        yield (
-            "result",
-            (
-                f"I don't have enough data on {turn.unavailable[0]} yet to answer that.",
-                False,
-                [],
-            ),
-        )
-        return
-
-    if not turn.symbol_blocks and turn.unavailable and _COMPARISON_INTENT.search(turn.user_content):
-        names = ", ".join(turn.unavailable)
-        yield (
-            "result",
-            (
-                f"I don't have enough verified data for {names} to compare them.",
-                False,
-                [],
-            ),
-        )
-        return
-
-    if not turn.symbol_blocks:
-        m = _WATCHLIST_CONTENTS_INTENT.search(turn.user_content)
-        if m:
-            reply = _watchlist_contents_reply(db, m.group("name1") or m.group("name2") or "")
-            if reply:
-                if trace is not None:
-                    trace.append({"kind": "server_reply", "trusted": True})
-                yield ("result", (reply, True, []))
-                return
-        if _WATCHLIST_LIST_INTENT.search(turn.user_content):
-            if trace is not None:
-                trace.append({"kind": "server_reply", "trusted": True})
-            yield ("result", (_watchlist_list_reply(db), True, []))
-            return
-        if turn.unavailable and turn.planner_state.get("rejected_symbols"):
-            names = ", ".join(turn.unavailable)
-            if trace is not None:
-                trace.append({"kind": "server_reply", "trusted": True})
-            yield (
-                "result",
-                (f"I couldn't find current verified market data for {names}. Please check the ticker and try again.", False, []),
-            )
-            return
-        remembered = turn.planner_state.get("current_symbols", [])
-        if _AMBIGUOUS_REFERENCE.search(turn.user_content) and len(remembered) > 1:
-            yield (
-                "result",
-                (f"Which ticker do you mean: {', '.join(remembered[:settings.ai.chat_max_tickers])}?", False, []),
-            )
-            return
-
-    det = _run_deterministic_shortcircuit(
-        db, turn.user_content, turn.symbol_blocks, turn.unavailable,
-        turn.market_baseline, turn.transcript, turn.alert_context,
-        trace, turn.planner_state, preferences=turn.preferences,
-    )
-    if det is not None:
-        yield ("result", det)
-        return
-
-    if not ai_manager.enabled:
-        _trace_model_route(trace, "fallback", "deterministic")
-        if trace is not None:
-            trace.append({"kind": "server_reply", "trusted": True})
-        yield ("result", _deterministic_context_reply(turn.symbol_blocks, turn.unavailable, turn.market_baseline))
-        return
-
-    budget = _prompt_token_budget(CHAT_SYSTEM_PROMPT, 500)
-    prompt = build_chat_prompt(
+    yield from _reply_events(
+        db,
         turn.symbol_blocks,
         turn.unavailable,
         turn.market_baseline,
         turn.transcript,
         turn.user_content,
         turn.alert_context,
-        capped_note=_capped_note(turn.capped, turn.symbol_blocks),
-        token_budget=budget,
-        chart_state=turn.chart_state,
-        preferences=turn.preferences,
-        regeneration=turn.planner_state.get("active_regeneration"),
-    )
-
-    chat_model = _chat_route_model("synthesis", _chat_route_model("planning"))
-    repair_model = _chat_route_model("repair")
-    _trace_model_route(trace, "synthesis", chat_model)
-    parsed = None
-    failure_message = "I couldn't process that — could you rephrase?"
-    # Same retry rationale as _complete_and_parse — a malformed/empty
-    # reply gets one more full attempt before giving up. A retry's
-    # deltas stream to the client same as the first attempt's; the
-    # trailing ("result", ...) below is always authoritative and
-    # overwrites whatever partial text was shown, same as the existing
-    # reanalysis-tool path already does.
-    for attempt in range(_CHAT_PARSE_RETRIES + 1):
-        call_started = time.perf_counter()
-        raw = ""
-        extractor = ReplyExtractor()
-        attribution = StreamAttribution()
-        requested_model = repair_model if attempt else chat_model
-        try:
-            if ai_manager.settings.chat_streaming:
-                for chunk in stream_sync(
-                    ai_manager.stream(
-                        prompt,
-                        system=CHAT_SYSTEM_PROMPT,
-                        max_tokens=500,
-                        model=requested_model,
-                        attribution=attribution,
-                    )
-                ):
-                    raw += chunk
-                    delta = extractor.feed(raw)
-                    if delta:
-                        yield ("delta", delta)
-            else:
-                resp = run_sync(
-                    ai_manager.complete(
-                        prompt,
-                        system=CHAT_SYSTEM_PROMPT,
-                        max_tokens=500,
-                        model=requested_model,
-                    )
-                )
-                raw = resp.text or ""
-                attribution.provider = getattr(resp, "provider", None)
-                attribution.model = getattr(resp, "model", None)
-                attribution.attempted_providers = list(getattr(resp, "attempted_providers", None) or [])
-                delta = extractor.feed(raw)
-                if delta:
-                    yield ("delta", delta)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Chat streaming AI call raised (attempt %d): %s", attempt + 1, e)
-            failure_message = "Something went wrong reaching the AI provider — please try again."
-            if trace is not None:
-                trace.append({
-                    "kind": "model_call",
-                    "role": "synthesis",
-                    "attempt": attempt + 1,
-                    "ok": False,
-                    "failure_kind": "provider_exception",
-                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
-                    "prompt_chars": len(prompt),
-                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT),
-                    "requested_model": requested_model,
-                    "provider_request_count": 1,
-                })
-            continue
-
-        provider_request_count = len(attribution.attempted_providers or []) or 1
-        if not raw.strip():
-            failure_message = "AI is currently unavailable, so I can't answer that right now."
-            if trace is not None:
-                trace.append({
-                    "kind": "model_call",
-                    "role": "synthesis",
-                    "attempt": attempt + 1,
-                    "ok": False,
-                    "failure_kind": "provider_no_text",
-                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
-                    "prompt_chars": len(prompt),
-                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
-                    "provider": attribution.provider,
-                    "model": attribution.model,
-                    "requested_model": requested_model,
-                    "provider_request_count": provider_request_count,
-                    "providers_tried": list(attribution.attempted_providers or []),
-                })
-            continue
-
-        try:
-            parsed = parse_chat_reply(raw)
-            if trace is not None:
-                trace.append({
-                    "kind": "model_call",
-                    "role": "synthesis",
-                    "attempt": attempt + 1,
-                    "ok": True,
-                    "status": "parsed",
-                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
-                    "prompt_chars": len(prompt),
-                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
-                    "provider": attribution.provider,
-                    "model": attribution.model,
-                    "requested_model": requested_model,
-                    "provider_request_count": provider_request_count,
-                    "providers_tried": list(attribution.attempted_providers or []),
-                })
-            break
-        except Exception as e:  # noqa: BLE001
-            logger.info("Chat reply failed to parse (attempt %d): %s", attempt + 1, e)
-            failure_message = extractor.text.strip() or failure_message
-            if trace is not None:
-                trace.append({
-                    "kind": "model_call",
-                    "role": "synthesis",
-                    "attempt": attempt + 1,
-                    "ok": False,
-                    "failure_kind": "parse_error",
-                    "duration_ms": round((time.perf_counter() - call_started) * 1000, 3),
-                    "prompt_chars": len(prompt),
-                    "estimated_tokens": _estimate_tokens(prompt, CHAT_SYSTEM_PROMPT, raw),
-                    "provider": attribution.provider,
-                    "model": attribution.model,
-                    "requested_model": requested_model,
-                    "provider_request_count": provider_request_count,
-                    "providers_tried": list(attribution.attempted_providers or []),
-                })
-
-    if parsed is None:
-        yield ("result", (failure_message, False, []))
-        return
-
-    yield (
-        "result",
-        _run_turn_actions(
-            db,
-            parsed,
-            turn.symbol_blocks,
-            turn.unavailable,
-            turn.market_baseline,
-            turn.transcript,
-        turn.user_content,
-        turn.alert_context,
-        trace=trace,
-        planner_state=turn.planner_state,
-        preferences=turn.preferences,
-        ),
+        turn.capped,
+        turn.base,
+        turn.planner_state,
+        trace,
+        turn.preferences,
+        stream_model=True,
     )
 
 

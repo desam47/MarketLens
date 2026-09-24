@@ -841,9 +841,10 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
                          user message was already persisted, so the client
                          must not resend the turn
 
-    The reply row is still persisted exactly once (at the end); the
-    ``final`` frame is authoritative — for the reanalysis-tool path it
-    differs from the streamed deltas and the client should overwrite.
+    The reply row is still persisted exactly once (at the end), even when the
+    client disconnects mid-turn; the ``final`` frame is authoritative — for
+    the reanalysis-tool path it differs from the streamed deltas and the
+    client should overwrite.
     """
     from ...ai.chat import stream_chat_message
 
@@ -867,13 +868,16 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
             try:
                 events = stream_chat_message(session_id, payload.content, **_turn_kwargs(payload))
                 for ev in events:
-                    if stop.is_set():
-                        break
                     if ev[0] == "meta":
                         # The user message is persisted from here on.
                         started.set()
+                    # After a disconnect, keep running the turn to the end so
+                    # the reply (and any action already under way) is saved;
+                    # there is just no one left to send frames to.
+                    if stop.is_set():
+                        continue
                     if not _put_sse_item(loop, queue, ev):
-                        break
+                        stop.set()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("chat stream drain failed: %s", exc)
                 if not stop.is_set():

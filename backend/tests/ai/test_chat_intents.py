@@ -267,6 +267,7 @@ def test_streaming_symbol_overview_uses_the_same_typed_route(monkeypatch) -> Non
         alert_context=None,
         preferences=None,
         chart_state=None,
+        capped=False,
     )
     events = list(_generate_reply_streaming(None, turn, []))
 
