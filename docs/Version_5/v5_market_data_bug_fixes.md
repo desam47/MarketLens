@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2b: MD-05, MD-06)
-**Status:** Review complete. MD-05 and MD-06 are fixed: console-log redirects are rotated and capped, dated Webull SDK logs are pruned, and the stream reconnect loop is paused outside the extended session with 429-aware backoff. MD-04 is fixed: a periodic sweep purges symbols in no active watchlist once they go stale, deactivating a watchlist now stops tracking immediately, and the six known orphans are purged. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 6 ✅ COMPLETE, 0 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 3: MD-07, MD-08, MD-09)
+**Status:** Review complete. All nine findings are fixed. MD-07: signal-recorder seeding now prioritizes the timeframes closest to real time instead of seeding them last. MD-08: the two missing `historical_signals` indexes were added by a new migration. MD-09: the stale 13:30-snapshot comments were corrected. MD-05 and MD-06 are fixed: console-log redirects are rotated and capped, dated Webull SDK logs are pruned, and the stream reconnect loop is paused outside the extended session with 429-aware backoff. MD-04 is fixed: a periodic sweep purges symbols in no active watchlist once they go stale, deactivating a watchlist now stops tracking immediately, and the six known orphans are purged. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 9 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -28,15 +28,17 @@ Line numbers refer to the code at `b41530c`.
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ✅ COMPLETE |
 | MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ✅ COMPLETE |
 | MD-06 | Low | Providers | Overnight Webull requests repeat about 80 times an hour and are rate-limited | Verified | ✅ COMPLETE |
-| MD-07 | Low | Signals | After each restart, signal recording takes about 30 minutes to catch up | Verified | ❌ NOT STARTED |
-| MD-08 | Low | Storage | The live schema is missing two indexes the migrations create | Verified | ❌ NOT STARTED |
-| MD-09 | Low | Code | A recorder comment describes intraday snapshots in the daily series that no longer exist | Verified | ❌ NOT STARTED |
+| MD-07 | Low | Signals | After each restart, signal recording takes about 30 minutes to catch up | Verified | ✅ COMPLETE |
+| MD-08 | Low | Storage | The live schema is missing two indexes the migrations create | Verified | ✅ COMPLETE |
+| MD-09 | Low | Code | A recorder comment describes intraday snapshots in the daily series that no longer exist | Verified | ✅ COMPLETE |
 
-**Next suggested order:**
+**Order followed:**
 
 1. **Batch 1 — credentials and bar correctness:** MD-02 first, because it is small and a credential leak; then MD-01 and MD-03.
 2. **Batch 2 — storage and operations:** MD-04, MD-05, and MD-06.
 3. **Batch 3 — clean-up:** MD-07, MD-08, and MD-09.
+
+All nine complete as of batch 3.
 
 ---
 
@@ -323,7 +325,7 @@ Full run: `backend/tests/market_data`, `scripts`, `observability` — 567 passed
 
 ### MD-07 — After each restart, signal recording takes about 30 minutes to catch up
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3).
 **Where:** `SignalRecorder.record_from_recent_bars` with `SEED_BUDGET_SECONDS = 3.0` (`backend/services/signal_recorder.py:40`). A restarted process must re-seed every symbol and timeframe before it records new bars for them.
 
 **Verified (live database, during the Historical Signals HS-12 rollout):**
@@ -335,26 +337,46 @@ With `--reload`, every saved backend file restarts the process.
 
 **Impact:** anything reading recent signals lags by up to about 30 minutes after a restart: Chat's signal history, AI signal stats, and the Replay markers. No data is lost.
 
-**Resolution:** seed the pairs with the most recent unrecorded closed bars first, or record new closed bars directly without waiting for a full seed.
+**Root cause:** `_SEED_ORDER` prioritized "cheapest first" — the coarse timeframes, because they have the fewest bars and were assumed most durable — which meant 1m, the timeframe closest to real time, was always seeded dead last, after every other pair of every symbol. `_replays` is in-memory and always starts empty on a restart, so every pair needs a full-history replay before it can be advanced live.
+
+**Resolution:** `_SEED_ORDER` now ranks by how often a timeframe closes — 1m first, 1wk last — not by replay cost. This directly matches the resolution's "seed the pairs with the most recent unrecorded closed bars first": whichever timeframe closes most often always has the freshest unrecorded bar, and matters most for near-real-time features (Chat's signal history, AI signal stats, Replay markers). `SEED_BUDGET_SECONDS` was also doubled, 3.0 → 6.0, to shrink the wall-clock time for whichever tier is in progress.
+
+This does **not** reduce the total CPU cost of a cold restart's catch-up — every pair still replays its full stored history, which the recorder needs to correctly rebuild the trend engine's state, not just to avoid rewriting rows that already exist. It only decides which timeframe's lag is felt. Coarse timeframes (1h now retains 366 days per MD-01, averaging ~2,770 bars/pair across the 23 watched symbols) now wait longer than before, in exchange for the timeframe the finding was actually about no longer waiting at all.
+
+**Tests:**
+
+| File | What it covers |
+|---|---|
+| `test_signal_replay.py` (1 test updated, 2 new) | The two-timeframe budget-ordering test now expects 1h before 1d (was 1d first); the full `_SEED_ORDER` ranking is asserted directly; a live symptom regression test (a 1m pair queued after a 1d pair is still seeded first). |
+
+Full run: `backend/tests/services`, `test_signals_api.py`, `migrations` — 121 passed. Full backend suite — 3,494 passed.
+
+**Live confirmation (2026-09-24 19:23 restart):** 1m signals started writing 24 seconds after restart and reached steady-state (advancing with each newly-closed bar, no backlog) within about 2 minutes; 2m, 3m, 5m, 15m, and 30m cascaded through in that same order right behind it, confirmed from each row's `created_at`. No errors. The coarser tiers (1h, 4h, 1d, 1wk) took considerably longer to be reached, as expected given the total-cost trade-off above; the API stayed responsive throughout (health check ~2ms) since this work runs off the main event loop thread.
 
 ### MD-08 — The live schema is missing two indexes the migrations create
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3).
 
 **Verified:** a fresh database built with `alembic upgrade head` was compared with the live database. The only difference is that the live `historical_signals` table lacks `ix_historical_signals_symbol` and `ix_historical_signals_timeframe`. All columns match. The retention prune's query plan uses `ix_historical_signals_timestamp`, and the new unique index covers symbol lookups, so no query was found to be slower.
 
-**Resolution:** add a migration that creates them if missing, or drop them from the model and migrations if they are not needed. Either way, the live schema should match the migration history.
+**Investigated further:** the model (`index=True` on both columns) and the initial-schema migration both say these indexes should exist, and no migration in the history drops them — `20260919_index_tuning`'s own docstring even states "historical_signals keeps its symbol/timeframe indexes" while dropping other redundant ones elsewhere, implying they were believed present at the time. The live table was most likely created outside the migration chain at some point, before they existed, and nothing since has needed to touch this table's indexes in a way that would have caught the drift.
+
+**Resolution:** `alembic/versions/20261004_historical_signals_missing_indexes.py` — `CREATE INDEX IF NOT EXISTS` for both, a no-op on a fresh build and additive on the live database. Chosen over dropping them from the model: a query pattern that would benefit from filtering by symbol or timeframe alone isn't ruled out just because none was found today.
+
+**Process note:** this migration was applied to the live database automatically, by `--reload`, the moment the file was saved into `alembic/versions/` — before the intended scratch-tree validation step ran. The migration is a simple, idempotent, non-destructive DDL change (no data touched, no table rebuild), and it applied cleanly with no errors; `pragma integrity_check` passed and both indexes were created on the correct columns. Still a process miss: the established rule (validate in a scratch tree → `.backup` → install) exists precisely so a riskier migration doesn't get this same accidental live exposure.
+
+**Tests:** `backend/tests/migrations/test_historical_signals_missing_indexes.py` (new, 4 tests) — a fresh build already has both indexes; a database with the exact drifted state found live (migrated to the prior revision, then the two indexes dropped by hand) gets them added; downgrade removes them and upgrade restores them; the index columns are correct.
 
 ### MD-09 — A recorder comment describes intraday snapshots in the daily series that no longer exist
 
-**Status:** ❌ NOT STARTED
-**Where:** `SignalRecorder._compute_outcome_for_signal` (`backend/services/signal_recorder.py`, the 1d anchor comment).
+**Status:** ✅ COMPLETE (2026-09-24, batch 3).
+**Where:** `SignalRecorder._compute_outcome_for_signal` and `SignalRecorder._price_at` (`backend/services/signal_recorder.py`, the 1d anchor comments — the same false claim appeared in both).
 
 The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots from Alpaca. `_normalize_1d_bar` has normalized daily bars since 2026-09-09.
 
-**Verified:** no stored 1d or 1wk bar has a non-midnight timestamp.
+**Verified:** no stored 1d or 1wk bar has a non-midnight timestamp (checked again on 2026-09-24, after this session's other bar-repair work).
 
-**Resolution:** correct the comment. The midnight anchor itself is still right, since daily bars are stamped at midnight.
+**Resolution:** corrected both comments to describe the current, actual reason for the midnight normalization — `_normalize_1d_bar` already guarantees every stored 1d bar is at midnight, so the anchor normalization is a no-op in practice, kept as a cheap guard against a caller passing a non-midnight timestamp. The midnight anchor itself is unchanged, since daily bars are stamped at midnight. The similarly-worded "13:30 ET noise" comments elsewhere (`ingestion_service.py`, `backfill_service.py`) were checked too and left alone: they already correctly describe themselves as a defensive backstop behind normalization, not a claim that the mixing currently happens.
 
 ---
 
@@ -383,6 +405,15 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 3. **One redaction point:** apply the MD-02 filter to every third-party logger, not just Webull's.
 
 ## Verification
+
+### Batch 3 (2026-09-24, MD-07, MD-08, MD-09)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/services`, `test_signals_api.py`, `migrations` | 121 passed |
+| Full backend suite | 3,494 passed |
+| Live: restart, signal-recording priority order | 1m signals from 24s post-restart, steady-state by ~2 min; 2m/3m/5m/15m/30m cascaded in order behind it; no errors |
+| Live: MD-08 migration | applied automatically by `--reload` before the intended scratch-tree validation ran (a process miss — see the MD-08 entry); integrity check passed, both indexes created correctly regardless |
 
 ### Batch 2b (2026-09-24, MD-05, MD-06)
 
@@ -452,20 +483,24 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 - **Batch 1b (MD-01):** `65ce005`.
 - **Batch 1c (MD-03):** `11246cc`.
 - **Batch 2a (MD-04):** `051b048`.
-- **Batch 2b (MD-05, MD-06):** in the working tree, not yet committed.
+- **Batch 2b (MD-05, MD-06):** `68b5478`.
+- **Batch 3 (MD-07, MD-08, MD-09):** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
 | 2026-09-24 | MD-03 | ✅ COMPLETE | `11246cc` | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
 | 2026-09-24 | MD-01 | ✅ COMPLETE | `65ce005` | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
-| 2026-09-24 | MD-05 | ✅ COMPLETE | batch 2b | `scripts/rotate_stdin.py`, `restart_dev.sh` | 5 new | 50MB x5 rotation on backend/frontend/rq_workers/rq_backfill logs; dated Webull SDK logs pruned past 7 days. |
-| 2026-09-24 | MD-06 | ✅ COMPLETE | batch 2b | `webull_stream.py`, `webull_provider.py` | 16 new, 2 updated | Reconnect paused outside 04:00-20:00 ET; 429 skips the normal backoff ramp; SDK log burst collapsed to one line. |
+| 2026-09-24 | MD-05 | ✅ COMPLETE | `68b5478` | `scripts/rotate_stdin.py`, `restart_dev.sh` | 5 new | 50MB x5 rotation on backend/frontend/rq_workers/rq_backfill logs; dated Webull SDK logs pruned past 7 days. |
+| 2026-09-24 | MD-06 | ✅ COMPLETE | `68b5478` | `webull_stream.py`, `webull_provider.py` | 16 new, 2 updated | Reconnect paused outside 04:00-20:00 ET; 429 skips the normal backoff ramp; SDK log burst collapsed to one line. |
 | 2026-09-24 | MD-04 | ✅ COMPLETE | `051b048` | `purge_service.py`, `watchlist_repository.py`, `ingestion_service.py`, `api/watchlist/router.py`, `settings.py`, plus 3 new test files | 13 new, 2 updated | Periodic sweep; deactivate refreshes ingestion; `symbol_exists_in_any_watchlist` now joins `Watchlist.is_active`; six known orphans purged live (34,119 rows). |
+| 2026-09-24 | MD-07 | ✅ COMPLETE | batch 3 | `signal_recorder.py` | 1 updated, 2 new | `_SEED_ORDER` ranks by close frequency (1m first); `SEED_BUDGET_SECONDS` 3.0 to 6.0; live-confirmed 1m catches up in ~2 min. |
+| 2026-09-24 | MD-08 | ✅ COMPLETE | batch 3 | `alembic/versions/20261004_historical_signals_missing_indexes.py` | 4 new | `CREATE INDEX IF NOT EXISTS` for both missing indexes; applied live. |
+| 2026-09-24 | MD-09 | ✅ COMPLETE | batch 3 | `signal_recorder.py` | — | corrected two stale comments claiming the 1d table still mixes 13:30 snapshots. |
 | 2026-09-24 | MD-02 | ✅ COMPLETE | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors; Webull app key/secret rotated 18:36. |
 
 ---
 
 ## Reference
 
-Ingestion writes 1m bars from the live provider (Webull), fills gaps from fallback providers, settles each minute from Alpaca SIP once it is 15 minutes old (since MD-03), and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins except over a settled bar (`_SETTLED_BY`), and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. A periodic sweep (since MD-04) purges any symbol with stored bars or signals that is not in an active watchlist and has gone stale, protected by a grace period for on-demand lookups. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.
+Ingestion writes 1m bars from the live provider (Webull), fills gaps from fallback providers, settles each minute from Alpaca SIP once it is 15 minutes old (since MD-03), and resamples 2m to 30m from 1m. After a restart, the signal recorder seeds the pairs closest to real time first (since MD-07). A periodic sweep purges symbols not in an active watchlist once they go stale (since MD-04). 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins except over a settled bar (`_SETTLED_BY`), and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. A periodic sweep (since MD-04) purges any symbol with stored bars or signals that is not in an active watchlist and has gone stale, protected by a grace period for on-demand lookups. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.

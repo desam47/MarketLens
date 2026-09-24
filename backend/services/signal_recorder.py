@@ -37,11 +37,29 @@ logger = logging.getLogger(__name__)
 
 # Seeding a pair replays its whole stored history (~0.15 ms a bar, pure Python, so it competes
 # with the event loop for the GIL). Each recording cycle seeds for at most this long.
-SEED_BUDGET_SECONDS = 3.0
+#
+# Was 3.0 until MD-07 (2026-09-24): after a restart, every (symbol, timeframe) pair needs
+# seeding again — `_replays` is in-memory and always starts empty — and almost all of that
+# replay is wasted CPU: the historical_signals rows for nearly every bar it walks already
+# exist from before the restart (the recorder only needs the replay to rebuild the trend
+# engine's state, not to re-write rows the dedup check immediately discards). At 3.0s/90s
+# (3.3% duty cycle), a tier's pairs finished roughly one every 90s once its bars ran a few
+# seconds each — verified live: 89 closed 1m bars across 15 symbols were still unrecorded 5
+# minutes after a restart, all caught up by ~33 minutes. Doubling the budget halves that for
+# whichever tier is in progress; a larger jump risks visibly delaying API/WebSocket responses
+# on the same process, since this work still competes for the GIL even off the event loop.
+SEED_BUDGET_SECONDS = 6.0
 SEED_MAX_BARS = 50000
-# Cheapest first: the coarse timeframes have the fewest bars and the most durable signals.
+# Most urgently needed first (MD-07): whichever pair's bars close most often has the freshest
+# unrecorded bar waiting, and matters most for near-real-time features (Chat's recent signal
+# history, AI signal stats, Replay markers) — 1m closes every minute, 1wk every week. This
+# doesn't shrink the total CPU cost of a cold restart's catch-up (each pair still replays its
+# full stored history — see SEED_BUDGET_SECONDS above), it only decides which timeframe's lag
+# is felt: before this, the coarse timeframes finished first purely because a fixed order
+# happened to list them first, and 1m — the one the live symptom above was actually about —
+# was always seeded dead last, after every other pair of every symbol.
 _SEED_ORDER = {
-    tf: i for i, tf in enumerate(["1wk", "1d", "4h", "1h", "30m", "15m", "5m", "3m", "2m", "1m"])
+    tf: i for i, tf in enumerate(["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"])
 }
 # A row written this soon after its bar closed may carry today's market regime.
 _FRESH = timedelta(minutes=15)
@@ -660,13 +678,16 @@ class SignalRecorder:
         # the signal. For a 1d signal these are 1d bars (5/10/20-day returns);
         # for a 1m signal they are 1m bars (5/10/20-minute returns).
         #
-        # Special case for 1d: the 1d bar table currently mixes two kinds of
-        # rows — proper midnight (00:00) daily bars and 13:30 intraday
-        # snapshots. The latter leak in via the Alpaca provider's free-tier
-        # feed and were backfilled alongside the 1d series. To keep the
-        # forward-outcome math aligned to calendar days, normalize the anchor
-        # to midnight: future bars are "anything strictly after the prior
-        # midnight", which excludes same-day 13:30 noise.
+        # Every stored 1d bar is stamped at midnight (_normalize_1d_bar,
+        # ingestion_service.py, since 2026-09-09) — floors a provider's
+        # 09:30 RTH-open stamp before it's ever written, so the table no
+        # longer mixes that offset in with the canonical midnight bars the
+        # way it briefly did before that fix (MD-09). ``outcome_anchor``
+        # still normalizes to midnight here too: signal.timestamp for a 1d
+        # signal is already midnight, so this is a no-op in practice, but a
+        # cheap one worth keeping — it makes "future bars are anything
+        # strictly after the anchor" correct even if a caller ever hands
+        # this a non-midnight 1d timestamp.
         anchor_ts = outcome_anchor(signal.timeframe, signal.timestamp)
 
         if future_bars_by_pair is not None:
@@ -768,9 +789,10 @@ class SignalRecorder:
     def _price_at(self, db, symbol: str, timeframe: str, ts: datetime) -> float | None:
         """Return the close price for the matching bar, or None.
 
-        For 1d, normalise the timestamp to midnight so we look up the
-        canonical daily bar rather than the same-day 13:30 intraday
-        snapshot that may also be in the table.
+        For 1d, normalise the timestamp to midnight: every stored 1d bar is
+        stamped there (_normalize_1d_bar, since 2026-09-09), so this is a
+        no-op for a well-formed 1d timestamp — kept as a cheap guard against
+        a caller passing one that isn't (MD-09).
         """
         if timeframe == "1d":
             ts = ts.replace(hour=0, minute=0, second=0, microsecond=0)

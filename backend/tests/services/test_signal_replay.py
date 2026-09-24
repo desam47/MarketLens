@@ -504,7 +504,10 @@ class TestLiveRecording(_Db):
         )
         self.assertEqual({r.market_regime for r in self._signals("LIVEG", "1d")}, {None})
 
-    def test_the_seeding_budget_seeds_one_pair_a_cycle_cheapest_timeframe_first(self):
+    def test_the_seeding_budget_seeds_one_pair_a_cycle_most_urgent_timeframe_first(self):
+        """MD-07: the timeframe whose bars close most often — so has the freshest unrecorded
+        bar, and matters most for near-real-time features — is seeded before a coarser one of
+        the same symbol, not after it."""
         daily, hourly = _bars(260), _hourly_bars(260)
         self._store_bars("LIVEH", "1d", daily)
         self._store_bars("LIVEH", "1h", hourly)
@@ -514,7 +517,7 @@ class TestLiveRecording(_Db):
         self.assertEqual(
             self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260
         )
-        self.assertEqual(counts(), (260, 0), "the daily pair is cheaper and goes first")
+        self.assertEqual(counts(), (0, 260), "1h closes far more often than 1d — it goes first")
         self.assertEqual(
             self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 260
         )
@@ -522,6 +525,37 @@ class TestLiveRecording(_Db):
         self.assertEqual(
             self.recorder.record_from_recent_bars(["LIVEH"], budget_seconds=0.0, now=now), 0
         )
+
+    def test_the_seed_order_ranks_every_timeframe_by_how_often_it_closes(self):
+        """The full order, not just a two-timeframe pair: 1m first (closes every minute) through
+        1wk last (closes weekly) — matches rec_mod._SEED_ORDER exactly, so this fails the moment
+        that table's priority (not just its membership) drifts from "most urgent first"."""
+        self.assertEqual(
+            sorted(rec_mod._SEED_ORDER, key=rec_mod._SEED_ORDER.get),
+            ["1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk"],
+        )
+
+    def test_a_dense_intraday_pair_is_seeded_before_a_stale_daily_one(self):
+        """The concrete live symptom (MD-07): after a restart, 1m signals for several symbols
+        were still missing 5 minutes later because 1m was seeded dead last, behind every other
+        pair of every symbol. One minute-bar pair must now go first, ahead of a daily pair
+        queued earlier in symbol order."""
+        daily = _bars(260)
+        self._store_bars("AAAFIRST", "1d", daily)
+        minute = [
+            SimpleNamespace(
+                timestamp=datetime(2026, 1, 1, 9, 30) + timedelta(minutes=i),
+                close=_price(i, 30),
+                volume=100_000,
+            )
+            for i in range(60)
+        ]
+        self._store_bars("ZZZLAST", "1m", minute)
+        now = datetime(2026, 1, 1, 11, 0)
+
+        self.recorder.record_from_recent_bars(["AAAFIRST", "ZZZLAST"], budget_seconds=0.0, now=now)
+        self.assertEqual(len(self._signals("ZZZLAST", "1m")), 60)
+        self.assertEqual(len(self._signals("AAAFIRST", "1d")), 0)
 
     def test_one_pairs_failure_does_not_stop_the_others_and_is_retried(self):
         bars = _bars(260)
