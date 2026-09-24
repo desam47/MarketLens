@@ -154,6 +154,9 @@ def configure_logging(
     Idempotent: safe to call multiple times (e.g. from tests). Removes any
     previously installed handlers to avoid duplicate log lines.
     """
+    from backend.observability.redaction import install_secret_redaction
+
+    install_secret_redaction()
     # Resolve level: explicit arg > LOG_LEVEL env > debug flag > INFO
     if log_level is not None:
         level = _resolve_log_level(log_level)

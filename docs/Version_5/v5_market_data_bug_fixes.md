@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (review)
-**Status:** Review complete; no fixes started. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 0 ✅ COMPLETE, 0 ⚠️ PARTIAL, 9 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 1a: MD-02)
+**Status:** Review complete; MD-02 is fixed for new log records and the old log files holding credentials are deleted; token rotation and a worker restart remain. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 0 ✅ COMPLETE, 1 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -23,7 +23,7 @@ Line numbers refer to the code at `b41530c`.
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
 | MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ❌ NOT STARTED |
-| MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ❌ NOT STARTED |
+| MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ⚠️ PARTIAL |
 | MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ❌ NOT STARTED |
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ❌ NOT STARTED |
 | MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ❌ NOT STARTED |
@@ -75,7 +75,7 @@ The code already knows this. A 2026-09-09 note in `_resample_1h_from_1m_and_upse
 
 ### MD-02 — Webull credentials are written to the log files in plain text
 
-**Status:** ❌ NOT STARTED
+**Status:** ⚠️ PARTIAL (2026-09-24, batch 1a). New records are redacted, and the log files written before the fix are deleted. Token rotation and a worker restart remain; see Remaining.
 **Where:** the Webull SDK logger `webull.core.client`. The patches in `backend/market_data/providers/webull_provider.py:100`–`:152` only lower log levels and redirect files.
 
 When a Webull request fails, the SDK logs an ERROR containing the full request, headers included. These include `x-app-key`, `x-access-token`, and `x-signature`. The existing patches lower the SDK's DEBUG noise but still pass ERROR records through unchanged.
@@ -85,11 +85,36 @@ When a Webull request fails, the SDK logs an ERROR containing the full request, 
 - A logged `ServerException` from 2026-09-21 contains a 35-character `x-app-key`, a 32-character `x-access-token`, and 44-character signatures.
 - `logs/backend.log` contains `"x-access-token": "` 1,413 times.
 - It also appears in `logs/marketlens.log` and its rotated copies `.1` to `.3`.
+- The RQ worker logs held them too: `logs/rq_workers.log` had 22,893 credential values, the last on 2026-09-19, and `logs/rq_backfill_1.log` had 17.
 - `logs/` is ignored by git, so none of this is committed.
 
 **Impact:** anyone who can read the logs, or who receives a copy for debugging, gets working API credentials for your Webull account. The Version 5 security review describes observability as sanitized, which does not hold for these records.
 
-**Resolution:** add a logging filter on the `webull` loggers and the root handlers that redacts these header values: `x-app-key`, `x-access-token`, `x-signature`, `access_token`, and `app_secret`. Test it with a synthetic `ServerException` record. Then decide what to do with the existing log files: redact them in place or delete them. Rotate the Webull token if the logs were ever shared.
+**Resolution:** a new module, `backend/observability/redaction.py`, wraps the process-wide log record factory. A filter on our own handlers would miss the SDK's, because the SDK attaches handlers of its own. Every record from a `webull*` logger, or whose message names a credential key, is redacted as it is created, so every handler receives the cleaned text:
+
+- values of `x-app-key`, `x-access-token`, `x-signature`, `access_token`, `app_secret`, `app_key`, and `Authorization` become `***`;
+- the message and any exception text are both cleaned;
+- other records cost one substring check.
+
+`webull_provider.py` installs it before importing the SDK, and `configure_logging` installs it too. The streaming client imports the provider first, so it is covered as well. The provider's docstring no longer claims keys are never logged and tokens never reach disk: the SDK stores its token in `conf/token.txt`.
+
+**Tests:** `backend/tests/observability/test_secret_redaction.py` has 8 tests, using fake values shaped like the real `ServerException`:
+
+- a record through a handler attached directly to an SDK logger;
+- the request passed as a format argument;
+- a logged exception;
+- one of our own loggers mentioning a token;
+- plain text left unchanged.
+
+With the factory not installed, 4 of them fail. The full backend suite passes: 3,425 tests.
+
+**Old log files (done, 2026-09-24):** every file in `logs/` that named a credential key was cleared, 114 in all, and `logs/` went from 845 MB to 2.4 MB. The five the running processes hold open were emptied rather than deleted, so they keep receiving new lines: `backend.log`, `marketlens.log`, `rq_workers.log`, and the two current Webull SDK logs. All five are opened in append mode, so emptying them leaves no gap. The other 109 were deleted: the rotated `marketlens.log.1`–`.5`, `rq_backfill_1.log`, and 103 rotated Webull SDK logs. Afterwards no file in `logs/` names a credential key. `data/logs/marketlens.log`, a stale copy from 2026-09-13, names the keys on 7 lines but holds no values, so it was kept.
+
+**Remaining:**
+
+- **Token rotation:** rotate the Webull token. The deleted logs held it, and during this review two access-token values from them were printed into the review session's output by a check that should have hidden them.
+- **Worker restart:** the RQ workers run `SimpleWorker`, which does not fork, so they still run the code they loaded at 00:31 on 2026-09-24, before the fix. They have not logged a credential since 2026-09-19, but they are not redacted until restarted.
+- **Live confirmation:** no Webull request had failed since the fix went live, so the redaction has not yet been seen on a real record. It has been exercised only by the tests.
 
 ### MD-03 — One series mixes providers whose volume differs by up to 2,800 times
 
@@ -230,13 +255,21 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 
 ## Verification
 
+### Batch 1a (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/observability/test_secret_redaction.py` | 8 passed; 4 fail with the factory not installed |
+| Full backend suite | 3,425 passed |
+| `ruff` on the changed files | clean |
+
 ### Review probes (2026-09-24, read-only)
 
 | Check | Result | Finding |
 |---|---|---|
 | Regular-session 1h closes since 2026-09-09 compared with 1m closes | Webull 312/312 and Yahoo 844/846 shifted 30 min; `live_from_1m` 370/370 aligned | MD-01 |
 | 1h provider rows before the 1m window; 4h rows before it | 32,824; 10,192 | MD-01 |
-| Credential headers in logs (values not printed) | `x-access-token` 1,413 times in `backend.log`; also in `marketlens.log` and rotated copies | MD-02 |
+| Credential headers in logs (values not printed) | `x-access-token` 1,413 times in `backend.log`; also in `marketlens.log`, its rotated copies, the RQ worker logs and the Webull SDK logs. After cleanup: 0 files in `logs/` | MD-02 |
 | SPY 1h volume against its 1m sum, 2026-09-16 | Alpaca 200 vs 75,289 and 2,313 vs 6,452,715 | MD-03 |
 | Symbols with bars but in no watchlist | NOK, XLK, GOOGL, RIVN, SOXL, WMT | MD-04 |
 | `logs/` size | `backend.log` 442 MB in 11 days; directory 842 MB | MD-05 |
@@ -249,11 +282,13 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 
 ## Fix log
 
-- **Review:** in the working tree, not yet committed.
+- **Review:** commit `e4c1d69`, `docs(v5): review market data ingestion and track findings`.
+- **Batch 1a (MD-02):** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
-| 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | review | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
+| 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
+| 2026-09-24 | MD-02 | ⚠️ PARTIAL | batch 1a | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied. Token rotation and worker restart remain. |
 
 ---
 

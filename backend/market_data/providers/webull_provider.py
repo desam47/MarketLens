@@ -17,9 +17,11 @@ Credentials are sourced from ``settings.webull``:
 
 Security constraints
 -------------------
-- ``app_key`` and ``app_secret`` are never logged.
-- Tokens are held in-process-memory only by the SDK; they are never persisted
-  to disk.
+- The SDK logs a failed request with its headers (app key, access token,
+  signatures). ``install_secret_redaction`` below, installed before the SDK
+  is imported, redacts those values from every log record (MD-02).
+- The SDK stores its access token in ``conf/token.txt``; keep that file out
+  of version control and backups you share.
 
 Timestamp convention
 -------------------
@@ -41,6 +43,11 @@ from pathlib import Path
 # reliably redirects all SDK logging to the project without touching site-packages.
 _WEBULL_LOG = Path(__file__).resolve().parents[3] / "logs" / "webull_trade_sdk.log"
 _WEBULL_LOG.parent.mkdir(exist_ok=True)
+
+# Before the SDK is imported: its loggers print request headers on failures.
+from backend.observability.redaction import install_secret_redaction  # noqa: E402
+
+install_secret_redaction()
 
 import webull.core.client as _wb_client  # noqa: E402
 
