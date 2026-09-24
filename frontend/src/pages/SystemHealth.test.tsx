@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import api from '../services/api';
 import { SystemHealth } from './SystemHealth';
 
@@ -43,14 +43,23 @@ describe('SystemHealth', () => {
   it('shows cache, freshness, and provider availability without exposing configuration secrets', async () => {
     render(<SystemHealth />);
 
-    await waitFor(() => expect(screen.getByText('Quote Cache Hit Rate:')).toBeInTheDocument());
-    expect(screen.getByText('80.0%')).toBeInTheDocument();
-    expect(screen.getByText('Pipeline:')).toBeInTheDocument();
-    expect(screen.getByText('Fresh')).toBeInTheDocument();
+    // The card headings render while loading, so wait for the loaded values.
+    // Cache hit rates render as dials: quotes 80%, bars 90%.
+    await waitFor(() => expect(screen.getByText('80%')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Runtime & Cache' })).toBeInTheDocument();
+    expect(screen.getByText('Quotes')).toBeInTheDocument();
+    expect(screen.getByText('90%')).toBeInTheDocument();
+    // Data freshness is the timeframe update latency.
+    expect(screen.getByText('Data Freshness')).toBeInTheDocument();
+    expect(screen.getByText('15s')).toBeInTheDocument();
     expect(screen.getByText('Redis:')).toBeInTheDocument();
     expect(screen.getAllByText('Running')).toHaveLength(2);
     expect(screen.getByRole('heading', { name: 'Provider Availability' })).toBeInTheDocument();
-    expect(screen.getAllByText('yfinance')).toHaveLength(2);
+    expect(screen.getByText(/2 providers configured\. ✓ All feeds operational\./)).toBeInTheDocument();
+    // Individual providers sit behind the advanced-diagnostics toggle.
+    expect(screen.queryByText('finnhub')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show Advanced Diagnostics' }));
+    expect(screen.getAllByText('yfinance')).toHaveLength(2);  // primary provider + its status row
     expect(screen.getByText('finnhub')).toBeInTheDocument();
   });
 });
