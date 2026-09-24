@@ -616,7 +616,10 @@ provenance, which only the live response carries.
 - If the trader sends the same text twice before a poll, the first
   server row replaces the first optimistic copy and the second replaces
   the second, so both stay single.
-- Alert-scoped sessions never poll, so they were never affected.
+- Alert-scoped sessions skip the 20-second poll, so the original bug
+  never reached them. Since batch 7 they do poll, every 4 s, while
+  waiting for a reply after Cancel, a timeout or a dropped stream
+  (BF-13); that poll merges through the same `mergePolledMessages`.
 
 ### BF-13 — Stream timeout, disconnect, and resend gaps
 
