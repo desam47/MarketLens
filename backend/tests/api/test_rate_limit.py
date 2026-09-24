@@ -508,6 +508,26 @@ class TestRateLimitMiddleware(unittest.TestCase):
         self.assertEqual(response.headers["x-ratelimit-remaining"], "2")
 
 
+    def test_per_endpoint_limit_headers_are_not_overwritten(self):
+        """A route's own limiter rejected the request: report its limit, not the global one."""
+
+        async def rejected_by_route_limiter(scope, receive, send):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 429,
+                    "headers": [(b"x-ratelimit-limit", b"10"), (b"x-ratelimit-remaining", b"0")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"{}"})
+
+        self.middleware = RateLimitMiddleware(rejected_by_route_limiter, limiter=self.limiter)
+        response = self._dispatch(method="POST", path="/api/ai/jobs")
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.headers["x-ratelimit-limit"], "10")
+        self.assertEqual(response.headers["x-ratelimit-remaining"], "0")
+
+
 class TestRateLimitMiddlewareIntegration(unittest.TestCase):
     """Integration test: verify 429 responses have security headers from
     the real SecurityHeadersMiddleware in the full app stack.

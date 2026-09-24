@@ -51,6 +51,18 @@ class TestCorrelationIdOnErrorResponses(unittest.TestCase):
         # Should be a UUID-like value (default generator).
         self.assertGreaterEqual(len(header_value), 16)
 
+    def test_http_exception_keeps_its_own_headers(self):
+        """The handler adds the correlation ID without dropping the exception's headers.
+
+        A 405 carries Allow, and a per-endpoint 429 carries Retry-After and its
+        X-RateLimit-* values; both used to be discarded here.
+        """
+        corr_id = "keeps-headers-" + uuid.uuid4().hex[:8]
+        resp = self.client.put("/api/health", headers={"X-Correlation-ID": corr_id})
+        self.assertEqual(resp.status_code, 405)
+        self.assertIn("GET", resp.headers.get("Allow", ""))
+        self.assertEqual(resp.headers.get("X-Correlation-ID"), corr_id)
+
     def test_200_response_still_has_correlation_id(self):
         """Sanity check: the happy path is unchanged."""
         corr_id = "happy-path-" + uuid.uuid4().hex[:8]

@@ -185,9 +185,9 @@ def test_analyze_with_inactive_template_400(client):
 
 @patch("backend.api.ai.router.analyze_symbol")
 @patch("backend.api.ai.router.ai_manager")
-def test_analyze_with_default_template_uses_default(mock_ai_mgr, mock_analyze, client):
-    """If a default template is set and no template_id given, the default
-    is rendered automatically."""
+def test_analyze_without_template_id_ignores_the_default_template(mock_ai_mgr, mock_analyze, client):
+    """AA-15: a template marked default is a library preference only. Without an
+    explicit template_id, analysis keeps the built-in prompt."""
     from backend.ai.prompt import AnalysisResponse
 
     mock_analyze.return_value = AnalysisResponse(
@@ -216,9 +216,5 @@ def test_analyze_with_default_template_uses_default(mock_ai_mgr, mock_analyze, c
     resp = client.post("/api/ai/analyze?symbol=GOOG&timeframe=4h")
     assert resp.status_code == 200
     data = resp.json()
-    # The default template gets auto-applied
-    assert data["template_name"] == "My Default"
-    override = mock_analyze.call_args[1].get("system_prompt_override")
-    assert override is not None
-    assert "GOOG" in override
-    assert "4h" in override
+    assert data["template_name"] is None
+    assert mock_analyze.call_args[1].get("system_prompt_override") is None

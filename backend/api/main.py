@@ -418,9 +418,13 @@ def _get_correlation_id(request: Request) -> str | None:
 
 @app.exception_handler(StarletteHTTPException)
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Attach X-Correlation-ID to HTTP exceptions (400, 404, 422, etc.)."""
+    """Attach X-Correlation-ID to HTTP exceptions (400, 404, 422, etc.).
+
+    Headers the exception carries are kept: a per-endpoint 429 sends
+    Retry-After and its own X-RateLimit-* values, and a 405 sends Allow.
+    """
     corr_id = _get_correlation_id(request)
-    headers = {}
+    headers = dict(exc.headers or {})
     if corr_id:
         headers["X-Correlation-ID"] = corr_id
     return JSONResponse(

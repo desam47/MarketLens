@@ -81,7 +81,10 @@ def test_enqueue_job_uses_the_ai_rate_limit(client):
 
     assert all(response.status_code == 202 for response in responses[:10])
     assert responses[10].status_code == 429
-    assert _ai_limiter.get_stats()["fallback"]["total_rejected"] == 1
+    # The AI limiter (10/min) rejected it, whichever backend (Redis or in-memory) is active.
+    assert responses[10].headers["X-RateLimit-Limit"] == str(_ai_limiter.max_requests)
+    assert responses[10].headers["X-RateLimit-Remaining"] == "0"
+    assert responses[10].headers["Retry-After"] == str(_ai_limiter.window_seconds)
 
 
 def test_enqueue_job_with_template(client):

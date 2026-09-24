@@ -385,12 +385,15 @@ class RateLimitMiddleware:
             return
 
         async def send_with_limit_headers(message: Message) -> None:
-            # Inform well-behaved clients of their remaining budget.
+            # Inform well-behaved clients of their remaining budget. A per-endpoint
+            # limiter (``check_rate_limit``) that rejected the request has already set
+            # its own, tighter numbers; keep those rather than reporting the global cap.
             if message["type"] == "http.response.start":
                 message.setdefault("headers", [])
                 headers = MutableHeaders(scope=message)
-                headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
-                headers["X-RateLimit-Remaining"] = str(remaining)
+                if "x-ratelimit-limit" not in headers:
+                    headers["X-RateLimit-Limit"] = str(self.limiter.max_requests)
+                    headers["X-RateLimit-Remaining"] = str(remaining)
             await send(message)
 
         await self.app(scope, receive, send_with_limit_headers)
