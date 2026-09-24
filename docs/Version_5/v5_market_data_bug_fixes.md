@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 1b: MD-01)
-**Status:** Review complete. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02: log records are redacted, confirmed on live Webull errors, and the old log files holding credentials are deleted; only token rotation remains. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 1 ✅ COMPLETE, 1 ⚠️ PARTIAL, 7 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 1c: MD-03)
+**Status:** Review complete. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02: log records are redacted, confirmed on live Webull errors, and the old log files holding credentials are deleted; only token rotation remains. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 2 ✅ COMPLETE, 1 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -24,7 +24,7 @@ Line numbers refer to the code at `b41530c`.
 |---|---|---|---|---|---|
 | MD-01 | Critical | Bars | Provider 1h bars are stored 30 minutes earlier than the data they hold | Verified | ✅ COMPLETE |
 | MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ⚠️ PARTIAL |
-| MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ❌ NOT STARTED |
+| MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ✅ COMPLETE |
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ❌ NOT STARTED |
 | MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ❌ NOT STARTED |
 | MD-06 | Low | Providers | Overnight Webull requests repeat about 80 times an hour and are rate-limited | Verified | ❌ NOT STARTED |
@@ -162,7 +162,7 @@ With the factory not installed, 4 of them fail. The full backend suite passes: 3
 
 ### MD-03 — One series mixes providers whose volume differs by up to 2,800 times
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 1c). Stored 1m bars are settled from Alpaca's consolidated (SIP) feed once they are 15 minutes old, and every timeframe built from them follows. The 1m history was settled on the live database.
 **Where:** the fallback chains in `_fetch_bars_with_fallback` (`ingestion_service.py:1336`) and `backfill_service.py`, and the per-bar `provider` column in `bars`.
 
 A fallback provider fills any gap the primary leaves, bar by bar. Providers report volume differently. Alpaca's free tier (IEX) counts only trades on one exchange, a few percent of the consolidated volume Webull and Yahoo report.
@@ -177,11 +177,49 @@ A fallback provider fills any gap the primary leaves, bar by bar. Providers repo
 
 **Impact:** anything built on volume sees sudden drops or spikes that are only a change of provider. That includes relative volume, VWAP, volume filters in the Scanner, the Replay volume column, and any AI answer about volume.
 
-**Resolution:**
+**Further findings (2026-09-24, read-only):** every stored 1m bar since 2026-09-09 was compared with Alpaca's SIP bar for the same minute. The comparison covered 10 symbols; the ratio is stored volume ÷ SIP volume.
 
-- **Scope Alpaca:** don't use IEX-only volume as a fill for consolidated series. Either drop Alpaca from volume-bearing fallbacks, or store its bars with a flag and exclude their volume.
-- **Provider per hour:** for 1h, building from 1m (MD-01) removes most of the mixing.
-- **Visibility:** show each series' provider mix wherever data quality is reported.
+| Source | Session | Volume ratio (median) | 10th–90th percentile |
+|---|---|---|---|
+| Webull REST | regular | 0.999 | 0.96–1.04 |
+| Webull REST | pre-market/after-hours | 0.53 | 0.11–0.98 |
+| Webull stream (Nasdaq Basic) | extended | 0.42 | — |
+| Alpaca IEX | regular | 0.054 | — |
+| Yahoo | regular | 1.00 | up to 1.6 |
+
+So even the primary source carried about half the market's extended-hours volume. The stream's rows were never replaced, because the 1m gap-fill only writes minutes that are missing. Since MD-01, the 1h history before the 1m window is SIP, so extended-hours 1h volume fell about 2× at the window's edge.
+
+**Resolution (chosen 2026-09-24):** SIP settles the 1m series. Webull stays the live feed.
+
+- **Settle loop:** `MarketDataIngestionService._settle_1m_loop` runs every 15 minutes, 04:15–20:30 ET on weekdays. It replaces each 1m bar older than 15 minutes with its Alpaca SIP bar. Each pass covers the last 90 minutes, so a late SIP correction is picked up. At startup it covers the last two days.
+- **Rebuild:** after a pass writes, the 2m–30m bars (`_resample_and_upsert(since=…)`, floored to the hour), 1h (from 1m) and 4h are rebuilt over the settled span.
+- **Settled means final:** `upsert_bars` never lets another provider replace a 1m bar from `alpaca`. Webull's recent-window writes, the stream and the gap-fills therefore can't undo a settled minute. `_SETTLED_BY` holds both precedence rules, this one and MD-01's.
+- **IEX is labelled:** if Alpaca refuses SIP, its bars come back as `alpaca_iex`. Those neither settle a minute nor are protected. `ALPACA_SETTLE_1M` (default true) turns the loop off.
+- **No SIP bar:** minutes SIP has no bar for, meaning no consolidated trades, keep what was stored. In the probe these carried under 0.3% of volume.
+- **Signals:** not re-recorded. They keep the volume the engine saw live.
+
+**One-off settle:** `scripts/settle_1m_from_sip.py --db <path> [--apply]` runs `backend/market_data/sip_settle.py`, one transaction per symbol. It settles every stored minute, starting at each symbol's first whole 1m hour, and rebuilds the 2m–30m, 1h and 4h bars. By default it covers only the enabled symbols of active watchlists: a dry run showed it would otherwise add thousands of minutes for NOK, XLK, SOXL and WMT, which nothing keeps current (MD-04).
+
+**Live run (2026-09-24 18:07):**
+
+- **Backup:** first, to `data/marketlens_pre_md03_20260924.db` (integrity check ok).
+- **Settle:** across 23 symbols, 168,458 minutes were replaced and 3,126 missing minutes added. 1m volume went from 11.86 billion to 13.39 billion shares. By symbol, the change ran from 0.98× for NVDA through 1.05× for SPY to 1.44× for CTNT.
+- **Probe afterwards:** every stored minute that has a SIP bar matches it exactly: 79,700 minutes at a median ratio of 1.000, with no close differences. Every 1h bar in the 1m window equals the sum of its 1m bars (3,964 of 3,964).
+- **Restart:** the stack restarted at 18:08, and its startup pass settled the last two days again without errors.
+
+**Tests:**
+
+| File | What it covers |
+|---|---|
+| `backend/tests/market_data/test_sip_settle.py` (new, 8 tests) | The live pass: the 15-minute cutoff, 5m and 1h rebuilt, IEX ignored, Webull can't overwrite, no Alpaca. The one-off: whole hours, rebuilds, IEX, rollback. |
+| `test_bar_repository.py` | A SIP minute isn't replaced by Webull; an `alpaca_iex` minute is. |
+| `test_alpaca_provider.py` | Refused-SIP bars are labelled `alpaca_iex`. |
+
+**Left as is:**
+
+- **Older 1h bars:** 1,009 1h bars built from 1m before the 1m window (2026-08-25 to 2026-09-08) still carry Webull volume. 985 of them are regular-session, where Webull matches SIP.
+- **Daily bars:** 1d bars come from Webull and were not compared.
+- **Provider mix:** showing each series' provider mix is left to Enhancement 2.
 
 ---
 
@@ -299,6 +337,14 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 
 ## Verification
 
+### Batch 1c (2026-09-24, MD-03)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/market_data`, `backend/tests/repositories`, `backend/tests/config`, `test_chat_reply_paths.py` | 691 passed |
+| New: `test_sip_settle.py` | 8 passed |
+| SIP probe after the live settle | every minute with a SIP bar matches it; 1h = sum of 1m for 3,964 of 3,964 hours |
+
 ### Batch 1b (2026-09-24, MD-01)
 
 | Suite | Result |
@@ -338,16 +384,18 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 
 - **Review:** commit `e4c1d69`, `docs(v5): review market data ingestion and track findings`.
 - **Batch 1a (MD-02):** `63a11a8`.
-- **Batch 1b (MD-01):** this commit.
+- **Batch 1b (MD-01):** `65ce005`.
+- **Batch 1c (MD-03):** this commit.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
-| 2026-09-24 | MD-01 | ✅ COMPLETE | batch 1b | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
+| 2026-09-24 | MD-03 | ✅ COMPLETE | batch 1c | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
+| 2026-09-24 | MD-01 | ✅ COMPLETE | `65ce005` | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
 | 2026-09-24 | MD-02 | ⚠️ PARTIAL | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors. Token rotation remains. |
 
 ---
 
 ## Reference
 
-Ingestion writes 1m bars from the live provider, fills gaps from fallback providers, and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins, and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.
+Ingestion writes 1m bars from the live provider (Webull), fills gaps from fallback providers, settles each minute from Alpaca SIP once it is 15 minutes old (since MD-03), and resamples 2m to 30m from 1m. 1h is built from 1m where 1m exists and otherwise comes from Alpaca SIP (since MD-01); a provider 1h bar never replaces a 1m-built one; 4h is resampled from 1h; 1d comes from providers and 1wk from 1d. Every write goes through `upsert_bars`, keyed on `(symbol, timeframe, timestamp)`, so the last writer wins except over a settled bar (`_SETTLED_BY`), and each bar records the `provider` that wrote it. Retention prunes each timeframe on its own window. Historical Signals, the trend engines, charts, Chat, and AI Analysis all read these stored bars.

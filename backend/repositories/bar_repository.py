@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from datetime import time as _time
 
-from sqlalchemy import and_, select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session
 
 from backend.engines.market_calendar import EASTERN, classify_bar_session, us_market_calendar
@@ -71,15 +71,30 @@ def _bar_to_model(bar: Bar) -> BarModel:
     )
 
 
-# A 1h bar built from our own 1m bars is exact for its clock hour, so a provider's 1h bar never
-# replaces it (MD-01). Only 1h: the provider's authoritative 16:02 daily bar is meant to replace
-# the live 1d bar built from 1m.
-_BUILT_FROM_1M = "live_from_1m"
+# Settled bars that another provider's bar must not replace:
+# - 1h built from our own 1m bars is exact for its clock hour (MD-01). Only 1h: the provider's
+#   authoritative 16:02 daily bar is meant to replace the live 1d bar built from 1m.
+# - 1m from Alpaca's consolidated (SIP) feed carries the whole market's volume; Webull's
+#   extended-hours volume is about half of it (MD-03). ``alpaca_iex`` bars are not protected.
+_SETTLED_BY = {"1h": "live_from_1m", "1m": "alpaca"}
 
 
 def _keeps_existing(timeframe: str, existing_provider: str | None, new_provider: str) -> bool:
-    return (
-        timeframe == "1h" and existing_provider == _BUILT_FROM_1M and new_provider != _BUILT_FROM_1M
+    settled_by = _SETTLED_BY.get(timeframe)
+    return settled_by is not None and existing_provider == settled_by != new_provider
+
+
+def _settled_row_kept(excluded):
+    """SQL for ``_keeps_existing`` on an upsert conflict (``excluded`` is the incoming row)."""
+    return or_(
+        *(
+            and_(
+                BarModel.timeframe == timeframe,
+                BarModel.provider == provider,
+                excluded.provider != provider,
+            )
+            for timeframe, provider in _SETTLED_BY.items()
+        )
     )
 
 
@@ -88,7 +103,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
 
     Uses ``insert(...).on_conflict_do_update`` when the uniqueness
     constraint is in place; falls back to per-row merge when it isn't.
-    A provider 1h bar never replaces one built from 1m (``_keeps_existing``).
+    A settled bar is never replaced by another provider's (``_SETTLED_BY``).
     Returns the number of rows written.
     """
     if not bars:
@@ -193,11 +208,7 @@ def upsert_bars(db: Session, bars: list[Bar]) -> int:
                 "data_status": stmt.excluded.data_status,
                 "session": stmt.excluded.session,
             },
-            where=~(
-                (BarModel.timeframe == "1h")
-                & (BarModel.provider == _BUILT_FROM_1M)
-                & (stmt.excluded.provider != _BUILT_FROM_1M)
-            ),
+            where=~_settled_row_kept(stmt.excluded),
         )
         written = db.connection().execute(stmt, rows).rowcount
         db.commit()

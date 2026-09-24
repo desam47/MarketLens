@@ -159,6 +159,30 @@ class TestBarRepository(unittest.TestCase):
             row = db.query(BarModel).one()
             self.assertEqual((row.provider, row.close), ("webull", 101.0))
 
+    def test_sip_settled_minute_is_not_replaced_by_another_provider(self):
+        """MD-03: a 1m bar from Alpaca's consolidated feed carries the market's volume."""
+        sip = _make_bar("AAPL", datetime(2025, 1, 2, 17, 5), 100.0)
+        sip.provider = "alpaca"
+        webull = _make_bar("AAPL", datetime(2025, 1, 2, 17, 5), 99.0)
+        webull.provider = "webull"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [sip])
+            self.assertEqual(bar_repository.upsert_bars(db, [webull]), 0)
+            row = db.query(BarModel).one()
+            self.assertEqual((row.provider, row.close), ("alpaca", 100.0))
+
+    def test_iex_minute_is_not_protected(self):
+        iex = _make_bar("AAPL", datetime(2025, 1, 2, 10, 5), 100.0)
+        iex.provider = "alpaca_iex"
+        webull = _make_bar("AAPL", datetime(2025, 1, 2, 10, 5), 99.0)
+        webull.provider = "webull"
+
+        with self.Session() as db:
+            bar_repository.upsert_bars(db, [iex])
+            bar_repository.upsert_bars(db, [webull])
+            self.assertEqual(db.query(BarModel).one().provider, "webull")
+
     def test_upsert_bars_empty_input_is_noop(self):
         with self.Session() as db:
             written = bar_repository.upsert_bars(db, [])

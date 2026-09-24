@@ -339,6 +339,8 @@ class AlpacaSettings(BaseSettings):
     # Feed for historical REST bars. The free plan serves consolidated SIP data older than
     # 15 minutes; IEX alone carries a few percent of the volume (MD-03).
     historical_feed: str = Field(default="sip")
+    # Replace each stored 1m bar with its SIP bar once it is 15 minutes old (MD-03).
+    settle_1m: bool = Field(default=True)
     request_timeout: float = Field(default=15.0)
 
 

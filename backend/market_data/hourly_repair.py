@@ -79,7 +79,7 @@ def _to_bar(row: BarModel) -> Bar:
     )
 
 
-def _write(db: Session, bars: list[Bar]) -> None:
+def write_bars(db: Session, bars: list[Bar]) -> None:
     """Upsert ``bars`` in the caller's transaction. ``upsert_bars`` commits, and a dry run must
     be able to roll everything back."""
     if not bars:
@@ -109,6 +109,8 @@ def _write(db: Session, bars: list[Bar]) -> None:
             for b in bars
         ],
     )
+    # The rows were written behind the ORM's back; don't serve stale copies of them.
+    db.expire_all()
 
 
 def _provider_counts(db: Session, symbol: str) -> Counter:
@@ -201,9 +203,9 @@ def repair_symbol(db: Session, symbol: str, fetch: HourlyFetch, now: datetime) -
         )
     }
 
-    _write(db, list(built.values()))
+    write_bars(db, list(built.values()))
     fill = [b for b in provider_bars if b.timestamp not in built and b.timestamp not in kept]
-    _write(db, fill)
+    write_bars(db, fill)
     report.built_from_1m = len(built)
     report.from_provider = len(fill)
 
@@ -222,7 +224,7 @@ def repair_symbol(db: Session, symbol: str, fetch: HourlyFetch, now: datetime) -
         .all()
     )
     four_hour = aggregate_1h_to_4h(symbol, (_to_bar(r) for r in hourly), now)
-    _write(db, four_hour)
+    write_bars(db, four_hour)
     report.after_4h = len(four_hour)
 
     for timeframe in ("1h", "4h"):

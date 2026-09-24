@@ -242,7 +242,8 @@ class TestAlpacaProviderBars(unittest.TestCase):
             _barset(bars=[_sdk_bar()]),
             _barset(bars=[_sdk_bar()]),
         ]
-        self.assertEqual(len(self.provider.get_historical_bars("AAPL", "1h", "5d")), 1)
+        bars = self.provider.get_historical_bars("AAPL", "1h", "5d")
+        self.assertEqual([b.provider for b in bars], ["alpaca_iex"])  # one exchange's volume
         self.provider.get_historical_bars("AAPL", "1h", "5d")
 
         feeds = [c.args[0].feed for c in self._mock_data_client.get_stock_bars.call_args_list]

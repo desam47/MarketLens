@@ -486,6 +486,7 @@ class MarketDataIngestionService:
         source_tf: str = "1m",
         _symbol: str | None = None,
         full_history: bool = False,
+        since: datetime | None = None,
     ) -> int:
         """Read 1m bars → resample → upsert, including the in-progress bucket.
 
@@ -515,6 +516,9 @@ class MarketDataIngestionService:
                 though years of 1m history existed to resample from
                 (2026-09-08 fix). Used by backfill_service for the initial
                 sub-hour resample of a newly backfilled symbol.
+            since: widen the narrow window back to this (naive NY) time,
+                floored to the hour so its first bucket is whole. Used after
+                1m bars older than the window are rewritten (``_settle_1m_from_sip``).
         """
         from backend.repositories.bar_repository import upsert_bars
         from backend.utils.resampler import _TF_MINUTES, ResampleError, resample_ohlcv
@@ -563,6 +567,8 @@ class MarketDataIngestionService:
                     cutoff = datetime.now(_NY_TZ).replace(tzinfo=None) - timedelta(
                         hours=base_hours + widening_hours
                     )
+                    if since is not None:
+                        cutoff = min(cutoff, since.replace(minute=0, second=0, microsecond=0))
                     query = query.filter(BarModel.timestamp >= cutoff)
 
                 rows = query.order_by(BarModel.timestamp.asc()).all()
@@ -1869,6 +1875,102 @@ class MarketDataIngestionService:
             )
             await self._jittered_sleep(120 if in_regular_hours else 300, jitter=10.0)
 
+    # ------------------------------------------------------------------
+    # Settle 1m bars from Alpaca's consolidated (SIP) feed (MD-03)
+    #
+    # Webull's live 1m bars match the whole market's volume in the regular
+    # session but carry about half of it before 09:30 and after 16:00, and
+    # the Webull stream (Nasdaq Basic) less still. Alpaca's free plan serves
+    # consolidated SIP bars once they are 15 minutes old. This pass replaces
+    # each stored minute with its SIP bar once it is, and upsert_bars keeps a
+    # settled minute from being overwritten by any other provider. Minutes
+    # SIP has no bar for (no trades) keep whatever was stored. Historical
+    # signals are not re-recorded: they keep what the engine saw live.
+    # ------------------------------------------------------------------
+
+    _SETTLE_DELAY = timedelta(minutes=15)
+    # Each pass settles this much, ending 15 minutes ago, so a late SIP correction is picked up.
+    _SETTLE_WINDOW = timedelta(minutes=90)
+    _SETTLE_EVERY_SECONDS = 900
+    _SETTLE_STARTUP_DAYS = 2
+
+    async def _settle_1m_loop(self, initial_delay: float = 0.0):
+        """Every 15 min, 04:15-20:30 ET on weekdays, settle the last 90 minutes of 1m bars.
+
+        At startup it settles the last two days first, so a restart or an
+        outage leaves no unsettled minutes behind (same span as the 1m
+        gap-fill's startup pass)."""
+        from backend.config.settings import settings
+
+        if initial_delay > 0:
+            await asyncio.sleep(initial_delay)
+        if not settings.alpaca.settle_1m:
+            return
+        now = datetime.now(_NY_TZ).replace(tzinfo=None)
+        try:
+            await self._settle_1m_from_sip(now - timedelta(days=self._SETTLE_STARTUP_DAYS), now)
+        except Exception as e:
+            logger.error(f"Startup 1m settle failed: {e}")
+        while self.is_running:
+            await self._jittered_sleep(self._SETTLE_EVERY_SECONDS, jitter=30.0)
+            ny = datetime.now(_NY_TZ)
+            now = ny.replace(tzinfo=None)
+            if ny.weekday() >= 5 or not (
+                now.replace(hour=4, minute=15) <= now <= now.replace(hour=20, minute=30)
+            ):
+                continue
+            try:
+                await self._settle_1m_from_sip(now - self._SETTLE_WINDOW, now)
+            except Exception as e:
+                logger.error(f"Error in 1m settle loop: {e}")
+
+    async def _settle_1m_from_sip(self, since: datetime, now: datetime) -> int:
+        """Replace stored 1m bars from ``since`` to 15 minutes before ``now`` (naive NY) with
+        Alpaca SIP bars, then rebuild the 2m-30m, 1h, and 4h bars over them. Returns the
+        number of 1m rows written."""
+        from backend.repositories.bar_repository import upsert_bars
+
+        from .manager import get_cached_provider
+
+        provider = get_cached_provider("alpaca")
+        if provider is None or not hasattr(provider, "get_bars_between"):
+            return 0
+        until = now - self._SETTLE_DELAY
+        written = 0
+        for symbol in list(self.symbols):
+            try:
+                bars = await asyncio.to_thread(
+                    provider.get_bars_between,
+                    symbol,
+                    "1m",
+                    since.replace(tzinfo=_NY_TZ),
+                    until.replace(tzinfo=_NY_TZ),
+                )
+            except Exception as e:
+                logger.debug(f"1m settle: SIP fetch failed for {symbol}: {e}")
+                continue
+            # Only consolidated bars settle a minute; alpaca_iex means SIP was refused.
+            sip = [b for b in bars if b.provider == "alpaca" and b.timestamp < until]
+            if not sip:
+                continue
+            db = SessionLocal()
+            try:
+                written += upsert_bars(db, sip)
+                db.commit()
+            finally:
+                db.close()
+            await asyncio.sleep(0.3)
+
+        if written:
+            logger.info(f"1m settle: wrote {written} SIP bars since {since:%Y-%m-%d %H:%M}")
+            for tf in self._SUBHOUR_TFS:
+                await self._resample_and_upsert(tf, source_tf="1m", since=since)
+            await self._resample_1h_from_1m_and_upsert(
+                hour_starts=self._hour_starts_between(since, until)
+            )
+            await self._resample_1h_to_4h_and_upsert()
+        return written
+
     async def _gapfill_1m_once(self, days: int = 1) -> int:
         """Run a single gap-fill pass for all watched symbols.
 
@@ -2097,6 +2199,7 @@ class MarketDataIngestionService:
             asyncio.create_task(self._gapfill_1m_loop(initial_delay=37.0)),
             asyncio.create_task(self._gapfill_1h_loop(initial_delay=39.0)),
             asyncio.create_task(self._retention_prune_loop(initial_delay=42.0)),
+            asyncio.create_task(self._settle_1m_loop(initial_delay=45.0)),
         ]
         try:
             await asyncio.gather(*tasks)

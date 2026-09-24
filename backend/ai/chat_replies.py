@@ -71,6 +71,7 @@ _SOURCE_NAMES = {
     "webull": "Webull",
     "yahoo_finance": "Yahoo Finance",
     "alpaca": "Alpaca",
+    "alpaca_iex": "Alpaca (IEX)",
     "finnhub": "Finnhub",
     "live_from_1m": "live intraday bars",
 }

@@ -57,6 +57,10 @@ from ..provider import BaseMarketDataProvider
 
 logger = logging.getLogger(__name__)
 
+# Provider name for bars from Alpaca's IEX feed: one exchange's trades, a few percent of the
+# market's volume. ``alpaca`` bars come from the consolidated (SIP) feed.
+IEX_PROVIDER = "alpaca_iex"
+
 
 # ---------------------------------------------------------------------------
 # Timeframe / range mapping
@@ -586,15 +590,20 @@ class AlpacaProvider(BaseMarketDataProvider):
         the whole market's; IEX, the free live feed, carries a few percent of
         it (MD-03). ``end`` is capped at 15 minutes ago for that rule. If the
         account is refused SIP, this falls back to ``ALPACA_DATA_TIER`` for the
-        rest of the process.
+        rest of the process, and those bars are labelled ``alpaca_iex``: only
+        ``alpaca`` bars carry full-market volume, and only they settle stored
+        1m bars (MD-03, ``bar_repository.upsert_bars``).
 
         The SDK pages through the whole window itself; without an ``end`` it
         would return the oldest 10k bars from ``start`` instead.
         """
         try:
             end = min(end, datetime.now(UTC) - timedelta(minutes=15))
-            bars_raw = self._fetch_bars(symbol, _resolve_tf(timeframe), start, end)
+            bars_raw, feed = self._fetch_bars(symbol, _resolve_tf(timeframe), start, end)
             bars: list[Bar] = [self._bar_from_sdk(symbol, item, timeframe) for item in bars_raw]
+            if feed == DataFeed.IEX:
+                for bar in bars:
+                    bar.provider = IEX_PROVIDER
             self._reset_error_state()
             return bars
 
@@ -602,7 +611,10 @@ class AlpacaProvider(BaseMarketDataProvider):
             self._handle_error(exc, f"Failed to get historical bars for {symbol}")
             raise
 
-    def _fetch_bars(self, symbol: str, tf: TimeFrame, start: datetime, end: datetime) -> list:
+    def _fetch_bars(
+        self, symbol: str, tf: TimeFrame, start: datetime, end: datetime
+    ) -> tuple[list, DataFeed]:
+        """The SDK bars and the feed that served them."""
         feed = self._historical_feed()
         client = self._get_data_client()
         try:
@@ -622,6 +634,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                 live_feed.value,
             )
             self._sip_refused = True
+            feed = live_feed
             barset = client.get_stock_bars(
                 StockBarsRequest(
                     symbol_or_symbols=symbol.upper(),
@@ -631,7 +644,7 @@ class AlpacaProvider(BaseMarketDataProvider):
                     feed=live_feed,
                 )
             )
-        return barset.data.get(symbol.upper(), [])
+        return barset.data.get(symbol.upper(), []), feed
 
     def _historical_feed(self) -> DataFeed:
         if self._sip_refused:
