@@ -13,22 +13,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.ai import tasks
+from backend.ai.analyze import _result_to_dict
+from backend.ai.prompt import AnalysisResponse, TradePlan
 
 
-def _fake_analysis_result() -> MagicMock:
-    """Build a stand-in for what ``analyze_symbol`` returns."""
-    result = MagicMock()
-    result.summary = "summary text"
-    result.trend = "bullish"
-    result.confidence = 0.7
-    result.supporting_factors = ["a", "b"]
-    result.risk_factors = ["c"]
-    result.timeframe_conflicts = []
-    result.key_levels = [{"price": 100.0}]
-    result.trade_plan = None
-    result.provider = "test-provider"
-    result.model = "test-model"
-    return result
+def _fake_analysis_result() -> AnalysisResponse:
+    """A finished analysis as ``analyze_symbol`` returns it."""
+    return AnalysisResponse(
+        summary="summary text for AAPL",
+        trend="bullish",
+        confidence=0.7,
+        supporting_factors=["a", "b"],
+        risk_factors=["c"],
+        key_levels=["100.0 support"],
+        provider="test-provider",
+        model="test-model",
+        symbol="AAPL",
+        timeframe="1d",
+        price=101.0,
+        source_timestamp="2026-09-24T10:00:00",
+        data_age_seconds=5.0,
+        data_status="LIVE",
+        market_regime={"regime": "risk_on"},
+        trade_plan_validation={"status": "not_applicable"},
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -45,23 +53,37 @@ class TestAnalyzeSymbolTask:
         """No job_id -> _run_direct, no DB status writes, returns dict."""
         with patch("backend.ai.tasks.analyze_symbol", return_value=_fake_analysis_result()):
             payload = tasks.analyze_symbol_task("aapl", "1d")
-        assert payload["summary"] == "summary text"
+        assert payload["summary"] == "summary text for AAPL"
         assert payload["trend"] == "bullish"
         assert payload["confidence"] == 0.7
         assert payload["supporting_factors"] == ["a", "b"]
-        assert payload["key_levels"] == [{"price": 100.0}]
+        assert payload["key_levels"] == ["100.0 support"]
         assert payload["provider"] == "test-provider"
         assert payload["is_uncertain"] is False
         assert payload["template_id"] is None
 
-    def test_run_direct_path_serializes_trade_plan_when_present(self):
+    def test_payload_matches_the_blocking_response_shape(self):
+        """AA-03: a background result used to keep only 13 fields, losing
+        the evidence, plan validation and context the panel shows."""
         result = _fake_analysis_result()
-        plan = MagicMock()
-        plan.model_dump.return_value = {"entry": 100}
-        result.trade_plan = plan
         with patch("backend.ai.tasks.analyze_symbol", return_value=result):
             payload = tasks.analyze_symbol_task("aapl", "1d")
-        assert payload["trade_plan"] == {"entry": 100}
+        expected = {**_result_to_dict(result), "template_id": None, "template_name": None}
+        assert payload == expected
+        for key in ("trade_plan_validation", "data_status", "source_timestamp", "price", "market_regime", "uncertainty_reason"):
+            assert key in payload, key
+
+    def test_run_direct_path_serializes_trade_plan_when_present(self):
+        result = _fake_analysis_result()
+        result.trade_plan = TradePlan(
+            recommendation="buy", conviction="medium", time_horizon="swing",
+            entry_zone_low=100.0, entry_zone_high=102.0, stop_loss=97.0, targets=[108.0],
+            thesis="Buy the pullback into support.", invalidation="Close below 97.",
+        )
+        with patch("backend.ai.tasks.analyze_symbol", return_value=result):
+            payload = tasks.analyze_symbol_task("aapl", "1d")
+        assert payload["trade_plan"]["entry_zone_low"] == 100.0
+        assert payload["trade_plan"]["targets"] == [108.0]
 
     def test_job_path_marks_started_then_finished(self):
         """With a job_id the task writes started -> finished status rows."""

@@ -27,7 +27,7 @@ import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from backend.ai.calculator import CalculationRequest
 from backend.alerts.conditions.evaluators import (
@@ -147,15 +147,15 @@ class TradePlan(BaseModel):
             entry_mid = hi
 
         if self.recommendation == "buy":
-            if self.stop_loss is not None and entry_mid is not None and self.stop_loss >= entry_mid:
+            if self.stop_loss is not None and lo is not None and self.stop_loss >= lo:
                 raise ValueError("buy plan: stop_loss must be below the entry zone")
-            if self.targets and entry_mid is not None and any(t <= entry_mid for t in self.targets):
+            if self.targets and hi is not None and any(t <= hi for t in self.targets):
                 raise ValueError("buy plan: targets must be above the entry zone")
             self.targets = sorted(self.targets)
         else:  # sell (short)
-            if self.stop_loss is not None and entry_mid is not None and self.stop_loss <= entry_mid:
+            if self.stop_loss is not None and hi is not None and self.stop_loss <= hi:
                 raise ValueError("sell plan: stop_loss must be above the entry zone")
-            if self.targets and entry_mid is not None and any(t >= entry_mid for t in self.targets):
+            if self.targets and lo is not None and any(t >= lo for t in self.targets):
                 raise ValueError("sell plan: targets must be below the entry zone")
             self.targets = sorted(self.targets, reverse=True)
 
@@ -469,6 +469,49 @@ def extract_json_object(text: str | None) -> str:
     raise ValueError("no JSON object found in AI reply")
 
 
+# Fields the server stamps after parsing (provenance, evidence, validation,
+# calibration). A model reply that includes them is ignored for these keys.
+_SERVER_OWNED_ANALYSIS_FIELDS = frozenset({
+    "provider", "model", "uncertainty_reason", "confidence_declared",
+    "confidence_sample_size", "market_regime", "timeframe_scores",
+    "track_record", "correlation_context", "trade_plan_validation", "symbol",
+    "timeframe", "price", "source_timestamp", "data_age_seconds", "data_status",
+    "market_data_provider", "market_session", "cache_status",
+})
+
+
+def _plan_error_reason(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        parts = []
+        for error in exc.errors():
+            message = str(error.get("msg", "")).removeprefix("Value error, ")
+            location = ".".join(str(part) for part in error.get("loc", ()))
+            parts.append(f"{location}: {message}" if location else message)
+        detail = "; ".join(part for part in parts if part)
+    else:
+        detail = str(exc)
+    return f"The proposed plan was inconsistent ({detail}), so no actionable setup was validated."
+
+
+def _analysis_from_data(data: Any) -> AnalysisResponse:
+    """Validate the analysis and its trade plan separately.
+
+    A plan that fails its own consistency check (a buy stop above entry, say)
+    is dropped with a reason; the summary, trend and factors are kept.
+    """
+    if not isinstance(data, dict):
+        return AnalysisResponse.model_validate(data)
+    data = {key: value for key, value in data.items() if key not in _SERVER_OWNED_ANALYSIS_FIELDS}
+    plan_data = data.pop("trade_plan", None)
+    parsed = AnalysisResponse.model_validate(data)
+    if plan_data is not None:
+        try:
+            parsed.trade_plan = TradePlan.model_validate(plan_data)
+        except ValueError as exc:
+            parsed.trade_plan_validation = {"status": "unavailable", "reason": _plan_error_reason(exc)}
+    return parsed
+
+
 def parse_ai_reply(text: str | None, structured: bool = False) -> AnalysisResponse:
     """Extract a structured ``AnalysisResponse`` from an AI reply.
 
@@ -493,12 +536,12 @@ def parse_ai_reply(text: str | None, structured: bool = False) -> AnalysisRespon
         text_stripped = text_stripped.strip()
         try:
             data = json.loads(text_stripped)
-            return AnalysisResponse.model_validate(data)
+            return _analysis_from_data(data)
         except (json.JSONDecodeError, ValueError):
             pass
     candidate = extract_json_object(text)
     data = json.loads(candidate)
-    return AnalysisResponse.model_validate(data)
+    return _analysis_from_data(data)
 
 
 # --- Prompt template ------------------------------------------------

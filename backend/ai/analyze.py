@@ -26,6 +26,7 @@ Per spec:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import threading
@@ -108,6 +109,7 @@ def _adaptive_temperature(ctx: AnalysisContext) -> float:
 
 _ANALYSIS_TTL = 45.0
 _ANALYSIS_CACHE_MAX_ENTRIES = 128
+_CACHEABLE_UNCERTAINTY_REASONS = frozenset({"insufficient_data"})
 
 _analysis_cache: OrderedDict[tuple, tuple[float, AnalysisResponse | UncertaintyResponse]] = (
     OrderedDict()
@@ -149,14 +151,38 @@ def _cache_result(
     key: tuple | None,
     result: AnalysisResponse | UncertaintyResponse,
 ) -> None:
-    """Store a result in the short-term cache with TTL + size-bounded eviction."""
+    """Store a successful or deterministic no-data result in the short cache.
+
+    Provider outages and malformed replies are transient. Caching either makes
+    a recovered provider look unavailable for the rest of the TTL, so only an
+    ``insufficient_data`` uncertainty is cacheable alongside successful
+    analyses.
+    """
     if key is None:
+        return
+    if (
+        isinstance(result, UncertaintyResponse)
+        and result.uncertainty_reason not in _CACHEABLE_UNCERTAINTY_REASONS
+    ):
         return
     now = time.monotonic()
     with _cache_lock:
         _analysis_cache[key] = (now, result)
         if len(_analysis_cache) > _ANALYSIS_CACHE_MAX_ENTRIES:
             _analysis_cache.popitem(last=False)
+
+
+def _cached_copy(
+    cached_at: float,
+    result: AnalysisResponse | UncertaintyResponse,
+    now: float,
+) -> AnalysisResponse | UncertaintyResponse:
+    """Mark a cache hit and advance its server-authored market-data age."""
+    update: dict[str, Any] = {"cache_status": "cached"}
+    age = result.data_age_seconds
+    if isinstance(age, (int, float)):
+        update["data_age_seconds"] = max(0.0, age + (now - cached_at))
+    return result.model_copy(update=update)
 
 
 def _with_request_metadata(
@@ -271,14 +297,18 @@ async def analyze_symbol(
                 hit = _analysis_cache.get(cache_key)
                 if hit is not None and now - hit[0] < _ANALYSIS_TTL:
                     _analysis_cache.move_to_end(cache_key)
-                    return hit[1].model_copy(update={"cache_status": "cached"})
+                    return _cached_copy(hit[0], hit[1], now)
     else:
         cache_key = None
 
     # --- Step 2: gather structured quant context ---
     ctx: AnalysisContext | None = None
     try:
-        ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
+        # Blocking work (scan, DB reads, provider quotes, a thread-pool
+        # fan-out): keep it off the event loop so other requests keep flowing.
+        ctx = await asyncio.to_thread(
+            build_context, symbol, timeframe, portfolio_symbols=portfolio_symbols
+        )
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
         result = _uncertainty(
@@ -464,7 +494,10 @@ def _finalize_analysis(
     # A structured model reply is not sufficient evidence for an actionable
     # setup. Keep the narrative, but suppress a buy/sell plan unless its
     # levels are compatible with the current quote and engine structure.
-    parsed.trade_plan_validation = _plan_validation(ctx, parsed.trade_plan)
+    # A plan that failed its own consistency check while parsing already
+    # carries an "unavailable" validation with the reason; keep it.
+    if parsed.trade_plan_validation.get("status") != "unavailable":
+        parsed.trade_plan_validation = _plan_validation(ctx, parsed.trade_plan)
     if parsed.trade_plan_validation.get("status") == "unavailable":
         parsed.trade_plan = None
 
@@ -536,7 +569,7 @@ async def analyze_symbol_stream(
                 hit = _analysis_cache.get(cache_key)
                 if hit is not None and now - hit[0] < _ANALYSIS_TTL:
                     _analysis_cache.move_to_end(cache_key)
-                    cached = hit[1].model_copy(update={"cache_status": "cached"})
+                    cached = _cached_copy(hit[0], hit[1], now)
         if cached is not None:
             yield (
                 "meta",
@@ -555,7 +588,11 @@ async def analyze_symbol_stream(
 
     # --- build context ---
     try:
-        ctx = build_context(symbol, timeframe, portfolio_symbols=portfolio_symbols)
+        # Blocking work (scan, DB reads, provider quotes, a thread-pool
+        # fan-out): keep it off the event loop so other requests keep flowing.
+        ctx = await asyncio.to_thread(
+            build_context, symbol, timeframe, portfolio_symbols=portfolio_symbols
+        )
     except InsufficientDataError as e:
         logger.info("Insufficient data for AI analysis of %s: %s", symbol, e)
         result = _uncertainty(
@@ -667,6 +704,7 @@ _CONFIDENCE_MIN_SAMPLE = 5
 _MAX_ENTRY_DISTANCE_FROM_QUOTE = 0.15
 _MAX_STOP_DISTANCE_FROM_ENTRY = 0.20
 _MAX_TARGET_DISTANCE_PAST_STRUCTURE = 0.15
+_MAX_REGULAR_SESSION_QUOTE_AGE_SECONDS = 15 * 60
 _PLAN_BLOCKING_DATA_STATUSES = {"STALE", "ERROR", "UNKNOWN", "GAP", "INCOMPLETE", "DUPLICATE"}
 
 
@@ -756,6 +794,20 @@ def _plan_validation(
             "reason": f"Market data is {data_status.lower()}, so no actionable setup was validated.",
         }
 
+    market_session = (getattr(ctx, "market_session", None) or "unknown").lower()
+    quote_age = getattr(ctx, "data_age_seconds", None)
+    if market_session == "regular":
+        if not isinstance(quote_age, (int, float)):
+            return {
+                "status": "unavailable",
+                "reason": "Quote freshness is unavailable during the regular session, so no actionable setup was validated.",
+            }
+        if quote_age > _MAX_REGULAR_SESSION_QUOTE_AGE_SECONDS:
+            return {
+                "status": "unavailable",
+                "reason": "The current quote is more than 15 minutes old during the regular session, so no actionable setup was validated.",
+            }
+
     price = ctx.price
     lo, hi = plan.entry_zone_low, plan.entry_zone_high
     entry = (lo + hi) / 2 if lo is not None and hi is not None else lo if lo is not None else hi
@@ -764,6 +816,30 @@ def _plan_validation(
             "status": "unavailable",
             "reason": "Entry, stop, target, and current quote are required to validate an actionable setup.",
         }
+    entry_low = min(value for value in (lo, hi) if value is not None)
+    entry_high = max(value for value in (lo, hi) if value is not None)
+    if plan.recommendation == "buy":
+        if plan.stop_loss >= entry_low:
+            return {
+                "status": "unavailable",
+                "reason": "The buy stop must be below the entire entry zone.",
+            }
+        if any(target <= entry_high for target in plan.targets):
+            return {
+                "status": "unavailable",
+                "reason": "Buy targets must be above the entire entry zone.",
+            }
+    else:
+        if plan.stop_loss <= entry_high:
+            return {
+                "status": "unavailable",
+                "reason": "The sell stop must be above the entire entry zone.",
+            }
+        if any(target >= entry_low for target in plan.targets):
+            return {
+                "status": "unavailable",
+                "reason": "Sell targets must be below the entire entry zone.",
+            }
     if abs(entry - price) / price > _MAX_ENTRY_DISTANCE_FROM_QUOTE:
         return {
             "status": "unavailable",
@@ -811,13 +887,18 @@ def _plan_validation(
                 "reason": "The sell target extends too far beyond visible support.",
             }
 
-    return {
+    validation = {
         "status": "verified",
         "quote_price": round(price, 2),
         "supports": [round(level, 2) for level in supports],
         "resistances": [round(level, 2) for level in resistances],
         "data_status": data_status,
     }
+    if market_session in {"premarket", "after_hours", "closed"}:
+        validation["freshness_note"] = (
+            "Validated outside regular trading hours against the latest available quote."
+        )
+    return validation
 
 
 def _uncertainty(

@@ -36,6 +36,20 @@ logger = logging.getLogger(__name__)
 # ── Single-symbol analysis task ────────────────────────────────────────────
 
 
+def _job_payload(result, template_id: int | None, template_name: str | None) -> dict:
+    """The job result in the same shape as ``POST /api/ai/analyze``.
+
+    Uses the streaming route's serializer, so a background result carries
+    the same evidence, plan validation and context as a blocking one.
+    """
+    from backend.ai.analyze import _result_to_dict
+
+    payload = _result_to_dict(result)
+    payload["template_id"] = template_id
+    payload["template_name"] = template_name
+    return payload
+
+
 def analyze_symbol_task(
     symbol: str,
     timeframe: str = "1d",
@@ -68,7 +82,6 @@ def analyze_symbol_task(
         ``timeframe_conflicts``, ``key_levels``, ``provider``, ``model``,
         ``is_uncertain``, ``template_id``, ``template_name``.
     """
-    from backend.ai import UncertaintyResponse
 
     if not job_id:
         return _run_direct(symbol, timeframe, template_id, template_name)
@@ -109,21 +122,7 @@ def analyze_symbol_task(
         _update_status(job_id, "failed", error=str(exc) + "\n" + traceback.format_exc())
         raise
 
-    payload = {
-        "summary": result.summary,
-        "trend": result.trend,
-        "confidence": result.confidence,
-        "supporting_factors": list(result.supporting_factors),
-        "risk_factors": list(result.risk_factors),
-        "timeframe_conflicts": list(result.timeframe_conflicts),
-        "key_levels": list(result.key_levels),
-        "trade_plan": result.trade_plan.model_dump() if result.trade_plan else None,
-        "provider": result.provider,
-        "model": result.model,
-        "is_uncertain": isinstance(result, UncertaintyResponse),
-        "template_id": resolved_template_id,
-        "template_name": resolved_template_name,
-    }
+    payload = _job_payload(result, resolved_template_id, resolved_template_name)
 
     _update_status(job_id, "finished", result=payload)
     return payload
@@ -136,7 +135,6 @@ def _run_direct(
     template_name: str | None,
 ) -> dict:
     """Run the analysis without touching the DB job table (used by tests)."""
-    from backend.ai import UncertaintyResponse
 
     rendered_system: str | None = None
     if template_id is not None:
@@ -157,21 +155,7 @@ def _run_direct(
             system_prompt_override=rendered_system,
         )
     )
-    return {
-        "summary": result.summary,
-        "trend": result.trend,
-        "confidence": result.confidence,
-        "supporting_factors": list(result.supporting_factors),
-        "risk_factors": list(result.risk_factors),
-        "timeframe_conflicts": list(result.timeframe_conflicts),
-        "key_levels": list(result.key_levels),
-        "trade_plan": result.trade_plan.model_dump() if result.trade_plan else None,
-        "provider": result.provider,
-        "model": result.model,
-        "is_uncertain": isinstance(result, UncertaintyResponse),
-        "template_id": template_id,
-        "template_name": template_name,
-    }
+    return _job_payload(result, template_id, template_name)
 
 
 # ── Alert commentary task (Version 4, AI feature 3) ───────────────────────

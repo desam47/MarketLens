@@ -1,9 +1,9 @@
 # Version 5 AI Analysis Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (review: 15 findings logged, converted to the bug-fix tracker format)
-**Status:** Open. The 2026-09-24 review found 15 issues; none is fixed yet. The core implementation (last code commit `43e00bf`) is otherwise complete; see [Reference](#reference).
-**Scorecard:** 0 ✅ COMPLETE, 0 ⚠️ PARTIAL, 15 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2: AA-06, AA-07, AA-08, AA-11)
+**Status:** Open. The 2026-09-24 review found 15 issues. Batches 1 and 2 are fixed, in the working tree and not yet committed; 8 remain. See [Reference](#reference) for how AI Analysis works.
+**Scorecard:** 7 ✅ COMPLETE, 0 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of `backend/ai/analyze.py`, `backend/ai/context.py`, `backend/ai/prompt.py` (analysis and trade-plan models), `backend/ai/tasks.py`, `backend/ai/trade_plan_tracker.py`, `backend/api/ai/router.py`, `backend/api/ai/jobs.py`, and `frontend/src/components/AIAnalysisPanel.tsx`, at `b7db6c8`.
 **Related:** [Phase audit](phase_audit_v5.md), [Chat bug fixes](v5_bug_fixes.md), [Phase 5.8 evaluation](phase_5_8_evaluation.md)
 
@@ -25,29 +25,27 @@ Line numbers refer to the code at `b7db6c8`.
 
 | ID | Severity | Area | Title | Evidence | Status |
 |---|---|---|---|---|---|
-| AA-01 | High | Backend | Analysis blocks the server's event loop while it builds context | Verified | ❌ NOT STARTED |
-| AA-02 | Medium | Backend | One inconsistent plan level discards the whole analysis | Verified | ❌ NOT STARTED |
-| AA-03 | Medium | Backend + UI | Background (template) results drop evidence, validation and context | Verified | ❌ NOT STARTED |
+| AA-01 | High | Backend | Analysis blocks the server's event loop while it builds context | Verified | ✅ COMPLETE |
+| AA-02 | Medium | Backend | One inconsistent plan level discards the whole analysis | Verified | ✅ COMPLETE |
+| AA-03 | Medium | Backend + UI | Background (template) results drop evidence, validation and context | Verified | ✅ COMPLETE |
 | AA-04 | Medium | Tracking | Grading never sees the day a plan was tracked | Verified | ❌ NOT STARTED |
 | AA-05 | Medium | Tracking | Tracked plans aren't tied to an analysis and lose model and timeframe | Code-read | ❌ NOT STARTED |
-| AA-06 | Medium | Validation | Plan validation ignores the quote's age | Verified | ❌ NOT STARTED |
-| AA-07 | Low | Backend | Transient failures are cached for 45 seconds | Verified | ❌ NOT STARTED |
-| AA-08 | Low | Validation | A stop or target inside the entry zone passes | Verified | ❌ NOT STARTED |
+| AA-06 | Medium | Validation | Plan validation ignores the quote's age | Verified | ✅ COMPLETE |
+| AA-07 | Low | Backend | Transient failures are cached for 45 seconds | Verified | ✅ COMPLETE |
+| AA-08 | Low | Validation | A stop or target inside the entry zone passes | Verified | ✅ COMPLETE |
 | AA-09 | Low | API | `POST /api/ai/jobs` is not rate-limited | Code-read | ❌ NOT STARTED |
 | AA-10 | Low | Backend + UI | A model trend that contradicts the engine is only logged | Code-read | ❌ NOT STARTED |
-| AA-11 | Low | Backend | A cached result reports its original data age | Verified | ❌ NOT STARTED |
+| AA-11 | Low | Backend | A cached result reports its original data age | Verified | ✅ COMPLETE |
 | AA-12 | Low | Context | Peer context falls back to a peer's first available signal | Code-read | ❌ NOT STARTED |
 | AA-13 | Low | Backend | The temperature comment contradicts the code | Code-read | ❌ NOT STARTED |
 | AA-14 | Low | Cleanup | `AnalyzeRequest` and `record_trade_plan` are dead code | Code-read | ❌ NOT STARTED |
 | AA-15 | Low | API | A default template silently replaces the built-in prompt | Code-read | ❌ NOT STARTED |
 
 **Next suggested order:**
-1. **Batch 1:** AA-01, AA-02 and AA-03. They are small and fix what the trader
-   sees in the panel.
-2. **Batch 2:** AA-06, AA-07, AA-08 and AA-11: validation and cache
-   correctness.
-3. **Batch 3:** AA-04 and AA-05: grading and tracking. They need an issued
-   plan id and intraday grading for the tracking day.
+1. ~~**Batch 1:**~~ AA-01, AA-02 and AA-03: done.
+2. ~~**Batch 2:**~~ AA-06, AA-07, AA-08 and AA-11: done.
+3. **Batch 3 (next):** AA-05, then AA-04: provenance-aware tracking first,
+   followed by intraday grading for the tracking day.
 4. **Batch 4:** AA-09, AA-10 and AA-12 to AA-15: the remaining low items.
 
 ---
@@ -56,21 +54,31 @@ Line numbers refer to the code at `b7db6c8`.
 
 ### AA-01 — Analysis blocks the server's event loop
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 1)
 **Where:** `analyze_symbol` and `analyze_symbol_stream` (`backend/ai/analyze.py:281` and `:558`), called from the `async` routes `POST /api/ai/analyze` and `POST /api/ai/analyze/stream`.
 
 `build_context` is blocking work: a scan, database reads, provider quotes,
-and waits on up to 12 thread-pool tasks. These `async` functions call it
-directly, so it runs on the event loop. For the whole context build, every
-other request stalls, including Chat streams and websockets.
+and waits on up to 12 thread-pool tasks. These `async` functions called it
+directly, so it ran on the event loop. For the whole context build, every
+other request stalled, including Chat streams and websockets.
 `POST /api/ai/track-trade-plan` does this correctly with `asyncio.to_thread`,
 and so does Chat.
 
 **Reproduced:** a ticker coroutine ran alongside `analyze_symbol` with a
 0.4 s `build_context`; the ticker froze for the full 0.4 s.
 
-**Fix:** `ctx = await asyncio.to_thread(build_context, ...)` in both
-functions.
+**Resolution:** both functions now run the context build with
+`await asyncio.to_thread(build_context, ...)`.
+
+**Tests:** in `backend/tests/ai/test_phase16_analyze.py::TestAnalysisLeavesTheEventLoopFree`:
+- `test_context_build_does_not_block_other_coroutines`
+- `test_streaming_context_build_does_not_block_either`
+
+Both run a ticker beside a 0.4 s context build and require every gap to
+stay under 0.25 s. Both fail with the old call.
+
+**Checked live:** a real AAPL analysis on the dev server took 9.3 s. During
+it, `/api/health` requests every 0.2 s never took more than 7 ms.
 
 ---
 
@@ -78,28 +86,50 @@ functions.
 
 ### AA-02 — One inconsistent plan level discards the whole analysis
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 1)
 **Where:** `TradePlan._check_consistency` (`backend/ai/prompt.py:128`) raises inside `AnalysisResponse` parsing; `_finalize_analysis` (`analyze.py:366`) then returns a `parse_failed` uncertainty.
 
 A Buy with its stop above the entry, or a target below it, is a plan
-problem. But it currently throws away the summary, trend and factors too,
-and tells the trader the reply "could not be parsed". This contradicts the
-promise that the narrative stays when a plan is withheld.
+problem. But it also threw away the summary, trend and factors, and told
+the trader the reply "could not be parsed". This contradicted the promise
+that the narrative stays when a plan is withheld.
 
 **Reproduced:** a valid reply whose Buy stop sat above the entry returned
 `parse_failed` with no narrative.
 
-**Fix:** parse the analysis without `trade_plan` first, then validate the
-plan on its own. On failure, keep the narrative, set `trade_plan` to `None`,
-and record `trade_plan_validation = {"status": "unavailable", "reason": ...}`
-so the panel shows "No validated trade setup".
+**Resolution:**
+- **Plan checked separately:** `parse_ai_reply` now validates the analysis
+  without `trade_plan` (`_analysis_from_data` in `prompt.py`), then
+  validates the plan on its own.
+- **On failure:** the narrative is kept, `trade_plan` is `None`, and
+  `trade_plan_validation` is `{"status": "unavailable", "reason": "The
+  proposed plan was inconsistent (buy plan: stop_loss must be below the
+  entry zone), so no actionable setup was validated."}`. The panel shows it
+  as "No validated trade setup".
+- **Reason kept:** `_finalize_analysis` keeps that parse-time result
+  instead of overwriting it with the structural check.
+- **Hardening:** the fields the server stamps after parsing are now dropped
+  from the model's JSON. These are provenance, evidence, validation,
+  `uncertainty_reason`, `confidence_declared` and the context blocks.
+  `AnalysisResponse` declares them, so a model reply could previously set
+  some that were never overwritten on success, such as `uncertainty_reason`
+  and `confidence_declared`. This also keeps a model from supplying its own
+  `trade_plan_validation`, which the fix above now preserves.
+
+**Tests:** in `backend/tests/ai/test_phase16_analyze.py::TestInconsistentPlanKeepsTheNarrative`:
+- `test_the_plan_is_withheld_with_a_reason_and_the_analysis_is_kept`
+- `test_a_consistent_plan_is_still_validated_against_structure`
+- `test_server_owned_fields_in_the_model_reply_are_ignored`
+
+Restoring the in-parse plan validation fails the first test, and allowing
+server-owned fields fails the third.
 
 ### AA-03 — Background results drop evidence, validation and context
 
-**Status:** ❌ NOT STARTED
-**Where:** the payload built in `analyze_symbol_task` and `_run_direct` (`backend/ai/tasks.py:112` and below). It keeps 13 fields.
+**Status:** ✅ COMPLETE (2026-09-24, batch 1)
+**Where:** the payload built in `analyze_symbol_task` and `_run_direct` (`backend/ai/tasks.py:112` and below). It kept 13 fields.
 
-A finished background (template) job has none of the following:
+A finished background (template) job had none of the following:
 - `trade_plan_validation`;
 - quote price, source timestamp, data age, data status, provider, session
   and cache status;
@@ -119,9 +149,19 @@ point.
 **Reproduced:** running the task on a complete result produced a payload
 with none of those fields.
 
-**Fix:** serialize with the same function the blocking and streaming routes
-use (`_result_to_dict`, plus the template fields), so all three paths
-return one shape.
+**Resolution:** both job paths now build their result with `_job_payload`.
+It uses the streaming route's serializer (`_result_to_dict`) plus the
+template fields, so blocking, streaming and background results have one
+shape. The panel needed no change: it already renders these fields.
+
+**Tests:** `backend/tests/ai/test_tasks.py::TestAnalyzeSymbolTask::test_payload_matches_the_blocking_response_shape`
+requires the payload to equal the blocking shape. The task tests now build
+real `AnalysisResponse` results instead of `MagicMock`s; the mocks had
+pinned the narrow payload.
+
+**Deployment note:** the RQ workers that run background jobs don't reload
+code the way the dev API server does. The fix reaches background jobs only
+after the workers are restarted (for example with `./start.sh`).
 
 ### AA-04 — Grading never sees the day a plan was tracked
 
@@ -170,17 +210,21 @@ trader chose to track, not a sample of the model's calls.
 
 ### AA-06 — Plan validation ignores the quote's age
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
 **Where:** `_plan_validation` (`backend/ai/analyze.py:753`).
 
-Only the provider's status label blocks a plan: STALE, ERROR, UNKNOWN, GAP,
-INCOMPLETE or DUPLICATE. A LIVE or DELAYED quote passes however old it is.
+Only the provider's status label used to block a plan: STALE, ERROR, UNKNOWN,
+GAP, INCOMPLETE or DUPLICATE. A LIVE or DELAYED quote passed however old it was.
 
 **Reproduced:** a plan validated against a DELAYED quote three days old.
 
-**Fix:** during the regular session, require a recent quote (for example 15
-minutes). Outside the session, allow the last close but say so in the
-validation.
+**Resolution:** during the regular session, a quote must have a known age of
+15 minutes or less. Premarket, after-hours, and closed-session plans can use
+the latest available quote, but return a visible validation note saying so.
+
+**Tests:** a 901-second DELAYED regular-session quote is withheld; a three-day
+HISTORICAL quote while closed remains eligible and carries the off-session
+note.
 
 ---
 
@@ -188,11 +232,11 @@ validation.
 
 ### AA-07 — Transient failures are cached for 45 seconds
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
 **Where:** `_cache_result` on the `providers_unavailable` and `parse_failed` paths in `_finalize_analysis` (`analyze.py:392`, `:413`) and `analyze_symbol_stream`.
 
-A second request within 45 s gets the cached failure without trying the
-provider. The panel's **Refresh & rerun** bypasses the cache, but these do
+A second request within 45 s used to get the cached failure without trying the
+provider. The panel's **Refresh & rerun** bypassed the cache, but these did
 not:
 - **Analyze** after switching away and back;
 - Chat's reanalysis (`chat_actions.py:982`);
@@ -202,18 +246,28 @@ not:
 **Reproduced:** over two calls the provider was called once, and the second
 call returned the cached `providers_unavailable`.
 
-**Fix:** cache only successful analyses and `insufficient_data`.
+**Resolution:** cache only successful analyses and deterministic
+`insufficient_data` results. Provider-unavailable, disabled, and parse-failed
+responses retry on the next request.
+
+**Tests:** provider-unavailable and parse-failed calls invoke the provider on
+both attempts; `insufficient_data` still reuses its bounded uncertainty result.
 
 ### AA-08 — A stop or target inside the entry zone passes
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
 **Where:** `TradePlan._check_consistency` (`prompt.py:128`) compares levels with the entry zone's midpoint; `_plan_validation` checks distances only.
 
 **Reproduced:** a Buy with entry 98–104 and stop 99 was accepted and
 verified, although a fill at 98.5 would be below its stop.
 
-**Fix:** compare a Buy's stop with the zone's low edge and its targets with
-the high edge, and the reverse for a Sell.
+**Resolution:** Buy stops must be below the entry zone's low edge and Buy
+targets above its high edge; Sell checks use the opposite edges. The parser
+withholds an inconsistent plan while keeping the narrative, and the
+server-side structural gate retains the same defense in depth.
+
+**Tests:** Buy stop and target values inside a 98–104 entry zone both withhold
+the plan with the narrative intact.
 
 ### AA-09 — Background jobs are not rate-limited
 
@@ -238,16 +292,21 @@ both in the panel.
 
 ### AA-11 — A cached result reports its original data age
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2)
 **Where:** the cache hit in `analyze_symbol` / `analyze_symbol_stream` (`analyze.py:268`, `:533`).
 
-A result served from the 45-second cache keeps the `data_age_seconds` it
-had when computed, so the evidence card understates the age by up to 45 s.
+A result served from the 45-second cache kept the `data_age_seconds` it had
+when computed, so the evidence card understated the age by up to 45 s.
 
 **Reproduced:** a cached result 0.2 s later reported the original 5.0 s
 age.
 
-**Fix:** recompute the age from `source_timestamp` on a cache hit.
+**Resolution:** a cache hit advances the server-authored age by its elapsed
+monotonic cache time in both blocking and streaming paths. It therefore stays
+truthful even if a provider timestamp is unavailable or cannot be parsed.
+
+**Tests:** a result cached for ten seconds reports its original five-second
+age as approximately fifteen seconds when reused.
 
 ### AA-12 — Peer context falls back to a peer's first available signal
 
@@ -323,11 +382,8 @@ name on the result.
 - **Test coverage:** these gaps are why the findings above weren't caught:
   - **Grading:** tests patch `get_bars`, so `from_ts` is never exercised
     (AA-04).
-  - **Background payload:** no test compares its shape with the blocking
-    response (AA-03).
-  - **Event loop:** no test checks that an analysis leaves it free (AA-01).
-  - **Inconsistent plans:** no test covers an otherwise valid reply with an
-    inconsistent plan (AA-02).
+  - ~~Background payload, event loop, inconsistent plans~~: covered by
+    tests since batch 1 (AA-03, AA-01, AA-02).
 
 ## Enhancements
 
@@ -347,6 +403,35 @@ name on the result.
    - Evidence or report export from the analysis card.
 
 ## Verification
+
+### Batch 2 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| AI Analysis, task, and AI router tests | 158 passed, 17 subtests passed |
+| AI Analysis panel suite | 13 passed |
+| TypeScript and production frontend build | passed |
+| Ruff and `git diff --check` | clean |
+
+**Regression coverage:** regular-session quote age, closed-session validation
+note, transient provider/parse retry, cached-age advancement, and entry-zone
+stop/target rejection.
+
+### Batch 1 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai`, `backend/tests/api` | 1,557 passed (6 new), 30 subtests passed |
+| `ruff` on the changed files | clean |
+| Live analysis on the dev server | 9.3 s; `/api/health` stayed at 7 ms or less during it; evidence present |
+
+**Mutation check:** undoing each change fails its tests:
+- the context build back on the loop (2 tests);
+- the plan validated inside the analysis;
+- server-owned fields accepted;
+- the narrow job payload.
+
+Neither full suite was run.
 
 ### Review probes (2026-09-24)
 
@@ -384,11 +469,19 @@ sanctioned private-flow smoke coverage.
 
 ## Fix log
 
-No fixes yet.
+- **Review:** commit `783afae`, `docs(v5): review AI Analysis and track findings in the bug-fix format`, on `development`.
+- **Batches 1 and 2:** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
-| 2026-09-24 | AA-01 to AA-15 | ❌ NOT STARTED | — | `docs/Version_5/v5_ai_analysis.md` | 8 probes | Review logged 15 findings. |
+| 2026-09-24 | AA-01 to AA-15 | ❌ NOT STARTED | review | `docs/Version_5/v5_ai_analysis.md` | 8 probes | Review logged 15 findings. |
+| 2026-09-24 | AA-01 | ✅ COMPLETE | batch 1 | `backend/ai/analyze.py`, `backend/tests/ai/test_phase16_analyze.py` | 2 tests | Context build runs in a worker thread. |
+| 2026-09-24 | AA-02 | ✅ COMPLETE | batch 1 | `backend/ai/prompt.py`, `backend/ai/analyze.py`, `backend/tests/ai/test_phase16_analyze.py` | 3 tests | Plan validated separately; narrative kept; server-owned fields ignored. |
+| 2026-09-24 | AA-03 | ✅ COMPLETE | batch 1 | `backend/ai/tasks.py`, `backend/tests/ai/test_tasks.py` | 1 new, 2 rewritten | Background results use the blocking shape. |
+| 2026-09-24 | AA-06 | ✅ COMPLETE | batch 2 | `backend/ai/analyze.py`, `frontend/src/components/AIAnalysisPanel.tsx`, tests | 2 tests + UI | Regular-session age limit; visible off-session note. |
+| 2026-09-24 | AA-07 | ✅ COMPLETE | batch 2 | `backend/ai/analyze.py`, `backend/tests/ai/test_phase16_analyze.py` | 3 tests | Retry transient provider and parse failures; retain deterministic no-data cache. |
+| 2026-09-24 | AA-08 | ✅ COMPLETE | batch 2 | `backend/ai/prompt.py`, `backend/ai/analyze.py`, tests | 2 tests | Validate stops and targets against entry-zone edges. |
+| 2026-09-24 | AA-11 | ✅ COMPLETE | batch 2 | `backend/ai/analyze.py`, `backend/tests/ai/test_phase16_analyze.py` | 1 test | Advance evidence age on cache hits. |
 
 ---
 
@@ -438,7 +531,7 @@ not from model prose:
 
 The panel displays this in a compact evidence card, so the trader can see
 whether an answer is current, delayed, historical, stale, or cached.
-Background (template) results currently lack these fields (AA-03).
+Background (template) results carry the same fields since batch 1 (AA-03).
 
 ### Trade-plan safety gate
 
@@ -453,12 +546,13 @@ fail, the narrative stays, the actionable plan is removed, and the UI shows
 `No validated trade setup`.
 
 Limits found by the review:
-- **Stale by label only:** "stale" means the provider's status label, not
-  the quote's age (AA-06).
-- **Inconsistent plans:** a plan that is internally inconsistent currently
-  discards the whole analysis (AA-02).
-- **Levels inside the entry zone:** a stop or target inside the entry zone
-  passes (AA-08).
+- **Regular-session freshness (fixed in batch 2):** a quote must be no more
+  than 15 minutes old, while off-session validation labels the latest
+  available quote (AA-06).
+- **Inconsistent plans (fixed in batch 1):** an internally inconsistent
+  plan is now withheld with its reason, and the analysis is kept (AA-02).
+- **Entry-zone edges (fixed in batch 2):** stops and targets must clear the
+  entire entry zone, not merely its midpoint (AA-08).
 
 ### User interaction model
 

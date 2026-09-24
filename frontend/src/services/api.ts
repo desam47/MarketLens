@@ -904,6 +904,7 @@ export interface AIAnalysisResult {
     supports?: number[];
     resistances?: number[];
     data_status?: string;
+    freshness_note?: string;
   };
 }
 

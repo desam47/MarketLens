@@ -671,6 +671,8 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
                     ? ` · support ${analysis.trade_plan_validation.supports.map(money).join(', ')}` : ''}
                   {analysis.trade_plan_validation.resistances?.length
                     ? ` · resistance ${analysis.trade_plan_validation.resistances.map(money).join(', ')}` : ''}
+                  {analysis.trade_plan_validation.freshness_note
+                    ? ` · ${analysis.trade_plan_validation.freshness_note}` : ''}
                 </p>
               )}
               {analysis.trade_plan_validation?.status === 'verified'

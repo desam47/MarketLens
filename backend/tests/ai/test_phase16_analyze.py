@@ -32,8 +32,10 @@ from backend.ai.analyze import (
     _calibrate_confidence,
     _clear_analysis_cache,
     _data_quality,
+    _finalize_analysis,
     _plan_validation,
     analyze_symbol,
+    analyze_symbol_stream,
 )
 from backend.ai.context import (
     AnalysisContext,
@@ -815,7 +817,7 @@ class TestAnalysisCache(unittest.TestCase):
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
-    def test_uncertainty_result_cached(self, mock_ctx, mock_ai):
+    def test_provider_failure_is_not_cached(self, mock_ctx, mock_ai):
         _clear_analysis_cache()
         mock_ctx.return_value = AnalysisContext(
             symbol="AAPL",
@@ -834,7 +836,70 @@ class TestAnalysisCache(unittest.TestCase):
 
         asyncio.run(analyze_symbol("AAPL", "1d"))
         asyncio.run(analyze_symbol("AAPL", "1d"))
-        self.assertEqual(mock_ai.complete.call_count, 1)
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_parse_failure_is_not_cached(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL", timeframe="1d", price=100.0, timestamp="t", data_status="live"
+        )
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(text="not valid analysis JSON", provider="test", model="test")
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+
+        self.assertEqual(mock_ai.complete.call_count, 2)
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_insufficient_data_result_is_cached(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.side_effect = InsufficientDataError("no bars")
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+
+        self.assertEqual(mock_ctx.call_count, 1)
+        mock_ai.complete.assert_not_called()
+
+    @patch("backend.ai.analyze.ai_manager")
+    @patch("backend.ai.analyze.build_context")
+    def test_cached_result_advances_market_data_age(self, mock_ctx, mock_ai):
+        _clear_analysis_cache()
+        mock_ctx.return_value = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="2026-09-24T10:00:00-04:00",
+            data_status="live",
+            data_age_seconds=5.0,
+        )
+        mock_ai.complete = AsyncMock(
+            return_value=AIResponse(
+                text='{"summary":"AAPL shows mixed signals.","trend":"bullish","confidence":0.5}',
+                provider="test",
+                model="test",
+            )
+        )
+        mock_ai.settings = MagicMock(max_tokens=20000)
+
+        asyncio.run(analyze_symbol("AAPL", "1d"))
+        from backend.ai.analyze import _analysis_cache, _cache_key, _cache_lock
+
+        key = _cache_key("AAPL", "1d", True, None, None, None, None)
+        with _cache_lock:
+            cached_at, result = _analysis_cache[key]
+            _analysis_cache[key] = (cached_at - 10.0, result)
+
+        cached = asyncio.run(analyze_symbol("AAPL", "1d"))
+
+        self.assertEqual(cached.cache_status, "cached")
+        self.assertAlmostEqual(cached.data_age_seconds, 15.0, delta=0.5)
 
     @patch("backend.ai.analyze.ai_manager")
     @patch("backend.ai.analyze.build_context")
@@ -1576,6 +1641,46 @@ class TestTradePlanEvidenceValidation(unittest.TestCase):
         self.assertEqual(validation["status"], "unavailable")
         self.assertIn("too far from the current quote", validation["reason"])
 
+    def test_rejects_an_old_quote_during_the_regular_session(self):
+        ctx = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="t",
+            data_status="DELAYED",
+            data_age_seconds=901.0,
+            market_session="regular",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 110.0}],
+            },
+        )
+
+        validation = _plan_validation(ctx, self._plan())
+
+        self.assertEqual(validation["status"], "unavailable")
+        self.assertIn("more than 15 minutes old", validation["reason"])
+
+    def test_closed_session_labels_the_latest_available_quote(self):
+        ctx = AnalysisContext(
+            symbol="AAPL",
+            timeframe="1d",
+            price=100.0,
+            timestamp="t",
+            data_status="HISTORICAL",
+            data_age_seconds=3 * 24 * 60 * 60,
+            market_session="closed",
+            support_resistance={
+                "supports": [{"price": 99.0}],
+                "resistances": [{"price": 110.0}],
+            },
+        )
+
+        validation = _plan_validation(ctx, self._plan())
+
+        self.assertEqual(validation["status"], "verified")
+        self.assertIn("outside regular trading hours", validation["freshness_note"])
+
 
 class TestTradePlanCapture(unittest.TestCase):
     """Analysis must not create trade-plan outcome rows implicitly.
@@ -2143,3 +2248,151 @@ class TestCorrelationContext(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- 2026-09-24 review fixes (docs/Version_5/v5_ai_analysis.md) ---------
+
+
+def _review_ctx(**over) -> AnalysisContext:
+    base = dict(
+        symbol="AAPL",
+        timeframe="1d",
+        price=100.0,
+        timestamp="2026-09-24T10:00:00",
+        data_status="LIVE",
+        data_age_seconds=5.0,
+        support_resistance={"supports": [{"price": 97.0}], "resistances": [{"price": 110.0}]},
+    )
+    base.update(over)
+    return AnalysisContext(**base)
+
+
+def _review_reply(plan: dict | None = None, **extra) -> str:
+    body = {"summary": "AAPL is in a steady uptrend above support.", "trend": "bullish", "confidence": 0.7}
+    if plan is not None:
+        body["trade_plan"] = plan
+    body.update(extra)
+    return json.dumps(body)
+
+
+_REVIEW_PLAN = dict(
+    recommendation="buy", conviction="medium", time_horizon="swing",
+    entry_zone_low=99.0, entry_zone_high=101.0, stop_loss=96.5, targets=[106.0],
+    thesis="Buy the pullback into support.", invalidation="Close below 96.",
+)
+
+
+class TestAnalysisLeavesTheEventLoopFree(unittest.TestCase):
+    """AA-01: build_context ran on the event loop and froze every request."""
+
+    def test_context_build_does_not_block_other_coroutines(self):
+        import time
+
+        ticks: list[float] = []
+
+        def slow_context(*args, **kwargs):
+            time.sleep(0.4)
+            raise InsufficientDataError("no data")
+
+        async def ticker():
+            for _ in range(8):
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.05)
+
+        async def scenario():
+            with patch("backend.ai.analyze.build_context", slow_context):
+                await asyncio.gather(ticker(), analyze_symbol("AAPL", force_refresh=True))
+
+        _clear_analysis_cache()
+        asyncio.run(scenario())
+        gaps = [later - earlier for earlier, later in zip(ticks, ticks[1:], strict=False)]
+        self.assertLess(max(gaps), 0.25)
+
+    def test_streaming_context_build_does_not_block_either(self):
+        import time
+
+        ticks: list[float] = []
+
+        def slow_context(*args, **kwargs):
+            time.sleep(0.4)
+            raise InsufficientDataError("no data")
+
+        async def ticker():
+            for _ in range(8):
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.05)
+
+        async def drain():
+            return [frame async for frame in analyze_symbol_stream("AAPL", force_refresh=True)]
+
+        async def scenario():
+            with patch("backend.ai.analyze.build_context", slow_context):
+                await asyncio.gather(ticker(), drain())
+
+        _clear_analysis_cache()
+        asyncio.run(scenario())
+        gaps = [later - earlier for earlier, later in zip(ticks, ticks[1:], strict=False)]
+        self.assertLess(max(gaps), 0.25)
+
+
+class TestInconsistentPlanKeepsTheNarrative(unittest.TestCase):
+    """AA-02: one inconsistent plan level turned the whole reply into a
+    parse failure."""
+
+    def test_the_plan_is_withheld_with_a_reason_and_the_analysis_is_kept(self):
+        bad = dict(_REVIEW_PLAN, stop_loss=102.0)  # buy stop above entry
+        result = _finalize_analysis(
+            "AAPL", _review_ctx(), AIResponse(text=_review_reply(bad), provider="p", model="m"), None
+        )
+        self.assertNotIsInstance(result, UncertaintyResponse)
+        self.assertEqual(result.uncertainty_reason, "none")
+        self.assertIn("steady uptrend", result.summary)
+        self.assertIsNone(result.trade_plan)
+        self.assertEqual(result.trade_plan_validation["status"], "unavailable")
+        self.assertIn("stop_loss must be below the entry zone", result.trade_plan_validation["reason"])
+
+    def test_stop_inside_a_buy_entry_zone_is_withheld(self):
+        bad = dict(_REVIEW_PLAN, entry_zone_low=98.0, entry_zone_high=104.0, stop_loss=99.0)
+        result = _finalize_analysis(
+            "AAPL", _review_ctx(), AIResponse(text=_review_reply(bad), provider="p", model="m"), None
+        )
+
+        self.assertIn("steady uptrend", result.summary)
+        self.assertIsNone(result.trade_plan)
+        self.assertIn("stop_loss must be below the entry zone", result.trade_plan_validation["reason"])
+
+    def test_target_inside_a_buy_entry_zone_is_withheld(self):
+        bad = dict(
+            _REVIEW_PLAN,
+            entry_zone_low=98.0,
+            entry_zone_high=104.0,
+            stop_loss=96.5,
+            targets=[102.0],
+        )
+        result = _finalize_analysis(
+            "AAPL", _review_ctx(), AIResponse(text=_review_reply(bad), provider="p", model="m"), None
+        )
+
+        self.assertIn("steady uptrend", result.summary)
+        self.assertIsNone(result.trade_plan)
+        self.assertIn("targets must be above the entry zone", result.trade_plan_validation["reason"])
+
+    def test_a_consistent_plan_is_still_validated_against_structure(self):
+        result = _finalize_analysis(
+            "AAPL", _review_ctx(), AIResponse(text=_review_reply(_REVIEW_PLAN), provider="p", model="m"), None
+        )
+        self.assertEqual(result.trade_plan_validation["status"], "verified")
+        self.assertIsNotNone(result.trade_plan)
+
+    def test_server_owned_fields_in_the_model_reply_are_ignored(self):
+        reply = _review_reply(
+            uncertainty_reason="parse_failed",
+            trade_plan_validation={"status": "verified"},
+            confidence_declared=0.1,
+            data_status="LIVE",
+        )
+        parsed = parse_ai_reply(reply)
+        self.assertEqual(parsed.uncertainty_reason, "none")
+        self.assertEqual(parsed.trade_plan_validation, {})
+        self.assertIsNone(parsed.confidence_declared)
+        self.assertEqual(parsed.data_status, "UNKNOWN")

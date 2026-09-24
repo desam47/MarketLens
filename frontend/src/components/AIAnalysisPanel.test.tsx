@@ -64,7 +64,12 @@ interface AIAnalysisResult {
     timeframe_scores?: Record<string, { direction?: string; strength?: string; confidence?: number }>;
     track_record?: Record<string, unknown>;
     correlation_context?: Record<string, unknown>;
-    trade_plan_validation?: { status?: 'verified' | 'unavailable' | 'not_applicable'; reason?: string };
+    trade_plan_validation?: {
+        status?: 'verified' | 'unavailable' | 'not_applicable';
+        reason?: string;
+        quote_price?: number;
+        freshness_note?: string;
+    };
 }
 
 function makeResult(overrides: Partial<AIAnalysisResult> = {}): AIAnalysisResult {
@@ -281,6 +286,32 @@ describe('AIAnalysisPanel', () => {
         expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Track this validated BUY setup'));
         expect(mockApi.trackTradePlan).toHaveBeenCalledWith('AAPL', '1d', plan);
         expect(await screen.findByText('✓ Setup tracked')).toBeInTheDocument();
+    });
+
+    it('labels a setup validated outside regular trading hours', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            trade_plan: {
+                recommendation: 'buy',
+                conviction: 'medium',
+                time_horizon: 'swing',
+                entry_zone_low: 100,
+                entry_zone_high: 101,
+                stop_loss: 96,
+                targets: [108],
+                thesis: 'Buy the pullback.',
+                invalidation: 'Close below support.',
+            },
+            trade_plan_validation: {
+                status: 'verified',
+                quote_price: 101,
+                freshness_note: 'Validated outside regular trading hours against the latest available quote.',
+            },
+        }));
+        render(<AIAnalysisPanel symbol="AAPL" />);
+        await runManualAnalysis();
+
+        expect(await screen.findByText(/Validated outside regular trading hours/)).toBeInTheDocument();
     });
 
     it('ignores an older response after the symbol changes', async () => {

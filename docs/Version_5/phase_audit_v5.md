@@ -1643,3 +1643,29 @@ until the line is removed. The end-to-end evaluation pins these defaults
 - **Regression coverage.** Backend coverage passed with 163 tests and 17
   subtests; the targeted panel suite passed with 12 tests; TypeScript,
   production build, Ruff, and `git diff --check` all passed.
+
+## AI Analysis review reliability batches 1–2 (2026-09-24)
+
+- **Responsive execution and complete background results.** Context building
+  now runs outside the async event loop for both blocking and streaming
+  analysis. Background template jobs serialize the same evidence, validation,
+  provenance, regime, multi-timeframe, peer, track-record, and uncertainty
+  fields returned by the blocking route.
+- **Narrative-safe plan parsing.** An internally inconsistent model plan no
+  longer discards an otherwise valid analysis. The server retains the
+  narrative, withholds the plan, and returns the server-authored reason; model
+  replies cannot populate server-owned evidence, provenance, calibration, or
+  validation fields.
+- **Freshness and cache integrity.** A regular-session actionable plan now
+  requires a known quote age of 15 minutes or less. Off-session validation
+  labels that it uses the latest available quote. Transient provider, disabled,
+  and parse failures are retried rather than cached; deterministic
+  insufficient-data results remain cacheable. Cache hits advance displayed
+  market-data age by the elapsed cache time.
+- **Entry-zone safety.** Buy stops must be below, and targets above, the
+  entire entry zone; Sell plans use the opposite bounds. The check applies at
+  parsing and validation boundaries, while keeping the narrative available.
+- **Regression coverage.** The AI Analysis/task/router slice passed with 158
+  tests and 17 subtests; AIAnalysisPanel passed with 13 tests; TypeScript,
+  production build, Ruff, and `git diff --check` passed. The detailed issue
+  tracker is in [v5_ai_analysis.md](v5_ai_analysis.md).
