@@ -15,10 +15,13 @@ Post-completion review explains the two items (multi-provider
 reconciliation, further contract-test expansion) that are blocked on real
 architectural gaps rather than left undone.
 
-The registry now has 42 tools and `ChatReplyResponse.action` accepts 53
-actions (registry tools plus the pre-Version-5 alert/watchlist/backtest/
-screen/reanalysis actions). Tool counts quoted in the historical slice notes
-below (14, 20, 22, 23) were correct when written.
+The registry now has 45 tools and `ChatReplyResponse.action` accepts 56
+actions: the 45 registry tools plus 11 non-tool actions (`none`, the three
+alert and four watchlist actions, `run_backtest`, `run_screen` and
+`set_entity_type`). The 2026-09-23 review counted 42 and 53; since then
+`9b95e77` added `get_signal_history` and `get_saved_scans`, and `b73f8d3`
+added `get_price_statistics`. Tool counts quoted in the historical slice
+notes below (14, 20, 22, 23) were correct when written.
 
 **Phase 5.1 delivery history (commit `9ceedec`):** Phase 5.1's first implementation
 slice shipped on `development`. The strict calculator foundation in

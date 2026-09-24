@@ -48,10 +48,15 @@ code), so line numbers quoted in older notes or commits will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next:** nothing left in the tracker. Open housekeeping:
-- **Phase audit counts:** `phase_audit_v5.md` still says 42 tools and 53
-  actions; it is now 43 and 54.
-- **Batch 3 backup:** delete `.pytest_tmp/bf10/pre_bf10_backup.db` (1.1 GB).
+**Next:** nothing left in the tracker. Housekeeping:
+- **Phase audit counts (done 2026-09-24):** `phase_audit_v5.md` and
+  `phase_audit_v5_tables.md` now say 45 tools and 56 actions. This doc
+  first said 43 and 54, which counted only `get_price_statistics` and
+  missed the two tools `9b95e77` added.
+- **Batch 3 backup (deleted 2026-09-24):**
+  `.pytest_tmp/bf10/pre_bf10_backup.db` (1.1 GB), after confirming the
+  live database is on `20260930_chat_id_autoincrement` with both chat
+  tables using `AUTOINCREMENT`.
 - **Push:** push `development` when you want it on `origin`.
 
 ---
@@ -262,9 +267,10 @@ so the fallback now steps aside entirely.
 Removing the route fails 3 tests; restoring the old reuse wording fails 1.
 
 **Follow-ups:**
-- **Stale counts:** the registry now has 43 tools and
-  `ChatReplyResponse.action` accepts 54 actions, so the counts in
-  `phase_audit_v5.md` ("42 tools", "53 actions") are out of date.
+- **Stale counts (fixed 2026-09-24):** the registry now has 45 tools and
+  `ChatReplyResponse.action` accepts 56 actions, so the counts in
+  `phase_audit_v5.md` ("42 tools", "53 actions") were out of date. This
+  entry first said 43 and 54, missing the two tools `9b95e77` added.
 - **Label mismatch:** "last week" / "last month" mean a trailing 7 or 30
   days, while "last year" means the previous calendar year. That matches
   common trader usage, and the reply shows the exact dates used.

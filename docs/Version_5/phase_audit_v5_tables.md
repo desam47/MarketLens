@@ -45,7 +45,7 @@ imports, and unknown names are rejected (`test_verified_formula`).
 
 ## 5.2 — Tools: source, cache, freshness, fallback, and tests
 
-The registry has 44 tools. Every read-only and calculation tool runs under
+The registry has 45 tools. Every read-only and calculation tool runs under
 the hard deadline (`AI_CHAT_TOOL_TIMEOUT_SECONDS`, default 20 s).
 `save_to_journal` is the only mutating tool: it needs a server-authored
 confirmation and never times out.
