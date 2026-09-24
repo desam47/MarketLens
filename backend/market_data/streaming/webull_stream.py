@@ -31,8 +31,10 @@ from backend.config.settings import settings
 
 # Importing the REST provider installs its ``ApiClient.set_file_logger``
 # monkey-patch (redirects the SDK's hard-coded relative log path into
-# ``logs/``) and gives us the shared epoch->NY helper. See CLAUDE.md.
-from backend.market_data.providers.webull_provider import _epoch_ms_to_ny
+# ``logs/``), its rate-limit log filter (MD-06), and gives us the shared
+# epoch->NY helper. See CLAUDE.md.
+from backend.market_data.providers.webull_provider import _epoch_ms_to_ny, _is_rate_limited
+from backend.utils.timezone import now_ny
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,24 @@ _TEARDOWN_WAIT_S = 2.0
 _teardowns_lock = threading.Lock()
 _teardowns_in_flight = 0
 
+# MD-06: the supervisor reconnected 24/7, including overnight when the market is
+# closed and no data is needed. That's also when Webull's own servers 429 the
+# hardest — /openapi/config failed 89, 79, and 85 times an hour between 01:00 and
+# 04:00 ET (2026-09-24), each one a fresh client build (a token handshake, not
+# free). Same extended-session window as ingestion_service._gapfill_1m_loop.
+_SESSION_START_HOUR = 4
+_SESSION_END_HOUR = 20
+# A confirmed 429 means Webull explicitly asked us to slow down — skip the normal
+# 5s-doubling backoff and wait this long outright, however small backoff currently is.
+_RATE_LIMITED_BACKOFF_S = 300
+# How often to recheck the session gate while paused outside it.
+_SESSION_GATE_POLL_S = 300
+
+
+def _in_extended_session(moment) -> bool:
+    """True 04:00-20:00 ET, Mon-Fri — the same window ingestion runs in."""
+    return moment.weekday() < 5 and _SESSION_START_HOUR <= moment.hour < _SESSION_END_HOUR
+
 
 class _ExpectedStopFilter(logging.Filter):
     """Demote the SDK's "loop ack code" ERROR to INFO while we are the ones stopping it."""
@@ -134,8 +154,20 @@ class _ExpectedStopFilter(logging.Filter):
 logging.getLogger("webull.data").addFilter(_ExpectedStopFilter())
 
 _SnapshotCb = Callable[
-    [str, float, float | None, "object", float | None, float | None, float | None,
-     float | None, float | None, float | None, float | None], None
+    [
+        str,
+        float,
+        float | None,
+        "object",
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+        float | None,
+    ],
+    None,
 ]
 _TradeCb = Callable[[str, float, float | None, "object", str | None], None]
 _BboCb = Callable[[str, float | None, float | None, float | None, float | None, "object"], None]
@@ -313,19 +345,41 @@ class WebullStreamClient:
         """Keep an MQTT connection alive: (re)build the SDK client, wait for
         connect, and rebuild with exponential backoff if it dies or never
         connects. Survives a transient 429 during the token handshake
-        instead of dying on it (the bare connect_and_loop_start did)."""
+        instead of dying on it (the bare connect_and_loop_start did).
+
+        Paused outside the extended session (MD-06) — no data is needed then,
+        and it's also when reconnects were tripping Webull's rate limit the
+        hardest. A confirmed 429 skips the normal backoff ramp and waits
+        ``_RATE_LIMITED_BACKOFF_S`` outright.
+        """
         backoff = 5
+        paused = False
         while not self._stop.is_set():
+            if not _in_extended_session(now_ny()):
+                if not paused:
+                    logger.info("Webull stream: outside the extended session — pausing reconnects")
+                    paused = True
+                self._stop.wait(_SESSION_GATE_POLL_S)
+                continue
+            if paused:
+                logger.info("Webull stream: extended session started — resuming reconnects")
+                paused = False
+                backoff = 5
+
+            rate_limited = False
             try:
                 self._client = self._build_client()
                 self._client.connect_and_loop_start(customer_logger=_stream_logger())
                 logger.info("Webull stream: connecting (%d symbols queued)", len(self._subscribed))
             except Exception as e:  # noqa: BLE001
+                rate_limited = _is_rate_limited(e)
                 logger.warning("Webull stream: connect attempt failed: %s", e)
                 self._client = None
 
             waited = 0
-            while not self._stop.is_set() and not self._connected and waited < 25:
+            while (
+                not rate_limited and not self._stop.is_set() and not self._connected and waited < 25
+            ):
                 self._stop.wait(1)
                 waited += 1
 
@@ -335,14 +389,22 @@ class WebullStreamClient:
                     self._stop.wait(5)
                 if not self._stop.is_set():
                     logger.warning("Webull stream: connection lost — rebuilding")
-            else:
+            elif not rate_limited:
                 logger.warning("Webull stream: not connected after 25s — retrying in %ds", backoff)
 
             self._teardown_client()
             if self._stop.is_set():
                 break
-            self._stop.wait(backoff)
-            backoff = min(backoff * 2, 300)
+            if rate_limited:
+                logger.warning(
+                    "Webull stream: rate-limited — waiting %ds before retrying",
+                    _RATE_LIMITED_BACKOFF_S,
+                )
+                self._stop.wait(_RATE_LIMITED_BACKOFF_S)
+                backoff = 5
+            else:
+                self._stop.wait(backoff)
+                backoff = min(backoff * 2, 300)
 
         self._teardown_client()
         logger.info("Webull stream: supervisor exited")
@@ -381,7 +443,11 @@ class WebullStreamClient:
                 self._client.unsubscribe(
                     symbols=sorted(drop),
                     category=Category.US_STOCK.name,
-                    sub_types=[SubscribeType.QUOTE.name, SubscribeType.SNAPSHOT.name, SubscribeType.TICK.name],
+                    sub_types=[
+                        SubscribeType.QUOTE.name,
+                        SubscribeType.SNAPSHOT.name,
+                        SubscribeType.TICK.name,
+                    ],
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("Webull stream unsubscribe failed: %s", e)

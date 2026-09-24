@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 import unittest
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 from backend.market_data.streaming import webull_stream
@@ -129,12 +130,23 @@ class TestHealthAndSubscription(unittest.TestCase):
         self.assertEqual(self.client._subscribed, {"MSFT"})
 
 
+# A fixed in-session moment (Wednesday 10:00 ET) so _supervise's extended-hours
+# gate (MD-06) never makes these tests depend on the wall-clock time they happen
+# to run at.
+_IN_SESSION = datetime(2026, 9, 9, 10, 0)
+_OUT_OF_SESSION = datetime(2026, 9, 9, 2, 0)  # 02:00 ET, same Wednesday
+_WEEKEND = datetime(2026, 9, 12, 10, 0)  # Saturday, 10:00 ET
+
+
 class TestSupervisor(unittest.TestCase):
     def test_start_spawns_supervisor_and_stop_joins_it(self):
         c = WebullStreamClient("k", "s")
         # _build_client raises every time -> supervisor must keep looping,
         # not die. Make the retry backoff instant.
-        with patch.object(c, "_build_client", side_effect=RuntimeError("429")):
+        with (
+            patch.object(c, "_build_client", side_effect=RuntimeError("429")),
+            patch.object(webull_stream, "now_ny", return_value=_IN_SESSION),
+        ):
             c.start()
             self.assertIsNotNone(c._supervisor)
             self.assertTrue(c._supervisor.is_alive())
@@ -154,11 +166,95 @@ class TestSupervisor(unittest.TestCase):
             c._on_connect(fake_sdk, MagicMock(), "sess")
             return fake_sdk
 
-        with patch.object(c, "_build_client", side_effect=_build):
+        with (
+            patch.object(c, "_build_client", side_effect=_build),
+            patch.object(webull_stream, "now_ny", return_value=_IN_SESSION),
+        ):
             c.start()
             time.sleep(0.3)
             self.assertTrue(c._connected)
             c.stop()
+
+
+class TestExtendedSessionGate(unittest.TestCase):
+    """MD-06: the supervisor must not attempt a reconnect outside 04:00-20:00 ET,
+    Mon-Fri — found live: ~80 failed reconnects an hour overnight, each a fresh
+    token handshake, tripping Webull's own rate limit at a time nothing needs data."""
+
+    def test_gate_boundaries(self):
+        cases = [
+            (datetime(2026, 9, 9, 3, 59), False),
+            (datetime(2026, 9, 9, 4, 0), True),
+            (datetime(2026, 9, 9, 19, 59), True),
+            (datetime(2026, 9, 9, 20, 0), False),
+            (_WEEKEND, False),
+        ]
+        for moment, expected in cases:
+            with self.subTest(moment=moment):
+                self.assertEqual(webull_stream._in_extended_session(moment), expected)
+
+    def test_no_reconnect_attempted_outside_the_session(self):
+        c = WebullStreamClient("k", "s")
+        with (
+            patch.object(c, "_build_client") as mock_build,
+            patch.object(webull_stream, "now_ny", return_value=_OUT_OF_SESSION),
+        ):
+            c.start()
+            time.sleep(0.2)
+            c.stop()
+        mock_build.assert_not_called()
+
+    def test_reconnects_resume_once_the_session_starts(self):
+        c = WebullStreamClient("k", "s")
+        clock = {"now": _OUT_OF_SESSION}
+        with (
+            patch.object(c, "_build_client", side_effect=RuntimeError("down")) as mock_build,
+            patch.object(webull_stream, "now_ny", side_effect=lambda: clock["now"]),
+            patch.object(webull_stream, "_SESSION_GATE_POLL_S", 0.05),
+        ):
+            c.start()
+            time.sleep(0.1)
+            mock_build.assert_not_called()
+            clock["now"] = _IN_SESSION
+            time.sleep(0.2)
+            c.stop()
+        mock_build.assert_called()
+
+
+class TestRateLimitBackoff(unittest.TestCase):
+    """MD-06: a confirmed 429 skips the normal 5s-doubling ramp and waits the fixed,
+    longer cooldown outright — the doubling-from-5s alone let a flapping connection
+    (brief connect, drop, backoff reset to 5) retry every ~40s all night."""
+
+    def test_rate_limited_failure_uses_the_long_cooldown(self):
+        from webull.core.exception.exceptions import ServerException
+
+        c = WebullStreamClient("k", "s")
+        with (
+            patch.object(
+                c,
+                "_build_client",
+                side_effect=ServerException("TOO_MANY_REQUESTS", "slow down", http_status=429),
+            ),
+            patch.object(webull_stream, "now_ny", return_value=_IN_SESSION),
+            patch.object(webull_stream, "_RATE_LIMITED_BACKOFF_S", 0.05),
+        ):
+            c.start()
+            time.sleep(0.3)  # several cooldowns at the shortened interval
+            c.stop()
+        # Never marked connected, and the process didn't hang or crash.
+        self.assertFalse(c._connected)
+
+    def test_a_non_rate_limit_failure_keeps_the_normal_backoff(self):
+        c = WebullStreamClient("k", "s")
+        with (
+            patch.object(c, "_build_client", side_effect=RuntimeError("connection refused")),
+            patch.object(webull_stream, "now_ny", return_value=_IN_SESSION),
+        ):
+            c.start()
+            time.sleep(0.1)
+            c.stop()
+        self.assertFalse(c._connected)
 
 
 class TestTeardown(unittest.TestCase):

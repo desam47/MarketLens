@@ -12,7 +12,9 @@ Covers:
   - Credentials are never logged or included in responses
 """
 
+import io
 import json
+import logging
 import os
 import sys
 import unittest
@@ -25,6 +27,8 @@ import backend.market_data.providers.webull_provider as _webull_module
 from backend.market_data.providers.webull_provider import (
     WebullAuthError,
     WebullProvider,
+    _is_rate_limited,
+    _RateLimitSummaryFilter,
 )
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1002,77 @@ class TestGetHistoricalBarsBatchChunking(unittest.TestCase):
 
         self.assertEqual(call_counts, [20, 5])
         self.assertEqual(set(result.keys()), {s.upper() for s in symbols})
+
+
+class TestIsRateLimited(unittest.TestCase):
+    """MD-06: reliably telling a 429 apart from any other connect failure is what
+    lets the stream supervisor skip its normal backoff ramp for one that's confirmed
+    a rate limit, instead of ramping from 5s (see webull_stream.py's own MD-06 fix)."""
+
+    def test_server_exception_429_is_rate_limited(self):
+        from webull.core.exception.exceptions import ServerException
+
+        exc = ServerException("TOO_MANY_REQUESTS", "slow down", http_status=429)
+        self.assertTrue(_is_rate_limited(exc))
+
+    def test_server_exception_other_code_is_not(self):
+        from webull.core.exception.exceptions import ServerException
+
+        exc = ServerException("SOME_OTHER_ERROR", "nope", http_status=500)
+        self.assertFalse(_is_rate_limited(exc))
+
+    def test_client_exception_is_not(self):
+        from webull.core.exception.exceptions import ClientException
+
+        self.assertFalse(_is_rate_limited(ClientException("ERROR_CHECK_TOKEN_ENABLE", "x")))
+
+    def test_plain_exception_falls_back_to_string_match(self):
+        self.assertTrue(_is_rate_limited(RuntimeError("body said TOO_MANY_REQUESTS")))
+        self.assertFalse(_is_rate_limited(RuntimeError("connection refused")))
+
+
+class TestRateLimitSummaryFilter(unittest.TestCase):
+    """A burst of retried 429s from one back-off collapses to one ERROR line; the
+    caller's own per-attempt WARNING already accounts for every attempt."""
+
+    def setUp(self):
+        self.logger = logging.getLogger("test.webull_provider.ratelimit")
+        self.stream = io.StringIO()
+        handler = logging.StreamHandler(self.stream)
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.DEBUG)
+        self.filter = _RateLimitSummaryFilter()
+        self.logger.addFilter(self.filter)
+        self.addCleanup(self.logger.removeHandler, handler)
+        self.addCleanup(self.logger.removeFilter, self.filter)
+
+    def test_only_the_first_of_a_burst_passes(self):
+        for i in range(10):
+            self.logger.error("ServerException ... TOO_MANY_REQUESTS attempt %d", i)
+        lines = [ln for ln in self.stream.getvalue().splitlines() if ln]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("attempt 0", lines[0])
+
+    def test_a_second_burst_after_the_window_passes_again(self):
+        self.logger.error("first TOO_MANY_REQUESTS")
+        self.filter._last_emit -= _RateLimitSummaryFilter._WINDOW_S + 1  # simulate elapsed time
+        self.logger.error("second TOO_MANY_REQUESTS")
+        lines = [ln for ln in self.stream.getvalue().splitlines() if ln]
+        self.assertEqual(len(lines), 2)
+
+    def test_unrelated_errors_are_never_suppressed(self):
+        self.logger.error("TOO_MANY_REQUESTS first")
+        self.logger.error("an unrelated ERROR")
+        self.logger.error("TOO_MANY_REQUESTS second, still within the window")
+        lines = [ln for ln in self.stream.getvalue().splitlines() if ln]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("unrelated", lines[1])
+
+    def test_non_error_levels_are_never_suppressed(self):
+        self.logger.error("TOO_MANY_REQUESTS")
+        self.logger.warning("TOO_MANY_REQUESTS at warning level")
+        lines = [ln for ln in self.stream.getvalue().splitlines() if ln]
+        self.assertEqual(len(lines), 2)
 
 
 if __name__ == "__main__":

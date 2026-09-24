@@ -34,6 +34,7 @@ before they reach the data layer. This matches the Alpaca provider's
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 # Redirect the webull SDK's default log file from the CWD-relative
@@ -48,6 +49,45 @@ _WEBULL_LOG.parent.mkdir(exist_ok=True)
 from backend.observability.redaction import install_secret_redaction  # noqa: E402
 
 install_secret_redaction()
+
+
+# MD-06: a burst of retried requests hitting Webull's rate limit (observed live:
+# ~80 an hour overnight, from the stream supervisor's reconnect loop — see
+# webull_stream.py's own MD-06 fix for the other half, pausing that loop outside
+# the extended session) each logged a full ServerException + get_response
+# exception pair at ERROR. Collapse a burst to one line: only the first
+# TOO_MANY_REQUESTS record in a rolling window passes; the caller's own retry
+# log (one line per attempt, at WARNING) already accounts for every attempt.
+class _RateLimitSummaryFilter(logging.Filter):
+    _WINDOW_S = 60.0
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._last_emit = 0.0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.ERROR or "TOO_MANY_REQUESTS" not in record.getMessage():
+            return True
+        now = time.monotonic()
+        if now - self._last_emit < self._WINDOW_S:
+            return False
+        self._last_emit = now
+        return True
+
+
+logging.getLogger("webull.core.client").addFilter(_RateLimitSummaryFilter())
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    """True if ``exc`` is the SDK's ServerException for a 429 (TOO_MANY_REQUESTS)."""
+    code = getattr(exc, "get_error_code", None)
+    if callable(code) and code() == "TOO_MANY_REQUESTS":
+        return True
+    status = getattr(exc, "get_http_status", None)
+    if callable(status) and status() == 429:
+        return True
+    return "TOO_MANY_REQUESTS" in str(exc)
+
 
 import webull.core.client as _wb_client  # noqa: E402
 

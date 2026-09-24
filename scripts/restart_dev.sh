@@ -74,18 +74,28 @@ fi
 # Let the OS actually release the ports before rebinding.
 sleep 1
 
+# Every console log below is piped through rotate_stdin.py (MD-05) instead of a raw `>>`
+# append: nothing rotated these, unlike logs/marketlens.log (the app's own RotatingFileHandler,
+# 50MB x 5 files) — found live 2026-09-24: logs/backend.log alone reached 442 MB in 11 days.
+# rotate_stdin.py applies the same 50MB x 5 cap. Each redirected process gets its OWN log file
+# and rotator process — two independent rotators appending AND rotating the same path would
+# race on the rename (each has a stable fd across an external rename, so it would keep writing
+# to what's now a stale backup instead of the fresh file) — this is why the two RQ workers below
+# no longer share logs/rq_workers.log.
+ROTATE="$SCRIPT_DIR/scripts/rotate_stdin.py"
+
 # --reload-exclude: editing a test must not restart the server (each restart re-runs the whole
 # lifespan: migrations, cache flush, provider handshakes, engine seeding). Keep in sync with
 # start.sh and scripts/run.py. It must be the ABSOLUTE directory: the relative "backend/tests/*"
 # only matches files directly in backend/tests/, so every edit under backend/tests/<pkg>/ (most of
 # the suite) still reloaded the server.
 nohup "$PYTHON_BIN" -m uvicorn backend.api.main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
-    --reload-exclude "$SCRIPT_DIR/backend/tests" \
-    >> logs/backend.log 2>&1 &
+    --reload-exclude "$SCRIPT_DIR/backend/tests" 2>&1 \
+    | nohup "$PYTHON_BIN" "$ROTATE" logs/backend.log &
 disown
 
 if [ -d "frontend" ] && [ -f "frontend/package.json" ]; then
-    (cd frontend && nohup npx craco start >> ../logs/frontend.log 2>&1 &)
+    (cd frontend && nohup npx craco start 2>&1 | nohup "$PYTHON_BIN" "$ROTATE" ../logs/frontend.log &)
     disown 2>/dev/null || true
 fi
 
@@ -101,14 +111,20 @@ if command -v rq >/dev/null 2>&1; then
     # (a leftover from before that fix landed in start.sh/scripts/run.py)
     # and silently reintroduced the exact bug on every restart.
     echo "$(date): relaunching RQ workers (marketlens-workers x1, marketlens-backfill x1)" >> logs/restart_dev.log
-    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers \
-        >> logs/rq_workers.log 2>&1 &
+    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-workers 2>&1 \
+        | nohup "$PYTHON_BIN" "$ROTATE" logs/rq_workers.log &
     disown
-    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill \
-        >> logs/rq_workers.log 2>&1 &
+    nohup rq worker --url redis://localhost:6379/0 --worker-class rq.worker.SimpleWorker marketlens-backfill 2>&1 \
+        | nohup "$PYTHON_BIN" "$ROTATE" logs/rq_backfill.log &
     disown
 else
     echo "$(date): 'rq' CLI not found — skipping RQ workers" >> logs/restart_dev.log
 fi
+
+# Prune the Webull SDK's own dated/rotated log files past a week. Its TimedRotatingFileHandler
+# (backup_count=72, hourly) only prunes past-backup-count files when IT rotates — with --reload
+# restarting the process (and the handler) more often than hourly during active dev work, that
+# rollover rarely fires, so files piled up regardless of backup_count: 146 found live 2026-09-24.
+find logs -maxdepth 1 -name 'webull_*.log.*' -mtime +7 -delete 2>/dev/null || true
 
 echo "$(date): restart_dev.sh done — backend + frontend + RQ workers relaunched" >> logs/restart_dev.log

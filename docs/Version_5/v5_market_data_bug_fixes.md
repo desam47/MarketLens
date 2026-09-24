@@ -1,9 +1,9 @@
 # Version 5 Market Data Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2a: MD-04)
-**Status:** Review complete. MD-04 is fixed: a periodic sweep purges symbols in no active watchlist once they go stale, deactivating a watchlist now stops tracking immediately, and the six known orphans are purged. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
-**Scorecard:** 4 ✅ COMPLETE, 0 ⚠️ PARTIAL, 5 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2b: MD-05, MD-06)
+**Status:** Review complete. MD-05 and MD-06 are fixed: console-log redirects are rotated and capped, dated Webull SDK logs are pruned, and the stream reconnect loop is paused outside the extended session with 429-aware backoff. MD-04 is fixed: a periodic sweep purges symbols in no active watchlist once they go stale, deactivating a watchlist now stops tracking immediately, and the six known orphans are purged. MD-03 is fixed: stored 1m bars are settled from Alpaca's consolidated (SIP) feed, so every timeframe carries full-market volume. MD-01 is fixed: 1h bars are placed on the clock hour, and the stored 1h/4h history and its signals were repaired on the live database. MD-02 is fixed: log records are redacted, confirmed on live Webull errors, the old log files holding credentials are deleted, and the Webull token was rotated. Nine findings: one Critical, two High, two Medium, four Low. The Critical finding affects every 1h and 4h chart, signal, and AI answer built on stored bars before 2026-09-23.
+**Scorecard:** 6 ✅ COMPLETE, 0 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of market-data ingestion, bar storage, retention, and the logs they produce. It covered `backend/market_data/services/ingestion_service.py`, `backend/market_data/providers/*`, `backend/repositories/bar_repository.py`, `backend/services/purge_service.py`, `backend/api/watchlist/router.py`, and `scripts/restart_dev.sh`, at `b41530c`, and checked each finding against the live database and logs.
 **Related:** [Historical Signals fixes](v5_historical_signal_bug_fixes.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md), [Phase audit](phase_audit_v5.md)
 
@@ -26,8 +26,8 @@ Line numbers refer to the code at `b41530c`.
 | MD-02 | High | Security | Webull credentials are written to the log files in plain text | Verified | ✅ COMPLETE |
 | MD-03 | High | Bars | One series mixes providers whose volume differs by up to 2,800 times | Verified | ✅ COMPLETE |
 | MD-04 | Medium | Storage | Data for symbols in no watchlist is never removed | Verified | ✅ COMPLETE |
-| MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ❌ NOT STARTED |
-| MD-06 | Low | Providers | Overnight Webull requests repeat about 80 times an hour and are rate-limited | Verified | ❌ NOT STARTED |
+| MD-05 | Medium | Operations | `logs/backend.log` grows without limit | Verified | ✅ COMPLETE |
+| MD-06 | Low | Providers | Overnight Webull requests repeat about 80 times an hour and are rate-limited | Verified | ✅ COMPLETE |
 | MD-07 | Low | Signals | After each restart, signal recording takes about 30 minutes to catch up | Verified | ❌ NOT STARTED |
 | MD-08 | Low | Storage | The live schema is missing two indexes the migrations create | Verified | ❌ NOT STARTED |
 | MD-09 | Low | Code | A recorder comment describes intraday snapshots in the daily series that no longer exist | Verified | ❌ NOT STARTED |
@@ -265,7 +265,7 @@ Full run: `backend/tests/market_data`, `services`, `watchlist`, `repositories`, 
 
 ### MD-05 — `logs/backend.log` grows without limit
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2b).
 **Where:** `scripts/restart_dev.sh:84` appends the server's stdout and stderr to `logs/backend.log` with `>>`.
 
 The app's own `RotatingFileHandler` keeps `logs/marketlens.log` to 5 × 50 MB. The console copy of the same records, plus the Webull SDK's output, goes to `backend.log`, which nothing rotates.
@@ -278,7 +278,16 @@ The app's own `RotatingFileHandler` keeps `logs/marketlens.log` to 5 × 50 MB. T
 
 **Impact:** disk use grows by gigabytes a quarter, and every leaked credential from MD-02 is kept indefinitely.
 
-**Resolution:** either stop writing the console copy to a file, or rotate `backend.log` with a size cap. Prune dated Webull SDK logs after a retention period.
+**Resolution:** `scripts/rotate_stdin.py` (new) reads stdin line by line and rotates the same way `logging.handlers.RotatingFileHandler` does — 50 MB × 5 files, matching `marketlens.log`'s own cap — without needing a second process to watch the file from outside. `restart_dev.sh` pipes every console-log redirect through it instead of a raw `>>`.
+
+- **Scope widened beyond `backend.log`:** the same unrotated-`>>` defect was in `logs/frontend.log` and `logs/rq_workers.log` too (craco and both RQ workers). All three now go through the rotator.
+- **The two RQ workers no longer share one log file:** two independent rotator processes appending *and* rotating the same path would race on the rename — each holds a stable fd across an external rename, so it would keep writing to what's now a stale backup instead of the fresh file. `marketlens-backfill` now writes to its own `logs/rq_backfill.log`.
+- **Dated Webull SDK logs pruned:** the SDK's own `TimedRotatingFileHandler` (`backup_count=72`, hourly) only deletes past-count files when *it* rotates, and with `--reload` restarting the process (and the handler) more often than hourly during active dev work, that rollover rarely fires — 146 dated files piled up regardless of the count. `restart_dev.sh` now deletes `logs/webull_*.log.*` older than 7 days on every restart.
+- **`start.sh`/`scripts/run.py` untouched:** they stream to the attached terminal, not a file — there was nothing to rotate there.
+
+**Tests:** `backend/tests/scripts/test_rotate_stdin.py` (new, 5 tests) — writes pass through below the cap, rotation at the cap, `backup_count` respected past many rotations, a write failure is reported and never raises, and a real subprocess pipe end to end.
+
+**Live confirmation (2026-09-24 19:02):** restarted; `backend.log`, `frontend.log`, `rq_workers.log`, and the new `rq_backfill.log` all received correctly formatted, unbroken content through their rotators; no rotator traceback in any of the four.
 
 ---
 
@@ -286,14 +295,31 @@ The app's own `RotatingFileHandler` keeps `logs/marketlens.log` to 5 × 50 MB. T
 
 ### MD-06 — Overnight Webull requests repeat about 80 times an hour and are rate-limited
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2b).
 **Where:** the Webull SDK's `/openapi/config` request, reached through the provider or stream reconnect path.
 
 **Verified (live logs):** `/openapi/config` fails with `TOO_MANY_REQUESTS` (HTTP 429) about 80 times an hour between 01:00 and 04:00 ET. Examples: 89, 79, and 85 an hour on 2026-09-24 from 05:00 to 07:00 UTC, with the same pattern on 2026-09-23. In the last 50 MB of `backend.log`, 1,021 of 1,111 Webull `ServerException` records are 429s.
 
 **Impact:** each failure writes a credential-bearing log record (MD-02) and keeps Webull's rate limit tripped at a time when no market data is needed.
 
-**Resolution:** back off exponentially after a 429 and pause reconnect attempts outside the extended session. Log one summary line per back-off rather than one record per request.
+**Root cause:** the stream reconnect supervisor (`backend/market_data/streaming/webull_stream.py:_supervise`) rebuilds the SDK client — a fresh token handshake, hitting `/openapi/config` — on every reconnect attempt, 24/7, with no gate for the market being closed. Its backoff (5s, doubling to a 300s ceiling) resets to 5s on any brief, even momentary, connect — so a connection that connects then drops right away churns at roughly the low end of that ramp indefinitely instead of climbing, which is consistent with the observed ~80/hour (about one every 45s).
+
+**Resolution:**
+
+- **Paused outside the extended session:** `_in_extended_session` gates the whole reconnect loop to 04:00-20:00 ET, Mon-Fri — the same window `ingestion_service._gapfill_1m_loop` already uses. No market data is needed outside it, and this alone removes every call in the reported 01:00-04:00 ET window. Polls every 5 minutes while paused, and logs one line entering and one line leaving the pause rather than nothing (silent) or one per poll.
+- **A confirmed 429 skips the normal ramp:** `_is_rate_limited` (`webull_provider.py`, reused by the supervisor) checks the SDK's own `ServerException.get_error_code()`/`get_http_status()`, falling back to a string match. On a confirmed 429, the supervisor waits `_RATE_LIMITED_BACKOFF_S` (300s) outright instead of the normal doubling-from-5s ramp, and skips the up-to-25s connection wait it already knows will fail.
+- **One summary line per burst:** `_RateLimitSummaryFilter` (`webull_provider.py`), attached to the SDK's `webull.core.client` logger, lets through only the first `TOO_MANY_REQUESTS` ERROR record in a rolling 60s window — collapsing the SDK's own per-request `ServerException` + `get_response exception` pair. The supervisor's own per-attempt `logger.warning` already accounts for every attempt; this only trims the SDK's duplicate low-level record. Scoped to the whole `webull.core.client` logger, so it also trims a 429 burst from the REST provider, not just the stream.
+
+**Tests:**
+
+| File | What it covers |
+|---|---|
+| `test_webull_stream.py` (5 new, plus 2 existing tests pinned to a fixed in-session clock) | Gate boundaries (session start/end, weekend); no reconnect attempted outside the session; reconnects resume once it starts; a confirmed 429 uses the long cooldown; a non-429 failure keeps the normal ramp. |
+| `test_webull_provider.py` (11 new) | `_is_rate_limited` against the real SDK exception types and a string fallback; `_RateLimitSummaryFilter` collapses a burst to one line, a second burst after the window passes again, unrelated/non-ERROR records are never suppressed. |
+
+Full run: `backend/tests/market_data`, `scripts`, `observability` — 567 passed.
+
+**Note:** the two existing `TestSupervisor` tests started depending on wall-clock time the moment the session gate was added — they call the real `_supervise()` loop via `.start()`, and it now checks `now_ny()`. Both now patch `webull_stream.now_ny` to a fixed in-session moment so they stay deterministic regardless of when the suite runs.
 
 ### MD-07 — After each restart, signal recording takes about 30 minutes to catch up
 
@@ -358,6 +384,15 @@ The comment says the 1d table mixes midnight bars with 13:30 intraday snapshots 
 
 ## Verification
 
+### Batch 2b (2026-09-24, MD-05, MD-06)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/market_data`, `scripts`, `observability` | 567 passed |
+| New: `test_rotate_stdin.py` (5), 5 new + 2 pinned in `test_webull_stream.py`, 11 new in `test_webull_provider.py` | 21 passed |
+| Full backend suite | 3,488 passed |
+| Live: restart with the new redirects | backend/frontend/rq_workers/rq_backfill logs all received correct content through their rotators; no rotator traceback |
+
 ### Batch 2a (2026-09-24, MD-04)
 
 | Suite | Result |
@@ -416,14 +451,17 @@ The fresh schema for MD-08 was built under `.pytest_tmp/` and deleted afterwards
 - **Batch 1a (MD-02):** `63a11a8`, tracker completed after token rotation in `6798e22`.
 - **Batch 1b (MD-01):** `65ce005`.
 - **Batch 1c (MD-03):** `11246cc`.
-- **Batch 2a (MD-04):** in the working tree, not yet committed.
+- **Batch 2a (MD-04):** `051b048`.
+- **Batch 2b (MD-05, MD-06):** in the working tree, not yet committed.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-24 | MD-01 to MD-09 | ❌ NOT STARTED | `e4c1d69` | `docs/Version_5/v5_market_data_bug_fixes.md` | 10 probes | Review logged nine findings. |
 | 2026-09-24 | MD-03 | ✅ COMPLETE | `11246cc` | `sip_settle.py`, `scripts/settle_1m_from_sip.py`, `ingestion_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `chat_replies.py` | 11 new | 1m settled from Alpaca SIP, live and one-off; IEX labelled. |
 | 2026-09-24 | MD-01 | ✅ COMPLETE | `65ce005` | `hourly_bars.py`, `hourly_repair.py`, `scripts/repair_hourly_bars.py`, `ingestion_service.py`, `backfill_service.py`, `bar_repository.py`, `alpaca_provider.py`, `settings.py`, `.env.example` | 24 new, 1 rewritten | 1h on the clock hour; Alpaca SIP; live 1h/4h history repaired and signals re-recorded. |
-| 2026-09-24 | MD-04 | ✅ COMPLETE | batch 2a | `purge_service.py`, `watchlist_repository.py`, `ingestion_service.py`, `api/watchlist/router.py`, `settings.py`, plus 3 new test files | 13 new, 2 updated | Periodic sweep; deactivate refreshes ingestion; `symbol_exists_in_any_watchlist` now joins `Watchlist.is_active`; six known orphans purged live (34,119 rows). |
+| 2026-09-24 | MD-05 | ✅ COMPLETE | batch 2b | `scripts/rotate_stdin.py`, `restart_dev.sh` | 5 new | 50MB x5 rotation on backend/frontend/rq_workers/rq_backfill logs; dated Webull SDK logs pruned past 7 days. |
+| 2026-09-24 | MD-06 | ✅ COMPLETE | batch 2b | `webull_stream.py`, `webull_provider.py` | 16 new, 2 updated | Reconnect paused outside 04:00-20:00 ET; 429 skips the normal backoff ramp; SDK log burst collapsed to one line. |
+| 2026-09-24 | MD-04 | ✅ COMPLETE | `051b048` | `purge_service.py`, `watchlist_repository.py`, `ingestion_service.py`, `api/watchlist/router.py`, `settings.py`, plus 3 new test files | 13 new, 2 updated | Periodic sweep; deactivate refreshes ingestion; `symbol_exists_in_any_watchlist` now joins `Watchlist.is_active`; six known orphans purged live (34,119 rows). |
 | 2026-09-24 | MD-02 | ✅ COMPLETE | `63a11a8` | `backend/observability/redaction.py`, `webull_provider.py`, `structured_logging.py`, `test_secret_redaction.py` | 8 tests | New records redacted; 114 old log files holding credentials deleted or emptied; workers restarted; redaction confirmed on 230 live Webull errors; Webull app key/secret rotated 18:36. |
 
 ---
