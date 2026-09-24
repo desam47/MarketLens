@@ -41,6 +41,7 @@ def test_default_registry_exposes_only_named_calculator() -> None:
         "get_market_regime",
         "get_news",
         "get_options_snapshot",
+        "get_price_statistics",
         "get_quote",
         "get_relative_strength",
         "get_risk_dashboard",

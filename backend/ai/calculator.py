@@ -28,6 +28,7 @@ CalculationName = Literal[
     "drawdown",
     "max_drawdown",
     "correlation",
+    "return_correlation",
     "options_breakeven",
     "options_intrinsic_value",
     "options_extrinsic_value",
@@ -274,6 +275,33 @@ def calculate(request: CalculationRequest) -> CalculationResult:
             raise ValueError("correlation requires variation in both series")
         values = {"correlation": covariance / (left_dev * right_dev)}
         formulas = ["covariance(prices, comparison_prices) / (stddev(prices) * stddev(comparison_prices))"]
+    elif op == "return_correlation":
+        left = [float(price) for price in (request.prices or [])]
+        right = [float(price) for price in (request.comparison_prices or [])]
+        if len(left) != len(right) or len(left) < 3:
+            raise ValueError("prices and comparison_prices must have the same length (at least three)")
+        if any(price <= 0 for price in right):
+            raise ValueError("comparison_prices must contain positive values")
+        left_returns = [left[i] / left[i - 1] - 1 for i in range(1, len(left))]
+        right_returns = [right[i] / right[i - 1] - 1 for i in range(1, len(right))]
+        left_mean = sum(left_returns) / len(left_returns)
+        right_mean = sum(right_returns) / len(right_returns)
+        covariance = sum(
+            (a - left_mean) * (b - right_mean) for a, b in zip(left_returns, right_returns, strict=True)
+        )
+        left_dev = math.sqrt(sum((a - left_mean) ** 2 for a in left_returns))
+        right_dev = math.sqrt(sum((b - right_mean) ** 2 for b in right_returns))
+        if left_dev == 0 or right_dev == 0:
+            raise ValueError("correlation requires variation in both return series")
+        values = {"correlation": covariance / (left_dev * right_dev), "return_observations": float(len(left_returns))}
+        formulas = [
+            "returns[i] = price[i] / price[i-1] - 1 (for each series)",
+            "covariance(returns, comparison_returns) / (stddev(returns) * stddev(comparison_returns))",
+        ]
+        assumptions.append(
+            "Correlates simple period returns, not price levels: two trending series can have highly "
+            "correlated prices while their day-to-day moves are unrelated."
+        )
     elif op == "options_breakeven":
         strike, premium = _require(request, "strike", "premium")
         option_type = request.option_type

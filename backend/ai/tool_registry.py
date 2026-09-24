@@ -457,6 +457,7 @@ METRIC_CATALOG: Mapping[str, dict[str, str]] = {
     "sample_size": {"formula": "count_of_observations", "unit": "count", "owner": "backtest"},
     "expected_move": {"formula": "price * implied_volatility * sqrt(days / 365)", "unit": "currency", "owner": "calculator"},
     "volatility": {"formula": "sample_stddev(sequential_returns)", "unit": "percent", "owner": "calculator"},
+    "return_correlation": {"formula": "pearson(returns, comparison_returns)", "unit": "ratio", "owner": "calculator"},
     "maximum_drawdown": {"formula": "max((running_peak - price) / running_peak * 100)", "unit": "percent", "owner": "calculator"},
     "options_breakeven": {"formula": "strike +/- premium by option type", "unit": "currency", "owner": "calculator"},
     "options_intrinsic_value": {"formula": "max(in_the_money_amount, 0)", "unit": "currency", "owner": "calculator"},
@@ -500,6 +501,7 @@ def build_default_registry() -> ToolRegistry:
         OptionsRequest,
         OptionsResearchRequest,
         PortfolioRiskRequest,
+        PriceStatisticsRequest,
         RiskDashboardRequest,
         SavedScansRequest,
         SaveToJournalRequest,
@@ -534,6 +536,7 @@ def build_default_registry() -> ToolRegistry:
         get_market_regime_tool,
         get_news_tool,
         get_options_tool,
+        get_price_statistics_tool,
         get_quote_tool,
         get_relative_strength_tool,
         get_risk_dashboard_tool,
@@ -581,6 +584,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ToolSpec(name="get_watchlist_intelligence", kind="read_only", description="Rank enabled names by weakness, strength, deterioration, or relative underperformance using cached scanner results and warming missing names on demand.", input_model=WatchlistIntelligenceRequest, handler=get_watchlist_intelligence_tool, max_duration_ms=30_000))
     registry.register(ToolSpec(name="why_did_it_move", kind="read_only", description="Assemble evidence for a symbol's move without claiming causation.", input_model=MoveAnalysisRequest, handler=why_did_it_move_tool))
     registry.register(ToolSpec(name="what_changed", kind="read_only", description="Compare current verified data with a selected baseline.", input_model=ChangeAnalysisRequest, handler=what_changed_tool))
+    registry.register(ToolSpec(name="get_price_statistics", kind="read_only", description="Return, volatility, max drawdown, or return correlation from verified daily closes over an explicit window.", input_model=PriceStatisticsRequest, handler=get_price_statistics_tool))
     registry.register(ToolSpec(name="compare_symbols", kind="read_only", description="Rank symbols or a watchlist using verified bar metrics.", input_model=ComparisonRequest, handler=compare_symbols_tool))
     registry.register(ToolSpec(name="scenario_analysis", kind="read_only", description="Recalculate explicit positions under deterministic what-if shocks.", input_model=ScenarioRequest, handler=scenario_analysis_tool))
     registry.register(ToolSpec(name="historical_similarity", kind="read_only", description="Find prior bar windows with similar verified features and forward outcomes.", input_model=HistoricalSimilarityRequest, handler=historical_similarity_tool))

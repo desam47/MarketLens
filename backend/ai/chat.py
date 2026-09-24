@@ -81,6 +81,7 @@ from backend.ai.chat_symbols import extract_unresolved_explicit_symbols, resolve
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
 from backend.ai.market_baseline import build_market_baseline
+from backend.ai.price_metric_intent import parse_price_metric_intent
 from backend.ai.prompt import (
     CHAT_CONTINUATION_SYSTEM_PROMPT,
     CHAT_SYSTEM_PROMPT,
@@ -572,7 +573,14 @@ _CALCULATION_HINT = re.compile(
     r"return|volatility|expected move|breakeven|calculate|percent(?:age)? change)\b",
     re.I,
 )
-_REUSE_MEMORY_HINT = re.compile(r"\b(previous|prior|same|those|last|it)\b", re.I)
+# An explicit reference to earlier inputs. A bare "it"/"last" is not one:
+# "what's the return on it" or "... last year" are new questions, and
+# re-running the remembered calculation answered them with stale inputs.
+_REUSE_MEMORY_HINT = re.compile(
+    r"\b(?:previous|prior|same|those|last|earlier)\s+(?:values?|inputs?|numbers?|figures?|calculation|calc|setup)\b"
+    r"|\b(?:recalculate|re-?run|again)\b",
+    re.I,
+)
 # Position-risk wording: "buy 200 AAPL at $220, stop $212", "300 shares at
 # 50 with a stop at 47". Each field is read from its own labelled phrase,
 # never from number order, so a missing label means a missing input.
@@ -2434,6 +2442,47 @@ def _build_deterministic_chat_reply(
     function prevents the two transport paths from acquiring different
     intent behavior.
     """
+    # Price statistics over daily closes ("TSLA max drawdown this year",
+    # "AAPL volatility over 30 days", "correlation between AAPL and MSFT",
+    # "NVDA return from Jan 5 to Jan 20"). Checked first: the semantic route
+    # would answer a calendar window with today's change, and the calculation
+    # hint would ask the trader for values the app can fetch itself.
+    if not any(
+        pattern.search(user_content)
+        for pattern in (
+            _MULTI_STEP_HINT,
+            _WHY_MOVE_INTENT,
+            _ANOMALY_INTENT,
+            _SCENARIO_INTENT,
+            _HISTORICAL_PNL_INTENT,
+            _WATCHLIST_ADD_INTENT,
+            _WATCHLIST_CREATE_INTENT,
+            _WATCHLIST_REMOVE_FROM_INTENT,
+            _WATCHLIST_DELETE_INTENT,
+        )
+    ):
+        price_metric = parse_price_metric_intent(user_content, focus_symbols, now_ny().date())
+        if isinstance(price_metric, str):
+            return price_metric
+        if (
+            price_metric is not None
+            and price_metric.metric == "return_percent"
+            and price_metric.lookback_days is not None
+            and route_semantic_intent(user_content, focus_symbols=focus_symbols, planner_state=planner_state)
+            is not None
+        ):
+            # Trailing returns the semantic route already answers ("over the
+            # last 5 days") keep that verified route.
+            price_metric = None
+        if price_metric is not None:
+            return ChatReplyResponse(
+                reply="Verified price statistics",
+                grounded=True,
+                action="get_price_statistics",
+                action_symbol=price_metric.symbol,
+                action_tool_arguments=price_metric.tool_arguments(),
+            )
+
     # Resolve high-confidence market semantics before the broad calculation
     # hint. Words such as "return" and "change" are valid market metrics,
     # not requests for arithmetic inputs when a ticker and lookback are
@@ -4973,6 +5022,7 @@ _MARKET_TOOL_ACTIONS = {
     "why_did_it_move",
     "what_changed",
     "compare_symbols",
+    "get_price_statistics",
     "scenario_analysis",
     "historical_similarity",
     "signal_explanation",
@@ -5144,6 +5194,63 @@ def _bounded_numeric_evidence(value, prefix: str = "", *, depth: int = 0) -> dic
             output.update(_bounded_numeric_evidence(child, f"{prefix}[{index}]", depth=depth + 1))
         return output
     return {}
+
+
+def _format_price_statistics_reply(data: dict) -> str:
+    """One sentence from get_price_statistics' verified values.
+
+    States the window actually covered and the number of daily closes, so a
+    trader can see what "this year" or "30 days" resolved to, plus any
+    coverage gap the tool reported.
+    """
+    symbol = str(data.get("symbol") or "").upper()
+    values = data.get("values") if isinstance(data.get("values"), dict) else {}
+    window = f"{data.get('start_date')} to {data.get('end_date')}, {data.get('observations')} daily closes"
+    metric = data.get("metric")
+    if metric == "return_percent":
+        change = values.get("return_percent")
+        text = (
+            f"Verified {symbol} return ({window}): {float(change):+.2f}% "
+            f"({_money(values.get('start_close'))} → {_money(values.get('end_close'))})."
+            if isinstance(change, (int, float))
+            else f"I couldn't compute a verified return for {symbol} ({window})."
+        )
+    elif metric == "volatility":
+        daily = values.get("daily_volatility_percent")
+        annual = values.get("annualized_volatility_percent")
+        text = (
+            f"Verified {symbol} volatility ({window}): "
+            f"{float(daily):.2f}% daily standard deviation of returns, "
+            f"{float(annual):.2f}% annualized (× √252)."
+            if isinstance(daily, (int, float)) and isinstance(annual, (int, float))
+            else f"I couldn't compute a verified volatility for {symbol} ({window})."
+        )
+    elif metric == "max_drawdown":
+        depth = values.get("max_drawdown_percent")
+        if isinstance(depth, (int, float)) and depth > 0:
+            text = (
+                f"Verified {symbol} max drawdown ({window}): -{float(depth):.2f}%, "
+                f"from {_money(values.get('peak_close'))} on {values.get('peak_date')} "
+                f"to {_money(values.get('trough_close'))} on {values.get('trough_date')}."
+            )
+        else:
+            text = f"Verified {symbol} max drawdown ({window}): none — no close fell below an earlier one."
+    else:
+        other = str(data.get("comparison_symbol") or "").upper()
+        correlation = values.get("correlation")
+        text = (
+            f"Verified correlation of {symbol} and {other} daily returns ({window}): {float(correlation):.2f}."
+            if isinstance(correlation, (int, float))
+            else f"I couldn't compute a verified correlation for {symbol} and {other} ({window})."
+        )
+    notes = [
+        str(item.get("reason"))
+        for item in (data.get("unknowns") or [])
+        if isinstance(item, dict) and item.get("reason")
+    ]
+    if notes:
+        text += " Note: " + "; ".join(notes) + "."
+    return text
 
 
 def _format_watchlist_intelligence(data: dict) -> str:
@@ -5425,6 +5532,8 @@ def _run_market_tool(
             timeframe=result.timeframe,
             arguments=arguments,
         ), True
+    if parsed.action == "get_price_statistics":
+        return _format_price_statistics_reply(result.data), True
     if parsed.action == "compare_symbols" and isinstance(result.data.get("rankings"), list):
         # Daily/weekly rankings describe completed bars. Once the regular
         # session has closed, those bars remain the correct comparison

@@ -1,9 +1,9 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 4: BF-14 to BF-18, BF-20)
-**Status:** In progress. Batches 1 to 4 are committed (batch 3's migration is applied to the live DB).
-**Scorecard:** 15 ✅ COMPLETE, 1 ⚠️ PARTIAL, 4 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 5: BF-04, completing BF-03)
+**Status:** In progress. Batches 1 to 5 are committed (batch 3's migration is applied to the live DB).
+**Scorecard:** 17 ✅ COMPLETE, 0 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
 
@@ -18,10 +18,10 @@ Status legend (same as the phase audits):
 - ❌ **NOT STARTED** — no change made yet
 - 🟡 **DEFERRED** — intentionally postponed
 
-Line numbers refer to the code as of batch 4. Each batch shifts
+Line numbers refer to the code as of batch 5. Each batch shifts
 `chat.py` (batch 1 added about 40 lines near the top, batch 2 about 120
-more, batch 4 about 30), so line numbers quoted in older notes or commits
-will not match.
+more, batch 4 about 30, batch 5 about 110), so line numbers quoted in
+older notes or commits will not match.
 
 ## Scorecard
 
@@ -29,8 +29,8 @@ will not match.
 |---|---|---|---|---|---|
 | BF-01 | Critical | Backend | Affirmation prefix confirms destructive actions | Verified | ✅ COMPLETE |
 | BF-02 | High | Backend | Position-size fallback maps numbers by order | Verified | ✅ COMPLETE |
-| BF-03 | High | Backend | Date numbers become calculator inputs | Verified | ⚠️ PARTIAL |
-| BF-04 | Medium | Backend | Market-metric questions dead-end in the calculator | Verified | ❌ NOT STARTED |
+| BF-03 | High | Backend | Date numbers become calculator inputs | Verified | ✅ COMPLETE |
+| BF-04 | Medium | Backend | Market-metric questions dead-end in the calculator | Verified | ✅ COMPLETE |
 | BF-05 | Medium | API | Positional argument misbinding in Chat router | Verified | ✅ COMPLETE |
 | BF-06 | Medium | Backend | Destructive actions cannot be confirmed with AI off | Code-read | ✅ COMPLETE |
 | BF-07 | Medium | Backend | Delete-alert confirmation does not name the alert | Code-read | ✅ COMPLETE |
@@ -48,10 +48,9 @@ will not match.
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next suggested order:**
-
-1. BF-04 (also finishes BF-03).
-2. The streaming group: BF-08, BF-09, BF-13.
+**Next suggested order:** the streaming group, BF-08, BF-09 and BF-13,
+possibly split into a backend batch (one reply path) and a frontend batch
+(timeout and Cancel).
 
 ---
 
@@ -133,15 +132,16 @@ The example now gives entry 50, stop 48, account 10000, risk 1%.
 
 ### BF-03 — Date numbers become calculator inputs
 
-**Status:** ⚠️ PARTIAL (2026-09-24, batch 1)
+**Status:** ✅ COMPLETE (2026-09-24, batch 1; completed in batch 5)
 **Where:** `_fallback_calculation`, `chat.py:683`; the new `_CALC_DATE_RE` at `chat.py:608`.
 
 **Reproduced:** "What was NVDA's return from Jan 5 to Jan 20?" produced
 `percentage_change(old=5, new=20)`, i.e. +300%.
 
-**Why ⚠️ PARTIAL:** the wrong answer is gone, but the date-range question
-still gets no real answer. The remaining work is the price-history return
-tool from the original fix (see Follow-ups, BF-04 and Enhancement 3).
+**Completed in batch 5:** batch 1 removed the wrong answer but left the
+question unanswered (⚠️ PARTIAL). The price-history return tool from BF-04
+now answers it: "What was NVDA's return from Jan 5 to Jan 20?" routes to
+`get_price_statistics` with `start=2026-01-05`, `end=2026-01-20`.
 
 **Resolution:** `_fallback_calculation` returns `None` when the message
 contains a calendar date. That covers a month name followed by a day
@@ -159,12 +159,10 @@ so the fallback now steps aside entirely.
 - `test_plain_percent_change_still_uses_the_fallback`
 
 **Follow-ups:**
-- **No date-range answer yet:** "return from Jan 5 to Jan 20" no longer
-  gets a wrong number, but it also does not get a real answer. That needs
-  the date-range return tool from BF-04 and Enhancement 3.
-- **Bare years:** these ("2024 to 2025") are not treated as dates,
-  because `from 2000 to 2500` can be real prices. The ticker case is
-  tracked under BF-04.
+- **Date-range answers:** now given by BF-04's tool.
+- **Bare years:** the calculator fallback still doesn't treat "2024 to
+  2025" as dates, because `from 2000 to 2500` can be real prices. With a
+  ticker, BF-04's parser reads it as a year range.
 - **"may" false positive:** "may" is matched as a month when followed by
   a number ("may 5"). This is unlikely in calculator wording but possible.
 
@@ -174,24 +172,106 @@ so the fallback now steps aside entirely.
 
 ### BF-04 — Market-metric questions dead-end in the calculator
 
-**Status:** ❌ NOT STARTED
-**Where:** `chat.py:2472-2494` (in `_build_deterministic_chat_reply`), `_CALCULATION_HINT` at `chat.py:570`, `_REUSE_MEMORY_HINT` at `chat.py:575`.
+**Status:** ✅ COMPLETE (2026-09-24, batch 5)
+**Where:** new tool `get_price_statistics` (`backend/ai/market_tools.py:1281`, request model at `:59`); new parser `backend/ai/price_metric_intent.py`; route at the top of `_build_deterministic_chat_reply` (`chat.py:2464`); reply formatter `_format_price_statistics_reply` (`chat.py:5199`); calculator op `return_correlation` (`calculator.py:278`); `_REUSE_MEMORY_HINT` (`chat.py:579`).
 
-**Reproduced:**
+**Reproduced (before the fix):**
 
 - "What is TSLA's max drawdown this year?", "What's AAPL volatility over
-  30 days?" and "What's the correlation between AAPL and MSFT?" all reply
-  "What values should I use for that calculation?"
-- "what's the return on it" silently re-runs the remembered
+  30 days?" and "What's the correlation between AAPL and MSFT?" all
+  replied "What values should I use for that calculation?"
+- "what's the return on it" silently re-ran the remembered
   `position_risk` calculation with stale inputs.
-- "percent change for AAPL from 2024 to 2025" routes to today's 1d
+- "percent change for AAPL from 2024 to 2025" routed to today's 1d
   `change_percent`.
 
-**Fix:** when a ticker is resolved, send drawdown, volatility, correlation
-and return questions to market tools that compute from bars. Remove `it`
-from the reuse hint (or require an explicit "same/previous calculation").
-Reject or ask about explicit date ranges instead of answering with today's
-change.
+**Resolution:**
+
+- **New read-only tool, `get_price_statistics`:** one statistic from a
+  symbol's regular-session daily closes over an explicit window: start/end
+  dates, `lookback_days`, or a per-metric default (volatility 30 days,
+  drawdown and correlation 365).
+  - **Metrics:**
+    - `return_percent`: first to last close in the window.
+    - `volatility`: daily standard deviation of returns, plus annualized
+      (× √252).
+    - `max_drawdown`: with the peak and trough closes and their dates.
+    - `correlation`: of daily returns, on the dates both symbols traded.
+  - **No model arithmetic:** every number comes from the calculator, and
+    the payload carries its formulas and assumptions.
+  - **Supported ranges only:** bars come through the same path as
+    `get_bars`, using the smallest provider range that covers the window.
+    An unknown range string would silently fetch 3 months. The tool then
+    trims the bars to the exact dates.
+  - **Honest coverage:** the payload states the dates and number of closes
+    actually used, and reports a coverage gap when the provider's history
+    starts after, or ends before, the requested window.
+- **Returns-based correlation:** a new calculator operation,
+  `return_correlation`, correlates daily returns. The existing
+  `correlation` correlates price levels, which makes any two trending
+  stocks look highly correlated.
+- **Parser, `price_metric_intent.py`:**
+  - **What it reads:** the metric, one or two tickers ("with the market"
+    uses SPY), and the window:
+    - date ranges ("from Jan 5 to Jan 20", "since Mar 3");
+    - year ranges and single years ("from 2024 to 2025", "in 2024");
+    - "YTD" / "this year", "last year" (the previous calendar year) and
+      "over the last year" (trailing 365 days);
+    - "N days/weeks/months/years" and "the last week/month/quarter".
+  - **Dates without a year:** a date without a year is the most recent one
+    not in the future.
+  - **Clarifying instead of guessing:** it asks when the window is
+    unreadable or in the future, or when a correlation lacks a second
+    symbol.
+  - **When it steps aside:**
+    - the message has its own price inputs (a calculator question);
+    - it asks for implied volatility (options);
+    - it names several tickers for a non-correlation metric (a
+      comparison).
+- **Chat route:** the route runs before the semantic route and the
+  calculator hint.
+  - **Skipped for other intents:** multi-step, why-did-it-move, anomaly,
+    scenario, historical P&L and watchlist messages.
+  - **Deferral:** trailing-window returns that the semantic route already
+    answers ("over the last week", "this month") keep that route.
+  - **Newly answered:** "over the last 5 days" and "over the last year"
+    returns had no route and now get this tool.
+- **Re-running a calculation needs an explicit reference:**
+  `_REUSE_MEMORY_HINT` requires "previous/same/those/last values, inputs,
+  numbers or calculation", or "again"/"re-run"/"recalculate". A bare "it"
+  or "last" no longer re-runs the remembered calculation.
+- **Registration:** the tool is registered and added to
+  `_MARKET_TOOL_ACTIONS` and `ChatReplyResponse.action`. It is also
+  documented in the model's tool list, so the model can select it too.
+  The pinned registry list in `test_tool_registry.py` was updated.
+
+**Tests:** `backend/tests/ai/test_price_statistics.py` (37 tests):
+- **Calculator:** the returns-vs-levels correlation and its input checks.
+- **Tool:** return between dates, volatility and range choice, drawdown
+  peak/trough, correlation on shared days, coverage gaps, too-few-closes,
+  request validation, and range selection.
+- **Parser:** 12 phrasings read correctly, 7 where it steps aside, and 4
+  where it asks.
+- **Chat routing:** routing, deferral to the semantic route, and the bare
+  "it" no longer re-running the last calculation.
+- **End to end:** a drawdown turn that the answer verifier marks
+  `verified`.
+
+Removing the route fails 3 tests; restoring the old reuse wording fails 1.
+
+**Follow-ups:**
+- **Stale counts:** the registry now has 43 tools and
+  `ChatReplyResponse.action` accepts 54 actions, so the counts in
+  `phase_audit_v5.md` ("42 tools", "53 actions") are out of date.
+- **Label mismatch:** "last week" / "last month" mean a trailing 7 or 30
+  days, while "last year" means the previous calendar year. That matches
+  common trader usage, and the reply shows the exact dates used.
+- **Timestamp convention:** bar dates are read from the timestamp's
+  first 10 characters, the same convention `get_session_stats` uses. A
+  provider that stamps daily bars at 00:00 UTC could shift a date by one;
+  this was not checked against live providers.
+- **Untested against live data:** the tool was not exercised against live
+  providers; all tests use patched bars.
 
 ### BF-05 — Positional argument misbinding in Chat router
 
@@ -282,7 +362,7 @@ an id. Its prompt already names the symbol and list, so it was left as is.
 ### BF-08 — Stream shows unverified model text before verification
 
 **Status:** ❌ NOT STARTED
-**Where:** `_generate_reply_streaming`, `chat.py:3801-3805`.
+**Where:** `_generate_reply_streaming`, `chat.py:3850-3854`.
 
 Deltas are the model's raw `reply` field, streamed before `verify_answer`
 and before any action runs. The note at `chat.py:544-551` records that the
@@ -296,14 +376,14 @@ alternative is to buffer until verification passes.
 ### BF-09 — Streaming and blocking reply paths have drifted
 
 **Status:** ❌ NOT STARTED
-**Where:** `_generate_reply` (`chat.py:2903`) vs `_generate_reply_streaming` (`chat.py:3649`).
+**Where:** `_generate_reply` (`chat.py:2952`) vs `_generate_reply_streaming` (`chat.py:3698`).
 
 - **No-data watchlist exemption:** the legacy "no data" degrade in
-  streaming (`chat.py:3684`) lacks the watchlist-intent exemption the
-  blocking path has (`chat.py:2946`). In a single-ticker session for a
+  streaming (`chat.py:3733`) lacks the watchlist-intent exemption the
+  blocking path has (`chat.py:2995`). In a single-ticker session for a
   ticker with no data, streaming refuses "add it to my watchlist".
 - **Parse failures:** streaming returns `extractor.text` (the raw
-  unparsed model reply) as the answer (`chat.py:3882`). Blocking returns
+  unparsed model reply) as the answer (`chat.py:3931`). Blocking returns
   "I couldn't process that — could you rephrase?"
 - **Time budget:** blocking passes `started_at` to the deterministic
   short-circuit; streaming does not, so the turn time budget differs.
@@ -471,7 +551,7 @@ provenance, which only the live response carries.
 ### BF-13 — Stream timeout, disconnect, and resend gaps
 
 **Status:** ❌ NOT STARTED
-**Where:** `frontend/src/services/api.ts` (`streamChatMessage`), `ChatPanel.tsx:388`, `chat_router.py:869-871`, `chat.py:1187`.
+**Where:** `frontend/src/services/api.ts` (`streamChatMessage`), `ChatPanel.tsx:388`, `chat_router.py:869-871`, `chat.py:1195`.
 
 - **No timeout:** the stream has no timeout or `AbortController`. A hung
   stream leaves `sending=true` and the input locked; unmounting does not
@@ -722,15 +802,36 @@ intended.
    (removes BF-09-class drift).
 2. **Server-side completion:** turns finish on the server even if the
    client disconnects, plus a Cancel button in the UI.
-3. **Market-metric tools:** period drawdown, volatility, correlation and
-   date-range return as tools. These give BF-03 and BF-04 real answers
-   instead of a clarifying question.
+3. ~~**Market-metric tools**~~: done in batch 5 as `get_price_statistics`
+   (BF-04).
 4. **Verification-gated streaming:** hold or mark streamed text until
    verification passes (BF-08).
 5. **Split `chat.py`:** the module is ~5,450 lines. Split it into intent
    routing, actions, turn orchestration and formatting.
 
 ## Verification
+
+### Batch 5 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| `backend/tests/ai/test_price_statistics.py` | 37 passed |
+| `backend/tests/ai`, `test_chat_router.py`, `test_chat_repository.py` | 1,086 passed, 30 subtests passed |
+| `ruff check` on every changed file | All checks passed (one import-order fix applied in `chat.py`) |
+
+**Mutation check:**
+- Removing the price-metric route fails 3 tests.
+- Restoring the old `_REUSE_MEMORY_HINT` fails 1.
+
+**Full backend suite (run before the batch 5 commit):**
+- 3,348 passed, 49 subtests passed, 0 failed, in 44 s. That is 37 more
+  than batch 4's run: the new tests.
+- No blocked outbound network attempts.
+- The same unclosed-transport `ResourceWarning` appeared, this time
+  attributed to `test_ai_manager.py::TestProviderStreaming::test_openai_stream_raises_unavailable_on_429`
+  rather than batch 4's `test_chat.py` test. Since it moves between
+  tests, it is likely released during cleanup from an earlier test
+  (unconfirmed).
 
 ### Batch 4 (2026-09-24)
 
@@ -747,7 +848,12 @@ test and they are the ones that use curl_cffi or the Chat code.
   fail without it.
 - BF-18 was not re-run with the guard removed (a real Yahoo request).
 
-The full backend suite was not run.
+**Full backend suite (run after the batch 4 commit, `43c5e17`):**
+- 3,311 passed, 49 subtests passed, 0 failed, in 46 s.
+- No blocked outbound network attempts were reported, so no test was
+  still depending on a real Yahoo call.
+- One `ResourceWarning` (unclosed asyncio transport) in
+  `test_chat.py::TestTurnIntent::test_news_question_pulls_news`.
 
 ### Batch 3 (2026-09-24)
 
@@ -798,7 +904,8 @@ The full backend suite was not run.
 - **Batch 1:** commit `b5afc49`, `fix(chat): harden confirmations, calculator fallbacks, and turn arguments`, on `development`.
 - **Batch 2:** commit `4381ae1`, `fix(chat): confirm safely with AI off and keep failed turns persistable`, on `development`.
 - **Batch 3:** commit `f251177`, `fix(chat): never reuse chat message and session ids`, on `development` (the migration was applied to the live DB before the commit).
-- **Batch 4:** commit `fix(chat): resolve class tickers and watchlist names, stop chains on questions`, on `development`.
+- **Batch 4:** commit `43c5e17`, `fix(chat): resolve class tickers and watchlist names, stop chains on questions`, on `development`.
+- **Batch 5:** commit `feat(chat): answer return, volatility, drawdown and correlation questions`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -818,3 +925,5 @@ The full backend suite was not run.
 | 2026-09-24 | BF-17 | ✅ COMPLETE | batch 4 | `backend/ai/chat.py`, `backend/tests/ai/test_chat_actions.py` | 1 test | `_BARE_NUM` replaces the `_NUM[4:]` slice. |
 | 2026-09-24 | BF-18 | ✅ COMPLETE | batch 4 | `backend/tests/conftest.py`, `backend/tests/test_live_resource_isolation.py` | 2 tests | curl_cffi `Session.request` / `AsyncSession.request` refused under pytest. |
 | 2026-09-24 | BF-20 | ✅ COMPLETE | batch 4 | `backend/tests/ai/test_context_news_fundamentals.py` | 2 tests fixed | Fake quote carries `data_status="LIVE"`. |
+| 2026-09-24 | BF-04 | ✅ COMPLETE | batch 5 | `backend/ai/market_tools.py`, `backend/ai/price_metric_intent.py` (new), `backend/ai/calculator.py`, `backend/ai/tool_registry.py`, `backend/ai/chat.py`, `backend/ai/prompt.py`, `backend/tests/ai/test_price_statistics.py` (new), `backend/tests/ai/test_tool_registry.py` | 37 tests | New `get_price_statistics` tool and parser; `return_correlation`; explicit reuse wording. |
+| 2026-09-24 | BF-03 | ✅ COMPLETE | batch 5 | (via BF-04) | `test_chat_routes_metric_questions_to_the_tool` | Date-range return questions now get a verified answer. |

@@ -53,6 +53,45 @@ class ComparisonRequest(BaseModel):
     limit: int = Field(default=25, ge=1, le=25)
 
 
+PriceStatistic = Literal["return_percent", "volatility", "max_drawdown", "correlation"]
+
+
+class PriceStatisticsRequest(BaseModel):
+    """One statistic over a symbol's daily closes for an explicit window.
+
+    The window is ``start``..``end`` (calendar dates, New York), or the last
+    ``lookback_days`` calendar days, or a per-metric default when neither is
+    given. ``return_percent`` requires an explicit window.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    metric: PriceStatistic
+    # correlation only: the second series.
+    comparison_symbol: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")
+    start: date | None = None
+    end: date | None = None
+    lookback_days: int | None = Field(default=None, ge=2, le=1826)
+
+    @model_validator(mode="after")
+    def _consistent_window(self) -> PriceStatisticsRequest:
+        if self.start is not None and self.lookback_days is not None:
+            raise ValueError("give either start or lookback_days, not both")
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("start must not be after end")
+        if self.metric == "correlation":
+            if not self.comparison_symbol:
+                raise ValueError("correlation needs comparison_symbol")
+            if self.comparison_symbol.upper() == self.symbol.upper():
+                raise ValueError("correlation needs two different symbols")
+        elif self.comparison_symbol:
+            raise ValueError("comparison_symbol is only used for correlation")
+        if self.metric == "return_percent" and self.start is None and self.lookback_days is None:
+            raise ValueError("return_percent needs a start date or lookback_days")
+        return self
+
+
 class MarketContextRequest(BaseModel):
     """Empty request for the composite market-context engine."""
 
@@ -1201,6 +1240,171 @@ def what_changed_tool(request: ChangeAnalysisRequest) -> BaseModel:
         sources=sources,
         conclusion={"status": "verified_comparison" if changes else "insufficient_baseline"},
         provider="MarketLens comparison",
+    )
+
+
+# Default lookback (calendar days) when the request names no window.
+_PRICE_STATISTIC_DEFAULT_DAYS: dict[str, int] = {"volatility": 30, "max_drawdown": 365, "correlation": 365}
+# The provider ranges daily bars support, with the calendar days each covers.
+# An unknown range string silently falls back to 3mo, so only these are used.
+_DAILY_RANGES: tuple[tuple[str, int], ...] = (
+    ("1mo", 30), ("3mo", 91), ("6mo", 182), ("1y", 365), ("2y", 730), ("5y", 1826),
+)
+_TRADING_DAYS_PER_YEAR = 252
+
+
+def _daily_range_covering(start: date, today: date) -> str:
+    needed = (today - start).days + 5  # slack for weekends/holidays at the edge
+    for name, days in _DAILY_RANGES:
+        if needed <= days:
+            return name
+    raise ValueError("price statistics support at most 5 years of daily history")
+
+
+def _closes_by_date(payload: dict[str, Any], start: date, end: date) -> list[tuple[str, float]]:
+    """(date, close) for daily bars inside start..end, oldest first."""
+    rows: dict[str, float] = {}
+    for bar in payload.get("bars", []):
+        close = bar.get("close")
+        day = str(bar.get("timestamp") or "")[:10]
+        if close is None or not day:
+            continue
+        try:
+            bar_date = date.fromisoformat(day)
+        except ValueError:
+            continue
+        if start <= bar_date <= end and float(close) > 0:
+            rows[day] = float(close)
+    return sorted(rows.items())
+
+
+def get_price_statistics_tool(request: PriceStatisticsRequest) -> BaseModel:
+    """Return, volatility, max drawdown, or return correlation from daily closes.
+
+    Bars come from the shared manager (same path as get_bars); every number
+    comes from the calculator, so Chat never does the arithmetic. The payload
+    states the window actually covered, which can be narrower than the one
+    requested when a provider's history starts later.
+    """
+    from backend.ai.calculator import CalculationRequest, calculate
+    from backend.utils.timezone import now_ny
+
+    today = now_ny().date()
+    end = min(request.end or today, today)
+    if request.start is not None:
+        start = request.start
+    else:
+        start = end - timedelta(days=request.lookback_days or _PRICE_STATISTIC_DEFAULT_DAYS[request.metric])
+    if start > end:
+        raise ValueError("the requested window starts in the future")
+    range_ = _daily_range_covering(start, today)
+
+    symbols = [request.symbol.upper()]
+    if request.comparison_symbol:
+        symbols.append(request.comparison_symbol.upper())
+    fetched = _fetch_bars_concurrently({
+        symbol: BarsRequest(symbol=symbol, timeframe="1d", range=range_, limit=2_000, session="regular")
+        for symbol in symbols
+    })
+    series: dict[str, list[tuple[str, float]]] = {}
+    sources: list[dict[str, Any]] = []
+    for symbol in symbols:
+        payload = fetched[symbol]
+        if isinstance(payload, Exception):
+            raise payload
+        series[symbol] = _closes_by_date(payload, start, end)
+        sources.append({
+            "name": "bars",
+            "symbol": symbol,
+            "provider": payload.get("provider"),
+            "timestamp": payload.get("source_timestamp"),
+        })
+
+    primary = series[symbols[0]]
+    if request.metric == "correlation":
+        other = dict(series[symbols[1]])
+        shared = [(day, close, other[day]) for day, close in primary if day in other]
+        if len(shared) < 3:
+            raise ValueError(f"fewer than three shared trading days for {symbols[0]} and {symbols[1]} in this window")
+        used_dates = [day for day, _, _ in shared]
+        result = calculate(CalculationRequest(
+            calculation="return_correlation",
+            prices=[close for _, close, _ in shared],
+            comparison_prices=[close for _, _, close in shared],
+        ))
+        values: dict[str, Any] = dict(result.values)
+    else:
+        minimum = 3 if request.metric == "volatility" else 2
+        if len(primary) < minimum:
+            raise ValueError(f"fewer than {minimum} daily closes for {symbols[0]} in this window")
+        used_dates = [day for day, _ in primary]
+        closes = [close for _, close in primary]
+        if request.metric == "return_percent":
+            result = calculate(CalculationRequest(calculation="percentage_change", old_value=closes[0], new_value=closes[-1]))
+            values = {
+                "return_percent": result.values["percentage_change"],
+                "start_close": closes[0],
+                "end_close": closes[-1],
+            }
+        elif request.metric == "volatility":
+            result = calculate(CalculationRequest(calculation="volatility", prices=closes))
+            daily = float(result.values["period_volatility"] or 0.0)
+            values = {
+                "daily_volatility_percent": daily,
+                "annualized_volatility_percent": daily * math.sqrt(_TRADING_DAYS_PER_YEAR),
+            }
+        else:
+            result = calculate(CalculationRequest(calculation="max_drawdown", prices=closes))
+            peak_index = trough_index = best_peak = 0
+            deepest = 0.0
+            for index, close in enumerate(closes):
+                if close > closes[best_peak]:
+                    best_peak = index
+                depth = (closes[best_peak] - close) / closes[best_peak] * 100
+                if depth > deepest:
+                    deepest, peak_index, trough_index = depth, best_peak, index
+            values = {
+                "max_drawdown_percent": result.values["maximum_drawdown_percent"],
+                "peak_close": closes[peak_index],
+                "peak_date": used_dates[peak_index],
+                "trough_close": closes[trough_index],
+                "trough_date": used_dates[trough_index],
+            }
+
+    formulas = list(result.formulas)
+    assumptions = list(result.assumptions)
+    assumptions.append("Uses regular-session daily closes; a window edge on a non-trading day moves to the nearest trading day inside it.")
+    if request.metric == "volatility":
+        formulas.append(f"annualized = daily_volatility * sqrt({_TRADING_DAYS_PER_YEAR})")
+    unknowns: list[dict[str, Any]] = []
+    first_used, last_used = date.fromisoformat(used_dates[0]), date.fromisoformat(used_dates[-1])
+    # A gap wider than a long weekend means the provider's history does not
+    # cover the whole request; say so rather than implying it does.
+    if (first_used - start).days > 5:
+        unknowns.append({"type": "coverage", "reason": f"history available from {used_dates[0]}, after the requested start {start.isoformat()}"})
+    if (end - last_used).days > 5:
+        unknowns.append({"type": "coverage", "reason": f"latest daily close is {used_dates[-1]}, before the requested end {end.isoformat()}"})
+
+    source_times = [str(item["timestamp"]) for item in sources if item.get("timestamp")]
+    providers = sorted({str(item["provider"]) for item in sources if item.get("provider")})
+    return _Payload(
+        symbol=symbols[0],
+        comparison_symbol=symbols[1] if len(symbols) > 1 else None,
+        metric=request.metric,
+        timeframe="1d",
+        session="regular",
+        requested_start=start.isoformat(),
+        requested_end=end.isoformat(),
+        start_date=used_dates[0],
+        end_date=used_dates[-1],
+        observations=len(used_dates),
+        values={key: round(value, 8) if isinstance(value, float) else value for key, value in values.items()},
+        formulas=formulas,
+        assumptions=assumptions,
+        unknowns=unknowns,
+        sources=sources,
+        provider=providers[0] if len(providers) == 1 else "MarketLens price statistics",
+        source_timestamp=min(source_times) if source_times else None,
     )
 
 

@@ -909,6 +909,7 @@ class ChatReplyResponse(BaseModel):
         "why_did_it_move",
         "what_changed",
         "compare_symbols",
+        "get_price_statistics",
         "scenario_analysis",
         "historical_similarity",
         "signal_explanation",
@@ -1082,6 +1083,13 @@ _ACTION_TOOL_DOCS = (
       action_symbol and reflect current-session order flow / OHLCV — use \
       for "what's happening right now" questions, not history. \
       get_calendar returns upcoming earnings/catalyst dates for a symbol. \
+      get_price_statistics computes one statistic from daily closes: set \
+      action_tool_arguments.symbol and metric ("return_percent", \
+      "volatility", "max_drawdown", or "correlation" with \
+      comparison_symbol), plus a window as start/end ISO dates or \
+      lookback_days. Use it for a ticker's return between dates, \
+      historical volatility, max drawdown, or return correlation; never \
+      estimate these yourself. \
       import_csv parses trader-pasted CSV text (positions, watchlist \
       symbols, or journal rows) via action_tool_arguments.csv_text and \
       import_type — it only validates and returns rows, it never saves \
@@ -1351,7 +1359,7 @@ add_to_watchlist, remove_from_watchlist, create_watchlist, \
       get_application_help, get_alerts, get_signal_history, get_saved_scans, \
       get_sector_data, get_trend, get_confluence, \
       get_relative_strength, get_tape_state, get_session_stats, get_calendar, \
-      import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, save_to_journal, export_report, why_did_it_move, what_changed, compare_symbols, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
+      import_csv, build_trade_plan, assess_portfolio_risk, options_research, trade_journal_coach, decision_checklist, save_to_journal, export_report, why_did_it_move, what_changed, compare_symbols, get_price_statistics, scenario_analysis, historical_similarity, signal_explanation, counterargument_review, sensitivity_analysis, market_event_timeline, anomaly_analysis, assumption_tracking.
 """
     + _ACTION_TOOL_DOCS
 )
