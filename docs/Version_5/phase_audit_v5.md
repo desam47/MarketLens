@@ -1602,3 +1602,17 @@ until the line is removed. The end-to-end evaluation pins these defaults
   downgraded by an unavailable preparatory market baseline.
 - **Regression coverage.** The focused Chat/observability/action suite passed
   with 193 tests; Ruff and `git diff --check` passed.
+
+## AI Analysis quantitative context visibility (2026-09-24)
+
+- **Track-record context.** The AI Analysis card now renders the server-
+  authored resolved-call sample, win rate, and all-time win/loss/open/expired
+  counts when trade-plan tracking data is available.
+- **Peer context.** The card now renders bounded peer count, aligned/opposed
+  counts, same-sector context, primary sector, and each peer's direction and
+  strength. Empty or malformed optional context remains hidden safely.
+- **Responsive presentation.** The new context subsections use compact,
+  responsive styling so peer lists remain readable on narrow screens.
+- **Regression coverage.** AIAnalysisPanel coverage now includes the context
+  sections; the targeted panel suite passed with 11 tests, TypeScript passed,
+  and the production build compiled successfully.

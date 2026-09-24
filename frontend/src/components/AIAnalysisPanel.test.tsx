@@ -60,6 +60,8 @@ interface AIAnalysisResult {
     cache_status?: 'fresh' | 'cached';
     market_regime?: Record<string, unknown>;
     timeframe_scores?: Record<string, { direction?: string; strength?: string; confidence?: number }>;
+    track_record?: Record<string, unknown>;
+    correlation_context?: Record<string, unknown>;
     trade_plan_validation?: { status?: 'verified' | 'unavailable' | 'not_applicable'; reason?: string };
 }
 
@@ -174,6 +176,42 @@ describe('AIAnalysisPanel', () => {
         expect(screen.getByText(/Price \$201.25/)).toBeInTheDocument();
         expect(screen.getByText(/Market regime:/)).toHaveTextContent('risk on');
         expect(screen.getByText('1d').parentElement).toHaveTextContent('1d · bullish · strong · 82%');
+    });
+
+    it('shows track record and peer context returned by the backend', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            track_record: {
+                sample_size: 7,
+                win_rate: 0.71,
+                all_time_win_count: 6,
+                all_time_loss_count: 2,
+                all_time_open_count: 1,
+                all_time_expired_count: 0,
+            },
+            correlation_context: {
+                peer_count: 2,
+                aligned: 1,
+                opposed: 1,
+                same_sector_count: 1,
+                primary_sector: 'Technology',
+                peers: [
+                    { symbol: 'MSFT', direction: 'bullish', strength: 'strong' },
+                    { symbol: 'TSLA', direction: 'bearish', strength: 'weak' },
+                ],
+            },
+        }));
+        await act(async () => {
+            render(<AIAnalysisPanel symbol="AAPL" />);
+        });
+        expect(await screen.findByText('Track record')).toBeInTheDocument();
+        expect(screen.getByText(/7 resolved calls · 71% win rate/)).toBeInTheDocument();
+        expect(screen.getByText(/6 wins · 2 losses · 1 open · 0 expired/)).toBeInTheDocument();
+        expect(screen.getByText('Peer context')).toBeInTheDocument();
+        expect(screen.getByText(/2 peers · 1 aligned · 1 opposed · 1 same sector · Technology/)).toBeInTheDocument();
+        const peerItems = screen.getAllByRole('listitem');
+        expect(peerItems[0]).toHaveTextContent(/MSFT.*bullish.*strong/);
+        expect(peerItems[1]).toHaveTextContent(/TSLA.*bearish.*weak/);
     });
 
     it('withholds an unvalidated trade setup with its server-authored reason', async () => {

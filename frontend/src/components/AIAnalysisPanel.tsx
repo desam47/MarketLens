@@ -85,6 +85,16 @@ function labelValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.replace(/_/g, ' ') : null;
 }
 
+function recordNumber(record: Record<string, unknown> | undefined, key: string): number | null {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function recordText(record: Record<string, unknown> | undefined, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
 export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
   { symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps,
   ref: React.ForwardedRef<AIAnalysisPanelHandle>,
@@ -327,6 +337,22 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
   );
   const scoreEntries = analysis ? Object.entries(analysis.timeframe_scores || {}) : [];
   const regimeLabel = analysis ? labelValue(analysis.market_regime?.regime) : null;
+  const trackRecord = analysis?.track_record;
+  const correlation = analysis?.correlation_context;
+  const trackSample = recordNumber(trackRecord, 'sample_size');
+  const trackWinRate = recordNumber(trackRecord, 'win_rate');
+  const hasTrackRecord = !!trackRecord && Object.keys(trackRecord).length > 0;
+  const peers = correlation && Array.isArray(correlation.peers)
+    ? correlation.peers.filter((peer): peer is Record<string, unknown> => (
+      !!peer && typeof peer === 'object' && !Array.isArray(peer)
+    ))
+    : [];
+  const peerCount = recordNumber(correlation, 'peer_count');
+  const alignedPeers = recordNumber(correlation, 'aligned');
+  const opposedPeers = recordNumber(correlation, 'opposed');
+  const sameSectorPeers = recordNumber(correlation, 'same_sector_count');
+  const primarySector = recordText(correlation, 'primary_sector');
+  const hasCorrelation = !!correlation && (peers.length > 0 || peerCount !== null);
 
   return (
     <div id="ai-analysis-panel" className="card ai-analysis-card">
@@ -495,7 +521,7 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
             <p>{highlightMessage(analysis.summary, [symbol])}</p>
           </div>
 
-          {(regimeLabel || scoreEntries.length > 0) && (
+          {(regimeLabel || scoreEntries.length > 0 || hasTrackRecord || hasCorrelation) && (
             <section className="ai-section ai-quant-context" aria-label="Quantitative context">
               <h3>📊 Quantitative Context</h3>
               {regimeLabel && <p className="ai-context-regime">Market regime: <b>{regimeLabel}</b></p>}
@@ -508,6 +534,48 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
                       {typeof score.confidence === 'number' ? ` · ${Math.round(score.confidence * 100)}%` : ''}
                     </span>
                   ))}
+                  </div>
+              )}
+              {hasTrackRecord && (
+                <div className="ai-context-subsection" aria-label="AI trade-plan track record">
+                  <h4>Track record</h4>
+                  <p>
+                    {trackSample !== null ? `${trackSample} resolved call${trackSample === 1 ? '' : 's'}` : 'Historical calls'}
+                    {trackWinRate !== null ? ` · ${Math.round(trackWinRate * 100)}% win rate` : ''}
+                  </p>
+                  <p className="info-text">
+                    {recordNumber(trackRecord, 'all_time_win_count') ?? 0} wins ·{' '}
+                    {recordNumber(trackRecord, 'all_time_loss_count') ?? 0} losses ·{' '}
+                    {recordNumber(trackRecord, 'all_time_open_count') ?? 0} open ·{' '}
+                    {recordNumber(trackRecord, 'all_time_expired_count') ?? 0} expired
+                  </p>
+                </div>
+              )}
+              {hasCorrelation && (
+                <div className="ai-context-subsection" aria-label="Peer context">
+                  <h4>Peer context</h4>
+                  <p>
+                    {peerCount !== null ? `${peerCount} peer${peerCount === 1 ? '' : 's'}` : `${peers.length} peers`}
+                    {alignedPeers !== null ? ` · ${alignedPeers} aligned` : ''}
+                    {opposedPeers !== null ? ` · ${opposedPeers} opposed` : ''}
+                    {sameSectorPeers !== null ? ` · ${sameSectorPeers} same sector` : ''}
+                    {primarySector ? ` · ${primarySector}` : ''}
+                  </p>
+                  {peers.length > 0 && (
+                    <ul className="ai-peer-list">
+                      {peers.slice(0, 8).map((peer, index) => {
+                        const peerSymbol = recordText(peer, 'symbol');
+                        if (!peerSymbol) return null;
+                        const direction = labelValue(peer.direction) || 'unknown';
+                        const strength = labelValue(peer.strength);
+                        return (
+                          <li key={`${peerSymbol}-${index}`}>
+                            <b>{peerSymbol}</b> · {direction}{strength ? ` · ${strength}` : ''}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </div>
               )}
             </section>
