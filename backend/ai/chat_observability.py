@@ -26,6 +26,23 @@ PERFORMANCE_TARGETS_MS: dict[str, float] = {
 _SECRET_KEY = re.compile(r"(?:api.?key|secret|token|password|credential|authorization|cookie)", re.I)
 _PRIVATE_KEY = re.compile(r"(?:journal|private|prompt|transcript|content|message|thesis|invalidation)", re.I)
 _PRIVATE_EXACT_KEYS = {"entry", "notes", "note", "comment", "comments", "description", "text"}
+_RAW_ERROR_MARKER = re.compile(
+    r"(?:traceback|jsondecodeerror|httpx\.|requests\.|response\s+body|status_code|"
+    r"api[\s_-]?key|authorization|bearer\s+|cookie|password|secret|token\s*=|"
+    r"\bat\s+0x[0-9a-f]+|\bfile\s+['\"])",
+    re.I,
+)
+
+_SAFE_ERROR_BY_KIND = {
+    "timeout": "That data request timed out. Please retry.",
+    "tool_timeout": "That data request timed out. Please retry.",
+    "provider_exception": "The AI provider is unavailable right now. Please retry.",
+    "provider_no_text": "The AI provider returned no usable answer. Please retry.",
+    "parse_error": "The AI provider returned an unusable answer. Please retry.",
+    "action_exception": "The requested operation failed safely. Please retry.",
+    "calculation_error": "I couldn't complete that calculation safely.",
+    "tool_error": "I couldn't retrieve that data safely.",
+}
 
 
 def sanitize_arguments(value: Any, *, depth: int = 0) -> Any:
@@ -53,6 +70,47 @@ def sanitize_arguments(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     return str(value)[:MAX_ARGUMENT_TEXT]
+
+
+def sanitize_error_message(
+    error: Any,
+    *,
+    failure_kind: str | None = None,
+    default: str = "I couldn't retrieve that data safely.",
+) -> str:
+    """Return a bounded, non-sensitive error suitable for Chat or traces.
+
+    Provider exceptions often contain response bodies, URLs, credentials, or
+    stack frames. Those details are useful in server logs but must not cross
+    into the visible reply, response blocks, API trace, or persisted message.
+    Short domain errors such as ``Watchlist not found`` remain useful.
+    """
+    mapped = _SAFE_ERROR_BY_KIND.get(str(failure_kind or "").lower())
+    if mapped:
+        return mapped
+    if error is None:
+        return default
+    text = str(error).strip()
+    if not text:
+        return default
+    first_line = text.splitlines()[0].strip()
+    if not first_line or len(first_line) > 240 or _RAW_ERROR_MARKER.search(first_line):
+        return default
+    # JSON and list payloads are overwhelmingly provider/error-body material;
+    # never copy them into Chat even when their text looks innocuous.
+    if first_line.startswith(("{", "[")) or ("{" in first_line and "}" in first_line):
+        return default
+    return first_line
+
+
+def sanitize_warnings(warnings: Any) -> list[str]:
+    """Keep data-quality warnings bounded before they enter Chat blocks."""
+    if not isinstance(warnings, (list, tuple)):
+        return []
+    return [
+        sanitize_error_message(warning, default="The tool returned a data-quality warning.")
+        for warning in list(warnings)[:8]
+    ]
 
 
 def _target_class(trace: list[dict[str, Any]]) -> str:
@@ -107,4 +165,6 @@ __all__ = [
     "PERFORMANCE_TARGETS_MS",
     "build_turn_observability",
     "sanitize_arguments",
+    "sanitize_error_message",
+    "sanitize_warnings",
 ]

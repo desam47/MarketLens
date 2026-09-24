@@ -5,7 +5,12 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from backend.ai.chat import CHAT_PARSE_MAX_ATTEMPTS, _complete_and_parse
-from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
+from backend.ai.chat_observability import (
+    build_turn_observability,
+    sanitize_arguments,
+    sanitize_error_message,
+    sanitize_warnings,
+)
 from backend.ai.evaluations.runner import CASES_PATH
 
 
@@ -24,6 +29,24 @@ def test_sanitized_arguments_remove_secrets_and_private_prose() -> None:
         "entry": "[private omitted]",
         "nested": {"token": "[redacted]"},
     }
+
+
+def test_error_sanitizer_maps_failures_and_drops_provider_payloads() -> None:
+    raw = 'Traceback (most recent call last): provider returned {"api_key":"secret"}'
+    assert sanitize_error_message(raw, failure_kind="provider_exception") == (
+        "The AI provider is unavailable right now. Please retry."
+    )
+    assert "secret" not in sanitize_error_message(raw)
+    assert sanitize_error_message("Watchlist \"Missing\" not found.") == 'Watchlist "Missing" not found.'
+
+
+def test_warning_sanitizer_bounds_and_redacts_raw_provider_warnings() -> None:
+    warnings = sanitize_warnings([
+        "Provider data status: STALE.",
+        'gateway response body {"token":"secret"}',
+    ])
+    assert warnings[0] == "Provider data status: STALE."
+    assert warnings[1] == "The tool returned a data-quality warning."
 
 
 def test_turn_observability_counts_calls_retries_failures_and_evidence() -> None:

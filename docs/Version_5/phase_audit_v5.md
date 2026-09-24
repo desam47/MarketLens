@@ -1303,8 +1303,8 @@ several "complete" claims. Fixed, each with a regression test:
     risk, P&L, options structures, and freshness are formatted explicitly;
     break-even P&L, zero changes, and credit spreads have dedicated regression
     coverage. Typed cards and tool pills continue to render structured UI, not
-    raw payloads. Provider-error text is intentionally tracked below as a
-    separate remaining sanitization gap.
+    raw payloads. Provider-error text is normalized by the Chat sanitization
+    pass documented below.
 
 12. **After-close comparison freshness.** The deterministic comparison route
     now resolves its omitted default timeframe to `1d` before executing the
@@ -1324,12 +1324,6 @@ clean `tsc --noEmit`.
 
 These are not fixed. They are recorded so the scorecard is not read as
 covering them.
-
-- **Chat provider-error formatting.** The successful-response formatter does
-  not yet normalize every `ToolResult.error` before it is interpolated into a
-  user-facing unavailable message. A provider may therefore still expose a
-  raw error payload on failure; this requires a dedicated error-sanitization
-  pass and is not claimed as complete by the prose-format work above.
 
 - **5.3.5 concurrency.** Per-symbol reads inside comparisons and portfolio
   risk now run in parallel, but chained steps still run one after another:
@@ -1591,3 +1585,20 @@ until the line is removed. The end-to-end evaluation pins these defaults
 - **Regression coverage.** Focused backend coverage passed with 26 tests;
   frontend API/panel coverage passed with 17 tests; the production build,
   Ruff, and diff checks passed.
+
+## Chat provider-error sanitization and offline action integrity (2026-09-24)
+
+- **Safe failure messages.** Provider exceptions, timeouts, parse failures,
+  tool failures, calculation failures, and action exceptions now map to
+  bounded trader-facing messages. Short domain errors remain useful, while
+  raw JSON, response bodies, tracebacks, credentials, and multiline provider
+  payloads are rejected.
+- **Persistence boundary.** Sanitization is applied before errors or tool
+  warnings enter user replies, response blocks, planner traces, or persisted
+  Chat messages. Warning lists are bounded and sanitized as well.
+- **Offline CRUD behavior.** Explicitly resolved watchlist symbols remain
+  available to watchlist CRUD routing even when quote/context providers are
+  unavailable. Successful CRUD actions remain grounded instead of being
+  downgraded by an unavailable preparatory market baseline.
+- **Regression coverage.** The focused Chat/observability/action suite passed
+  with 193 tests; Ruff and `git diff --check` passed.

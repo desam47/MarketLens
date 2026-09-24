@@ -48,6 +48,7 @@ from backend.ai.chat import (
 from backend.ai.manager import ai_manager
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.provider import AIResponse
+from backend.ai.tool_registry import ToolResult
 from backend.config.settings import settings
 from backend.models import (
     Alert,
@@ -1318,6 +1319,29 @@ class TestRunActionNeverRaises(_DBBase):
         self.assertFalse(grounded)
         self.assertIn("went wrong", text.lower())
         self.assertEqual(trace[-1]["failure_kind"], "action_exception")
+
+    @patch(
+        "backend.ai.chat.default_registry.execute",
+        return_value=ToolResult(
+            tool_name="get_quote",
+            ok=False,
+            provider="openai",
+            error='gateway response {"api_key":"do-not-show"}',
+            failure_kind="tool_error",
+        ),
+    )
+    def test_market_tool_error_is_safe_in_reply_and_trace(self, _execute):
+        trace: list[dict] = []
+        text, grounded, _ = _run_action(
+            self.db,
+            _parsed(action="get_quote", action_tool_arguments={"symbol": "AAPL"}),
+            trace=trace,
+        )
+        self.assertFalse(grounded)
+        self.assertIn("couldn't retrieve that safely", text.lower())
+        self.assertNotIn("api_key", text)
+        self.assertNotIn("do-not-show", text)
+        self.assertNotIn("do-not-show", json.dumps(trace))
 
 
 class TestRunActionInvalidatesBaseline(_DBBase):

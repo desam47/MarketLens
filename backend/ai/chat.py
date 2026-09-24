@@ -71,7 +71,12 @@ from datetime import UTC, date, datetime, timedelta
 from backend.ai.analyze import analyze_symbol
 from backend.ai.answer_verifier import assign_evidence_ids, verify_answer
 from backend.ai.calculator import CalculationRequest
-from backend.ai.chat_observability import build_turn_observability, sanitize_arguments
+from backend.ai.chat_observability import (
+    build_turn_observability,
+    sanitize_arguments,
+    sanitize_error_message,
+    sanitize_warnings,
+)
 from backend.ai.chat_symbols import extract_unresolved_explicit_symbols, resolve_turn_symbols
 from backend.ai.context import InsufficientDataError, build_context
 from backend.ai.manager import ai_manager
@@ -2767,9 +2772,25 @@ def _run_deterministic_shortcircuit(
     ``_generate_reply`` and ``_generate_reply_streaming`` so the logic
     only lives in one place.
     """
+    # A CRUD request can be valid even when the ticker has no current market
+    # data. Keep explicitly resolved-but-unavailable symbols in the intent
+    # planner for those requests only; generic market questions must still
+    # reach the model's unavailable-data path instead of becoming a ticker
+    # lookup merely because context construction failed.
+    focus_symbols = [b["symbol"] for b in symbol_blocks]
+    if any(
+        pattern.search(user_content)
+        for pattern in (
+            _WATCHLIST_ADD_INTENT,
+            _WATCHLIST_CREATE_INTENT,
+            _WATCHLIST_REMOVE_FROM_INTENT,
+            _WATCHLIST_DELETE_INTENT,
+        )
+    ):
+        focus_symbols = list(dict.fromkeys([*focus_symbols, *unavailable]))
     deterministic = _build_deterministic_chat_reply(
         user_content,
-        focus_symbols=[b["symbol"] for b in symbol_blocks],
+        focus_symbols=focus_symbols,
         planner_state=planner_state,
     )
     if isinstance(deterministic, str):
@@ -2834,6 +2855,15 @@ def _generate_reply(
         and unavailable
         and base_symbols
         and set(unavailable) == {s.upper() for s in base_symbols}
+        and not any(
+            pattern.search(user_content)
+            for pattern in (
+                _WATCHLIST_ADD_INTENT,
+                _WATCHLIST_CREATE_INTENT,
+                _WATCHLIST_REMOVE_FROM_INTENT,
+                _WATCHLIST_DELETE_INTENT,
+            )
+        )
     ):
         return f"I don't have enough data on {unavailable[0]} yet to answer that.", False, []
 
@@ -3233,8 +3263,26 @@ def _trace_is_action_only(trace: list[dict]) -> bool:
     ``_known_symbols()`` yet (e.g. just being added to a watchlist), but
     a successful action is not a data-quality problem.
     """
-    substantive = [e for e in trace if e.get("kind") not in {"context", "regeneration"}]
-    return bool(substantive) and all(e.get("kind") == "step" and e.get("status") == "completed" for e in substantive)
+    crud_tools = {
+        "create_alert",
+        "modify_alert",
+        "delete_alert",
+        "add_to_watchlist",
+        "remove_from_watchlist",
+        "create_watchlist",
+        "delete_watchlist",
+    }
+    substantive = [
+        e
+        for e in trace
+        if e.get("kind") not in {"context", "regeneration"}
+        and e.get("tool") != "chat_market_baseline"
+    ]
+    return bool(substantive) and all(
+        (e.get("kind") == "step" and e.get("status") == "completed")
+        or (e.get("tool") in crud_tools and e.get("ok") is True)
+        for e in substantive
+    )
 
 
 def _run_turn_actions(
@@ -4311,7 +4359,13 @@ def _browser_preset_for_query(query: str) -> dict | None:
 
 def _run_saved_browser_preset(db, parsed, preset: dict) -> tuple[str, bool, list[str]]:
     """Execute a validated browser preset through the Scanner filter engine."""
-    from backend.api.scanner.router import _FilterRequest, _build_filter, _scoped_cache, _split_earnings_exclusion, _without_upcoming_earnings
+    from backend.api.scanner.router import (
+        _build_filter,
+        _FilterRequest,
+        _scoped_cache,
+        _split_earnings_exclusion,
+        _without_upcoming_earnings,
+    )
     from backend.scanner.ranking import default_ranking_engine
     from backend.scanner.scanner import market_scanner
 
@@ -4378,19 +4432,24 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
         ToolRequest(tool_name="calculate", arguments=request.model_dump())
     )
     if not result.ok:
+        safe_error = sanitize_error_message(
+            result.error,
+            failure_kind=result.failure_kind or "calculation_error",
+            default="I couldn't complete that calculation safely.",
+        )
         if trace is not None:
             trace.append({
                 "tool": "calculate",
                 "kind": "calculation",
                 "ok": False,
                 "provider": result.provider,
-                "error": result.error,
+                "error": safe_error,
                 "failure_kind": "calculation_error",
                 "duration_ms": result.duration_ms,
                 "arguments": sanitize_arguments(request.model_dump(mode="json")),
                 "fallback": result.fallback,
             })
-        return f"I couldn't calculate that safely: {result.error}", False
+        return f"I couldn't calculate that safely: {safe_error}", False
     if trace is not None:
         trace.append({
             "tool": "calculate",
@@ -5042,12 +5101,16 @@ def _run_market_tool(
         )
     )
     if not result.ok:
+        safe_error = sanitize_error_message(
+            result.error,
+            failure_kind=result.failure_kind or "tool_error",
+        )
         if trace is not None:
             trace.append({
                 "tool": parsed.action,
                 "ok": False,
                 "provider": result.provider,
-                "error": result.error,
+                "error": safe_error,
                 "failure_kind": result.failure_kind or "tool_error",
                 "duration_ms": result.duration_ms,
                 "arguments": {**sanitize_arguments(trace_argument_source), **browser_markers},
@@ -5064,13 +5127,13 @@ def _run_market_tool(
             timeframe_label = {"1d": "daily", "1wk": "weekly"}.get(timeframe, timeframe)
             return (
                 f'I couldn\'t retrieve {timeframe_label} watchlist intelligence for "{scope}": '
-                f"{result.error}",
+                f"{safe_error}",
                 False,
             )
         if parsed.action == "get_risk_dashboard" and parsed.action_query in {"portfolio_change", "portfolio_weakness"}:
             label = "changes" if parsed.action_query == "portfolio_change" else "weakness ranking"
-            return f"Portfolio {label} is unavailable from {result.provider or 'MarketLens'}: {result.error}", False
-        return f"I couldn't retrieve that safely: {result.error}", False
+            return f"Portfolio {label} is unavailable from {result.provider or 'MarketLens'}: {safe_error}", False
+        return f"I couldn't retrieve that safely: {safe_error}", False
     if trace is not None:
         trace_item = {
             "tool": parsed.action,
@@ -5082,7 +5145,7 @@ def _run_market_tool(
             "timeframe": result.timeframe,
             "fallback": result.fallback,
             "entitlement": result.entitlement,
-            "warnings": result.warnings,
+            "warnings": sanitize_warnings(result.warnings),
             "duration_ms": result.duration_ms,
             "arguments": {**sanitize_arguments(trace_argument_source), **browser_markers},
             "cache_hit": bool(result.data.get("cache_hit", False)),
@@ -5304,12 +5367,17 @@ def _run_action(
         )
     except Exception as e:  # noqa: BLE001 — a tool call must never crash the turn
         logger.warning("chat action %s failed: %s", parsed.action, e)
+        safe_error = sanitize_error_message(
+            e,
+            failure_kind="action_exception",
+            default="Something went wrong doing that — please try again.",
+        )
         if trace is not None:
             trace.append({
                 "tool": parsed.action,
                 "ok": False,
                 "provider": "MarketLens",
-                "error": str(e),
+                "error": safe_error,
                 "failure_kind": "action_exception",
                 "arguments": _action_trace_arguments(parsed),
                 "provider_request_count": 0,
