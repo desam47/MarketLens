@@ -11,7 +11,14 @@
  *   - Key levels
  *   - Provider/model attribution
  */
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, {
+  forwardRef,
+  useEffect,
+  useState,
+  useCallback,
+  useImperativeHandle,
+  useRef,
+} from 'react';
 import api, { AIAnalysisResult, AIConfig, AIJobStatusResponse } from '../services/api';
 import { DEFAULT_TIMEFRAME } from '../utils/timeframeUtils';
 import { highlightMessage } from '../utils/textHighlight';
@@ -22,6 +29,15 @@ interface AIAnalysisPanelProps {
   symbol: string;
   timeframe?: string;
 }
+
+export interface AIAnalysisPanelHandle {
+  runBackground: (templateId?: number) => Promise<void>;
+  cancelBackground: () => Promise<void>;
+  refreshAnalysis: () => void;
+}
+
+export const AI_BACKGROUND_POLL_MS = 2000;
+export const AI_BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000;
 
 function trendColor(trend: string): string {
   if (trend === 'bullish') return '#10b981';
@@ -69,17 +85,24 @@ function labelValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.replace(/_/g, ' ') : null;
 }
 
-export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps) {
+export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
+  { symbol, timeframe = DEFAULT_TIMEFRAME }: AIAnalysisPanelProps,
+  ref: React.ForwardedRef<AIAnalysisPanelHandle>,
+) {
     const [analysis, setAnalysis] = useState<AIAnalysisResult | null>(null);
     const [config, setConfig] = useState<AIConfig | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [hasRun, setHasRun] = useState(false);
     const [toggling, setToggling] = useState(false);
-    const [, setBackgroundJobId] = useState<string | null>(null);
+    const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
     const [backgroundStatus, setBackgroundStatus] = useState<string | null>(null);
     const [backgroundError, setBackgroundError] = useState<string | null>(null);
     const pollRef = useRef<number | null>(null);
+    const backgroundTimeoutRef = useRef<number | null>(null);
+    const backgroundRunIdRef = useRef(0);
+    const backgroundAbortRef = useRef<AbortController | null>(null);
+    const backgroundTemplateIdRef = useRef<number | undefined>(undefined);
     const analysisRequestIdRef = useRef(0);
     const analysisAbortRef = useRef<AbortController | null>(null);
 
@@ -92,6 +115,24 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         return () => { cancelled = true; };
     }, []);
 
+    const clearBackgroundTimers = useCallback(() => {
+        if (pollRef.current !== null) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+        if (backgroundTimeoutRef.current !== null) {
+            clearTimeout(backgroundTimeoutRef.current);
+            backgroundTimeoutRef.current = null;
+        }
+    }, []);
+
+    const invalidateBackground = useCallback(() => {
+        backgroundRunIdRef.current += 1;
+        backgroundAbortRef.current?.abort();
+        backgroundAbortRef.current = null;
+        clearBackgroundTimers();
+    }, [clearBackgroundTimers]);
+
     const runAnalysis = useCallback(async (forceRefresh = false) => {
         if (!symbol) return;
         const requestId = ++analysisRequestIdRef.current;
@@ -102,11 +143,8 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         setError(null);
         setAnalysis(null);
         setHasRun(false);
-        // Clear any stale background job state
-        if (pollRef.current !== null) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-        }
+        // A synchronous run supersedes any template-backed background job.
+        invalidateBackground();
         setBackgroundJobId(null);
         setBackgroundStatus(null);
         setBackgroundError(null);
@@ -128,64 +166,109 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
                 analysisAbortRef.current = null;
             }
         }
-    }, [symbol, timeframe]);
+    }, [invalidateBackground, symbol, timeframe]);
 
-  // ── Background job runner ─────────────────────────────────────────────
+    // ── Background job runner ─────────────────────────────────────────────
 
-  const runBackground = useCallback(async (templateId?: number) => {
-    if (!symbol) return;
-    setBackgroundError(null);
-    setBackgroundStatus('queued');
-    try {
-      const { job_id } = await api.enqueueAIJob({
-        symbol,
-        timeframe,
-        template_id: templateId,
-      });
-      setBackgroundJobId(job_id);
-      // Start polling
-      const poll = async () => {
+    const runBackground = useCallback(async (templateId?: number) => {
+        if (!symbol) return;
+        invalidateBackground();
+        const runId = backgroundRunIdRef.current;
+        const controller = new AbortController();
+        backgroundAbortRef.current = controller;
+        backgroundTemplateIdRef.current = templateId;
+        setBackgroundJobId(null);
+        setBackgroundError(null);
+        setBackgroundStatus('queued');
         try {
-          const status: AIJobStatusResponse = await api.getAIJob(job_id);
-          setBackgroundStatus(status.status);
-          if (status.status === 'finished' && status.result) {
-            setAnalysis(status.result as AIAnalysisResult);
-            setHasRun(true);
-            setBackgroundStatus('done');
-            clearInterval(pollRef.current!);
-            pollRef.current = null;
-          } else if (status.status === 'failed') {
-            setBackgroundError(status.error || 'Job failed');
-            setBackgroundStatus('failed');
-            clearInterval(pollRef.current!);
-            pollRef.current = null;
-          }
-        } catch (_) {
-          // Keep polling; worker may not have started yet
-        }
-      };
-      pollRef.current = window.setInterval(poll, 2000) as unknown as number;
-    } catch (e: any) {
-      setBackgroundError(e?.message || 'Failed to enqueue job');
-      setBackgroundStatus(null);
-    }
-  }, [symbol, timeframe]);
+            const { job_id } = await api.enqueueAIJob({
+                symbol,
+                timeframe,
+                template_id: templateId,
+            }, controller.signal);
+            if (runId !== backgroundRunIdRef.current) return;
+            setBackgroundJobId(job_id);
 
-  // Expose runBackground via a data attribute so AITemplatesPanel can trigger it.
-  // (Simple cross-component communication without context or prop-drilling.)
-  useEffect(() => {
-    const el = document.getElementById('ai-analysis-panel');
-    if (el) {
-      (el as any).runBackground = runBackground;
-      (el as any).refreshAnalysis = () => runAnalysis(true);
-    }
-    return () => {
-      if (el) {
-        delete (el as any).runBackground;
-        delete (el as any).refreshAnalysis;
-      }
-    };
-  }, [runBackground, runAnalysis]);
+            const finish = () => {
+                clearBackgroundTimers();
+                // Invalidate any poll request that was already in flight so
+                // a late response cannot resurrect a terminal state.
+                backgroundRunIdRef.current += 1;
+                backgroundAbortRef.current?.abort();
+                backgroundAbortRef.current = null;
+            };
+
+            const poll = async () => {
+                if (runId !== backgroundRunIdRef.current) return;
+                try {
+                    const status: AIJobStatusResponse = await api.getAIJob(job_id, controller.signal);
+                    if (runId !== backgroundRunIdRef.current) return;
+                    setBackgroundStatus(status.status);
+                    if (status.status === 'finished') {
+                        setBackgroundError(null);
+                        if (status.result) {
+                            setAnalysis(status.result as AIAnalysisResult);
+                            setHasRun(true);
+                            setBackgroundStatus('done');
+                        } else {
+                            setBackgroundError('Background analysis finished without a result.');
+                            setBackgroundStatus('failed');
+                        }
+                        finish();
+                    } else if (status.status === 'failed') {
+                        setBackgroundError('Background analysis failed. Retry or run it synchronously.');
+                        setBackgroundStatus('failed');
+                        finish();
+                    } else if (status.status === 'cancelled') {
+                        setBackgroundError('Background analysis was cancelled.');
+                        setBackgroundStatus('cancelled');
+                        finish();
+                    }
+                } catch (e: any) {
+                    if (runId !== backgroundRunIdRef.current || e?.name === 'AbortError') return;
+                    // A transient polling failure is non-terminal; the timeout
+                    // below still gives the user a deterministic recovery path.
+                    setBackgroundError('Unable to check the background job; retrying…');
+                }
+            };
+
+            void poll();
+            pollRef.current = window.setInterval(() => { void poll(); }, AI_BACKGROUND_POLL_MS);
+            backgroundTimeoutRef.current = window.setTimeout(() => {
+                if (runId !== backgroundRunIdRef.current) return;
+                backgroundAbortRef.current?.abort();
+                finish();
+                setBackgroundStatus('timed_out');
+                setBackgroundError('Background analysis timed out. Retry or run it synchronously.');
+            }, AI_BACKGROUND_TIMEOUT_MS);
+        } catch (e: any) {
+            if (runId !== backgroundRunIdRef.current || e?.name === 'AbortError') return;
+            setBackgroundError('Unable to queue background analysis. Retry or run it synchronously.');
+            setBackgroundStatus('failed');
+            backgroundAbortRef.current = null;
+        }
+    }, [clearBackgroundTimers, invalidateBackground, symbol, timeframe]);
+
+    const cancelBackground = useCallback(async () => {
+        const jobId = backgroundJobId;
+        invalidateBackground();
+        setBackgroundJobId(null);
+        setBackgroundStatus('cancelled');
+        setBackgroundError('Background analysis was cancelled.');
+        if (!jobId) return;
+        try {
+            await api.cancelAIJob(jobId);
+        } catch (_) {
+            // The local cancellation still stops polling even if the worker
+            // has already completed or the queue is temporarily unavailable.
+        }
+    }, [backgroundJobId, invalidateBackground]);
+
+    useImperativeHandle(ref, () => ({
+        runBackground,
+        cancelBackground,
+        refreshAnalysis: () => { void runAnalysis(true); },
+    }), [cancelBackground, runAnalysis, runBackground]);
 
   // Auto-run on mount when AI is enabled and the symbol changes.
   useEffect(() => {
@@ -222,12 +305,12 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
       analysisRequestIdRef.current += 1;
       analysisAbortRef.current?.abort();
       analysisAbortRef.current = null;
-      if (pollRef.current !== null) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      backgroundRunIdRef.current += 1;
+      backgroundAbortRef.current?.abort();
+      backgroundAbortRef.current = null;
+      clearBackgroundTimers();
     };
-  }, []);
+  }, [clearBackgroundTimers]);
 
   // The primary provider is unhealthy/rate-limited right now if the
   // answer actually came from something other than what's configured
@@ -279,13 +362,18 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
           </label>
         )}
         {backgroundStatus === 'queued' || backgroundStatus === 'started' ? (
-          <button
-            className="btn btn-small btn-loading"
-            disabled
-            title="Background analysis in progress"
-          >
-            ⏳ {backgroundStatus === 'queued' ? 'Queued…' : 'Running…'}
-          </button>
+          <span className="ai-background-actions">
+            <span className="btn btn-small btn-loading" aria-live="polite">
+              ⏳ {backgroundStatus === 'queued' ? 'Queued…' : 'Running…'}
+            </span>
+            <button
+              className="btn btn-small"
+              onClick={() => { void cancelBackground(); }}
+              title="Stop waiting for this background analysis"
+            >
+              Cancel
+            </button>
+          </span>
         ) : (
           <button
             className={`btn btn-small ${loading ? 'btn-loading' : ''}`}
@@ -312,7 +400,15 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
         )}
         {backgroundError && (
             <div className="ai-error">
-                <p>⚠️ Background job failed: {backgroundError}</p>
+                <p>⚠️ {backgroundError}</p>
+                {(backgroundStatus === 'failed' || backgroundStatus === 'timed_out' || backgroundStatus === 'cancelled') && (
+                  <button
+                    className="btn btn-small data-state-retry"
+                    onClick={() => { void runBackground(backgroundTemplateIdRef.current); }}
+                  >
+                    Retry background analysis
+                  </button>
+                )}
             </div>
         )}
 
@@ -557,6 +653,6 @@ export function AIAnalysisPanel({ symbol, timeframe = DEFAULT_TIMEFRAME }: AIAna
       )}
     </div>
   );
-}
+});
 
 export default AIAnalysisPanel;

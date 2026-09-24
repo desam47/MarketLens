@@ -21,14 +21,13 @@
  * chat-session request instead of a five-panel burst (auto-analyze +
  * chat + templates + digest + search all at once).
  *
- * The Analysis section must stay ABOVE Templates: AITemplatesPanel's
- * "⏱ Background" button reaches out of React to
- * document.getElementById('ai-analysis-panel').runBackground(), so it
- * must be mounted first. Revealing Templates therefore also reveals
- * Analysis (same implicit contract SymbolPage had before these panels
- * moved here). Chat above Analysis is fine.
+ * The Analysis section stays above Templates so the Hub can pass its
+ * imperative React ref to the mounted Analysis panel before a template
+ * background run is requested. Revealing Templates therefore also reveals
+ * Analysis (same layout contract SymbolPage had before these panels moved
+ * here). Chat above Analysis is fine.
  */
-import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { PageErrorBoundary } from '../components/PageErrorBoundary';
 import { SymbolInput } from '../components/SymbolInput';
 import { AIProviderBadge } from '../components/AIProviderBadge';
@@ -39,6 +38,7 @@ import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timefr
 import api, { AlertConversationContext } from '../services/api';
 import { consumePendingAlertChat, type PendingAlertChat } from '../utils/alertConversation';
 import type { AppPage, NavigationState } from '../utils/appNavigation';
+import type { AIAnalysisPanelHandle } from '../components/AIAnalysisPanel';
 
 // Heavy, self-fetching panels — same lazy pattern + same chunks
 // SymbolPage used for these.
@@ -71,6 +71,7 @@ type SectionId = typeof SECTIONS[number]['id'];
 export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps) {
   const [timeframe, setTimeframe] = useState<string>(DEFAULT_TIMEFRAME);
   const [templatesReloadKey, setTemplatesReloadKey] = useState(0);
+  const analysisRef = useRef<AIAnalysisPanelHandle>(null);
   const [activeSection, setActiveSection] = useState<SectionId>('chat');
   // Which sections have been mounted. Chat mounts on open; the rest are
   // added as they scroll into view or get jumped to, and never removed.
@@ -104,10 +105,13 @@ export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps
   // does not remount it or orphan an in-flight request.
   const handleRefresh = useCallback(() => {
     setTemplatesReloadKey(k => k + 1);
-    const panel = document.getElementById('ai-analysis-panel') as (HTMLElement & {
-      refreshAnalysis?: () => void;
-    }) | null;
-    panel?.refreshAnalysis?.();
+    analysisRef.current?.refreshAnalysis();
+  }, []);
+
+  const handleBackgroundRun = useCallback((templateId: number): boolean => {
+    if (!analysisRef.current) return false;
+    void analysisRef.current.runBackground(templateId);
+    return true;
   }, []);
 
   // Chat is universal, but when a turn resolves to a ticker we point the
@@ -124,9 +128,8 @@ export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps
     [symbol, onSymbolChange, handleRefresh],
   );
 
-  // Mount a section (idempotent). Templates drags in Analysis so the
-  // AITemplatesPanel → getElementById('ai-analysis-panel').runBackground()
-  // bridge always has its target mounted.
+  // Mount a section (idempotent). Templates also reveals Analysis so its
+  // React ref is available for template-backed background runs.
   const reveal = useCallback((id: SectionId) => {
     setRevealed(prev => {
       const needsAnalysis = id === 'templates' && !prev.has('analysis');
@@ -256,14 +259,13 @@ export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps
         )}
       </section>
 
-      {/* Analysis stays ABOVE Templates: AITemplatesPanel's "⏱ Background"
-          button calls document.getElementById('ai-analysis-panel').runBackground()
-          out of React, so the Analysis section must render before it. */}
+      {/* Analysis stays ABOVE Templates so the template panel can use the
+          React-owned imperative handle for background runs. */}
       <section id="hub-analysis" className="ai-hub-section">
         {revealed.has('analysis') ? (
           <PageErrorBoundary pageName="AI Analysis">
             <Suspense fallback={<div className="panel-skeleton">Loading AI analysis…</div>}>
-              <AIAnalysisPanel symbol={symbol} timeframe={timeframe} />
+              <AIAnalysisPanel ref={analysisRef} symbol={symbol} timeframe={timeframe} />
             </Suspense>
           </PageErrorBoundary>
         ) : (
@@ -275,7 +277,12 @@ export function AIHubPage({ symbol, onSymbolChange, onNavigate }: AIHubPageProps
         {revealed.has('templates') ? (
           <PageErrorBoundary pageName="AI Templates">
             <Suspense fallback={<div className="panel-skeleton">Loading AI templates…</div>}>
-              <AITemplatesPanel key={templatesReloadKey} symbol={symbol} timeframe={timeframe} />
+              <AITemplatesPanel
+                key={templatesReloadKey}
+                symbol={symbol}
+                timeframe={timeframe}
+                onRunBackground={handleBackgroundRun}
+              />
             </Suspense>
           </PageErrorBoundary>
         ) : (

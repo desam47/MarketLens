@@ -11,7 +11,7 @@ Covers the seams that do NOT require a live Redis / RQ worker / DB:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -37,6 +37,23 @@ class TestIsoHelper:
 
 
 class TestGracefulDegradation:
+    def test_enqueue_binds_rq_job_id_to_worker_status_updates(self):
+        queue = MagicMock()
+        queue.enqueue.return_value.id = "rq-id-is-overridden-by-requested-id"
+        db = MagicMock()
+
+        with (
+            patch.object(background, "get_queue", return_value=queue),
+            patch("backend.database.SessionLocal", return_value=db),
+        ):
+            job_id = background.enqueue_analyze_job("aapl", timeframe="4h")
+
+        enqueue_kwargs = queue.enqueue.call_args.kwargs
+        assert job_id == enqueue_kwargs["job_id"]
+        assert enqueue_kwargs["kwargs"]["job_id"] == job_id
+        record = db.add.call_args.args[0]
+        assert record.job_id == job_id
+
     def test_get_redis_none_when_disabled(self):
         with patch.object(settings.redis, "enabled", False):
             assert background.get_redis() is None

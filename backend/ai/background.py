@@ -24,6 +24,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from backend.config.settings import settings
 
@@ -128,6 +129,7 @@ def enqueue_analyze_job(
     if queue is None:
         return None
 
+    job_id = uuid4().hex
     rq_job = queue.enqueue(
         analyze_symbol_task,
         kwargs={
@@ -135,14 +137,16 @@ def enqueue_analyze_job(
             "timeframe": timeframe,
             "template_id": template_id,
             "template_name": template_name,
+            "job_id": job_id,
         },
+        job_id=job_id,
         result_ttl=settings.background.result_ttl,
     )
 
     db = SessionLocal()
     try:
         record = AIAnalysisJob(
-            job_id=rq_job.id,
+            job_id=job_id,
             symbol=symbol.upper(),
             timeframe=timeframe,
             template_id=template_id,
@@ -159,7 +163,7 @@ def enqueue_analyze_job(
     finally:
         db.close()
 
-    return rq_job.id
+    return job_id
 
 
 def enqueue_alert_commentary_job(trigger_id: int) -> str | None:
@@ -207,7 +211,7 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
     Returns None if the job isn't found. The dict has the same shape
     the API returns to the frontend:
 
-    - ``status`` (str): "queued" | "started" | "finished" | "failed"
+    - ``status`` (str): "queued" | "started" | "finished" | "failed" | "cancelled"
     - ``result`` (dict | None): AnalysisResponse-like dict when finished
     - ``error`` (str | None): error message when failed
     - ``symbol`` / ``timeframe`` / ``template_id`` / ``template_name``
@@ -231,7 +235,7 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
                 record.status = rq_status
                 if rq_status == "started" and record.started_at is None:
                     record.started_at = datetime.now(UTC)
-                if rq_status in ("finished", "failed") and record.completed_at is None:
+                if rq_status in ("finished", "failed", "cancelled") and record.completed_at is None:
                     record.completed_at = datetime.now(UTC)
                 db.commit()
 
@@ -260,6 +264,53 @@ def get_job_status(job_id: str) -> dict[str, Any] | None:
         db.close()
 
 
+def cancel_job(job_id: str) -> dict[str, Any] | None:
+    """Cancel a queued analysis job and return its current status.
+
+    RQ cannot safely interrupt a worker that has already started running an
+    analysis. In that case ``cancelled`` is false and the caller can stop
+    waiting without claiming that server-side work stopped. Queued jobs are
+    cancelled in RQ and marked terminal in our database.
+    """
+    from backend.database import SessionLocal
+    from backend.models import AIAnalysisJob
+
+    db = SessionLocal()
+    try:
+        record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
+        if record is None:
+            return None
+        if record.status in ("finished", "failed", "cancelled"):
+            current = get_job_status(job_id)
+            return {**current, "cancelled": record.status == "cancelled"} if current else None
+
+        client = get_redis()
+        if client is None:
+            current = get_job_status(job_id)
+            return {**current, "cancelled": False} if current else None
+
+        try:
+            from rq.job import Job
+
+            rq_job = Job.fetch(job_id, connection=client)
+            rq_status = rq_job.get_status()
+            if rq_status in ("queued", "deferred", "scheduled"):
+                rq_job.cancel()
+                record.status = "cancelled"
+                record.error = "Cancelled by user."
+                record.completed_at = datetime.now(UTC)
+                db.commit()
+                current = get_job_status(job_id)
+                return {**current, "cancelled": True} if current else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unable to cancel AI job %s: %s", job_id, exc)
+
+        current = get_job_status(job_id)
+        return {**current, "cancelled": False} if current else None
+    finally:
+        db.close()
+
+
 def _safe_rq_status(job_id: str) -> str | None:
     """Map an RQ job state to one of our four statuses, or None on error."""
     client = get_redis()
@@ -272,6 +323,8 @@ def _safe_rq_status(job_id: str) -> str | None:
         status = rq_job.get_status()
         if status in ("queued", "started", "finished", "failed"):
             return status
+        if status in ("canceled", "cancelled"):
+            return "cancelled"
         if status == "deferred":
             return "queued"
         if status in ("scheduled",):

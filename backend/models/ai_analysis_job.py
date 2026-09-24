@@ -2,7 +2,7 @@
 AI Analysis Job model (Phase 2.5: Background AI processing with RQ).
 
 Stores an enqueued AI analysis job so the frontend can poll for results.
-Status transitions: queued → started → finished | failed
+Status transitions: queued → started → finished | failed, or queued → cancelled
 """
 
 from datetime import datetime
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
 
-_JOB_STATUS_ENUM = ["queued", "started", "finished", "failed"]
+_JOB_STATUS_ENUM = ["queued", "started", "finished", "failed", "cancelled"]
 
 
 class AIAnalysisJob(Base):
@@ -35,7 +35,7 @@ class AIAnalysisJob(Base):
     template_name : str | None
         Human-readable template name captured at enqueue time.
     status : str
-        One of "queued", "started", "finished", "failed".
+        One of "queued", "started", "finished", "failed", "cancelled".
     result : str | None
         JSON-serialized ``AnalysisResponse`` when status is "finished".
     error : str | None

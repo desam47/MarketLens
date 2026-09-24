@@ -17,6 +17,8 @@ interface AITemplatesPanelProps {
   /** Symbol+timeframe context for "Run with template" actions. */
   symbol: string;
   timeframe: string;
+  /** React-owned bridge to the mounted Analysis panel's background runner. */
+  onRunBackground?: (templateId: number) => boolean | void;
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -42,9 +44,10 @@ interface PreviewRowProps {
   symbol: string;
   timeframe: string;
   onRunAnalysis: (templateId: number) => void;
+  onRunBackground?: (templateId: number) => boolean | void;
 }
 
-function PreviewRow({ tmpl, symbol, timeframe, onRunAnalysis }: PreviewRowProps) {
+function PreviewRow({ tmpl, symbol, timeframe, onRunAnalysis, onRunBackground }: PreviewRowProps) {
   const [preview, setPreview] = useState<AITemplatePreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -78,14 +81,10 @@ function PreviewRow({ tmpl, symbol, timeframe, onRunAnalysis }: PreviewRowProps)
   };
 
   const handleRunBackground = async () => {
-    // Trigger the AIAnalysisPanel's background runner via the
-    // DOM-attached method (cross-component hookup — see
-    // AIAnalysisPanel's useEffect that attaches runBackground).
-    const el = document.getElementById('ai-analysis-panel') as any;
-    if (el && typeof el.runBackground === 'function') {
-      el.runBackground(tmpl.id);
+    if (onRunBackground && onRunBackground(tmpl.id) !== false) {
+      return;
     } else {
-      // Fall back to sync if the panel isn't on this page.
+      // SymbolPage can render Templates without the Hub Analysis panel.
       onRunAnalysis(tmpl.id);
     }
   };
@@ -158,7 +157,7 @@ function PreviewRow({ tmpl, symbol, timeframe, onRunAnalysis }: PreviewRowProps)
 
 // ── Main panel ─────────────────────────────────────────────────────────────
 
-export function AITemplatesPanel({ symbol, timeframe }: AITemplatesPanelProps) {
+export function AITemplatesPanel({ symbol, timeframe, onRunBackground }: AITemplatesPanelProps) {
   const [templates, setTemplates] = useState<AITemplate[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -446,6 +445,7 @@ export function AITemplatesPanel({ symbol, timeframe }: AITemplatesPanelProps) {
                             symbol={symbol}
                             timeframe={timeframe}
                             onRunAnalysis={handleRunAnalysis}
+                            onRunBackground={onRunBackground}
                           />
                         )}
                       </td>

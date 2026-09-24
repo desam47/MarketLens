@@ -2537,16 +2537,23 @@ class ApiService {
     symbol: string;
     timeframe?: string;
     template_id?: number | null;
-  }): Promise<AIJobEnqueueResponse> {
+  }, signal?: AbortSignal): Promise<AIJobEnqueueResponse> {
     return this.fetch<AIJobEnqueueResponse>('/ai/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal,
     });
   }
 
-  async getAIJob(jobId: string): Promise<AIJobStatusResponse> {
-    return this.fetch<AIJobStatusResponse>(`/ai/jobs/${encodeURIComponent(jobId)}`);
+  async getAIJob(jobId: string, signal?: AbortSignal): Promise<AIJobStatusResponse> {
+    return this.fetch<AIJobStatusResponse>(`/ai/jobs/${encodeURIComponent(jobId)}`, { signal });
+  }
+
+  async cancelAIJob(jobId: string): Promise<AIJobStatusResponse> {
+    return this.fetch<AIJobStatusResponse>(`/ai/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+    });
   }
 
   // ── Version 4 AI feature 2: daily/session digest ────────────────────
@@ -3214,7 +3221,7 @@ export interface AIJobEnqueueResponse {
 
 export interface AIJobStatusResponse {
   job_id: string;
-  status: 'queued' | 'started' | 'finished' | 'failed';
+  status: 'queued' | 'started' | 'finished' | 'failed' | 'cancelled';
   symbol: string;
   timeframe: string;
   template_id?: number | null;

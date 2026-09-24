@@ -1572,3 +1572,22 @@ until the line is removed. The end-to-end evaluation pins these defaults
   the production build, Ruff, and diff checks passed. The focused backend suite
   passed with 137 tests and 17 subtests; the frontend targeted suites passed
   with 14 tests.
+
+## AI Analysis background-job lifecycle (2026-09-24)
+
+- **React-owned coordination.** AI Hub now passes a typed imperative handle
+  between the Analysis and Templates panels. The former DOM-attached method
+  bridge is removed, while Symbol Page keeps a synchronous fallback when no
+  background panel is mounted.
+- **Bounded lifecycle.** Background analysis now has request ordering guards,
+  abortable enqueue/status requests, a deterministic ten-minute timeout,
+  terminal cancellation and failure states, and retry actions. Late polling
+  responses cannot resurrect a finished, cancelled, or timed-out job.
+- **Server status integrity.** Enqueued RQ jobs now pass their persisted job ID
+  into the worker, so `queued -> started -> finished/failed` status updates
+  address the correct row. Queued jobs can be cancelled through the API;
+  already-started work is reported as non-interruptible and the client stops
+  polling safely.
+- **Regression coverage.** Focused backend coverage passed with 26 tests;
+  frontend API/panel coverage passed with 17 tests; the production build,
+  Ruff, and diff checks passed.

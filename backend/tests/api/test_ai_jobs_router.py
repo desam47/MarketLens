@@ -239,3 +239,50 @@ def test_get_job_returns_failed_with_error(client):
     data = resp.json()
     assert data["status"] == "failed"
     assert "unavailable" in data["error"]
+
+
+def test_cancel_queued_job_returns_cancelled_status(client):
+    job_id = _enqueue_and_get_job_id(client, "AAPL")
+    payload = {
+        "id": 4,
+        "job_id": job_id,
+        "status": "cancelled",
+        "result": None,
+        "error": "Cancelled by user.",
+        "symbol": "AAPL",
+        "timeframe": "1d",
+        "template_id": None,
+        "template_name": None,
+        "created_at": "2024-01-01T00:00:00Z",
+        "started_at": None,
+        "completed_at": "2024-01-01T00:00:01Z",
+        "cancelled": True,
+    }
+    with patch("backend.api.ai.jobs.cancel_job", return_value=payload):
+        resp = client.post(f"/api/ai/jobs/{job_id}/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "cancelled"
+    assert resp.json()["cancelled"] is True
+
+
+def test_cancel_started_job_returns_conflict(client):
+    job_id = _enqueue_and_get_job_id(client, "MSFT")
+    payload = {
+        "id": 5,
+        "job_id": job_id,
+        "status": "started",
+        "result": None,
+        "error": None,
+        "symbol": "MSFT",
+        "timeframe": "1d",
+        "template_id": None,
+        "template_name": None,
+        "created_at": "2024-01-01T00:00:00Z",
+        "started_at": "2024-01-01T00:00:01Z",
+        "completed_at": None,
+        "cancelled": False,
+    }
+    with patch("backend.api.ai.jobs.cancel_job", return_value=payload):
+        resp = client.post(f"/api/ai/jobs/{job_id}/cancel")
+    assert resp.status_code == 409
+    assert "already started" in resp.json()["detail"]

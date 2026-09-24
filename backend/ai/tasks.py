@@ -208,6 +208,10 @@ def _update_status(
         record = db.query(AIAnalysisJob).filter(AIAnalysisJob.job_id == job_id).first()
         if record is None:
             return
+        # A queued job can race with cancellation. Do not let a worker that
+        # starts after the cancellation resurrect the terminal record.
+        if record.status == "cancelled" and status != "cancelled":
+            return
         record.status = status
         if status == "started":
             record.started_at = now_ny()

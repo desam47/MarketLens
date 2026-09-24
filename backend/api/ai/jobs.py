@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from ...ai.background import enqueue_analyze_job, get_job_status
+from ...ai.background import cancel_job, enqueue_analyze_job, get_job_status
 from ...ai.tasks import analyze_symbol_task
 
 router = APIRouter(prefix="/api/ai/jobs", tags=["ai-jobs"])
@@ -59,6 +59,12 @@ class JobStatusResponse(BaseModel):
     created_at: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
+
+
+class JobCancelResponse(JobStatusResponse):
+    """Response for a cancellation request."""
+
+    cancelled: bool
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
@@ -146,6 +152,23 @@ def get_job(job_id: str) -> JobStatusResponse:
     if data is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return JobStatusResponse(**{k: v for k, v in data.items() if k != "id"})
+
+
+@router.post(
+    "/{job_id}/cancel",
+    response_model=JobCancelResponse,
+)
+def cancel_queued_job(job_id: str) -> JobCancelResponse:
+    """Cancel a queued job, or report that a started job cannot be interrupted."""
+    data = cancel_job(job_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    if not data.get("cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail="Analysis has already started and cannot be interrupted; polling may stop safely.",
+        )
+    return JobCancelResponse(**{k: v for k, v in data.items() if k != "id"})
 
 
 # Make analyze_symbol_task importable by the worker process.

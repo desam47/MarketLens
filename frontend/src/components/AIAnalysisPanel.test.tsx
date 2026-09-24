@@ -7,10 +7,10 @@
  * with no options. This covers what's left: the panel surfaces which
  * model actually answered.
  */
-import React from 'react';
+import React, { createRef } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { act } from '@testing-library/react';
-import { AIAnalysisPanel } from './AIAnalysisPanel';
+import { AIAnalysisPanel, AIAnalysisPanelHandle, AI_BACKGROUND_TIMEOUT_MS } from './AIAnalysisPanel';
 import api from '../services/api';
 
 jest.mock('../services/api', () => ({
@@ -18,6 +18,9 @@ jest.mock('../services/api', () => ({
     default: {
         getAIConfig: jest.fn(),
         analyzeSymbol: jest.fn(),
+        enqueueAIJob: jest.fn(),
+        getAIJob: jest.fn(),
+        cancelAIJob: jest.fn(),
         setAIEnabled: jest.fn(),
         getAIStatus: jest.fn(),
     },
@@ -26,6 +29,9 @@ jest.mock('../services/api', () => ({
 const mockApi = api as unknown as {
     getAIConfig: jest.Mock;
     analyzeSymbol: jest.Mock;
+    enqueueAIJob: jest.Mock;
+    getAIJob: jest.Mock;
+    cancelAIJob: jest.Mock;
     setAIEnabled: jest.Mock;
     getAIStatus: jest.Mock;
 };
@@ -100,6 +106,10 @@ function setConfig(enabled = true) {
 describe('AIAnalysisPanel', () => {
     beforeEach(() => {
         jest.clearAllMocks();
+    });
+
+    afterEach(() => {
+        jest.useRealTimers();
     });
 
     it('runs analysis with no options (no Peers/Model controls)', async () => {
@@ -217,5 +227,98 @@ describe('AIAnalysisPanel', () => {
         expect(mockApi.analyzeSymbol.mock.calls[1][2]).toEqual(
             expect.objectContaining({ force_refresh: true, signal: expect.anything() }),
         );
+    });
+
+    it('runs a template job through the React handle and renders its result', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult());
+        mockApi.enqueueAIJob.mockResolvedValue({ job_id: 'job-1' });
+        mockApi.getAIJob.mockResolvedValue({
+            job_id: 'job-1',
+            status: 'finished',
+            symbol: 'AAPL',
+            timeframe: '1d',
+            result: makeResult({ summary: 'Background template result.' }),
+            error: null,
+        });
+        const ref = createRef<AIAnalysisPanelHandle>();
+        render(<AIAnalysisPanel ref={ref} symbol="AAPL" />);
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
+
+        await act(async () => {
+            await ref.current!.runBackground(7);
+        });
+
+        expect(mockApi.enqueueAIJob).toHaveBeenCalledWith(
+            { symbol: 'AAPL', timeframe: '1d', template_id: 7 },
+            expect.anything(),
+        );
+        expect(await screen.findByText('Background template result.')).toBeInTheDocument();
+        expect((document.getElementById('ai-analysis-panel') as any).runBackground).toBeUndefined();
+    });
+
+    it('cancels polling and offers a retry for a queued job', async () => {
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult());
+        mockApi.enqueueAIJob.mockResolvedValue({ job_id: 'job-2' });
+        mockApi.getAIJob.mockResolvedValue({
+            job_id: 'job-2',
+            status: 'queued',
+            symbol: 'AAPL',
+            timeframe: '1d',
+            result: null,
+            error: null,
+        });
+        mockApi.cancelAIJob.mockResolvedValue({ status: 'cancelled', cancelled: true });
+        const ref = createRef<AIAnalysisPanelHandle>();
+        render(<AIAnalysisPanel ref={ref} symbol="AAPL" />);
+        await waitFor(() => expect(mockApi.analyzeSymbol).toHaveBeenCalledTimes(1));
+
+        await act(async () => {
+            await ref.current!.runBackground(9);
+        });
+        await waitFor(() => expect(mockApi.getAIJob).toHaveBeenCalledWith('job-2', expect.anything()));
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+        await act(async () => {
+            await ref.current!.cancelBackground();
+        });
+        expect(mockApi.cancelAIJob).toHaveBeenCalledWith('job-2');
+        expect(await screen.findByText(/Background analysis was cancelled/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /retry background analysis/i })).toBeInTheDocument();
+    });
+
+    it('times out a job that never reaches a terminal state', async () => {
+        jest.useFakeTimers();
+        setConfig(true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult());
+        mockApi.enqueueAIJob.mockResolvedValue({ job_id: 'job-3' });
+        mockApi.getAIJob.mockResolvedValue({
+            job_id: 'job-3',
+            status: 'started',
+            symbol: 'AAPL',
+            timeframe: '1d',
+            result: null,
+            error: null,
+        });
+        const ref = createRef<AIAnalysisPanelHandle>();
+        render(<AIAnalysisPanel ref={ref} symbol="AAPL" />);
+        await act(async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+
+        await act(async () => {
+            await ref.current!.runBackground();
+        });
+        await act(async () => {
+            await Promise.resolve();
+        });
+        await act(async () => {
+            jest.advanceTimersByTime(AI_BACKGROUND_TIMEOUT_MS);
+        });
+
+        expect(screen.getByText(/background analysis timed out/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /retry background analysis/i })).toBeInTheDocument();
     });
 });
