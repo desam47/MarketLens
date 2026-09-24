@@ -1739,7 +1739,9 @@ def _format_generic_market_reply(
     }
     label = labels.get(action, action.replace("_", " "))
     if data.get("available") is False:
-        return f"{action} ({label}) is unavailable{f' for {symbol}' if symbol else ''}: {data.get('reason') or 'the required verified data was not available'}."
+        reason = data.get("reason") or "the required verified data was not available"
+        target = f" for {symbol}" if symbol else ""
+        return f"{label.capitalize()} isn't available{target}: {reason}."
 
     if action == "save_to_journal":
         saved = data.get("saved_entry") or {}
@@ -1752,8 +1754,6 @@ def _format_generic_market_reply(
         return f"Done — saved {header} trade to your Journal.{count_note}" if header else f"Done — trade saved to your Journal.{count_note}"
 
     details: list[str] = []
-    if symbol:
-        details.append(symbol)
     if action == "get_quote":
         if isinstance(data.get("price"), (int, float)):
             details.append(f"${float(data['price']):.2f}")
@@ -1808,14 +1808,14 @@ def _format_generic_market_reply(
             value = data.get(key)
             if isinstance(value, (str, int, float)) and not isinstance(value, bool):
                 details.append(f"{key.replace('_', ' ')} {value}")
-        if not details or (symbol and len(details) == 1):
+        if not details:
             scalar_keys = [key for key, value in data.items() if isinstance(value, (str, int, float)) and not isinstance(value, bool) and key not in {"source_timestamp"}]
             if scalar_keys:
                 details.append(f"{len(scalar_keys)} verified summary fields")
 
     timeframe_label = timeframe or data.get("timeframe")
     if timeframe_label:
-        details.append(f"timeframe {timeframe_label}")
+        details.append(f"{timeframe_label} timeframe")
 
     # Build compact freshness tag: "live, 4s" / "8min old" / "2hr old ⚠"
     # Daily/weekly bars are inherently end-of-day data — staleness > 15min is
@@ -1827,7 +1827,7 @@ def _format_generic_market_reply(
     if isinstance(freshness_seconds, (int, float)):
         s = freshness_seconds
         if s < 60:
-            freshness_tag = f"live, {s:.0f}s"
+            freshness_tag = f"{s:.0f}s old"
         elif s < 3600:
             freshness_tag = f"{s / 60:.0f}min old"
         else:
@@ -1842,12 +1842,14 @@ def _format_generic_market_reply(
         provenance_parts.append(provider)
     if freshness_tag:
         provenance_parts.append(freshness_tag)
-    if provenance_parts:
-        details.append(" · ".join(provenance_parts))
 
-    reply = f"Verified {action} ({label}" + (f"; {'; '.join(details)}" if details else "") + ")."
+    # Lead with what the trader asked for, never the internal tool name.
+    subject = f"{symbol} {label}" if symbol else label[:1].upper() + label[1:]
+    reply = f"{subject}: {', '.join(details)}." if details else f"{subject} returned no summary fields."
+    if provenance_parts:
+        reply += f" Source: {', '.join(provenance_parts)}."
     if stale:
-        reply += " Warning: refresh market data before treating it as current."
+        reply += " Refresh market data before relying on it as current."
     return reply
 
 
@@ -4389,9 +4391,6 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
                 "fallback": result.fallback,
             })
         return f"I couldn't calculate that safely: {result.error}", False
-    values = ", ".join(f"{key}={value}" for key, value in result.data["values"].items())
-    formula = result.data["formulas"][0]
-    source_time = result.source_timestamp or "unknown time"
     if trace is not None:
         trace.append({
             "tool": "calculate",
@@ -4415,75 +4414,257 @@ def _calculate(db, parsed, *, trace: list[dict] | None = None) -> tuple[str, boo
             },
             "request": request.model_dump(mode="json"),
         })
-    if request.calculation == "position_pnl":
-        return _format_position_pnl_reply(
-            result.data.get("values") or {},
-            request,
-            getattr(parsed, "action_pnl_context", None) or {},
-            provider=result.provider,
-        ), True
-    return (
-        f"Verified calculation ({result.provider}, source {source_time}, "
-        f"session {result.session}): {values}. Formula: {formula}.",
-        True,
-    )
+    return _format_calculation_reply(
+        request,
+        result.data.get("values") or {},
+        result.data.get("assumptions") or [],
+        context=getattr(parsed, "action_pnl_context", None) or {},
+        provider=result.provider,
+    ), True
 
 
-def _format_position_pnl_reply(
-    values: dict,
-    request,
-    context: dict,
-    *,
-    provider: str,
-) -> str:
-    """Render a position_pnl result as prose.
+def _money(value: float | None) -> str:
+    """$1,234.56 — sub-dollar values keep 4dp so penny stocks stay meaningful.
 
-    Every number printed here is one the calculator returned (or was given), so
-    the answer still verifies against the calculation's own evidence. Direction
-    words are chosen to match the sign — a positive word on a negative result
-    trips the verifier's contradictory-evidence check.
+    Rounding is always inside the verifier's match tolerance (the looser of
+    1c or 0.05% of the value), so a displayed number still matches its evidence.
     """
-    total = float(values.get("total_pnl") or 0.0)
-    per_share = float(values.get("per_share_pnl") or 0.0)
-    cost_basis = float(values.get("cost_basis") or 0.0)
-    exit_value = float(values.get("exit_value") or 0.0)
-    return_percent = float(values.get("return_percent") or 0.0)
-    shares = float(request.shares or 0.0)
-    entry_price = float(request.entry_price or 0.0)
-    exit_price = float(request.exit_price or 0.0)
+    if value is None:
+        return "n/a"
+    digits = 4 if value != 0 and abs(value) < 1 else 2
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.{digits}f}"
 
-    symbol = str(context.get("symbol") or "").upper()
-    entry_date = str(context.get("entry_date") or "")
-    exit_date = str(context.get("exit_date") or "")
-    entry_when = f" ({entry_date} close)" if entry_date else ""
-    exit_when = f" ({exit_date} close)" if exit_date else ""
 
-    # "profit"/"loss" only — no up/higher/gain wording, which would contradict a
-    # negative return_percent in the evidence.
-    outcome = "profit" if total >= 0 else "loss"
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:,.2f}%"
 
-    session_note = ""
+
+def _qty(value: float | None) -> str:
+    """Share/contract counts: no decimals when whole."""
+    if value is None:
+        return "n/a"
+    return f"{value:,.0f}" if float(value).is_integer() else f"{value:,.2f}"
+
+
+def _ratio(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:,.2f}"
+
+
+def _market_closed_note(subject: str) -> str:
     try:
         from backend.engines.market_calendar import SessionType, us_market_calendar
 
         if us_market_calendar.get_session_type(datetime.now(UTC)) == SessionType.CLOSED:
-            session_note = " Market is closed, so the exit price is the most recent session's close."
+            return f" Market is closed, so {subject} is the most recent session's close."
     except Exception:
         pass
+    return ""
 
-    # The prices came from the bars provider; the arithmetic from the calculator.
+
+def _format_calculation_reply(
+    request,
+    values: dict,
+    assumptions: list[str],
+    *,
+    context: dict,
+    provider: str,
+) -> str:
+    """Render any calculator result as prose instead of a key=value dump.
+
+    Every number printed traces to the calculator's own returned values or the
+    inputs it was given, so the answer still verifies against its evidence.
+    Direction words must match the sign of the result — a positive word against
+    a negative value trips the verifier's contradictory-evidence check.
+    """
+    op = request.calculation
+    get = lambda key: values.get(key)  # noqa: E731 — local shorthand only
+
+    if op == "position_pnl":
+        total = float(get("total_pnl") or 0.0)
+        symbol = str(context.get("symbol") or "").upper() or "the position"
+        entry_date = str(context.get("entry_date") or "")
+        exit_date = str(context.get("exit_date") or "")
+        entry_when = f" ({entry_date} close)" if entry_date else ""
+        exit_when = f" ({exit_date} close)" if exit_date else ""
+        outcome = (
+            f"a profit of {_money(abs(total))}"
+            if total > 0
+            else f"a loss of {_money(abs(total))}"
+            if total < 0
+            else "break-even"
+        )
+        body = (
+            f"{_qty(request.shares)} shares of {symbol} at {_money(request.entry_price)}"
+            f"{entry_when} cost {_money(get('cost_basis'))}. "
+            f"At {_money(request.exit_price)}{exit_when} the position is worth "
+            f"{_money(get('exit_value'))} — {outcome} "
+            f"({_money(abs(float(get('per_share_pnl') or 0.0)))} per share, "
+            f"{_pct(get('return_percent'))})."
+            f"{_market_closed_note('the exit price')}"
+        )
+    elif op == "percentage_change":
+        change = float(get("percentage_change") or 0.0)
+        body = (
+            f"{_money(request.old_value)} to {_money(request.new_value)} is unchanged."
+            if change == 0
+            else f"{_money(request.old_value)} to {_money(request.new_value)} is a "
+            f"{_pct(abs(change))} {'increase' if change > 0 else 'decrease'}."
+        )
+    elif op == "dollar_change":
+        change = float(get("dollar_change") or 0.0)
+        body = (
+            f"{_money(request.old_value)} to {_money(request.new_value)} is unchanged."
+            if change == 0
+            else f"{_money(request.old_value)} to {_money(request.new_value)} is a "
+            f"{_money(abs(change))} {'increase' if change > 0 else 'decrease'} per share."
+        )
+    elif op == "return":
+        ret = float(get("return") or 0.0)
+        body = (
+            f"{_money(request.start_value)} to {_money(request.end_value)} is a "
+            f"{_pct(abs(ret))} {'return' if ret >= 0 else 'negative return'}."
+        )
+    elif op == "cagr":
+        body = (
+            f"Growing {_money(request.start_value)} to {_money(request.end_value)} over "
+            f"{_qty(request.years)} years is a compound annual growth rate of "
+            f"{_pct(get('cagr'))}."
+        )
+    elif op == "weighted_average":
+        body = (
+            f"The weighted average of those prices is {_money(get('weighted_average'))}."
+        )
+    elif op == "position_size":
+        body = (
+            f"Risking {_pct(get('portfolio_risk_percent'))} of a "
+            f"{_money(request.account_value)} account at {_money(request.entry_price)} with a "
+            f"{_money(request.stop_price)} stop allows {_qty(get('shares'))} shares — "
+            f"{_money(get('per_share_risk'))} of risk per share, "
+            f"{_money(get('risk_dollars'))} at risk in total, for a "
+            f"{_money(get('position_value'))} position."
+        )
+    elif op == "position_risk":
+        extras = []
+        if get("portfolio_risk_percent") is not None:
+            extras.append(f"that is {_pct(get('portfolio_risk_percent'))} of the account")
+        if get("reward_risk") is not None:
+            extras.append(f"reward/risk to the target is {_ratio(get('reward_risk'))}")
+        tail = f" — {', and '.join(extras)}." if extras else "."
+        body = (
+            f"{_qty(request.shares)} shares at {_money(request.entry_price)} with a "
+            f"{_money(request.stop_price)} stop is a {_money(get('position_value'))} position "
+            f"risking {_money(get('per_share_risk'))} per share, "
+            f"{_money(get('total_risk'))} in total{tail}"
+        )
+    elif op == "risk_reward":
+        body = (
+            f"A {_money(request.entry_price)} entry with a {_money(request.stop_price)} stop "
+            f"risks {_money(get('risk'))} per share to make {_money(get('reward'))} at the "
+            f"{_money(request.target_price)} target — a reward/risk ratio of "
+            f"{_ratio(get('risk_reward'))}."
+        )
+    elif op == "allocation":
+        body = (
+            f"A {_money(request.position_value)} position in a "
+            f"{_money(request.portfolio_value)} portfolio is "
+            f"{_pct(get('allocation_percent'))} of it."
+        )
+    elif op == "volatility":
+        body = (
+            f"Period volatility across those prices (standard deviation of returns) is "
+            f"{_pct(get('period_volatility'))}."
+        )
+    elif op == "drawdown":
+        body = (
+            f"From a {_money(request.peak_value)} peak down to "
+            f"{_money(request.trough_value)} is a {_pct(get('drawdown_percent'))} drawdown."
+        )
+    elif op == "max_drawdown":
+        body = (
+            f"The deepest peak-to-trough decline across those prices is "
+            f"{_pct(get('maximum_drawdown_percent'))}."
+        )
+    elif op == "correlation":
+        corr = float(get("correlation") or 0.0)
+        strength = "strong" if abs(corr) >= 0.7 else "moderate" if abs(corr) >= 0.4 else "weak"
+        body = (
+            f"The correlation between the two series is {_ratio(corr)} — a {strength} "
+            f"{'positive' if corr >= 0 else 'inverse'} relationship."
+        )
+    elif op == "options_breakeven":
+        body = (
+            f"A {request.option_type} at the {_money(request.strike)} strike paid for with "
+            f"{_money(request.premium)} of premium breaks even at "
+            f"{_money(get('breakeven'))} at expiration."
+        )
+    elif op == "options_intrinsic_value":
+        body = (
+            f"With the underlying at {_money(request.underlying_price)}, the "
+            f"{_money(request.strike)} {request.option_type} has "
+            f"{_money(get('intrinsic_value'))} of intrinsic value."
+        )
+    elif op == "options_extrinsic_value":
+        body = (
+            f"Of the {_money(request.premium)} premium on the {_money(request.strike)} "
+            f"{request.option_type}, {_money(get('extrinsic_value'))} is extrinsic "
+            f"(time and volatility) value."
+        )
+    elif op == "options_max_gain_loss":
+        max_gain = get("max_gain_per_share")
+        gain_text = "unlimited" if max_gain is None else _money(max_gain)
+        body = (
+            f"On the {_money(request.strike)} {request.option_type} bought for "
+            f"{_money(request.premium)}, the most you can make is {gain_text} per share "
+            f"and the most you can lose is {_money(get('max_loss_per_share'))} per share "
+            f"(the premium paid)."
+        )
+    elif op == "options_assignment_exposure":
+        body = (
+            f"If assigned, {_qty(request.contracts or 1)} "
+            f"{request.option_type} contract(s) at the {_money(request.strike)} strike means "
+            f"{_qty(get('assignment_shares'))} shares and "
+            f"{_money(get('assignment_cash_exposure'))} of cash exposure."
+        )
+    elif op == "options_vertical_spread":
+        net_debit = float(get("net_debit") or 0.0)
+        opening = (
+            f"costs {_money(net_debit)} net debit per share"
+            if net_debit > 0
+            else f"collects {_money(abs(net_debit))} net credit per share"
+            if net_debit < 0
+            else "has no net debit or credit"
+        )
+        body = (
+            f"That {request.option_type} vertical {opening}. "
+            f"Best case is {_money(get('max_gain_per_share'))} per share "
+            f"({_money(get('max_gain_total'))} total), worst case "
+            f"{_money(get('max_loss_per_share'))} per share "
+            f"({_money(get('max_loss_total'))} total), breaking even at "
+            f"{_money(get('breakeven'))}."
+        )
+    elif op == "expected_move":
+        body = (
+            f"At {_money(request.new_value)} with that implied volatility over "
+            f"{_qty(request.days_to_expiration)} days, the expected move is "
+            f"±{_money(get('expected_move'))} — roughly {_money(get('lower_bound'))} to "
+            f"{_money(get('upper_bound'))}."
+        )
+    else:
+        # Unknown operation: name each value in prose rather than dumping key=value.
+        named = ", ".join(
+            f"{key.replace('_', ' ')} {value:,.2f}" if isinstance(value, (int, float)) else f"{key.replace('_', ' ')} {value}"
+            for key, value in values.items()
+            if value is not None
+        )
+        body = f"{op.replace('_', ' ').capitalize()}: {named}." if named else f"{op.replace('_', ' ').capitalize()} completed."
+
+    # Only carry a caveat that states no numbers of its own — a figure in
+    # explanatory prose has no evidence behind it and would fail verification.
+    caveat = next((f" {note}" for note in assumptions if not any(ch.isdigit() for ch in note)), "")
     price_source = str(context.get("provider") or "").strip()
     source = f"{price_source} prices, {provider}" if price_source else provider
-
-    return (
-        f"{shares:,.0f} shares of {symbol or 'the position'} at ${entry_price:,.4f}"
-        f"{entry_when} cost ${cost_basis:,.2f}. "
-        f"At ${exit_price:,.4f}{exit_when} the position is worth ${exit_value:,.2f} — "
-        f"a {outcome} of ${abs(total):,.2f} "
-        f"(${abs(per_share):,.4f} per share, {return_percent:,.2f}%)."
-        f"{session_note} Excludes commissions, fees, dividends, and taxes. "
-        f"Source: {source}."
-    )
+    return f"{body}{caveat} Source: {source}."
 
 
 _MARKET_TOOL_ACTIONS = {

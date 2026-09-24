@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
-from backend.ai.chat import _finalize_parsed, _generate_reply, _run_action
+from backend.ai.calculator import CalculationRequest, calculate
+from backend.ai.chat import _finalize_parsed, _format_calculation_reply, _generate_reply, _run_action
 from backend.ai.prompt import ChatReplyResponse
 from backend.ai.tool_registry import ToolResult
 
@@ -22,8 +23,54 @@ def test_chat_calculate_action_uses_verified_backend_values() -> None:
 
     assert grounded is True
     assert screened == []
-    assert "risk_reward=2.0" in text
-    assert "Formula:" in text
+    assert "reward/risk ratio of 2.00" in text
+    assert "$5.00 per share" in text
+
+
+def test_calculation_formatter_labels_break_even_and_flat_changes() -> None:
+    position_pnl = CalculationRequest(
+        calculation="position_pnl", entry_price=100, exit_price=100, shares=10
+    )
+    percentage_change = CalculationRequest(
+        calculation="percentage_change", old_value=100, new_value=100
+    )
+    dollar_change = CalculationRequest(
+        calculation="dollar_change", old_value=100, new_value=100
+    )
+
+    pnl_text = _format_calculation_reply(
+        position_pnl, calculate(position_pnl).values, [], context={}, provider="MarketLens calculator"
+    )
+    percentage_text = _format_calculation_reply(
+        percentage_change, calculate(percentage_change).values, [], context={}, provider="MarketLens calculator"
+    )
+    dollar_text = _format_calculation_reply(
+        dollar_change, calculate(dollar_change).values, [], context={}, provider="MarketLens calculator"
+    )
+
+    assert "break-even" in pnl_text
+    assert "profit" not in pnl_text
+    assert "unchanged" in percentage_text
+    assert "increase" not in percentage_text
+    assert "unchanged" in dollar_text
+    assert "increase" not in dollar_text
+
+
+def test_calculation_formatter_calls_credit_spreads_a_credit() -> None:
+    request = CalculationRequest(
+        calculation="options_vertical_spread",
+        option_type="call",
+        strike=110,
+        premium=2,
+        short_strike=100,
+        short_premium=5,
+    )
+    text = _format_calculation_reply(
+        request, calculate(request).values, [], context={}, provider="MarketLens calculator"
+    )
+
+    assert "collects $3.00 net credit" in text
+    assert "costs -$3.00" not in text
 
 
 def test_chat_fallback_parses_unambiguous_allocation_question() -> None:
@@ -38,7 +85,7 @@ def test_chat_fallback_parses_unambiguous_allocation_question() -> None:
 
     assert grounded is True
     assert screened == []
-    assert "allocation_percent=25.0" in text
+    assert "is 25.00% of it" in text
     assert parsed.action == "calculate"
 
 
@@ -88,7 +135,7 @@ def test_chat_can_reuse_previous_calculation_inputs(monkeypatch) -> None:
         },
     )
 
-    assert "allocation_percent=25.0" in text
+    assert "is 25.00% of it" in text
     assert grounded is True
     assert screened == []
     mock_complete.assert_not_called()

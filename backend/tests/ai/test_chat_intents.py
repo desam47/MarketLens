@@ -44,7 +44,7 @@ def test_options_question_routes_to_typed_tool_without_ai(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "get_options_snapshot" in text
+    assert "options snapshot" in text
     complete.assert_not_called()
 
 
@@ -235,7 +235,7 @@ def test_generic_market_tool_response_is_readable_without_raw_json(monkeypatch) 
     text, grounded = _run_market_tool(None, parsed)
 
     assert grounded is True
-    assert "Verified get_quote (quote" in text
+    assert "AAPL quote:" in text
     assert "$227.50" in text
     assert "raw" not in text
     assert "secret" not in text
@@ -352,7 +352,7 @@ def test_historical_question_uses_remembered_timeframe(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "get_bars" in text
+    assert "historical bars" in text
     assert requests[0].arguments["timeframe"] == "1h"
     complete.assert_not_called()
 
@@ -386,7 +386,7 @@ def test_why_move_routes_to_evidence_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "why_did_it_move" in text
+    assert "move evidence" in text
     assert requests[0].tool_name == "why_did_it_move"
     complete.assert_not_called()
 
@@ -863,7 +863,7 @@ def test_historical_similarity_routes_to_typed_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "historical_similarity" in text
+    assert "historical similarity" in text
     assert requests[0].arguments["symbol"] == "AAPL"
     complete.assert_not_called()
 
@@ -897,7 +897,7 @@ def test_signal_explanation_routes_to_typed_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "signal_explanation" in text
+    assert "signal explanation" in text
     assert requests[0].arguments["symbol"] == "AAPL"
     complete.assert_not_called()
 
@@ -925,7 +925,7 @@ def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> No
         {},
     )
     assert grounded is True
-    assert "counterargument_review" in text
+    assert "counterargument review" in text
     assert requests[-1].tool_name == "counterargument_review"
 
     text, grounded, _ = _generate_reply(
@@ -941,7 +941,7 @@ def test_counterargument_and_sensitivity_route_to_typed_tools(monkeypatch) -> No
         {},
     )
     assert grounded is True
-    assert "sensitivity_analysis" in text
+    assert "Sensitivity analysis" in text
     assert requests[-1].tool_name == "sensitivity_analysis"
     complete.assert_not_called()
 
@@ -969,7 +969,7 @@ def test_event_timeline_routes_to_typed_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "market_event_timeline" in text
+    assert "market event timeline" in text
     assert requests[0].tool_name == "market_event_timeline"
     complete.assert_not_called()
 
@@ -997,7 +997,7 @@ def test_anomaly_question_routes_to_typed_tool(monkeypatch) -> None:
     )
 
     assert grounded is True
-    assert "anomaly_analysis" in text
+    assert "anomaly analysis" in text
     assert requests[0].tool_name == "anomaly_analysis"
     complete.assert_not_called()
 
@@ -1030,7 +1030,7 @@ def test_assumption_save_routes_to_typed_tool_and_requires_explicit_save(monkeyp
     )
 
     assert grounded is True
-    assert "assumption_tracking" in text
+    assert "assumption review" in text
     assert requests[0].tool_name == "assumption_tracking"
     assert requests[0].confirmed is True
     assert requests[0].arguments["operation"] == "save"
@@ -1092,7 +1092,7 @@ def test_assumption_tool_updates_structured_planner_state() -> None:
     )
     text, grounded = _run_market_tool(None, parsed, planner_state=planner_state)
     assert grounded is True
-    assert "assumption_tracking" in text
+    assert "assumption review" in text
     assert planner_state["research_assumptions"][0]["original_statement"].startswith("Break below")
 
 
@@ -1213,6 +1213,6 @@ def test_sensitivity_analysis_routes_and_formats_reply(monkeypatch) -> None:
 
     assert grounded is True
     assert screened == []
-    assert "sensitivity analysis" in text
+    assert "Sensitivity analysis" in text
     assert "MarketLens calculator" in text
     assert "{" not in text

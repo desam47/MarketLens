@@ -202,12 +202,12 @@ def calculate(request: CalculationRequest) -> CalculationResult:
             values["portfolio_risk_percent"] = per_share * shares / float(request.account_value) * 100
             formulas.append("total_risk / account_value * 100")
         else:
-            assumptions.append("Portfolio-risk percent needs account_value.")
+            assumptions.append("Tell me your account value to get portfolio-risk percent.")
         if request.target_price is not None:
             values["reward_risk"] = abs(float(request.target_price) - entry) / per_share
             formulas.append("abs(target_price - entry_price) / per_share_risk")
         else:
-            assumptions.append("Reward/risk needs target_price.")
+            assumptions.append("Tell me a target price to get reward/risk.")
     elif op == "position_pnl":
         # Realized/unrealized P&L of a position held from entry to exit.
         entry, exit_p, shares = _require(request, "entry_price", "exit_price", "shares")

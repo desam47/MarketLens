@@ -1,6 +1,6 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-23 (Chat intent, benchmark scope, and transcript-format hardening)
+**Last updated:** 2026-09-24 (Chat prose-format hardening)
 **Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
@@ -1293,6 +1293,15 @@ several "complete" claims. Fixed, each with a regression test:
     passes with 158 tests, and live local smoke confirmed readable daily-change
     and weekly-return responses with stale-data warnings.
 
+11. **User-facing prose formatting.** Successful calculator and generic
+    market-tool replies now lead with trader-readable language rather than
+    internal action names, raw JSON, or `key=value` fields. Prices, position
+    risk, P&L, options structures, and freshness are formatted explicitly;
+    break-even P&L, zero changes, and credit spreads have dedicated regression
+    coverage. Typed cards and tool pills continue to render structured UI, not
+    raw payloads. Provider-error text is intentionally tracked below as a
+    separate remaining sanitization gap.
+
 Verification: `backend/tests/ai` plus `backend/tests/api/test_chat_router.py`
 (821 passed) and the frontend ChatPanel/utils suites (72 passed) with a
 clean `tsc --noEmit`.
@@ -1301,6 +1310,12 @@ clean `tsc --noEmit`.
 
 These are not fixed. They are recorded so the scorecard is not read as
 covering them.
+
+- **Chat provider-error formatting.** The successful-response formatter does
+  not yet normalize every `ToolResult.error` before it is interpolated into a
+  user-facing unavailable message. A provider may therefore still expose a
+  raw error payload on failure; this requires a dedicated error-sanitization
+  pass and is not claimed as complete by the prose-format work above.
 
 - **5.3.5 concurrency.** Per-symbol reads inside comparisons and portfolio
   risk now run in parallel, but chained steps still run one after another:

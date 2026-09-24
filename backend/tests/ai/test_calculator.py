@@ -183,7 +183,7 @@ def test_position_risk_leaves_unavailable_outputs_empty() -> None:
     assert result.values["total_risk"] == 1600
     assert result.values["portfolio_risk_percent"] is None
     assert result.values["reward_risk"] is None
-    assert any("account_value" in assumption for assumption in result.assumptions)
+    assert any("account value" in assumption for assumption in result.assumptions)
 
 
 def test_position_risk_requires_shares() -> None:

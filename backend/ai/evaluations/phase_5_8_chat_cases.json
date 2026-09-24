@@ -14,7 +14,7 @@
             ],
             "max_model_calls": 0,
             "reply_contains": [
-              "1600"
+              "1,600.00"
             ],
             "verification": "verified",
             "requires_evidence": true
@@ -69,7 +69,7 @@
               "calculate"
             ],
             "reply_contains": [
-              "1600"
+              "1,600.00"
             ]
           }
         },

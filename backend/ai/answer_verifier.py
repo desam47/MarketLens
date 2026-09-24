@@ -205,7 +205,7 @@ def _evidence_unit_families(numbers: dict[str, float]) -> set[str]:
     families: set[str] = set()
     for key in numbers:
         normalized = key.lower().replace("_", " ")
-        if any(token in normalized for token in ("percent", "pct", "rate", "return", "change", "yield", "volatility", "drawdown", "iv")):
+        if any(token in normalized for token in ("percent", "pct", "rate", "return", "change", "yield", "volatility", "drawdown", "iv", "cagr", "correlation")):
             families.add("percent")
         if "bps" in normalized:
             families.add("bps")

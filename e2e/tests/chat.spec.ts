@@ -99,8 +99,8 @@ test.describe('B. Deterministic calculation — no AI call', () => {
     // _fallback_calculation requires the word "entry" (not "buy") for risk_reward
     await sendMessage(page, 'risk reward with entry at 100, stop at 95, target at 110');
     const reply = await waitForNextAssistantReply(page);
-    await expect(reply).toContainText('risk_reward=2.0', { timeout: 30_000 });
-    await expect(reply).toContainText('Formula:');
+    await expect(reply).toContainText('reward/risk ratio of 2.00', { timeout: 30_000 });
+    await expect(reply).toContainText('$5.00 per share');
     await expect(page.locator('[aria-label="Verified calculation"]')).toBeVisible();
   });
 
@@ -108,7 +108,7 @@ test.describe('B. Deterministic calculation — no AI call', () => {
     await goToChat(page);
     await sendMessage(page, 'A position is worth $25,000 in a $100,000 portfolio. What is its allocation?');
     const reply = await waitForNextAssistantReply(page);
-    await expect(reply).toContainText('allocation_percent=25.0', { timeout: 30_000 });
+    await expect(reply).toContainText('is 25.00% of it', { timeout: 30_000 });
   });
 
   test('missing calculation inputs prompts for values', async ({ page }) => {
@@ -122,8 +122,9 @@ test.describe('B. Deterministic calculation — no AI call', () => {
     await goToChat(page);
     await sendMessage(page, 'buy 100 AAPL at 220, stop at 212, account value $50,000');
     const reply = await waitForNextAssistantReply(page);
-    // Backend returns position_risk fields: per_share_risk, total_risk, risk_percent
-    await expect(reply).toContainText(/per_share_risk|total_risk|risk_percent|position_risk/i, { timeout: 30_000 });
+    // Reply is prose: "100 shares at $220.00 with a $212.00 stop is a $22,000.00
+    // position risking $8.00 per share, $1,600.00 in total — that is 3.20% of the account."
+    await expect(reply).toContainText(/risking \$[\d,.]+ per share/i, { timeout: 30_000 });
   });
 });
 
@@ -213,9 +214,9 @@ test.describe('E. Freshness tag on market data replies (#10)', () => {
     await expect(reply).toContainText(/AAPL/i, { timeout: 45_000 });
     const text = await reply.textContent() ?? '';
     // _format_generic_market_reply always appends provider · freshness tag.
-    // Formats: "live, Xs" / "Xmin old" / "X.Xhr old ⚠" / "as of YYYY-MM-DD"
+    // Formats: "Xs old" / "Xmin old" / "X.Xhr old ⚠" / "as of YYYY-MM-DD"
     // Accept any of these, or at minimum a provider name.
-    const hasFreshnessOrProvider = /live,\s*\d+s|\d+min old|\d+\.\d+hr old|as of \d{4}-\d{2}-\d{2}|webull|alpaca|finnhub|MarketLens/.test(text);
+    const hasFreshnessOrProvider = /\d+s old|\d+min old|\d+\.\d+hr old|as of \d{4}-\d{2}-\d{2}|webull|alpaca|finnhub|MarketLens/.test(text);
     expect(hasFreshnessOrProvider, `Expected provider or freshness in reply. Full text: ${text}`).toBe(true);
   });
 
