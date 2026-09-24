@@ -196,6 +196,37 @@ describe('ChatPanel (universal)', () => {
     expect(window.localStorage.getItem('marketlens.chat.notebooks')).toContain('Compare AAPL and MSFT');
   });
 
+  it('renames notebooks and confirms removal of saved answers or a notebook', async () => {
+    mockApi.getChatMessages.mockResolvedValue([
+      { id: 1, session_id: 1, role: 'user', content: 'Compare AAPL and MSFT', created_at: '', grounded: null } as any,
+      { id: 2, session_id: 1, role: 'assistant', content: 'Comparison.', created_at: '', grounded: true, focus: ['AAPL'], partial: [], unavailable: [], blocks: [] } as any,
+    ]);
+    render(<ChatPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: /Notebooks/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New notebook name' }), { target: { value: 'Trade ideas' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: '📓 Save to notebook' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Trade ideas' }));
+    fireEvent.click(screen.getByRole('button', { name: /Trade ideas · 1 saved/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit name' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Notebook name' }), { target: { value: 'Long ideas' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit name' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Long ideas · 1 saved/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove saved answer: Compare AAPL and MSFT' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Remove this saved answer?');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove answer' }));
+    await waitFor(() => expect(screen.getByText('No answers saved yet.')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete notebook' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Delete “Long ideas”');
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete notebook' });
+    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Long ideas ·/ })).not.toBeInTheDocument());
+  });
+
   it('renders every remaining typed block type (5.7.1 component coverage)', async () => {
     mockApi.getChatMessages.mockResolvedValue([
       {

@@ -1,4 +1,12 @@
-import { createChatNotebook, loadChatNotebooks, mergeServerChatNotebooks, saveMessageToChatNotebook } from './chatNotebooks';
+import {
+  createChatNotebook,
+  loadChatNotebooks,
+  mergeServerChatNotebooks,
+  removeChatNotebook,
+  removeChatNotebookItem,
+  renameChatNotebook,
+  saveMessageToChatNotebook,
+} from './chatNotebooks';
 
 beforeEach(() => window.localStorage.clear());
 
@@ -33,4 +41,15 @@ test('server merge keeps notebooks and items that exist only in this browser', (
   expect(merged[0].items.map(item => item.message_id)).toEqual([11]);
   expect(merged[1].items[0].answer).toBe('Local answer');
   expect(loadChatNotebooks()).toHaveLength(2);
+});
+
+test('renames notebooks and removes only the requested saved answer or notebook', () => {
+  const notebook = createChatNotebook('Trade ideas');
+  const message = { id: 10, session_id: 1, role: 'assistant' as const, content: 'Local answer', created_at: '', grounded: true, focus: [], partial: [], unavailable: [], blocks: [] };
+  const updated = saveMessageToChatNotebook(notebook.id, message, 'Q');
+  const itemId = updated[0].items[0].id;
+
+  expect(renameChatNotebook(notebook.id, 'Renamed ideas')[0].name).toBe('Renamed ideas');
+  expect(removeChatNotebookItem(notebook.id, itemId)[0].items).toEqual([]);
+  expect(removeChatNotebook(notebook.id)).toEqual([]);
 });

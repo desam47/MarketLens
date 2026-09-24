@@ -2597,11 +2597,31 @@ class ApiService {
     });
   }
 
+  async renameChatNotebook(clientKey: string, notebookId: number, name: string): Promise<ChatNotebookResponse> {
+    return this.fetch<ChatNotebookResponse>(`/ai/chat/notebooks/${notebookId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_key: clientKey, name }),
+    });
+  }
+
+  async deleteChatNotebook(clientKey: string, notebookId: number): Promise<{ deleted: boolean }> {
+    return this.fetch<{ deleted: boolean }>(`/ai/chat/notebooks/${notebookId}?client_key=${encodeURIComponent(clientKey)}`, {
+      method: 'DELETE',
+    });
+  }
+
   async saveChatNotebookItem(clientKey: string, notebookId: number, messageId: number, question: string): Promise<ChatNotebookItemResponse> {
     return this.fetch<ChatNotebookItemResponse>(`/ai/chat/notebooks/${notebookId}/items`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_key: clientKey, message_id: messageId, question }),
+    });
+  }
+
+  async deleteChatNotebookItem(clientKey: string, notebookId: number, itemId: number): Promise<{ deleted: boolean }> {
+    return this.fetch<{ deleted: boolean }>(`/ai/chat/notebooks/${notebookId}/items/${itemId}?client_key=${encodeURIComponent(clientKey)}`, {
+      method: 'DELETE',
     });
   }
 

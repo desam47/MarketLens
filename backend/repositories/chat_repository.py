@@ -284,6 +284,26 @@ class ChatRepository:
         self.db.refresh(notebook)
         return notebook
 
+    def rename_notebook(self, notebook_id: int, client_key: str, name: str) -> ResearchNotebook | None:
+        """Rename a notebook only when it belongs to the requesting browser."""
+        notebook = self.get_notebook(notebook_id, client_key)
+        if notebook is None:
+            return None
+        notebook.name = name.strip()[:120] or "Market research"
+        notebook.updated_at = now_ny()
+        self.db.commit()
+        self.db.refresh(notebook)
+        return notebook
+
+    def delete_notebook(self, notebook_id: int, client_key: str) -> bool:
+        """Delete an owned notebook and its saved-answer snapshots."""
+        notebook = self.get_notebook(notebook_id, client_key)
+        if notebook is None:
+            return False
+        self.db.delete(notebook)
+        self.db.commit()
+        return True
+
     def get_notebook(self, notebook_id: int, client_key: str | None = None) -> ResearchNotebook | None:
         query = self.db.query(ResearchNotebook).filter(ResearchNotebook.id == notebook_id)
         if client_key is not None:
@@ -327,3 +347,22 @@ class ChatRepository:
         self.db.commit()
         self.db.refresh(item)
         return item
+
+    def delete_notebook_item(self, notebook_id: int, item_id: int, client_key: str) -> bool:
+        """Remove one saved answer, scoped through the owning notebook."""
+        notebook = self.get_notebook(notebook_id, client_key)
+        if notebook is None:
+            return False
+        item = (
+            self.db.query(ResearchNotebookItem)
+            .filter(
+                ResearchNotebookItem.id == item_id,
+                ResearchNotebookItem.notebook_id == notebook.id,
+            )
+            .first()
+        )
+        if item is None:
+            return False
+        self.db.delete(item)
+        self.db.commit()
+        return True

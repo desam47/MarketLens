@@ -23,7 +23,17 @@ import type { AppPage, NavigationState } from '../utils/appNavigation';
 import { loadChartState } from '../utils/chartState';
 import { ChatPreferencesPanel } from './ChatPreferencesPanel';
 import { ChatSharingSettings, collectChatBrowserData, isChatBrowserDataRelevant, isSharingAnything, loadChatSharing, saveChatSharing } from '../utils/chatBrowserData';
-import { createChatNotebook, getChatNotebookClientKey, loadChatNotebooks, mergeServerChatNotebooks, saveMessageToChatNotebook, type ChatNotebook } from '../utils/chatNotebooks';
+import {
+  createChatNotebook,
+  getChatNotebookClientKey,
+  loadChatNotebooks,
+  mergeServerChatNotebooks,
+  removeChatNotebook,
+  removeChatNotebookItem,
+  renameChatNotebook,
+  saveMessageToChatNotebook,
+  type ChatNotebook,
+} from '../utils/chatNotebooks';
 import {
   isDefaultChatPreferences,
   loadChatPreferences,
@@ -513,6 +523,31 @@ export function ChatPanel({
                   }
                 } catch { /* browser-local notebook remains the fallback */ }
               }
+            }}
+            onRename={async (notebookId, name) => {
+              const serverNotebookId = notebookId.startsWith('server-') ? Number(notebookId.slice(7)) : null;
+              const renameServerNotebook = (api as any).renameChatNotebook as ((clientKey: string, id: number, name: string) => Promise<unknown>) | undefined;
+              if (serverNotebookId && renameServerNotebook) {
+                await renameServerNotebook(getChatNotebookClientKey(), serverNotebookId, name);
+              }
+              setNotebooks(renameChatNotebook(notebookId, name));
+            }}
+            onDelete={async notebookId => {
+              const serverNotebookId = notebookId.startsWith('server-') ? Number(notebookId.slice(7)) : null;
+              const deleteServerNotebook = (api as any).deleteChatNotebook as ((clientKey: string, id: number) => Promise<unknown>) | undefined;
+              if (serverNotebookId && deleteServerNotebook) {
+                await deleteServerNotebook(getChatNotebookClientKey(), serverNotebookId);
+              }
+              setNotebooks(removeChatNotebook(notebookId));
+            }}
+            onDeleteItem={async (notebookId, itemId) => {
+              const serverNotebookId = notebookId.startsWith('server-') ? Number(notebookId.slice(7)) : null;
+              const serverItemId = itemId.startsWith('server-item-') ? Number(itemId.slice(12)) : null;
+              const deleteServerItem = (api as any).deleteChatNotebookItem as ((clientKey: string, notebookId: number, itemId: number) => Promise<unknown>) | undefined;
+              if (serverNotebookId && serverItemId && deleteServerItem) {
+                await deleteServerItem(getChatNotebookClientKey(), serverNotebookId, serverItemId);
+              }
+              setNotebooks(removeChatNotebookItem(notebookId, itemId));
             }}
           />
         )}
@@ -1199,14 +1234,64 @@ function ChatNotebookPanel({
   newName,
   onNewNameChange,
   onCreate,
+  onRename,
+  onDelete,
+  onDeleteItem,
 }: {
   notebooks: ChatNotebook[];
   newName: string;
   onNewNameChange: (value: string) => void;
   onCreate: () => void;
+  onRename: (notebookId: string, name: string) => Promise<void>;
+  onDelete: (notebookId: string) => Promise<void>;
+  onDeleteItem: (notebookId: string, itemId: string) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<{ type: 'notebook' | 'item'; notebookId: string; itemId?: string; label: string } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const selected = notebooks.find(notebook => notebook.id === selectedId) ?? null;
+
+  const selectNotebook = (notebook: ChatNotebook) => {
+    setSelectedId(notebook.id);
+    setEditingName(false);
+    setNameDraft(notebook.name);
+    setPendingDelete(null);
+    setActionError(null);
+  };
+
+  const saveName = async () => {
+    if (!selected || !nameDraft.trim()) return;
+    try {
+      await onRename(selected.id, nameDraft);
+      setEditingName(false);
+      setActionError(null);
+    } catch {
+      setActionError('Could not rename this notebook. Your saved answers were not changed.');
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    try {
+      if (pendingDelete.type === 'notebook') {
+        await onDelete(pendingDelete.notebookId);
+        setSelectedId(null);
+      } else if (pendingDelete.itemId) {
+        await onDeleteItem(pendingDelete.notebookId, pendingDelete.itemId);
+      }
+      setPendingDelete(null);
+      setActionError(null);
+    } catch {
+      setActionError(
+        pendingDelete.type === 'notebook'
+          ? 'Could not delete this notebook. It is still available.'
+          : 'Could not remove this saved answer. It is still available.',
+      );
+    }
+  };
+
   return (
     <div className="chat-notebook-panel" aria-label="Research notebooks">
       <div className="chat-notebook-create">
@@ -1215,26 +1300,65 @@ function ChatNotebookPanel({
       </div>
       <small>Notebooks sync to the server for this browser key and preserve original evidence timestamps.</small>
       {notebooks.length > 0 && <div className="chat-notebook-list">{notebooks.map(notebook => (
-        <button key={notebook.id} type="button" className="chat-notebook-chip" onClick={() => setSelectedId(notebook.id)}>
+        <button key={notebook.id} type="button" className="chat-notebook-chip" onClick={() => selectNotebook(notebook)}>
           {notebook.name} · {notebook.items.length} saved
         </button>
       ))}</div>}
       {selected && (
-        <div className="chat-notebook-items" aria-label={`${selected.name} saved answers`}>
-          {selected.items.length === 0 ? <small>No answers saved yet.</small> : selected.items.slice(0, 10).map(item => (
-            <article key={item.id} className="chat-notebook-item">
-              <strong>{item.question || 'Saved answer'}</strong>
-              <span>{item.answer.slice(0, 220)}{item.answer.length > 220 ? '…' : ''}</span>
-              <small>
-                Saved {formatAlertTime(item.saved_at)}
-                {item.symbols?.length ? ` · ${item.symbols.join(', ')}` : ''}
-                {item.content_types?.length ? ` · ${item.content_types.join(', ')}` : ''}
-                {item.evidence_timestamps.length ? ` · evidence ${formatAlertTime(item.evidence_timestamps[0])}` : ''}
-                {item.stale ? ' · stale inputs' : ''}
-              </small>
-            </article>
-          ))}
-        </div>
+        <>
+          <div className="chat-notebook-heading">
+            {editingName ? (
+              <>
+                <input aria-label="Notebook name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} maxLength={120} />
+                <button type="button" className="chat-quick-action-btn" onClick={saveName}>Save name</button>
+                <button type="button" className="chat-quick-action-btn" onClick={() => { setEditingName(false); setNameDraft(selected.name); }}>Cancel</button>
+              </>
+            ) : (
+              <>
+                <strong>{selected.name}</strong>
+                <button type="button" className="chat-quick-action-btn" onClick={() => { setNameDraft(selected.name); setEditingName(true); }}>Edit name</button>
+                <button type="button" className="chat-quick-action-btn chat-notebook-danger" onClick={() => setPendingDelete({ type: 'notebook', notebookId: selected.id, label: selected.name })}>Delete notebook</button>
+              </>
+            )}
+          </div>
+          {actionError && <small className="chat-notebook-error" role="status">{actionError}</small>}
+          {pendingDelete && (
+            <div className="chat-notebook-confirm" role="alert">
+              <span>{pendingDelete.type === 'notebook'
+                ? `Delete “${pendingDelete.label}” and all of its saved answers?`
+                : 'Remove this saved answer? The original Chat message will remain.'}</span>
+              <button type="button" className="chat-quick-action-btn" onClick={() => setPendingDelete(null)}>Cancel</button>
+              <button type="button" className="chat-quick-action-btn chat-notebook-danger" onClick={confirmDelete}>
+                {pendingDelete.type === 'notebook' ? 'Delete notebook' : 'Remove answer'}
+              </button>
+            </div>
+          )}
+          <div className="chat-notebook-items" aria-label={`${selected.name} saved answers`}>
+            {selected.items.length === 0 ? <small>No answers saved yet.</small> : selected.items.slice(0, 10).map(item => (
+              <article key={item.id} className="chat-notebook-item">
+                <div className="chat-notebook-item-heading">
+                  <strong>{item.question || 'Saved answer'}</strong>
+                  <button
+                    type="button"
+                    className="chat-quick-action-btn chat-notebook-danger"
+                    onClick={() => setPendingDelete({ type: 'item', notebookId: selected.id, itemId: item.id, label: item.question || 'Saved answer' })}
+                    aria-label={`Remove saved answer: ${item.question || 'Saved answer'}`}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <span>{item.answer.slice(0, 220)}{item.answer.length > 220 ? '…' : ''}</span>
+                <small>
+                  Saved {formatAlertTime(item.saved_at)}
+                  {item.symbols?.length ? ` · ${item.symbols.join(', ')}` : ''}
+                  {item.content_types?.length ? ` · ${item.content_types.join(', ')}` : ''}
+                  {item.evidence_timestamps.length ? ` · evidence ${formatAlertTime(item.evidence_timestamps[0])}` : ''}
+                  {item.stale ? ' · stale inputs' : ''}
+                </small>
+              </article>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

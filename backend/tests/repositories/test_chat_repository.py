@@ -287,6 +287,31 @@ class TestChatFeedback(unittest.TestCase):
         self.assertEqual(repo.list_notebooks("client-a-123456")[0].items[0].id, item.id)
         self.assertEqual(repo.list_notebooks("client-b-123456"), [])
 
+    def test_notebooks_can_be_renamed_and_saved_items_or_notebooks_deleted(self):
+        repo = self._repo()
+        notebook = repo.create_notebook("client-a-123456", "Trade ideas")
+        message = repo.add_message(repo.create_session("AAPL").id, "assistant", "AAPL is strong.", response_blocks=[])
+        item = repo.save_notebook_item(
+            notebook.id,
+            message_id=message.id,
+            question="How is AAPL?",
+            answer=message.content,
+            response_blocks=[],
+            symbols=["AAPL"],
+            content_types=["prose"],
+            evidence_timestamps=[],
+            stale=False,
+        )
+
+        renamed = repo.rename_notebook(notebook.id, "client-a-123456", "Long ideas")
+        self.assertEqual(renamed.name, "Long ideas")
+        self.assertIsNone(repo.rename_notebook(notebook.id, "client-b-123456", "Other ideas"))
+        self.assertTrue(repo.delete_notebook_item(notebook.id, item.id, "client-a-123456"))
+        self.assertEqual(repo.get_notebook(notebook.id, "client-a-123456").items, [])
+        self.assertFalse(repo.delete_notebook(notebook.id, "client-b-123456"))
+        self.assertTrue(repo.delete_notebook(notebook.id, "client-a-123456"))
+        self.assertIsNone(repo.get_notebook(notebook.id, "client-a-123456"))
+
 
 if __name__ == "__main__":
     unittest.main()

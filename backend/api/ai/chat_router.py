@@ -278,6 +278,11 @@ class CreateNotebookRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
 
 
+class RenameNotebookRequest(BaseModel):
+    client_key: str = Field(..., min_length=8, max_length=80)
+    name: str = Field(..., min_length=1, max_length=120)
+
+
 class SaveNotebookItemRequest(BaseModel):
     client_key: str = Field(..., min_length=8, max_length=80)
     message_id: int = Field(..., gt=0)
@@ -608,6 +613,38 @@ async def create_notebook(payload: CreateNotebookRequest):
         repo.close()
 
 
+@router.patch("/notebooks/{notebook_id}", response_model=NotebookResponse)
+async def rename_notebook(notebook_id: int, payload: RenameNotebookRequest):
+    repo = ChatRepository()
+    try:
+        notebook = await asyncio.to_thread(
+            repo.rename_notebook,
+            notebook_id,
+            payload.client_key,
+            payload.name,
+        )
+        if notebook is None:
+            raise HTTPException(status_code=404, detail="Notebook not found")
+        return _notebook_to_response(notebook)
+    finally:
+        repo.close()
+
+
+@router.delete("/notebooks/{notebook_id}")
+async def delete_notebook(
+    notebook_id: int,
+    client_key: str = Query(..., min_length=8, max_length=80),
+):
+    repo = ChatRepository()
+    try:
+        deleted = await asyncio.to_thread(repo.delete_notebook, notebook_id, client_key)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Notebook not found")
+        return {"deleted": True}
+    finally:
+        repo.close()
+
+
 @router.post("/notebooks/{notebook_id}/items", response_model=NotebookItemResponse)
 async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest):
     repo = ChatRepository()
@@ -683,6 +720,27 @@ async def save_notebook_item(notebook_id: int, payload: SaveNotebookItemRequest)
         if item is None:
             raise HTTPException(status_code=404, detail="Notebook not found")
         return _notebook_item_to_response(item)
+    finally:
+        repo.close()
+
+
+@router.delete("/notebooks/{notebook_id}/items/{item_id}")
+async def delete_notebook_item(
+    notebook_id: int,
+    item_id: int,
+    client_key: str = Query(..., min_length=8, max_length=80),
+):
+    repo = ChatRepository()
+    try:
+        deleted = await asyncio.to_thread(
+            repo.delete_notebook_item,
+            notebook_id,
+            item_id,
+            client_key,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Notebook item not found")
+        return {"deleted": True}
     finally:
         repo.close()
 

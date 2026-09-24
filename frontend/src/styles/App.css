@@ -6374,6 +6374,54 @@ div.td-trend {
   flex: 1;
 }
 
+.chat-notebook-heading,
+.chat-notebook-item-heading,
+.chat-notebook-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-notebook-heading {
+  justify-content: space-between;
+}
+
+.chat-notebook-heading strong {
+  margin-right: auto;
+}
+
+.chat-notebook-heading input {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+
+.chat-notebook-item-heading strong {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-notebook-confirm {
+  padding: 7px;
+  border: 1px solid var(--warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-secondary));
+  font-size: 0.75rem;
+}
+
+.chat-notebook-confirm span {
+  flex: 1 1 14rem;
+}
+
+.chat-notebook-danger {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
+.chat-notebook-error {
+  color: var(--danger, #dc2626);
+}
+
 .chat-regeneration-row button:focus-visible,
 .chat-notebook-panel button:focus-visible,
 .chat-notebook-panel input:focus-visible {
@@ -6389,6 +6437,9 @@ div.td-trend {
   .chat-regeneration-options .chat-quick-action-btn,
   .chat-notebook-options .chat-quick-action-btn { flex: 1 1 auto; min-height: 2.2rem; }
   .chat-notebook-create { align-items: stretch; flex-direction: column; }
+  .chat-notebook-heading { align-items: stretch; }
+  .chat-notebook-heading .chat-quick-action-btn,
+  .chat-notebook-confirm .chat-quick-action-btn { flex: 1 1 auto; min-height: 2.2rem; }
 }
 
 .chat-notebook-list {

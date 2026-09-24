@@ -1,6 +1,6 @@
 # Version 5 Phase Audit
 
-**Last updated:** 2026-09-24 (Chat prose-format hardening)
+**Last updated:** 2026-09-24 (Chat comparison freshness and Notebook management)
 **Status:** Active. Planning complete; Phases 5.1–5.8 are complete. Version 5 release handoff to the protected stable branch remains outside this phase audit.
 **Scope:** Grounded tool-using Chat, verified calculations, market/user-data retrieval, bounded orchestration, analysis workflows, structured UI, personalization, and reliability evaluation.
 **Branch workflow:** Version 5 implementation is developed on `development`; `main` remains the protected stable branch and receives reviewed merges only.
@@ -1028,7 +1028,11 @@ Refresh explicitly clears the short-lived Chat context and market baseline
 caches before rebuilding evidence. Research notebooks are server-backed by a
 stable browser client key, retain grouped symbols, block/content types,
 stale/material-change flags, original evidence timestamps, and typed blocks,
-and keep browser-local storage as an offline fallback.
+and keep browser-local storage as an offline fallback. Notebook management now
+includes rename, deletion of an entire notebook, and removal of one saved
+answer. Server mutations are scoped to the stable browser client key; the UI
+requires an explicit confirmation before either deletion, while a local-only
+notebook remains manageable when the server is unavailable.
 
 The answer contract now computes freshness status server-side (`fresh`,
 `recent`, `stale`, or `unknown`) from the evidence age and marks old typed

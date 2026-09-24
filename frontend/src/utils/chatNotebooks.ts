@@ -98,6 +98,34 @@ export function createChatNotebook(name: string): ChatNotebook {
   return notebook;
 }
 
+export function renameChatNotebook(notebookId: string, name: string): ChatNotebook[] {
+  const normalizedName = name.trim().slice(0, 120) || 'Market research';
+  const now = new Date().toISOString();
+  const updated = read().map(notebook => notebook.id === notebookId
+    ? { ...notebook, name: normalizedName, updated_at: now }
+    : notebook);
+  write(updated);
+  return updated;
+}
+
+export function removeChatNotebook(notebookId: string): ChatNotebook[] {
+  const updated = read().filter(notebook => notebook.id !== notebookId);
+  write(updated);
+  return updated;
+}
+
+export function removeChatNotebookItem(notebookId: string, itemId: string): ChatNotebook[] {
+  const updated = read().map(notebook => notebook.id === notebookId
+    ? {
+      ...notebook,
+      updated_at: new Date().toISOString(),
+      items: notebook.items.filter(item => item.id !== itemId),
+    }
+    : notebook);
+  write(updated);
+  return updated;
+}
+
 export function saveMessageToChatNotebook(notebookId: string, message: ChatMessage, question: string): ChatNotebook[] {
   const notebooks = read();
   const now = new Date().toISOString();

@@ -43,6 +43,16 @@ def _mock_message(id=1, session_id=1, role="user", content="hi", response_blocks
     return m
 
 
+def _mock_notebook(id=1, name="Trade ideas"):
+    notebook = MagicMock()
+    notebook.id = id
+    notebook.name = name
+    notebook.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    notebook.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    notebook.items = []
+    return notebook
+
+
 class TestCreateOrGetSession(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
@@ -736,6 +746,62 @@ class TestClearSessions(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         mock_repo.delete_sessions.assert_called_once_with(scope=None, alert_trigger_id=7)
+
+
+class TestNotebookManagement(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_renames_owned_notebook(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.rename_notebook.return_value = _mock_notebook(id=8, name="Long ideas")
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.patch(
+            "/api/ai/chat/notebooks/8",
+            json={"client_key": "client-a-123456", "name": "Long ideas"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["name"], "Long ideas")
+        mock_repo.rename_notebook.assert_called_once_with(8, "client-a-123456", "Long ideas")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_deletes_owned_notebook_and_item(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.delete_notebook.return_value = True
+        mock_repo.delete_notebook_item.return_value = True
+        mock_repo_cls.return_value = mock_repo
+
+        notebook_response = self.client.delete("/api/ai/chat/notebooks/8?client_key=client-a-123456")
+        item_response = self.client.delete("/api/ai/chat/notebooks/8/items/13?client_key=client-a-123456")
+
+        self.assertEqual(notebook_response.status_code, 200)
+        self.assertEqual(notebook_response.json(), {"deleted": True})
+        self.assertEqual(item_response.status_code, 200)
+        self.assertEqual(item_response.json(), {"deleted": True})
+        mock_repo.delete_notebook.assert_called_once_with(8, "client-a-123456")
+        mock_repo.delete_notebook_item.assert_called_once_with(8, 13, "client-a-123456")
+
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_notebook_management_returns_404_for_unowned_records(self, mock_repo_cls):
+        mock_repo = MagicMock()
+        mock_repo.rename_notebook.return_value = None
+        mock_repo.delete_notebook.return_value = False
+        mock_repo.delete_notebook_item.return_value = False
+        mock_repo_cls.return_value = mock_repo
+
+        rename_response = self.client.patch(
+            "/api/ai/chat/notebooks/8",
+            json={"client_key": "client-b-123456", "name": "Other ideas"},
+        )
+        notebook_response = self.client.delete("/api/ai/chat/notebooks/8?client_key=client-b-123456")
+        item_response = self.client.delete("/api/ai/chat/notebooks/8/items/13?client_key=client-b-123456")
+
+        self.assertEqual(rename_response.status_code, 404)
+        self.assertEqual(notebook_response.status_code, 404)
+        self.assertEqual(item_response.status_code, 404)
 
 
 if __name__ == "__main__":
