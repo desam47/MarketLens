@@ -379,7 +379,7 @@ The full backend and frontend suites and the production build were not run for t
 
 - **Review and batch 1:** commit `8eb7ac9`, `fix(signals): correct historical outcome research`.
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
-- **Review of batches 1 and 2a:** in the working tree, not yet committed.
+- **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -392,7 +392,7 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-05 | ✅ COMPLETE | `f762f8a` | `router.py`, `api.ts`, card, dashboard, tests | API and UI | Explicit scope; active watchlists unioned. |
 | 2026-09-24 | HS-06 | ✅ COMPLETE | `f762f8a` | `router.py`, `signal_repository.py`, `api.ts`, dashboard, tests | API and UI | Server-side research page and full scoped export. |
 | 2026-09-24 | HS-14 | ⚠️ PARTIAL | `8eb7ac9`, `f762f8a` | tests | see entry | Several regressions added; card, replay, duplicate, queue, and AI coverage remain. |
-| 2026-09-24 | HS-15 to HS-18 | ❌ NOT STARTED | review | `docs/Version_5/v5_historical_signal_bug_fixes.md` | 9 live-database checks | Review of batches 1 and 2a logged four findings and refreshed HS-07 to HS-10 and HS-12 evidence. |
+| 2026-09-24 | HS-15 to HS-18 | ❌ NOT STARTED | `59e269a` | `docs/Version_5/v5_historical_signal_bug_fixes.md` | 9 live-database checks | Review of batches 1 and 2a logged four findings and refreshed HS-07 to HS-10 and HS-12 evidence. |
 
 ---
 
