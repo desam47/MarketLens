@@ -56,8 +56,21 @@ interface ChatPanelProps {
   onNavigate?: (page: AppPage, symbol?: string, navigation?: NavigationState) => void;
 }
 
-// A message in local state may be a not-yet-finalized streaming bubble.
-type LocalMessage = ChatMessage & { streaming?: boolean };
+// A message in local state may be a not-yet-finalized streaming bubble, or
+// the partial text of a stream that broke before its final message.
+type LocalMessage = ChatMessage & { streaming?: boolean; interrupted?: boolean };
+
+// After the client stops waiting for a turn (Cancel, a timeout, a broken
+// stream), the server still finishes it and saves the reply (BF-13). The
+// panel checks for that reply this often, for this long.
+const AWAIT_REPLY_POLL_MS = 4000;
+const AWAIT_REPLY_TIMEOUT_MS = 120000;
+
+/** Whether ``fresh`` holds a reply to the latest user message ``content``. */
+export function replyArrived(fresh: ChatMessage[], content: string): boolean {
+  const userIndex = fresh.map(m => m.role === 'user' && m.content === content).lastIndexOf(true);
+  return userIndex !== -1 && fresh.slice(userIndex + 1).some(m => m.role === 'assistant');
+}
 
 /**
  * Merge a polled transcript into local state. Only the assistant
@@ -169,6 +182,12 @@ export function ChatPanel({
   const [slow, setSlow] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
+  // The stream in flight. ``teardown`` marks an abort caused by leaving the
+  // session (switch or unmount), after which nothing should be updated.
+  const streamRef = useRef<{ controller: AbortController; teardown: boolean } | null>(null);
+  const [cancellable, setCancellable] = useState(false);
+  const [streamNotice, setStreamNotice] = useState<string | null>(null);
+  const [awaitingReply, setAwaitingReply] = useState<{ content: string; since: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const [watchlistIndex, setWatchlistIndex] = useState<WatchlistIndex | null>(null);
@@ -246,6 +265,8 @@ export function ChatPanel({
     setError(null);
     setMessages([]);
     setSessionId(null);
+    setStreamNotice(null);
+    setAwaitingReply(null);
 
     (async () => {
       try {
@@ -264,7 +285,15 @@ export function ChatPanel({
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Leaving the session (or unmounting) stops the stream; its turn
+      // belongs to the old session, so nothing may be updated from it.
+      if (streamRef.current) {
+        streamRef.current.teardown = true;
+        streamRef.current.controller.abort();
+      }
+    };
   }, [alertTriggerId, alertSymbol, sessionAttempt]);
 
   const handleClear = useCallback(async () => {
@@ -318,19 +347,65 @@ export function ChatPanel({
   // while a turn is in flight (its own reconciliation already
   // covers the latest state, and mid-stream is not a safe time to
   // splice in extra messages).
+  //
+  // The same poll also watches for a reply the client stopped waiting for
+  // (see awaitServerReply) — faster, and in alert sessions too, until the
+  // reply arrives or AWAIT_REPLY_TIMEOUT_MS passes.
   useEffect(() => {
-    if (!sessionId || alertTriggerId) return;
+    if (!sessionId || (alertTriggerId && !awaitingReply)) return;
     const interval = setInterval(async () => {
       if (sending) return;
       try {
         const fresh = await api.getChatMessages(sessionId);
+        if (awaitingReply && replyArrived(fresh, awaitingReply.content)) {
+          setMessages(prev => mergePolledMessages(prev.filter(m => !m.interrupted), fresh));
+          setAwaitingReply(null);
+          setStreamNotice(null);
+          return;
+        }
         setMessages(prev => mergePolledMessages(prev, fresh));
+        if (awaitingReply && Date.now() - awaitingReply.since > AWAIT_REPLY_TIMEOUT_MS) {
+          const saved = fresh.some(m => m.role === 'user' && m.content === awaitingReply.content);
+          setAwaitingReply(null);
+          if (saved) {
+            setStreamNotice("The reply hasn't arrived yet. It will appear here once it's saved.");
+          } else {
+            // The turn never reached the server: nothing is coming.
+            setMessages(prev => prev.filter(m => !(m.id < 0 && m.role === 'user' && m.content === awaitingReply.content) && !m.interrupted));
+            setStreamNotice(null);
+            setError('That message never reached the server — please send it again.');
+          }
+        }
       } catch {
         // best-effort — a missed poll just tries again next tick
       }
-    }, 20000);
+    }, awaitingReply ? AWAIT_REPLY_POLL_MS : 20000);
     return () => clearInterval(interval);
-  }, [sessionId, alertTriggerId, sending]);
+  }, [sessionId, alertTriggerId, sending, awaitingReply]);
+
+  // The server keeps running a turn after the client stops listening and saves
+  // its reply (BF-13), so a stopped or broken stream is never resent — that
+  // would repeat any action the turn took. Show what the server has stored,
+  // then watch for the reply.
+  const awaitServerReply = useCallback(async (
+    targetSessionId: number,
+    content: string,
+    placeholderId: number,
+    keepPlaceholder: boolean,
+  ): Promise<boolean> => {
+    try {
+      const fresh = await api.getChatMessages(targetSessionId);
+      if (replyArrived(fresh, content)) {
+        setMessages(prev => mergePolledMessages(prev.filter(m => m.id !== placeholderId && !m.interrupted), fresh));
+        return true;
+      }
+      setMessages(prev => mergePolledMessages(keepPlaceholder ? prev : prev.filter(m => m.id !== placeholderId), fresh));
+    } catch {
+      if (!keepPlaceholder) setMessages(prev => prev.filter(m => m.id !== placeholderId));
+    }
+    setAwaitingReply({ content, since: Date.now() });
+    return false;
+  }, []);
 
   const submit = useCallback(async (content: string, regenerationMode?: RegenerationMode, regenerationScope?: ChatRegenerationScope) => {
     if (!content || !sessionId || sending) return;
@@ -345,6 +420,10 @@ export function ChatPanel({
       : null;
     const apiRegenerationMode = regenerationMode;
     setChartState(currentChartState);
+    setStreamNotice(null);
+    const stream = { controller: new AbortController(), teardown: false };
+    streamRef.current = stream;
+    setCancellable(true);
     const now = Date.now();
     const optimisticUser: LocalMessage = {
       id: -now,
@@ -402,25 +481,57 @@ export function ChatPanel({
         regenerationMode: apiRegenerationMode,
         regenerationScope,
         browserData,
+        signal: stream.controller.signal,
       });
       persistJournalBlocks(finalMsg.blocks);
       setMessages(prev => prev.map(m => (m.id === placeholderId ? finalMsg : m)));
       adoptSymbol(finalMsg.focus, finalMsg.partial);
     } catch (e: any) {
-      if (e?.turnStarted && !sawDelta) {
-        // The server already persisted this turn; show what it stored
-        // instead of resending (which would repeat any actions).
+      // A new session or an unmount stopped the stream; its turn belongs to
+      // the session being left.
+      if (stream.teardown) return;
+      setCancellable(false);
+      if (e?.aborted || e?.timedOut) {
+        setStreamNotice(e?.timedOut
+          ? 'The reply is taking longer than expected. It will appear here when it is ready.'
+          : 'Stopped waiting for this reply. The server still finishes it, so it will appear here shortly.');
+        if (await awaitServerReply(sessionId, content, placeholderId, false)) setStreamNotice(null);
+        return;
+      }
+      // Deltas only follow `meta`, so seeing one means the turn started too.
+      const turnStarted = Boolean(e?.turnStarted) || sawDelta;
+      if (turnStarted && e?.serverFailed) {
+        // The server reported the failure itself; no reply is coming. Show
+        // what it stored instead of resending (which would repeat any actions).
         setError(e?.message || 'The chat turn failed after it started.');
         try {
           const fresh = await api.getChatMessages(sessionId);
-          setMessages(fresh);
+          setMessages(prev => mergePolledMessages(prev.filter(m => m.id !== placeholderId), fresh));
         } catch {
           setMessages(prev => prev.filter(m => m.id !== placeholderId));
         }
         return;
       }
+      if (turnStarted) {
+        // The connection broke mid-turn; the server still finishes it.
+        const partial = sawDelta && Boolean(streamedContent);
+        if (partial) {
+          patchPlaceholder({
+            content: `${streamedContent}\n\nStream interrupted before verification completed. The verified answer will appear here when it is saved.`,
+            grounded: false,
+            streaming: false,
+            interrupted: true,
+          });
+        } else {
+          setStreamNotice('The connection dropped. The reply will appear here when it is saved.');
+        }
+        if (await awaitServerReply(sessionId, content, placeholderId, partial)) setStreamNotice(null);
+        return;
+      }
       if (e?.beforeFirstDelta && !sawDelta) {
         // Stream never started — fall back to the plain blocking endpoint.
+        // Nothing was saved (the server saves the user message only once
+        // the turn starts), so this is not a duplicate.
         try {
           const sentPreferences = isDefaultChatPreferences(preferences) ? null : preferences;
           const finalMsg = (apiRegenerationMode || regenerationScope || browserData)
@@ -437,21 +548,19 @@ export function ChatPanel({
         }
       } else {
         setError(e?.message || 'Failed to send message');
-        if (sawDelta && streamedContent) {
-          patchPlaceholder({
-            content: `${streamedContent}\n\nStream interrupted before verification completed. Retry to get a verified answer.`,
-            grounded: false,
-            streaming: false,
-          });
-          return;
-        }
       }
       setMessages(prev => prev.filter(m => m.id !== optimisticUser.id && m.id !== placeholderId));
       setInput(content);
     } finally {
-      setSending(false);
+      if (streamRef.current === stream) streamRef.current = null;
+      // Unlock the input unless a newer send is already in flight (a torn-
+      // down stream's cleanup can land after the next session's first send).
+      if (streamRef.current === null) {
+        setCancellable(false);
+        setSending(false);
+      }
     }
-  }, [sessionId, sending, onSymbolResolved, preferences, sharing]);
+  }, [sessionId, sending, onSymbolResolved, preferences, sharing, awaitServerReply]);
 
   const handleSend = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -593,6 +702,8 @@ export function ChatPanel({
         </div>
       )}
 
+      {streamNotice && <div className="chat-draft-status chat-stream-notice" role="status">{streamNotice}</div>}
+
       <div className="chat-message-list" ref={listRef}>
         {loading && <p className="info-text">Opening chat…</p>}
         {!loading && messages.length === 0 && (
@@ -692,6 +803,17 @@ export function ChatPanel({
         >
           {sending ? '⟳' : 'Send'}
         </button>
+        {sending && cancellable && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => streamRef.current?.controller.abort()}
+            aria-label="Cancel reply"
+            title="Stop waiting for this reply. The server still finishes it, and the reply appears here."
+          >
+            Cancel
+          </button>
+        )}
       </form>
     </div>
   );

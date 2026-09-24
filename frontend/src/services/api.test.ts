@@ -138,3 +138,109 @@ describe('ApiService request timeout/cancellation', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+describe('ApiService.streamChatMessage stopping (BF-13)', () => {
+  const originalFetch = global.fetch;
+  const META = 'event: meta\ndata: {"focus":[],"partial":[],"unavailable":[]}\n\n';
+  const DELTA = 'event: delta\ndata: {"text":"Hi"}\n\n';
+  const FINAL = 'event: final\ndata: {"id":9,"session_id":1,"role":"assistant","content":"Hi","created_at":"","grounded":true}\n\n';
+  const SERVER_ERROR = 'event: error\ndata: {"message":"The chat turn failed after it started.","started":true}\n\n';
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.useRealTimers();
+  });
+
+  // A streaming response whose chunks arrive after the given delays; after the
+  // last one the body stays open until the request is aborted, like a
+  // stalled server. `null` ends the body.
+  function streamingFetch(chunks: Array<[number, string | null]>): jest.Mock {
+    return jest.fn((_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      const queue = [...chunks];
+      const encoder = new TextEncoder();
+      const reader = {
+        read: () => new Promise((resolve, reject) => {
+          const onAbort = () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener('abort', onAbort, { once: true });
+          const next = queue.shift();
+          if (!next) return;
+          setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve(next[1] === null ? { done: true, value: undefined } : { done: false, value: encoder.encode(next[1]) });
+          }, next[0]);
+        }),
+      };
+      return Promise.resolve({ ok: true, status: 200, statusText: 'OK', body: { getReader: () => reader } });
+    });
+  }
+
+  // Let the client reach its next read() (registering that chunk's timer)
+  // before moving the clock, then let it process what arrived.
+  async function advance(ms: number) {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    jest.advanceTimersByTime(ms);
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  }
+
+  it('gives up on a stream that goes silent, flagged as a timeout after the turn started', async () => {
+    jest.useFakeTimers();
+    global.fetch = streamingFetch([[10, META]]) as any;
+
+    const promise = api.streamChatMessage(1, 'hi', { idleTimeoutMs: 1000 });
+    promise.catch(() => {});
+    await advance(10);
+    await advance(1000);
+
+    await expect(promise).rejects.toMatchObject({ timedOut: true, aborted: false, turnStarted: true });
+  });
+
+  it('keeps a slow but live stream alive: every chunk restarts the idle timer', async () => {
+    jest.useFakeTimers();
+    global.fetch = streamingFetch([[600, META], [600, DELTA], [600, FINAL], [600, null]]) as any;
+
+    const promise = api.streamChatMessage(1, 'hi', { idleTimeoutMs: 1000 });
+    for (let i = 0; i < 4; i += 1) await advance(600);
+
+    await expect(promise).resolves.toMatchObject({ id: 9, content: 'Hi' });
+  });
+
+  it("the caller's signal stops waiting, flagged as aborted", async () => {
+    jest.useFakeTimers();
+    global.fetch = streamingFetch([[10, META]]) as any;
+    const controller = new AbortController();
+
+    const promise = api.streamChatMessage(1, 'hi', { signal: controller.signal, idleTimeoutMs: 60000 });
+    promise.catch(() => {});
+    await advance(10);
+    controller.abort();
+    await advance(0);
+
+    await expect(promise).rejects.toMatchObject({ aborted: true, timedOut: false, turnStarted: true });
+  });
+
+  it('a cancel before the response arrives is flagged as not started', async () => {
+    global.fetch = hangingFetchMock() as any;
+    const controller = new AbortController();
+
+    const promise = api.streamChatMessage(1, 'hi', { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ aborted: true, turnStarted: false, beforeFirstDelta: true });
+  });
+
+  it('marks an error the server reported after the turn started', async () => {
+    jest.useFakeTimers();
+    global.fetch = streamingFetch([[10, META], [10, SERVER_ERROR], [10, null]]) as any;
+
+    const promise = api.streamChatMessage(1, 'hi', { idleTimeoutMs: 1000 });
+    promise.catch(() => {});
+    for (let i = 0; i < 3; i += 1) await advance(10);
+
+    await expect(promise).rejects.toMatchObject({ serverFailed: true, turnStarted: true });
+  });
+});

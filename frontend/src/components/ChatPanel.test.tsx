@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import { ChatPanel, mergePolledMessages } from './ChatPanel';
+import { ChatPanel, mergePolledMessages, replyArrived } from './ChatPanel';
 import api from '../services/api';
 
 jest.mock('../services/api', () => ({
@@ -1104,5 +1104,158 @@ describe('mergePolledMessages (BF-12)', () => {
   it('returns the same array when nothing changed', () => {
     const prev = [msg(11, 'user', 'hi'), msg(12, 'assistant', 'hello')];
     expect(mergePolledMessages(prev, [...prev])).toBe(prev);
+  });
+});
+
+describe('stopping and recovering a streamed turn (BF-13)', () => {
+  // Mirrors api.streamChatMessage: `meta` first (the turn has started), then
+  // wait; aborting the signal rejects the way the real client does.
+  const waitUntilAborted = (opts: any, { started = true } = {}) => {
+    if (started) opts.onMeta?.({ focus: [], partial: [], unavailable: [] });
+    return new Promise((_resolve, reject) => {
+      opts.signal?.addEventListener('abort', () => reject(Object.assign(new Error('Stopped waiting for the reply.'), {
+        aborted: true, timedOut: false, beforeFirstDelta: true, turnStarted: started,
+      })), { once: true });
+    });
+  };
+  const send = async (text: string) => {
+    // The session opens asynchronously; Send is disabled until it has.
+    await waitFor(() => expect(screen.getByRole('textbox')).not.toBeDisabled());
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+  };
+  const flush = async (ms: number) => {
+    await act(async () => {
+      jest.advanceTimersByTime(ms);
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    });
+  };
+  const userRow = { id: 11, session_id: 1, role: 'user', content: 'how is the market', created_at: '', grounded: null } as any;
+  const savedReply = { id: 12, session_id: 1, role: 'assistant', content: 'Saved reply.', created_at: '', grounded: true } as any;
+
+  it('Cancel stops waiting without resending, and the saved reply appears', async () => {
+    jest.useFakeTimers();
+    mockApi.streamChatMessage.mockImplementation((_id: number, _content: string, opts: any) => waitUntilAborted(opts) as any);
+    mockApi.getChatMessages
+      .mockResolvedValueOnce([]) // history on open
+      .mockResolvedValueOnce([userRow]) // right after Cancel: no reply yet
+      .mockResolvedValue([userRow, savedReply]); // the server finished the turn
+    render(<ChatPanel />);
+    await send('how is the market');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel reply' }));
+
+    expect(await screen.findByText(/Stopped waiting for this reply/)).toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+    expect(screen.getByText('how is the market')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).not.toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Cancel reply' })).not.toBeInTheDocument();
+
+    await flush(4000);
+    expect(await screen.findByText('Saved reply.')).toBeInTheDocument();
+    expect(screen.queryByText(/Stopped waiting for this reply/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('how is the market')).toHaveLength(1);
+  });
+
+  it('a timed-out stream says so and is not resent', async () => {
+    mockApi.streamChatMessage.mockRejectedValue(Object.assign(new Error('The reply took too long to arrive.'), {
+      timedOut: true, aborted: false, beforeFirstDelta: true, turnStarted: true,
+    }));
+    render(<ChatPanel />);
+    await send('how is the market');
+
+    expect(await screen.findByText(/taking longer than expected/)).toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('replaces interrupted partial text with the saved reply', async () => {
+    jest.useFakeTimers();
+    mockApi.streamChatMessage.mockImplementation(async (_id: number, _content: string, opts: any) => {
+      opts.onMeta?.({ focus: [], partial: [], unavailable: [] });
+      opts.onDelta?.('Partial answer');
+      throw Object.assign(new Error('network error'), { beforeFirstDelta: false, turnStarted: true });
+    });
+    mockApi.getChatMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([userRow])
+      .mockResolvedValue([userRow, savedReply]);
+    render(<ChatPanel />);
+    await send('how is the market');
+
+    expect(await screen.findByText(/The verified answer will appear here when it is saved/)).toBeInTheDocument();
+    await flush(4000);
+    expect(await screen.findByText('Saved reply.')).toBeInTheDocument();
+    expect(screen.queryByText(/Partial answer/)).not.toBeInTheDocument();
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('drops a message that never reached the server once the wait runs out', async () => {
+    jest.useFakeTimers();
+    mockApi.streamChatMessage.mockImplementation(
+      (_id: number, _content: string, opts: any) => waitUntilAborted(opts, { started: false }) as any,
+    );
+    mockApi.getChatMessages.mockResolvedValue([]);
+    render(<ChatPanel />);
+    await send('how is the market');
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel reply' }));
+    expect(await screen.findByText(/Stopped waiting for this reply/)).toBeInTheDocument();
+
+    for (let elapsed = 0; elapsed <= 124000; elapsed += 4000) await flush(4000);
+
+    expect(await screen.findByText(/never reached the server/)).toBeInTheDocument();
+    expect(screen.queryByText('how is the market')).not.toBeInTheDocument();
+  });
+
+  it('unmounting stops the stream and updates nothing afterwards', async () => {
+    let signal: AbortSignal | undefined;
+    mockApi.streamChatMessage.mockImplementation((_id: number, _content: string, opts: any) => {
+      signal = opts.signal;
+      return waitUntilAborted(opts) as any;
+    });
+    const { unmount } = render(<ChatPanel />);
+    await send('how is the market');
+    await waitFor(() => expect(signal).toBeDefined());
+    const historyLoads = mockApi.getChatMessages.mock.calls.length;
+
+    unmount();
+    await act(async () => { await Promise.resolve(); });
+
+    expect(signal?.aborted).toBe(true);
+    expect(mockApi.getChatMessages.mock.calls.length).toBe(historyLoads);
+    expect(mockApi.sendChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('switching sessions stops the stream and leaves the new session usable', async () => {
+    let signal: AbortSignal | undefined;
+    mockApi.streamChatMessage.mockImplementation((_id: number, _content: string, opts: any) => {
+      signal = opts.signal;
+      return waitUntilAborted(opts) as any;
+    });
+    const { rerender } = render(<ChatPanel />);
+    await send('how is the market');
+    await waitFor(() => expect(signal).toBeDefined());
+
+    mockApi.createChatSession.mockResolvedValue({
+      id: 2, symbol: 'AAPL', scope: 'alert', alert_trigger_id: 5, created_at: '', updated_at: '',
+    } as any);
+    rerender(<ChatPanel alertTriggerId={5} alertSymbol="AAPL" />);
+
+    expect(signal?.aborted).toBe(true);
+    await waitFor(() => expect(screen.getByRole('textbox')).not.toBeDisabled());
+    expect(screen.queryByText('how is the market')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Stopped waiting/)).not.toBeInTheDocument();
+  });
+});
+
+describe('replyArrived', () => {
+  const row = (id: number, role: 'user' | 'assistant', content: string) =>
+    ({ id, session_id: 1, role, content, created_at: '', grounded: null } as any);
+
+  it('needs an assistant row after the matching user row', () => {
+    expect(replyArrived([row(1, 'user', 'q')], 'q')).toBe(false);
+    expect(replyArrived([row(1, 'user', 'q'), row(2, 'assistant', 'a')], 'q')).toBe(true);
+    // An earlier answer to the same question doesn't count.
+    expect(replyArrived([row(1, 'user', 'q'), row(2, 'assistant', 'a'), row(3, 'user', 'q')], 'q')).toBe(false);
+    expect(replyArrived([row(1, 'assistant', 'a')], 'q')).toBe(false);
   });
 });

@@ -2746,6 +2746,13 @@ class ApiService {
    * Rejects with ``{ beforeFirstDelta, turnStarted }`` context. The caller
    * may fall back to the plain endpoint only when ``turnStarted`` is false;
    * after ``meta`` the server has already persisted the turn.
+   *
+   * ``signal`` stops waiting (``aborted: true``), and a stream that sends
+   * nothing for ``idleTimeoutMs`` is abandoned (``timedOut: true``). The
+   * server keeps running a turn it received and saves the reply either way
+   * (BF-13), so after either the caller must not resend: the reply arrives
+   * with the conversation. ``serverFailed: true`` marks an error the server
+   * itself reported after the turn started.
    */
   async streamChatMessage(
     sessionId: number,
@@ -2754,6 +2761,7 @@ class ApiService {
       onDelta?: (text: string) => void;
       onMeta?: (m: { focus: string[]; partial: string[]; unavailable: string[] }) => void;
       signal?: AbortSignal;
+      idleTimeoutMs?: number;
       preferences?: ChatPreferences | null;
       chartState?: ChatChartState | null;
       regenerationMode?: ChatRegenerationMode | null;
@@ -2761,31 +2769,23 @@ class ApiService {
       browserData?: ChatBrowserData | null;
     } = {},
   ): Promise<ChatMessage> {
-    const response = await fetch(
-      `${this.baseUrl}/ai/chat/sessions/${sessionId}/messages/stream`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content,
-          ...(opts.preferences ? { preferences: opts.preferences } : {}),
-          ...(opts.chartState ? { chart_state: opts.chartState } : {}),
-          ...(opts.regenerationMode ? { regeneration_mode: opts.regenerationMode } : {}),
-          ...(opts.regenerationScope ? { regeneration_timeframe: opts.regenerationScope.timeframe, regeneration_session: opts.regenerationScope.session } : {}),
-          ...(opts.browserData ? { browser_data: opts.browserData } : {}),
-        }),
-        signal: opts.signal,
-      },
-    );
-    if (!response.ok || !response.body) {
-      const err: any = new Error(`API Error: ${response.status} ${response.statusText}`);
-      err.beforeFirstDelta = true;
-      throw err;
-    }
+    // One controller for both ways of giving up: the caller's signal and
+    // the idle timer. The timer restarts on every chunk, so a slow but
+    // live reply is never cut off.
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    if (opts.signal?.aborted) controller.abort();
+    else opts.signal?.addEventListener('abort', forwardAbort, { once: true });
+    let timedOut = false;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const restartIdleTimer = () => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, opts.idleTimeoutMs ?? AI_TIMEOUT_MS);
+    };
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     let sawDelta = false;
     // Once `meta` arrives the server has persisted the user message (and may
     // have run actions); resending through the blocking endpoint would
@@ -2793,6 +2793,10 @@ class ApiService {
     let turnStarted = false;
     let final: ChatMessage | null = null;
     let streamError: string | null = null;
+    const stoppedWaiting = () => Object.assign(
+      new Error(timedOut ? 'The reply took too long to arrive.' : 'Stopped waiting for the reply.'),
+      { aborted: !timedOut, timedOut, beforeFirstDelta: !sawDelta, turnStarted },
+    );
 
     const handleFrame = (frame: string) => {
       let event = 'message';
@@ -2813,22 +2817,70 @@ class ApiService {
       }
     };
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let sep: number;
-      while ((sep = buffer.indexOf('\n\n')) !== -1) {
-        handleFrame(buffer.slice(0, sep));
-        buffer = buffer.slice(sep + 2);
+    try {
+      restartIdleTimer();
+      let response: Response;
+      try {
+        response = await fetch(
+          `${this.baseUrl}/ai/chat/sessions/${sessionId}/messages/stream`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content,
+              ...(opts.preferences ? { preferences: opts.preferences } : {}),
+              ...(opts.chartState ? { chart_state: opts.chartState } : {}),
+              ...(opts.regenerationMode ? { regeneration_mode: opts.regenerationMode } : {}),
+              ...(opts.regenerationScope ? { regeneration_timeframe: opts.regenerationScope.timeframe, regeneration_session: opts.regenerationScope.session } : {}),
+              ...(opts.browserData ? { browser_data: opts.browserData } : {}),
+            }),
+            signal: controller.signal,
+          },
+        );
+      } catch (err) {
+        if (controller.signal.aborted) throw stoppedWaiting();
+        throw err;
       }
+      if (!response.ok || !response.body) {
+        const err: any = new Error(`API Error: ${response.status} ${response.statusText}`);
+        err.beforeFirstDelta = true;
+        throw err;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        let chunk: { done: boolean; value?: Uint8Array };
+        try {
+          chunk = await reader.read();
+        } catch (err: any) {
+          if (controller.signal.aborted) throw stoppedWaiting();
+          throw Object.assign(err instanceof Error ? err : new Error(String(err)), {
+            beforeFirstDelta: !sawDelta,
+            turnStarted,
+          });
+        }
+        if (chunk.done) break;
+        restartIdleTimer();
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          handleFrame(buffer.slice(0, sep));
+          buffer = buffer.slice(sep + 2);
+        }
+      }
+      if (buffer.trim()) handleFrame(buffer);
+    } finally {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      opts.signal?.removeEventListener('abort', forwardAbort);
     }
-    if (buffer.trim()) handleFrame(buffer);
 
     if (streamError && !final) {
       const err: any = new Error(streamError);
       err.beforeFirstDelta = !sawDelta;
       err.turnStarted = turnStarted;
+      err.serverFailed = turnStarted;
       throw err;
     }
     if (!final) {
