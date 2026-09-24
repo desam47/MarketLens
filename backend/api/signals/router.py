@@ -7,6 +7,7 @@ Routes:
   GET    /api/signals/symbol/{symbol}   - latest signal per timeframe for a symbol
   GET    /api/signals/research/regime-performance   - avg returns by market regime
   GET    /api/signals/research/count-by-regime      - signal count by regime
+  GET    /api/signals/research/summary  - research metrics over the full filtered population
   POST   /api/signals/backfill          - trigger outcome backfill manually
   DELETE /api/signals/old               - delete signals older than N days
 
@@ -103,6 +104,34 @@ class BackfillResponse(BaseModel):
     updated: int
 
 
+class TimeframeCoverage(BaseModel):
+    timeframe: str
+    recorded: int
+    complete: int
+
+
+class RegimeCoverage(BaseModel):
+    """Complete outcomes that carry a regime. Only rows recorded as their bar
+    closed get one, because the regime engine only knows the present."""
+
+    with_regime: int
+    complete: int
+
+
+class ResearchMetrics(BaseModel):
+    label: str
+    complete: int
+    directional: int
+    win_rate: float | None
+    avg_signal_return_5b: float | None
+    avg_signal_return_10b: float | None
+
+
+class ResearchPerformance(ResearchMetrics):
+    by_regime: list[ResearchMetrics]
+    by_trend: list[ResearchMetrics]
+
+
 SignalScopeMode = Literal["all_active", "watchlist", "all_stored"]
 
 
@@ -123,6 +152,21 @@ class SignalResearchPage(BaseModel):
     timeframe: str | None
     start_date: date | None
     end_date: date | None
+
+
+class SignalResearchSummary(BaseModel):
+    """Metrics over the whole filtered population, not one page of it."""
+
+    scope: ResolvedSignalScope
+    timeframe: str | None
+    start_date: date | None
+    end_date: date | None
+    recorded: int
+    complete: int
+    timeframe_coverage: list[TimeframeCoverage]
+    regime_coverage: RegimeCoverage
+    performance: ResearchPerformance | None
+    performance_note: str | None
 
 
 def _resolve_signal_scope(
@@ -281,6 +325,48 @@ def get_signal_research_page(
     )
 
 
+@router.get("/research/summary", response_model=SignalResearchSummary)
+def get_signal_research_summary(
+    timeframe: str | None = None,
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    scope: SignalScopeMode = Query("all_active"),
+    watchlist_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Research metrics over every matching record.
+
+    Performance is returned only for a single timeframe; without one, the
+    response carries per-timeframe coverage and a note instead.
+    """
+    resolved_scope, symbols = _resolve_signal_scope(db, scope=scope, watchlist_id=watchlist_id)
+    start_time, end_time = _research_time_range(start_date, end_date)
+    if symbols == []:
+        summary = {
+            "recorded": 0,
+            "complete": 0,
+            "timeframe_coverage": [],
+            "regime_coverage": {"with_regime": 0, "complete": 0},
+            "performance": None,
+        }
+    else:
+        summary = SignalRepository(db).research_summary(
+            timeframe=timeframe, start_time=start_time, end_time=end_time, symbols=symbols
+        )
+    note = None if timeframe else (
+        "Choose one timeframe to see performance: a 5-bar outcome is five minutes on 1m "
+        "and five sessions on 1d, so returns across timeframes are not averaged together."
+    )
+    return SignalResearchSummary(
+        scope=resolved_scope,
+        timeframe=timeframe,
+        start_date=start_date,
+        end_date=end_date,
+        performance_note=note,
+        **summary,
+    )
+
+
 @router.get("/research/export")
 def export_signal_research(
     timeframe: str | None = None,
@@ -342,6 +428,7 @@ def export_signal_research(
 
 @router.get("/research/regime-performance", response_model=list[RegimePerformance])
 def get_regime_performance(
+    timeframe: str | None = Query(None, description="Limit to one timeframe; horizons differ across timeframes"),
     scope: SignalScopeMode = Query("all_active"),
     watchlist_id: int | None = Query(None),
     include_all: bool = Query(
@@ -351,8 +438,8 @@ def get_regime_performance(
 ):
     """Average forward returns by market regime.
 
-    Only signals that have outcomes computed (return_5b IS NOT NULL)
-    are included. By default, only signals for symbols in the active
+    Only complete bullish/bearish outcomes are included, direction-adjusted.
+    By default, only signals for symbols in the active
     watchlist are counted — pass ``include_all=true`` to include
     signals for symbols that have been removed from the watchlist
     (used by offline research).
@@ -363,11 +450,12 @@ def get_regime_performance(
     if watchlist_symbols == []:
         return []
     repo = SignalRepository(db)
-    return repo.get_performance_by_regime(symbols=watchlist_symbols)
+    return repo.get_performance_by_regime(symbols=watchlist_symbols, timeframe=timeframe)
 
 
 @router.get("/research/count-by-regime", response_model=list[RegimeCount])
 def get_signal_count_by_regime(
+    timeframe: str | None = Query(None),
     scope: SignalScopeMode = Query("all_active"),
     watchlist_id: int | None = Query(None),
     include_all: bool = Query(
@@ -385,7 +473,7 @@ def get_signal_count_by_regime(
     if watchlist_symbols == []:
         return []
     repo = SignalRepository(db)
-    return repo.count_by_regime(symbols=watchlist_symbols)
+    return repo.count_by_regime(symbols=watchlist_symbols, timeframe=timeframe)
 
 
 @router.post("/backfill", response_model=BackfillResponse)

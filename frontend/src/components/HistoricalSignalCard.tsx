@@ -1,16 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import api, { HistoricalSignal, RegimeCount, RegimePerformance, SignalScopeMode, Watchlist } from '../services/api';
+import api, { HistoricalSignal, RegimeCount, RegimePerformance, SignalResearchSummary, SignalScopeMode, Watchlist } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
-import { DEFAULT_TIMEFRAME, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { DEFAULT_TIMEFRAME, TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { directionalOutcome, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 
 const strPrice = fmtPrice;
-
-// Historical Signals page only shows the 3 primary timeframes — the
-// sub-hour / 4h / weekly buckets are recorded by the trend engine but
-// not analysed in this view. Keeps the dropdown focused on what users
-// typically want to inspect.
-const SIGNAL_TIMEFRAMES = ['1m', '1h', '1d'] as const;
 
 interface HistoricalSignalCardProps {
   /** Optional default symbol to filter on. */
@@ -61,6 +55,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
   const [signals, setSignals] = useState<HistoricalSignal[]>([]);
   const [regimePerformance, setRegimePerformance] = useState<RegimePerformance[]>([]);
   const [regimeCounts, setRegimeCounts] = useState<RegimeCount[]>([]);
+  const [regimeCoverage, setRegimeCoverage] = useState<SignalResearchSummary['regime_coverage'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{ msg: string; isError: boolean } | null>(null);
   const [busy, setBusy] = useState<{ backfill: boolean; record: boolean; cleanup: boolean }>({
@@ -96,16 +91,20 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
 
   const loadResearch = useCallback(async () => {
     try {
-      const [perf, counts] = await Promise.all([
-        api.getRegimePerformance(scope, scope === 'watchlist' ? watchlistId : undefined),
-        api.getSignalCountByRegime(scope, scope === 'watchlist' ? watchlistId : undefined),
+      const selectedWatchlist = scope === 'watchlist' ? watchlistId : undefined;
+      // Regime metrics follow the selected timeframe: horizons differ across timeframes.
+      const [perf, counts, summary] = await Promise.all([
+        api.getRegimePerformance(scope, selectedWatchlist, timeframe),
+        api.getSignalCountByRegime(scope, selectedWatchlist, timeframe),
+        api.getSignalResearchSummary({ scope, watchlistId: selectedWatchlist, timeframe }),
       ]);
       setRegimePerformance(perf);
       setRegimeCounts(counts);
+      setRegimeCoverage(summary.regime_coverage);
     } catch {
       // Best effort: leave previous values.
     }
-  }, [scope, watchlistId]);
+  }, [scope, watchlistId, timeframe]);
 
   useEffect(() => {
     let active = true;
@@ -213,8 +212,8 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         </label>
         <label>
           <span>Timeframe</span>
-          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
-            {SIGNAL_TIMEFRAMES.map((tf) => (
+          <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} aria-label="Historical signal timeframe">
+            {TIMEFRAMES.map((tf) => (
               <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>
             ))}
           </select>
@@ -312,11 +311,18 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         </div>
       )}
 
-      <h3 style={{ marginTop: 18, color: '#34495e' }}>Directional Performance by Market Regime</h3>
+      <h3 style={{ marginTop: 18, color: '#34495e' }}>Directional Performance by Regime at Recording ({TIMEFRAME_LABELS[timeframe] || timeframe})</h3>
       <p className="label" style={{ marginTop: 0 }}>
         Direction-adjusted returns, favorable excursion, and adverse excursion
         for completed bullish/bearish signals. Underlying price movement remains
         available in exports; neutral signals have no directional outcome.
+      </p>
+      <p className="label" style={{ marginTop: 0 }} aria-label="Regime coverage">
+        Regime is a live snapshot, recorded only for signals captured as their bar closed
+        (the regime engine knows only the present), so this table covers a recent subset.
+        {regimeCoverage && regimeCoverage.complete > 0
+          ? ` ${regimeCoverage.with_regime.toLocaleString()} of ${regimeCoverage.complete.toLocaleString()} complete outcomes carry a regime.`
+          : ''}
       </p>
       {regimePerformance.length === 0 ? (
         <p className="empty-state">
@@ -357,7 +363,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
 
       {regimeCounts.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <span className="label">All-time counts: </span>
+          <span className="label">All-time counts ({TIMEFRAME_LABELS[timeframe] || timeframe}): </span>
           {regimeCounts.map((c, i) => (
             <span key={c.regime} className={regimeBadgeClass(c.regime)} style={{ marginRight: 6 }}>
               {c.regime}={c.count}

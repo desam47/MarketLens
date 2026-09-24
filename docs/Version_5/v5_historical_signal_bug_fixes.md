@@ -1,9 +1,9 @@
 # Version 5 Historical Signals Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2b: HS-15 and HS-16)
-**Status:** Batches 1, 2a, and 2b are complete. Every Critical finding is fixed. Nine findings remain open: the methodology items (batch 2c) and the operational items (batch 3).
-**Scorecard:** 9 ✅ COMPLETE, 1 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 2c: HS-07, HS-08, HS-09, HS-10, HS-17)
+**Status:** Batches 1 to 2c are complete, including HS-09's migration of the stored rows. The operational items (batch 3) remain.
+**Scorecard:** 14 ✅ COMPLETE, 1 ⚠️ PARTIAL, 3 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 code review of the Historical Signals backend, API, storage, card, research dashboard, and replay panel at `d0aebd2` (HS-01 to HS-14). A follow-up review of batches 1 and 2a at `8f6a803` added HS-15 to HS-18.
 **Related:** [Phase audit](phase_audit_v5.md), [AI Analysis fixes](v5_ai_analysis.md), [Chat bug fixes](v5_bug_fixes.md)
 
@@ -30,15 +30,15 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 | HS-16 | Critical | AI | AI Analysis reads raw price movement as the signals' track record | Verified | ✅ COMPLETE |
 | HS-05 | High | Scope | Default scope silently uses only the first active watchlist | Verified | ✅ COMPLETE |
 | HS-06 | High | Research | Date filters and exports are silently limited to the newest 1,000 rows | Verified | ✅ COMPLETE |
-| HS-07 | High | Methodology | All timeframes combines incomparable horizons and hides recorded timeframes | Verified | ❌ NOT STARTED |
-| HS-08 | High | Provenance | Regime data is not historical and covers under a fifth of rows | Verified | ❌ NOT STARTED |
-| HS-09 | High | Data quality | Several stored context fields are placeholders rather than evidence | Verified | ❌ NOT STARTED |
-| HS-10 | High | Replay | Neutral or unknown signals are simulated as long trades; session scope drifts | Code-read | ❌ NOT STARTED |
+| HS-07 | High | Methodology | All timeframes combines incomparable horizons and hides recorded timeframes | Verified | ✅ COMPLETE |
+| HS-08 | High | Provenance | Regime data is not historical and covers under a fifth of rows | Verified | ✅ COMPLETE |
+| HS-09 | High | Data quality | Several stored context fields are placeholders rather than evidence | Verified | ✅ COMPLETE |
+| HS-10 | High | Replay | Neutral or unknown signals are simulated as long trades; session scope drifts | Code-read | ✅ COMPLETE |
 | HS-11 | Medium | API safety | Manual recording accepts ignored client scope and mutations lack server guardrails | Code-read | ❌ NOT STARTED |
 | HS-12 | Medium | Storage | No database uniqueness constraint protects signal identity | Verified | ❌ NOT STARTED |
 | HS-13 | Medium | API + presentation | A valid zero regime average is returned as unavailable | Code-read | ✅ COMPLETE |
 | HS-14 | Medium | Tests | Regression coverage preserves faulty semantics and misses lifecycle transitions | Code-read | ⚠️ PARTIAL |
-| HS-17 | Medium | Research | Research metrics describe one 250-row page, not the selected population | Code-read | ❌ NOT STARTED |
+| HS-17 | Medium | Research | Research metrics describe one 250-row page, not the selected population | Code-read | ✅ COMPLETE |
 | HS-18 | Medium | API + UI | “Delete >180d” is undone at restart and ignores the selected scope | Code-read | ❌ NOT STARTED |
 
 **Next suggested order:**
@@ -46,7 +46,7 @@ Line numbers for HS-01 to HS-14 refer to the code at `d0aebd2`; line numbers for
 1. ~~**Batch 1 — decision-data correctness:** HS-01, HS-02, HS-03, HS-04, and HS-13.~~ Done.
 2. ~~**Batch 2a — truthful scope:** HS-05 and HS-06.~~ Done.
 3. ~~**Batch 2b — outcomes and AI correctness:** HS-15 and HS-16.~~ Done.
-4. **Batch 2c — methodology:** HS-07, HS-08, HS-09, HS-10, and HS-17.
+4. ~~**Batch 2c — methodology:** HS-07, HS-08, HS-09, HS-10, and HS-17.~~ Done.
 5. **Batch 3 — operational integrity and regressions:** HS-11, HS-12, HS-18, then the rest of HS-14 as the release gate.
 
 ---
@@ -210,18 +210,29 @@ The dashboard fetches the newest 1,000 records once, then filters date and timef
 
 ### HS-07 — All timeframes combines incomparable horizons and hides recorded timeframes
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2c)
 **Where:** selectors in `SignalResearchDashboard.tsx:5`, `HistoricalSignalCard.tsx:8`, and `HistoricalReplayPanel.tsx:7`.
 
 Five bars means five minutes for `1m` and five trading days for `1d`; pooling their returns or wins is not meaningful. The live database holds signals for ten timeframes. The card offers only 1m, 1h, and 1d; Research and Replay offer 1m, 5m, 15m, 1h, and 1d. 2m, 3m, 30m, 4h, and 1wk are hidden everywhere. Together they are about 239,000 of 617,000 rows (39%).
 
 **Impact:** dense intraday rows dominate default research while valid higher-timeframe records are hidden.
 
-**Resolution:** require one timeframe for all performance and backtest metrics. An all-timeframe view may show separated coverage/counts but must not aggregate returns. Derive every selector from one supported-timeframe source.
+**Resolution:**
+
+- **Selectors:** the card, Research, and Replay all build their timeframe lists from `TIMEFRAMES` in `timeframeUtils.ts`, so all ten recorded timeframes are offered everywhere.
+- **Research:** the dashboard now opens on Daily. Its "All timeframes (coverage only)" option shows recorded and complete counts per timeframe and a note, with no returns or win rates. The server enforces this: `GET /api/signals/research/summary` returns `performance: null` and a `performance_note` when no timeframe is given.
+- **Card:** the regime-performance and regime-count endpoints take a `timeframe`, and the card passes its selected one. Its regime table used to pool every timeframe.
+
+**Tests:**
+
+- `test_research_summary_does_not_pool_returns_across_timeframes`: no timeframe gives coverage only.
+- `test_regime_performance_can_be_limited_to_one_timeframe`.
+- Dashboard test: it offers all ten timeframes plus the coverage-only view, and hides performance in that view.
+- New `HistoricalSignalCard.test.tsx`: it offers all ten timeframes and re-queries regime data for the selected one.
 
 ### HS-08 — Regime data is not historical and covers under a fifth of rows
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2c). This takes the "live snapshot plus coverage" option; point-in-time reconstruction is listed under Enhancements.
 **Where:** signal insertion (`backend/services/signal_recorder.py:542`) and regime-performance tables (`frontend/src/components/HistoricalSignalCard.tsx:281`).
 
 Backfilled signals deliberately have no regime because the regime engine knows only the present. A row written within fifteen minutes of its close receives the current regime; older backfilled rows retain `NULL`. Batch 1 removed the card's claim that regimes come from the engine at signal time. The card still shows no regime coverage, so the regime tables read as a complete breakdown.
@@ -230,11 +241,19 @@ Backfilled signals deliberately have no regime because the regime engine knows o
 
 **Impact:** regime research is a partial recent sample with unknown coverage but is presented as complete historical segmentation.
 
-**Resolution:** reconstruct and persist point-in-time regime from stored benchmark bars, or call this a live regime snapshot, omit it from historical performance, and show regime coverage.
+**Resolution:** regime is now presented as a live snapshot, with its coverage shown.
+
+- **Summary endpoint:** returns `regime_coverage`, the number of complete outcomes that carry a regime.
+- **Research dashboard:** its table is now "By Regime at Recording". Rows without a regime are grouped as "not recorded" instead of being dropped. A note says why they are missing and gives the share with one.
+- **Card:** its table is now "Directional Performance by Regime at Recording (timeframe)". It shows the same note and the "N of M complete outcomes carry a regime" count.
+
+On a copy of the live data, 0 of 16,198 complete daily outcomes carry a regime. The daily regime table therefore now shows a single "not recorded" row, where before it silently used a handful of recent rows.
+
+**Tests:** the summary API test groups 300 regime-less rows as "not recorded" and checks `regime_coverage`. The dashboard and card tests require the coverage note.
 
 ### HS-09 — Several stored context fields are placeholders rather than evidence
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2c)
 **Where:** insertion and volume classification (`backend/services/signal_recorder.py:542` and `:587`).
 
 `relative_strength` and `sector_alignment` are stored as `None`; `_classify_volume` always returns `normal`, including zero volume; `strategy_version` is always `v1`; and `data_quality` is always `good`.
@@ -243,18 +262,38 @@ Backfilled signals deliberately have no regime because the regime engine knows o
 
 **Impact:** downstream research and AI context can mistake schema fields for evidence fields.
 
-**Resolution:** calculate each field causally with versioned inputs, or leave it unavailable and expose a coverage/data-quality reason. Store configuration and provider/bar provenance.
+**Resolution:** the recorder no longer writes values it didn't measure.
+
+- **Empty fields:** `volume_state` and `data_quality` are left empty, and `_classify_volume`, which always returned `normal`, is removed. `relative_strength` and `sector_alignment` were already empty.
+- **Version:** `strategy_version` now comes from `settings.trend.strategy_version` (`v1.0`) rather than a hard-coded `v1`. `record_signal` no longer defaults to `v1`/`good`.
+- **Provenance:** `confidence_inputs` now records each bar's `provider` and `data_status`. The recording queries load those two columns.
+- **Chat:** `get_signal_history` no longer passes `data_quality` to the model.
+
+**Stored rows:** migration `20261002_signal_placeholder_fields` sets the stored `normal`/`good` constants to NULL. Its downgrade restores the constants on every row, which is the state the old recorder produced.
+
+It was first validated on a copy of the signals table, run from a scratch Alembic tree so that `--reload` could not apply it. Upgrade, downgrade, and upgrade again all gave the expected counts, the run took under 2 s, and `conf/token.txt` was untouched.
+
+With approval, a `.backup` of the live database was taken and the migration was installed. The dev server's reload applied it within seconds. The live database is now at `20261002_signal_placeholder_fields`, and all 618,476 signals have empty `volume_state` and `data_quality`. `/api/health` returned 200 afterwards.
+
+**Tests:** `test_backfill_signals_for_symbol_bulk_inserts_all` now also requires empty `volume_state` and `data_quality`, the settings version, and the bar's provider and data status in `confidence_inputs`.
 
 ### HS-10 — Replay simulates neutral or unknown signals as long trades and session scope drifts
 
-**Status:** ❌ NOT STARTED. Batch 1 limited the replay statistics to complete bullish and bearish outcomes (`HistoricalReplayPanel.tsx:173`). The simulated trades are unchanged.
+**Status:** ✅ COMPLETE (2026-09-24, batch 2c). Batch 1 had already limited the replay statistics to complete bullish and bearish outcomes.
 **Where:** replay filters and simulation (`frontend/src/components/HistoricalReplayPanel.tsx:158` and `:191`).
 
 Only a state matching bearish/down/sell becomes short. Neutral, warm-up `NULL`, and unknown values become long simulated trades. The session filter applies to candles, but replay signal statistics use date filtering only. On the live database, 46% of rows are neutral and 24,999 have no trend state.
 
 **Impact:** simulated net can include trades the engine never called for, while chart and statistics cover different session populations.
 
-**Resolution:** simulate only explicit bullish/bearish calls, show entry/exit and intrabar assumptions, and apply one resolved session scope to bars, signals, markers, statistics, and current-signal lookup.
+**Resolution:**
+
+- **Trades:** only explicit `bullish` and `bearish` calls are simulated. A bearish call goes short, matched on the exact state rather than the old `bear|down|sell` pattern. Neutral and warm-up rows are not traded, and the "Simulated trades" count is out of directional calls only.
+- **One scope:** a signal is recorded for the bar it closed on. The panel therefore keeps only signals whose bar is in the replay, so date and session filters apply to bars, signals, markers, statistics, and the "Signal at this point" lookup alike.
+- **Markers:** these now match the exact bar rather than the first signal of the same day. They are coloured by the direction-adjusted 5-bar outcome, not the raw move, which fixes a leftover from HS-03.
+- **Assumptions:** a note under the simulated trades states them. Entry is at the signal bar's close; exit is when a later bar reaches the stop or target; the stop is assumed first when one bar reaches both; there is no commission or slippage.
+
+**Tests:** a new replay test has a neutral call and a premarket signal. With all sessions it shows three signals and "Simulated trades 1 / 2". With the regular session, the premarket bar and its signal drop out together, giving two signals and "0 / 1".
 
 ---
 
@@ -312,8 +351,8 @@ The partial-fill test said a later backfill completes remaining outcomes but did
 
 **Remaining:**
 
-- a `HistoricalSignalCard` test (none exists);
-- neutral replay calls and session alignment (HS-10);
+- ~~a `HistoricalSignalCard` test~~: added in batch 2c;
+- ~~neutral replay calls and session alignment (HS-10)~~: covered in batch 2c;
 - duplicate inserts (HS-12);
 - ~~queue progress past unfinishable rows (HS-15)~~: covered in batch 2b;
 - ~~direction-adjusted AI stats (HS-16)~~: covered in batch 2b.
@@ -322,14 +361,25 @@ The partial-fill test said a later backfill completes remaining outcomes but did
 
 ### HS-17 — Research metrics describe one 250-row page, not the selected population
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 2c)
 **Where:** the research query (`frontend/src/components/SignalResearchDashboard.tsx:79`, `limit: 250`) and the metrics computed from the loaded page (`metricRows` and the summary figures).
 
 HS-06 moved filtering to the server and labels the metrics as page metrics. But the win rate, the averages, and every group table are still computed in the browser from the current page: the newest 250 complete records. Before batch 2a, they were computed from 1,000. With the default “All timeframes”, the newest records are mostly 1m, 2m, and 3m rows. Moving to the next page changes every metric.
 
 **Impact:** the numbers no longer mislead about their coverage, but they don't answer the question the filters ask. A trader filtering a year of daily signals sees results for the newest 250.
 
-**Resolution:** add a server-side aggregate endpoint over the full scoped population: counts, directional win rate, and averages by regime, trend, and timeframe, with sample sizes. Page only the record list.
+**Resolution:** a new endpoint, `GET /api/signals/research/summary`, computes everything over the whole filtered population in SQL (`SignalRepository.research_summary`). It uses the same scope, timeframe, and date filters as the export. It returns:
+
+- recorded and complete counts;
+- coverage per timeframe;
+- regime coverage;
+- for one timeframe, directional counts, win rate, and direction-adjusted 5- and 10-bar averages, overall and by regime and trend state.
+
+The dashboard now renders only this summary, so paging is gone, and its coverage line says the metrics cover every matching record. The `/research/signals` page endpoint remains for API callers.
+
+**Tests:** `test_research_summary_covers_every_record_not_one_page` seeds 304 rows, more than one old page. It checks the totals, the direction-adjusted average across all of them, the regime and trend groups, and that a partial row is excluded. The dashboard test requires the full-population coverage line and no paging controls.
+
+**Checked on a copy of the live data:** the summary took 0.68 s for all 618,314 rows with no timeframe, 0.85 s for 1m (248,430 rows), and 0.04 s for 1d.
 
 ### HS-18 — “Delete >180d” is undone at restart and ignores the selected scope
 
@@ -362,10 +412,25 @@ A 180-day manual delete therefore reaches only 1h, 4h, 1d, and 1wk signals. The 
 1. **Explicit outcome state:** store `pending`, `complete`, or `abandoned` with a reason, rather than inferring state from null columns in several places (repository, API, frontend helper, AI stats, chat tool).
 2. **Horizon labels:** show what five bars means for the selected timeframe, for example “5 bars = 25 minutes” on 5m.
 3. **Sample-size cues:** show counts and a confidence interval next to each win rate and average, and flag groups too small to trust.
-4. **Regime coverage badge:** show what share of the selected rows carry a regime before showing regime tables (pairs with HS-08).
-5. **Replay costs:** add optional commission and slippage to the simulated trades once HS-10 is fixed.
+4. **Point-in-time regime:** rebuild each signal's regime from stored benchmark bars, so backfilled rows get one and regime research covers all of history. Batch 2c shows coverage instead (HS-08).
+5. **Volume baseline:** if volume context is wanted, compute a causal relative-volume state (bar volume against a trailing, time-of-day-aware baseline) with a version tag. Batch 2c leaves `volume_state` empty (HS-09).
+6. **Replay costs:** add optional commission and slippage to the simulated trades; the replay currently assumes none.
 
 ## Verification
+
+### Batch 2c (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| Signals API, all repository tests, `backend/tests/services`, AI market tools, analysis, chat, scanner API, multi-timeframe | 609 passed, 17 subtests passed |
+| `SignalResearchDashboard`, `HistoricalReplayPanel`, `HistoricalSignalCard` (new), `SignalExplanationPanel` suites | 6 passed |
+| TypeScript (`tsc --noEmit`) and `ruff` on the changed files | clean |
+| HS-09 migration on a copy of the signals table (scratch Alembic tree) | upgrade, downgrade, and upgrade again correct; under 2 s |
+| HS-09 migration on the live database (after a `.backup`) | applied by the reload; 618,476 rows cleared; `/api/health` 200 |
+
+**Summary endpoint on a copy of the live signals:** 0.68 s for 618,314 rows with no timeframe, 0.85 s for 1m, and 0.04 s for 1d.
+
+The full backend and frontend suites and the production build were not run.
 
 ### Batch 2b (2026-09-24)
 
@@ -427,6 +492,7 @@ The full backend and frontend suites and the production build were not run for t
 - **Batch 2a:** commit `f762f8a`, `fix(signals): make research scope and coverage explicit`.
 - **Review of batches 1 and 2a:** commit `59e269a`, `docs(v5): review historical signals batches 1 and 2a`.
 - **Batch 2b:** commit `b430e06`, `fix(signals): unblock outcome queue and direction-adjust track record`.
+- **Batch 2c:** in the working tree, not yet committed. The HS-09 migration is installed and already applied to the live database.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -442,6 +508,11 @@ The full backend and frontend suites and the production build were not run for t
 | 2026-09-24 | HS-15 to HS-18 | ❌ NOT STARTED | `59e269a` | `docs/Version_5/v5_historical_signal_bug_fixes.md` | 9 live-database checks | Review of batches 1 and 2a logged four findings and refreshed HS-07 to HS-10 and HS-12 evidence. |
 | 2026-09-24 | HS-15 | ✅ COMPLETE | `b430e06` | `signal_repository.py`, `signal_recorder.py`, `test_signal_repository.py`, `test_signal_recorder.py` | 4 new, 3 updated | Queue selects only rows that stored bars can advance. |
 | 2026-09-24 | HS-16 | ✅ COMPLETE | `b430e06` | `signal_repository.py`, `router.py`, `context.py`, `market_tools.py`, `SignalExplanationPanel.tsx`, `api.ts`, tests | 2 new, 4 updated | One directional rule; AI, chat, and Scanner stats direction-adjusted and complete-only. |
+| 2026-09-24 | HS-07 | ✅ COMPLETE | batch 2c | `SignalResearchDashboard.tsx`, `HistoricalSignalCard.tsx`, `HistoricalReplayPanel.tsx`, `router.py`, `signal_repository.py`, `api.ts`, tests | 2 API, 3 UI | Every selector uses `TIMEFRAMES`; no returns pooled across timeframes. |
+| 2026-09-24 | HS-08 | ✅ COMPLETE | batch 2c | `signal_repository.py`, `router.py`, dashboard, card, tests | API + UI | Regime shown as a live snapshot with coverage and a "not recorded" group. |
+| 2026-09-24 | HS-09 | ✅ COMPLETE | batch 2c | `signal_recorder.py`, `market_tools.py`, `alembic/versions/20261002_signal_placeholder_fields.py`, `test_signal_recorder.py` | 1 updated + migration run | New rows carry no placeholders; stored placeholders cleared on the live database. |
+| 2026-09-24 | HS-10 | ✅ COMPLETE | batch 2c | `HistoricalReplayPanel.tsx`, test | 1 UI | Directional trades only; one session scope; assumptions shown. |
+| 2026-09-24 | HS-17 | ✅ COMPLETE | batch 2c | `signal_repository.py`, `router.py`, `api.ts`, `SignalResearchDashboard.tsx`, tests | 1 API, 2 UI | Server-side summary over the full filtered population. |
 
 ---
 

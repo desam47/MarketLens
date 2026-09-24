@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func
 
+from backend.config.settings import settings
 from backend.database import SessionLocal
 from backend.models import BarModel, HistoricalSignal
 from backend.repositories.signal_repository import OUTCOME_WINDOWS, SignalRepository, outcome_anchor
@@ -47,6 +48,17 @@ _FRESH = timedelta(minutes=15)
 # How many bars of forward data we need before an outcome is complete.
 # Per spec: 5/10/20-bar returns plus MFE/MAE across the same 20-bar window.
 REQUIRED_FORWARD_BARS = OUTCOME_WINDOWS[-1]
+
+# Bar columns the recorder reads; provider and data_status are stored as each row's provenance.
+_RECORD_BAR_COLUMNS = (
+    BarModel.timestamp,
+    BarModel.close,
+    BarModel.high,
+    BarModel.low,
+    BarModel.volume,
+    BarModel.provider,
+    BarModel.data_status,
+)
 
 
 class SignalRecorder:
@@ -76,8 +88,8 @@ class SignalRecorder:
         momentum: float | None = None,
         structure: str | None = None,
         confidence_inputs: dict | None = None,
-        strategy_version: str = "v1",
-        data_quality: str = "good",
+        strategy_version: str | None = None,
+        data_quality: str | None = None,
         price: float | None = None,
         timestamp: datetime | None = None,
     ) -> HistoricalSignal | None:
@@ -138,7 +150,7 @@ class SignalRecorder:
                 momentum=momentum,
                 structure=structure,
                 confidence_inputs=confidence_json,
-                strategy_version=strategy_version,
+                strategy_version=strategy_version or settings.trend.strategy_version,
                 data_quality=data_quality,
                 _outcome_missing=True,
             )
@@ -478,9 +490,7 @@ class SignalRecorder:
         """Replay the pair's closed bars, write the ones without a row, keep the engine so
         ``_advance_pair`` can carry on from the last bar."""
         rows = (
-            db.query(
-                BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low, BarModel.volume
-            )
+            db.query(*_RECORD_BAR_COLUMNS)
             .filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
             .order_by(BarModel.timestamp.desc())
             .limit(max_bars)
@@ -512,9 +522,9 @@ class SignalRecorder:
         self, db, symbol: str, timeframe: str, replay: BarReplay, now: datetime
     ) -> int:
         """Feed the bars that closed since the last cycle and write their rows."""
-        q = db.query(
-            BarModel.timestamp, BarModel.close, BarModel.high, BarModel.low, BarModel.volume
-        ).filter(BarModel.symbol == symbol, BarModel.timeframe == timeframe)
+        q = db.query(*_RECORD_BAR_COLUMNS).filter(
+            BarModel.symbol == symbol, BarModel.timeframe == timeframe
+        )
         if replay.last_ts is not None:
             q = q.filter(BarModel.timestamp > replay.last_ts)
         new = []
@@ -560,18 +570,23 @@ class SignalRecorder:
                     timeframe=timeframe,
                     price=float(bar.close or 0),
                     **label,
+                    # Not computed: no relative-strength, sector, volume-baseline,
+                    # or data-quality assessment runs here, so these stay empty
+                    # rather than holding a value that reads like evidence.
                     relative_strength=None,
                     sector_alignment=None,
-                    volume_state=self._classify_volume(bar),
+                    volume_state=None,
+                    data_quality=None,
                     confidence_inputs=json.dumps(
                         {
                             "bar_close": float(bar.close or 0),
                             "bar_high": float(bar.high or 0),
                             "bar_low": float(bar.low or 0),
+                            "bar_provider": bar.provider,
+                            "bar_data_status": bar.data_status,
                         }
                     ),
-                    strategy_version="v1",
-                    data_quality="good",
+                    strategy_version=settings.trend.strategy_version,
                     _outcome_missing=True,
                 )
             )
@@ -583,16 +598,6 @@ class SignalRecorder:
             logger.error(f"_insert_rows({symbol}, {timeframe}, n={len(objects)}) failed: {e}")
             raise
         return len(objects)
-
-    def _classify_volume(self, bar) -> str:
-        """Crude volume classification — no historical baseline here."""
-        try:
-            v = float(bar.volume or 0)
-            if v <= 0:
-                return "normal"
-            return "normal"  # needs a baseline; left as a future hook
-        except Exception:
-            return "normal"
 
     def _get_market_regime(self) -> str | None:
         """Try to read the current market regime from the global engine.

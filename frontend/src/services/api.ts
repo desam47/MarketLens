@@ -703,6 +703,36 @@ export interface SignalResearchPage {
   end_date: string | null;
 }
 
+export interface SignalResearchMetrics {
+  label: string;
+  complete: number;
+  /** Complete bullish/bearish calls; the win rate and averages use only these. */
+  directional: number;
+  /** Fraction 0–1. */
+  win_rate: number | null;
+  /** Direction-adjusted: a bearish call earns when price falls. */
+  avg_signal_return_5b: number | null;
+  avg_signal_return_10b: number | null;
+}
+
+export interface SignalResearchSummary {
+  scope: SignalResearchScope;
+  timeframe: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  recorded: number;
+  complete: number;
+  timeframe_coverage: { timeframe: string; recorded: number; complete: number }[];
+  /** Complete outcomes that carry a regime; only rows recorded as their bar closed have one. */
+  regime_coverage: { with_regime: number; complete: number };
+  /** Present only when one timeframe is selected. */
+  performance: (SignalResearchMetrics & {
+    by_regime: SignalResearchMetrics[];
+    by_trend: SignalResearchMetrics[];
+  }) | null;
+  performance_note: string | null;
+}
+
 function signalResearchParams(query: SignalResearchQuery, includePage: boolean): URLSearchParams {
   const params = new URLSearchParams();
   if (query.timeframe) params.set('timeframe', query.timeframe);
@@ -2183,6 +2213,12 @@ class ApiService {
     );
   }
 
+  async getSignalResearchSummary(query: SignalResearchQuery = {}): Promise<SignalResearchSummary> {
+    const params = signalResearchParams(query, false);
+    params.delete('completed_only');
+    return this.fetch<SignalResearchSummary>(`/signals/research/summary?${params.toString()}`);
+  }
+
   async exportSignalResearch(query: SignalResearchQuery = {}): Promise<string> {
     return this.fetchRaw(
       `/signals/research/export?${signalResearchParams(query, false).toString()}`,
@@ -2198,18 +2234,22 @@ class ApiService {
   async getRegimePerformance(
     scope: SignalScopeMode = 'all_active',
     watchlistId?: number,
+    timeframe?: string,
   ): Promise<RegimePerformance[]> {
     const params = new URLSearchParams({ scope });
     if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
+    if (timeframe) params.set('timeframe', timeframe);
     return this.fetch<RegimePerformance[]>(`/signals/research/regime-performance?${params.toString()}`);
   }
 
   async getSignalCountByRegime(
     scope: SignalScopeMode = 'all_active',
     watchlistId?: number,
+    timeframe?: string,
   ): Promise<RegimeCount[]> {
     const params = new URLSearchParams({ scope });
     if (watchlistId != null) params.set('watchlist_id', String(watchlistId));
+    if (timeframe) params.set('timeframe', timeframe);
     return this.fetch<RegimeCount[]>(`/signals/research/count-by-regime?${params.toString()}`);
   }
 

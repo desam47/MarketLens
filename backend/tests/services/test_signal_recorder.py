@@ -8,6 +8,7 @@ Tests cover:
   - outcome math (return_at_bar, mfe_mae)
 """
 
+import json
 import os
 import sys
 import unittest
@@ -542,6 +543,15 @@ class TestSignalRecorderBackfillSignals(unittest.TestCase):
         self.assertIsNone(signals[0].trend_state)
         self.assertIsNotNone(signals[-1].trend_state)
         self.assertIsNotNone(signals[-1].trend_score)
+        # HS-09: no placeholder evidence. Nothing assesses volume or data quality here, so both
+        # stay empty; the version comes from settings and the bar's provenance is kept.
+        from backend.config.settings import settings
+
+        self.assertIsNone(signals[-1].volume_state)
+        self.assertIsNone(signals[-1].data_quality)
+        self.assertEqual(signals[-1].strategy_version, settings.trend.strategy_version)
+        inputs = json.loads(signals[-1].confidence_inputs)
+        self.assertEqual((inputs["bar_provider"], inputs["bar_data_status"]), ("test", "historical"))
 
     def test_backfill_signals_for_symbol_dedup_skips_existing(self):
         """Second call records 0 new signals (DB dedup + in-process cache)."""

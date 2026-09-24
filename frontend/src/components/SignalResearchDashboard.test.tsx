@@ -1,49 +1,76 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
-import api from '../services/api';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import api, { SignalResearchSummary } from '../services/api';
 import { SignalResearchDashboard } from './SignalResearchDashboard';
+
+const scope = { mode: 'all_active' as const, watchlist_ids: [1], watchlist_names: ['Default'], symbols: ['SPY', 'QQQ'] };
+const coverage = [
+  { timeframe: '1m', recorded: 900, complete: 850 },
+  { timeframe: '1d', recorded: 12, complete: 10 },
+];
+
+const dailySummary: SignalResearchSummary = {
+  scope, timeframe: '1d', start_date: null, end_date: null,
+  recorded: 12, complete: 10,
+  timeframe_coverage: [coverage[1]],
+  regime_coverage: { with_regime: 2, complete: 10 },
+  performance: {
+    label: 'all', complete: 10, directional: 8, win_rate: 0.625,
+    avg_signal_return_5b: 1.5, avg_signal_return_10b: 2.25,
+    by_regime: [
+      { label: 'not recorded', complete: 8, directional: 6, win_rate: 0.5, avg_signal_return_5b: 1, avg_signal_return_10b: 2 },
+      { label: 'risk_on', complete: 2, directional: 2, win_rate: 1, avg_signal_return_5b: 3, avg_signal_return_10b: 3 },
+    ],
+    by_trend: [
+      { label: 'bullish', complete: 5, directional: 5, win_rate: 0.6, avg_signal_return_5b: 2, avg_signal_return_10b: 2 },
+      { label: 'neutral', complete: 2, directional: 0, win_rate: null, avg_signal_return_5b: null, avg_signal_return_10b: null },
+    ],
+  },
+  performance_note: null,
+};
 
 describe('SignalResearchDashboard', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  it('summarizes completed outcomes and groups them by regime, trend, and timeframe', async () => {
+  it('shows metrics for the whole filtered population of one timeframe', async () => {
     jest.spyOn(api, 'getWatchlists').mockResolvedValue([]);
-    jest.spyOn(api, 'getSignalResearch').mockResolvedValue({
-      total: 2, offset: 0, limit: 250, has_more: false,
-      scope: { mode: 'all_active', watchlist_ids: [1], watchlist_names: ['Default'], symbols: ['SPY', 'QQQ'] },
-      timeframe: null, start_date: null, end_date: null,
-      records: [
-      {
-        id: 1, symbol: 'SPY', timestamp: '2026-09-01T15:00:00-04:00', timeframe: '1d', price: 100,
-        trend_score: 70, trend_state: 'bullish', strength: 80, market_regime: 'risk_on',
-        relative_strength: null, sector_alignment: null, volume_state: null, momentum: null, structure: null,
-        confidence_inputs: null, strategy_version: null, data_quality: null,
-        return_5b: 2, return_10b: 3, return_20b: 4, mfe: 3, mae: -1, created_at: null,
-      },
-      {
-        id: 2, symbol: 'QQQ', timestamp: '2026-09-02T15:00:00-04:00', timeframe: '1d', price: 200,
-        trend_score: 40, trend_state: 'bearish', strength: 50, market_regime: 'risk_off',
-        relative_strength: null, sector_alignment: null, volume_state: null, momentum: null, structure: null,
-        confidence_inputs: null, strategy_version: null, data_quality: null,
-        return_5b: -1, return_10b: -2, return_20b: -3, mfe: 1, mae: -2, created_at: null,
-      },
-      ],
-    });
+    jest.spyOn(api, 'getSignalResearchSummary').mockResolvedValue(dailySummary);
 
     render(<SignalResearchDashboard />);
 
     await waitFor(() => expect(screen.getByText('Avg signal 5-bar return')).toBeInTheDocument());
-    expect(screen.getByText('risk_on')).toBeInTheDocument();
-    expect(screen.getByText('risk_off')).toBeInTheDocument();
-    expect(screen.getAllByText('100.0%').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('1.50%').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Cumulative 5-bar signal return')).not.toBeInTheDocument();
-    expect(screen.getByText(/not a strategy equity curve/)).toBeInTheDocument();
+    expect(api.getSignalResearchSummary).toHaveBeenCalledWith(expect.objectContaining({ scope: 'all_active', timeframe: '1d' }));
     expect(screen.getByLabelText('Research coverage')).toHaveTextContent('Default · 2 enabled symbols');
-    expect(api.getSignalResearch).toHaveBeenCalledWith(expect.objectContaining({
-      scope: 'all_active', completedOnly: true, limit: 250, offset: 0,
-    }));
+    expect(screen.getByLabelText('Research coverage')).toHaveTextContent('10 complete outcomes of 12 recorded signals; metrics cover all of them');
+    expect(screen.getByText('62.5%')).toBeInTheDocument();
+    expect(screen.getAllByText('1.50%').length).toBeGreaterThan(0);
+    expect(screen.getByText('not recorded')).toBeInTheDocument();
+    expect(screen.getByLabelText('Regime coverage')).toHaveTextContent('2 of 10 complete outcomes (20.00%)');
+    expect(screen.getByText(/not a strategy equity curve/)).toBeInTheDocument();
+    expect(screen.queryByText(/Next page/)).not.toBeInTheDocument();
+  });
+
+  it('offers every recorded timeframe and shows coverage, not returns, across all of them', async () => {
+    jest.spyOn(api, 'getWatchlists').mockResolvedValue([]);
+    const summarySpy = jest.spyOn(api, 'getSignalResearchSummary').mockResolvedValue(dailySummary);
+
+    render(<SignalResearchDashboard />);
+    await waitFor(() => expect(screen.getByText('Avg signal 5-bar return')).toBeInTheDocument());
+
+    const options = Array.from((screen.getByLabelText('Research timeframe') as HTMLSelectElement).options).map((option) => option.value);
+    expect(options).toEqual(['1m', '2m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1wk', 'all']);
+
+    summarySpy.mockResolvedValue({
+      ...dailySummary, timeframe: null, recorded: 912, complete: 860, timeframe_coverage: coverage,
+      performance: null, performance_note: 'Choose one timeframe to see performance.',
+    });
+    fireEvent.change(screen.getByLabelText('Research timeframe'), { target: { value: 'all' } });
+
+    await waitFor(() => expect(screen.getByLabelText('Performance note')).toHaveTextContent('Choose one timeframe'));
+    expect(summarySpy).toHaveBeenLastCalledWith(expect.objectContaining({ timeframe: undefined }));
+    expect(screen.queryByText('Directional win rate')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Coverage by timeframe')).toHaveTextContent('850');
   });
 });

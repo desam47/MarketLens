@@ -2617,7 +2617,6 @@ def get_signal_history_tool(request: SignalHistoryRequest) -> BaseModel:
                 "trend_score": signal.trend_score,
                 "strength": signal.strength,
                 "market_regime": signal.market_regime,
-                "data_quality": signal.data_quality,
                 # Stored returns are raw price movement; signal_return_* is the
                 # same move seen from the call (None for neutral rows).
                 "underlying_return_5b": signal.return_5b,

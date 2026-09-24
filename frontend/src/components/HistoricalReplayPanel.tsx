@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import api, { Bar, HistoricalSignal, TickSignalReplayResponse } from '../services/api';
 import { formatETDateTime } from './chartMath';
-import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { TIMEFRAMES, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
 import { directionalOutcome, isDirectionalSignal, isDirectionalWin, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 
-const REPLAY_TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'] as const;
 const REPLAY_LIMIT = 180;
 const REPLAY_SESSIONS = [
   { value: 'all', label: 'All sessions' },
@@ -37,6 +36,10 @@ function fmtPct(value: number | null | undefined): string {
 
 function dateKey(timestamp: string): string {
   return timestamp.slice(0, 10);
+}
+
+function timeKey(timestamp: string): number {
+  return Date.parse(timestamp);
 }
 
 function latestSignalAt(signals: HistoricalSignal[], timestamp: string): HistoricalSignal | null {
@@ -164,12 +167,16 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       return (!fromDate || day >= fromDate) && (!toDate || day <= toDate);
     }).filter((bar) => sessionMatchesPreference(bar, sessionFilter));
   }, [bars, fromDate, toDate, validDateRange, sessionFilter]);
+  // A signal is recorded for the bar it closed on, so keeping only signals whose bar is in
+  // the replay applies the same date and session scope to bars, signals, markers, and stats.
   const replaySignals = useMemo(() => {
-    if (!replayBars.length) return [];
-    const firstDay = dateKey(replayBars[0].timestamp);
-    const lastDay = dateKey(replayBars[replayBars.length - 1].timestamp);
-    return signals.filter((signal) => dateKey(signal.timestamp) >= firstDay && dateKey(signal.timestamp) <= lastDay);
+    const barTimes = new Set(replayBars.map((bar) => timeKey(bar.timestamp)));
+    return signals.filter((signal) => barTimes.has(timeKey(signal.timestamp)));
   }, [replayBars, signals]);
+  const signalByBarTime = useMemo(
+    () => new Map(replaySignals.map((signal) => [timeKey(signal.timestamp), signal])),
+    [replaySignals],
+  );
   const completedOutcomes = useMemo(
     () => replaySignals.filter(isSignalOutcomeComplete).filter(isDirectionalSignal),
     [replaySignals],
@@ -189,11 +196,12 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       averageMae: average(completedOutcomes.map((signal) => directionalOutcome(signal, 'mae'))),
     };
   }, [completedOutcomes, replaySignals.length]);
-  const simulatedTrades = useMemo<SimulatedTrade[]>(() => replaySignals.map((signal) => {
-    const index = replayBars.findIndex((bar) => Date.parse(bar.timestamp) >= Date.parse(signal.timestamp));
+  // Only explicit bullish/bearish calls are traded; neutral and warm-up rows made no call.
+  const simulatedTrades = useMemo<SimulatedTrade[]>(() => replaySignals.filter(isDirectionalSignal).map((signal) => {
+    const index = replayBars.findIndex((bar) => timeKey(bar.timestamp) >= timeKey(signal.timestamp));
     if (index < 0) return { signal, entry: 0, exit: null, result: 'open', returnPct: null, barsHeld: 0 };
     const entry = replayBars[index].close;
-    const bearish = /bear|down|sell/i.test(signal.trend_state || '');
+    const bearish = signal.trend_state === 'bearish';
     const stop = bearish ? entry * (1 + stopPct / 100) : entry * (1 - stopPct / 100);
     const target = bearish ? entry * (1 - targetPct / 100) : entry * (1 + targetPct / 100);
     for (let i = index + 1; i < replayBars.length; i += 1) {
@@ -237,8 +245,8 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
 
   const currentBar = replayBars[cursor] || null;
   const currentSignal = useMemo(
-    () => currentBar ? latestSignalAt(signals, currentBar.timestamp) : null,
-    [currentBar, signals],
+    () => currentBar ? latestSignalAt(replaySignals, currentBar.timestamp) : null,
+    [currentBar, replaySignals],
   );
   const previousBar = cursor > 0 ? replayBars[cursor - 1] : null;
   const change = currentBar && previousBar ? currentBar.close - previousBar.close : null;
@@ -276,7 +284,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
         <label>
           <span>Timeframe</span>
           <select value={timeframe} onChange={(event) => setTimeframe(event.target.value)} aria-label="Replay timeframe">
-            {REPLAY_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
+            {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{TIMEFRAME_LABELS[tf] || tf}</option>)}
           </select>
         </label>
         <button className="btn btn-primary" onClick={() => void loadReplay()} disabled={loading}>
@@ -346,9 +354,9 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             <div><small>Signals</small><strong>{replayStats.signals}</strong></div>
             <div><small>Directional outcomes</small><strong>{replayStats.completed}</strong></div>
             <div><small>5-bar win rate</small><strong>{replayStats.winRate == null ? '—' : `${replayStats.winRate.toFixed(1)}%`}</strong></div>
-            <div><small>Avg 5-bar return</small><strong>{fmtPct(replayStats.averageReturn)}</strong></div>
-            <div><small>Avg MFE</small><strong>{fmtPct(replayStats.averageMfe)}</strong></div>
-            <div><small>Avg MAE</small><strong>{fmtPct(replayStats.averageMae)}</strong></div>
+            <div><small>Avg signal 5-bar return</small><strong>{fmtPct(replayStats.averageReturn)}</strong></div>
+            <div><small>Avg fav. excursion</small><strong>{fmtPct(replayStats.averageMfe)}</strong></div>
+            <div><small>Avg adv. excursion</small><strong>{fmtPct(replayStats.averageMae)}</strong></div>
             <div><small>Simulated trades</small><strong>{simulatedCompleted.length} / {simulatedTrades.length}</strong></div>
             <div><small>Simulated net</small><strong className={simulatedNet >= 0 ? 'positive' : 'negative'}>{fmtPct(simulatedNet)}</strong></div>
           </div>
@@ -413,7 +421,15 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
           </div>
 
           {simulatedTrades.length > 0 && (
-            <div className="replay-section-title" style={{ marginTop: '0.9rem' }}>Simulated trade outcomes</div>
+            <>
+              <div className="replay-section-title" style={{ marginTop: '0.9rem' }}>Simulated trade outcomes</div>
+              <p className="label" aria-label="Simulation assumptions">
+                Bullish calls go long and bearish calls go short; neutral and warm-up signals are not traded.
+                Entry is the close of the signal&apos;s bar. A trade exits when a later bar&apos;s high or low
+                reaches the {stopPct}% stop or {targetPct}% target; if one bar reaches both, the stop is
+                assumed to fill first. No commission or slippage.
+              </p>
+            </>
           )}
           {simulatedTrades.slice(-8).map((trade) => (
             <div className="replay-sim-trade" key={`${trade.signal.id}-${trade.signal.timestamp}`}>
@@ -427,12 +443,13 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
             {visibleBars.map((bar, index) => {
               const isUp = bar.close >= bar.open;
               const isCurrent = bar.timestamp === currentBar.timestamp;
-              const marker = replaySignals.find((signal) => dateKey(signal.timestamp) === dateKey(bar.timestamp));
+              const marker = signalByBarTime.get(timeKey(bar.timestamp));
+              const markerOutcome = marker ? directionalOutcome(marker, 'return_5b') : null;
               return (
                 <div key={`${bar.timestamp}-${index}`} className={`replay-bar ${isCurrent ? 'current' : ''}`} title={`${formatETDateTime(bar.timestamp)} · ${fmt(bar.close)}${marker ? ` · ${marker.trend_state || 'signal'}` : ''}`}>
                   <span className={`replay-bar-body ${isUp ? 'up' : 'down'}`} style={{ height: `${Math.max(10, Math.min(84, Math.abs(bar.close - bar.open) / Math.max(bar.high - bar.low, 0.01) * 84))}%` }} />
                   <span className="replay-bar-wick" />
-                  {marker && <span className={`replay-signal-marker ${marker.return_5b == null ? 'neutral' : marker.return_5b >= 0 ? 'positive' : 'negative'}`} aria-label={`Signal: ${marker.trend_state || 'unknown'}`} />}
+                  {marker && <span className={`replay-signal-marker ${markerOutcome == null ? 'neutral' : markerOutcome >= 0 ? 'positive' : 'negative'}`} aria-label={`Signal: ${marker.trend_state || 'unknown'}`} />}
                 </div>
               );
             })}

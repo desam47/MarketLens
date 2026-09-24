@@ -71,6 +71,25 @@ def directional_outcome(signal: Any, field: str) -> float | None:
     return -value if value is not None else None
 
 
+def called_it_filter():
+    """SQL filter: the 5-bar move went the way the signal called it."""
+    return or_(
+        and_(HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_5b > 0),
+        and_(HistoricalSignal.trend_state == "bearish", HistoricalSignal.return_5b < 0),
+    )
+
+
+def _rounded(value: Any) -> float | None:
+    return round(float(value), 4) if value is not None else None
+
+
+# Display order for per-timeframe coverage rows.
+_TIMEFRAME_ORDER = ("1m", "2m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1wk")
+
+# The regime engine only knows the present, so only rows recorded as their bar closed carry one.
+REGIME_NOT_RECORDED = "not recorded"
+
+
 def _next_outcome_window(signal: HistoricalSignal) -> int:
     """How many later bars a pending row needs before recomputing changes it."""
     if signal.return_5b is None:
@@ -363,10 +382,13 @@ class SignalRepository:
         self.db.refresh(signal)
         return signal
 
-    def count_by_regime(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+    def count_by_regime(
+        self, symbols: list[str] | None = None, timeframe: str | None = None
+    ) -> list[dict[str, Any]]:
         """Count of signals grouped by market regime.
 
-        If ``symbols`` is given, only signals for those symbols are counted.
+        If ``symbols`` is given, only signals for those symbols are counted;
+        ``timeframe`` limits the count to one timeframe.
         """
         q = self.db.query(
             HistoricalSignal.market_regime,
@@ -374,14 +396,20 @@ class SignalRepository:
         ).filter(HistoricalSignal.market_regime.isnot(None))
         if symbols:
             q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
+        if timeframe:
+            q = q.filter(HistoricalSignal.timeframe == timeframe)
         rows = q.group_by(HistoricalSignal.market_regime).all()
         return [{"regime": r.market_regime, "count": r.count} for r in rows]
 
-    def get_performance_by_regime(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
+    def get_performance_by_regime(
+        self, symbols: list[str] | None = None, timeframe: str | None = None
+    ) -> list[dict[str, Any]]:
         """Average forward returns grouped by market regime.
 
         Only includes signals that have outcomes computed. If ``symbols``
-        is given, only signals for those symbols are included.
+        is given, only signals for those symbols are included. Pass
+        ``timeframe``: five bars of 1m and five bars of 1d are different
+        horizons, so their returns should not be averaged together.
         """
         q = self.db.query(
             HistoricalSignal.market_regime,
@@ -398,6 +426,8 @@ class SignalRepository:
         )
         if symbols:
             q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
+        if timeframe:
+            q = q.filter(HistoricalSignal.timeframe == timeframe)
         rows = q.group_by(HistoricalSignal.market_regime).all()
         return [
             {
@@ -428,6 +458,115 @@ class SignalRepository:
         """Total count of historical signals."""
         return self.db.query(func.count(HistoricalSignal.id)).scalar() or 0
 
+    def research_summary(
+        self,
+        *,
+        timeframe: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        symbols: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate research metrics over the whole filtered population.
+
+        Coverage (recorded and complete rows per timeframe) is always
+        returned. Performance is returned only for a single ``timeframe``:
+        a 5-bar outcome means five minutes on 1m and five sessions on 1d,
+        so pooling them would average different horizons. Every return is
+        direction-adjusted and uses complete bullish/bearish outcomes only.
+        """
+        base = self._history_query(
+            timeframe=timeframe, start_time=start_time, end_time=end_time, symbols=symbols
+        ).order_by(None)
+        complete = outcome_complete_filter()
+        coverage_rows = (
+            base.with_entities(
+                HistoricalSignal.timeframe,
+                func.count(HistoricalSignal.id),
+                func.sum(case((complete, 1), else_=0)),
+            )
+            .group_by(HistoricalSignal.timeframe)
+            .all()
+        )
+        coverage = sorted(
+            (
+                {"timeframe": tf, "recorded": int(recorded), "complete": int(done or 0)}
+                for tf, recorded, done in coverage_rows
+            ),
+            key=lambda row: (
+                _TIMEFRAME_ORDER.index(row["timeframe"])
+                if row["timeframe"] in _TIMEFRAME_ORDER
+                else len(_TIMEFRAME_ORDER),
+                row["timeframe"],
+            ),
+        )
+        recorded = sum(row["recorded"] for row in coverage)
+        completed = sum(row["complete"] for row in coverage)
+        with_regime = (
+            base.filter(complete, HistoricalSignal.market_regime.isnot(None))
+            .with_entities(func.count(HistoricalSignal.id))
+            .scalar()
+        ) or 0
+        summary: dict[str, Any] = {
+            "recorded": recorded,
+            "complete": completed,
+            "timeframe_coverage": coverage,
+            "regime_coverage": {"with_regime": int(with_regime), "complete": completed},
+            "performance": None,
+        }
+        if timeframe:
+            overall = self._group_metrics(base, None)
+            summary["performance"] = {
+                **(overall[0] if overall else self._empty_metrics("all")),
+                "by_regime": self._group_metrics(
+                    base, func.coalesce(HistoricalSignal.market_regime, REGIME_NOT_RECORDED)
+                ),
+                "by_trend": self._group_metrics(
+                    base, func.coalesce(HistoricalSignal.trend_state, "unknown")
+                ),
+            }
+        return summary
+
+    @staticmethod
+    def _empty_metrics(label: str) -> dict[str, Any]:
+        return {
+            "label": label,
+            "complete": 0,
+            "directional": 0,
+            "win_rate": None,
+            "avg_signal_return_5b": None,
+            "avg_signal_return_10b": None,
+        }
+
+    def _group_metrics(self, base, label_expr) -> list[dict[str, Any]]:
+        """Directional metrics for ``base``, grouped by ``label_expr`` (or overall when None)."""
+        complete = outcome_complete_filter()
+        directional = and_(complete, HistoricalSignal.trend_state.in_(DIRECTIONAL_STATES))
+        columns = [
+            func.sum(case((complete, 1), else_=0)),
+            func.sum(case((directional, 1), else_=0)),
+            func.sum(case((and_(directional, called_it_filter()), 1), else_=0)),
+            func.avg(case((directional, directional_outcome_expr("return_5b")), else_=None)),
+            func.avg(case((directional, directional_outcome_expr("return_10b")), else_=None)),
+        ]
+        if label_expr is None:
+            rows = [("all", *base.with_entities(*columns).one())]
+        else:
+            rows = base.with_entities(label_expr, *columns).group_by(label_expr).all()
+        metrics = []
+        for label, done, n_directional, wins, avg5, avg10 in rows:
+            if not done:
+                continue
+            n_directional = int(n_directional or 0)
+            metrics.append({
+                "label": label,
+                "complete": int(done),
+                "directional": n_directional,
+                "win_rate": round(int(wins or 0) / n_directional, 4) if n_directional else None,
+                "avg_signal_return_5b": _rounded(avg5),
+                "avg_signal_return_10b": _rounded(avg10),
+            })
+        return sorted(metrics, key=lambda row: (-row["complete"], str(row["label"])))
+
     def get_stats(self, symbol: str, timeframe: str | None = None) -> dict[str, Any]:
         """Track-record statistics for one symbol (optionally one timeframe).
 
@@ -448,10 +587,7 @@ class SignalRepository:
             q = q.filter(HistoricalSignal.timeframe == timeframe)
         complete = outcome_complete_filter()
         directional = and_(complete, HistoricalSignal.trend_state.in_(DIRECTIONAL_STATES))
-        called_it = or_(
-            and_(HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_5b > 0),
-            and_(HistoricalSignal.trend_state == "bearish", HistoricalSignal.return_5b < 0),
-        )
+        called_it = called_it_filter()
         row = q.with_entities(
             func.count(HistoricalSignal.id),
             func.sum(case((complete, 1), else_=0)),

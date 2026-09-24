@@ -214,6 +214,54 @@ class TestSignalsAPI(unittest.TestCase):
         self.assertFalse(second.json()["has_more"])
         self.assertEqual(second.json()["records"][0]["timestamp"][:10], "2025-01-02")
 
+    def test_research_summary_covers_every_record_not_one_page(self):
+        """HS-17: metrics come from the whole filtered population on the server."""
+        self._watchlist("Growth", ["AAPL"])
+        for day in range(1, 301):  # more than one 250-row page
+            self._seed(timestamp=datetime(2025, 1, 1) + timedelta(hours=day), trend_state="bullish",
+                       return_5b=1.0, market_regime=None)
+        self._seed(timestamp=datetime(2025, 3, 1), trend_state="bearish", return_5b=-2.0, market_regime="risk_on")
+        self._seed(timestamp=datetime(2025, 3, 2), trend_state="neutral", return_5b=5.0, market_regime="risk_on")
+        self._seed(timestamp=datetime(2025, 3, 3), return_20b=None, mfe=None, mae=None)  # partial
+
+        body = self.client.get("/api/signals/research/summary?timeframe=1d").json()
+        self.assertEqual((body["recorded"], body["complete"]), (303, 302))
+        perf = body["performance"]
+        self.assertEqual((perf["complete"], perf["directional"]), (302, 301))
+        self.assertEqual(perf["win_rate"], 1.0)
+        # 300 bullish +1% and one bearish call that earned 2% on a 2% fall.
+        self.assertAlmostEqual(perf["avg_signal_return_5b"], (300 * 1.0 + 2.0) / 301, places=4)
+        regimes = {row["label"]: row for row in perf["by_regime"]}
+        self.assertEqual(regimes["not recorded"]["complete"], 300)
+        self.assertEqual(regimes["risk_on"]["directional"], 1)
+        trends = {row["label"]: row for row in perf["by_trend"]}
+        self.assertIsNone(trends["neutral"]["win_rate"])
+        self.assertEqual(body["regime_coverage"], {"with_regime": 2, "complete": 302})
+
+    def test_research_summary_does_not_pool_returns_across_timeframes(self):
+        """HS-07: without one timeframe there is coverage per timeframe but no performance."""
+        self._watchlist("Growth", ["AAPL"])
+        self._seed(timeframe="1m")
+        self._seed(timeframe="1d")
+        self._seed(timeframe="1d", timestamp=datetime(2025, 1, 2), return_20b=None)
+
+        body = self.client.get("/api/signals/research/summary").json()
+        self.assertIsNone(body["performance"])
+        self.assertIn("one timeframe", body["performance_note"])
+        self.assertEqual(
+            body["timeframe_coverage"],
+            [{"timeframe": "1m", "recorded": 1, "complete": 1}, {"timeframe": "1d", "recorded": 2, "complete": 1}],
+        )
+
+    def test_regime_performance_can_be_limited_to_one_timeframe(self):
+        self._watchlist("Growth", ["AAPL"])
+        self._seed(timeframe="1m", return_5b=10.0)
+        self._seed(timeframe="1d", return_5b=1.0)
+        rows = self.client.get("/api/signals/research/regime-performance?timeframe=1d").json()
+        self.assertEqual([(row["count"], row["avg_return_5b"]) for row in rows], [(1, 1.0)])
+        counts = self.client.get("/api/signals/research/count-by-regime?timeframe=1m").json()
+        self.assertEqual(counts, [{"regime": "risk_on", "count": 1}])
+
     def test_research_export_uses_full_scoped_dataset_not_the_visible_page(self):
         watchlist = self._watchlist("Growth", ["AAPL"])
         self._seed(symbol="AAPL", timestamp=datetime(2025, 1, 1))
