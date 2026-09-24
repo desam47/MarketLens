@@ -46,9 +46,29 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.engines.timeframe import Timeframe
 from backend.scanner.scanner import ScanResult, market_scanner
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_timeframe_key(value: Any) -> str:
+    """Return the public timeframe value for a scanner or API key.
+
+    Scanner results are historically keyed by :class:`Timeframe` member names
+    (``"ONE_DAY"``), whereas AI API requests and bar data use their values
+    (``"1d"``). Keep that representation difference at this boundary so a
+    requested analysis window never silently reads a different signal.
+    """
+    raw = getattr(value, "value", value)
+    key = str(raw).strip()
+    if not key:
+        return key
+
+    member = Timeframe.__members__.get(key.upper())
+    if member is not None:
+        return member.value
+    return key.lower()
 
 # Sized for TWO things sharing this one pool (2026-09-16, be59abd made
 # it process-wide instead of per-call — see _CONTEXT_EXECUTOR below):
@@ -844,7 +864,7 @@ def build_context(
     # for SPY" came back with an empty support_resistance dict and the
     # AI honestly replied it had no live levels, when the engine
     # produces 50 real levels the moment you pass "1d".
-    tf = timeframe.lower()
+    tf = _canonical_timeframe_key(timeframe)
 
     # --- 1. Single-symbol scan (complete snapshot including MTF scores) ---
     # Runs on the caller's thread: every other sub-engine derives from it,
@@ -866,7 +886,8 @@ def build_context(
     # --- 2. MTF trend signals (cheap derivation from the scan) ---
     mtf = scan.trend_signals or {}
     timeframe_scores: dict[str, Any] = {}
-    for tf_key, tsig in mtf.items():
+    for raw_tf_key, tsig in mtf.items():
+        tf_key = _canonical_timeframe_key(raw_tf_key)
         # trend_signals is a dict-of-dicts in the scanner API
         if hasattr(tsig, "direction"):
             timeframe_scores[tf_key] = {
@@ -881,10 +902,15 @@ def build_context(
                 "confidence": round(float(tsig.get("confidence", 0)), 2),
             }
 
-    # Primary signal for the requested timeframe
-    primary_sig = mtf.get(tf)
-    if primary_sig is None:
-        primary_sig = next(iter(mtf.values()), None)
+    # Primary signal for the requested timeframe. Do not substitute the first
+    # available MTF result when the requested window is unavailable: that used
+    # to make a Daily analysis use the scanner's first-inserted ONE_MINUTE
+    # signal while presenting it as Daily.
+    primary_sig = None
+    for raw_tf_key, candidate in mtf.items():
+        if _canonical_timeframe_key(raw_tf_key) == tf:
+            primary_sig = candidate
+            break
 
     trend_state: dict[str, Any] = {}
     if primary_sig is not None:

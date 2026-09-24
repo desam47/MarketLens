@@ -1492,3 +1492,21 @@ until the line is removed. The end-to-end evaluation pins these defaults
   per symbol.
 - **Evaluation.** The end-to-end suite (`5.8.6`) has 40 cases, all passing,
   including opt-in browser-data routing and persisted-message privacy checks.
+
+## AI Analysis timeframe-selection correction (2026-09-24)
+
+- **Correct primary timeframe.** Scanner multi-timeframe results are stored
+  with engine-member keys such as `ONE_DAY`, while AI Analysis requests use
+  public values such as `1d`. `build_context()` now canonicalizes both forms
+  at the boundary, exposes canonical `timeframe_scores` keys, and selects the
+  requested signal only. It no longer substitutes the first available signal
+  (normally `ONE_MINUTE`) when the requested timeframe is absent.
+- **Safe missing-data behavior.** A missing requested timeframe now leaves
+  `trend_state` empty so the existing insufficient/partial-context behavior
+  can communicate that limitation rather than presenting another timeframe as
+  the selected one.
+- **Regression coverage.** The AI context suite asserts independent selection
+  for `1m`, `5m`, `15m`, `1h`, `4h`, and `1d`, plus the no-substitution case.
+  `DEBUG=false python -m pytest -q backend/tests/ai/test_phase16_analyze.py
+  backend/tests/api/test_ai_router.py` passed with 132 tests and 17 subtests;
+  Ruff passed for the changed files.

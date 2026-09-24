@@ -492,6 +492,45 @@ class TestBuildContext(unittest.TestCase):
         ]:
             self.assertIn(k, d)
 
+    def test_context_uses_the_requested_scanner_timeframe(self):
+        """Scanner enum-name keys must not make AI Analysis fall back to 1m."""
+        scan = _fake_scan_result()
+        scan.trend_signals = {
+            "ONE_MINUTE": {"direction": "bearish", "strength": "weak", "confidence": 0.11},
+            "FIVE_MINUTE": {"direction": "bullish", "strength": "weak", "confidence": 0.22},
+            "FIFTEEN_MINUTE": {"direction": "bearish", "strength": "moderate", "confidence": 0.33},
+            "ONE_HOUR": {"direction": "bullish", "strength": "moderate", "confidence": 0.44},
+            "FOUR_HOUR": {"direction": "bearish", "strength": "strong", "confidence": 0.55},
+            "ONE_DAY": {"direction": "bullish", "strength": "strong", "confidence": 0.66},
+        }
+        self.scanner.scan_symbol.return_value = scan
+
+        for timeframe, expected_direction, expected_confidence in [
+            ("1m", "bearish", 0.11),
+            ("5m", "bullish", 0.22),
+            ("15m", "bearish", 0.33),
+            ("1h", "bullish", 0.44),
+            ("4h", "bearish", 0.55),
+            ("1d", "bullish", 0.66),
+        ]:
+            with self.subTest(timeframe=timeframe):
+                ctx = build_context("AAPL", timeframe)
+                self.assertEqual(ctx.timeframe, timeframe)
+                self.assertEqual(ctx.trend_state["direction"], expected_direction)
+                self.assertEqual(ctx.trend_state["confidence"], expected_confidence)
+                self.assertIn(timeframe, ctx.timeframe_scores)
+
+    def test_context_does_not_substitute_another_timeframe_signal(self):
+        scan = _fake_scan_result()
+        scan.trend_signals = {
+            "ONE_MINUTE": {"direction": "bearish", "strength": "weak", "confidence": 0.11},
+        }
+        self.scanner.scan_symbol.return_value = scan
+
+        ctx = build_context("AAPL", "1d")
+
+        self.assertEqual(ctx.trend_state, {})
+
     def test_context_symbol_uppercased(self):
         self.scanner.scan_symbol.return_value = _fake_scan_result()
         ctx = build_context("aapl", "1d")
