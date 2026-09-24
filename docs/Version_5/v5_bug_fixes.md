@@ -2,7 +2,7 @@
 
 **Created:** 2026-09-24
 **Last updated:** 2026-09-24 (batch 13: two tests no longer reach the network)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too; batch 12 (the `chat.py` split) is committed too; batch 13 (test network isolation) is committed too. Nothing is pushed.
+**Status:** Complete. Batches 1 to 13 are committed and pushed to `origin/development` (through `5aa5403`, 2026-09-24); batch 3's migration is applied to the live DB.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -51,11 +51,12 @@ Since batch 12, most functions named here live in sibling modules
 | BF-19 | Low | Frontend | Evidence card lost its 8-item cap; two ChatPanel tests failing | Verified | ✅ COMPLETE |
 | BF-20 | Low | Tests | Two context tests expect an inferred "live" quote status | Verified | ✅ COMPLETE |
 
-**Next:** nothing left in the tracker; the gaps (batch 8), the
+**Next:** nothing remains. The tracker items, the gaps (batch 8), the
 follow-ups (batch 9), daily-close freshness (batch 10), reply wording
-(batch 11) and the `chat.py` split (batch 12) are done. The full e2e
-suite passed after batches 11 and 12 (31 of 31). What remains:
-- **Push:** push `development` when you want it on `origin`.
+(batch 11), the `chat.py` split (batch 12) and test network isolation
+(batch 13) are done. The full e2e suite passed after batches 11 and 12
+(31 of 31). `development` was pushed to `origin` on 2026-09-24 (70
+commits, through `5aa5403`).
 - ~~**Time-dependent test network use**~~ (fixed in batch 13): during
   market hours, and only in some test orders, two tests reached
   Finnhub, Alpaca and Yahoo. The guard blocked every attempt and both
@@ -1419,7 +1420,8 @@ The full backend suite was not run.
 - **Batch 10 (daily-close freshness):** commit `be6ba00`, `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
 - **Batch 11 (reply wording):** commit `8f2d5c5`, `fix(chat): write server replies as plain sentences`, on `development`.
 - **Batch 12 (`chat.py` split):** commit `8581792`, `refactor(chat): split chat.py into six modules by role`, on `development`.
-- **Batch 13 (test network isolation):** commit `test(chat): keep two tests off the market-data providers`, on `development`.
+- **Batch 13 (test network isolation):** commit `5aa5403`, `test(chat): keep two tests off the market-data providers`, on `development`.
+- **Pushed:** `development` to `origin` on 2026-09-24, through `5aa5403`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
