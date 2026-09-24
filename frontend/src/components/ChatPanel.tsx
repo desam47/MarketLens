@@ -736,12 +736,18 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
           const refs = Array.isArray(block.data.evidence_refs) ? block.data.evidence_refs : [];
           const issues = Array.isArray(block.data.issues) ? block.data.issues : [];
           const statusLabel = status === 'verified' ? 'Verified' : status === 'blocked' ? 'Needs review' : 'Limited verification';
+          const expanded = expandedBlocks.has(block.id);
           return (
             <section className={`chat-typed-card chat-verification-card ${status}`} key={block.id} role="status" aria-label="Answer verification">
-              <div className="chat-typed-card-heading">Answer verification <span className={`chat-quality ${quality.state}`}>{statusLabel}</span></div>
-              <p>{refs.length > 0 ? `Checked against ${refs.length} evidence source${refs.length === 1 ? '' : 's'}.` : 'No source evidence was available for this answer.'}</p>
-              {issues.length > 0 && <ul>{issues.map((issue: string) => <li key={issue}>{formatVerificationIssue(issue)}</li>)}</ul>}
-              <small>Verifier {String(block.data.version ?? 'unknown')}</small>
+              <button type="button" className="chat-typed-card-heading chat-collapsible-heading" onClick={() => toggleExpanded(block.id)} aria-expanded={expanded}>
+                Answer verification <span className={`chat-quality ${quality.state}`}>{statusLabel}</span>
+                <span className="chat-collapse-chevron">{expanded ? '▴' : '▾'}</span>
+              </button>
+              {expanded && <>
+                <p>{refs.length > 0 ? `Checked against ${refs.length} evidence source${refs.length === 1 ? '' : 's'}.` : 'No source evidence was available for this answer.'}</p>
+                {issues.length > 0 && <ul>{issues.map((issue: string) => <li key={issue}>{formatVerificationIssue(issue)}</li>)}</ul>}
+                <small>Verifier {String(block.data.version ?? 'unknown')}</small>
+              </>}
             </section>
           );
         }
@@ -752,36 +758,41 @@ function TypedResponseBlocks({ blocks, onNavigate }: { blocks: ChatResponseBlock
           const visibleItems = expanded ? items : items.slice(0, 8);
           return (
             <section className="chat-typed-card chat-evidence-card" key={block.id} aria-label="Evidence">
-              <div className="chat-typed-card-heading">Evidence <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span></div>
-              <div className="chat-evidence-symbols">
-                {(symbols.verified ?? []).map((s: string) => <span className="chat-evidence-symbol verified" key={`v-${s}`}>{s} ✓</span>)}
-                {(symbols.partial ?? []).map((s: string) => <span className="chat-evidence-symbol partial" key={`p-${s}`}>{s} ◐</span>)}
-                {(symbols.unavailable ?? []).map((s: string) => <span className="chat-evidence-symbol unavailable" key={`u-${s}`}>{s} ✗</span>)}
-              </div>
-              {items.length > 0 && <ul>{visibleItems.map((item: any, index: number) => (
-                <li key={`${item.tool ?? 'evidence'}-${index}`}>
-                  {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
-                  {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
-                  {item.freshness_status && item.freshness_status !== 'fresh' ? ` · ${item.freshness_status}` : ''}
-                  {item.entitlement && item.entitlement !== 'not_applicable' ? ` · entitlement: ${item.entitlement}` : ''}
-                </li>
-              ))}</ul>}
-              {items.length > 8 && (
-                <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
-                  {expanded ? 'Show less' : `Show all ${items.length}`}
-                </button>
-              )}
-              {block.data.chart_state && (
-                <small className="chat-chart-state-note">
-                  Chart context: {block.data.chart_state.symbol ?? 'symbol'} · {block.data.chart_state.timeframe ?? 'timeframe'} · {block.data.chart_state.session ?? 'session'}
-                  {block.data.chart_state.selected_candle ? ' · selected candle included' : ''}
-                </small>
-              )}
-              {block.data.regeneration && (
-                <small className="chat-chart-state-note" role="status">
-                  Regenerated: {String(block.data.regeneration.mode).replace(/_/g, ' ')} · {block.data.regeneration.reused_context ? 'eligible recent context reused' : 'fresh context requested'}
-                </small>
-              )}
+              <button type="button" className="chat-typed-card-heading chat-collapsible-heading" onClick={() => toggleExpanded(block.id)} aria-expanded={expanded}>
+                Evidence <span className={`chat-quality ${quality.state}`}>{qualityLabel}</span>
+                <span className="chat-collapse-chevron">{expanded ? '▴' : '▾'}</span>
+              </button>
+              {expanded && <>
+                <div className="chat-evidence-symbols">
+                  {(symbols.verified ?? []).map((s: string) => <span className="chat-evidence-symbol verified" key={`v-${s}`}>{s} ✓</span>)}
+                  {(symbols.partial ?? []).map((s: string) => <span className="chat-evidence-symbol partial" key={`p-${s}`}>{s} ◐</span>)}
+                  {(symbols.unavailable ?? []).map((s: string) => <span className="chat-evidence-symbol unavailable" key={`u-${s}`}>{s} ✗</span>)}
+                </div>
+                {items.length > 0 && <ul>{visibleItems.map((item: any, index: number) => (
+                  <li key={`${item.tool ?? 'evidence'}-${index}`}>
+                    {item.tool ?? 'Market data'}{item.provider ? ` · ${item.provider}` : ''}
+                    {item.timeframe ? ` · ${item.timeframe}` : ''}{item.session ? ` · ${item.session}` : ''}
+                    {item.freshness_status && item.freshness_status !== 'fresh' ? ` · ${item.freshness_status}` : ''}
+                    {item.entitlement && item.entitlement !== 'not_applicable' ? ` · entitlement: ${item.entitlement}` : ''}
+                  </li>
+                ))}</ul>}
+                {items.length > 8 && (
+                  <button type="button" className="chat-quick-action-btn chat-expand-btn" onClick={() => toggleExpanded(block.id)}>
+                    Show less
+                  </button>
+                )}
+                {block.data.chart_state && (
+                  <small className="chat-chart-state-note">
+                    Chart context: {block.data.chart_state.symbol ?? 'symbol'} · {block.data.chart_state.timeframe ?? 'timeframe'} · {block.data.chart_state.session ?? 'session'}
+                    {block.data.chart_state.selected_candle ? ' · selected candle included' : ''}
+                  </small>
+                )}
+                {block.data.regeneration && (
+                  <small className="chat-chart-state-note" role="status">
+                    Regenerated: {String(block.data.regeneration.mode).replace(/_/g, ' ')} · {block.data.regeneration.reused_context ? 'eligible recent context reused' : 'fresh context requested'}
+                  </small>
+                )}
+              </>}
             </section>
           );
         }
