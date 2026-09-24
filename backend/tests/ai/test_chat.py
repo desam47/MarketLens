@@ -25,6 +25,7 @@ from backend.ai.chat_replies import _browser_safe_reply_data, _format_browser_lo
 from backend.ai.context import InsufficientDataError
 from backend.ai.prompt import AnalysisResponse, TradePlan, UncertaintyResponse
 from backend.ai.provider import AIResponse
+from backend.ai.tool_registry import ToolResult
 from backend.models import Alert, AlertTrigger, ChatMessage, ChatSession
 
 WARM_CTX = {"price": 150.0, "trend_state": {"direction": "up"}, "momentum": {"rsi": 55}}
@@ -646,12 +647,22 @@ class TestTurnIntent(_Base):
         self.assertFalse(kw["include_news"])
         self.assertFalse(kw["include_fundamentals"])
 
+    @patch("backend.ai.chat_actions.default_registry.execute")
     @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")
-    def test_news_question_pulls_news(self, mock_ctx, mock_ai):
+    def test_news_question_pulls_news(self, mock_ctx, mock_ai, mock_execute):
+        # "why is it up" routes to why_did_it_move; stub the tool so the test
+        # never reaches the market-data providers.
+        mock_execute.return_value = ToolResult(
+            tool_name="why_did_it_move",
+            ok=True,
+            data={"symbol": "AAPL", "facts": [], "correlations": []},
+            provider="test",
+        )
         self._wire(mock_ctx, mock_ai)
         answer_chat_message(self.session.id, "any news on AAPL? why is it up")
         self.assertTrue(mock_ctx.call_args.kwargs["include_news"])
+        self.assertEqual(mock_execute.call_args.args[0].tool_name, "why_did_it_move")
 
     @patch("backend.ai.chat_model.ai_manager")
     @patch("backend.ai.chat.build_context")

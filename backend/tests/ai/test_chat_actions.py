@@ -1885,6 +1885,11 @@ class TestEndToEnd(unittest.TestCase):
         p4 = patch("backend.ai.chat_actions._kickoff_backfill")
         self.mock_backfill = p4.start()
         self.addCleanup(p4.stop)
+        # A test that resolves a ticker must not build real context: that
+        # reaches the market-data providers (blocked, and time-dependent).
+        p5 = patch("backend.ai.chat.build_context")
+        p5.start().return_value.compact.return_value = {"price": 12.0, "trend_state": {"direction": "up"}}
+        self.addCleanup(p5.stop)
 
         db = self.Session()
         session = ChatSession(symbol="*", scope="universal")

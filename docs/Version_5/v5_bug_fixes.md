@@ -1,8 +1,8 @@
 # Version 5 Chat Bug Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 12: `chat.py` split into six modules)
-**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too; batch 12 (the `chat.py` split) is committed too. Nothing is pushed.
+**Last updated:** 2026-09-24 (batch 13: two tests no longer reach the network)
+**Status:** All items and gaps complete. Batches 1 to 7 are committed (batch 3's migration is applied to the live DB); batch 8 (the four gaps) is committed too. Batch 9 (follow-ups, live checks, isolated e2e) is committed too; batch 10 (daily-close freshness) is committed too; batch 11 (natural reply wording) is committed too; batch 12 (the `chat.py` split) is committed too; batch 13 (test network isolation) is committed too. Nothing is pushed.
 **Scorecard:** 20 ✅ COMPLETE, 0 ⚠️ PARTIAL, 0 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 Chat review of `backend/ai/chat.py`, `backend/api/ai/chat_router.py`, `backend/repositories/chat_repository.py`, `frontend/src/components/ChatPanel.tsx`, and `frontend/src/services/api.ts`.
 **Related:** [Phase audit](phase_audit_v5.md), [Version 5 plan](v5_plan.md)
@@ -56,18 +56,21 @@ follow-ups (batch 9), daily-close freshness (batch 10), reply wording
 (batch 11) and the `chat.py` split (batch 12) are done. The full e2e
 suite passed after batches 11 and 12 (31 of 31). What remains:
 - **Push:** push `development` when you want it on `origin`.
-- **Time-dependent test network use (new, open):** during market hours,
-  `test_news_question_pulls_news` and `test_add_to_watchlist_end_to_end`
-  run the real `why_did_it_move` / bars path. Provider availability
-  checks and the live daily bar then try Finnhub, Alpaca and Yahoo. The
-  guard blocks every attempt and both tests pass, but their results
-  depend on the time of day. The same attempts happen on the pre-split
-  code (checked on a clean checkout of `8f2d5c5` with the same `.env`),
-  and the early-morning full-suite runs showed none. It also depends on
-  test order: the full suite at 11:20 ET, in session, showed none, while
-  runs of `backend/tests/ai` and `backend/tests/api` alone did. The fix is to patch
-  the tool in those tests, or to make the provider availability checks
-  offline under the guard.
+- ~~**Time-dependent test network use**~~ (fixed in batch 13): during
+  market hours, and only in some test orders, two tests reached
+  Finnhub, Alpaca and Yahoo. The guard blocked every attempt and both
+  tests passed, but their results depended on the clock:
+  - `test_add_to_watchlist_end_to_end` resolved RIVN without a patched
+    `build_context`. `TestEndToEnd.setUp` now stubs it, so no end-to-end
+    test can build real context.
+  - `test_news_question_pulls_news` ("…why is it up") ran the real
+    `why_did_it_move` tool; the tool call is now stubbed, and the test
+    checks the call went to that tool.
+
+  **Check:** every file in `backend/tests/ai` and `backend/tests/api` (83)
+  was run in its own process, so no earlier file could warm the
+  providers. None failed, and none made a network attempt. The combined
+  run that showed 12 attempts now shows 0 (1,551 passed).
 
 Done in batch 9:
 - **Checked in the running app** (headless Chromium via Playwright,
@@ -1415,7 +1418,8 @@ The full backend suite was not run.
 - **Batch 9 (follow-ups):** commit `8ce8fa9`, `fix(chat): read $10k account sizes, ask Yahoo for BRK-B, label question steps, isolate e2e`, on `development`.
 - **Batch 10 (daily-close freshness):** commit `be6ba00`, `fix(chat): judge daily data by session date, not a 15-minute age limit`, on `development`.
 - **Batch 11 (reply wording):** commit `8f2d5c5`, `fix(chat): write server replies as plain sentences`, on `development`.
-- **Batch 12 (`chat.py` split):** commit `refactor(chat): split chat.py into six modules by role`, on `development`.
+- **Batch 12 (`chat.py` split):** commit `8581792`, `refactor(chat): split chat.py into six modules by role`, on `development`.
+- **Batch 13 (test network isolation):** commit `test(chat): keep two tests off the market-data providers`, on `development`.
 
 | Date | ID | Status | Commit | Files | Tests | Notes |
 |---|---|---|---|---|---|---|
@@ -1447,3 +1451,4 @@ The full backend suite was not run.
 | 2026-09-24 | Daily freshness | ✅ FIXED | batch 10 | `backend/engines/market_calendar.py`, `backend/ai/response_blocks.py`, `backend/ai/tool_registry.py`, `backend/ai/market_tools.py`, `backend/ai/chat.py`, `frontend/src/components/ChatPanel.tsx`, plus tests | 13 new, 1 updated | Daily evidence judged by session date; age from the close; price statistics end at the last completed session; daily comparisons usable in session; ages shown as "19 h". |
 | 2026-09-24 | Reply wording | ✅ FIXED | batch 11 | `backend/ai/chat.py`, `backend/ai/evaluations/phase_5_8_chat_cases.json`, 6 test files | 23 assertions updated, 1 added | Server replies in plain sentences; mid-session comparisons no longer claim the market is closed. |
 | 2026-09-24 | Split `chat.py` | ✅ DONE | batch 12 | `backend/ai/chat.py` plus 5 new `chat_*.py` modules, `evaluations/chat_runner.py`, 12 test files, 3 comment-only files | 0 behaviour changes | 5,937-line module split into six by role; no cycles; tests patch where names are used. |
+| 2026-09-24 | Test network use | ✅ FIXED | batch 13 | `backend/tests/ai/test_chat.py`, `backend/tests/ai/test_chat_actions.py` | 2 tests stubbed | No test reaches the market-data providers, whatever the time or test order. |
