@@ -42,6 +42,7 @@ from ...ai.context import InsufficientDataError, build_context
 from ...ai.prompt import TradePlan
 from ...ai.tool_registry import ToolRequest, ToolResult, default_registry
 from ...ai.trade_plan_tracker import record_confirmed_trade_plan
+from ...ai.verified_plan_store import get_verified_plan, issue_verified_plan
 from ...config.settings import settings
 from ...database import get_db
 from ..ai_templates.router import resolve_and_render
@@ -162,14 +163,15 @@ class AnalyzeResponse(BaseModel):
     market_session: str = "unknown"
     cache_status: str = "fresh"
     trade_plan_validation: dict[str, Any] = Field(default_factory=dict)
+    # Opaque, short-lived server handle for a verified actionable plan. The
+    # client must send this (not a plan body) if the trader elects to track it.
+    verified_plan_id: str | None = None
 
 
 class TrackTradePlanRequest(BaseModel):
-    """The exact setup the trader saw and explicitly approved for tracking."""
+    """An opaque server-issued handle for the setup the trader approved."""
 
-    symbol: str = Field(..., min_length=1, max_length=10)
-    timeframe: str = Field(default="1d", pattern=r"^(1d|1h|4h|15m|5m|1m)$")
-    trade_plan: TradePlan
+    verified_plan_id: str = Field(..., min_length=16, max_length=128)
 
 
 class TrackTradePlanResponse(BaseModel):
@@ -220,6 +222,28 @@ def _sync_resolve_template(db: Session, template_id: int | None):
         .first()
     )
     return tmpl_obj.id if tmpl_obj else None, tmpl_obj
+
+
+def _issue_verified_plan_id(
+    *,
+    symbol: str,
+    timeframe: str,
+    provider: str,
+    model: str,
+    plan: TradePlan | dict[str, Any] | None,
+    validation: dict[str, Any] | None,
+    source_key: str | None = None,
+) -> str | None:
+    """Issue a trackable-plan handle only after server validation."""
+    return issue_verified_plan(
+        symbol=symbol,
+        timeframe=timeframe,
+        provider=provider,
+        model=model,
+        plan=plan,
+        validation=validation,
+        source_key=source_key,
+    )
 
 
 @router.post(
@@ -312,6 +336,9 @@ async def analyze(
         force_refresh=force_refresh,
     )
 
+    result_symbol = getattr(result, "symbol", symbol.upper())
+    result_timeframe = getattr(result, "timeframe", timeframe)
+    validation = getattr(result, "trade_plan_validation", {}) or {}
     return AnalyzeResponse(
         summary=result.summary,
         trend=result.trend,
@@ -333,8 +360,8 @@ async def analyze(
         uncertainty_reason=getattr(result, "uncertainty_reason", "none"),
         confidence_declared=getattr(result, "confidence_declared", None),
         confidence_sample_size=getattr(result, "confidence_sample_size", None),
-        symbol=getattr(result, "symbol", symbol.upper()),
-        timeframe=getattr(result, "timeframe", timeframe),
+        symbol=result_symbol,
+        timeframe=result_timeframe,
         price=getattr(result, "price", None),
         source_timestamp=getattr(result, "source_timestamp", None),
         data_age_seconds=getattr(result, "data_age_seconds", None),
@@ -342,7 +369,15 @@ async def analyze(
         market_data_provider=getattr(result, "market_data_provider", None),
         market_session=getattr(result, "market_session", "unknown"),
         cache_status=getattr(result, "cache_status", "fresh"),
-        trade_plan_validation=getattr(result, "trade_plan_validation", {}) or {},
+        trade_plan_validation=validation,
+        verified_plan_id=_issue_verified_plan_id(
+            symbol=result_symbol,
+            timeframe=result_timeframe,
+            provider=result.provider,
+            model=result.model,
+            plan=result.trade_plan,
+            validation=validation,
+        ),
     )
 
 
@@ -410,6 +445,14 @@ async def analyze_stream(
                     # matching the blocking endpoint's shape.
                     payload.setdefault("template_id", resolved_template_id)
                     payload.setdefault("template_name", tmpl_obj.name if tmpl_obj else None)
+                    payload["verified_plan_id"] = _issue_verified_plan_id(
+                        symbol=payload.get("symbol") or symbol.upper(),
+                        timeframe=payload.get("timeframe") or timeframe,
+                        provider=payload.get("provider") or "unknown",
+                        model=payload.get("model") or "unknown",
+                        plan=payload.get("trade_plan"),
+                        validation=payload.get("trade_plan_validation"),
+                    )
                     yield _sse("final", payload)
                 elif kind == "error":
                     yield _sse("error", {"message": payload})
@@ -497,22 +540,28 @@ async def track_trade_plan(
             detail="Trade-plan tracking is disabled in this environment.",
         )
 
-    symbol = request.symbol.upper()
+    verified = get_verified_plan(request.verified_plan_id)
+    if verified is None:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This verified setup is no longer available. Rerun analysis and track it again.",
+        )
+
     try:
-        ctx = await asyncio.to_thread(build_context, symbol, request.timeframe)
+        ctx = await asyncio.to_thread(build_context, verified.symbol, verified.timeframe)
     except InsufficientDataError:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Current market data is insufficient to revalidate this setup.",
         ) from None
     except Exception:
-        logger.exception("trade-plan revalidation failed for %s", symbol)
+        logger.exception("trade-plan revalidation failed for %s", verified.symbol)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Current market data is unavailable to revalidate this setup.",
         ) from None
 
-    validation = _plan_validation(ctx, request.trade_plan)
+    validation = _plan_validation(ctx, verified.plan)
     if validation.get("status") != "verified":
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -521,8 +570,12 @@ async def track_trade_plan(
 
     row, duplicate = await asyncio.to_thread(
         record_confirmed_trade_plan,
-        symbol,
-        request.trade_plan,
+        verified.symbol,
+        verified.plan,
+        provider=verified.provider,
+        model=verified.model,
+        timeframe=verified.timeframe,
+        analysis_id=verified.id,
     )
     if row is None:
         raise HTTPException(

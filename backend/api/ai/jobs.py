@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from ...ai.background import cancel_job, enqueue_analyze_job, get_job_status
 from ...ai.tasks import analyze_symbol_task
+from ...ai.verified_plan_store import issue_verified_plan
 
 router = APIRouter(prefix="/api/ai/jobs", tags=["ai-jobs"])
 
@@ -151,7 +152,21 @@ def get_job(job_id: str) -> JobStatusResponse:
     data = get_job_status(job_id)
     if data is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    return JobStatusResponse(**{k: v for k, v in data.items() if k != "id"})
+    response_data = {k: v for k, v in data.items() if k != "id"}
+    result = response_data.get("result")
+    if response_data.get("status") == "finished" and isinstance(result, dict):
+        result = result.copy()
+        result["verified_plan_id"] = issue_verified_plan(
+            symbol=result.get("symbol") or response_data["symbol"],
+            timeframe=result.get("timeframe") or response_data["timeframe"],
+            provider=result.get("provider") or "unknown",
+            model=result.get("model") or "unknown",
+            plan=result.get("trade_plan"),
+            validation=result.get("trade_plan_validation"),
+            source_key=f"background-job:{job_id}",
+        )
+        response_data["result"] = result
+    return JobStatusResponse(**response_data)
 
 
 @router.post(

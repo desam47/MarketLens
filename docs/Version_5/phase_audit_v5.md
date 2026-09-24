@@ -1635,16 +1635,24 @@ until the line is removed. The end-to-end evaluation pins these defaults
   `Track this setup` action only when tracking is enabled. The panel asks for
   confirmation, shows saving/tracked/duplicate states, and keeps Hold/Avoid
   and unvalidated plans out of the action path.
-- **Server revalidation and deduplication.** `POST /api/ai/track-trade-plan`
-  rebuilds fresh context, validates the exact submitted plan against the
-  current quote and structure, and records only a verified setup. Repeated
-  requests for the same open setup return the existing outcome instead of
-  creating another grading row.
+- **Server-issued plan boundary.** A verified Buy/Sell analysis now supplies
+  an opaque, short-lived handle. `POST /api/ai/track-trade-plan` accepts that
+  handle alone, so a browser cannot edit the symbol, timeframe, or plan before
+  it is recorded. The endpoint returns `410 Gone` for an expired handle,
+  rebuilds current context, and revalidates the retained server plan before it
+  records it. Repeated requests for the same open setup return the existing
+  outcome instead of creating another grading row.
+- **Auditable provenance and grading.** Outcomes retain the real provider,
+  model, requested timeframe, and opaque analysis handle. The tracker grades
+  1-minute bars after the confirmation on the tracking day, then daily bars
+  from the following day; it cannot silently omit same-day movement or include
+  pre-confirmation daily movement. The quantitative card and prompt call this
+  a selected **Tracked setups** record, not the AI's complete call history.
 - **Regression coverage.** Backend coverage passed with 163 tests and 17
   subtests; the targeted panel suite passed with 12 tests; TypeScript,
   production build, Ruff, and `git diff --check` all passed.
 
-## AI Analysis review reliability batches 1–2 (2026-09-24)
+## AI Analysis review reliability batches 1–3 (2026-09-24)
 
 - **Responsive execution and complete background results.** Context building
   now runs outside the async event loop for both blocking and streaming
@@ -1665,6 +1673,11 @@ until the line is removed. The end-to-end evaluation pins these defaults
 - **Entry-zone safety.** Buy stops must be below, and targets above, the
   entire entry zone; Sell plans use the opposite bounds. The check applies at
   parsing and validation boundaries, while keeping the narrative available.
+- **Tracked-setup integrity.** Only an opaque server-issued handle for a
+  verified actionable plan can create a tracked outcome. The retained setup
+  is freshly revalidated, records its true provider/model/timeframe, and is
+  graded from post-confirmation intraday bars on day D before daily bars from
+  D+1.
 - **Regression coverage.** The AI Analysis/task/router slice passed with 158
   tests and 17 subtests; AIAnalysisPanel passed with 13 tests; TypeScript,
   production build, Ruff, and `git diff --check` passed. The detailed issue

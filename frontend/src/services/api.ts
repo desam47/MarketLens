@@ -897,6 +897,8 @@ export interface AIAnalysisResult {
   market_data_provider?: string | null;
   market_session?: MarketSessionType | 'unknown';
   cache_status?: 'fresh' | 'cached';
+  /** Short-lived server handle required to track this verified setup. */
+  verified_plan_id?: string | null;
   trade_plan_validation?: {
     status?: 'verified' | 'unavailable' | 'not_applicable';
     reason?: string;
@@ -2355,14 +2357,12 @@ class ApiService {
     }
 
     async trackTradePlan(
-        symbol: string,
-        timeframe: string,
-        tradePlan: TradePlan,
+        verifiedPlanId: string,
         signal?: AbortSignal,
     ): Promise<TrackTradePlanResponse> {
         return this.fetch<TrackTradePlanResponse>('/ai/track-trade-plan', {
             method: 'POST',
-            body: JSON.stringify({ symbol, timeframe, trade_plan: tradePlan }),
+            body: JSON.stringify({ verified_plan_id: verifiedPlanId }),
             signal,
         }, AI_TIMEOUT_MS);
     }

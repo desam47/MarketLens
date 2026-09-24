@@ -1,9 +1,9 @@
 # Version 5 AI Analysis Fixes
 
 **Created:** 2026-09-24
-**Last updated:** 2026-09-24 (batch 2: AA-06, AA-07, AA-08, AA-11)
-**Status:** Open. The 2026-09-24 review found 15 issues. Batches 1 and 2 are fixed, in the working tree and not yet committed; 8 remain. See [Reference](#reference) for how AI Analysis works.
-**Scorecard:** 7 ✅ COMPLETE, 0 ⚠️ PARTIAL, 8 ❌ NOT STARTED, 0 🟡 DEFERRED.
+**Last updated:** 2026-09-24 (batch 3: AA-04, AA-05)
+**Status:** Open. The 2026-09-24 review found 15 issues. Batches 1–3 are fixed; 6 remain. See [Reference](#reference) for how AI Analysis works.
+**Scorecard:** 9 ✅ COMPLETE, 0 ⚠️ PARTIAL, 6 ❌ NOT STARTED, 0 🟡 DEFERRED.
 **Source:** 2026-09-24 review of `backend/ai/analyze.py`, `backend/ai/context.py`, `backend/ai/prompt.py` (analysis and trade-plan models), `backend/ai/tasks.py`, `backend/ai/trade_plan_tracker.py`, `backend/api/ai/router.py`, `backend/api/ai/jobs.py`, and `frontend/src/components/AIAnalysisPanel.tsx`, at `b7db6c8`.
 **Related:** [Phase audit](phase_audit_v5.md), [Chat bug fixes](v5_bug_fixes.md), [Phase 5.8 evaluation](phase_5_8_evaluation.md)
 
@@ -28,8 +28,8 @@ Line numbers refer to the code at `b7db6c8`.
 | AA-01 | High | Backend | Analysis blocks the server's event loop while it builds context | Verified | ✅ COMPLETE |
 | AA-02 | Medium | Backend | One inconsistent plan level discards the whole analysis | Verified | ✅ COMPLETE |
 | AA-03 | Medium | Backend + UI | Background (template) results drop evidence, validation and context | Verified | ✅ COMPLETE |
-| AA-04 | Medium | Tracking | Grading never sees the day a plan was tracked | Verified | ❌ NOT STARTED |
-| AA-05 | Medium | Tracking | Tracked plans aren't tied to an analysis and lose model and timeframe | Code-read | ❌ NOT STARTED |
+| AA-04 | Medium | Tracking | Grading never sees the day a plan was tracked | Verified | ✅ COMPLETE |
+| AA-05 | Medium | Tracking | Tracked plans aren't tied to an analysis and lose model and timeframe | Code-read | ✅ COMPLETE |
 | AA-06 | Medium | Validation | Plan validation ignores the quote's age | Verified | ✅ COMPLETE |
 | AA-07 | Low | Backend | Transient failures are cached for 45 seconds | Verified | ✅ COMPLETE |
 | AA-08 | Low | Validation | A stop or target inside the entry zone passes | Verified | ✅ COMPLETE |
@@ -44,9 +44,8 @@ Line numbers refer to the code at `b7db6c8`.
 **Next suggested order:**
 1. ~~**Batch 1:**~~ AA-01, AA-02 and AA-03: done.
 2. ~~**Batch 2:**~~ AA-06, AA-07, AA-08 and AA-11: done.
-3. **Batch 3 (next):** AA-05, then AA-04: provenance-aware tracking first,
-   followed by intraday grading for the tracking day.
-4. **Batch 4:** AA-09, AA-10 and AA-12 to AA-15: the remaining low items.
+3. ~~**Batch 3:**~~ AA-05 and AA-04: done.
+4. **Batch 4 (next):** AA-09, AA-10 and AA-12 to AA-15: the remaining low items.
 
 ---
 
@@ -165,7 +164,7 @@ after the workers are restarted (for example with `./start.sh`).
 
 ### AA-04 — Grading never sees the day a plan was tracked
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
 **Where:** `_grade_row` reads `get_bars(db, symbol, "1d", from_ts=row.created_at)` (`backend/ai/trade_plan_tracker.py:194`).
 
 Daily bars are stamped at midnight. A plan tracked at 10:30 on day D
@@ -178,13 +177,19 @@ therefore never has day D graded; the first graded bar is D+1. For a
 - **Probe:** with a target hit on the tracking day and a stop hit the next
   day, the plan was graded a loss.
 
-**Fix:** grade the tracking day from intraday bars after `created_at`, then
-daily bars from D+1. Simply including day D's daily bar would be wrong the
-other way: it also holds price moves from before the plan was tracked.
+**Resolution:** the tracker now reads 1-minute bars from the explicit
+confirmation timestamp through the end of day D, then reads daily bars from
+D+1. It never grades a daily D bar containing price action that preceded the
+tracked setup. A same-day target/stop therefore resolves before later daily
+bars can change the result.
+
+**Tests:** `TestGradeRow` proves a post-confirmation 1-minute target wins even
+when D+1 would stop out, and that the daily query begins exactly at the next
+midnight.
 
 ### AA-05 — Tracked plans aren't tied to an analysis and lose provenance
 
-**Status:** ❌ NOT STARTED
+**Status:** ✅ COMPLETE (2026-09-24, batch 3)
 **Where:** `POST /api/ai/track-trade-plan` (`backend/api/ai/router.py:489`) and `record_confirmed_trade_plan`'s defaults (`trade_plan_tracker.py:79`).
 
 - **Not bound to an analysis:** the endpoint revalidates whatever plan the
@@ -200,13 +205,26 @@ The track record built from these rows is shown to the model as "YOUR OWN
 past buy/sell calls" and damps its confidence. It is also a subset the
 trader chose to track, not a sample of the model's calls.
 
-**Fix:**
-- Have the server issue an id for each verified plan it returns (kept for a
-  few minutes), and accept tracking only for such an id.
-- Record the real provider, model and timeframe, and grade intraday plans
-  on intraday bars.
-- Describe the track record as "setups you tracked" in the prompt and the
-  UI.
+**Resolution:**
+- Each blocking, streaming, and finished background analysis issues an opaque,
+  short-lived server-side handle only for a verified Buy/Sell plan. The panel
+  sends that handle alone to track a setup; it no longer sends editable symbol,
+  timeframe, or plan fields.
+- The endpoint returns `410 Gone` if the handle expired or the API restarted,
+  so the trader must rerun analysis rather than track a stale or altered plan.
+  It rebuilds fresh context and revalidates the retained server plan before
+  recording it.
+- Outcomes now retain the actual provider, model, requested timeframe, and
+  opaque analysis handle. Alembic migration
+  `20261001_ai_trade_plan_provenance` adds the durable `timeframe` and
+  `analysis_id` columns without rewriting legacy rows.
+- Prompt/context and UI call the metric **Tracked setups** and explicitly say
+  it is a selected trader-tracked sample, not the model's complete history.
+
+**Tests:** the verified-plan store covers eligibility, expiry, and background
+handle reuse; router tests cover issuance, accepted handle provenance, and a
+410 expired/unknown handle; the panel hides tracking without a handle. The
+migration completeness test checks both persisted provenance columns.
 
 ### AA-06 — Plan validation ignores the quote's age
 
@@ -380,8 +398,8 @@ name on the result.
   - Require or improve application-owned evidence citations for applicable
     numeric claims.
 - **Test coverage:** these gaps are why the findings above weren't caught:
-  - **Grading:** tests patch `get_bars`, so `from_ts` is never exercised
-    (AA-04).
+- ~~**Grading:**~~ batch 3 tests assert the 1-minute `from_ts` boundary and
+  the D+1 daily boundary (AA-04).
   - ~~Background payload, event loop, inconsistent plans~~: covered by
     tests since batch 1 (AA-03, AA-01, AA-02).
 
@@ -393,9 +411,8 @@ name on the result.
 2. **Show when there's no engine signal:** when the requested timeframe has
    no signal, `trend_state` is empty and the model's trend has no anchor.
    Say so in the evidence card.
-3. **Track-record transparency:** show that the record comes from tracked
-   setups, its sample size, and a per-model breakdown once AA-05 records the
-   model.
+3. **Track-record transparency:** the record is now labelled as tracked
+   setups and provenance is retained; add a per-model breakdown.
 4. **Workflow handoffs:**
    - Journal or Notebook directly from an analysis.
    - Risk sizing using the validated entry and stop.
@@ -403,6 +420,19 @@ name on the result.
    - Evidence or report export from the analysis card.
 
 ## Verification
+
+### Batch 3 (2026-09-24)
+
+| Suite | Result |
+|---|---|
+| Focused backend tracking, API, migration, analysis, and task tests | 202 passed, 17 subtests passed |
+| AI Analysis panel suite | 14 passed |
+| TypeScript and production frontend build | passed |
+
+**Regression coverage:** opaque verified-plan eligibility and expiry,
+blocking-route issuance, background handle reuse, provenance persistence,
+same-day post-confirmation 1-minute grading, D+1 daily grading, and hiding
+the Track action when the server did not issue a handle.
 
 ### Batch 2 (2026-09-24)
 
@@ -574,12 +604,14 @@ timeframe, or refresh cannot overwrite the current result.
 Trade-plan outcome tracking is opt-in and requires all of the following:
 
 1. The environment enables trade-plan tracking.
-2. The analysis shows a server-verified Buy or Sell plan. The panel checks
-   this; the server revalidates the submitted plan but does not check that
-   an analysis produced it (AA-05).
+2. The analysis returns a server-issued, short-lived handle for a
+   server-verified Buy or Sell plan. The browser retains this opaque handle,
+   not an editable copy of the plan (AA-05).
 3. The trader clicks `Track this setup`.
 4. The trader confirms the browser confirmation prompt.
-5. The server rebuilds fresh context and revalidates the exact submitted plan.
+5. The server rebuilds fresh context and revalidates the retained,
+   server-authored plan. An expired or unknown handle returns `410 Gone` and
+   requires a new analysis.
 
 The endpoint is `POST /api/ai/track-trade-plan`. It records only a verified
 actionable plan. Repeated requests for the same open setup return the
@@ -587,10 +619,11 @@ existing outcome instead of creating another grading row. Hold, Avoid,
 unvalidated, stale, and unavailable plans cannot be tracked. Analysis,
 refresh, and background execution do not create outcome rows.
 
-A background thread grades open rows against daily bars: a target hit before
-the stop is a win, the stop first is a loss, and neither within the holding
-window (scalp 1 day, swing 10, position 60) is expired. See AA-04 and AA-05
-for the grading limits.
+A background thread grades open rows against 1-minute bars after the tracking
+confirmation on day D, then daily bars from D+1: a target hit before the stop
+is a win, the stop first is a loss, and neither within the holding window
+(scalp 1 day, swing 10, position 60) is expired. See AA-04 and AA-05 for the
+grading limits.
 
 ### Background analysis lifecycle
 

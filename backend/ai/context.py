@@ -738,9 +738,10 @@ def _tape_context(sym: str) -> dict[str, Any]:
 
 
 def _track_record_context(sym: str) -> dict[str, Any]:
-    """Step 14 — Track record: the AI's OWN past buy/sell calls on this
-    ticker, graded against what happened. Not engine-derived either, but
-    it must be framed honestly (small samples early on) — see
+    """Step 14 — Track record: setups the trader explicitly chose to track
+    on this ticker, graded against what happened. This is a selected subset,
+    not the AI's complete recommendation history, so it must be framed
+    honestly (small samples early on) — see
     CHAT_SYSTEM_PROMPT / SYSTEM_PROMPT for the exact wording rule.
     """
     track_record: dict[str, Any] = {}

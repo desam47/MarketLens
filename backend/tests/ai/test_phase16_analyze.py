@@ -1066,8 +1066,9 @@ class TestRenderSystemPrompt(unittest.TestCase):
             track_record=tr,
             market_regime={},
         )
-        self.assertIn("historical accuracy on this ticker is 65%", result)
-        self.assertIn("20 resolved calls", result)
+        self.assertIn("explicitly tracked 20 resolved setup(s)", result)
+        self.assertIn("65% win rate", result)
+        self.assertIn("20 resolved setup(s)", result)
         self.assertTrue(result.startswith("base\n\n"))
 
     def test_i1_skips_calibration_when_no_win_rate(self):
@@ -1119,7 +1120,7 @@ class TestRenderSystemPrompt(unittest.TestCase):
         mr = {"regime": "crisis"}
         result = render_system_prompt("base", track_record=tr, market_regime=mr)
         self.assertIn("30%", result)
-        self.assertIn("10 resolved calls", result)
+        self.assertIn("10 resolved setup(s)", result)
         self.assertIn("crisis", result)
 
 

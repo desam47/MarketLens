@@ -10,10 +10,11 @@ _check_consistency`` already clears their entry/stop/targets, so
 there's nothing to grade.
 
 A background thread (mirrors ``backend/api/tape/registry.py``'s flush
-loop) periodically grades every still-"open" row against daily bars
-since it was proposed: a target hit before the stop -> "win"; the stop
-hit first -> "loss"; neither within the time_horizon's holding window
--> "expired" (marked-to-market, kept out of the win-rate stat).
+loop) periodically grades every still-"open" row against 1-minute bars
+after it was tracked on that day, then daily bars from the following day:
+a target hit before the stop -> "win"; the stop hit first -> "loss";
+neither within the time_horizon's holding window -> "expired"
+(marked-to-market, kept out of the win-rate stat).
 
 Gated end-to-end on ``settings.ai_trade_plan_tracking.enabled`` —
 capture, grading, and ``get_track_record()`` are all no-ops when it's
@@ -25,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from statistics import fmean
 
 from backend.config.settings import settings
@@ -82,6 +83,8 @@ def record_confirmed_trade_plan(
     *,
     provider: str = "user-confirmed",
     model: str = "AIAnalysisPanel",
+    timeframe: str = "1d",
+    analysis_id: str = "",
 ) -> tuple[object | None, bool]:
     """Persist a freshly server-validated plan after explicit confirmation.
 
@@ -108,6 +111,7 @@ def record_confirmed_trade_plan(
                 AITradePlanOutcome.recommendation == plan.recommendation,
                 AITradePlanOutcome.conviction == plan.conviction,
                 AITradePlanOutcome.time_horizon == plan.time_horizon,
+                AITradePlanOutcome.timeframe == timeframe,
             )
             .all()
         )
@@ -132,6 +136,8 @@ def record_confirmed_trade_plan(
             risk_reward=plan.risk_reward,
             provider=provider[:50],
             model=model[:100],
+            timeframe=timeframe[:8],
+            analysis_id=analysis_id[:64],
         )
         db.add(row)
         db.commit()
@@ -191,42 +197,64 @@ def _grade_row(db, row, today) -> bool:
             return True
         return bar.low <= entry_hi and bar.high >= entry_lo
 
-    bars = get_bars(db, row.symbol, "1d", from_ts=row.created_at)
     filled = False
+    latest_bar = None
 
-    for bar in bars:
-        # Only grade once the position has been filled on this bar or a
-        # prior one. Bars that gap past the entry zone (no fill) are
-        # skipped — a stop/target touch on an unfilled bar is not a real
-        # resolution.
-        if not filled:
-            if not _touches_entry(bar):
-                continue
-            filled = True
+    def _grade_bars(bars) -> bool:
+        nonlocal filled, latest_bar
+        for bar in bars:
+            latest_bar = bar
+            # Only grade once the position has been filled on this bar or a
+            # prior one. Bars that gap past the entry zone (no fill) are
+            # skipped — a stop/target touch on an unfilled bar is not a real
+            # resolution.
+            if not filled:
+                if not _touches_entry(bar):
+                    continue
+                filled = True
 
-        # Conservative: a single OHLC bar can't tell us which happened
-        # first intraday, so a bar that touches both is treated as a
-        # stop-out, not a win.
-        if row.recommendation == "buy":
-            if row.stop_loss is not None and bar.low <= row.stop_loss:
-                row.status, row.resolved_price = "loss", row.stop_loss
-            else:
-                for i, t in enumerate(targets):
-                    if bar.high >= t:
-                        row.status, row.resolved_price, row.hit_target_index = "win", t, i
-                        break
-        else:  # sell
-            if row.stop_loss is not None and bar.high >= row.stop_loss:
-                row.status, row.resolved_price = "loss", row.stop_loss
-            else:
-                for i, t in enumerate(targets):
-                    if bar.low <= t:
-                        row.status, row.resolved_price, row.hit_target_index = "win", t, i
-                        break
-        if row.status != "open":
-            row.resolved_at = now_ny()
-            row.return_pct = _return_pct(row, entry_mid)
-            return True
+            # Conservative: a single OHLC bar can't tell us which happened
+            # first intraday, so a bar that touches both is treated as a
+            # stop-out, not a win.
+            if row.recommendation == "buy":
+                if row.stop_loss is not None and bar.low <= row.stop_loss:
+                    row.status, row.resolved_price = "loss", row.stop_loss
+                else:
+                    for i, target in enumerate(targets):
+                        if bar.high >= target:
+                            row.status, row.resolved_price, row.hit_target_index = "win", target, i
+                            break
+            else:  # sell
+                if row.stop_loss is not None and bar.high >= row.stop_loss:
+                    row.status, row.resolved_price = "loss", row.stop_loss
+                else:
+                    for i, target in enumerate(targets):
+                        if bar.low <= target:
+                            row.status, row.resolved_price, row.hit_target_index = "win", target, i
+                            break
+            if row.status != "open":
+                row.resolved_at = now_ny()
+                row.return_pct = _return_pct(row, entry_mid)
+                return True
+        return False
+
+    # Daily bars are stamped at midnight, so querying them from a plan tracked
+    # at (say) 10:30 would silently skip that whole day. Use only bars after
+    # the explicit confirmation on day D, then switch to daily bars at D+1.
+    next_day = datetime.combine(row.created_at.date() + timedelta(days=1), time.min)
+    intraday_bars = get_bars(
+        db,
+        row.symbol,
+        "1m",
+        from_ts=row.created_at,
+        to_ts=next_day - timedelta(microseconds=1),
+    )
+    if _grade_bars(intraday_bars):
+        return True
+
+    daily_bars = get_bars(db, row.symbol, "1d", from_ts=next_day)
+    if _grade_bars(daily_bars):
+        return True
 
     holding_days = _HOLDING_DAYS.get(row.time_horizon, _DEFAULT_HOLDING_DAYS)
     if today - row.created_at.date() >= timedelta(days=holding_days):
@@ -238,8 +266,8 @@ def _grade_row(db, row, today) -> bool:
         # is a phantom number — same fill gate as the win/loss branch
         # above, just applied to the "held the whole window and never
         # resolved" case instead of "resolved by stop/target".
-        if filled and bars:
-            row.resolved_price = bars[-1].close
+        if filled and latest_bar is not None:
+            row.resolved_price = latest_bar.close
             row.return_pct = _return_pct(row, entry_mid)
         return True
     return False
@@ -267,8 +295,8 @@ def _grade_once(db) -> int:
 
 
 def get_track_record(symbol: str, limit: int = 20) -> dict:
-    """Best-effort win-rate summary of the AI's own resolved buy/sell
-    calls on ``symbol``. ``{}`` when tracking is off or there's no
+    """Best-effort win-rate summary of explicitly tracked setups on
+    ``symbol``. ``{}`` when tracking is off or there's no
     resolved history yet — the caller (context.py) treats an empty
     dict as "drop this section", same as every other best-effort
     context block. Opens and closes its own session — same convention
@@ -283,7 +311,7 @@ def get_track_record(symbol: str, limit: int = 20) -> dict:
     ``limit`` resolved rows (the calibration sample the AI's confidence
     is damped against). These two windows are deliberately different
     questions ("how many opens do I have right now, all-time" vs. "how
-    have my last N calls done") — the ``all_time_`` prefix exists
+    have my last N tracked setups done") — the ``all_time_`` prefix exists
     specifically so a consumer never assumes they reconcile (bug found
     2026-09-16: they didn't, and nothing in either field name said so).
     """

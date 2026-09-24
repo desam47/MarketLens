@@ -100,6 +100,10 @@ class TestSchemaCompletenessMigration(unittest.TestCase):
                 row[1] for row in connection.execute("PRAGMA index_list('ai_trade_plan_outcomes')")
             }
             self.assertNotIn("ix_ai_trade_plan_outcomes_id", outcome_indexes)
+            outcome_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info('ai_trade_plan_outcomes')")
+            }
+            self.assertTrue({"timeframe", "analysis_id"}.issubset(outcome_columns))
 
 
 if __name__ == "__main__":

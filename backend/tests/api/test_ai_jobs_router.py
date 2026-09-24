@@ -208,12 +208,14 @@ def test_get_job_returns_finished_with_result(client):
         "completed_at": "2024-01-01T00:00:10Z",
     }
 
-    resp = client.get(f"/api/ai/jobs/{job_id}")
+    with patch("backend.api.ai.jobs.issue_verified_plan", return_value="verified-plan-123456"):
+        resp = client.get(f"/api/ai/jobs/{job_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "finished"
     assert data["result"]["summary"] == "Bullish analysis for MSFT on 4h shows upward momentum."
     assert data["result"]["trend"] == "bullish"
+    assert data["result"]["verified_plan_id"] == "verified-plan-123456"
 
 
 def test_get_job_returns_failed_with_error(client):

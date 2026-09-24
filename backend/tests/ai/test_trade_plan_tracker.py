@@ -50,7 +50,7 @@ def _analysis(**over) -> AnalysisResponse:
     return AnalysisResponse(**base)
 
 
-def _bar(day: str, *, o, h, low, c) -> Bar:
+def _bar(day: str, *, o, h, low, c, timeframe: str = "1d") -> Bar:
     return Bar(
         symbol="AAPL",
         timestamp=datetime.fromisoformat(day),
@@ -59,7 +59,7 @@ def _bar(day: str, *, o, h, low, c) -> Bar:
         low=low,
         close=c,
         volume=1_000_000,
-        timeframe="1d",
+        timeframe=timeframe,
         provider="test",
         data_status=DataStatus.HISTORICAL,
     )
@@ -147,6 +147,22 @@ class TestConfirmedTradePlan(_DBBase):
         self.assertEqual(first.id, second.id)
         self.assertEqual(self.db.query(AITradePlanOutcome).count(), 1)
 
+    def test_confirmed_plan_preserves_analysis_provenance(self):
+        row, duplicate = tracker.record_confirmed_trade_plan(
+            "AAPL",
+            _plan(),
+            provider="openrouter",
+            model="openai/gpt-oss-120b",
+            timeframe="15m",
+            analysis_id="verified-plan-123",
+        )
+
+        self.assertFalse(duplicate)
+        self.assertEqual(row.provider, "openrouter")
+        self.assertEqual(row.model, "openai/gpt-oss-120b")
+        self.assertEqual(row.timeframe, "15m")
+        self.assertEqual(row.analysis_id, "verified-plan-123")
+
     def test_confirmed_hold_plan_is_not_recorded(self):
         row, duplicate = tracker.record_confirmed_trade_plan(
             "AAPL", _plan(recommendation="hold")
@@ -193,6 +209,42 @@ class TestGradeRow(_DBBase):
         self.assertEqual(row.hit_target_index, 0)
         self.assertEqual(row.resolved_price, 108.0)
         self.assertAlmostEqual(row.return_pct, (108.0 - 101.0) / 101.0, places=4)
+
+    @patch("backend.repositories.bar_repository.get_bars")
+    def test_tracking_day_uses_only_post_confirmation_intraday_bars(self, mock_bars):
+        created_at = datetime(2026, 1, 2, 10, 30)
+        row = self._open_row(created_at=created_at)
+        # The target was reached after the explicit tracking confirmation.
+        # A D+1 daily stop must never overwrite that same-day resolution.
+        mock_bars.side_effect = [
+            [_bar("2026-01-02T10:31:00", o=101, h=109, low=100, c=108, timeframe="1m")],
+            [_bar("2026-01-03", o=100, h=101, low=95, c=96)],
+        ]
+
+        resolved = tracker._grade_row(self.db, row, datetime(2026, 1, 3).date())
+
+        self.assertTrue(resolved)
+        self.assertEqual(row.status, "win")
+        self.assertEqual(mock_bars.call_count, 1)
+        _, _, timeframe = mock_bars.call_args.args[:3]
+        self.assertEqual(timeframe, "1m")
+        self.assertEqual(mock_bars.call_args.kwargs["from_ts"], created_at)
+
+    @patch("backend.repositories.bar_repository.get_bars")
+    def test_daily_grading_starts_on_the_day_after_tracking(self, mock_bars):
+        created_at = datetime(2026, 1, 2, 10, 30)
+        row = self._open_row(created_at=created_at)
+        mock_bars.side_effect = [
+            [_bar("2026-01-02T10:31:00", o=101, h=103, low=100, c=102, timeframe="1m")],
+            [_bar("2026-01-03", o=102, h=109, low=101, c=108)],
+        ]
+
+        resolved = tracker._grade_row(self.db, row, datetime(2026, 1, 3).date())
+
+        self.assertTrue(resolved)
+        self.assertEqual(row.status, "win")
+        self.assertEqual(mock_bars.call_args_list[1].args[2], "1d")
+        self.assertEqual(mock_bars.call_args_list[1].kwargs["from_ts"], datetime(2026, 1, 3))
 
     @patch("backend.repositories.bar_repository.get_bars")
     def test_buy_stop_hit_is_a_loss(self, mock_bars):

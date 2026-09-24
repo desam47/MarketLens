@@ -60,6 +60,7 @@ interface AIAnalysisResult {
     market_data_provider?: string | null;
     market_session?: 'premarket' | 'regular' | 'after_hours' | 'closed' | 'unknown';
     cache_status?: 'fresh' | 'cached';
+    verified_plan_id?: string | null;
     market_regime?: Record<string, unknown>;
     timeframe_scores?: Record<string, { direction?: string; strength?: string; confidence?: number }>;
     track_record?: Record<string, unknown>;
@@ -225,8 +226,8 @@ describe('AIAnalysisPanel', () => {
             render(<AIAnalysisPanel symbol="AAPL" />);
         });
         await runManualAnalysis();
-        expect(await screen.findByText('Track record')).toBeInTheDocument();
-        expect(screen.getByText(/7 resolved calls · 71% win rate/)).toBeInTheDocument();
+        expect(await screen.findByText('Tracked setups')).toBeInTheDocument();
+        expect(screen.getByText(/7 resolved tracked setups · 71% win rate/)).toBeInTheDocument();
         expect(screen.getByText(/6 wins · 2 losses · 1 open · 0 expired/)).toBeInTheDocument();
         expect(screen.getByText('Peer context')).toBeInTheDocument();
         expect(screen.getByText(/2 peers · 1 aligned · 1 opposed · 1 same sector · Technology/)).toBeInTheDocument();
@@ -268,6 +269,7 @@ describe('AIAnalysisPanel', () => {
         mockApi.analyzeSymbol.mockResolvedValue(makeResult({
             trade_plan: plan,
             trade_plan_validation: { status: 'verified', quote_price: 101 },
+            verified_plan_id: 'verified-plan-123456',
         }));
         mockApi.trackTradePlan.mockResolvedValue({
             tracked: true,
@@ -284,8 +286,25 @@ describe('AIAnalysisPanel', () => {
             trackButton.click();
         });
         expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Track this validated BUY setup'));
-        expect(mockApi.trackTradePlan).toHaveBeenCalledWith('AAPL', '1d', plan);
+        expect(mockApi.trackTradePlan).toHaveBeenCalledWith('verified-plan-123456');
         expect(await screen.findByText('✓ Setup tracked')).toBeInTheDocument();
+    });
+
+    it('does not offer tracking when a plan lacks a server-issued handle', async () => {
+        setConfig(true, true);
+        mockApi.analyzeSymbol.mockResolvedValue(makeResult({
+            trade_plan: {
+                recommendation: 'buy', conviction: 'high', time_horizon: 'swing',
+                entry_zone_low: 100, entry_zone_high: 102, stop_loss: 96,
+                targets: [108], risk_reward: 1.5, thesis: 'Buy the pullback.',
+                invalidation: 'Close below support.',
+            },
+            trade_plan_validation: { status: 'verified', quote_price: 101 },
+        }));
+        render(<AIAnalysisPanel symbol="AAPL" />);
+        await runManualAnalysis();
+
+        expect(screen.queryByRole('button', { name: /track this setup/i })).not.toBeInTheDocument();
     });
 
     it('labels a setup validated outside regular trading hours', async () => {

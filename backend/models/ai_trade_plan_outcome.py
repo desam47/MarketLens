@@ -60,6 +60,11 @@ class AITradePlanOutcome(Base):
     risk_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Provenance for the exact server-verified analysis the trader chose to
+    # track. ``analysis_id`` is an opaque short-lived handle, not the plan
+    # body itself; legacy rows retain the empty default.
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False, default="1d")
+    analysis_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=now_ny, index=True
     )

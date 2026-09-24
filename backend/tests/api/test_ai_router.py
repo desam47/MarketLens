@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 
 from fastapi.testclient import TestClient
 
+from backend.ai.prompt import TradePlan
+from backend.ai.verified_plan_store import VerifiedPlan
 from backend.api.main import app
 from backend.config.settings import settings
 
@@ -63,6 +65,18 @@ class TestAnalyzeEndpoint(unittest.TestCase):
             market_data_provider="webull",
             market_session="regular",
             cache_status="fresh",
+            trade_plan=TradePlan(
+                recommendation="buy",
+                conviction="high",
+                time_horizon="swing",
+                entry_zone_low=200.0,
+                entry_zone_high=202.0,
+                stop_loss=194.0,
+                targets=[208.0],
+                risk_reward=1.5,
+                thesis="Buy the pullback.",
+                invalidation="Close below support.",
+            ),
             trade_plan_validation={"status": "verified", "quote_price": 201.25},
         )
 
@@ -87,6 +101,8 @@ class TestAnalyzeEndpoint(unittest.TestCase):
         self.assertEqual(data["market_session"], "regular")
         self.assertEqual(data["cache_status"], "fresh")
         self.assertEqual(data["trade_plan_validation"]["status"], "verified")
+        self.assertIsInstance(data["verified_plan_id"], str)
+        self.assertGreaterEqual(len(data["verified_plan_id"]), 16)
         self.assertFalse(data["is_uncertain"])
 
     @patch("backend.api.ai.router.analyze_symbol")
@@ -402,8 +418,9 @@ class TestTrackTradePlanEndpoint(unittest.TestCase):
     @patch.object(settings.ai_trade_plan_tracking, "enabled", True)
     @patch("backend.api.ai.router.record_confirmed_trade_plan")
     @patch("backend.api.ai.router.build_context")
+    @patch("backend.api.ai.router.get_verified_plan")
     def test_revalidates_and_tracks_explicitly_confirmed_plan(
-        self, mock_context, mock_record
+        self, mock_verified, mock_context, mock_record
     ):
         mock_context.return_value = SimpleNamespace(
             data_status="LIVE",
@@ -413,23 +430,29 @@ class TestTrackTradePlanEndpoint(unittest.TestCase):
                 "resistances": [{"price": 110.0}],
             },
         )
-        mock_record.return_value = (SimpleNamespace(id=42), False)
-        payload = {
-            "symbol": "AAPL",
-            "timeframe": "1d",
-            "trade_plan": {
-                "recommendation": "buy",
-                "conviction": "high",
-                "time_horizon": "swing",
-                "entry_zone_low": 100.0,
-                "entry_zone_high": 102.0,
-                "stop_loss": 94.0,
-                "targets": [108.0],
-                "risk_reward": 1.5,
-                "thesis": "Buy the pullback.",
-                "invalidation": "Close below support.",
-            },
+        plan = {
+            "recommendation": "buy",
+            "conviction": "high",
+            "time_horizon": "swing",
+            "entry_zone_low": 100.0,
+            "entry_zone_high": 102.0,
+            "stop_loss": 94.0,
+            "targets": [108.0],
+            "risk_reward": 1.5,
+            "thesis": "Buy the pullback.",
+            "invalidation": "Close below support.",
         }
+        mock_verified.return_value = VerifiedPlan(
+            id="verified-plan-123456",
+            symbol="AAPL",
+            timeframe="1d",
+            provider="ollama",
+            model="llama3.2",
+            plan=TradePlan.model_validate(plan),
+            issued_at=0.0,
+        )
+        mock_record.return_value = (SimpleNamespace(id=42), False)
+        payload = {"verified_plan_id": "verified-plan-123456"}
 
         response = client.post("/api/ai/track-trade-plan", json=payload)
 
@@ -437,7 +460,25 @@ class TestTrackTradePlanEndpoint(unittest.TestCase):
         self.assertEqual(response.json()["outcome_id"], 42)
         self.assertFalse(response.json()["duplicate"])
         mock_context.assert_called_once_with("AAPL", "1d")
-        mock_record.assert_called_once()
+        mock_record.assert_called_once_with(
+            "AAPL",
+            TradePlan.model_validate(plan),
+            provider="ollama",
+            model="llama3.2",
+            timeframe="1d",
+            analysis_id="verified-plan-123456",
+        )
+
+    @patch.object(settings.ai_trade_plan_tracking, "enabled", True)
+    @patch("backend.api.ai.router.get_verified_plan", return_value=None)
+    def test_rejects_expired_or_unknown_verified_plan(self, mock_verified):
+        response = client.post(
+            "/api/ai/track-trade-plan", json={"verified_plan_id": "expired-plan-123456"}
+        )
+
+        self.assertEqual(response.status_code, 410)
+        self.assertIn("no longer available", response.json()["detail"])
+        mock_verified.assert_called_once_with("expired-plan-123456")
 
 
 class TestAIConfigPatchEndpoint(unittest.TestCase):

@@ -284,23 +284,24 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
         refreshAnalysis: () => { void runAnalysis(true); },
     }), [cancelBackground, runAnalysis, runBackground]);
 
-  const trackSetup = useCallback(async () => {
-    const plan = analysis?.trade_plan;
-    if (!plan || plan.recommendation === 'hold' || plan.recommendation === 'avoid') return;
-    if (analysis.trade_plan_validation?.status !== 'verified') return;
-    if (!window.confirm(`Track this validated ${plan.recommendation.toUpperCase()} setup for ${analysis.symbol || symbol}?`)) {
-      return;
-    }
-    setTrackingStatus('saving');
-    setTrackingError(null);
-    try {
-      const result = await api.trackTradePlan(analysis.symbol || symbol, analysis.timeframe || timeframe, plan);
-      setTrackingStatus(result.duplicate ? 'duplicate' : 'tracked');
-    } catch (e: any) {
-      setTrackingStatus('error');
-      setTrackingError(e.message || 'Unable to track this setup.');
-    }
-  }, [analysis, symbol, timeframe]);
+    const trackSetup = useCallback(async () => {
+        const plan = analysis?.trade_plan;
+        const verifiedPlanId = analysis?.verified_plan_id;
+        if (!plan || plan.recommendation === 'hold' || plan.recommendation === 'avoid') return;
+        if (analysis.trade_plan_validation?.status !== 'verified' || !verifiedPlanId) return;
+        if (!window.confirm(`Track this validated ${plan.recommendation.toUpperCase()} setup for ${analysis.symbol || symbol}?`)) {
+            return;
+        }
+        setTrackingStatus('saving');
+        setTrackingError(null);
+        try {
+            const result = await api.trackTradePlan(verifiedPlanId);
+            setTrackingStatus(result.duplicate ? 'duplicate' : 'tracked');
+        } catch (e: any) {
+            setTrackingStatus('error');
+            setTrackingError(e.message || 'Unable to track this setup.');
+        }
+    }, [analysis, symbol]);
 
   // Analysis is intentionally user-triggered. Changing symbol/timeframe
   // clears the previous result and cancels work, but never invokes a provider
@@ -567,10 +568,10 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
                   </div>
               )}
               {hasTrackRecord && (
-                <div className="ai-context-subsection" aria-label="AI trade-plan track record">
-                  <h4>Track record</h4>
+                <div className="ai-context-subsection" aria-label="Tracked setup record">
+                  <h4>Tracked setups</h4>
                   <p>
-                    {trackSample !== null ? `${trackSample} resolved call${trackSample === 1 ? '' : 's'}` : 'Historical calls'}
+                    {trackSample !== null ? `${trackSample} resolved tracked setup${trackSample === 1 ? '' : 's'}` : 'Tracked setup history'}
                     {trackWinRate !== null ? ` · ${Math.round(trackWinRate * 100)}% win rate` : ''}
                   </p>
                   <p className="info-text">
@@ -677,7 +678,7 @@ export const AIAnalysisPanel = forwardRef(function AIAnalysisPanel(
               )}
               {analysis.trade_plan_validation?.status === 'verified'
                 && (analysis.trade_plan.recommendation === 'buy' || analysis.trade_plan.recommendation === 'sell')
-                && config?.trade_plan_tracking_enabled && (
+                && analysis.verified_plan_id && config?.trade_plan_tracking_enabled && (
                 <div className="ai-tracking-action">
                   <button
                     className="btn btn-small"

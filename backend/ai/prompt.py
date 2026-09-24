@@ -570,10 +570,11 @@ _ANALYST_RULES = """\
    "tape" section is raw recent order-flow aggregation (buy vs sell \
    pressure, block prints, tape speed) — you MAY quote its values \
    directly, framed as "recent tape". The "track_record" section, \
-   when present, is YOUR OWN past buy/sell calls on this ticker \
-   graded against what happened (win_rate, sample_size, ...) — frame \
-   it honestly, never as a guarantee, and say so explicitly when \
-   sample_size is small (under ~5).
+   when present, is a selected set of setups the trader explicitly \
+   tracked on this ticker, graded against what happened (win_rate, \
+   sample_size, ...). It is NOT a complete sample of your calls — \
+   frame it honestly, never as a guarantee, and say so explicitly \
+   when sample_size is small (under ~5).
 5. Wrap the JSON in a single ```json ... ``` block. No prose outside \
    the block."""
 
@@ -640,12 +641,13 @@ Rules you must follow:
 """
 
 
-# I1: Confidence calibration — injects the AI's own track-record win-rate
-# into the system prompt so the model can self-calibrate its confidence.
+# I1: Confidence calibration — injects a selected tracked-setup win rate
+# into the system prompt so the model can calibrate its confidence carefully.
 _CONFIDENCE_CALIBRATION = """\
-Your historical accuracy on this ticker is {win_rate}% over {n} resolved \
-calls. Calibrate your confidence accordingly — if your past calls on this \
-ticker have been wrong more often than right, lower your confidence."""
+The trader has explicitly tracked {n} resolved setup(s) on this ticker, \
+with a {win_rate} win rate. This is a selected sample, not your complete \
+recommendation history. Use it only as a cautious calibration signal — never \
+as a guarantee or a claim about all of your past calls."""
 
 # I2: Regime-aware prompt tuning — adds a risk-first framing clause when
 # the market regime signals high volatility or crisis conditions.
@@ -685,8 +687,8 @@ def render_system_prompt(
     """Render a system prompt with I1/I2 dynamic injections.
 
     I1 — Confidence calibration: when ``track_record`` has a ``win_rate``
-    and ``sample_size``, appends a calibration clause so the model knows
-    its own historical accuracy on this ticker.
+    and ``sample_size``, appends a calibration clause describing the
+    trader's selected tracked-setup sample on this ticker.
 
     I2 — Regime-aware tuning: when ``market_regime`` signals
     ``high_volatility`` or ``crisis``, appends a risk-first framing
@@ -1292,10 +1294,11 @@ Rules you must follow:
    past replies. A "tape" section, when present, is raw recent \
    order-flow aggregation (buy/sell pressure, block prints, tape \
    speed); you may quote it directly as "recent tape". A \
-   "track_record" section, when present, is YOUR OWN past buy/sell \
-   calls on that ticker graded against what happened — frame it \
-   honestly, never as a guarantee, and flag it when sample_size is \
-   small (under ~5).
+   "track_record" section, when present, is a selected set of setups \
+   the trader explicitly tracked on that ticker, graded against what \
+   happened. It is not a complete sample of the assistant's calls — \
+   frame it honestly, never as a guarantee, and flag it when \
+   sample_size is small (under ~5).
 5. Your output is a single JSON object with EXACTLY these fields: \
    "reply" (string, 1-4 sentences, conversational), "grounded" \
    (boolean — true if you had enough context to answer, false if \
