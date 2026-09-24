@@ -59,6 +59,31 @@ interface ChatPanelProps {
 // A message in local state may be a not-yet-finalized streaming bubble.
 type LocalMessage = ChatMessage & { streaming?: boolean };
 
+/**
+ * Merge a polled transcript into local state. Only the assistant
+ * placeholder is swapped for the server row when a turn finishes; the
+ * optimistic user message keeps its temporary negative id. A server user
+ * row matching one of those is swapped in place, not appended, so the
+ * poll doesn't show the trader's own message a second time.
+ */
+export function mergePolledMessages(prev: LocalMessage[], fresh: ChatMessage[]): LocalMessage[] {
+  const known = new Set(prev.map(m => m.id));
+  let next = prev;
+  const additions: LocalMessage[] = [];
+  for (const m of fresh) {
+    if (known.has(m.id)) continue;
+    if (m.role === 'user') {
+      const idx = next.findIndex(x => x.id < 0 && x.role === 'user' && x.content === m.content);
+      if (idx !== -1) {
+        next = next.map((x, i) => (i === idx ? m : x));
+        continue;
+      }
+    }
+    additions.push(m);
+  }
+  return next === prev && !additions.length ? prev : [...next, ...additions];
+}
+
 // What the quick-action buttons need to know to be smart instead of
 // dumb: every watchlist that exists, and which one (if any) already
 // holds a given ticker. Loaded once per ChatPanel mount and kept
@@ -299,11 +324,7 @@ export function ChatPanel({
       if (sending) return;
       try {
         const fresh = await api.getChatMessages(sessionId);
-        setMessages(prev => {
-          const known = new Set(prev.map(m => m.id));
-          const additions = fresh.filter(m => !known.has(m.id));
-          return additions.length ? [...prev, ...additions] : prev;
-        });
+        setMessages(prev => mergePolledMessages(prev, fresh));
       } catch {
         // best-effort — a missed poll just tries again next tick
       }

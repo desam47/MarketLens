@@ -2068,6 +2068,52 @@ class TestPositionRiskParsing(unittest.TestCase):
         self.assertIsNone(_calculation_followup("same thing but 100 shares", {"calculation": "percentage_change", "old_value": 1, "new_value": 2}))
 
 
+class TestConfirmationAffirmation(unittest.TestCase):
+    """BF-01: only a whole-message affirmation confirms a pending action."""
+
+    _PENDING = {
+        "action": "delete_watchlist",
+        "symbol": None,
+        "watchlist": "Tech",
+        "target_id": None,
+        "tool_arguments": {},
+    }
+    _PROMPT = 'Delete the watchlist "Tech"? This removes every ticker in it — say yes to confirm.'
+
+    def _finalize(self, user_content):
+        from backend.ai.chat import _finalize_parsed
+
+        state = {"pending_confirmation": dict(self._PENDING)}
+        parsed = ChatReplyResponse(reply="Okay, I won't delete it.", grounded=True, action="none")
+        with patch("backend.ai.chat._run_action", return_value=("Done — deleted", True, [])) as run:
+            text, _, _ = _finalize_parsed(
+                None, parsed, [], user_content, [("assistant", self._PROMPT)], trace=[], planner_state=state
+            )
+        return text, run
+
+    def test_hesitation_or_topic_change_after_an_affirm_word_does_not_execute(self):
+        for text in (
+            "ok nevermind",
+            "okay wait, actually don't",
+            "sure, but first show me TSLA",
+            "ok, what's the price of AAPL?",
+            "yes?",
+            "no",
+        ):
+            with self.subTest(text=text):
+                reply, run = self._finalize(text)
+                run.assert_not_called()
+                self.assertEqual(reply, "Okay, I won't delete it.")
+
+    def test_whole_message_affirmation_executes_the_pending_payload(self):
+        for text in ("yes", "Yes!", "ok", "yes please", "yes, delete it", "go ahead.", "confirm"):
+            with self.subTest(text=text):
+                _, run = self._finalize(text)
+                run.assert_called_once()
+                parsed = run.call_args.args[1]
+                self.assertEqual((parsed.action, parsed.action_watchlist), ("delete_watchlist", "Tech"))
+
+
 class TestRegeneration(unittest.TestCase):
     def test_instruction_is_server_authored_and_scoped(self):
         from backend.ai.prompt import regeneration_instruction

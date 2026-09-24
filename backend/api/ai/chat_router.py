@@ -763,18 +763,9 @@ async def send_message(session_id: int, payload: SendMessageRequest):
     finally:
         repo.close()
 
-    args = [session_id, payload.content, payload.preferences.model_dump() if payload.preferences else None]
-    if payload.chart_state is not None or payload.regeneration_mode is not None:
-        args.append(payload.chart_state.model_dump() if payload.chart_state else None)
-    if payload.regeneration_mode is not None:
-        args.append(payload.regeneration_mode)
-    if payload.regeneration_timeframe is not None or payload.regeneration_session is not None:
-        args.append({
-            "timeframe": payload.regeneration_timeframe,
-            "session": payload.regeneration_session,
-        })
-    kwargs = _browser_data_kwargs(payload)
-    message, grounded, focus, partial, unavailable = await asyncio.to_thread(answer_chat_message, *args, **kwargs)
+    message, grounded, focus, partial, unavailable = await asyncio.to_thread(
+        answer_chat_message, session_id, payload.content, **_turn_kwargs(payload)
+    )
     return _message_to_response(
         message,
         grounded=grounded,
@@ -784,6 +775,29 @@ async def send_message(session_id: int, payload: SendMessageRequest):
         tools=getattr(message, "planner_trace", []),
         blocks=getattr(message, "response_blocks_payload", None),
     )
+
+
+def _turn_kwargs(payload: SendMessageRequest) -> dict[str, Any]:
+    """Keyword arguments for answer_chat_message / stream_chat_message.
+
+    Passed by name, only when the client sent them, so an optional field
+    (e.g. a regeneration scope without a mode) can never land in another
+    parameter's position.
+    """
+    kwargs: dict[str, Any] = {
+        "preferences": payload.preferences.model_dump() if payload.preferences else None,
+    }
+    if payload.chart_state is not None:
+        kwargs["chart_state"] = payload.chart_state.model_dump()
+    if payload.regeneration_mode is not None:
+        kwargs["regeneration_mode"] = payload.regeneration_mode
+    if payload.regeneration_timeframe is not None or payload.regeneration_session is not None:
+        kwargs["regeneration_scope"] = {
+            "timeframe": payload.regeneration_timeframe,
+            "session": payload.regeneration_session,
+        }
+    kwargs.update(_browser_data_kwargs(payload))
+    return kwargs
 
 
 def _browser_data_kwargs(payload: SendMessageRequest) -> dict[str, Any]:
@@ -851,25 +865,7 @@ async def send_message_stream(session_id: int, payload: SendMessageRequest):
 
         def drain():
             try:
-                preferences = payload.preferences.model_dump() if payload.preferences else None
-                browser_kwargs = _browser_data_kwargs(payload)
-                if (
-                    payload.chart_state is None
-                    and payload.regeneration_mode is None
-                    and payload.regeneration_timeframe is None
-                    and payload.regeneration_session is None
-                ):
-                    events = stream_chat_message(session_id, payload.content, preferences, **browser_kwargs)
-                else:
-                    stream_args = [session_id, payload.content, preferences, payload.chart_state.model_dump() if payload.chart_state else None]
-                    if payload.regeneration_mode is not None:
-                        stream_args.append(payload.regeneration_mode)
-                    if payload.regeneration_timeframe is not None or payload.regeneration_session is not None:
-                        stream_args.append({
-                            "timeframe": payload.regeneration_timeframe,
-                            "session": payload.regeneration_session,
-                        })
-                    events = stream_chat_message(*stream_args, **browser_kwargs)
+                events = stream_chat_message(session_id, payload.content, **_turn_kwargs(payload))
                 for ev in events:
                     if stop.is_set():
                         break

@@ -549,8 +549,17 @@ _DELETE_WATCHLIST_FALLBACK = re.compile(
 # questions _confirm_prompt composes back out of the prior assistant
 # turn, so the follow-up executes deterministically instead of trusting
 # the model to remember and restate the pending action correctly.
+#
+# The whole message must be an affirmation (optionally restating the verb):
+# a prefix match let "ok nevermind", "okay wait, actually don't" and
+# "sure, but first show me TSLA" execute the pending destructive action.
+_AFFIRM_WORD = r"(?:yes|yep|yeah|yup|confirm(?:ed)?|do it|go ahead|sure|ok(?:ay)?)"
 _AFFIRM_INTENT = re.compile(
-    r"^\s*(yes\b|yep\b|yeah\b|yup\b|confirm(ed)?\b|do it\b|go ahead\b|sure\b|ok(ay)?\b)", re.I
+    rf"^\s*{_AFFIRM_WORD}"
+    r"(?:[\s,.!]+(?:please|"
+    rf"{_AFFIRM_WORD}|proceed|(?:delete|remove|save) (?:it|that|them))\b)*"
+    r"[\s.!]*$",
+    re.I,
 )
 _CONFIRM_DELETE_WATCHLIST_RE = re.compile(r'^Delete the watchlist "(?P<name>.+)"\? This removes')
 _CONFIRM_REMOVE_FROM_WATCHLIST_RE = re.compile(
@@ -583,6 +592,27 @@ _NOT_ENTRY_BEFORE_AT = re.compile(r"\b(?:stop|stop[- ]?loss|target|take[- ]profi
 _STOP_RE = re.compile(r"\bstop(?:[- ]?loss)?\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
 _TARGET_RE = re.compile(r"\b(?:target|take[- ]profit)\s*(?:price\s*)?(?:at|of|is|=|:|to)?\s*" + _NUM, re.I)
 _ACCOUNT_RE = re.compile(r"\b(?:account|portfolio)\s*(?:value|size|balance)?\s*(?:of|is|=|:)?\s*" + _NUM, re.I)
+# "my $10,000 account" — the value before the label. Only consulted when
+# the label-first form above finds nothing.
+_ACCOUNT_BEFORE_RE = re.compile(
+    r"(?<![\d.,%])\$?([0-9](?:[0-9,]*[0-9])?(?:\.\d+)?)\s+(?:dollar\s+)?(?:account|portfolio)\b", re.I
+)
+_RISK_PERCENT_RE = re.compile(
+    r"\brisk(?:ing)?\s*(?:percent(?:age)?)?\s*(?:of|is|=|:)?\s*([0-9]+(?:\.\d+)?)\s*%"
+    r"|\b([0-9]+(?:\.\d+)?)\s*%\s*(?:risk|of (?:my |the )?(?:account|portfolio))\b",
+    re.I,
+)
+# Calendar dates ("Jan 5", "January 20, 2026", "1/5", "2026-01-05"). Their
+# numbers are never calculator inputs: "return from Jan 5 to Jan 20" is a
+# market question, not percentage_change(5, 20).
+_CALC_DATE_RE = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
+    r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?\b(?:,?\s+\d{4})?"
+    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b",
+    re.I,
+)
 
 
 def _numbers_from_text(text: str) -> list[float]:
@@ -615,7 +645,8 @@ def _position_risk_fields(user_content: str) -> dict[str, float]:
         "entry_price": _entry_price(user_content),
         "stop_price": _labelled_number(_STOP_RE, user_content),
         "target_price": _labelled_number(_TARGET_RE, user_content),
-        "account_value": _labelled_number(_ACCOUNT_RE, user_content),
+        "account_value": _labelled_number(_ACCOUNT_RE, user_content)
+        or _labelled_number(_ACCOUNT_BEFORE_RE, user_content),
     }
     return {key: value for key, value in fields.items() if value is not None and value > 0}
 
@@ -659,6 +690,8 @@ def _fallback_calculation(user_content: str) -> CalculationRequest | None:
     position_risk = _position_risk_calculation(user_content)
     if position_risk is not None:
         return position_risk
+    if _CALC_DATE_RE.search(user_content):
+        return None
     text = user_content.lower()
     numbers = _numbers_from_text(user_content)
     if len(numbers) == 2 and "allocation" in text and "portfolio" in text:
@@ -674,21 +707,28 @@ def _fallback_calculation(user_content: str) -> CalculationRequest | None:
             old_value=numbers[0],
             new_value=numbers[1],
         )
-    if len(numbers) == 3 and all(word in text for word in ("entry", "stop", "target")):
-        return CalculationRequest(
-            calculation="risk_reward",
-            entry_price=numbers[0],
-            stop_price=numbers[1],
-            target_price=numbers[2],
-        )
-    if len(numbers) == 4 and "position" in text and "risk" in text:
-        return CalculationRequest(
-            calculation="position_size",
-            entry_price=numbers[0],
-            stop_price=numbers[1],
-            account_value=numbers[2],
-            risk_percent=numbers[3],
-        )
+    # Each input comes from its own labelled phrase, never from number
+    # order; a missing label means a missing input (the caller asks).
+    if all(word in text for word in ("entry", "stop", "target")):
+        fields = _position_risk_fields(user_content)
+        if {"entry_price", "stop_price", "target_price"} <= fields.keys():
+            return CalculationRequest(
+                calculation="risk_reward",
+                entry_price=fields["entry_price"],
+                stop_price=fields["stop_price"],
+                target_price=fields["target_price"],
+            )
+    if "position" in text and "risk" in text:
+        fields = _position_risk_fields(user_content)
+        risk_percent = _labelled_number(_RISK_PERCENT_RE, user_content)
+        if {"entry_price", "stop_price", "account_value"} <= fields.keys() and risk_percent:
+            return CalculationRequest(
+                calculation="position_size",
+                entry_price=fields["entry_price"],
+                stop_price=fields["stop_price"],
+                account_value=fields["account_value"],
+                risk_percent=risk_percent,
+            )
     return None
 
 # "How many watchlists do I have" / "what are my watchlists" / "what's

@@ -169,3 +169,55 @@ def test_chat_market_tool_action_returns_provenance(monkeypatch) -> None:
     assert "webull" in text
     # 3.2s is fresh data — no age warning expected (warning only fires above 900s)
     assert "3.2s old" not in text
+
+
+def test_position_size_fallback_reads_labelled_inputs_not_number_order() -> None:
+    """BF-02: "risk 1% of my 10000 account, entry 50 stop 48" used to map
+    by order to entry=1, stop=10000, account=50, risk=48%."""
+    from backend.ai.chat import _fallback_calculation
+
+    request = _fallback_calculation("position size: risk 1% of my 10000 account, entry 50 stop 48")
+
+    assert request is not None
+    assert (request.calculation, request.entry_price, request.stop_price, request.account_value, request.risk_percent) == (
+        "position_size", 50, 48, 10000, 1,
+    )
+
+
+def test_position_size_fallback_does_not_guess_a_missing_label() -> None:
+    from backend.ai.chat import _fallback_calculation
+
+    assert _fallback_calculation("position size with risk 50 48 10000 1") is None
+
+
+def test_risk_reward_fallback_reads_labelled_inputs() -> None:
+    from backend.ai.chat import _fallback_calculation
+
+    request = _fallback_calculation("target 110, stop 95, entry 100 - what's the risk reward?")
+
+    assert request is not None
+    assert (request.calculation, request.entry_price, request.stop_price, request.target_price) == (
+        "risk_reward", 100, 95, 110,
+    )
+
+
+def test_date_numbers_are_not_calculator_inputs() -> None:
+    """BF-03: "return from Jan 5 to Jan 20" used to become
+    percentage_change(5, 20) = +300%."""
+    from backend.ai.chat import _fallback_calculation
+
+    for text in (
+        "What was NVDA's return from Jan 5 to Jan 20?",
+        "What was the change from 1/5 to 1/20?",
+        "Return from 2026-01-05 to 2026-01-20",
+    ):
+        assert _fallback_calculation(text) is None, text
+
+
+def test_plain_percent_change_still_uses_the_fallback() -> None:
+    from backend.ai.chat import _fallback_calculation
+
+    request = _fallback_calculation("What is the percent change from 50 to 60?")
+
+    assert request is not None
+    assert (request.calculation, request.old_value, request.new_value) == ("percentage_change", 50, 60)

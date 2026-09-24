@@ -381,7 +381,7 @@ class TestSendMessage(unittest.TestCase):
         self.assertEqual(data["content"], "AAPL looks bullish.")
         self.assertTrue(data["grounded"])
         self.assertEqual(data["focus"], ["AAPL"])
-        mock_answer.assert_called_once_with(1, "How's AAPL?", None)
+        mock_answer.assert_called_once_with(1, "How's AAPL?", preferences=None)
 
     @patch("backend.ai.chat.answer_chat_message")
     @patch("backend.api.ai.chat_router.ChatRepository")
@@ -404,7 +404,7 @@ class TestSendMessage(unittest.TestCase):
         )
 
         self.assertEqual(resp.status_code, 200)
-        sent_preferences = mock_answer.call_args.args[2]
+        sent_preferences = mock_answer.call_args.kwargs["preferences"]
         self.assertIsInstance(sent_preferences, dict)
         self.assertEqual(sent_preferences["mode"], "day_trading")
         self.assertEqual(sent_preferences["risk_per_trade_percent"], 1.5)
@@ -448,8 +448,35 @@ class TestSendMessage(unittest.TestCase):
         )
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(mock_answer.call_args.args[3], None)
-        self.assertEqual(mock_answer.call_args.args[4], "refresh")
+        self.assertNotIn("chart_state", mock_answer.call_args.kwargs)
+        self.assertEqual(mock_answer.call_args.kwargs["regeneration_mode"], "refresh")
+
+    @patch("backend.ai.chat.answer_chat_message")
+    @patch("backend.api.ai.chat_router.ChatRepository")
+    def test_scope_without_mode_is_not_passed_as_chart_state(self, mock_repo_cls, mock_answer):
+        """BF-05: optional fields are passed by name, so a regeneration
+        scope sent without a mode (or chart_state) can never land in the
+        chart_state / regeneration_mode position."""
+        mock_repo = MagicMock()
+        mock_repo.get_session.return_value = _mock_session()
+        mock_repo_cls.return_value = mock_repo
+        mock_answer.return_value = (_mock_message(id=2, role="assistant", content="scoped"), True, ["AAPL"], [], [])
+
+        resp = self.client.post(
+            "/api/ai/chat/sessions/1/messages",
+            json={
+                "content": "How's AAPL?",
+                "chart_state": {"symbol": "AAPL", "updated_at": "2026-09-24T10:00:00"},
+                "regeneration_session": "regular",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        kwargs = mock_answer.call_args.kwargs
+        self.assertEqual(mock_answer.call_args.args, (1, "How's AAPL?"))
+        self.assertEqual(kwargs["chart_state"]["symbol"], "AAPL")
+        self.assertNotIn("regeneration_mode", kwargs)
+        self.assertEqual(kwargs["regeneration_scope"], {"timeframe": None, "session": "regular"})
 
     def test_rejects_unknown_regeneration_mode(self):
         resp = self.client.post(
@@ -477,7 +504,7 @@ class TestSendMessage(unittest.TestCase):
         )
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(mock_answer.call_args.args[5], {"timeframe": "4h", "session": "regular"})
+        self.assertEqual(mock_answer.call_args.kwargs["regeneration_scope"], {"timeframe": "4h", "session": "regular"})
 
     @patch("backend.api.ai.chat_router.ChatRepository")
     def test_404_when_session_missing(self, mock_repo_cls):
@@ -610,7 +637,7 @@ class TestSendMessageStream(unittest.TestCase):
         self.assertEqual(final["content"], "AAPL looks bullish.")
         self.assertTrue(final["grounded"])
         self.assertEqual(final["focus"], ["AAPL"])
-        mock_stream.assert_called_once_with(1, "How's AAPL?", None)
+        mock_stream.assert_called_once_with(1, "How's AAPL?", preferences=None)
 
     @patch("backend.ai.chat.stream_chat_message")
     @patch("backend.api.ai.chat_router.ChatRepository")
@@ -631,7 +658,7 @@ class TestSendMessageStream(unittest.TestCase):
         )
 
         self.assertEqual(resp.status_code, 200)
-        mock_stream.assert_called_once_with(1, "How's AAPL?", {"mode": "swing_trading", "preferred_timeframes": [], "default_session": None, "risk_per_trade_percent": None, "primary_watchlist": None, "answer_detail_level": None, "preferred_units": None})
+        mock_stream.assert_called_once_with(1, "How's AAPL?", preferences={"mode": "swing_trading", "preferred_timeframes": [], "default_session": None, "risk_per_trade_percent": None, "primary_watchlist": None, "answer_detail_level": None, "preferred_units": None})
 
     @patch("backend.ai.chat.stream_chat_message")
     @patch("backend.api.ai.chat_router.ChatRepository")

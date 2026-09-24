@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import { ChatPanel } from './ChatPanel';
+import { ChatPanel, mergePolledMessages } from './ChatPanel';
 import api from '../services/api';
 
 jest.mock('../services/api', () => ({
@@ -1068,5 +1068,35 @@ describe('ChatPanel (universal)', () => {
     expect(await screen.findByText(/Chat memory reset/)).toBeInTheDocument();
     expect(screen.getByText('How is AAPL?')).toBeInTheDocument();
     expect(mockApi.clearChatHistory).not.toHaveBeenCalled();
+  });
+});
+
+describe('mergePolledMessages (BF-12)', () => {
+  const msg = (id: number, role: 'user' | 'assistant', content: string) =>
+    ({ id, session_id: 1, role, content, created_at: '', grounded: null } as any);
+
+  it('swaps the optimistic user message for its server row instead of appending a duplicate', () => {
+    const prev = [msg(-1000, 'user', 'How is AAPL?'), msg(12, 'assistant', 'AAPL is up.')];
+    const fresh = [msg(11, 'user', 'How is AAPL?'), msg(12, 'assistant', 'AAPL is up.')];
+
+    const merged = mergePolledMessages(prev, fresh);
+
+    expect(merged.map(m => m.id)).toEqual([11, 12]);
+  });
+
+  it('still appends a genuinely new nudge', () => {
+    const prev = [msg(-1000, 'user', 'How is AAPL?'), msg(12, 'assistant', 'AAPL is up.')];
+    const fresh = [
+      msg(11, 'user', 'How is AAPL?'),
+      msg(12, 'assistant', 'AAPL is up.'),
+      msg(13, 'assistant', 'NVDA crossed a strong scanner score.'),
+    ];
+
+    expect(mergePolledMessages(prev, fresh).map(m => m.id)).toEqual([11, 12, 13]);
+  });
+
+  it('returns the same array when nothing changed', () => {
+    const prev = [msg(11, 'user', 'hi'), msg(12, 'assistant', 'hello')];
+    expect(mergePolledMessages(prev, [...prev])).toBe(prev);
   });
 });
