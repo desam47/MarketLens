@@ -2155,7 +2155,7 @@ class ApiService {
 
   async deleteOldSignals(days = 180): Promise<{ deleted: number; older_than_days: number }> {
     return this.fetch<{ deleted: number; older_than_days: number }>(
-      `/signals/old?days=${days}`,
+      `/signals/old?older_than_days=${days}&confirm=true`,
       { method: 'DELETE' },
     );
   }

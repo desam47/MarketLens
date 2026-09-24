@@ -5,7 +5,7 @@ Repository for historical signal storage and research queries.
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from backend.models import HistoricalSignal
@@ -94,8 +94,7 @@ class SignalRepository:
         ``symbol`` filters to a single symbol; ``symbols`` filters to any
         of a list. If both are given, ``symbol`` wins (single-symbol query).
 
-        ``completed_only`` skips rows where return_5b IS NULL (i.e. outcomes
-        haven't been computed yet because not enough future bars exist).
+        ``completed_only`` skips rows whose full 20-bar outcome is not ready.
         """
         q = self.db.query(HistoricalSignal)
 
@@ -110,7 +109,13 @@ class SignalRepository:
         if end_time:
             q = q.filter(HistoricalSignal.timestamp <= end_time)
         if completed_only:
-            q = q.filter(HistoricalSignal.return_5b.isnot(None))
+            q = q.filter(
+                HistoricalSignal.return_5b.isnot(None),
+                HistoricalSignal.return_10b.isnot(None),
+                HistoricalSignal.return_20b.isnot(None),
+                HistoricalSignal.mfe.isnot(None),
+                HistoricalSignal.mae.isnot(None),
+            )
 
         return q.order_by(desc(HistoricalSignal.timestamp)).limit(limit).all()
 
@@ -146,13 +151,23 @@ class SignalRepository:
     def get_signals_needing_outcomes(self, limit: int = 100) -> list[HistoricalSignal]:
         """Signals whose forward outcomes haven't been computed yet.
 
-        Any row with return_5b IS NULL needs processing — that covers both
-        freshly-created signals and rows whose outcomes were reset. Sorting
-        oldest-first ensures we fill in order from the beginning of history.
+        A row remains eligible until every required forward metric exists.
+        This includes partially matured rows: a signal can have a valid 5-bar
+        return while still waiting for its 10/20-bar outcomes and final
+        20-bar MFE/MAE. Sorting oldest-first ensures we fill in order from
+        the beginning of history.
         """
         return (
             self.db.query(HistoricalSignal)
-            .filter(HistoricalSignal.return_5b.is_(None))
+            .filter(
+                or_(
+                    HistoricalSignal.return_5b.is_(None),
+                    HistoricalSignal.return_10b.is_(None),
+                    HistoricalSignal.return_20b.is_(None),
+                    HistoricalSignal.mfe.is_(None),
+                    HistoricalSignal.mae.is_(None),
+                )
+            )
             .order_by(HistoricalSignal.timestamp.asc())
             .limit(limit)
             .all()
@@ -182,7 +197,10 @@ class SignalRepository:
         signal.return_20b = return_20b
         signal.mfe = mfe
         signal.mae = mae
-        signal._outcome_missing = False
+        signal._outcome_missing = not all(
+            value is not None
+            for value in (return_5b, return_10b, return_20b, mfe, mae)
+        )
         if commit:
             self.db.commit()
         self.db.refresh(signal)
@@ -208,17 +226,47 @@ class SignalRepository:
         Only includes signals that have outcomes computed. If ``symbols``
         is given, only signals for those symbols are included.
         """
+        directional_5b = case(
+            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_5b),
+            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_5b),
+            else_=None,
+        )
+        directional_10b = case(
+            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_10b),
+            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_10b),
+            else_=None,
+        )
+        directional_20b = case(
+            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.return_20b),
+            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.return_20b),
+            else_=None,
+        )
+        favorable_excursion = case(
+            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.mfe),
+            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.mae),
+            else_=None,
+        )
+        adverse_excursion = case(
+            (HistoricalSignal.trend_state == "bullish", HistoricalSignal.mae),
+            (HistoricalSignal.trend_state == "bearish", -HistoricalSignal.mfe),
+            else_=None,
+        )
         q = self.db.query(
             HistoricalSignal.market_regime,
-            func.avg(HistoricalSignal.return_5b).label("avg_return_5b"),
-            func.avg(HistoricalSignal.return_10b).label("avg_return_10b"),
-            func.avg(HistoricalSignal.return_20b).label("avg_return_20b"),
-            func.avg(HistoricalSignal.mfe).label("avg_mfe"),
-            func.avg(HistoricalSignal.mae).label("avg_mae"),
+            func.avg(directional_5b).label("avg_return_5b"),
+            func.avg(directional_10b).label("avg_return_10b"),
+            func.avg(directional_20b).label("avg_return_20b"),
+            func.avg(favorable_excursion).label("avg_mfe"),
+            func.avg(adverse_excursion).label("avg_mae"),
             func.count(HistoricalSignal.id).label("count"),
         ).filter(
             HistoricalSignal.market_regime.isnot(None),
             HistoricalSignal.return_5b.isnot(None),
+            HistoricalSignal.return_10b.isnot(None),
+            HistoricalSignal.return_20b.isnot(None),
+            HistoricalSignal.mfe.isnot(None),
+            HistoricalSignal.mae.isnot(None),
+            HistoricalSignal.trend_state.in_(("bullish", "bearish")),
         )
         if symbols:
             q = q.filter(HistoricalSignal.symbol.in_([s.upper() for s in symbols]))
@@ -227,11 +275,11 @@ class SignalRepository:
             {
                 "regime": r.market_regime,
                 "count": r.count,
-                "avg_return_5b": round(float(r.avg_return_5b), 4) if r.avg_return_5b else None,
-                "avg_return_10b": round(float(r.avg_return_10b), 4) if r.avg_return_10b else None,
-                "avg_return_20b": round(float(r.avg_return_20b), 4) if r.avg_return_20b else None,
-                "avg_mfe": round(float(r.avg_mfe), 4) if r.avg_mfe else None,
-                "avg_mae": round(float(r.avg_mae), 4) if r.avg_mae else None,
+                "avg_return_5b": round(float(r.avg_return_5b), 4) if r.avg_return_5b is not None else None,
+                "avg_return_10b": round(float(r.avg_return_10b), 4) if r.avg_return_10b is not None else None,
+                "avg_return_20b": round(float(r.avg_return_20b), 4) if r.avg_return_20b is not None else None,
+                "avg_mfe": round(float(r.avg_mfe), 4) if r.avg_mfe is not None else None,
+                "avg_mae": round(float(r.avg_mae), 4) if r.avg_mae is not None else None,
             }
             for r in rows
         ]

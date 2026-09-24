@@ -3,6 +3,7 @@ import api, { Bar, HistoricalSignal, TickSignalReplayResponse } from '../service
 import { formatETDateTime } from './chartMath';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
 import { readSessionPreference, sessionMatchesPreference, SESSION_PREFERENCE_KEY, type SessionPreference } from '../utils/marketSession';
+import { directionalOutcome, isDirectionalSignal, isDirectionalWin, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 
 const REPLAY_TIMEFRAMES = ['1m', '5m', '15m', '1h', '1d'] as const;
 const REPLAY_LIMIT = 180;
@@ -170,7 +171,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
     return signals.filter((signal) => dateKey(signal.timestamp) >= firstDay && dateKey(signal.timestamp) <= lastDay);
   }, [replayBars, signals]);
   const completedOutcomes = useMemo(
-    () => replaySignals.filter((signal) => signal.return_5b != null),
+    () => replaySignals.filter(isSignalOutcomeComplete).filter(isDirectionalSignal),
     [replaySignals],
   );
   const replayStats = useMemo(() => {
@@ -178,14 +179,14 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
       const usable = values.filter((value): value is number => value != null && Number.isFinite(value));
       return usable.length ? usable.reduce((total, value) => total + value, 0) / usable.length : null;
     };
-    const wins = completedOutcomes.filter((signal) => (signal.return_5b || 0) > 0).length;
+    const wins = completedOutcomes.filter(isDirectionalWin).length;
     return {
       signals: replaySignals.length,
       completed: completedOutcomes.length,
       winRate: completedOutcomes.length ? (wins / completedOutcomes.length) * 100 : null,
-      averageReturn: average(completedOutcomes.map((signal) => signal.return_5b)),
-      averageMfe: average(completedOutcomes.map((signal) => signal.mfe)),
-      averageMae: average(completedOutcomes.map((signal) => signal.mae)),
+      averageReturn: average(completedOutcomes.map((signal) => directionalOutcome(signal, 'return_5b'))),
+      averageMfe: average(completedOutcomes.map((signal) => directionalOutcome(signal, 'mfe'))),
+      averageMae: average(completedOutcomes.map((signal) => directionalOutcome(signal, 'mae'))),
     };
   }, [completedOutcomes, replaySignals.length]);
   const simulatedTrades = useMemo<SimulatedTrade[]>(() => replaySignals.map((signal) => {
@@ -343,7 +344,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
         <>
           <div className="replay-metrics" aria-label="Replay performance summary">
             <div><small>Signals</small><strong>{replayStats.signals}</strong></div>
-            <div><small>Completed</small><strong>{replayStats.completed}</strong></div>
+            <div><small>Directional outcomes</small><strong>{replayStats.completed}</strong></div>
             <div><small>5-bar win rate</small><strong>{replayStats.winRate == null ? '—' : `${replayStats.winRate.toFixed(1)}%`}</strong></div>
             <div><small>Avg 5-bar return</small><strong>{fmtPct(replayStats.averageReturn)}</strong></div>
             <div><small>Avg MFE</small><strong>{fmtPct(replayStats.averageMfe)}</strong></div>
@@ -400,7 +401,7 @@ export function HistoricalReplayPanel({ defaultSymbol = 'SPY' }: HistoricalRepla
                   <span>Regime: {currentSignal.market_regime || '—'}</span>
                   <span>Recorded {formatETDateTime(currentSignal.timestamp)} ET</span>
                   <div className="replay-outcome">
-                    <small>Historical outcome after this signal</small>
+                    <small>Raw underlying movement after this signal — not trade P&amp;L</small>
                     <span>5-bar {fmtPct(currentSignal.return_5b)} · 10-bar {fmtPct(currentSignal.return_10b)} · 20-bar {fmtPct(currentSignal.return_20b)}</span>
                     <span>MFE {fmtPct(currentSignal.mfe)} · MAE {fmtPct(currentSignal.mae)}</span>
                   </div>

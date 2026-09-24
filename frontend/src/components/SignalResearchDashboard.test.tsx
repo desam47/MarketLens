@@ -28,11 +28,13 @@ describe('SignalResearchDashboard', () => {
 
     render(<SignalResearchDashboard />);
 
-    await waitFor(() => expect(screen.getByText('Cumulative 5-bar signal return')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Avg signal 5-bar return')).toBeInTheDocument());
     expect(screen.getByText('risk_on')).toBeInTheDocument();
     expect(screen.getByText('risk_off')).toBeInTheDocument();
     expect(screen.getAllByText('100.0%').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('0.50%').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1.50%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Cumulative 5-bar signal return')).not.toBeInTheDocument();
+    expect(screen.getByText(/not a strategy equity curve/)).toBeInTheDocument();
     expect(api.listSignals).toHaveBeenCalledWith(undefined, undefined, 1000, false);
   });
 });

@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { HistoricalSignal } from '../services/api';
 import { TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import {
+  directionalOutcome,
+  isDirectionalSignal,
+  isDirectionalWin,
+  isSignalOutcomeComplete,
+} from '../utils/signalOutcomes';
 
 const RESEARCH_TIMEFRAMES = ['all', '1m', '5m', '15m', '1h', '1d'] as const;
 const SIGNAL_LIMIT = 1000;
@@ -21,13 +27,6 @@ function dateKey(timestamp: string): string {
   return timestamp.slice(0, 10);
 }
 
-function isDirectionalWin(signal: HistoricalSignal): boolean {
-  if (signal.return_5b == null) return false;
-  if (signal.trend_state === 'bullish') return signal.return_5b > 0;
-  if (signal.trend_state === 'bearish') return signal.return_5b < 0;
-  return false;
-}
-
 function metricRows(signals: HistoricalSignal[], getLabel: (signal: HistoricalSignal) => string): MetricRow[] {
   const groups = new Map<string, HistoricalSignal[]>();
   signals.forEach((signal) => {
@@ -38,15 +37,17 @@ function metricRows(signals: HistoricalSignal[], getLabel: (signal: HistoricalSi
   });
   return Array.from(groups.entries())
     .map(([label, group]) => {
-      const completed = group.filter((signal) => signal.return_5b != null);
-      const directional = completed.filter((signal) => signal.trend_state === 'bullish' || signal.trend_state === 'bearish');
+      const completed = group.filter(isSignalOutcomeComplete);
+      const directional = completed.filter(isDirectionalSignal);
       const average = (key: 'return_5b' | 'return_10b') => {
-        const values = completed.map((signal) => signal[key]).filter((value): value is number => value != null && Number.isFinite(value));
+        const values = directional
+          .map((signal) => directionalOutcome(signal, key))
+          .filter((value): value is number => value != null && Number.isFinite(value));
         return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
       };
       return {
         label,
-        count: completed.length,
+        count: directional.length,
         winRate: directional.length ? directional.filter(isDirectionalWin).length / directional.length * 100 : null,
         avg5: average('return_5b'),
         avg10: average('return_10b'),
@@ -56,7 +57,7 @@ function metricRows(signals: HistoricalSignal[], getLabel: (signal: HistoricalSi
 }
 
 function downloadCsv(signals: HistoricalSignal[]): void {
-  const header = ['timestamp', 'symbol', 'timeframe', 'trend_state', 'market_regime', 'return_5b', 'return_10b', 'return_20b', 'mfe', 'mae'];
+  const header = ['timestamp', 'symbol', 'timeframe', 'trend_state', 'market_regime', 'raw_return_5b', 'raw_return_10b', 'raw_return_20b', 'raw_mfe', 'raw_mae', 'signal_return_5b', 'signal_return_10b', 'signal_return_20b', 'favorable_excursion', 'adverse_excursion'];
   const rows = signals.map((signal) => [
     signal.timestamp,
     signal.symbol,
@@ -68,6 +69,11 @@ function downloadCsv(signals: HistoricalSignal[]): void {
     signal.return_20b ?? '',
     signal.mfe ?? '',
     signal.mae ?? '',
+    directionalOutcome(signal, 'return_5b') ?? '',
+    directionalOutcome(signal, 'return_10b') ?? '',
+    directionalOutcome(signal, 'return_20b') ?? '',
+    directionalOutcome(signal, 'mfe') ?? '',
+    directionalOutcome(signal, 'mae') ?? '',
   ]);
   const csv = [header, ...rows]
     .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
@@ -118,46 +124,31 @@ export function SignalResearchDashboard() {
     });
   }, [signals, timeframe, fromDate, toDate, validDateRange]);
   const completedSignals = useMemo(
-    () => filteredSignals.filter((signal) => signal.return_5b != null),
+    () => filteredSignals.filter(isSignalOutcomeComplete),
     [filteredSignals],
   );
-  const directionalSignals = completedSignals.filter((signal) => signal.trend_state === 'bullish' || signal.trend_state === 'bearish');
+  const directionalSignals = completedSignals.filter(isDirectionalSignal);
   const overallWinRate = directionalSignals.length
     ? directionalSignals.filter(isDirectionalWin).length / directionalSignals.length * 100
     : null;
   const averageReturn = completedSignals.length
-    ? completedSignals.reduce((sum, signal) => sum + (signal.return_5b || 0), 0) / completedSignals.length
+    ? (() => {
+      const values = directionalSignals
+        .map((signal) => directionalOutcome(signal, 'return_5b'))
+        .filter((value): value is number => value != null);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    })()
     : null;
   const regimeRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.market_regime || 'unknown'), [filteredSignals]);
   const trendRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.trend_state || 'unknown'), [filteredSignals]);
   const timeframeRows = useMemo(() => metricRows(filteredSignals, (signal) => signal.timeframe), [filteredSignals]);
-  const equityPoints = useMemo(() => {
-    const ordered = [...completedSignals].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-    let cumulative = 0;
-    return ordered.map((signal) => {
-      cumulative += signal.return_5b || 0;
-      return cumulative;
-    });
-  }, [completedSignals]);
-  const chart = useMemo(() => {
-    if (equityPoints.length < 2) return null;
-    const sampled = equityPoints.length > 120
-      ? equityPoints.filter((_, index) => index % Math.ceil(equityPoints.length / 120) === 0 || index === equityPoints.length - 1)
-      : equityPoints;
-    const min = Math.min(0, ...sampled);
-    const max = Math.max(0, ...sampled);
-    const range = max - min || 1;
-    const points = sampled.map((value, index) => `${(index / Math.max(1, sampled.length - 1)) * 100},${100 - ((value - min) / range) * 90 - 5}`).join(' ');
-    const zeroY = 100 - ((0 - min) / range) * 90 - 5;
-    return { points, zeroY };
-  }, [equityPoints]);
 
   return (
     <div className="card signal-research-card">
       <div className="research-heading">
         <div>
           <h2>Signal Research Dashboard</h2>
-          <p className="label">Equal-weighted 5-bar signal outcomes across the active watchlist. Use this view to compare regimes and trend states before trusting a pattern.</p>
+          <p className="label">Direction-adjusted completed 5-bar outcomes across the active watchlist. Compare one timeframe at a time before trusting a pattern.</p>
         </div>
         <button className="btn" onClick={() => downloadCsv(completedSignals)} disabled={!completedSignals.length}>Export CSV</button>
       </div>
@@ -182,21 +173,11 @@ export function SignalResearchDashboard() {
         <>
           <div className="research-metrics">
             <div><small>Signals</small><strong>{filteredSignals.length}</strong></div>
-            <div><small>Completed</small><strong>{completedSignals.length}</strong></div>
+            <div><small>Complete outcomes</small><strong>{completedSignals.length}</strong></div>
             <div><small>Directional win rate</small><strong>{overallWinRate == null ? '—' : `${overallWinRate.toFixed(1)}%`}</strong></div>
-            <div><small>Avg 5-bar return</small><strong>{fmt(averageReturn, '%')}</strong></div>
+            <div><small>Avg signal 5-bar return</small><strong>{fmt(averageReturn, '%')}</strong></div>
           </div>
-
-          {chart ? (
-            <div className="research-chart-wrap">
-              <div className="research-chart-title">Cumulative 5-bar signal return</div>
-              <svg className="research-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Cumulative 5-bar signal return chart">
-                <line x1="0" x2="100" y1={chart.zeroY} y2={chart.zeroY} className="research-zero-line" />
-                <polyline points={chart.points} className="research-equity-line" />
-              </svg>
-              <div className="research-chart-axis"><span>0%</span><span>{fmt(equityPoints[equityPoints.length - 1], '%')}</span></div>
-            </div>
-          ) : <div className="empty-state research-empty">At least two completed outcomes are needed to draw the equity curve.</div>}
+          <p className="label research-status">No cumulative-return chart is shown: overlapping signals across symbols and horizons are not a strategy equity curve. Use a dedicated backtest with execution, allocation, and cost assumptions for that question.</p>
 
           <div className="research-tables">
             <ResearchTable title="By Market Regime" rows={regimeRows} />
@@ -216,7 +197,7 @@ function ResearchTable({ title, rows }: { title: string; rows: MetricRow[] }) {
       {rows.length === 0 ? <p className="empty-state">No completed outcomes.</p> : (
         <div className="data-grid">
           <table className="regime-table research-table">
-            <thead><tr><th>Group</th><th>Count</th><th>Win rate</th><th>Avg 5b</th><th>Avg 10b</th></tr></thead>
+            <thead><tr><th>Group</th><th>Directional calls</th><th>Win rate</th><th>Avg signal 5b</th><th>Avg signal 10b</th></tr></thead>
             <tbody>{rows.map((row) => <tr key={row.label}>
               <td>{row.label}</td><td>{row.count}</td><td>{row.winRate == null ? '—' : `${row.winRate.toFixed(1)}%`}</td>
               <td className={row.avg5 != null && row.avg5 < 0 ? 'outcome-negative' : 'outcome-positive'}>{fmt(row.avg5, '%')}</td>

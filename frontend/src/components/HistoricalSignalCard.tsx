@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import api, { HistoricalSignal, RegimeCount, RegimePerformance } from '../services/api';
 import { fmtPrice } from './watchlistUtils';
 import { DEFAULT_TIMEFRAME, TIMEFRAME_LABELS } from '../utils/timeframeUtils';
+import { directionalOutcome, isSignalOutcomeComplete } from '../utils/signalOutcomes';
 
 const strPrice = fmtPrice;
 
@@ -154,7 +155,7 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
     }
   };
 
-  const completedSignals = signals.filter((s) => s.return_5b != null).length;
+  const completedSignals = signals.filter(isSignalOutcomeComplete).length;
   const pendingSignals = signals.length - completedSignals;
 
   return (
@@ -245,11 +246,11 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
                 <th>Trend</th>
                 <th>Score</th>
                 <th>Regime</th>
-                <th>5b</th>
-                <th>10b</th>
-                <th>20b</th>
-                <th>MFE</th>
-                <th>MAE</th>
+                <th>Signal 5b</th>
+                <th>Signal 10b</th>
+                <th>Signal 20b</th>
+                <th>Fav. ex.</th>
+                <th>Adv. ex.</th>
               </tr>
             </thead>
             <tbody>
@@ -266,11 +267,11 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
                       {s.market_regime || '—'}
                     </span>
                   </td>
-                  <td className={outcomeCellClass(s.return_5b)}>{fmtPct(s.return_5b)}</td>
-                  <td className={outcomeCellClass(s.return_10b)}>{fmtPct(s.return_10b)}</td>
-                  <td className={outcomeCellClass(s.return_20b)}>{fmtPct(s.return_20b)}</td>
-                  <td className={outcomeCellClass(s.mfe)}>{fmtPct(s.mfe)}</td>
-                  <td className={outcomeCellClass(s.mae)}>{fmtPct(s.mae)}</td>
+                  <td className={outcomeCellClass(directionalOutcome(s, 'return_5b'))}>{fmtPct(directionalOutcome(s, 'return_5b'))}</td>
+                  <td className={outcomeCellClass(directionalOutcome(s, 'return_10b'))}>{fmtPct(directionalOutcome(s, 'return_10b'))}</td>
+                  <td className={outcomeCellClass(directionalOutcome(s, 'return_20b'))}>{fmtPct(directionalOutcome(s, 'return_20b'))}</td>
+                  <td className={outcomeCellClass(directionalOutcome(s, 'mfe'))}>{fmtPct(directionalOutcome(s, 'mfe'))}</td>
+                  <td className={outcomeCellClass(directionalOutcome(s, 'mae'))}>{fmtPct(directionalOutcome(s, 'mae'))}</td>
                 </tr>
               ))}
             </tbody>
@@ -278,11 +279,11 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
         </div>
       )}
 
-      <h3 style={{ marginTop: 18, color: '#34495e' }}>Performance by Market Regime</h3>
+      <h3 style={{ marginTop: 18, color: '#34495e' }}>Directional Performance by Market Regime</h3>
       <p className="label" style={{ marginTop: 0 }}>
-        Average forward returns, MFE, and MAE for every signal that has
-        outcomes computed. Risk-on / risk-off / neutral / transition come
-        from the market-context engine at signal time.
+        Direction-adjusted returns, favorable excursion, and adverse excursion
+        for completed bullish/bearish signals. Underlying price movement remains
+        available in exports; neutral signals have no directional outcome.
       </p>
       {regimePerformance.length === 0 ? (
         <p className="empty-state">
@@ -295,11 +296,11 @@ export function HistoricalSignalCard({ defaultSymbol = '' }: HistoricalSignalCar
               <tr>
                 <th>Regime</th>
                 <th>Count</th>
-                <th>Avg 5b</th>
-                <th>Avg 10b</th>
-                <th>Avg 20b</th>
-                <th>Avg MFE</th>
-                <th>Avg MAE</th>
+                <th>Avg signal 5b</th>
+                <th>Avg signal 10b</th>
+                <th>Avg signal 20b</th>
+                <th>Avg fav. ex.</th>
+                <th>Avg adv. ex.</th>
               </tr>
             </thead>
             <tbody>

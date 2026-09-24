@@ -44,9 +44,9 @@ _SEED_ORDER = {
 # A row written this soon after its bar closed may carry today's market regime.
 _FRESH = timedelta(minutes=15)
 
-# How many bars of forward data we need before computing outcomes.
-# Per spec: 5/10/20-bar returns + MFE/MAE.
-REQUIRED_FORWARD_BARS = 25  # leave a few bars headroom for MFE/MAE
+# How many bars of forward data we need before an outcome is complete.
+# Per spec: 5/10/20-bar returns plus MFE/MAE across the same 20-bar window.
+REQUIRED_FORWARD_BARS = 20
 
 
 class SignalRecorder:
@@ -688,22 +688,18 @@ class SignalRecorder:
             # No data after the signal at all — leave the row alone.
             return False
 
-        # Compute whatever windows are available now; the missing ones stay
-        # None and get filled in by future backfill runs as more bars arrive.
-        # This used to require len >= 20 (== 20b window) which left a 19-bar
-        # blind spot at the data edge — signals 20 days back from the edge
-        # were stuck with NULL until the 20th day, even though their 5b/10b
-        # windows were already computable.
+        # Compute whatever return windows are available now. The row remains
+        # eligible until all 5/10/20-bar values and the final 20-bar
+        # excursions exist, so later backfills complete partial rows rather
+        # than abandoning them after the 5-bar result appears.
         return_5b = self._return_at_bar(future_bars, anchor_price, 5)
         return_10b = self._return_at_bar(future_bars, anchor_price, 10)
         return_20b = self._return_at_bar(future_bars, anchor_price, 20)
-        mfe, mae = self._mfe_mae(future_bars, anchor_price)
-
-        # Only skip if even MFE/MAE are None — that means there are no
-        # future bars at all (the "zero future bars" case already returned
-        # False above, but this guards against the rare 0-bar query result).
-        if mfe is None and mae is None:
-            return False
+        mfe, mae = (
+            self._mfe_mae(future_bars[:REQUIRED_FORWARD_BARS], anchor_price)
+            if len(future_bars) >= REQUIRED_FORWARD_BARS
+            else (None, None)
+        )
 
         # Direct ORM attribute mutation (no per-signal commit). The bulk
         # caller commits once at the end of the batch; the legacy direct
@@ -714,7 +710,10 @@ class SignalRecorder:
             signal.return_20b = return_20b
             signal.mfe = mfe
             signal.mae = mae
-            signal._outcome_missing = False
+            signal._outcome_missing = not all(
+                value is not None
+                for value in (return_5b, return_10b, return_20b, mfe, mae)
+            )
         else:
             repo.update_outcomes(
                 signal.id,

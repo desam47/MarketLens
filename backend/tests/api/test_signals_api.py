@@ -212,6 +212,7 @@ class TestSignalsAPI(unittest.TestCase):
         self._seed(
             symbol="GOOGL",
             market_regime="risk_off",
+            trend_state="bearish",
             return_5b=-1.0,
             return_10b=-2.0,
             return_20b=-3.0,
@@ -224,6 +225,7 @@ class TestSignalsAPI(unittest.TestCase):
         self.assertAlmostEqual(rows["risk_on"]["avg_return_5b"], 2.0)
         self.assertAlmostEqual(rows["risk_on"]["avg_return_20b"], 5.0)
         self.assertEqual(rows["risk_off"]["count"], 1)
+        self.assertAlmostEqual(rows["risk_off"]["avg_return_5b"], 1.0)
 
     # --- research: count-by-regime ---
 
@@ -278,7 +280,7 @@ class TestSignalsAPI(unittest.TestCase):
         # Insert two signals at different ages
         self._seed(symbol="AAPL", timestamp=now - timedelta(days=400))
         self._seed(symbol="MSFT", timestamp=now - timedelta(days=10))
-        r = self.client.delete("/api/signals/old?older_than_days=180")
+        r = self.client.delete("/api/signals/old?older_than_days=180&confirm=true")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["deleted"], 1)
@@ -288,6 +290,13 @@ class TestSignalsAPI(unittest.TestCase):
         remaining = r2.json()
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0]["symbol"], "MSFT")
+
+    def test_delete_old_signals_requires_confirmation(self):
+        self._seed(symbol="AAPL", timestamp=datetime.utcnow() - timedelta(days=400))
+        r = self.client.delete("/api/signals/old?older_than_days=180")
+        self.assertEqual(r.status_code, 400)
+        r2 = self.client.get("/api/signals/?include_all=true")
+        self.assertEqual(len(r2.json()), 1)
 
 
 if __name__ == "__main__":

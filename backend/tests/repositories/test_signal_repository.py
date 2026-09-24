@@ -296,6 +296,7 @@ class TestSignalRepository(unittest.TestCase):
         self._create_signal(
             symbol="GOOGL",
             market_regime="risk_off",
+            trend_state="bearish",
             return_5b=-1.0,
             return_10b=-2.0,
             return_20b=-3.0,
@@ -310,6 +311,20 @@ class TestSignalRepository(unittest.TestCase):
         self.assertAlmostEqual(r_on["avg_return_5b"], 2.0)
         self.assertAlmostEqual(r_on["avg_return_10b"], 3.0)
         self.assertAlmostEqual(r_on["avg_return_20b"], 5.0)
+        self.assertAlmostEqual(rows_map["risk_off"]["avg_return_5b"], 1.0)
+
+    def test_get_performance_by_regime_preserves_a_zero_average(self):
+        self._create_signal(
+            symbol="AAPL", market_regime="risk_on", trend_state="bullish",
+            return_5b=1.0, return_10b=1.0, return_20b=1.0, mfe=2.0, mae=-1.0,
+        )
+        self._create_signal(
+            symbol="MSFT", market_regime="risk_on", trend_state="bearish",
+            return_5b=1.0, return_10b=1.0, return_20b=1.0, mfe=2.0, mae=-1.0,
+        )
+        with self.Session() as db:
+            rows = self._repo(db).get_performance_by_regime()
+        self.assertEqual(rows[0]["avg_return_5b"], 0.0)
 
     def test_get_performance_by_regime_requires_return_5b(self):
         """A signal with return_5b=None should not appear in performance."""

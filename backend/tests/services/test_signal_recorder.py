@@ -216,13 +216,8 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
             sig = db.query(HistoricalSignal).first()
         self.assertIsNone(sig.return_5b)
 
-    def test_backfill_outcomes_partial_fill_with_ten_bars(self):
-        """With 10 future bars: 5b filled, 10b filled, 20b=None, MFE/MAE filled.
-
-        Partial-fill design: as soon as ANY outcome window is computable,
-        we write what we have and leave the rest NULL. The next backfill
-        pass fills them in as more bars arrive.
-        """
+    def test_backfill_outcomes_partial_row_matures_on_later_pass(self):
+        """A partial row stays queued until its complete 20-bar outcome exists."""
         anchor_ts = datetime(2025, 1, 1)
         anchor_price = 100.0
         self._seed_signal("AAPL", anchor_ts, anchor_price)
@@ -258,8 +253,28 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(sig.return_5b)
         self.assertIsNotNone(sig.return_10b)
         self.assertIsNone(sig.return_20b)  # not enough bars
+        self.assertIsNone(sig.mfe)  # excursions use the completed 20-bar window
+        self.assertIsNone(sig.mae)
+        self.assertTrue(sig._outcome_missing)
+
+        # Add bars 11 through 20 and prove a later pass revisits this same row.
+        with self.Session() as db:
+            for i in range(10, 20):
+                close = 100.0 + i
+                db.add(BarModel(
+                    symbol="AAPL", timeframe="1d", timestamp=anchor_ts + timedelta(days=i + 1),
+                    open=close - 0.5, high=close + 0.5, low=close - 0.5, close=close,
+                    volume=1_000_000, provider="test", data_status="historical",
+                ))
+            db.commit()
+
+        self.assertEqual(self.recorder.backfill_outcomes(batch_size=10), 1)
+        with self.Session() as db:
+            sig = db.query(HistoricalSignal).first()
+        self.assertIsNotNone(sig.return_20b)
         self.assertIsNotNone(sig.mfe)
         self.assertIsNotNone(sig.mae)
+        self.assertFalse(sig._outcome_missing)
 
     def test_backfill_outcomes_zero_candidates(self):
         """No signals needing outcomes → returns 0."""
@@ -342,21 +357,21 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(aapl_sig.return_5b)  # 5 bars → 5b filled
         self.assertIsNone(aapl_sig.return_10b)  # <10 bars → None
         self.assertIsNone(aapl_sig.return_20b)  # <20 bars → None
-        self.assertIsNotNone(aapl_sig.mfe)  # MFE needs 1 bar → filled
-        self.assertIsNotNone(aapl_sig.mae)
+        self.assertIsNone(aapl_sig.mfe)  # excursion waits for the 20-bar horizon
+        self.assertIsNone(aapl_sig.mae)
 
         self.assertIsNotNone(msft_sig)
         self.assertIsNotNone(msft_sig.return_5b)  # 15 bars → 5b filled
         self.assertIsNotNone(msft_sig.return_10b)  # 15 bars → 10b filled
         self.assertIsNone(msft_sig.return_20b)  # <20 bars → None
-        self.assertIsNotNone(msft_sig.mfe)
-        self.assertIsNotNone(msft_sig.mae)
+        self.assertIsNone(msft_sig.mfe)
+        self.assertIsNone(msft_sig.mae)
 
     def test_backfill_outcomes_bulk_prefetch_two_signals_same_symbol(self):
         """Regression: two signals for the same symbol are handled independently.
 
         Signal A at Jan 1 (5 future bars → partial).
-        Signal B at Jan 7 (1 future bar → only MFE/MAE, returns None).
+        Signal B at Jan 7 (1 future bar → still pending).
         Both are in the same (AAPL, 1d) bucket but must not share results.
         """
         anchor = datetime(2025, 1, 1)
@@ -423,16 +438,16 @@ class TestSignalRecorderBackfillOutcomes(unittest.TestCase):
         self.assertIsNotNone(sigs[0].return_5b)
         self.assertIsNone(sigs[0].return_10b)  # only 5 bars
         self.assertIsNone(sigs[0].return_20b)
-        self.assertIsNotNone(sigs[0].mfe)
-        self.assertIsNotNone(sigs[0].mae)
+        self.assertIsNone(sigs[0].mfe)
+        self.assertIsNone(sigs[0].mae)
 
-        # Signal B (Jan 7): 1 bar available → only MFE/MAE
+        # Signal B (Jan 7): one bar is not enough for any complete outcome.
         self.assertEqual(sigs[1].timestamp, sig_b_ts)
         self.assertIsNone(sigs[1].return_5b)  # 1 bar not enough for 5b
         self.assertIsNone(sigs[1].return_10b)
         self.assertIsNone(sigs[1].return_20b)
-        self.assertIsNotNone(sigs[1].mfe)  # 1 bar → MFE/MAE filled
-        self.assertIsNotNone(sigs[1].mae)
+        self.assertIsNone(sigs[1].mfe)
+        self.assertIsNone(sigs[1].mae)
 
 
 class TestSignalRecorderBackfillSignals(unittest.TestCase):

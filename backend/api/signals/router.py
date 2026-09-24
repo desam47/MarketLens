@@ -112,7 +112,7 @@ def list_signals(
         False, description="Include signals for symbols not in the active watchlist"
     ),
     completed_only: bool = Query(
-        False, description="Only return signals with completed outcomes (return_5b IS NOT NULL)"
+        False, description="Only return signals with complete 5/10/20-bar outcomes and excursions"
     ),
     db: Session = Depends(get_db),
 ):
@@ -301,9 +301,15 @@ def get_latest_signals(symbol: str, db: Session = Depends(get_db)):
 @router.delete("/old", response_model=dict)
 def delete_old_signals(
     older_than_days: int = Query(30, ge=1),
+    confirm: bool = Query(False, description="Must be true to delete retained research data"),
     db: Session = Depends(get_db),
 ):
     """Delete signals older than N days."""
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true after reviewing the deletion scope.",
+        )
     repo = SignalRepository(db)
     deleted = repo.delete_older_than(older_than_days)
     return {"deleted": deleted, "older_than_days": older_than_days}
